@@ -56,10 +56,8 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
   @desktop_member_role "stack-member-planning-step"
   @mobile_member_role "mobile-stack-member-planning-step"
 
-  # `in_progress` is the mobile board's default status filter
-  # (`tasks_live.ex` mount, `:active_status_filter`) AND a desktop column, so
-  # a task in this status is the only one that renders on BOTH branches
-  # without driving the filter pills. `failed` renders at every status, which
+  # `in_progress` is a mobile section AND a desktop column, so a task in this
+  # status renders on BOTH branches. `failed` renders at every status, which
   # is what makes that possible.
   @dual_branch_status "in_progress"
 
@@ -176,10 +174,8 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     {Repo.get!(Stack, stack.id), members}
   end
 
-  # The DESKTOP expansion only. `stack_toggle_expand` is one MapSet for both
-  # branches, so this also expands the mobile list — but the mobile list only
-  # renders the ACTIVE filter pill's section, so the mobile assertions below
-  # additionally drive `filter_by_status`.
+  # `stack_toggle_expand` is one MapSet for both branches, so this expands the
+  # desktop card and the mobile list's card alike.
   defp expand(view, stack) do
     stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
     view
@@ -625,10 +621,6 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
 
       # A mount that raised on duplicate ids fails here, not in an assertion.
       {:ok, view, _html} = live(conn, ~p"/tasks")
-
-      # The mobile list renders only the active filter pill's section, so the
-      # mobile half needs the pill moved to the stack's rollup status first.
-      render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       view = expand(view, stack)
 
       assert count_elements(view, "[data-role='#{@desktop_member_role}']") == 1
@@ -676,7 +668,6 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
         )
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       view = expand(view, stack)
 
       # Two chips in one root — the widest the marker ever gets — and the root
@@ -749,7 +740,4 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
     _ = render_click(with_target(view, "#tasks-stacks"), event, params)
     render(view)
   end
-
-  # Task 01a008f6 stage 6: board filtering is a LiveComponent.
-  defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
 end

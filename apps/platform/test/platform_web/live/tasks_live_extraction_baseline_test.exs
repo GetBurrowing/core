@@ -459,10 +459,6 @@ defmodule PlatformWeb.TasksLiveExtractionBaselineTest do
 
       html = after_filter(view)
       assert html =~ "Baseline Gadget Gamma"
-
-      # The mobile status filter narrows the rendered column instead.
-      render_click(filters(view), "filter_by_status", %{"status" => "in_progress"})
-      assert assigns(view).active_status_filter == "in_progress"
     end
   end
 
@@ -499,7 +495,4 @@ defmodule PlatformWeb.TasksLiveExtractionBaselineTest do
 
   # Task 01a008f6 stage 6: New-Task creation is a LiveComponent.
   defp create(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-create")
-
-  # Task 01a008f6 stage 6: board filtering is a LiveComponent.
-  defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
 end

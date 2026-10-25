@@ -49,19 +49,16 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
   end
 
   defp filters(attrs) do
-    kind_filters = Map.get(attrs, :kind_filters, [])
-
     Map.merge(
       %{
         board_sort: :priority,
         selected_project_id: nil,
         selected_epic_id: nil,
         status_filters: [],
-        kind_filters: kind_filters,
-        kind_filter: BoardData.kind_filter_from_list(kind_filters),
+        kind_filters: [],
         mine_filter: false
       },
-      Map.delete(attrs, :kind_filters)
+      attrs
     )
   end
 
@@ -76,23 +73,23 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
       assert BoardData.decode_status_param(Enum.join(Task.statuses(), ",")) == Task.statuses()
     end
 
-    test "kind list: intersected with Task.kinds/0; the single value derives from it" do
+    test "kind list: intersected with Task.kinds/0" do
       assert BoardData.decode_kind_list_param("bug,feature") == ["feature", "bug"]
       assert BoardData.decode_kind_list_param("bug,Bug,widget") == ["bug"]
       assert BoardData.decode_kind_list_param(nil) == []
-      assert BoardData.kind_filter_from_list(["bug"]) == "bug"
-      assert BoardData.kind_filter_from_list(["feature", "bug"]) == :all
-      assert BoardData.kind_filter_from_list([]) == :all
     end
 
-    test "a single ?kind=bug decodes exactly as the old single-value decoder" do
+    test "a shared single ?kind=bug decodes to a one-element :kind_filters" do
       for kind <- Task.kinds() do
-        assert BoardData.decode_filter_params(%{"kind" => kind}).kind_filter ==
-                 BoardData.decode_kind_param(kind)
+        decoded = BoardData.decode_filter_params(%{"kind" => kind})
+        assert decoded.kind_filters == [kind]
+
+        assert decoded |> Map.keys() |> Enum.sort() ==
+                 ~w(board_sort kind_filters mine_filter selected_epic_id selected_project_id
+                    status_filters)a
       end
 
-      assert BoardData.decode_filter_params(%{"kind" => "nope"}).kind_filter ==
-               BoardData.decode_kind_param("nope")
+      assert BoardData.decode_filter_params(%{"kind" => "nope"}).kind_filters == []
     end
 
     test "project and epic: canonical UUIDs only, downcased; 'all' and garbage are nil" do
@@ -168,7 +165,6 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
           board_sort: :newest,
           task_search_query: "a,b",
           scope_filter: "acme",
-          kind_filter: :all,
           kind_filters: ["feature", "bug"],
           origin_filter: "external_feedback",
           selected_project_id: @p,
@@ -183,24 +179,23 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
                  "&status=in_progress,blocked&mine=1"
     end
 
-    test "kind: the list when non-empty, else the single :kind_filter" do
-      assert BoardData.tasks_path(%{kind_filter: "chore"}) == "/tasks?kind=chore"
-
-      assert BoardData.tasks_path(%{kind_filter: "chore", kind_filters: []}) ==
-               "/tasks?kind=chore"
-
-      assert BoardData.tasks_path(%{kind_filter: :all, kind_filters: ["chore", "ops"]}) ==
-               "/tasks?kind=chore,ops"
+    test "kind: emitted from :kind_filters only" do
+      assert BoardData.tasks_path(%{kind_filters: []}) == "/tasks"
+      assert BoardData.tasks_path(%{kind_filters: ["chore"]}) == "/tasks?kind=chore"
+      assert BoardData.tasks_path(%{kind_filters: ["chore", "ops"]}) == "/tasks?kind=chore,ops"
     end
 
-    test "the positional arities are unchanged for their old inputs" do
-      assert BoardData.tasks_path(:all, :priority, "", :all, :all) == "/tasks"
+    test "the positional arities take the kind set as a list" do
+      assert BoardData.tasks_path(:all, :priority, "", :all, []) == "/tasks"
 
-      assert BoardData.tasks_path(:mine, :updated, "zephyr", "acme", "chore") ==
+      assert BoardData.tasks_path(:mine, :updated, "zephyr", "acme", ["chore"]) ==
                "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme&kind=chore"
 
-      assert BoardData.tasks_path(:all, :priority, "", :all, "bug", "external_feedback") ==
+      assert BoardData.tasks_path(:all, :priority, "", :all, ["bug"], "external_feedback") ==
                "/tasks?kind=bug&origin=external_feedback"
+
+      assert BoardData.tasks_path(:all, :priority, "", :all, ["bug", "chore"]) ==
+               "/tasks?kind=bug,chore"
 
       assert BoardData.tasks_path(:mine, :updated) == "/tasks?sponsor=mine&sort=updated"
     end
@@ -274,10 +269,11 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
                Enum.sort([a.id, b.id])
     end
 
-    test "kind set, and the single :kind_filter when the list is empty", %{a: a, b: b, c: c} do
+    test "kind set", %{a: a, b: b, c: c} do
       all = [a, b, c]
+      assert Enum.sort(narrow(all, %{kind_filters: []})) == Enum.sort([a.id, b.id, c.id])
       assert Enum.sort(narrow(all, %{kind_filters: ["bug", "chore"]})) == Enum.sort([a.id, c.id])
-      assert narrow(all, %{kind_filter: "feature", kind_filters: []}) == [b.id]
+      assert narrow(all, %{kind_filters: ["feature"]}) == [b.id]
     end
 
     test "mine: sponsor or a user assignee in any phase", %{a: a, b: b, c: c, d: d} do

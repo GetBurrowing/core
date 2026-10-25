@@ -93,10 +93,12 @@ defmodule PlatformWeb.TasksLiveKindTest do
 
     {:ok, view, html} = live(conn, ~p"/tasks?kind=chore")
 
-    assert :sys.get_state(view.pid).socket.assigns.kind_filter == "chore"
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.kind_filters == ["chore"]
+    # Task 01a15746 stage 2: the single-kind assign and the old select are gone.
+    refute has_element?(view, "#tasks-kind-filter")
     assert html =~ ~s(id="task-card-#{chore.id}")
     refute html =~ ~s(id="task-card-#{feature.id}")
-    assert has_element?(view, "[data-role='task-kind-filter'] option[value='chore'][selected]")
 
     assert has_element?(
              view,
@@ -104,22 +106,29 @@ defmodule PlatformWeb.TasksLiveKindTest do
            )
   end
 
-  test "kind control patches shareable URL and invalid values fail open", %{conn: conn} do
+  test "the filter popover's kind toggle patches a shareable URL; invalid values fail open",
+       %{conn: conn} do
     project = project_fixture()
     chore = task_fixture(project, "Chore Through Control", "chore")
     feature = task_fixture(project, "Feature Through Control", "feature")
     conn = authenticated_conn(conn)
 
-    {:ok, view, _html} = live(conn, ~p"/tasks")
+    {:ok, view, html} = live(conn, ~p"/tasks")
+    assert html =~ ~s(id="task-card-#{feature.id}"), "positive control"
 
-    render_change(with_target(view, "#tasks-filters"), "filter_kind", %{"kind" => "chore"})
+    render_click(view, "tasks_filter_open", %{"sheet" => "filter"})
+
+    view
+    |> element(~s(#tasks-filter-popover [data-role="tasks-filter-option"][data-kind="chore"]))
+    |> render_click()
+
     assert_patched(view, "/tasks?kind=chore")
     html = render(view)
     assert html =~ ~s(id="task-card-#{chore.id}")
     refute html =~ ~s(id="task-card-#{feature.id}")
 
     {:ok, invalid_view, invalid_html} = live(conn, ~p"/tasks?kind=not-a-kind")
-    assert :sys.get_state(invalid_view.pid).socket.assigns.kind_filter == :all
+    assert :sys.get_state(invalid_view.pid).socket.assigns.kind_filters == []
     assert invalid_html =~ ~s(id="task-card-#{chore.id}")
     assert invalid_html =~ ~s(id="task-card-#{feature.id}")
   end

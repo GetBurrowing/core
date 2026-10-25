@@ -22,17 +22,15 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
 
   Scenarios:
 
-    * S1: the user has a stored tasks project, and the device's last-project
-      copy names the same project, so the LastProject hook pushes nothing.
-    * S2: no stored project and an empty device copy: the hook pushes
-      nothing either, and the bare URL is pinned to `?project=all`.
+    * S1: the user has a stored tasks project, restored from the server pref.
+    * S2: no stored project: the bare URL is pinned to `?project=all`.
 
   Stage 1 recorded the pre-fix baseline at feat/redesign 441b5571: S1 ran
   3 board loads and 75 queries per arrival, S2 1 load and 49 queries. Stage 2
   turns that into a BUDGET: one board load per arrival, and no more Repo
   queries than main runs for the same arrival (measured with this same
   harness on main ea157a735, which carries no stored preference and
-  restores the project through the LastProject hook's
+  restored the project through a since-deleted client hook's
   `sidebar_select_project` replay instead):
 
     * main S1, arrival + replay: 2 loads, 48 + 12 = 60 queries
@@ -225,7 +223,6 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
     # pinned (rung 15b behaviour), so the counts are about a real arrival on
     # project P.
     assert assigns.selected_project_id == p.id
-    assert assigns.tasks_project_source == "pref"
     assert assigns.tasks_pin_url == false
     assert task_ids(assigns.all_tasks) == task_ids(Tasks.list_all_tasks(project_id: p.id))
 
@@ -291,7 +288,7 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
     assert Accounts.tasks_project_pref(Repo.get!(User, user.id)) == {nil, nil}
   end
 
-  test "S2: one board load with no stored project and an empty device copy", %{
+  test "S2: one board load with no stored project", %{
     user: user,
     tag: tag
   } do
@@ -300,27 +297,12 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
     {_tasks, assigns, counts} = chat_to_tasks(user, tag)
 
     assert assigns.selected_project_id == nil
-    assert assigns.tasks_project_source == "default"
     assert assigns.tasks_pin_url == false
 
     assert counts.refresh_board == 1, "refresh_board passes: #{inspect(counts)}"
     assert counts.queries <= @main_s2_queries, "Repo queries: #{inspect(counts)}"
     assert counts.handle_params == 2, "handle_params calls: #{inspect(counts)}"
     assert updated_at(user) == pinned
-  end
-
-  test "S2 with a device project that differs: at most one more load", %{
-    user: user,
-    q: q,
-    tag: tag
-  } do
-    {tasks, _assigns, arrival} = chat_to_tasks(user, tag)
-
-    tasks |> render_hook("tasks_restore_device_project", %{"id" => q.id})
-    replay = settle_and_count(tasks, tag)
-
-    assert assigns(tasks).selected_project_id == q.id
-    assert arrival.refresh_board + replay.refresh_board <= 2, inspect({arrival, replay})
   end
 
   test "a board PubSub event on /tasks refreshes exactly once", %{user: user, p: p, tag: tag} do

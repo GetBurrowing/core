@@ -21,8 +21,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       `:scope_counts_db`, `:visible_task_count`,
       `:review_request_subscriptions`, `:my_tasks`, `:my_needs_you`,
       and (task 01a161fd stage 1) `:status_filters`, `:kind_filters`,
-      `:mine_filter`, `:filtered_tasks`, `:filtered_count`, and (stage 2)
-      `:tasks_project_source`, and (stage 3, through `FilterHooks`)
+      `:mine_filter`, `:filtered_tasks`, `:filtered_count`, and (stage 3,
+      through `FilterHooks`)
       `:tasks_filter_sheet`, `:tasks_filter_epics`
     * Info: `{:task_updated, _}`, `{:task_created, _}`, `{:task_deleted, _}`,
       `{:tasks_batch_deleted, _, _}`, `{:epic_created, _}`,
@@ -53,7 +53,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   """
 
   import Phoenix.Component, only: [assign: 3, assign_new: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, push_event: 3, send_update: 2]
+  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, send_update: 2]
 
   alias Platform.Tasks
   alias Platform.Tasks.ReviewRequests
@@ -83,8 +83,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign(:status_filters, [])
     |> assign(:kind_filters, [])
     |> assign(:mine_filter, false)
-    # Task 01a161fd stage 2: "pref" when a stored project was applied.
-    |> assign(:tasks_project_source, nil)
     # Task 01a161fd stage 3: the phone header's sheet state and events.
     |> FilterHooks.attach()
     |> attach_hook(:board_info, :handle_info, &handle_info/2)
@@ -203,7 +201,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   def apply_url_filters(
         socket,
-        {new_sponsor, new_sort, new_query, new_scope, new_kind},
+        {new_sponsor, new_sort, new_query, new_scope},
         params
       ) do
     # `?origin=` (task 01a11ec3 stage 4) is decoded HERE from the raw params
@@ -214,13 +212,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     {socket, params} = FilterPrefs.apply_stored(socket, params)
     new_origin = BoardData.decode_origin_param(params["origin"])
     decoded = BoardData.decode_filter_params(params)
-
-    # parallel-ui: tasks.kind_filter_single
-    # `:kind_filter` (the old select's value and the DB opt) is DERIVED from
-    # the list: the one kind when exactly one is set, else `:all`, so a
-    # multi-kind URL narrows in memory and a single `?kind=bug` decodes
-    # exactly as before.
-    new_kind = if decoded.kind_filters == [], do: new_kind, else: decoded.kind_filter
 
     narrow =
       {decoded.status_filters, decoded.kind_filters, decoded.mine_filter}
@@ -234,9 +225,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
     board_changed? =
       selection_changed? or
-        {new_sponsor, new_sort, new_kind, new_origin} !=
+        {new_sponsor, new_sort, new_origin} !=
           {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
-           socket.assigns[:kind_filter], socket.assigns[:origin_filter]}
+           socket.assigns[:origin_filter]}
 
     search_changed? = new_query != socket.assigns[:task_search_query]
 
@@ -246,7 +237,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> assign(:board_sort, new_sort)
       |> assign(:task_search_query, new_query)
       |> assign(:scope_filter, new_scope)
-      |> assign(:kind_filter, new_kind)
       |> assign(:origin_filter, new_origin)
       |> assign(:status_filters, decoded.status_filters)
       |> assign(:kind_filters, decoded.kind_filters)
@@ -272,8 +262,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   # `?project=` / `?epic=` (task 01a161fd stage 1). The selection itself is
   # the shell's: a changed project goes through `{:sidebar_project_selected,
-  # id}` (readability check, archived fallback, epic reload,
-  # `selected_project_changed` push) and `nil` through
+  # id}` (readability check, archived fallback, epic reload) and `nil`
+  # through
   # `{:tasks_filters_cleared}`, so there is no second selection path.
   #
   # Those are messages, handled AFTER this render. Measured: without help
@@ -346,8 +336,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   # Inline only when the message path's extra work is a no-op: no task
   # detail is selected (its `clear_detail/1`) and no execution space is held
   # (its `resubscribe_execution_space(nil)`). That is always true on the
-  # LiveView's first `handle_params/3` (mount sets neither) and on the
-  # LastProject device replay that follows it. A patch away from an open
+  # LiveView's first `handle_params/3` (mount sets neither). A patch away
+  # from an open
   # `/tasks/:task_id` keeps the message path, as do sidebar clicks, which
   # send the message themselves.
   defp inline_selection?(socket) do
@@ -358,23 +348,13 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   # What the message path does that still applies is done here: the
   # unreadable/archived fallback to All projects, the epic and epic-list
-  # load, and `selected_project_changed` for the LastProject hook (connected
-  # only). No hold is taken, so `FilterPrefs.sync/1` writes the resolved
+  # load. No hold is taken, so `FilterPrefs.sync/1` writes the resolved
   # selection in the same pass, and only when it differs from the stored one.
-  defp select_inline(socket, readable?, project_id, epic_id) do
-    socket =
-      if readable?,
-        do: assign_selection(socket, project_id, epic_id),
-        else: assign_selection(socket, nil, nil)
+  defp select_inline(socket, true, project_id, epic_id),
+    do: assign_selection(socket, project_id, epic_id)
 
-    if connected?(socket) do
-      push_event(socket, "selected_project_changed", %{
-        id: socket.assigns.selected_project_id || "__all__"
-      })
-    else
-      socket
-    end
-  end
+  defp select_inline(socket, false, _project_id, _epic_id),
+    do: assign_selection(socket, nil, nil)
 
   defp select_url_project_later(socket, readable?, project_id, epic_id) do
     if connected?(socket) do
@@ -466,7 +446,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       # when the "Sponsored by me" toggle is active. `nil` is the unfiltered
       # passthrough that matches every prior refresh_board call site.
       |> maybe_put(:sponsor_user_id, sponsor_filter_user_id(socket))
-      |> maybe_put(:kind, kind_filter_value(socket))
       |> maybe_put(:origin, origin_filter_value(socket))
       # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the viewer's
       # `@access_scope` (LiveAuth). With no grant an internal member's
@@ -482,7 +461,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       %{}
       |> maybe_put_map(:project_id, socket.assigns.selected_project_id)
       |> maybe_put_map(:sponsor_user_id, sponsor_filter_user_id(socket))
-      |> maybe_put_map(:kind, kind_filter_value(socket))
       |> maybe_put_map(:origin, origin_filter_value(socket))
       |> maybe_put_map(:access_scope, access_scope(socket))
 
@@ -552,7 +530,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       end
 
     # Task 01a161fd stage 4: the desktop board also honours the status set,
-    # Mine and a multi-kind set, through narrow_list/3's own predicate. With
+    # Mine and the kind set, through narrow_list/3's own predicate. With
     # none set this is skipped, so the shapes are exactly the search-only ones.
     narrowing? = BoardData.board_narrowing?(socket.assigns)
     ctx = %{current_user_id: socket.assigns[:current_user_id]}
@@ -621,13 +599,6 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   # The active list order; `:priority` until something (the stage-2 `?sort=`
   # decode) assigns otherwise.
   defp board_sort(socket), do: socket.assigns[:board_sort] || :priority
-
-  defp kind_filter_value(socket) do
-    case socket.assigns[:kind_filter] do
-      kind when kind in ~w(feature chore bug research ops) -> kind
-      _ -> nil
-    end
-  end
 
   defp origin_filter_value(socket) do
     case socket.assigns[:origin_filter] do
@@ -741,7 +712,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   end
 
   # No-op passthrough when there is no active query and no board narrowing
-  # (status set, Mine, multi kind; task 01a161fd stage 4), so the
+  # (status set, Mine, kind set; task 01a161fd stage 4), so the
   # DB-computed shapes from `refresh_board/1` stay authoritative in the
   # common case.
   defp maybe_reapply_search(socket) do

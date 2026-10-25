@@ -219,10 +219,9 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
     view |> element("#tasks-mobile-list") |> render() |> scan_ids(@mobile_card)
   end
 
-  # Stage 2: the mobile list for the in_progress pill, selected explicitly
-  # (see the stage-1 mobile test for why the mount default is not trusted).
+  # Stage 2: the mobile list's in_progress section, the only one the seed
+  # fills, so the h2 below matches exactly one element.
   defp mobile_in_progress_order(view) do
-    _ = render_click(filters(view), "filter_by_status", %{"status" => "in_progress"})
     _ = :sys.get_state(view.pid)
     assert view |> element("#tasks-mobile-list h2") |> render() =~ "In Progress · 9"
     mobile_order(view)
@@ -263,10 +262,6 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
-      # Select the In Progress pill explicitly rather than trusting the mount
-      # default. FiltersComponent hands the value to the shell, so the board
-      # lands in the render AFTER the event reply.
-      _ = render_click(filters(view), "filter_by_status", %{"status" => "in_progress"})
       _ = :sys.get_state(view.pid)
 
       # Premise: the list is showing the in_progress section with all nine

@@ -67,9 +67,8 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
   `sidebar_create_epic`.
 
   Trigger sites that live OUTSIDE this component's tree (the page-header
-  create menu, the mobile create FAB, the epics-strip collapse button, and
-  the `LastProject` JS hook) reach it with `phx-target="#tasks-sidebar"` /
-  `pushEventTo`, which is why `render/1`'s root element always renders even
+  create menu, the mobile create FAB and the epics-strip collapse button)
+  reach it with `phx-target="#tasks-sidebar"` / `pushEventTo`, which is why `render/1`'s root element always renders even
   when the sidebar is closed.
 
   ## Messages sent to the parent

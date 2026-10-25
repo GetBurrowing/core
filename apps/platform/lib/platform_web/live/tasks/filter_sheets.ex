@@ -427,7 +427,7 @@ defmodule PlatformWeb.Tasks.FilterSheets do
         <div role="group" aria-label="Kind" class="flex flex-wrap gap-2">
           <.link
             :for={k <- kind_order()}
-            patch={FilterBar.href(@url, %{kind_filters: toggle(@kinds, k), kind_filter: :all})}
+            patch={FilterBar.href(@url, %{kind_filters: toggle(@kinds, k)})}
             aria-pressed={to_string(k in @kinds)}
             data-role="tasks-filter-option"
             data-kind={k}

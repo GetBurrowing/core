@@ -490,6 +490,23 @@ defmodule PlatformWeb.TasksFilterDesktopTest do
     assert board_ids(view) == all
   end
 
+  # Task 01a15746 stage 2: kind narrows through `:kind_filters` only (no
+  # single-kind DB opt), so a one-kind and a two-kind URL take the same path.
+  test "a two-kind URL narrows the board and the list to those two kinds", ctx do
+    base = "/tasks?project=#{ctx.p.id}"
+    view = mount(ctx.conn, ctx.me, base)
+    assert board_ids(view) == MapSet.new([ctx.a.id, ctx.b.id, ctx.c.id, ctx.d.id])
+
+    view = mount(ctx.conn, ctx.me, base <> "&kind=bug,chore")
+    a = :sys.get_state(view.pid).socket.assigns
+    assert a.kind_filters == ["chore", "bug"]
+    assert board_ids(view) == MapSet.new([ctx.a.id, ctx.c.id])
+    assert MapSet.new(a.filtered_tasks, & &1.id) == MapSet.new([ctx.a.id, ctx.c.id])
+
+    view = mount(ctx.conn, ctx.me, base <> "&kind=chore")
+    assert board_ids(view) == MapSet.new([ctx.c.id])
+  end
+
   test "a no-filter render equals the control render, byte for byte", ctx do
     base = "/tasks?project=#{ctx.p.id}"
     control = mount(ctx.conn, ctx.me, base)

@@ -200,12 +200,7 @@ defmodule PlatformWeb.Tasks.BoardDefaultListingGuardTest do
 
       # Page-wide. Mobile and desktop share ONE document (`lg:hidden` /
       # `hidden lg:flex` — CSS visibility, not presence), so this also covers
-      # the mobile card for whichever pill is active. MEASURED, not assumed:
-      # adding `stack_pending` to `@mobile_column_statuses["in_progress"]`
-      # (the mount default, `tasks_live.ex` `:active_status_filter`) fails
-      # exactly here and nowhere else. It does NOT cover the mobile Backlog
-      # pill, whose section is `:if`-gated on being active — that is the next
-      # test's job.
+      # every mobile section, which all render with no `?status=` set.
       refute has_element?(view, ~s([data-task-id="#{orphan.id}"]))
       refute has_element?(view, ~s([data-task-id="#{member.id}"]))
       # The board region only (task 01a161fd stage 3): the phone list beside
@@ -214,7 +209,7 @@ defmodule PlatformWeb.Tasks.BoardDefaultListingGuardTest do
       refute view |> element("#tasks-main") |> render() =~ "Guard orphan parked ticket"
     end
 
-    test "on the mobile Backlog pill with no query, a stack_pending task is no card there",
+    test "in the mobile Backlog section with no query, a stack_pending task is no card there",
          %{conn: conn} do
       project = create_project()
 
@@ -229,20 +224,11 @@ defmodule PlatformWeb.Tasks.BoardDefaultListingGuardTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # The mobile section list renders only the ACTIVE pill's section, and
-      # mount defaults to `in_progress`, so the Backlog section is absent
-      # from the document until we switch to it. Without this click a leak
-      # into `@mobile_column_statuses["backlog"]` is invisible to every
-      # assertion in this module.
-      _ =
-        view
-        |> Phoenix.LiveViewTest.with_target("#tasks-filters")
-        |> render_click("filter_by_status", %{"status" => "backlog"})
-
+      # With no `?status=` every mobile section renders, Backlog included,
+      # so a leak into `@mobile_column_statuses["backlog"]` would surface here.
       _ = :sys.get_state(view.pid)
       html = render(view)
 
-      # Still no search query — the status pill is not the search box.
       refute has_element?(view, ~s([data-role="search-empty-state"]))
 
       # POSITIVE CONTROL: the mobile Backlog section rendered and the

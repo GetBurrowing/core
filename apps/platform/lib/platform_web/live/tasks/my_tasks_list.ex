@@ -103,7 +103,6 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   attr :board_sort, :atom, default: :priority
   attr :status_filters, :list, default: []
   attr :kind_filters, :list, default: []
-  attr :kind_filter, :any, default: :all
   attr :mine_filter, :boolean, default: false
   attr :sponsor_filter, :atom, default: :all
   attr :task_search_query, :string, default: ""

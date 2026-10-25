@@ -1,5 +1,5 @@
 // DoneColumnState — remembers, per viewer, whether the /tasks Done column is
-// expanded (task 01a13884 stage 3). Mirrors `last_project.js`: the server owns
+// expanded (task 01a13884 stage 3). The server owns
 // the state (`:done_expanded?` on BoardComponent, collapsed by default) and
 // this hook only replays and records it through Suite.ClientState.
 //

@@ -95,9 +95,8 @@ defmodule PlatformWeb.TasksLiveStackChevronTest do
     project = create_project()
     stack = stack_fixture(project)
 
-    # The mobile list renders only the column matching
-    # `:active_status_filter`, which mounts as "in_progress". Park the
-    # stack there so BOTH surfaces render it and the count assertion
+    # Park the stack in "in_progress", a desktop column and a mobile
+    # section both, so BOTH surfaces render it and the count assertion
     # below is meaningful rather than accidentally desktop-only.
     stack =
       stack

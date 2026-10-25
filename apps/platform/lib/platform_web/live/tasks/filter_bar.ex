@@ -34,8 +34,8 @@ defmodule PlatformWeb.Tasks.FilterBar do
 
   alias PlatformWeb.Tasks.{BoardData, StatusLabels, TaskDisplay}
 
-  @url_keys ~w(sponsor_filter board_sort task_search_query scope_filter kind_filter kind_filters
-               origin_filter selected_project_id selected_epic_id status_filters mine_filter)a
+  @url_keys ~w(sponsor_filter board_sort task_search_query scope_filter kind_filters origin_filter
+               selected_project_id selected_epic_id status_filters mine_filter)a
 
   @sort_labels %{
     priority: "Priority",
@@ -58,7 +58,6 @@ defmodule PlatformWeb.Tasks.FilterBar do
     href(url, %{
       status_filters: [],
       kind_filters: [],
-      kind_filter: :all,
       mine_filter: false,
       sponsor_filter: :all,
       task_search_query: "",
@@ -96,7 +95,7 @@ defmodule PlatformWeb.Tasks.FilterBar do
         %{
           key: "kind-#{k}",
           label: kind_label(k),
-          remove: href(url, %{kind_filters: List.delete(kinds, k), kind_filter: :all})
+          remove: href(url, %{kind_filters: List.delete(kinds, k)})
         }
       end) ++
       Enum.reject(
@@ -124,13 +123,8 @@ defmodule PlatformWeb.Tasks.FilterBar do
       )
   end
 
-  @doc "The kind set a URL state means: the list, else the old single value."
-  def kind_list(url) do
-    case {list(url[:kind_filters]), url[:kind_filter]} do
-      {[], kind} when is_binary(kind) -> [kind]
-      {kinds, _} -> kinds
-    end
-  end
+  @doc "The kind set a URL state means: `:kind_filters`."
+  def kind_list(url), do: list(url[:kind_filters])
 
   defp list(values) when is_list(values), do: values
   defp list(_values), do: []

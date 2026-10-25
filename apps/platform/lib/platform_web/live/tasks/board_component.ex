@@ -70,9 +70,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   handler here without touching the hook would have killed drag-and-drop
   outright while every click path — and every `mix test` — stayed green.
   It now pushes `pushEventTo("#tasks-board", "board_drop", ...)`.
-
-  `tasks_status_filter.js` also binds inside this region but targets
-  `#tasks-filters` already (retargeted in stage 6); it is unchanged.
   """
   use PlatformWeb, :live_component
 
@@ -361,13 +358,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          is hidden on mobile via the same breakpoint, so desktop stays
          unchanged.
 
-         Status-filter pill bar (design review, 2026-05-12) reuses the chat
-         pills pattern of the time. Default-active = "in_progress" so users land
-         on actionable work; previously the section iteration began at
-         "Backlog" which buried in-progress work below the scroll fold. The
-         @mobile_columns order (in_progress first) controls both the pill
-         order and the rendered-section order — desktop @kanban_columns is
-         unchanged. --%>
+         The @mobile_columns order controls the rendered-section order —
+         desktop @kanban_columns is unchanged. The single-status pill nav
+         that used to pick ONE section is gone (task 01a15746 stage 1):
+         `?status=` (`@status_filters`) narrows the sections instead. --%>
       <%!-- The inner scroll container (`flex-1 overflow-y-auto pb-24`)
          provides comfortable scroll-end padding so the last task isn't
          flush with the bottom-nav. The outer wrapper used to also carry
@@ -388,59 +382,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         id="tasks-mobile-list"
         class="lg:hidden flex flex-1 flex-col overflow-hidden"
       >
-        <%!-- T6 status-filter pill nav (PR #328). Counts are derived from
-           `@board_items` so stack cards contribute to the per-pill
-           total — `@columns` is task-only and would undercount.
-
-           The row also carries the mobile sort control (task 01a0cef1
-           stage 2), trailing and OUTSIDE the scrolling nav: the pills
-           scroll, the sort never does, and an `overflow-x-auto` ancestor
-           would clip its menu. --%>
+        <%!-- The mobile sort control (task 01a0cef1 stage 2). The row once
+           also held the single-status pill nav, deleted with its event in
+           task 01a15746 stage 1. --%>
         <div
           data-role="tasks-status-filter-row"
-          class="flex items-center gap-2 pr-3 border-b border-base-content/10 shrink-0"
+          class="flex items-center justify-end gap-2 px-3 py-2 border-b border-base-content/10 shrink-0"
         >
-          <nav
-            id="tasks-status-filter-pills"
-            phx-hook="TasksStatusFilter"
-            class="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-2"
-            style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-            aria-label="Filter tasks by status"
-          >
-            <button
-              :for={{col_key, col_label} <- @mobile_columns}
-              type="button"
-              phx-click="filter_by_status"
-              phx-target="#tasks-filters"
-              phx-value-status={col_key}
-              aria-pressed={@active_status_filter == col_key}
-              class={[
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-                "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-                if @active_status_filter == col_key do
-                  "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-                else
-                  "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
-                end
-              ]}
-            >
-              <span class={["size-1.5 rounded-full", status_dot_class(col_key)]} aria-hidden="true">
-              </span>
-              {col_label}
-              <span
-                :if={length(Map.get(@board_items, col_key, [])) > 0}
-                class={[
-                  "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
-                  if(@active_status_filter == col_key,
-                    do: "bg-primary-content/20 text-primary-content",
-                    else: "bg-base-300 text-base-content"
-                  )
-                ]}
-              >
-                {length(Map.get(@board_items, col_key, []))}
-              </span>
-            </button>
-          </nav>
           <SortControl.sort_control
             id="mobile-board-sort-control"
             role="mobile-board-sort-control"
@@ -448,7 +396,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             sponsor_filter={@sponsor_filter}
             task_search_query={@task_search_query}
             scope_filter={@scope_filter}
-            kind_filter={@kind_filter}
             origin_filter={@origin_filter}
             selected_project_id={@selected_project_id}
             selected_epic_id={@selected_epic_id}
@@ -460,9 +407,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           />
         </div>
 
-        <%!-- T7 mobile section list, rebased on top of T6's pill filter.
-           Iterates `@mobile_columns` for ordering + only renders the
-           active-filter section. Items come from `@board_items` so
+        <%!-- T7 mobile section list. Iterates `@mobile_columns` for
+           ordering and renders every non-empty section `?status=` keeps
+           (`BoardData.mobile_section_visible?/2`; all of them when no
+           status is set). Items come from `@board_items` so
            stack cards interleave with standalone tasks (ordered by
            `BoardData.sort_items/3` in `@board_sort`, priority first by
            default; ADR 0041, task 01a0cef1). Member rows inside a stack
@@ -472,7 +420,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         <div class="flex-1 overflow-y-auto px-3 pb-24 clears-tab-bar">
           <div
             :for={{col_key, col_label} <- @mobile_columns}
-            :if={@active_status_filter == col_key && Map.get(@board_items, col_key, []) != []}
+            :if={
+              BoardData.mobile_section_visible?(col_key, @status_filters) &&
+                Map.get(@board_items, col_key, []) != []
+            }
             class="mt-4 first:mt-2"
           >
             <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content mb-2 px-1 tabular-nums">
@@ -546,25 +497,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           >
             <:body>No tasks yet — tap the + button to create one.</:body>
           </.empty_state>
-
-          <.empty_state
-            :if={
-              !empty_board?(@board_items) &&
-                Map.get(@board_items, @active_status_filter, []) == []
-            }
-            variant={:minimal}
-          >
-            <:body>
-              No tasks in {active_status_label(@active_status_filter, @mobile_columns)}.
-            </:body>
-          </.empty_state>
         </div>
       </div>
 
       <%!-- Kanban board (desktop, Stage 2 of Tasks v2 — 2026-05-19).
          7 columns: Backlog / Planning / In Progress / Blocked /
          In Review / Deploying / Done. Hidden below `lg` (1024px) — the
-         pill-filtered mobile list above covers tablet + phone since 7
+         section-grouped mobile list above covers tablet + phone since 7
          columns don't fit comfortably under 1280px. At lg-1024 the
          board overflows horizontally; the user scrolls inside the
          board container.
@@ -1990,16 +1929,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   defp empty_board?(columns) when is_map(columns) do
     Enum.all?(columns, fn {_key, tasks} -> tasks == [] end)
-  end
-
-  # Used by the mobile-list empty state. Looks up the label matching the
-  # active status filter so the message reads naturally — 'No tasks in In
-  # Progress.' rather than 'No tasks in in_progress.'
-  defp active_status_label(status, columns) do
-    case Enum.find(columns, fn {key, _label} -> key == status end) do
-      {_key, label} -> label
-      nil -> status
-    end
   end
 
   defp plan_progress(%Task{plans: plans}) when is_list(plans) do

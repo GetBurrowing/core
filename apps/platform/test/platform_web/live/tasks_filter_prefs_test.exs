@@ -46,13 +46,6 @@ defmodule PlatformWeb.TasksFilterPrefsTest do
 
   defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
 
-  # `[]` when the wrapper carries no attribute; the wrapper itself must exist.
-  defp project_source(html) do
-    wrapper = html |> LazyHTML.from_fragment() |> LazyHTML.query("#tasks-last-project")
-    assert Enum.count(wrapper) == 1, "positive control: the LastProject wrapper rendered"
-    LazyHTML.attribute(wrapper, "data-project-source")
-  end
-
   # Pin the stored row's `updated_at` in the past, so ANY later write moves it.
   defp backdate!(user) do
     {1, _} =
@@ -83,17 +76,13 @@ defmodule PlatformWeb.TasksFilterPrefsTest do
     assert stored(a) == %{"project_id" => p.id, "epic_id" => nil}
 
     # A fresh LiveView, as if on another device: the first connected render
-    # already shows P (no flash of All projects) and tells the hook to skip.
+    # already shows P (no flash of All projects), from the server pref alone.
     {:ok, view, html} = live(conn_for(a), "/tasks")
     assert breadcrumb_text(html) =~ p.name
-    assert project_source(html) == ["pref"]
     assert assigns(view).selected_project_id == p.id
 
     {:ok, view, html} = live(conn_for(b), "/tasks")
     assert breadcrumb(html) |> Enum.to_list() == []
-    # Stage 5: nothing stored, so the bare URL is pinned to `project=all` as
-    # the server's DEFAULT, which still lets the hook replay a device copy.
-    assert project_source(html) == ["default"]
     assert assigns(view).selected_project_id == nil
     assert stored(b) == nil
   end
@@ -126,7 +115,6 @@ defmodule PlatformWeb.TasksFilterPrefsTest do
     _ = render(view)
     assert breadcrumb(html) |> Enum.to_list() == []
     assert assigns(view).selected_project_id == nil
-    assert project_source(html) == []
     assert stored(a) == %{"project_id" => nil, "epic_id" => nil}
 
     {:ok, _view, html} = live(conn_for(a), "/tasks")
@@ -332,10 +320,10 @@ defmodule PlatformWeb.TasksFilterPrefsTest do
       assert assigns(view).selected_epic_id == epic.id
     end
 
-    test "nothing stored pins project=all and marks the source as the default", %{b: b} do
+    test "nothing stored pins project=all", %{b: b} do
       {view, uris} = handle_params_uris(fn -> live(conn_for(b), "/tasks") end)
       assert uris == ["/tasks", "/tasks?project=all"]
-      assert project_source(render(view)) == ["default"]
+      assert assigns(view).selected_project_id == nil
       assert stored(b) == nil, "pinning All writes nothing"
     end
 
@@ -389,24 +377,6 @@ defmodule PlatformWeb.TasksFilterPrefsTest do
 
       assert uris == ["/tasks", "/tasks?project=#{p.id}", "/tasks?sort=oldest"]
       assert assigns(view).selected_project_id == p.id
-    end
-
-    test "a device copy replayed over the default is pinned in place, once, and never over a pref",
-         %{a: a, b: b, p: p, q: q} do
-      {:ok, view, _html} = live(conn_for(b), "/tasks")
-      _ = render_hook(view, "tasks_restore_device_project", %{"id" => p.id})
-      assert_patch(view, "/tasks?project=#{p.id}")
-      assert assigns(view).selected_project_id == p.id
-
-      _ = render_hook(view, "tasks_restore_device_project", %{"id" => q.id})
-      assert_raise ArgumentError, fn -> assert_patch(view, 100) end
-      assert assigns(view).selected_project_id == p.id
-
-      {:ok, _} = Accounts.put_tasks_project_pref(a.id, q.id, nil)
-      {:ok, view, _html} = live(conn_for(a), "/tasks")
-      _ = render_hook(view, "tasks_restore_device_project", %{"id" => p.id})
-      assert_raise ArgumentError, fn -> assert_patch(view, 100) end
-      assert assigns(view).selected_project_id == q.id
     end
   end
 end

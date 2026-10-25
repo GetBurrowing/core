@@ -100,13 +100,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:orgs, Tenancy.list_orgs_in_priority_order())
      |> assign(:kanban_columns, BoardData.kanban_columns())
      |> assign(:mobile_columns, BoardData.mobile_columns())
-     |> assign(:active_status_filter, "in_progress")
      # `?scope=`, `?sponsor=mine` and `?q=` are all URL-authoritative;
      # `handle_params/3` overwrites these defaults on the very next callback
      # (see its comment and `FiltersComponent`'s moduledoc).
      |> assign(:scope_filter, :all)
      |> assign(:sponsor_filter, :all)
-     |> assign(:kind_filter, :all)
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
      # Task 019fed1e: the Tasks settings menu (one row today, Pipeline).
@@ -198,8 +196,7 @@ defmodule PlatformWeb.TasksLive do
     new_sort = BoardData.decode_sort(params["sort"])
     new_query = BoardData.decode_search_param(params["q"])
     new_scope = BoardData.decode_scope_param(params["scope"], socket.assigns[:active_scopes])
-    new_kind = BoardData.decode_kind_param(params["kind"])
-    filters = {new_sponsor, new_sort, new_query, new_scope, new_kind}
+    filters = {new_sponsor, new_sort, new_query, new_scope}
     socket = BoardHooks.apply_url_filters(socket, filters, params)
 
     {:noreply, socket |> assign(:selected_task, nil) |> assign(:show_detail, false)}
@@ -303,16 +300,16 @@ defmodule PlatformWeb.TasksLive do
   # ── SidebarComponent (stage 2) ─────────────────────────────────────────
 
   def handle_info({:sidebar_project_selected, project_id}, socket) do
-    # Stale-id fallback: a restored localStorage value may reference a
-    # project that has since been deleted, been ARCHIVED, or that the current
-    # user can no longer see. Drop back to the All Projects view rather than
-    # render a board the sidebar no longer offers.
+    # Stale-id fallback: a `?project=` URL or the stored `tasks_project`
+    # pref may reference a project that has since been deleted, been
+    # ARCHIVED, or that the current user can no longer see. Drop back to the
+    # All Projects view rather than render a board the sidebar no longer
+    # offers.
     #
-    # Archived counts as stale (task 019f4eaa): `last_project.js` replays the
-    # stored id via this event on EVERY mount, so filtering archived projects
-    # out of the sidebar isn't enough on its own. Falling through here also
-    # self-heals the stored value, because `push_selected_project_changed/1`
-    # writes the corrected id back to localStorage.
+    # Archived counts as stale (task 019f4eaa): filtering archived projects
+    # out of the sidebar isn't enough on its own, because a stored or linked
+    # id still arrives here. Falling through also self-heals the stored pref,
+    # because `FilterPrefs.sync/1` writes the resolved selection back.
     project = Selection.readable_project(socket, project_id)
 
     resolved_id =
@@ -469,8 +466,7 @@ defmodule PlatformWeb.TasksLive do
   # The component writes the filter values and hands them here; the shell
   # mirrors them and does the board work. Search filters IN MEMORY over the
   # already-loaded sources. Scope narrows the kanban render, which reads
-  # `@scope_filter` directly. The mobile pill bar picks a section out of
-  # `@board_items`. Only the first needs work.
+  # `@scope_filter` directly. Only the first needs work.
   def handle_info({:tasks_filters_changed, changes}, socket) do
     socket = assign(socket, Enum.to_list(changes))
 
@@ -483,7 +479,7 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # Clearing the breadcrumb drops the project + epic selection, which IS a
-  # re-query, and has to push the corrected id back to localStorage.
+  # re-query, and `FilterPrefs.sync/1` stores the cleared selection.
   def handle_info({:tasks_filters_cleared}, socket) do
     # `:show_project_sheet` belongs to SidebarComponent, so clearing the
     # filter dismisses the mobile sheet by send_update rather than by writing
@@ -561,9 +557,9 @@ defmodule PlatformWeb.TasksLive do
 
   # ── Private ────────────────────────────────────────────────────────────
 
-  # Project selection is three writes plus a re-query plus a localStorage
-  # push, and both `{:sidebar_project_selected, _}` and
-  # `{:tasks_filters_cleared}` need all five.
+  # Project selection is three writes plus a re-query, and both
+  # `{:sidebar_project_selected, _}` and `{:tasks_filters_cleared}` need
+  # all four.
   #
   # Clearing the detail panel comes BEFORE `refresh_board/1`, which funnels
   # into `full_refresh/1` -> `Selection.reload_selected_task/1` and would
@@ -582,18 +578,6 @@ defmodule PlatformWeb.TasksLive do
     |> clear_detail()
     |> resubscribe_execution_space(nil)
     |> BoardHooks.refresh_board()
-    |> push_selected_project_changed()
-  end
-
-  # Push the canonical post-handler selection back to the client so the
-  # LastProject JS hook can keep localStorage in sync. This MUST fire after
-  # both project selection (including the stale-UUID fallback path) and
-  # filter-clear — relying solely on a wrapper-attribute DOM diff misses the
-  # case where the server-side state was already at the same value (e.g.
-  # fallback from a stale UUID → nil when nil was the initial render).
-  defp push_selected_project_changed(socket) do
-    id = socket.assigns.selected_project_id || "__all__"
-    push_event(socket, "selected_project_changed", %{id: id})
   end
 
   defp clear_detail(socket) do

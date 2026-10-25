@@ -161,11 +161,6 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   def decode_scope_param(_scope, _active_scopes), do: :all
 
-  @doc "Decode a shareable task-kind filter, falling back to the unfiltered board."
-  @spec decode_kind_param(term()) :: :all | String.t()
-  def decode_kind_param(kind) when kind in @task_kinds, do: kind
-  def decode_kind_param(_kind), do: :all
-
   @doc """
   Decode the External Feedback lane (`?origin=external_feedback`, task
   01a11ec3 stage 4). Only the persisted `external_feedback` origin selects a
@@ -207,8 +202,7 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   @doc """
   Decode `?kind=` as a LIST (`:kind_filters`): the subset of `Task.kinds/0`
-  it names, in `Task.kinds/0` order. `decode_kind_param/1` stays the
-  single-value reading the old kind select and the DB opt use.
+  it names, in `Task.kinds/0` order. A single `?kind=bug` is `["bug"]`.
   """
   @spec decode_kind_list_param(term()) :: [String.t()]
   def decode_kind_list_param(value), do: decode_list_param(value, @task_kinds)
@@ -219,16 +213,6 @@ defmodule PlatformWeb.Tasks.BoardData do
   end
 
   defp decode_list_param(_value, _allowed), do: []
-
-  @doc """
-  The single `:kind_filter` derived from `:kind_filters`: the one kind when
-  exactly one is set, otherwise `:all` (so a multi-kind URL narrows in
-  memory, not in the DB query). A single `?kind=bug` decodes exactly as
-  `decode_kind_param/1` always did.
-  """
-  @spec kind_filter_from_list([String.t()]) :: :all | String.t()
-  def kind_filter_from_list([kind]), do: kind
-  def kind_filter_from_list(_kinds), do: :all
 
   @doc """
   Decode `?mine=1` to `:mine_filter`. Only `"1"` is on. (The prototype spells
@@ -249,32 +233,29 @@ defmodule PlatformWeb.Tasks.BoardData do
   """
   @spec decode_filter_params(map()) :: map()
   def decode_filter_params(params) when is_map(params) do
-    kind_filters = decode_kind_list_param(params["kind"])
-
     %{
       board_sort: decode_sort(params["sort"]),
       selected_project_id: decode_project_param(params["project"]),
       selected_epic_id: decode_epic_param(params["epic"]),
       status_filters: decode_status_param(params["status"]),
-      kind_filters: kind_filters,
-      kind_filter: kind_filter_from_list(kind_filters),
+      kind_filters: decode_kind_list_param(params["kind"]),
       mine_filter: decode_mine_param(params["mine"])
     }
   end
 
   @doc """
   The board URL for a sponsor filter, a sort mode, a search query, a
-  status scope and a task kind — the ONE builder for every patch back to `/tasks` (task
+  status scope and a task-kind set (`:kind_filters`) — the ONE builder for every patch back to `/tasks` (task
   01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
   a param another control set.
 
-  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`, `:all`),
+  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`, `[]`),
   exactly as `?sponsor=all` is never emitted, so the canonical URL stays
   `/tasks`. Keys come out in a fixed order — sponsor, sort, q, scope, kind:
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, :all)
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, [])
       "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme", "chore")
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme", ["chore"])
       "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme&kind=chore"
   """
   @spec tasks_path(
@@ -282,16 +263,17 @@ defmodule PlatformWeb.Tasks.BoardData do
           sort_mode() | nil,
           String.t() | nil,
           :all | String.t() | nil,
-          :all | String.t() | nil
+          [String.t()]
         ) :: String.t()
-  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter),
-    do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter, :all)
+  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filters),
+    do:
+      tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filters, :all)
 
   @doc """
   `tasks_path/5` plus the External Feedback lane, emitted last as
   `origin=external_feedback` (task 01a11ec3 stage 4).
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, "bug", "external_feedback")
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, ["bug"], "external_feedback")
       "/tasks?kind=bug&origin=external_feedback"
   """
   def tasks_path(
@@ -299,23 +281,17 @@ defmodule PlatformWeb.Tasks.BoardData do
         board_sort,
         task_search_query,
         scope_filter,
-        kind_filter,
+        kind_filters,
         origin_filter
       ) do
-    query =
-      Enum.reject(
-        [
-          sponsor: sponsor_filter == :mine && "mine",
-          sort: board_sort in [:updated, :newest, :oldest] && Atom.to_string(board_sort),
-          q: search_active?(task_search_query) && task_search_query,
-          scope: scope_filter not in [:all, nil] && scope_filter,
-          kind: kind_filter not in [:all, nil] && kind_filter,
-          origin: origin_filter == "external_feedback" && origin_filter
-        ],
-        fn {_key, value} -> value == false end
-      )
-
-    build_tasks_path(query)
+    tasks_path(%{
+      sponsor_filter: sponsor_filter,
+      board_sort: board_sort,
+      task_search_query: task_search_query,
+      scope_filter: scope_filter,
+      kind_filters: kind_filters,
+      origin_filter: origin_filter
+    })
   end
 
   # `URI.encode_query/1`'s pair encoding, done pair by pair so a LIST value
@@ -337,7 +313,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   defp encode_pair({key, value}), do: URI.encode_query([{key, value}])
 
   def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter),
-    do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, :all)
+    do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, [])
 
   @doc """
   The board URL for a sponsor filter and a sort mode only — kept exactly as
@@ -355,7 +331,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   """
   @spec tasks_path(:all | :mine | nil, sort_mode() | nil) :: String.t()
   def tasks_path(sponsor_filter, board_sort),
-    do: tasks_path(sponsor_filter, board_sort, "", :all, :all)
+    do: tasks_path(sponsor_filter, board_sort, "", :all, [])
 
   @doc """
   The board URL read off a socket's (or component's) assigns — the ONE
@@ -363,12 +339,11 @@ defmodule PlatformWeb.Tasks.BoardData do
   changes one param can never drop another.
 
   Reads `:sponsor_filter`, `:board_sort`, `:task_search_query`,
-  `:scope_filter`, `:kind_filter`, `:origin_filter`, and (task 01a161fd
+  `:scope_filter`, `:origin_filter`, and (task 01a161fd
   stage 1) `:selected_project_id`, `:selected_epic_id`, `:status_filters`,
   `:kind_filters` and `:mine_filter`. Keys come out in a fixed order:
   sponsor, sort, q, scope, kind, origin, project, epic, status, mine. `kind`
-  is the comma list of `:kind_filters` when it is non-empty, else
-  `:kind_filter`. An absent assign is the default and defaults emit nothing,
+  is the comma list of `:kind_filters`, emitted when it is non-empty. An absent assign is the default and defaults emit nothing,
   so a bare board is still `/tasks`:
 
       iex> PlatformWeb.Tasks.BoardData.tasks_path(%{})
@@ -388,11 +363,7 @@ defmodule PlatformWeb.Tasks.BoardData do
           Atom.to_string(assigns[:board_sort]),
       q: search_active?(assigns[:task_search_query]) && assigns[:task_search_query],
       scope: assigns[:scope_filter] not in [:all, nil] && assigns[:scope_filter],
-      kind:
-        if(kind_filters == [],
-          do: assigns[:kind_filter] not in [:all, nil] && assigns[:kind_filter],
-          else: kind_filters
-        ),
+      kind: kind_filters != [] && kind_filters,
       origin: assigns[:origin_filter] == "external_feedback" && assigns[:origin_filter],
       project: is_binary(assigns[:selected_project_id]) && assigns[:selected_project_id],
       epic: is_binary(assigns[:selected_epic_id]) && assigns[:selected_epic_id],
@@ -484,6 +455,32 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   @spec mobile_columns() :: [{String.t(), String.t()}]
   def mobile_columns, do: @mobile_columns
+
+  @doc """
+  True when the phone board shows the `col_key` section under the `?status=`
+  set `status_filters` (task 01a15746 stage 1): an empty set shows every
+  section, otherwise a section shows when any status it buckets is in the
+  set, so `?status=blocked` keeps the Backlog section that holds blocked work.
+
+      iex> PlatformWeb.Tasks.BoardData.mobile_section_visible?("in_review", ["in_progress"])
+      false
+
+      iex> PlatformWeb.Tasks.BoardData.mobile_section_visible?("backlog", ["blocked"])
+      true
+
+      iex> PlatformWeb.Tasks.BoardData.mobile_section_visible?("done", [])
+      true
+  """
+  @spec mobile_section_visible?(String.t(), [String.t()] | nil) :: boolean()
+  def mobile_section_visible?(_col_key, status_filters)
+      when status_filters in [nil, []],
+      do: true
+
+  def mobile_section_visible?(col_key, status_filters) when is_list(status_filters) do
+    @mobile_column_statuses
+    |> Map.get(col_key, [])
+    |> Enum.any?(&(&1 in status_filters))
+  end
 
   @doc """
   Bucket `%Task{}` and `%Stack{}` into MOBILE kanban columns (5-bucket
@@ -578,7 +575,7 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   `filters` is assign-shaped (the socket's assigns work as-is):
   `:selected_project_id`, `:selected_epic_id`, `:status_filters`,
-  `:kind_filters` / `:kind_filter`, `:mine_filter`, `:sponsor_filter`,
+  `:kind_filters`, `:mine_filter`, `:sponsor_filter`,
   `:task_search_query`, `:origin_filter`, `:scope_filter`, `:board_sort`.
   `ctx` carries `:current_user_id`, `:agent_names` and `:root_org_slug`.
   An absent key is that filter's default, which keeps everything; by default
@@ -589,8 +586,7 @@ defmodule PlatformWeb.Tasks.BoardData do
     * org scope — mirrors `BoardComponent`'s `board_scope/1` +
       `desktop_column_items_for_scope/6`: `:all`, `nil` or the root org's
       slug keeps everything; any other org slug is empty today.
-    * kind — the `:kind_filters` set when non-empty, else the single
-      `:kind_filter`.
+    * kind — the `:kind_filters` set; empty keeps every kind.
 
   Pure: no Repo, no socket.
   """
@@ -600,7 +596,7 @@ defmodule PlatformWeb.Tasks.BoardData do
     q = normalize_search(filters[:task_search_query])
     agent_names = ctx[:agent_names] || %{}
     statuses = list_assign(filters[:status_filters])
-    kinds = narrow_kinds(filters)
+    kinds = list_assign(filters[:kind_filters])
 
     if org_scope_empty?(filters[:scope_filter], ctx[:root_org_slug]) do
       []
@@ -622,14 +618,15 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   @doc """
   True when the desktop board needs `narrow_board/3` (task 01a161fd stage 4):
-  a status set, Mine, or MORE than one kind. A single kind already narrows the
-  board's DB query (`:kind_filter`), and project, epic, sponsor and origin are
-  DB opts too, so with none of these three set the board is today's board.
+  a status set, Mine, or any kind set. Kind is narrowed in memory only (the
+  board's DB query takes no kind opt since task 01a15746 stage 2); project,
+  epic, sponsor and origin are DB opts, so with none of these three set the
+  board is the DB board.
   """
   @spec board_narrowing?(map()) :: boolean()
   def board_narrowing?(filters) do
     list_assign(filters[:status_filters]) != [] or filters[:mine_filter] == true or
-      length(list_assign(filters[:kind_filters])) > 1
+      list_assign(filters[:kind_filters]) != []
   end
 
   @doc """
@@ -641,7 +638,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   @spec narrow_board([%Task{}], map(), map()) :: [%Task{}]
   def narrow_board(tasks, filters, ctx) when is_list(tasks) do
     statuses = list_assign(filters[:status_filters])
-    kinds = narrow_kinds(filters)
+    kinds = list_assign(filters[:kind_filters])
     mine? = filters[:mine_filter] == true
     user_id = ctx[:current_user_id]
 
@@ -656,13 +653,6 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   defp matches_id?(_value, nil), do: true
   defp matches_id?(value, id), do: value == id
-
-  defp narrow_kinds(filters) do
-    case {list_assign(filters[:kind_filters]), filters[:kind_filter]} do
-      {[], kind} when is_binary(kind) -> [kind]
-      {kinds, _kind} -> kinds
-    end
-  end
 
   defp narrow_sort(mode) when mode in @sort_modes, do: mode
   defp narrow_sort(_mode), do: :priority

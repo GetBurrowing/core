@@ -585,9 +585,10 @@ defmodule PlatformWeb.TasksLiveTest do
 
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks")
-    # Scoped to the board (task 01a161fd stage 3): the phone list beside it
-    # shows every status, done included, by default.
-    refute view |> element("#tasks-main") |> render() =~ "Delta Done"
+    # Scoped to the desktop kanban (task 01a161fd stage 3): the phone list
+    # beside it and the phone board's sections (task 01a15746 stage 1) show
+    # every status, done included, by default.
+    refute view |> element("#kanban-board") |> render() =~ "Delta Done"
     # Done renders collapsed by default (task 01a13884 stage 3); open it so
     # the done card is in the render.
     html =
@@ -645,24 +646,65 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Cancelled Task Body"
   end
 
-  test "mobile pill nav renders the unchanged 5-bucket shape",
+  test "mobile section list renders the unchanged 5-bucket shape",
        %{conn: conn} do
+    project = create_project()
+    _ = create_task(project, %{title: "Bucket planning", status: "planning"})
+    _ = create_task(project, %{title: "Bucket blocked", status: "blocked"})
+    _ = create_task(project, %{title: "Bucket moving", status: "in_progress"})
+
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
     # The mobile-list container carries the `lg:hidden` breakpoint as of
     # Stage 2 (was md:hidden pre-Stage-2 — promoted to lg so the 7-col
-    # desktop kanban has room). The pill nav still iterates
-    # @mobile_columns (5 buckets) — planning + blocked roll up under
-    # Backlog on mobile per the responsive-scope contract.
+    # desktop kanban has room). Its sections iterate @mobile_columns
+    # (5 buckets) — planning + blocked roll up under Backlog on mobile
+    # per the responsive-scope contract.
     assert html =~ ~s(id="tasks-mobile-list")
     assert html =~ ~s(class="lg:hidden flex flex-1 flex-col overflow-hidden")
-    # The mobile pills should NOT include separate Planning / Blocked
-    # buttons (those are only present on desktop). `phx-value-status` is
-    # what backs the pill click handler, so absence of those values is
-    # the cleanest assertion.
-    refute html =~ ~s(phx-value-status="planning")
-    refute html =~ ~s(phx-value-status="blocked")
+
+    headings =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#tasks-mobile-list h2")
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+
+    assert headings == ["Backlog · 2", "In Progress · 1"]
+  end
+
+  # Task 01a15746 stage 1: the phone board's single-status pill nav is gone and
+  # `?status=` narrows its sections instead. LiveViewTest renders one document
+  # for every width; `#tasks-mobile-list` is the `lg:hidden` phone board.
+  test "phone board with ?status=in_progress renders only the In Progress section and no pill nav",
+       %{conn: conn} do
+    project = create_project()
+    moving = create_task(project, %{title: "Status moving", status: "in_progress"})
+    waiting = create_task(project, %{title: "Status waiting", status: "backlog"})
+    reviewing = create_task(project, %{title: "Status reviewing", status: "in_review"})
+
+    conn = authenticated_conn(conn)
+
+    # Control: with no status set the same board shows all three sections, so
+    # the narrowing below is the filter's doing.
+    {:ok, all_view, _html} = live(conn, ~p"/tasks")
+    assert has_element?(all_view, ~s(#tasks-mobile-list [data-task-id="#{waiting.id}"]))
+    assert has_element?(all_view, ~s(#tasks-mobile-list [data-task-id="#{reviewing.id}"]))
+
+    {:ok, view, html} = live(conn, ~p"/tasks?status=in_progress")
+
+    headings =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#tasks-mobile-list h2")
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+
+    assert headings == ["In Progress · 1"]
+    assert has_element?(view, ~s(#tasks-mobile-list [data-task-id="#{moving.id}"]))
+    refute has_element?(view, ~s(#tasks-mobile-list [data-task-id="#{waiting.id}"]))
+    refute has_element?(view, ~s(#tasks-mobile-list [data-task-id="#{reviewing.id}"]))
+    refute has_element?(view, "#tasks-status-filter-pills")
+    assert has_element?(view, ~s(#tasks-mobile-list [data-role="mobile-board-sort-control"]))
   end
 
   # ── Scope-filter rail (Stage 3 of Tasks v2 — 2026-05-19) ─────────────────
@@ -850,31 +892,23 @@ defmodule PlatformWeb.TasksLiveTest do
       assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
     end
 
-    test "rail is hidden on mobile (lg:flex container, no mobile pill collision)",
+    test "rail is hidden on mobile (lg:flex container, not inside the phone board)",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # The rail container carries hidden lg:flex so mobile users only see
-      # the existing 5-pill status nav above the section-grouped list.
+      # the section-grouped list.
       assert html =~ ~s(id="tasks-scope-rail")
       assert html =~ "hidden lg:flex"
 
-      # The mobile pill nav (Stage 2) still renders unchanged on the same page.
-      assert html =~ ~s(id="tasks-status-filter-pills")
-      assert html =~ ~s(id="tasks-mobile-list")
+      doc = LazyHTML.from_fragment(html)
+      assert LazyHTML.query(doc, "#tasks-mobile-list") |> Enum.count() == 1
 
-      # And the mobile pills do NOT contain the scope-chip data attribute —
-      # scope filtering is desktop-only.
-      assert html =~ ~s(data-scope-chip="acme")
-
-      mobile_block =
-        case Regex.run(~r/id="tasks-status-filter-pills".*?<\/nav>/s, html) do
-          [match] -> match
-          _ -> ""
-        end
-
-      refute mobile_block =~ "data-scope-chip"
+      # The chip renders on the page, so the refute below is not vacuous —
+      # scope filtering is desktop-only and never inside the phone board.
+      assert LazyHTML.query(doc, ~s([data-scope-chip="acme"])) |> Enum.count() > 0
+      assert LazyHTML.query(doc, "#tasks-mobile-list [data-scope-chip]") |> Enum.count() == 0
     end
   end
 
@@ -2056,10 +2090,8 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Seeded stack rolls up to `in_review` (members default to
-      # `in_review`); the mobile list only renders the active filter
-      # pill's section (T6 PR #328), so switch to the matching pill
-      # before exercising the stack-card.
-      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      # `in_review`); the mobile list renders that section with no
+      # `?status=` set.
       html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Mobile member rows use the `stack-member-mobile-` id prefix so
@@ -2082,14 +2114,13 @@ defmodule PlatformWeb.TasksLiveTest do
     end
 
     test "stack header button has min-h-[44px] iOS tap target",
-         %{conn: conn, stack: stack} do
+         %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Switch the active mobile filter pill to the rollup status so
-      # the mobile stack header (the `min-h-[44px]` carrier) renders;
-      # the desktop kanban variant is always rendered (`hidden
-      # md:flex`) and emits `data-role="stack-header"` regardless.
-      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
+      # The mobile stack header (the `min-h-[44px]` carrier) renders in
+      # its rollup status's section; the desktop kanban variant is
+      # always rendered (`hidden md:flex`) and emits
+      # `data-role="stack-header"` regardless.
       html = after_filter(view)
       # The mobile stack header button sits on the stack_toggle_expand
       # phx-click — assert the iOS minimum 44px tap target is enforced.
@@ -2105,9 +2136,6 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn, stack: stack} do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Switch the mobile filter pill to the rollup status so the
-      # mobile stack-card is visible before expanding (T6 PR #328).
-      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Mobile member rows must be ≥ 44px tall (iOS guideline) and the
@@ -2157,32 +2185,7 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
-  describe "last-selected-project persistence (LastProject hook)" do
-    test "wrapper carries data-selected-project-id reflecting the current selection",
-         %{conn: conn} do
-      project = create_project()
-      _t = create_task(project, %{title: "Wrapper Task"})
-
-      conn = authenticated_conn(conn)
-      {:ok, view, html} = live(conn, ~p"/tasks")
-
-      # On first mount with no selection, the wrapper carries the All Projects
-      # sentinel — the JS hook reads this attribute to mirror state into
-      # localStorage, so it must be present and accurate.
-      assert html =~ ~s|id="tasks-last-project"|
-      assert html =~ ~s|phx-hook="LastProject"|
-      assert html =~ ~s|data-selected-project-id="__all__"|
-
-      # After selecting a project, the wrapper should reflect the UUID.
-      html = sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
-      assert html =~ ~s|data-selected-project-id="#{project.id}"|
-
-      # Clearing the filter snaps the wrapper back to the sentinel.
-      _ = render_click(filters(view), "filter_clear")
-      html = after_filter(view)
-      assert html =~ ~s|data-selected-project-id="__all__"|
-    end
-
+  describe "project selection fallbacks" do
     test "select_project with a stale/deleted UUID falls back to All Projects",
          %{conn: conn} do
       project = create_project()
@@ -2193,11 +2196,11 @@ defmodule PlatformWeb.TasksLiveTest do
 
       stale_id = Ecto.UUID.generate()
 
-      # The hook may push a UUID that no longer points at a project. The
+      # A client may send a UUID that no longer points at a project. The
       # handler should treat that as a clear-filters and not crash.
       html = sidebar_click(view, "sidebar_select_project", %{"id" => stale_id})
 
-      assert html =~ ~s|data-selected-project-id="__all__"|
+      assert :sys.get_state(view.pid).socket.assigns.selected_project_id == nil
       # Board still renders (not blank/erroring) and the original task is
       # visible because we fell back to All Projects.
       assert html =~ "Visible Task"
@@ -2216,58 +2219,14 @@ defmodule PlatformWeb.TasksLiveTest do
       html = sidebar_click(view, "sidebar_select_project", %{"id" => p1.id})
       assert html =~ "P1 Task"
       refute html =~ "P2 Task"
+      assert :sys.get_state(view.pid).socket.assigns.selected_project_id == p1.id
 
-      # Clear — both visible again, sentinel restored on the wrapper
+      # Clear — both visible again
       _ = render_click(filters(view), "filter_clear")
       html = after_filter(view)
-      assert html =~ ~s|data-selected-project-id="__all__"|
+      assert :sys.get_state(view.pid).socket.assigns.selected_project_id == nil
       assert html =~ "P1 Task"
       assert html =~ "P2 Task"
-    end
-
-    test "select_project pushes selected_project_changed with the project id",
-         %{conn: conn} do
-      project = create_project()
-      _t = create_task(project, %{title: "Push Event Task"})
-
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/tasks")
-
-      project_id = project.id
-      sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
-      assert_push_event(view, "selected_project_changed", %{id: ^project_id})
-    end
-
-    test "select_project with a stale UUID still pushes selected_project_changed with __all__",
-         %{conn: conn} do
-      # This is the regression that the e2e_behavior Case C caught: when the
-      # server falls back from a stale UUID to the All Projects view, it MUST
-      # still emit selected_project_changed so the JS hook can overwrite the
-      # stale value in localStorage. Previously the hook relied on a
-      # `data-selected-project-id` DOM diff, which never fired when the wrapper
-      # was already at "__all__".
-      _project = create_project()
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/tasks")
-
-      stale_id = Ecto.UUID.generate()
-      sidebar_click(view, "sidebar_select_project", %{"id" => stale_id})
-      assert_push_event(view, "selected_project_changed", %{id: "__all__"})
-    end
-
-    test "clear_filters pushes selected_project_changed with __all__", %{conn: conn} do
-      project = create_project()
-      _t = create_task(project, %{title: "Clear Push Task"})
-
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/tasks")
-
-      project_id = project.id
-      sidebar_click(view, "sidebar_select_project", %{"id" => project.id})
-      assert_push_event(view, "selected_project_changed", %{id: ^project_id})
-
-      render_click(filters(view), "filter_clear")
-      assert_push_event(view, "selected_project_changed", %{id: "__all__"})
     end
   end
 
@@ -10583,8 +10542,7 @@ defmodule PlatformWeb.TasksLiveTest do
     end
 
     # Build a solo task (no stack) attached to the project. Status is
-    # explicit so each test can drive the predicate's three branches and
-    # ensure the active mobile-filter pill matches.
+    # explicit so each test can drive the predicate's three branches.
     defp seed_solo_task(project, status) do
       {:ok, task} =
         Tasks.create_task(%{
@@ -10611,11 +10569,8 @@ defmodule PlatformWeb.TasksLiveTest do
         Tasks.create_plan(%{task_id: task.id, version: 1, status: "pending_review"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      # Switch the mobile pill to the task's column so the mobile card is
-      # rendered (mobile only renders the active filter section).
-      # `planning` status maps to the `backlog` column per
-      # `@column_statuses` in tasks_live.ex.
-      _ = render_click(filters(view), "filter_by_status", %{"status" => "backlog"})
+      # `planning` status maps to the `backlog` mobile section per
+      # `@mobile_column_statuses` in board_data.ex.
       html = after_filter(view)
       # Sanity: card is rendered.
       assert html =~ ~s(data-task-id="#{task.id}")
@@ -10663,12 +10618,10 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       # Re-load — creating the manual_approval validation transitions the
-      # task to `in_review` automatically (Tasks orchestrator), and the
-      # mobile pill must match that current status.
+      # task to `in_review` automatically (Tasks orchestrator).
       task = Repo.get!(Task, task.id)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => task.status})
       html = after_filter(view)
       assert html =~ ~s(data-role="mobile-task-action")
       assert html =~ ~s(data-action-reason="review_request_pending")
@@ -10680,7 +10633,6 @@ defmodule PlatformWeb.TasksLiveTest do
       task = seed_solo_task(project, "in_progress")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => task.status})
       html = after_filter(view)
       # The card itself must be present (sanity check — otherwise a
       # rendering regression would silently let the negative assertion
@@ -10691,10 +10643,9 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s(data-role="mobile-task-action")
       # No status chip (the `in_progress` status is not in the
       # `~w(blocked planning in_review deploying)` allow-list that gates
-      # the mobile + desktop status badges). The literal "In Review"
-      # appears in the mobile filter pill nav, so target the *badge*
-      # markup that gates "Plan Ready" instead — neither the warning
-      # badge text nor the pending-review-plan attribute should leak.
+      # the mobile + desktop status badges). Target the *badge* markup
+      # that gates "Plan Ready" — neither the warning badge text nor the
+      # pending-review-plan attribute should leak.
       refute html =~ "Plan Ready"
       refute html =~ ~s(data-action-reason="plan_pending_review")
     end
@@ -10774,8 +10725,6 @@ defmodule PlatformWeb.TasksLiveTest do
       assert task.status == "in_review"
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      # The mobile board renders ONLY the actively-filtered column.
-      _ = render_click(filters(view), "filter_by_status", %{"status" => "in_review"})
       html = after_filter(view)
       card = mobile_card_markup(html, task.id)
 
@@ -10792,7 +10741,6 @@ defmodule PlatformWeb.TasksLiveTest do
       task = seed_solo_task(project, "in_review")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => "in_review"})
       html = after_filter(view)
       card = mobile_card_markup(html, task.id)
 
@@ -10822,10 +10770,8 @@ defmodule PlatformWeb.TasksLiveTest do
     # was added to `Stacks.list_stacks_with_members/1` as part of this
     # stage (the only caller in the live view).
     #
-    # The mobile board only renders the active filter pill's section
-    # (T6 PR #328), so each test calls `filter_by_status` to switch the
-    # pill to the stack's rollup status before `stack_toggle_expand`
-    # to surface the member rows.
+    # With no `?status=` the mobile board renders every section, so
+    # `stack_toggle_expand` alone surfaces the member rows.
 
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
@@ -10859,8 +10805,7 @@ defmodule PlatformWeb.TasksLiveTest do
     end
 
     # Recompute the stack rollup so its status matches the seeded
-    # member(s) and the mobile filter pill's `status == stack.status`
-    # gate makes the stack card visible on the mobile section list.
+    # member(s) and the stack card lands in that mobile section.
     defp refresh_stack_rollup(stack) do
       {:ok, stack} = Stacks.recompute_stack_status(stack)
       Repo.get!(Stack, stack.id)
@@ -10883,11 +10828,8 @@ defmodule PlatformWeb.TasksLiveTest do
       _stack = refresh_stack_rollup(stack)
 
       # `planning` member status rolls up to stack status `forming`, which
-      # `@column_statuses` buckets under the `backlog` mobile pill (the
-      # `filter_by_status` handler only accepts `@mobile_columns` keys —
-      # raw `forming` is rejected).
+      # `@mobile_column_statuses` buckets under the `backlog` section.
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => "backlog"})
       html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # Row exists.
@@ -10936,12 +10878,11 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       # Creating the manual_approval validation transitions the member
-      # to `in_review`; recompute the stack rollup so the mobile pill
-      # for `in_review` makes the stack card visible.
+      # to `in_review`; recompute the stack rollup so the stack card
+      # lands in the `in_review` mobile section.
       stack = refresh_stack_rollup(stack)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       assert html =~ ~s(id="stack-member-mobile-#{member.id}")
@@ -10956,7 +10897,6 @@ defmodule PlatformWeb.TasksLiveTest do
       stack = refresh_stack_rollup(stack)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = render_click(filters(view), "filter_by_status", %{"status" => stack.status})
       html = stacks_click(view, "stack_toggle_expand", %{"id" => stack.id})
 
       # The row exists (sanity), but the action badge does not.

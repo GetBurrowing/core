@@ -19,8 +19,7 @@ defmodule PlatformWeb.Tasks.FilterHooks do
     * Events `tasks_filter_open` (`sheet`: "project" | "filter" |
       "filter_project"),
       `tasks_filter_close`, `tasks_filter_epics` (`id`) and
-      `tasks_filter_back`, and (stage 5) `tasks_restore_device_project`
-      (`id`).
+      `tasks_filter_back`.
     * `@tasks_my_list_limit` (task 01a166be): how many `#tasks-my-list`
       rows a join renders; `nil` is all of them. With no project selected
       the list holds every board task, rendered on top of the board, which
@@ -45,10 +44,9 @@ defmodule PlatformWeb.Tasks.FilterHooks do
 
   import Phoenix.Component, only: [assign: 3]
 
-  import Phoenix.LiveView,
-    only: [attach_hook: 4, connected?: 1, get_connect_params: 1, push_patch: 2]
+  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, get_connect_params: 1]
 
-  alias PlatformWeb.Tasks.{EpicLoaders, FilterBar}
+  alias PlatformWeb.Tasks.EpicLoaders
   alias PlatformWeb.Tasks.Selection
 
   @sheets %{
@@ -122,30 +120,6 @@ defmodule PlatformWeb.Tasks.FilterHooks do
 
   defp handle_event("tasks_filter_back", _params, socket),
     do: {:halt, assign(socket, :tasks_filter_sheet, back(socket.assigns[:tasks_filter_sheet]))}
-
-  # Stage 5: `last_project.js` replays a device's project over the server's
-  # DEFAULT `?project=all` (nothing remembered for the user). It is a REPLACE
-  # patch, so the entry names what it shows, sent from here rather than from
-  # the hook: the join's own replace lands after the hook mounts and would
-  # overwrite a client-side patch. Once only, and only over the default.
-  defp handle_event("tasks_restore_device_project", %{"id" => id}, socket)
-       when is_binary(id) do
-    with "default" <- socket.assigns[:tasks_project_source],
-         {:ok, uuid} <- Platform.UUID.cast(id) do
-      url =
-        socket.assigns
-        |> FilterBar.url_state()
-        |> Map.merge(%{selected_project_id: uuid, selected_epic_id: nil})
-        |> FilterBar.href(%{})
-
-      {:halt,
-       socket
-       |> assign(:tasks_project_source, nil)
-       |> push_patch(to: url, replace: true)}
-    else
-      _ -> {:halt, socket}
-    end
-  end
 
   defp handle_event("tasks_my_list_rows", _params, socket),
     do: {:halt, assign(socket, :tasks_my_list_limit, nil)}

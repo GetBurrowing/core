@@ -106,8 +106,8 @@ defmodule PlatformWeb.Tasks.Selection do
 
   @doc """
   `Tasks.get_project/1` for a project the viewer may `tasks.read`, else
-  `nil` (task 01a1472d stage 1). The sidebar's project selection (and the
-  `last_project.js` replay) sends a client-supplied id; a foreign project
+  `nil` (task 01a1472d stage 1). The sidebar's project selection (and a
+  `?project=` URL) sends a client-supplied id; a foreign project
   takes the stale-id fallback a deleted one takes, so it never becomes the
   board filter or the pinned `project_id` of a new epic.
   """

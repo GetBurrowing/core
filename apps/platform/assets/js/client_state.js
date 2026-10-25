@@ -5,9 +5,8 @@
 // later stage; this file is the sole approved consumer.
 //
 // Contract:
-//   - Keys are namespaced as `suite:<namespace>:<key>`. The `suite:` prefix
-//     mirrors the existing `suite:tasks-last-project-id` convention already
-//     baked into hooks like `last_project.js` — new callers get it for free.
+//   - Keys are namespaced as `suite:<namespace>:<key>`, so every caller
+//     shares the `suite:` prefix for free.
 //   - Values JSON-serialize on write. Reads try `JSON.parse` first; if it
 //     throws, we return the raw string. This lets a caller migrate a legacy
 //     `localStorage.setItem(key, "blocked")`-style value byte-identically

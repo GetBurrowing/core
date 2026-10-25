@@ -4,7 +4,8 @@ defmodule PlatformWeb.TasksLiveUrlFiltersTest do
   `?status=`, multi-value `?kind=` and `?mine=1` params survive every OLD
   filter control's patch (`BoardData.tasks_path/1` is the one builder), the
   URL's project shows on the first connected render, and a single
-  `?kind=bug` still narrows the DB query exactly as before.
+  `?kind=bug` narrows the board as a one-element `:kind_filters` (task
+  01a15746 stage 2 removed the single-kind DB opt).
   """
   use PlatformWeb.ConnCase, async: false
 
@@ -99,7 +100,6 @@ defmodule PlatformWeb.TasksLiveUrlFiltersTest do
     assert a.selected_project_id == p.id
     assert a.status_filters == ["in_progress", "blocked"]
     assert a.kind_filters == ["feature", "bug"]
-    assert a.kind_filter == :all
     assert a.mine_filter == true
     assert a.board_sort == :oldest
 
@@ -127,16 +127,20 @@ defmodule PlatformWeb.TasksLiveUrlFiltersTest do
     assert params["kind"] == "feature,bug"
   end
 
-  test "the old kind select replaces the kind list and keeps the rest", %{conn: conn, p: p} do
+  test "the filter popover's kind toggle edits the kind list and keeps the rest",
+       %{conn: conn, p: p} do
     {:ok, view, _html} = live(conn, board_url(p))
+    refute has_element?(view, "#tasks-kind-filter")
 
-    render_change(filters(view), "filter_kind", %{"kind" => "chore"})
+    render_click(view, "tasks_filter_open", %{"sheet" => "filter"})
+
+    view
+    |> element(~s(#tasks-filter-popover [data-role="tasks-filter-option"][data-kind="feature"]))
+    |> render_click()
+
     params = view |> assert_patch() |> assert_new_params_kept(p)
-    assert params["kind"] == "chore"
-
-    a = assigns(view)
-    assert a.kind_filters == ["chore"]
-    assert a.kind_filter == "chore"
+    assert params["kind"] == "bug"
+    assert assigns(view).kind_filters == ["bug"]
   end
 
   test "the old sort control and origin lanes link with every new param", %{conn: conn, p: p} do
@@ -159,14 +163,23 @@ defmodule PlatformWeb.TasksLiveUrlFiltersTest do
     assert has_element?(view, ~s([data-role=board-sort-option][data-sort=newest]))
   end
 
-  test "a single ?kind=bug still narrows the DB query", %{conn: conn, rows: rows} do
+  test "a single ?kind=bug narrows the board and list through :kind_filters",
+       %{conn: conn, rows: rows} do
     {:ok, view, _html} = live(conn, "/tasks?kind=bug")
 
     a = assigns(view)
-    assert a.kind_filter == "bug"
-    loaded = MapSet.new(a.all_tasks, & &1.id)
-    assert rows.mine_bug.id in loaded, "positive control"
-    refute rows.mine_chore.id in loaded
+    assert a.kind_filters == ["bug"]
+    # The DB query takes no kind opt any more: the chore is loaded, then
+    # narrowed out in memory.
+    assert rows.mine_chore.id in MapSet.new(a.all_tasks, & &1.id)
+
+    board = a.columns |> Enum.flat_map(fn {_col, tasks} -> tasks end) |> MapSet.new(& &1.id)
+    assert rows.mine_bug.id in board, "positive control"
+    refute rows.mine_chore.id in board
+
+    listed = MapSet.new(a.filtered_tasks, & &1.id)
+    assert rows.mine_bug.id in listed, "positive control"
+    refute rows.mine_chore.id in listed
   end
 
   test "an epic is honoured only inside the selected project", %{conn: conn, p: p, q: q} do

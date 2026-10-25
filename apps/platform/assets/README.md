@@ -58,10 +58,10 @@ ClientState.set(NAMESPACE, "collapsed", true);
 ```
 
 If you're migrating an existing hook off a raw `localStorage` key, use
-the one-shot read-then-delete pattern — see any of
-`last_project.js`, `tasks_status_filter.js`, or `sidebar_collapse.js` for
-the template. Mark the legacy calls with a `// client-state:allow (legacy
-migration)` comment so the lint gate lets them through.
+the one-shot read-then-delete pattern — see
+`last_project.js` or `sidebar_collapse.js` for the template. Mark the legacy
+calls with a `// client-state:allow (legacy migration)` comment so the lint
+gate lets them through.
 
 ### Carve-outs
 

@@ -314,18 +314,15 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
   describe "select_project with an archived project" do
     # Filtering archived projects out of the sidebar is NOT enough on its own.
-    # `last_project.js` replays the stored id through this event on EVERY
-    # mount, and the handler used to check only for nil — so whoever had a
-    # project selected when it was archived kept getting a live, interactive
-    # board for it on every visit, sticky until they picked another. Archived
-    # is a stale selection, exactly like a deleted id.
+    # A stored `tasks_project` pref or a `?project=` link still names the id,
+    # and the handler used to check only for nil — so whoever had a project
+    # selected when it was archived kept getting a live, interactive board
+    # for it on every visit. Archived is a stale selection, exactly like a
+    # deleted id.
 
-    # NB: assert on the pushed event, not on the project NAME appearing in the
-    # markup — the name stays in the sidebar either way, because `@projects` is
-    # read once at mount and isn't re-fetched when a project is archived. The
-    # push is also the thing that matters: `last_project.js` writes the id it
-    # receives back to localStorage, so `"__all__"` is what self-heals the
-    # stale entry and stops the archived board recurring on every visit.
+    # NB: assert on the selection, not on the project NAME appearing in the
+    # markup — the name stays in the sidebar either way, because `@projects`
+    # is read once at mount and isn't re-fetched when a project is archived.
 
     test "falls back to All Projects instead of selecting it", %{conn: conn} do
       {conn, admin} = acme_admin_conn(conn)
@@ -333,16 +330,15 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Active: the replayed id selects normally.
+      # Active: the id selects normally.
       sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
-      assert_push_event(view, "selected_project_changed", %{id: pushed_id})
-      assert pushed_id == project.id
+      assert selected_project_id(view) == project.id
 
       {:ok, _} = Tasks.archive_project(admin, project)
 
-      # Archived: the same replayed id must fall back, and push the correction.
+      # Archived: the same id must fall back to All.
       sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
-      assert_push_event(view, "selected_project_changed", %{id: "__all__"})
+      assert selected_project_id(view) == nil
     end
 
     test "an active project is still selectable", %{conn: conn} do
@@ -352,8 +348,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       sidebar_hook(view, "sidebar_select_project", %{"id" => project.id})
-      assert_push_event(view, "selected_project_changed", %{id: pushed_id})
-      assert pushed_id == project.id
+      assert selected_project_id(view) == project.id
     end
   end
 
@@ -659,4 +654,6 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     _ = render_hook(with_target(view, "#tasks-sidebar"), event, params)
     render(view)
   end
+
+  defp selected_project_id(view), do: :sys.get_state(view.pid).socket.assigns.selected_project_id
 end

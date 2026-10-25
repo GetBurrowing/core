@@ -87,9 +87,9 @@ defmodule PlatformWeb.TasksLiveBoardInvarianceTest do
   # are stage 3's surface and are covered in `tasks_live_planning_step_test.exs`.
   @spread_statuses ~w(backlog planning in_progress in_review done)
 
-  # The status that renders on BOTH board branches: a desktop column of its own
-  # AND the mobile board's default `:active_status_filter`. The paired positive
-  # control flips this one, so the control measures both branches.
+  # A status that renders on BOTH board branches: a desktop column of its own
+  # AND a mobile section of its own. The paired positive control flips this
+  # one, so the control measures both branches.
   @dual_branch_status "in_progress"
 
   @desktop_role "planning-step-extension"
@@ -1013,7 +1013,23 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `Selection.readable_task_detail/2` in place, line for line, and the
   # access check and its explanation live in `PlatformWeb.Tasks.Selection`.
   # 653 is the budget in `scripts/surface-budgets.txt`, which is not raised.
-  @shell_line_count 653
+  #
+  # LOWERED 653 -> 651 (-2), task 01a15746 stage 1. ARITHMETIC: 653 - 2 =
+  # 651, the mount line that defaulted the phone status pill to in_progress
+  # and one line of the `{:tasks_filters_changed, _}` comment that described the
+  # deleted phone status pills. Down, so the promise above holds.
+  #
+  # LOWERED 651 -> 649 (-2), task 01a15746 stage 2. ARITHMETIC: 651 - 2 =
+  # 649, the mount line that defaulted the single-kind assign and the
+  # `handle_params/3` line that decoded `?kind=` as one value (the filters
+  # tuple shrank in place). Down, so the promise above holds.
+  #
+  # LOWERED 649 -> 637 (-12), task 01a15746 stage 3. ARITHMETIC: 649 - 12 =
+  # 637: `select_project/2`'s localStorage-sync push pipe (1) and that
+  # function with its comment and trailing blank (11), deleted with the
+  # client hook it fed. The rewritten comments kept their line counts.
+  # Down, so the promise above holds.
+  @shell_line_count 637
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

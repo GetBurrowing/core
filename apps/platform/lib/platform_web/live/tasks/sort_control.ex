@@ -66,7 +66,6 @@ defmodule PlatformWeb.Tasks.SortControl do
   # clearing them (see the moduledoc's "Why there is no event" section).
   attr :task_search_query, :string, default: ""
   attr :scope_filter, :any, default: :all
-  attr :kind_filter, :any, default: :all
   attr :origin_filter, :any, default: :all
   # Task 01a161fd stage 1: the new URL params, threaded through so a sort
   # click's patch preserves them too.
@@ -140,7 +139,6 @@ defmodule PlatformWeb.Tasks.SortControl do
                 board_sort: mode,
                 task_search_query: @task_search_query,
                 scope_filter: @scope_filter,
-                kind_filter: @kind_filter,
                 origin_filter: @origin_filter,
                 selected_project_id: @selected_project_id,
                 selected_epic_id: @selected_epic_id,

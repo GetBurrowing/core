@@ -1,8 +1,5 @@
 <div
   id="tasks-last-project"
-  phx-hook="LastProject"
-  data-selected-project-id={@selected_project_id || "__all__"}
-  data-project-source={@tasks_project_source}
   class="flex h-full min-h-0"
 >
   <%!-- Sidebar / Projects / Epics (task 01a008f6 stage 2). The desktop
@@ -46,7 +43,6 @@
     board_sort={@board_sort}
     status_filters={@status_filters}
     kind_filters={@kind_filters}
-    kind_filter={@kind_filter}
     mine_filter={@mine_filter}
     sponsor_filter={@sponsor_filter}
     task_search_query={@task_search_query}
@@ -189,15 +185,12 @@
           id="tasks-filters"
           scope_filter={@scope_filter}
           sponsor_filter={@sponsor_filter}
-          kind_filter={@kind_filter}
           kind_filters={@kind_filters}
           status_filters={@status_filters}
           mine_filter={@mine_filter}
           origin_filter={@origin_filter}
           board_sort={@board_sort}
           task_search_query={@task_search_query}
-          active_status_filter={@active_status_filter}
-          mobile_columns={@mobile_columns}
           scope_counts={@scope_counts}
           active_scopes={@active_scopes}
           projects={@projects}
@@ -230,10 +223,8 @@
       epics_collapsed={@epics_collapsed}
       kanban_columns={@kanban_columns}
       mobile_columns={@mobile_columns}
-      active_status_filter={@active_status_filter}
       scope_filter={@scope_filter}
       sponsor_filter={@sponsor_filter}
-      kind_filter={@kind_filter}
       kind_filters={@kind_filters}
       status_filters={@status_filters}
       mine_filter={@mine_filter}

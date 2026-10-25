@@ -175,11 +175,11 @@ defmodule PlatformWeb.TasksLiveDoneWindowTest do
     assert done_card_ids(html, done) == []
   end
 
-  test "the mobile Done pill renders the same 20 / +50 window, newest first",
+  test "the mobile Done section renders the same 20 / +50 window, newest first",
        %{conn: conn, done: done} do
-    {:ok, view, _html} = live(conn, ~p"/tasks")
-
-    _ = render_click(filters(view), "filter_by_status", %{"status" => "done"})
+    # `?status=done` keeps the in-progress task out of the phone list, so the
+    # ids scanned below are the Done section's alone.
+    {:ok, view, _html} = live(conn, ~p"/tasks?status=done")
     settle(view)
 
     mobile_ids = fn ->

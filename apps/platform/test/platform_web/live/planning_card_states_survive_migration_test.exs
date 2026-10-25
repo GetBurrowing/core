@@ -314,10 +314,13 @@ defmodule PlatformWeb.PlanningCardStatesSurviveMigrationTest do
                "[data-planning-reason='#{PreplanStep.reasons().no_designer}']"
              ) == 0
 
+      # Page-wide, so 2: with no `?status=` the phone board renders the
+      # Backlog section too (task 01a15746 stage 1), and these planning-status
+      # tasks render there as well as on the desktop kanban.
       assert count(
                view,
                "[data-planning-reason='#{PlanningStepExtension.contradicted_reason()}']"
-             ) == 1
+             ) == 2
     end
   end
 
@@ -420,7 +423,10 @@ defmodule PlatformWeb.PlanningCardStatesSurviveMigrationTest do
       view = conn |> mount_board() |> assert_card_on_board!(plain)
       assert_card_on_board!(view, control)
 
-      assert count(view, "[data-planning-cursor='designing']") == 1
+      # Page-wide, so 2: with no `?status=` the phone board renders the
+      # Backlog section too (task 01a15746 stage 1), and these planning-status
+      # tasks render there as well as on the desktop kanban.
+      assert count(view, "[data-planning-cursor='designing']") == 2
       assert count(view, "[data-planning-cursor='planning']") == 0
     end
 
@@ -442,8 +448,10 @@ defmodule PlatformWeb.PlanningCardStatesSurviveMigrationTest do
       assert_card_on_board!(view, control)
 
       # The control proves cursor rendering works at all in this run; the
-      # count of exactly one proves the stale task is the one suppressed.
-      assert count(view, "[data-planning-cursor='designing']") == 1
+      # count of exactly two (the control's desktop card and its phone-board
+      # Backlog card, task 01a15746 stage 1) proves the stale task is
+      # suppressed on both surfaces.
+      assert count(view, "[data-planning-cursor='designing']") == 2
     end
   end
 

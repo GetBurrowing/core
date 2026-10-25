@@ -36,7 +36,6 @@ import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
-import LastProject from "./last_project"
 import TasksMyListRows from "./tasks_my_list_rows"
 import MessageGestures from "./message_gestures"
 import MessageActionsCopy from "./message_actions_copy"
@@ -78,7 +77,6 @@ import SidebarCollapse from "./sidebar_collapse"
 import TabPill from "./tab_pill"
 import VoiceContext from "./voice_context"
 import VoiceTab from "./voice_tab"
-import TasksStatusFilter from "./tasks_status_filter"
 import ThemeEditor from "./theme_editor"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
@@ -120,7 +118,6 @@ export default {
   InlineFocus,
   InlineThread,
   KanbanDragDrop,
-  LastProject,
   TasksMyListRows,
   LocalTime,
   MessageGestures,
@@ -164,7 +161,6 @@ export default {
   TabPill,
   VoiceContext,
   VoiceTab,
-  TasksStatusFilter,
   ThemeEditor,
   ThemePicker,
   ToastPause,

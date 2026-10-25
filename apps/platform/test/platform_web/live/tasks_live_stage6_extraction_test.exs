@@ -119,8 +119,7 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
                "ChatLive and defaults to the un-targeted ChatLive event."
     end
 
-    test "the search input and the mobile status pills both target the filters component",
-         %{conn: conn} do
+    test "the search input targets the filters component", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       doc = LazyHTML.from_fragment(html)
@@ -129,33 +128,22 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
       form = Map.new(form)
       assert Map.get(form, "phx-change") == "filter_search"
       assert Map.get(form, "phx-target") == "#tasks-filters"
-
-      pills =
-        doc
-        |> LazyHTML.query(~s(#tasks-status-filter-pills button[phx-click="filter_by_status"]))
-        |> LazyHTML.attributes()
-        |> Enum.map(&Map.new/1)
-
-      assert pills != [], "no mobile status pills rendered — the refute below would be vacuous"
-
-      assert Enum.all?(pills, &(Map.get(&1, "phx-target") == "#tasks-filters"))
     end
 
     # `mix test` cannot execute a JS hook, and a hook's `pushEvent` silently
-    # ignores `phx-target`. These two would have gone dead with the whole
-    # suite green, so the guard reads the source.
-    test "the two JS hooks that push filter events were retargeted at the component" do
-      status_filter = File.read!("assets/js/hooks/tasks_status_filter.js")
-      last_project = File.read!("assets/js/hooks/last_project.js")
+    # ignores `phx-target`. A hook pushing a filter event that way would go
+    # dead with the whole suite green, so the guard reads the sources.
+    test "no JS hook pushes a filter event untargeted" do
+      hooks = Path.wildcard("assets/js/**/*.js")
+      assert Enum.any?(hooks, &String.ends_with?(&1, "hooks/index.js")), "positive control"
 
-      assert status_filter =~ ~s|pushEventTo("#tasks-filters", "filter_by_status"|
+      offenders =
+        for path <- hooks,
+            source = File.read!(path),
+            source =~ ~r/pushEvent\(\s*"(filter_clear|clear_filters)"/,
+            do: path
 
-      refute status_filter =~ ~s|pushEvent("filter_by_status"|,
-             "an un-targeted pushEvent would land on the shell and the stored " <>
-               "mobile pill would silently stop being replayed"
-
-      assert last_project =~ ~s|pushEventTo("#tasks-filters", "filter_clear"|
-      refute last_project =~ ~s|pushEvent("clear_filters"|
+      assert offenders == []
     end
 
     test "the component never reaches for the board itself" do

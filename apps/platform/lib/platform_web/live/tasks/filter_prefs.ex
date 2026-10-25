@@ -37,12 +37,7 @@ defmodule PlatformWeb.Tasks.FilterPrefs do
   and, when the URL has no `project` key, puts the stored project and epic
   into the params, so the stored choice goes through the same selection path
   as a URL (readability and archive checks apply, and an archived project
-  self-heals to All). `project=all` overrides it. It then assigns
-  `:tasks_project_source` `"pref"`, which the template renders as
-  `data-project-source` so `last_project.js` skips its per-device restore.
-  With nothing stored on a connected bare URL it assigns `"default"`
-  instead: the `project=all` that `pin_url/2` writes is the server's
-  default, not a choice, so the hook may still replay a device's copy.
+  self-heals to All). `project=all` overrides it.
 
   ## Pin: `pin_url/2` (stage 5)
 
@@ -56,11 +51,7 @@ defmodule PlatformWeb.Tasks.FilterPrefs do
   LiveView was opened on), and cannot loop: it disarms itself, and the
   replaced URL carries `project` anyway. User picks still push their own
   entry and are never rewritten.
-
-  The per-device client-state (localStorage) copy stays as a dual write.
   """
-
-  # parallel-ui: tasks.last_project_client_state
 
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [connected?: 1, push_patch: 2]
@@ -87,16 +78,7 @@ defmodule PlatformWeb.Tasks.FilterPrefs do
 
       case stored do
         {project_id, epic_id} when not is_map_key(params, "project") ->
-          params =
-            params
-            |> Map.put("project", project_id || "all")
-            |> put_epic(epic_id)
-
-          {assign(socket, :tasks_project_source, "pref"), params}
-
-        nil when not is_map_key(params, "project") ->
-          source = if connected?(socket), do: "default"
-          {assign(socket, :tasks_project_source, source), params}
+          {socket, params |> Map.put("project", project_id || "all") |> put_epic(epic_id)}
 
         _ ->
           {socket, params}

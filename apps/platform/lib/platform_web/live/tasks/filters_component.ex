@@ -1,13 +1,13 @@
 defmodule PlatformWeb.Tasks.FiltersComponent do
   @moduledoc """
-  Board filtering — search, scope rail, sponsor toggle, mobile status pills
-  and the active-filter breadcrumb. Extracted from `PlatformWeb.TasksLive`
+  Board filtering — search, scope rail, sponsor toggle and the active-filter
+  breadcrumb. Extracted from `PlatformWeb.TasksLive`
   by task 01a008f6 stage 6.
 
   ## Ownership
 
-  Writer for `:task_search_query`, `:scope_filter` and
-  `:active_status_filter`. Every write is announced with
+  Writer for `:task_search_query` and `:scope_filter`. Every write is
+  announced with
   `send(self(), {:tasks_filters_changed, filters})`; the shell mirrors the
   values and does the board work. This component NEVER calls
   `refresh_board/1` and never touches a board assign — the shell mediates,
@@ -36,9 +36,10 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   here read-only, and the control's two options are `patch` links built by
   `BoardData.tasks_path/1`, so the sort needs no event at all.
 
-  Five events, and the plan's count of five is right for once:
-  `filter_search`, `filter_by_status`, `filter_scope`,
-  `filter_toggle_sponsor`, `filter_clear`.
+  Its events: `filter_search`, `filter_scope`,
+  `filter_toggle_sponsor`, `filter_clear`. The phone board's single-status
+  pill event went with its pill nav (task 01a15746 stage 1); `?status=`
+  narrows the phone board now.
 
   ## Three regions, one component
 
@@ -47,7 +48,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   `tasks_live.html.heex` 54-63 (search input, in the `page_header`
   `:search` slot), 189-323 (breadcrumb + scope rail + sponsor toggle, in
   the `:filters` slot) and 401-445 (mobile status pills, nested inside the
-  mobile list container). A LiveComponent renders in exactly one place, so
+  mobile list container, since deleted). A LiveComponent renders in exactly one place, so
   the largest region moves into this module's `~H` and the other two stay
   as *trigger sites* in the shell carrying `phx-target="#tasks-filters"` —
   the same shape stage 2 established for `SidebarComponent`, whose triggers
@@ -66,17 +67,14 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
   ## Hook retargeting
 
-  Two JS hooks push filter events, and `pushEvent` from a hook ignores
-  `phx-target` — it always lands on the parent LiveView. Both were
-  converted to `pushEventTo("#tasks-filters", ...)` in the same commit:
-  `tasks_status_filter.js` (replays the stored mobile pill on mount) and
-  `last_project.js` (replays a stored "All projects" as `filter_clear`).
-  Left alone, both would have gone silently dead with every `mix test`
-  still green — the click paths they shadow keep working.
+  A JS hook that pushes a filter event must use `pushEventTo`: `pushEvent`
+  from a hook ignores `phx-target` and always lands on the parent LiveView,
+  so a hook that sends `filter_clear` targets `#tasks-filters`. Left alone it
+  would go silently dead with every `mix test` still green, because the
+  click path it shadows keeps working.
   """
   use PlatformWeb, :live_component
 
-  alias Platform.Tasks.Task
   alias Platform.Tenancy
   alias PlatformWeb.Tasks.{BoardData, SortControl, TaskDisplay}
 
@@ -303,7 +301,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
               board_sort: @board_sort,
               task_search_query: @task_search_query,
               scope_filter: @scope_filter,
-              kind_filter: @kind_filter,
               origin_filter: lane,
               selected_project_id: @selected_project_id,
               selected_epic_id: @selected_epic_id,
@@ -328,26 +325,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         </.link>
       </nav>
 
-      <form phx-change="filter_kind" phx-target={@myself} class="block shrink-0">
-        <label for="tasks-kind-filter" class="sr-only">Filter tasks by kind</label>
-        <select
-          id="tasks-kind-filter"
-          name="kind"
-          data-role="task-kind-filter"
-          aria-label="Filter tasks by kind"
-          class="select select-bordered select-xs min-h-7 h-7"
-        >
-          <option value="all" selected={@kind_filter == :all}>All kinds</option>
-          <option
-            :for={kind <- Task.kinds()}
-            value={kind}
-            selected={@kind_filter == kind}
-          >
-            {String.capitalize(kind)}
-          </option>
-        </select>
-      </form>
-
       <%!-- Sort control (task 01a0cef1 stage 2). A SIBLING of the scope rail,
            not a chip inside it: the rail narrows the set and scrolls, this
            reorders it and never scrolls (`shrink-0`). See `SortControl`. --%>
@@ -358,7 +335,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         sponsor_filter={@sponsor_filter}
         task_search_query={@task_search_query}
         scope_filter={@scope_filter}
-        kind_filter={@kind_filter}
         origin_filter={@origin_filter}
         selected_project_id={@selected_project_id}
         selected_epic_id={@selected_epic_id}
@@ -451,19 +427,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
      )}
   end
 
-  # Mobile-only: status-filter pill bar above the section-grouped task list.
-  # Validates the incoming status against the mobile columns to ignore
-  # garbage — a stale ClientState value replayed by `tasks_status_filter.js`
-  # is the realistic source.
-  # parallel-ui: tasks.mobile_status_pill
-  def handle_event("filter_by_status", %{"status" => status}, socket) do
-    if Enum.any?(socket.assigns.mobile_columns, fn {key, _label} -> key == status end) do
-      {:noreply, announce(socket, %{active_status_filter: status})}
-    else
-      {:noreply, socket}
-    end
-  end
-
   # Desktop-only: scope-filter rail. The scope arrives as a string (Phoenix
   # serializes `phx-value-scope={@scope}` from an atom into its string
   # name), so parse it against the canonical allowlist — anything outside
@@ -498,23 +461,6 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   def handle_event("filter_scope", _params, socket) do
     socket = announce(socket, %{scope_filter: :all})
     {:noreply, push_patch(socket, to: BoardData.tasks_path(socket.assigns))}
-  end
-
-  def handle_event("filter_kind", %{"kind" => kind}, socket) do
-    parsed = if kind in Task.kinds(), do: kind, else: :all
-
-    # The old single select writes the list too (task 01a161fd stage 1):
-    # `tasks_path/1` emits `:kind_filters` when non-empty, so leaving a
-    # stale multi-kind list here would override the pick.
-    # parallel-ui: tasks.kind_filter_single
-    kind_filters = if parsed == :all, do: [], else: [parsed]
-
-    path =
-      socket.assigns
-      |> Map.merge(%{kind_filter: parsed, kind_filters: kind_filters})
-      |> BoardData.tasks_path()
-
-    {:noreply, push_patch(socket, to: path)}
   end
 
   # Thin push_patch shim: `handle_params/3` in the shell owns the decode, so
