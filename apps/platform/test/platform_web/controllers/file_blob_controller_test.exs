@@ -9,7 +9,8 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
   ## Coverage matrix
 
-    * 200 inline for image/text/pdf (Content-Disposition: inline).
+    * 200 inline for non-SVG image/pdf (Content-Disposition: inline);
+      text/* and SVG are attachments under a sandbox CSP (task 01a16a08).
     * 200 attachment for unknown content type (forced attachment).
     * 200 attachment when `?download=1` is passed regardless of type
       (the revision contract from Alex's feedback).
@@ -123,6 +124,11 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
   # ── Tests ──────────────────────────────────────────────────────────────
 
+  # The `:blob_browser` pipeline's `put_secure_browser_headers` CSP, captured
+  # literally from an image/png response in a scratch run (task 01a16a08
+  # stage 2). Deliberately NOT derived from `AttachmentResponsePolicy`.
+  @baseline_csp "base-uri 'self'; frame-ancestors 'self';"
+
   describe "GET /files/blob/:id (default disposition)" do
     test "renders inline for image content type", %{conn: conn} do
       user = insert_user()
@@ -138,7 +144,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
       assert response(conn, 200) == "PNGBYTES"
     end
 
-    test "renders inline for text content type", %{conn: conn} do
+    test "text/plain is an attachment under the sandbox CSP (task 01a16a08)", %{conn: conn} do
       user = insert_user()
       project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "hello body")
@@ -147,7 +153,10 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
       assert conn.status == 200
       [disposition] = get_resp_header(conn, "content-disposition")
-      assert disposition =~ "inline"
+      assert String.starts_with?(disposition, "attachment;")
+
+      assert get_resp_header(conn, "content-security-policy") ==
+               [@baseline_csp <> " sandbox;"]
     end
 
     test "renders inline for application/pdf", %{conn: conn} do
@@ -203,7 +212,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
       refute disposition =~ "inline"
     end
 
-    test "the change is narrow: text/plain and text/csv still render inline", %{conn: conn} do
+    test "every non-allowlisted text/* is an attachment under sandbox", %{conn: _conn} do
       user = insert_user()
       project = seed_acme_project()
 
@@ -212,7 +221,12 @@ defmodule PlatformWeb.FileBlobControllerTest do
         conn = build_conn() |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
 
         [disposition] = get_resp_header(conn, "content-disposition")
-        assert disposition =~ "inline", "expected #{ct} to stay inline"
+
+        assert String.starts_with?(disposition, "attachment;"),
+               "expected #{ct} to be an attachment"
+
+        [csp] = get_resp_header(conn, "content-security-policy")
+        assert csp =~ "sandbox;", "expected #{ct} to carry the sandbox CSP"
       end
     end
 
@@ -247,9 +261,12 @@ defmodule PlatformWeb.FileBlobControllerTest do
       [disposition] = get_resp_header(conn, "content-disposition")
       assert disposition =~ "attachment"
       [csp] = get_resp_header(conn, "content-security-policy")
-      refute csp =~ "sandbox"
-      # Positive control: the baseline header IS present, so the refute
-      # above is not reading a missing header.
+      # octet-stream is not on the shared inline allowlist, so it carries the
+      # type-based sandbox CSP (task 01a16a08) whether or not ?preview=1 is
+      # present. What ?preview=1 must NOT do is add a second one: exactly
+      # one `sandbox` occurrence.
+      assert length(String.split(csp, "sandbox")) - 1 == 1
+      # Positive control: the baseline header IS present.
       assert csp =~ "frame-ancestors"
     end
 
@@ -334,6 +351,64 @@ defmodule PlatformWeb.FileBlobControllerTest do
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "base-uri 'self'"
       assert csp =~ "frame-ancestors 'self'"
+    end
+
+    # allow-scripts stays markup-only even though the sandbox gate now
+    # covers every non-allowlisted type (task 01a16a08 stage 2).
+    test "a flagged text/plain file requested by an iframe gets bare sandbox, never allow-scripts",
+         %{conn: conn} do
+      user = insert_user()
+      project = seed_acme_project()
+      {file, _path} = seed_blob(project, "text/plain", "<script>alert(1)</script>")
+      {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("sec-fetch-dest", "iframe")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "sandbox;"
+      refute csp =~ "allow-scripts"
+    end
+  end
+
+  describe "shared inline allowlist (task 01a16a08 stage 2)" do
+    for ct <- ["image/svg+xml", "IMAGE/SVG+XML"] do
+      test "#{ct} is an attachment under the sandbox CSP", %{conn: conn} do
+        user = insert_user()
+        project = seed_acme_project()
+
+        {file, _path} =
+          seed_blob(project, unquote(ct), ~s(<svg xmlns="http://www.w3.org/2000/svg"></svg>))
+
+        conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
+
+        assert conn.status == 200
+        [disposition] = get_resp_header(conn, "content-disposition")
+        assert String.starts_with?(disposition, "attachment;")
+
+        assert get_resp_header(conn, "content-security-policy") ==
+                 [@baseline_csp <> " sandbox;"]
+      end
+    end
+
+    for ct <- ["image/png", "application/pdf"] do
+      test "#{ct} stays inline with only the baseline CSP", %{conn: conn} do
+        user = insert_user()
+        project = seed_acme_project()
+        {file, _path} = seed_blob(project, unquote(ct), "BYTES")
+
+        conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
+
+        assert conn.status == 200
+        [disposition] = get_resp_header(conn, "content-disposition")
+        assert String.starts_with?(disposition, "inline;")
+        assert get_resp_header(conn, "content-security-policy") == [@baseline_csp]
+        refute hd(get_resp_header(conn, "content-security-policy")) =~ "sandbox"
+      end
     end
   end
 

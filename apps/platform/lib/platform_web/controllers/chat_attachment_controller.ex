@@ -3,6 +3,7 @@ defmodule PlatformWeb.ChatAttachmentController do
 
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
+  alias PlatformWeb.AttachmentResponsePolicy
 
   def show(conn, %{"id" => id}) do
     principal = conn.assigns[:principal]
@@ -21,6 +22,8 @@ defmodule PlatformWeb.ChatAttachmentController do
             # Without this, a browser can reinterpret a response as HTML based on
             # its bytes, bypassing the safe-override allowlist in AttachmentStorage.
             |> put_resp_header("x-content-type-options", "nosniff")
+            # In show/2 so the 200, 206 and 416 responses all carry it (task 01a16a08).
+            |> maybe_sandbox(attachment)
             |> put_resp_header("accept-ranges", "bytes")
             |> send_attachment(attachment, path, size, get_req_header(conn, "range"))
 
@@ -35,7 +38,7 @@ defmodule PlatformWeb.ChatAttachmentController do
     send_download(conn, {:file, path},
       filename: attachment.filename,
       content_type: attachment.content_type,
-      disposition: disposition_for(attachment.content_type)
+      disposition: AttachmentResponsePolicy.disposition(attachment.content_type)
     )
   end
 
@@ -64,7 +67,7 @@ defmodule PlatformWeb.ChatAttachmentController do
 
   # Same Content-Type / Content-Disposition `send_download/3` would set.
   defp put_download_headers(conn, attachment) do
-    disposition = Atom.to_string(disposition_for(attachment.content_type))
+    disposition = Atom.to_string(AttachmentResponsePolicy.disposition(attachment.content_type))
     encoded = URI.encode(attachment.filename, &URI.char_unreserved?/1)
 
     conn
@@ -115,11 +118,13 @@ defmodule PlatformWeb.ChatAttachmentController do
     end
   end
 
-  defp disposition_for("image/" <> _rest), do: :inline
-  defp disposition_for("text/" <> _rest), do: :inline
-  defp disposition_for("application/pdf"), do: :inline
-  # Video and audio play in the page (task 01a120be); nosniff still applies.
-  defp disposition_for("video/" <> _rest), do: :inline
-  defp disposition_for("audio/" <> _rest), do: :inline
-  defp disposition_for(_content_type), do: :attachment
+  # Anything not served inline (text/*, svg, unknown) is sandboxed so that a
+  # browser which renders it anyway cannot run it as same-origin script.
+  defp maybe_sandbox(conn, attachment) do
+    if AttachmentResponsePolicy.disposition(attachment.content_type) == :attachment do
+      AttachmentResponsePolicy.put_sandbox_csp(conn)
+    else
+      conn
+    end
+  end
 end

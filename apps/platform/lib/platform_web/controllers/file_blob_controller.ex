@@ -19,9 +19,12 @@ defmodule PlatformWeb.FileBlobController do
   ## Query params
 
     * `download=1` — force `Content-Disposition: attachment`, so the
-      browser saves the file instead of trying to preview it. Default
-      disposition is inline for image/* / text/* / application/pdf and
-      attachment for anything else.
+      browser saves the file instead of trying to preview it. The default
+      disposition comes from the shared allowlist in
+      `PlatformWeb.AttachmentResponsePolicy` (the same one chat attachments
+      use): inline for non-SVG image/*, video/*, audio/* and application/pdf,
+      attachment for everything else, every text/* and image/svg+xml
+      included. Every non-allowlisted type also carries a sandbox CSP.
     * `preview=1` — HTML/XHTML only: serve the markup inline for the
       sandboxed preview frame. Without it, markup downloads. Either way
       the response carries `Content-Security-Policy: sandbox`, so the
@@ -53,6 +56,7 @@ defmodule PlatformWeb.FileBlobController do
   alias Platform.Files
   alias Platform.Tasks
   alias Platform.Tenancy
+  alias PlatformWeb.AttachmentResponsePolicy
 
   def show(conn, %{"id" => file_id} = params) do
     with %Files.File{} = file <- Files.get_file(file_id),
@@ -101,7 +105,7 @@ defmodule PlatformWeb.FileBlobController do
         cond do
           force_download? -> :attachment
           sandboxed_preview? -> :inline
-          true -> disposition_for(file.content_type)
+          true -> AttachmentResponsePolicy.disposition(file.content_type)
         end
 
       conn
@@ -208,27 +212,24 @@ defmodule PlatformWeb.FileBlobController do
                            "img-src data: blob:; media-src data: blob:; font-src data:; " <>
                            "connect-src 'none'; form-action 'none'"
 
-  # APPENDS rather than sets: the browser pipeline's
-  # `put_secure_browser_headers` already put `base-uri 'self';
-  # frame-ancestors 'self';` on this response, and replacing the header
-  # would quietly drop both while looking like a hardening change.
+  # Type-based, independent of `?download` and `?preview`: every type the
+  # shared allowlist would NOT serve inline gets a sandbox CSP, so a
+  # `?preview=1` HTML response (inline by request) is still sandboxed. The
+  # merge (append to the pipeline's `base-uri 'self'; frame-ancestors
+  # 'self';`, never replace) lives only in `AttachmentResponsePolicy`.
   defp maybe_sandbox_header(conn, %Files.File{} = file) do
-    if markup_content_type?(file.content_type) do
-      existing =
-        case get_resp_header(conn, "content-security-policy") do
-          [value | _] -> String.trim(value)
-          [] -> ""
-        end
-
-      merged = String.trim_leading(existing <> " " <> sandbox_directive(conn, file))
-      put_resp_header(conn, "content-security-policy", merged)
+    if AttachmentResponsePolicy.disposition(file.content_type) == :attachment do
+      AttachmentResponsePolicy.put_sandbox_csp(conn, sandbox_directive(conn, file))
     else
       conn
     end
   end
 
-  # Flagged (`interactive_at` set) AND requested by the preview <iframe> —
-  # the only combination that gets `allow-scripts`. `Sec-Fetch-Dest:
+  # Flagged (`interactive_at` set) AND markup (text/html or xhtml) AND
+  # requested by the preview <iframe> — the only combination that gets
+  # `allow-scripts`. The markup check matters because the sandbox gate in
+  # `maybe_sandbox_header/2` now covers every non-allowlisted type, and
+  # `allow-scripts` must stay markup-only. `Sec-Fetch-Dest:
   # iframe` is what tells the preview frame's request apart from a direct
   # top-level hit on the same URL; a missing header (older browsers) or
   # any other value (a bare link, the address bar, `Sec-Fetch-Dest:
@@ -238,8 +239,9 @@ defmodule PlatformWeb.FileBlobController do
   # directive: CSP ignores every directive of a given type after the
   # first one in a policy, so a duplicate `sandbox` later in the header
   # would silently leave the file inert instead of interactive.
-  defp sandbox_directive(conn, %Files.File{interactive_at: %DateTime{}}) do
-    if get_req_header(conn, "sec-fetch-dest") == ["iframe"] do
+  defp sandbox_directive(conn, %Files.File{interactive_at: %DateTime{}} = file) do
+    if markup_content_type?(file.content_type) and
+         get_req_header(conn, "sec-fetch-dest") == ["iframe"] do
       @interactive_frame_csp
     else
       "sandbox;"
@@ -249,16 +251,6 @@ defmodule PlatformWeb.FileBlobController do
   defp sandbox_directive(_conn, _file), do: "sandbox;"
 
   defp markup_content_type?(ct), do: ct in ["text/html", "application/xhtml+xml"]
-
-  # ORDER IS LOAD-BEARING: `text/html` matches the `"text/" <> _rest`
-  # prefix below, so this clause is only reachable above it. Moved down,
-  # it is dead code that still reads like a fix.
-  defp disposition_for("text/html"), do: :attachment
-  defp disposition_for("application/xhtml+xml"), do: :attachment
-  defp disposition_for("image/" <> _rest), do: :inline
-  defp disposition_for("text/" <> _rest), do: :inline
-  defp disposition_for("application/pdf"), do: :inline
-  defp disposition_for(_content_type), do: :attachment
 
   defp authorize(conn, %Files.File{} = file) do
     user_id = get_session(conn, :current_user_id)

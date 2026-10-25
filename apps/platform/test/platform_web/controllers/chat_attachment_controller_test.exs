@@ -63,7 +63,11 @@ defmodule PlatformWeb.ChatAttachmentControllerTest do
     {agent, runtime, token}
   end
 
-  defp create_attachment_fixture do
+  defp create_attachment_fixture(
+         filename \\ "hello.txt",
+         content_type \\ "text/plain",
+         body \\ "hello attachment"
+       ) do
     {:ok, space} =
       Chat.create_space(%{
         name: "General",
@@ -89,14 +93,17 @@ defmodule PlatformWeb.ChatAttachmentControllerTest do
     source_path =
       Platform.TestTemp.path("chat-attachment-source") <> ".txt"
 
-    File.write!(source_path, "hello attachment")
+    File.write!(source_path, body)
 
-    {:ok, stored} = AttachmentStorage.persist_upload(source_path, "hello.txt", "text/plain")
+    {:ok, stored} = AttachmentStorage.persist_upload(source_path, filename, content_type)
     File.rm(source_path)
 
+    # Store the literal content_type verbatim, even if persist_upload
+    # normalises a mixed-case or param-bearing type.
     {:ok, attachment} =
       Chat.create_attachment(
         stored
+        |> Map.put(:content_type, content_type)
         |> Map.put(:message_id, message.id)
         |> Map.put(:space_id, space.id)
       )
@@ -214,5 +221,75 @@ defmodule PlatformWeb.ChatAttachmentControllerTest do
       |> get(~p"/chat/attachments/#{attachment.id}")
 
     assert response(conn, 404) =~ "Not found"
+  end
+
+  describe "response policy (task 01a16a08)" do
+    defp fetch_as_member(conn, filename, content_type, req_headers \\ []) do
+      %{space: space, attachment: attachment} =
+        create_attachment_fixture(filename, content_type, "<html><script>alert(1)</script>")
+
+      user = insert_user()
+      _ = join_space_as_user(space.id, user)
+
+      conn = authenticate_session(conn, user)
+
+      conn =
+        Enum.reduce(req_headers, conn, fn {k, v}, acc -> put_req_header(acc, k, v) end)
+
+      get(conn, ~p"/chat/attachments/#{attachment.id}")
+    end
+
+    defp assert_sandboxed_download(conn) do
+      [disposition] = get_resp_header(conn, "content-disposition")
+      assert String.starts_with?(disposition, "attachment;")
+      assert get_resp_header(conn, "content-security-policy") == ["sandbox;"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    end
+
+    test "text/html is served as a sandboxed attachment", %{conn: conn} do
+      conn = fetch_as_member(conn, "page.html", "text/html")
+      assert conn.status == 200
+      assert_sandboxed_download(conn)
+    end
+
+    test "text/html range request (206) is a sandboxed attachment", %{conn: conn} do
+      conn = fetch_as_member(conn, "page.html", "text/html", [{"range", "bytes=0-3"}])
+      assert conn.status == 206
+      assert_sandboxed_download(conn)
+    end
+
+    test "image/svg+xml is served as a sandboxed attachment", %{conn: conn} do
+      conn = fetch_as_member(conn, "pic.svg", "image/svg+xml")
+      assert conn.status == 200
+      assert_sandboxed_download(conn)
+    end
+
+    test "text/plain is served as a sandboxed attachment (deliberate change)", %{conn: conn} do
+      conn = fetch_as_member(conn, "notes.txt", "text/plain")
+      assert conn.status == 200
+      assert_sandboxed_download(conn)
+    end
+
+    test "mixed-case, param-bearing TEXT/HTML is a sandboxed attachment", %{conn: conn} do
+      conn = fetch_as_member(conn, "page.html", "TEXT/HTML; charset=utf-8")
+      assert conn.status == 200
+      assert_sandboxed_download(conn)
+    end
+
+    for {filename, content_type} <- [
+          {"pic.png", "image/png"},
+          {"doc.pdf", "application/pdf"},
+          {"clip.mp4", "video/mp4"},
+          {"song.mp3", "audio/mpeg"}
+        ] do
+      test "#{content_type} stays inline with no CSP", %{conn: conn} do
+        conn = fetch_as_member(conn, unquote(filename), unquote(content_type))
+        assert conn.status == 200
+        [disposition] = get_resp_header(conn, "content-disposition")
+        assert String.starts_with?(disposition, "inline;")
+        assert get_resp_header(conn, "content-security-policy") == []
+        assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      end
+    end
   end
 end
