@@ -2262,6 +2262,13 @@ defmodule PlatformWeb.InboxLiveTest do
 
       {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
 
+      # Positive control: B's page holds a Revert button carrying exactly the
+      # params the stale click below sends.
+      assert has_element?(
+               lv,
+               ~s([data-role="meeting-briefing-card"]#{card} [data-action="revert"][phx-click="act"][phx-value-key="#{k}"][phx-value-verb="revert"])
+             )
+
       briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
 
       assert {:ok, _} =
@@ -2276,11 +2283,12 @@ defmodule PlatformWeb.InboxLiveTest do
       deleted_at = Repo.get!(TaskRecord, ctx.t1.id).deleted_at
       assert %DateTime{} = deleted_at
 
-      # B's page still holds the stale Revert button: the click reaches the
-      # server before the reload it is about to get.
+      # The stale click is sent as the button's event with its params, straight
+      # to the component: A's broadcast may already have repainted B's page and
+      # removed the button, but a real browser that rendered it still sends this.
       lv
-      |> element(~s([data-role="meeting-briefing-card"]#{card} [data-action="revert"]))
-      |> render_click()
+      |> with_target("#meeting-briefing-#{ctx.meeting.id}")
+      |> render_click("act", %{"key" => k, "verb" => "revert"})
 
       assert lv |> element(~s([data-role="meeting-briefing-notice"])) |> render() |> strip_tags() ==
                "Already handled by " <> ctx.a.name
