@@ -1,3 +1,4 @@
+import CoreText
 import UIKit
 
 // The native tab bar (task 01a1557b): the system's own UITabBar over the web
@@ -6,22 +7,24 @@ import UIKit
 // each key. Labels always shown. Stock material: no backgroundColor and no
 // custom appearance on iOS 26+ (design direction canvas 01a1724a, rule zero).
 
-/// How one tab key is drawn: its label and the SF Symbols that match the
-/// masters' glyphs (outline at rest, `.fill` when selected where one exists).
+/// How one tab key is drawn: its label and the masters' own glyph
+/// (task 01a174e8 stage 2), the same image selected and unselected.
 struct NativeTab: Equatable {
     let key: String
     let title: String
-    let symbol: String
-    let selectedSymbol: String
+    /// An imageset in App/Assets.xcassets: one template SVG, the masters'
+    /// glyph verbatim (master-mobile.html), single scale at the 25pt
+    /// tab-icon box, vector preserved.
+    let image: String
 
     /// Every key native can draw. A key the web sends that is not here is
     /// dropped; native never invents a tab.
     static let catalog: [NativeTab] = [
-        NativeTab(key: "chat", title: "Chat", symbol: "ellipsis.bubble", selectedSymbol: "ellipsis.bubble.fill"),
-        NativeTab(key: "voice", title: "Voice", symbol: "mic", selectedSymbol: "mic.fill"),
-        NativeTab(key: "tasks", title: "Tasks", symbol: "checklist", selectedSymbol: "checklist"),
-        NativeTab(key: "meetings", title: "Meetings", symbol: "video", selectedSymbol: "video.fill"),
-        NativeTab(key: "more", title: "More", symbol: "ellipsis", selectedSymbol: "ellipsis"),
+        NativeTab(key: "chat", title: "Chat", image: "tab-chat"),
+        NativeTab(key: "voice", title: "Voice", image: "tab-voice"),
+        NativeTab(key: "tasks", title: "Tasks", image: "tab-tasks"),
+        NativeTab(key: "meetings", title: "Meetings", image: "tab-meetings"),
+        NativeTab(key: "more", title: "More", image: "tab-more"),
     ]
 
     /// At most five, so iOS never adds its own "More" overflow item.
@@ -30,14 +33,100 @@ struct NativeTab: Equatable {
     static func named(_ key: String, in catalog: [NativeTab] = catalog) -> NativeTab? {
         catalog.first { $0.key == key }
     }
+
+    /// The glyph as a template image, so the bar's selected and unselected
+    /// inks paint it. Nil only if the asset is missing from the bundle.
+    var glyph: UIImage? { Self.glyph(named: image) }
+
+    static func glyph(named name: String) -> UIImage? {
+        UIImage(named: name, in: Bundle(for: StandaloneTabBarHost.self), compatibleWith: nil)?.withRenderingMode(.alwaysTemplate)
+    }
+}
+
+/// The tab labels: Public Sans 11pt at weight 550 (the variable font's
+/// 'wght' axis), the same selected and unselected, scaled with Dynamic Type
+/// as caption2 up to `maximumPointSize`.
+enum NativeTabLabel {
+    static let size: CGFloat = 11
+    static let weight: Double = 550
+    static let textStyle = UIFont.TextStyle.caption2
+    /// 13pt. The narrowest bar is 375pt; its floating glass platter is inset
+    /// 21pt a side (README, "Hosting"), so each of five tabs gets 333 / 5 =
+    /// 66.6pt, about 62pt once the platter's own inner padding is taken off.
+    /// "Meetings" at wght 550 is 4.4185em wide (measured from
+    /// PublicSans-Variable.ttf's advances), so 13pt is 57.4pt (fits with
+    /// about 2pt a side) and 14pt is 61.9pt (touches the edges). Past the
+    /// cap the Large Content Viewer shows the label.
+    static let maximumPointSize: CGFloat = 13
+    /// The OpenType 'wght' axis tag.
+    static let weightAxis = 0x7767_6874
+
+    static func font(compatibleWith traits: UITraitCollection? = nil) -> UIFont {
+        let variation = UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String)
+        let descriptor = UIFontDescriptor(fontAttributes: [.family: BurrowFont.family, variation: [weightAxis: weight]])
+        let base = UIFont(descriptor: descriptor, size: size)
+        return UIFontMetrics(forTextStyle: textStyle).scaledFont(for: base, maximumPointSize: maximumPointSize, compatibleWith: traits)
+    }
+
+    /// Per item, for `.normal` and `.selected`. Not through
+    /// UITabBarAppearance: on iOS 26+ the bar carries no appearance at all
+    /// (`NativeTabBarMaterial`). No colour here; the bar's inks paint it.
+    static func apply(to item: UITabBarItem, compatibleWith traits: UITraitCollection? = nil) {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font(compatibleWith: traits)]
+        item.setTitleTextAttributes(attributes, for: .normal)
+        item.setTitleTextAttributes(attributes, for: .selected)
+    }
+
+    /// The 'wght' value a font draws at, nil if it carries no variation.
+    static func variationWeight(of font: UIFont) -> Double? {
+        guard let variation = CTFontCopyVariation(font as CTFont) as? [NSNumber: NSNumber] else { return nil }
+        return variation[NSNumber(value: weightAxis)]?.doubleValue
+    }
 }
 
 /// The tab inks the web resolved from its theme (`ink` in
 /// `SuiteNative.tabBarState`, task 01a174e8): each a '#rrggbbaa' string,
-/// stored as sent. Nothing draws with them yet; nil until the web sends one.
+/// stored as sent; nil until the web sends one. `NativeTabInkColors` turns
+/// them into the bar's tints.
 struct NativeTabInk: Equatable {
     var selected: String?
     var unselected: String?
+
+    /// '#rrggbbaa' as a colour; nil for anything else (a missing value, a
+    /// short or long string, a non-hex digit, a CSS name).
+    static func colour(_ value: String?) -> UIColor? {
+        guard let value, value.utf8.count == 9, value.hasPrefix("#") else { return nil }
+        let digits = value.dropFirst()
+        guard digits.allSatisfy({ $0.isASCII && $0.isHexDigit }), let rgba = UInt32(digits, radix: 16) else { return nil }
+        return webInk(rgba: rgba)
+    }
+
+    /// The one place this file builds a colour from components: a value the
+    /// WEB resolved from its theme tokens, never a literal. ThemeTests
+    /// allowlists exactly this line.
+    private static func webInk(rgba: UInt32) -> UIColor {
+        let channel = { (shift: UInt32) in CGFloat(rgba >> shift & 0xff) / 255 }
+        return UIColor(red: channel(24), green: channel(16), blue: channel(8), alpha: channel(0))
+    }
+}
+
+/// The bar's two tints. A web ink that does not parse keeps the previous
+/// colour; before any ink parses, the Burrow slots (primary selected, muted
+/// unselected).
+struct NativeTabInkColors: Equatable {
+    var selected: UIColor
+    var unselected: UIColor
+
+    static var fallback: NativeTabInkColors {
+        NativeTabInkColors(selected: BurrowColor.primary.uiColor, unselected: BurrowColor.muted.uiColor)
+    }
+
+    func applying(_ ink: NativeTabInk) -> NativeTabInkColors {
+        var next = self
+        if let selected = NativeTabInk.colour(ink.selected) { next.selected = selected }
+        if let unselected = NativeTabInk.colour(ink.unselected) { next.unselected = unselected }
+        return next
+    }
 }
 
 /// What the web last said through `SuiteNative.tabBarState`
@@ -55,6 +144,16 @@ struct NativeTabBarState: Equatable {
     var ink = NativeTabInk()
     /// "light" or "dark": the web theme's scheme, nil until the web sends one.
     var scheme: String?
+
+    /// The bar's interface style: the web's scheme, the system's until one
+    /// arrives.
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch scheme {
+        case "dark": return .dark
+        case "light": return .light
+        default: return .unspecified
+        }
+    }
 
     /// The bar shows only when the web asked for it AND there is something
     /// to draw.
@@ -144,19 +243,33 @@ enum NativeTabBarFactory {
         StandaloneTabBarHost()
     }
 
-    static func item(_ tab: NativeTab, index: Int) -> UITabBarItem {
-        let item = UITabBarItem(title: tab.title, image: UIImage(systemName: tab.symbol), selectedImage: UIImage(systemName: tab.selectedSymbol))
+    static func item(_ tab: NativeTab, index: Int, compatibleWith traits: UITraitCollection? = nil) -> UITabBarItem {
+        let glyph = tab.glyph
+        let item = UITabBarItem(title: tab.title, image: glyph, selectedImage: glyph)
+        item.largeContentSizeImage = glyph
+        NativeTabLabel.apply(to: item, compatibleWith: traits)
         item.tag = index
         item.accessibilityIdentifier = "native-tab-\(tab.key)"
         return item
     }
 
-    /// Selected tint is base-content (onSurface), not the brand colour;
-    /// unselected items keep the system default.
+    /// The stock material; the inks start at the Burrow fallback until the
+    /// web sends its own. The Large Content Viewer stays on, so a label past
+    /// the font cap is still readable at the largest text sizes.
     static func configure(_ bar: UITabBar) {
-        bar.tintColor = BurrowColor.onSurface.uiColor
+        paint(bar, ink: .fallback, style: .unspecified)
+        bar.showsLargeContentViewer = true
         bar.accessibilityIdentifier = "native-tab-bar"
         NativeTabBarMaterial.apply(to: bar)
+    }
+
+    /// The web theme's inks and scheme on the bar: the selected tab in
+    /// `tintColor`, the rest in `unselectedItemTintColor`, the glass in the
+    /// web's light or dark.
+    static func paint(_ bar: UITabBar, ink: NativeTabInkColors, style: UIUserInterfaceStyle) {
+        bar.tintColor = ink.selected
+        bar.unselectedItemTintColor = ink.unselected
+        bar.overrideUserInterfaceStyle = style
     }
 
     /// The badge for `key`: `""` (the system red dot) on More while
@@ -182,6 +295,8 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     let bar = UITabBar()
     var onTap: ((String) -> Void)?
     private var state = NativeTabBarState()
+    /// The tints last painted; a web ink that does not parse keeps these.
+    private(set) var ink = NativeTabInkColors.fallback
     /// The keys `bar.items` was last built from.
     private(set) var renderedKeys: [String] = []
     /// Where the bar is heading; a hide finishing after a newer show does
@@ -194,6 +309,11 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         NativeTabBarFactory.configure(bar)
         bar.isHidden = true
         bar.translatesAutoresizingMaskIntoConstraints = false
+        // A Dynamic Type change re-scales the labels (a bar item's title
+        // font does not follow it on its own).
+        bar.registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { [weak self] (_: UITabBar, _: UITraitCollection) in
+            self?.applyLabelFonts()
+        }
         parent.view.addSubview(bar)
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: parent.view.leadingAnchor),
@@ -207,14 +327,23 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         if state.items != renderedKeys {
             renderedKeys = state.items
             let tabs = state.items.compactMap { NativeTab.named($0) }
-            bar.setItems(tabs.enumerated().map { NativeTabBarFactory.item($1, index: $0) }, animated: false)
+            let traits = bar.traitCollection
+            bar.setItems(tabs.enumerated().map { NativeTabBarFactory.item($1, index: $0, compatibleWith: traits) }, animated: false)
         }
+        ink = ink.applying(state.ink)
+        NativeTabBarFactory.paint(bar, ink: ink, style: state.interfaceStyle)
         let index = state.selected.flatMap { renderedKeys.firstIndex(of: $0) }
         bar.selectedItem = index.flatMap { bar.items?[$0] }
         for (key, item) in zip(renderedKeys, bar.items ?? []) {
             item.badgeValue = NativeTabBarFactory.badge(for: key, state)
         }
         setShown(state.shown)
+    }
+
+    /// Every label at the font for the bar's current content size.
+    func applyLabelFonts() {
+        let traits = bar.traitCollection
+        for item in bar.items ?? [] { NativeTabLabel.apply(to: item, compatibleWith: traits) }
     }
 
     /// The bar slides down out of view and back with a standard UIKit
@@ -258,13 +387,45 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     @MainActor
     enum NativeTabBarProbe {
         /// What the bar is drawing right now, for the fixture page:
-        /// `keys=chat,voice selected=chat badges=more hidden=false`.
+        /// `keys=chat,voice selected=chat badges=more hidden=false
+        /// ink=ad4b07ff/0000008c style=light fonts=Public Sans 11 w550`.
         static func rendered(bar: UITabBar, keys: [String]) -> String {
             let selected = bar.selectedItem.flatMap { item in bar.items?.firstIndex(of: item) }.map { keys[$0] } ?? "none"
             let badges = zip(keys, bar.items ?? []).filter { $0.1.badgeValue != nil }.map(\.0)
             let titles = (bar.items ?? []).compactMap(\.title)
+            let styles: [UIUserInterfaceStyle: String] = [.light: "light", .dark: "dark"]
+            let style = styles[bar.overrideUserInterfaceStyle] ?? "unspecified"
             return "keys=\(keys.joined(separator: ",")) titles=\(titles.joined(separator: ",")) selected=\(selected) "
-                + "badges=\(badges.isEmpty ? "none" : badges.joined(separator: ",")) hidden=\(bar.isHidden)"
+                + "badges=\(badges.isEmpty ? "none" : badges.joined(separator: ",")) hidden=\(bar.isHidden) "
+                + "ink=\(hex(bar.tintColor, bar))/\(hex(bar.unselectedItemTintColor, bar)) style=\(style) fonts=\(labelFonts(bar))"
+        }
+
+        /// A tint as `rrggbbaa`, resolved in the bar's own traits.
+        static func hex(_ colour: UIColor?, _ bar: UITabBar) -> String {
+            guard let colour else { return "none" }
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var b: CGFloat = 0
+            var a: CGFloat = 0
+            guard colour.resolvedColor(with: bar.traitCollection).getRed(&r, green: &g, blue: &b, alpha: &a) else { return "unresolved" }
+            return [r, g, b, a].map { String(format: "%02x", Int(($0 * 255).rounded())) }.joined()
+        }
+
+        /// The fonts the system actually drew the tab labels in (the labels
+        /// under the bar), e.g. `Public Sans 11 w550`; `none` if no label
+        /// was found. This is the check that iOS honoured the per-item font.
+        static func labelFonts(_ bar: UITabBar) -> String {
+            var fonts: [String] = []
+            func walk(_ view: UIView) {
+                if let label = view as? UILabel, let text = label.text, !text.isEmpty {
+                    let weight = NativeTabLabel.variationWeight(of: label.font).map { "w\(Int($0.rounded()))" } ?? "w-"
+                    let name = "\(label.font.familyName) \(Int(label.font.pointSize.rounded())) \(weight)"
+                    if !fonts.contains(name) { fonts.append(name) }
+                }
+                for child in view.subviews { walk(child) }
+            }
+            walk(bar)
+            return fonts.isEmpty ? "none" : fonts.joined(separator: ";")
         }
 
         static func describe(_ frame: CGRect) -> String {

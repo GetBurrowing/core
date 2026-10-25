@@ -4,7 +4,8 @@ import XCTest
 @testable import App
 
 /// The native tab bar's model, rendering, document contract and material
-/// (task 01a1557b stages 1 and 2).
+/// (task 01a1557b stages 1 and 2), and its glyphs, label font and inks
+/// (task 01a174e8 stage 2).
 @MainActor
 final class NativeTabBarTests: XCTestCase {
     private let five = ["chat", "voice", "tasks", "meetings", "more"]
@@ -19,17 +20,132 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(NativeTab.maxItems, 5)
     }
 
-    func testSymbolPairsMatchTheMasters() {
-        let pairs = NativeTab.catalog.map { "\($0.symbol)|\($0.selectedSymbol)" }
-        XCTAssertEqual(
-            pairs, ["ellipsis.bubble|ellipsis.bubble.fill", "mic|mic.fill", "checklist|checklist", "video|video.fill", "ellipsis|ellipsis"])
+    /// Task 01a174e8 stage 2: one bundled glyph per tab, the same image
+    /// selected and unselected, drawn as a template; the label in Public Sans.
+    func testItemsUseTheBundledGlyphSelectedAndUnselected() {
+        for (index, tab) in NativeTab.catalog.enumerated() {
+            let item = NativeTabBarFactory.item(tab, index: index)
+            let image = try? XCTUnwrap(item.image, tab.image)
+            XCTAssertEqual(image?.renderingMode, .alwaysTemplate, tab.image)
+            XCTAssertTrue(item.selectedImage === item.image, "\(tab.key): one glyph for both states")
+            XCTAssertTrue(item.largeContentSizeImage === item.image, "\(tab.key): the Large Content Viewer shows the glyph")
+            for state in [UIControl.State.normal, .selected] {
+                let font = item.titleTextAttributes(for: state)?[.font] as? UIFont
+                XCTAssertEqual(font?.familyName, "Public Sans", "\(tab.key) \(state)")
+                XCTAssertNil(item.titleTextAttributes(for: state)?[.foregroundColor], "the bar's inks paint the label")
+            }
+        }
     }
 
-    func testEverySymbolResolves() {
-        for tab in NativeTab.catalog {
-            XCTAssertNotNil(UIImage(systemName: tab.symbol), tab.symbol)
-            XCTAssertNotNil(UIImage(systemName: tab.selectedSymbol), tab.selectedSymbol)
+    func testLabelFontIsPublicSans11AtWeight550() throws {
+        let font = NativeTabLabel.font(compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+        XCTAssertEqual(font.familyName, "Public Sans")
+        XCTAssertEqual(font.pointSize, 11, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(NativeTabLabel.variationWeight(of: font)), 550, accuracy: 0.5)
+    }
+
+    /// Dynamic Type grows the label, the weight holds, and the cap stops it
+    /// at 13pt (NativeTabLabel.maximumPointSize: "Meetings" in a fifth of a
+    /// 375pt bar).
+    func testLabelFontScalesWithDynamicTypeUpToTheCap() throws {
+        XCTAssertEqual(NativeTabLabel.maximumPointSize, 13)
+        let small = NativeTabLabel.font(compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize
+        let larger = NativeTabLabel.font(compatibleWith: UITraitCollection(preferredContentSizeCategory: .extraLarge)).pointSize
+        XCTAssertGreaterThan(larger, small)
+        for category in [UIContentSizeCategory.extraExtraExtraLarge, .accessibilityMedium, .accessibilityExtraExtraExtraLarge] {
+            let font = NativeTabLabel.font(compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
+            XCTAssertEqual(font.pointSize, 13, accuracy: 0.01, "\(category.rawValue)")
+            XCTAssertEqual(try XCTUnwrap(NativeTabLabel.variationWeight(of: font)), 550, accuracy: 0.5, "\(category.rawValue)")
         }
+    }
+
+    func testAContentSizeChangeReappliesTheLabelFont() {
+        let parent = UIViewController()
+        let host = StandaloneTabBarHost()
+        host.install(in: parent)
+        host.render(state(["items": five, "visible": true]))
+        let before = host.bar.items?.first?.titleTextAttributes(for: .normal)?[.font] as? UIFont
+        XCTAssertEqual(before?.pointSize ?? 0, 11, accuracy: 0.01)
+        // The trait registration in install, not a direct call.
+        host.bar.traitOverrides.preferredContentSizeCategory = .accessibilityExtraLarge
+        host.bar.updateTraitsIfNeeded()
+        for item in host.bar.items ?? [] {
+            for control in [UIControl.State.normal, .selected] {
+                let font = item.titleTextAttributes(for: control)?[.font] as? UIFont
+                XCTAssertEqual(font?.pointSize ?? 0, 13, accuracy: 0.01, item.title ?? "")
+            }
+        }
+    }
+
+    // MARK: Ink and scheme (task 01a174e8 stage 2)
+
+    private func rgba(_ colour: UIColor, _ style: UIUserInterfaceStyle = .light) -> [Int] {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        _ = colour.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return [r, g, b, a].map { Int(($0 * 255).rounded()) }
+    }
+
+    func testInkParsesRrggbbaaOnly() {
+        XCTAssertEqual(NativeTabInk.colour("#ad4b07ff").map { rgba($0) }, [0xad, 0x4b, 0x07, 0xff])
+        XCTAssertEqual(NativeTabInk.colour("#EEEFF18C").map { rgba($0) }, [0xee, 0xef, 0xf1, 0x8c])
+        for bad in [nil, "", "#ad4b07", "ad4b07ff", "#ad4b07ff0", "#ad4b0gff", "#+d4b07ff", "orange", "#ａd4b07ff", "rgb(0,0,0)"] {
+            XCTAssertNil(NativeTabInk.colour(bad), bad ?? "nil")
+        }
+    }
+
+    func testInkFallsBackToTheBurrowSlotsAndAMalformedValueKeepsThePrevious() {
+        let fallback = NativeTabInkColors.fallback
+        XCTAssertEqual(rgba(fallback.selected), rgba(BurrowColor.primary.uiColor))
+        XCTAssertEqual(rgba(fallback.unselected), rgba(BurrowColor.muted.uiColor))
+        XCTAssertEqual(rgba(fallback.selected, .dark), rgba(BurrowColor.primary.uiColor, .dark))
+        XCTAssertEqual(fallback.applying(NativeTabInk()), fallback, "no ink received: the slots")
+        XCTAssertEqual(fallback.applying(NativeTabInk(selected: "orange", unselected: "#12")), fallback, "malformed before any good one")
+
+        let web = fallback.applying(NativeTabInk(selected: "#ad4b07ff", unselected: "#0000008c"))
+        XCTAssertEqual(rgba(web.selected), [0xad, 0x4b, 0x07, 0xff])
+        XCTAssertEqual(rgba(web.unselected), [0, 0, 0, 0x8c])
+        let kept = web.applying(NativeTabInk(selected: "not-a-colour", unselected: "#eeeff18c"))
+        XCTAssertEqual(rgba(kept.selected), [0xad, 0x4b, 0x07, 0xff], "a malformed value keeps the previous ink")
+        XCTAssertEqual(rgba(kept.unselected), [0xee, 0xef, 0xf1, 0x8c])
+    }
+
+    func testSchemeSetsTheInterfaceStyle() {
+        XCTAssertEqual(NativeTabBarState().interfaceStyle, .unspecified)
+        XCTAssertEqual(state(["scheme": "dark"]).interfaceStyle, .dark)
+        XCTAssertEqual(state(["scheme": "light"]).interfaceStyle, .light)
+        XCTAssertEqual(state(["scheme": "sepia"], from: state(["scheme": "dark"])).interfaceStyle, .dark)
+    }
+
+    /// The host paints what the web sent, keeps the last good ink across a
+    /// malformed one, and repaints on a theme change with no restart.
+    func testHostPaintsTheWebInksAndSchemeAndRepaintsOnAThemeChange() throws {
+        let parent = UIViewController()
+        let host = StandaloneTabBarHost()
+        host.install(in: parent)
+        XCTAssertEqual(rgba(host.bar.tintColor), rgba(BurrowColor.primary.uiColor), "the fallback before any state")
+        XCTAssertEqual(rgba(try XCTUnwrap(host.bar.unselectedItemTintColor)), rgba(BurrowColor.muted.uiColor))
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .unspecified)
+
+        var next = state(["items": five, "visible": true, "ink": ["selected": "#ad4b07ff", "unselected": "#0000008c"], "scheme": "light"])
+        host.render(next)
+        XCTAssertEqual(rgba(host.bar.tintColor), [0xad, 0x4b, 0x07, 0xff])
+        XCTAssertEqual(rgba(try XCTUnwrap(host.bar.unselectedItemTintColor)), [0, 0, 0, 0x8c])
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .light)
+
+        next = state(["ink": ["selected": "#f47721ff", "unselected": "#eeeff18c"], "scheme": "dark"], from: next)
+        host.render(next)
+        XCTAssertEqual(rgba(host.bar.tintColor), [0xf4, 0x77, 0x21, 0xff])
+        XCTAssertEqual(rgba(try XCTUnwrap(host.bar.unselectedItemTintColor)), [0xee, 0xef, 0xf1, 0x8c])
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .dark)
+
+        next = state(["ink": ["selected": "bogus"], "scheme": "sepia"], from: next)
+        host.render(next)
+        XCTAssertEqual(rgba(host.bar.tintColor), [0xf4, 0x77, 0x21, 0xff], "malformed keeps the previous ink")
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .dark)
+        XCTAssertNil(host.bar.backgroundColor, "the material stays stock")
     }
 
     func testStateStartsHiddenWithNoItemsAndNoBadge() {
@@ -138,7 +254,7 @@ final class NativeTabBarTests: XCTestCase {
     }
 
     func testMoreThanFiveKeysAreTruncatedWithALogLine() {
-        let wide = NativeTab.catalog + ["games", "store"].map { NativeTab(key: $0, title: $0, symbol: "star", selectedSymbol: "star.fill") }
+        let wide = NativeTab.catalog + ["games", "store"].map { NativeTab(key: $0, title: $0, image: "tab-more") }
         var lines: [String] = []
         let next = NativeTabBarState().applying(
             ["items": five + ["games", "store"], "visible": true], catalog: wide, log: { lines.append($0) })

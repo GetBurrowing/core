@@ -115,3 +115,113 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     expect(iconRail).toMatch(/id="bottom-nav"\s+class="bottom-nav lg:hidden"/)
   })
 })
+
+// Task 01a174e8 stage 2: the masters' glyphs, bundled. The same table and
+// SVG text NativeTabBarContractTests.swift pins, read from the Swift source
+// and the asset catalog so it runs without Xcode.
+const MASTERS_GLYPHS = {
+  "tab-chat":
+    '<path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.3-3.2A8 8 0 0 1 4 12z"/><path d="M9 11.5h.01M12 11.5h.01M15 11.5h.01"/>',
+  "tab-voice": '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
+  "tab-tasks": '<path d="m4 12 2 2 4-4M4 6l2 2 4-4M4 18l2 2 4-4M13 6h7M13 12h7M13 18h7"/>',
+  "tab-meetings": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
+  "tab-more": '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+}
+const SVG_ATTRIBUTES =
+  'xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#000000" ' +
+  'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"'
+const assets = `${ios}/Assets.xcassets`
+
+describe("native tab bar glyphs: NativeTab.catalog vs the asset catalog", () => {
+  it("the catalog is chat:tab-chat:Chat, voice, tasks, meetings, more, in order", () => {
+    const table = [...tabBarSwift.matchAll(/NativeTab\(key: "(\w+)", title: "(\w+)", image: "([\w-]+)"\)/g)].map(
+      (m) => `${m[1]}:${m[3]}:${m[2]}`,
+    )
+    expect(table).toEqual([
+      "chat:tab-chat:Chat",
+      "voice:tab-voice:Voice",
+      "tasks:tab-tasks:Tasks",
+      "meetings:tab-meetings:Meetings",
+      "more:tab-more:More",
+    ])
+    expect(tabBarSwift).not.toMatch(/systemName:/)
+    expect(tabBarSwift).toContain("UITabBarItem(title: tab.title, image: glyph, selectedImage: glyph)")
+    expect(tabBarSwift).toContain(".withRenderingMode(.alwaysTemplate)")
+  })
+
+  it("every tab image is a single-scale vector template imageset holding the masters' SVG verbatim", () => {
+    const images = [...tabBarSwift.matchAll(/image: "(tab-[\w-]+)"\)/g)].map((m) => m[1])
+    expect(images.sort()).toEqual(Object.keys(MASTERS_GLYPHS).sort())
+    const imagesets = fs
+      .readdirSync(path.join(root, assets))
+      .filter((d) => d.startsWith("tab-"))
+      .sort()
+    expect(imagesets).toEqual(images.map((i) => `${i}.imageset`).sort())
+    for (const image of images) {
+      const dir = `${assets}/${image}.imageset`
+      expect(fs.readdirSync(path.join(root, dir)).sort()).toEqual(["Contents.json", `${image}.svg`])
+      const contents = JSON.parse(read(`${dir}/Contents.json`))
+      expect(contents.properties).toEqual({
+        "preserves-vector-representation": true,
+        "template-rendering-intent": "template",
+      })
+      expect(contents.images).toEqual([{ filename: `${image}.svg`, idiom: "universal" }])
+      const svg = read(`${dir}/${image}.svg`).match(/^<svg ([^>]*)>([\s\S]*)<\/svg>\n?$/)
+      expect(svg, image).not.toBeNull()
+      expect(svg[1]).toBe(SVG_ATTRIBUTES)
+      expect(svg[2], image).toBe(MASTERS_GLYPHS[image])
+    }
+  })
+})
+
+describe("native tab bar inks: the fixture vs the Burrow preset tokens in app.css", () => {
+  const fixture = read("clients/ios/www/tabbar-fixture.html")
+
+  // A daisyUI theme block from app.css, by name.
+  function themeBlock(name) {
+    const blocks = appCss.split('@plugin "../vendor/daisyui-theme" {').slice(1)
+    const block = blocks.find((b) => b.includes(`name: "${name}";`))
+    expect(block, name).toBeDefined()
+    return block.split("@plugin ")[0]
+  }
+  const token = (block, name) => block.match(new RegExp(`\\n\\s*${name}:\\s*([^;]+);`))?.[1].trim()
+
+  // What the hook's 1x1-canvas normaliser sends for a token: '#rrggbbaa'.
+  function expected(name) {
+    const block = themeBlock(name)
+    const primary = token(block, "--color-primary")
+    const content = token(block, "--color-base-content")
+    const subtle = token(block, "--subtle")
+    expect(primary).toMatch(/^#[0-9a-f]{6}$/)
+    expect(content).toMatch(/^#[0-9a-f]{6}$/)
+    const strength = subtle.match(/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/)
+    expect(strength, subtle).not.toBeNull()
+    const alpha = Math.round((Number(strength[1]) / 100) * 255)
+      .toString(16)
+      .padStart(2, "0")
+    return { selected: `${primary}ff`, unselected: `${content}${alpha}` }
+  }
+
+  it("BURROW_INK is the Burrow light and dark --color-primary and --tab-ink (--subtle)", () => {
+    const m = fixture.match(/var BURROW_INK = (\{[\s\S]*?\n {8}\});/)
+    expect(m).not.toBeNull()
+    const ink = Function(`"use strict"; return (${m[1]})`)()
+    expect(ink).toEqual({ light: expected("light"), dark: expected("dark") })
+    // The pinned values, so a token edit shows up here as well.
+    expect(ink).toEqual({
+      light: { selected: "#ad4b07ff", unselected: "#0000008c" },
+      dark: { selected: "#f47721ff", unselected: "#eeeff18c" },
+    })
+    // --tab-ink is --color-subtle (= --subtle) on the bar, the probe's
+    // unselected fallback.
+    expect(appCss).toMatch(/\.bottom-nav \{\n[\s\S]*?--tab-ink: var\(--color-subtle\);/)
+    expect(appCss).toContain("--color-subtle: var(--subtle);")
+  })
+
+  it("the fixture sends ink and scheme in the hook's shape", () => {
+    expect(fixture).toContain('<button data-ink="auto" data-state=')
+    expect(fixture).toContain("state.ink = BURROW_INK[scheme];")
+    expect(fixture).toContain("state.scheme = scheme;")
+    expect(INK_KEYS).toEqual(["selected", "unselected"])
+  })
+})

@@ -142,7 +142,38 @@ final class TabBarUITests: XCTestCase {
         let report = probe(app)
         let tree = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS 'UITabBar'")).firstMatch
         note("\(name)-probe", report + "\n" + (tree.exists ? tree.label : ""))
+        restyle(appearance, app)
         app.terminate()
+    }
+
+    /// The Burrow preset's inks as the fixture sends them (BURROW_INK).
+    private let inks = ["light": "ad4b07ff/0000008c", "dark": "f47721ff/eeeff18c"]
+
+    /// Task 01a174e8 stage 2: the bar paints the web's inks and scheme, a
+    /// theme change repaints it with no restart, a malformed ink keeps the
+    /// last one, and the labels are drawn in Public Sans 11 at weight 550.
+    private func restyle(_ appearance: String, _ app: XCUIApplication) {
+        rendered(["ink=\(inks[appearance]!)", "style=\(appearance)"], app)
+        let drawn = line("rendered: keys=", ["fonts="], app).label
+        note("restyle-\(appearance)-rendered", drawn)
+        shot("restyle-\(appearance)-chat")
+        send("Select tasks", app)
+        rendered(["selected=tasks"], app)
+        sleep(1)
+        shot("restyle-\(appearance)-tasks")
+
+        let other = appearance == "dark" ? "light" : "dark"
+        send(other == "dark" ? "Ink dark" : "Ink light", app)
+        rendered(["ink=\(inks[other]!)", "style=\(other)"], app)
+        sleep(1)
+        shot("restyle-\(appearance)-then-\(other)")
+        send("Ink malformed", app)
+        sleep(2)
+        rendered(["ink=\(inks[other]!)", "style=\(other)"], app)
+
+        // Last, so the screenshots above exist whatever it says: iOS drew the
+        // per-item font (rung 26 rule zero: no UITabBarAppearance on 26+).
+        XCTAssertTrue(drawn.hasSuffix("fonts=Public Sans 11 w550"), drawn)
     }
 
     /// Stage 2: the full contract on the fixture, light.
@@ -239,7 +270,8 @@ final class TabBarUITests: XCTestCase {
         app.terminate()
     }
 
-    /// Stage 1: the glass probe, light and dark.
+    /// Stage 1: the glass probe, light and dark; task 01a174e8 stage 2's
+    /// restyle on the same launch.
     func testFixtureLight() { fixture("light") }
     func testFixtureDark() { fixture("dark") }
 }

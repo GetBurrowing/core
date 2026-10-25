@@ -7,7 +7,10 @@
     <!-- DEBUG fixture (task 01a1557b): a fake web side for the native tab
          bar, loaded only by a Debug build launched with -BurrowTabBarFixture.
          Buttons send SuiteNative.tabBarState ({items, selected, more_dot,
-         visible}); every burrowNativeTab event is written into #events.
+         visible, ink, scheme}); every burrowNativeTab event is written into
+         #events. A button marked data-ink="auto" adds the Burrow preset's
+         inks for the page's own colour scheme (BURROW_INK, pinned to
+         app.css by native_tab_bar_contract.test.js, task 01a174e8).
          ?mode=silent is a document that never sends a state (the bar must
          hide after didFinish); ?mode=auto sends one on load (it must stay). Rows under the bar give the glass something
          to refract. -->
@@ -28,7 +31,10 @@
     <main>
       <h1>Tab bar fixture</h1>
       <div class="controls">
-        <button data-state='{"items":["chat","voice","tasks","meetings","more"],"selected":"chat","more_dot":true,"visible":true}'>Chat, dot on</button>
+        <button data-ink="auto" data-state='{"items":["chat","voice","tasks","meetings","more"],"selected":"chat","more_dot":true,"visible":true}'>Chat, dot on</button>
+        <button data-ink="light" data-state='{}'>Ink light</button>
+        <button data-ink="dark" data-state='{}'>Ink dark</button>
+        <button data-state='{"ink":{"selected":"orange","unselected":"#12"},"scheme":"sepia"}'>Ink malformed</button>
         <button data-state='{"selected":"tasks"}'>Select tasks</button>
         <button data-state='{"selected":null}'>Select none</button>
         <button data-state='{"more_dot":true}'>Dot on</button>
@@ -53,6 +59,23 @@
     </main>
     <script>
       (function () {
+        // The Burrow preset's tab inks as the NativeTabBar hook sends them
+        // ('#rrggbbaa'): --color-primary selected, --tab-ink (--subtle,
+        // base-content at 55%) unselected, per daisyUI theme in app.css.
+        var BURROW_INK = {
+          light: { selected: "#ad4b07ff", unselected: "#0000008c" },
+          dark: { selected: "#f47721ff", unselected: "#eeeff18c" },
+        };
+        function pageScheme() {
+          return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        function withInk(state, which) {
+          if (!which) return state;
+          var scheme = which === "auto" ? pageScheme() : which;
+          state.ink = BURROW_INK[scheme];
+          state.scheme = scheme;
+          return state;
+        }
         var colours = ["#ad4b07", "#0e7382", "#635b53", "#f1383e", "#221f1b", "#f47721", "#22d3ee"];
         var rows = document.getElementById("rows");
         for (var i = 0; i < 28; i++) {
@@ -90,7 +113,7 @@
 
         var mode = (location.search.match(/mode=(\w+)/) || [])[1] || "buttons";
         if (mode === "auto" && p && typeof p.tabBarState === "function") {
-          p.tabBarState({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "tasks", more_dot: false, visible: true })
+          p.tabBarState(withInk({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "tasks", more_dot: false, visible: true }, "auto"))
             .catch(function () {});
         }
         var modeLine = document.createElement("p");
@@ -101,7 +124,8 @@
           button.addEventListener("click", function () {
             var target = plugin();
             if (!target || typeof target.tabBarState !== "function") return;
-            target.tabBarState(JSON.parse(button.getAttribute("data-state"))).catch(function () {});
+            var state = withInk(JSON.parse(button.getAttribute("data-state")), button.getAttribute("data-ink"));
+            target.tabBarState(state).catch(function () {});
           });
         });
 

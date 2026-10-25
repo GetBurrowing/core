@@ -67,4 +67,34 @@ final class ThemeTests: XCTestCase {
         XCTAssertGreaterThan(slotUses, 10, "the screen draws through BurrowColor slots")
         XCTAssertEqual(offences, [])
     }
+
+    // MARK: No colour literal in the native tab bar (task 01a174e8 stage 2)
+
+    /// The one line in NativeTabBar.swift allowed to build a colour from
+    /// components: `NativeTabInk.webInk`, which turns a '#rrggbbaa' the WEB
+    /// resolved from its theme into the bar's tint.
+    static let webInkLine = "return UIColor(red: channel(24), green: channel(16), blue: channel(8), alpha: channel(0))"
+
+    func testNativeTabBarHasNoLiteralColourOutsideTheWebInkHelper() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("App/NativeTabBar.swift")
+        let source = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(source.contains("struct NativeTabInkColors"), "is the scan reading the source?")
+        var allowed = 0
+        var offences: [String] = []
+        for (n, line) in source.components(separatedBy: .newlines).enumerated() {
+            let hits = Self.literalColours(in: line)
+            guard !hits.isEmpty else { continue }
+            if line.trimmingCharacters(in: .whitespaces) == Self.webInkLine {
+                allowed += 1
+            } else {
+                offences += hits.map { "NativeTabBar.swift:\(n + 1) \($0)" }
+            }
+        }
+        XCTAssertEqual(allowed, 1, "exactly one allowlisted helper builds a colour")
+        XCTAssertEqual(offences, [])
+        XCTAssertTrue(source.contains("private static func webInk(rgba: UInt32) -> UIColor"))
+        XCTAssertEqual(source.components(separatedBy: "webInk(rgba:").count - 1, 2, "declared once, called once (by the parser)")
+        XCTAssertTrue(source.contains("BurrowColor.primary.uiColor, unselected: BurrowColor.muted.uiColor"), "the fallback is the slots")
+    }
 }
