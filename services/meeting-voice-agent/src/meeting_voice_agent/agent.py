@@ -20,7 +20,7 @@ from livekit.agents.voice.room_io import RoomOptions
 
 from meeting_voice_agent import ask_floor_gate, mcp_tools, tool_telemetry
 from meeting_voice_agent.config import AgentConfig
-from meeting_voice_agent.persona import MeetingVoiceAgent
+from meeting_voice_agent.persona import MeetingVoiceAgent, attach_voice_context_handler
 from meeting_voice_agent.session import build_agent_session
 
 logger = logging.getLogger("meeting_voice_agent")
@@ -53,6 +53,17 @@ def parse_job_metadata(raw: str | None) -> dict:
         return {}
 
     return parsed
+
+
+#: The dispatch `mode` Core's `Platform.Meetings.VoiceSession` sets for a
+#: Voice-tab 1:1 session (task 01a1557a-eab7).
+VOICE_1TO1_MODE = "voice_1to1"
+
+
+def parse_voice_context(metadata: dict) -> dict | None:
+    """The job metadata's `voice_context`, or `None` when absent/malformed."""
+    voice_context = metadata.get("voice_context")
+    return voice_context if isinstance(voice_context, dict) else None
 
 
 #: The identity prefix Core's dispatch metadata uses for an agent participant.
@@ -161,10 +172,24 @@ async def entrypoint(ctx: JobContext) -> None:
     # already degrades that to `{}` above) -- either way, today's
     # generic-category-only behavior, never a crash.
     agent_roster = job_metadata.get("agent_roster", [])
+    # Task 01a1557a-eab7: a Voice-tab session names its mode and the space
+    # (or none) the person is asking about; later changes arrive on the
+    # `mva.context` data topic, listened to only in that mode.
+    mode = job_metadata.get("mode")
+    voice_context = parse_voice_context(job_metadata)
 
     session: AgentSession = build_agent_session(config)
     tools = build_tool_surface(config, ctx.room.name, space_id=space_id)
-    agent = MeetingVoiceAgent(config, tools=tools, space_id=space_id, agent_roster=agent_roster)
+    agent = MeetingVoiceAgent(
+        config,
+        tools=tools,
+        space_id=space_id,
+        agent_roster=agent_roster,
+        voice_context=voice_context,
+    )
+
+    if mode == VOICE_1TO1_MODE:
+        attach_voice_context_handler(agent, ctx.room)
 
     # Task 01a0d4a0 stage 4 round 2: publish tool-call telemetry so an
     # external observer (the live latency harness) can see a tool call

@@ -80,6 +80,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     # The "Get someone's attention" picker's search field (task
     # 01a1557a-a30a stage 2).
     "platform_web/live/chat/partials/overlays.ex",
+    # The Voice tab's context sheet search (task 01a1557a-eab7 stage 2).
+    "platform_web/components/voice/voice_components.ex",
     "platform_web/live/meeting_live.html.heex"
   ]
 

@@ -337,3 +337,48 @@ def test_build_worker_options_wires_request_fnc():
     options = agent_module.build_worker_options(AgentConfig.from_env())
 
     assert options.request_fnc is agent_module.request_fnc
+
+
+# ── Task 01a1557a-eab7: Voice-tab mode + voice_context ──────────────────────
+
+
+def _run_entrypoint(metadata):
+    ctx = _ctx_with_job_metadata(metadata)
+    mock_session = MagicMock()
+    mock_session.start = AsyncMock()
+
+    with (
+        patch.object(agent_module, "build_agent_session", return_value=mock_session),
+        patch.object(agent_module, "build_tool_surface", return_value=[]),
+        patch.object(agent_module, "MeetingVoiceAgent") as mock_persona_cls,
+        patch.object(agent_module, "attach_voice_context_handler") as mock_ctx_handler,
+        patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry"),
+        patch.object(agent_module.ask_floor_gate, "attach_ask_floor_gate"),
+    ):
+        asyncio.run(agent_module.entrypoint(ctx))
+
+    return ctx, mock_persona_cls, mock_ctx_handler
+
+
+def test_entrypoint_passes_voice_context_and_listens_for_mva_context_in_voice_1to1_mode():
+    voice_context = {"kind": "space", "id": "space-123", "name": "Roadmap"}
+    ctx, persona_cls, ctx_handler = _run_entrypoint(
+        {"space_id": "dm-1", "mode": "voice_1to1", "voice_context": voice_context}
+    )
+
+    assert persona_cls.call_args.kwargs["voice_context"] == voice_context
+    ctx_handler.assert_called_once_with(persona_cls.return_value, ctx.room)
+
+
+def test_entrypoint_meeting_mode_has_no_voice_context_and_no_context_listener():
+    _ctx, persona_cls, ctx_handler = _run_entrypoint({"space_id": "meeting-space"})
+
+    assert persona_cls.call_args.kwargs["voice_context"] is None
+    ctx_handler.assert_not_called()
+
+
+def test_parse_voice_context_ignores_null_and_malformed_values():
+    assert agent_module.parse_voice_context({"voice_context": None}) is None
+    assert agent_module.parse_voice_context({"voice_context": "space"}) is None
+    assert agent_module.parse_voice_context({}) is None
+    assert agent_module.parse_voice_context({"voice_context": {"kind": "none"}}) == {"kind": "none"}

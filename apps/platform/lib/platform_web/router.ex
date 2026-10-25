@@ -887,6 +887,8 @@ defmodule PlatformWeb.Router do
       live("/files/:project_id", FilesLive, :show)
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
+      # The Voice tab (task 01a1557a-eab7 stage 2).
+      live("/voice", VoiceLive, :index)
       # Task 01a0cf21 stage 4: the Email module. Routes are compile-time, so
       # `EmailLive.mount/3` 404s when `Platform.Mail.Config.enabled?/0` is
       # false or the viewer has no non-external membership. `/email/accounts/new`

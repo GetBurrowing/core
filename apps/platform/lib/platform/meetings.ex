@@ -6510,7 +6510,7 @@ defmodule Platform.Meetings do
   # socket it never opens.
   defp dispatch_meeting_join_via_livekit(agent, target, room_name, context) do
     metadata =
-      Jason.encode!(%{
+      %{
         "space_id" => Map.get(context, :space_id),
         "meeting_id" => Map.get(context, :meeting_id),
         # Task 01a0d4a0 stage 5: the worker's own participant-linking (which
@@ -6541,7 +6541,9 @@ defmodule Platform.Meetings do
         "agent_id" => agent.id,
         "agent_identity" => "agent:" <> agent.id,
         "agent_name" => agent.name || agent.slug
-      })
+      }
+      |> Map.merge(voice_dispatch_metadata(context))
+      |> Jason.encode!()
 
     case create_livekit_agent_dispatch(room_name, target.livekit_agent_name, metadata) do
       :ok ->
@@ -6562,6 +6564,16 @@ defmodule Platform.Meetings do
         {:error, :livekit_dispatch_failed}
     end
   end
+
+  # Task 01a1557a-eab7: the Voice tab's two job-metadata keys. Present ONLY
+  # when the caller is `invite_agent/4` (its context map carries `:mode`);
+  # every `/3` caller's context has no such key, so its metadata encodes to
+  # exactly the bytes it did before.
+  defp voice_dispatch_metadata(%{mode: mode} = context) do
+    %{"mode" => mode, "voice_context" => Map.get(context, :voice_context)}
+  end
+
+  defp voice_dispatch_metadata(_context), do: %{}
 
   @doc """
   The runtime topic a `meeting_join` for this agent would be broadcast on.
@@ -7727,17 +7739,52 @@ defmodule Platform.Meetings do
   @spec invite_agent(Room.t(), Agent.t(), SpaceAccess.actor()) ::
           {:ok, Participant.t()} | {:error, term()}
   def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user) do
+    do_invite_agent(room, agent, inviting_user, %{})
+  end
+
+  @doc """
+  `invite_agent/3` with dispatch options (task 01a1557a-eab7, the Voice tab).
+
+    * `:mode` — a string the worker reads from the job metadata as
+      `"mode"`; `Platform.Meetings.VoiceSession` passes `"voice_1to1"`.
+    * `:voice_context` — `%{"kind" => "space", "id" => _, "name" => _}` or
+      `nil`, read by the worker as `"voice_context"`.
+
+  Both keys are written into the dispatch metadata ONLY by this arity, so a
+  `/3` caller's metadata is byte-identical to what it was before this
+  function existed. Everything else (writer gate, reachability, roster row)
+  is the same path as `/3`.
+  """
+  @spec invite_agent(Room.t(), Agent.t(), SpaceAccess.actor(), keyword()) ::
+          {:ok, Participant.t()} | {:error, term()}
+  def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user, opts) when is_list(opts) do
+    extra = %{
+      mode: Keyword.get(opts, :mode),
+      voice_context: Keyword.get(opts, :voice_context)
+    }
+
+    do_invite_agent(room, agent, inviting_user, extra)
+  end
+
+  defp do_invite_agent(room, agent, inviting_user, extra) do
     with {:ok, _writer} <- SpaceAccess.authorize_writer(room.space_id, inviting_user),
-         :ok <- meeting_join_reachable?(agent),
+         :ok <- voice_reachable?(agent),
          {:ok, _token} <-
            generate_agent_token(agent, room.livekit_room_name),
          {:ok, participant} <- invite_participant_row(room, agent) do
       # Dispatch to agent runtime
-      dispatch_meeting_join(agent, room.livekit_room_name, %{
-        space_id: room.space_id,
-        human_identity: human_identity_from_actor(inviting_user),
-        agent_roster: agent_roster_for_room(room.id, agent.id)
-      })
+      dispatch_meeting_join(
+        agent,
+        room.livekit_room_name,
+        Map.merge(
+          %{
+            space_id: room.space_id,
+            human_identity: human_identity_from_actor(inviting_user),
+            agent_roster: agent_roster_for_room(room.id, agent.id)
+          },
+          extra
+        )
+      )
 
       {:ok, participant}
     end
@@ -7774,8 +7821,12 @@ defmodule Platform.Meetings do
   # let `say/4` report success into a void. Every runtime that has not
   # declared the opt-in key is unaffected: `livekit_dispatch_target/1` finds
   # nothing for it and the original `:voice_runtime_offline` is returned.
-  @spec meeting_join_reachable?(Agent.t()) :: :ok | {:error, :no_runtime | :voice_runtime_offline}
-  defp meeting_join_reachable?(agent) do
+  #
+  # Public as `voice_reachable?/1` (task 01a1557a-eab7) so the Voice tab's
+  # partner list asks the SAME question `invite_agent/3` refuses on.
+  @doc false
+  @spec voice_reachable?(Agent.t()) :: :ok | {:error, :no_runtime | :voice_runtime_offline}
+  def voice_reachable?(agent) do
     case meeting_join_topic(agent) do
       {:ok, _topic} ->
         :ok
@@ -7927,7 +7978,7 @@ defmodule Platform.Meetings do
   # `metadata["client_info"]["livekit_agent_name"]` string — explicit data
   # on the row, sibling to the `"meeting_voice"` feature flag
   # `capability_from_metadata/1` already reads. This is consulted ONLY as a
-  # fallback, from `dispatch_meeting_join/3` and `meeting_join_reachable?/1`,
+  # fallback, from `dispatch_meeting_join/3` and `voice_reachable?/1`,
   # after `resolve_voice_target/1` has already answered
   # `:voice_runtime_offline` — a runtime that never declares this key never
   # reaches this code, so its behaviour is unchanged by this task.

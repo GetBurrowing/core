@@ -922,6 +922,8 @@ defmodule Platform.ExtensionsTest do
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
     @main_rail [
       :chat,
+      # The Voice tab (task 01a1557a-eab7 stage 2).
+      :voice,
       :tasks,
       :inbox,
       :agents,

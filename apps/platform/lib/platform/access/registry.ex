@@ -309,7 +309,13 @@ defmodule Platform.Access.Registry do
       %{
         module: "meetings",
         permissions: ~w(meetings.join),
-        rail: [%{key: :meetings, permission: "meetings.join"}]
+        # `:voice` (task 01a1557a-eab7 stage 2): the Voice tab rides the
+        # meetings LiveKit + transcription pipeline, so it asks the same
+        # permission ModuleGate asks of VoiceLive (`{:voice, nil}`).
+        rail: [
+          %{key: :meetings, permission: "meetings.join"},
+          %{key: :voice, permission: "meetings.join"}
+        ]
       },
       %{
         module: "mail",

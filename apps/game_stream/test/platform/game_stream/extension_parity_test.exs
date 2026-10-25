@@ -408,6 +408,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # (task 01a1557a-b5f9 stage 3).
     @main_rail [
       :chat,
+      # The Voice tab (task 01a1557a-eab7 stage 2).
+      :voice,
       :tasks,
       :inbox,
       :agents,

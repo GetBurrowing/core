@@ -9,8 +9,8 @@ defmodule PlatformWeb.Components.IconRail do
                        Two clusters (Live, Working) separated by a divider,
                        with an `mt-auto` Admin slot pinned to the bottom.
     * `bottom_rail/1` — mobile tab bar (<`lg` breakpoint). Link tabs from
-                       `mobile_tab_keys/0` (Chat, Tasks, Meetings, filtered
-                       by Scope) plus a More button that fires
+                       `mobile_tab_keys/0` (Chat, Voice, Tasks, Meetings,
+                       filtered by Scope) plus a More button that fires
                        `phx-click="open_more_sheet"` (`close_more_sheet`
                        while the sheet is open). Inbox and Activity are
                        not in the bar (task 01a1557a-7a71 stage 2): Inbox
@@ -380,7 +380,7 @@ defmodule PlatformWeb.Components.IconRail do
   @doc """
   Mobile tab bar. Hidden at the `lg` breakpoint and above.
 
-  Link tabs for `mobile_tab_keys/0` (Chat, Tasks, Meetings; a Scope that does
+  Link tabs for `mobile_tab_keys/0` (Chat, Voice, Tasks, Meetings; a Scope that does
   not admit one drops its cell, and the rest stay equal width), then a More
   button. Admin and the long tail live in the More sheet, never in the bar.
 
@@ -490,12 +490,12 @@ defmodule PlatformWeb.Components.IconRail do
 
   @doc """
   The bar's link-tab keys, in order (task 01a1557a-7a71 stage 2; the product lead:
-  chat, voice, tasks, meetings, more). An ordered key list a later rung
-  extends: Voice joins between Chat and Tasks in rung 20. More is not a key
-  here; it is the button after the links.
+  chat, voice, tasks, meetings, more). Voice joined between Chat and Tasks
+  in rung 20 (task 01a1557a-eab7 stage 2). More is not a key here; it is the
+  button after the links.
   """
   @spec mobile_tab_keys() :: [atom()]
-  def mobile_tab_keys, do: [:chat, :tasks, :meetings]
+  def mobile_tab_keys, do: [:chat, :voice, :tasks, :meetings]
 
   # Bar-only icon mapping (task 01a1557a-7a71 stage 2): outline at rest,
   # `-solid` when active (Saru rule 3). Chosen against the masters'
@@ -503,12 +503,14 @@ defmodule PlatformWeb.Components.IconRail do
   # desktop rail's) is deliberately not touched. Literal class names, so the
   # heroicons plugin generates every one of them.
   #   chat     round speech bubble with three dots -> chat-bubble-oval-left-ellipsis
+  #   voice    microphone                           -> microphone
   #   tasks    three check-mark rows                -> list-bullet (Heroicons has no
   #            checklist-rows glyph; three rows is the nearer half of the shape)
   #   meetings video camera                         -> video-camera
   #   more     three dots                           -> ellipsis-horizontal
   @tab_icons %{
     chat: {"hero-chat-bubble-oval-left-ellipsis", "hero-chat-bubble-oval-left-ellipsis-solid"},
+    voice: {"hero-microphone", "hero-microphone-solid"},
     tasks: {"hero-list-bullet", "hero-list-bullet-solid"},
     meetings: {"hero-video-camera", "hero-video-camera-solid"},
     more: {"hero-ellipsis-horizontal", "hero-ellipsis-horizontal-solid"}
@@ -947,7 +949,7 @@ defmodule PlatformWeb.Components.IconRail do
 
   defp badge_spec(_key, _inbox_count, _chat_count), do: nil
 
-  # Canonical destination list: core's 11 entries, then every build-time
+  # Canonical destination list: core's entries, then every build-time
   # module's (`Platform.Extensions.rail_items/0`, ADR 0055 section 5, read per
   # call). Order within a cluster determines render order in the rail, and an
   # extension's item goes through the same `root_only?` and `enabled?`
@@ -964,6 +966,17 @@ defmodule PlatformWeb.Components.IconRail do
         label: "Chat",
         path: "/chat",
         hero_icon: "hero-chat-bubble-left-right",
+        cluster: :live,
+        root_only?: false
+      },
+      %{
+        # The Voice tab (task 01a1557a-eab7 stage 2): a 1:1 hold-to-talk
+        # conversation with an agent. Gated with Meetings (`meetings.join`):
+        # it rides the same LiveKit + transcription pipeline.
+        key: :voice,
+        label: "Voice",
+        path: "/voice",
+        hero_icon: "hero-microphone",
         cluster: :live,
         root_only?: false
       },

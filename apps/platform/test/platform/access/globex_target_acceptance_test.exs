@@ -202,8 +202,9 @@ defmodule Platform.Access.GlobexTargetAcceptanceTest do
     u_scope = scope(ctx.u)
 
     # ── U: fenced to S, five channels denied, locked to chat/tasks/meetings ──
+    # (Voice rides the meetings module, task 01a1557a-eab7 stage 2.)
     assert Access.org_fence(u_scope) == [ctx.s]
-    assert Enum.sort(rail(u_scope)) == [:chat, :meetings, :tasks]
+    assert Enum.sort(rail(u_scope)) == [:chat, :meetings, :tasks, :voice]
     assert channels(u_scope) == ids(ctx.open)
     assert ctx.dm.id in ids(Chat.list_user_conversations(ctx.u.id, scope: u_scope))
     assert board(u_scope) == ids(ctx.p_tasks)

@@ -97,10 +97,11 @@ defmodule PlatformWeb.Components.IconRailTest do
       # (it moved to an admin-only cog in the Tasks header), 10 → 9 when
       # task 01a1557a-7a71 stage 4 retired Activity, and 9 -> 10 when task
       # 01a1557a-807f stage 2 added the More-sheet-only Changelog, and 10 -> 11
-      # when task 01a1557a-b5f9 stage 3 added the More-sheet-only Canvases.
+      # when task 01a1557a-b5f9 stage 3 added the More-sheet-only Canvases,
+      # and 11 -> 12 when task 01a1557a-eab7 stage 2 added Voice.
       # Any future destination addition should bump the matching guard below.
       list = destinations(root_user: false)
-      assert length(list) == 11
+      assert length(list) == 12
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -110,9 +111,10 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 13 destinations for an Acme user (Admin + Prompts included)" do
+    test "returns all 14 destinations for an Acme user (Admin + Prompts included)" do
+      # 13 -> 14 when task 01a1557a-eab7 stage 2 added Voice.
       list = destinations(root_user: true)
-      assert length(list) == 13
+      assert length(list) == 14
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
@@ -313,18 +315,20 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ "w-56"
     end
 
-    test "renders 11 destination tiles for an Acme user (Chat..Meetings + Files + Admin; no Activity)" do
-      # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files, and
-      # 10 → 11 when task 019fe6ba added Experiments.
+    test "renders 12 destination tiles for an Acme user (Chat..Meetings + Files + Admin; no Activity)" do
+      # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files,
+      # 10 → 11 when task 019fe6ba added Experiments, and 11 -> 12 when task
+      # 01a1557a-eab7 stage 2 added Voice.
       html = render_icon_rail(%{root_user: true})
-      assert count_data_destination_matches(html) == 11
+      assert count_data_destination_matches(html) == 12
     end
 
-    test "renders 9 destination tiles for a non-Acme user (no Admin, no Prompts)" do
+    test "renders 10 destination tiles for a non-Acme user (no Admin, no Prompts)" do
       # 7 → 8 when Files (visible to all authenticated users) shipped;
-      # 8 → 9 when Experiments shipped (also visible to all).
+      # 8 → 9 when Experiments shipped (also visible to all); 9 -> 10 when
+      # Voice shipped (task 01a1557a-eab7 stage 2).
       html = render_icon_rail(%{root_user: false})
-      assert count_data_destination_matches(html) == 9
+      assert count_data_destination_matches(html) == 10
       assert html =~ ~s(data-destination="experiments")
       assert html =~ "/control/experiments"
     end
@@ -594,9 +598,9 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ ~s(aria-label="Main navigation")
     end
 
-    test "renders exactly four tabs, in order: Chat, Tasks, Meetings, More" do
+    test "renders exactly five tabs, in order: Chat, Voice, Tasks, Meetings, More" do
       html = render_bottom_rail(%{})
-      assert bar_keys(html) == ["chat", "tasks", "meetings", "more"]
+      assert bar_keys(html) == ["chat", "voice", "tasks", "meetings", "more"]
     end
 
     test "Inbox and Activity are not in the bar" do
@@ -622,8 +626,8 @@ defmodule PlatformWeb.Components.IconRailTest do
       acme = render_bottom_rail(%{root_user: true})
       non_acme = render_bottom_rail(%{root_user: false})
 
-      assert count_data_destination_matches(acme) == 4
-      assert count_data_destination_matches(non_acme) == 4
+      assert count_data_destination_matches(acme) == 5
+      assert count_data_destination_matches(non_acme) == 5
     end
   end
 
@@ -668,7 +672,7 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "every mobile tab carries an aria-label" do
       html = render_bottom_rail(%{})
 
-      for label <- ["Chat", "Tasks", "Meetings", "More"] do
+      for label <- ["Chat", "Voice", "Tasks", "Meetings", "More"] do
         assert html =~ ~s(aria-label="#{label}"),
                "expected aria-label=#{inspect(label)} on mobile bottom-rail"
       end

@@ -74,6 +74,8 @@ import SectionReorder from "./section_reorder"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TabPill from "./tab_pill"
+import VoiceContext from "./voice_context"
+import VoiceTab from "./voice_tab"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
@@ -155,6 +157,8 @@ export default {
   SheetHandleClock,
   SidebarCollapse,
   TabPill,
+  VoiceContext,
+  VoiceTab,
   TasksStatusFilter,
   ThemePicker,
   ToastPause,

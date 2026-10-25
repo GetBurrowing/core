@@ -58,7 +58,14 @@ const ASSETS = resolve(HERE, "..");
 // per-person grouping, and the sharer label and its share-end teardown), not
 // an island. When main was merged into feat/redesign the higher 960 KB
 // ceiling was kept; it covers both sides' first-party growth.
-const MAX_BYTES = 960 * 1024;
+//
+// Raised from 960 KB to 976 KB by task 01a1557a-eab7 (Burrow redesign 20:
+// Voice tab): the WITH-Play app.js measured 985,543 bytes in CI run
+// 40159455936, 2,503 over 960 KB, after hooks/voice_tab.js (hold-to-talk,
+// transcript, floor release) and hooks/voice_context.js landed as first-party
+// code. livekit-client was already in the bundle via the meeting hooks, so
+// this is hook code, not an island; 976 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 976 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

@@ -3,6 +3,24 @@
 // Component: lib/platform_web/components/sheet.ex
 // Spec: docs/design-system/components/sheet.md §2
 
+// A node the browser actually lays out. `checkVisibility` is in every engine
+// this app supports; where it is missing (the node test shims) every node
+// counts as visible, which is the behaviour before the check existed.
+const visible = (node) =>
+  !node || typeof node.checkVisibility !== "function" || node.checkVisibility()
+
+// Where focus stood when the sheet opened. A click on a button does not
+// focus it in Safari or Firefox on macOS, so activeElement is often the body:
+// then the sheet's `data-return-focus` selector (its trigger) is the target.
+// A real element (a pill clicked in Chrome, or #mic still holding focus)
+// always wins, so focus goes back exactly where it was.
+const focusOrigin = (el) => {
+  const active = document.activeElement
+  if (active && active !== document.body) return active
+  const selector = el.dataset.returnFocus
+  return (selector && document.querySelector(selector)) || active || null
+}
+
 // Masters' threshold (master-mobile.html v3 :802-806): a downward drag of MORE
 // than this many pixels closes; anything shorter snaps back.
 export const SWIPE_CLOSE_PX = 60
@@ -19,9 +37,13 @@ const Sheet = {
 
     this.handleFocusTrap = (e) => {
       if (this.el.dataset.open !== "true") return
-      const focusable = this.el.querySelectorAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      )
+      // Only what is laid out: a handle hidden at a breakpoint (a popover has
+      // none) must not be the trap's first or last stop, or Tab walks out.
+      const focusable = Array.from(
+        this.el.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter(visible)
       if (focusable.length === 0) return
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
@@ -116,6 +138,8 @@ const Sheet = {
     this.handleSwipeStart = (e) => {
       if (this.el.dataset.open !== "true") return
       if (e.pointerType === "mouse" && e.button !== 0) return
+      // No visible drag affordance (a popover hides the handle): no swipe.
+      if (!visible(this.el.querySelector(".sheet-handle-button"))) return
       const onHandle =
         e.target && typeof e.target.closest === "function"
           ? e.target.closest(".sheet-handle-button, .sheet-handle")
@@ -154,7 +178,7 @@ const Sheet = {
   },
 
   _captureFocusInto() {
-    this.previousFocus = document.activeElement
+    this.previousFocus = focusOrigin(this.el)
     const first = this.el.querySelector(
       'button:not([aria-label="Close"]), [href], input, textarea, select'
     )

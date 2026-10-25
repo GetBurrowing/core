@@ -25,9 +25,20 @@ Each entry is `{"name": ..., "slug": ..., "capability": ...}` (`capability`
 may be `None`). This lets Burrow's `post_to_meeting_chat` hand-off name a
 real, present agent by name instead of only the generic-category phrasing
 above, when one is an obvious match.
+
+Task 01a1557a-eab7 (Voice tab) adds `voice_context`: in a 1:1 voice session
+(`"mode": "voice_1to1"`) the person may pick ONE Burrow space the
+conversation is about, or none. It arrives in the job metadata as
+`{"kind": "space", "id", "name"}` (or null), and later changes arrive on the
+`mva.context` data topic; both go through `build_instructions` so the two
+paths cannot drift.
 """
 
 from __future__ import annotations
+
+import asyncio
+import json
+import logging
 
 from livekit.agents import Agent, llm
 
@@ -105,6 +116,77 @@ def _instructions_with_roster_context(
     )
 
 
+def _instructions_with_voice_context(base_instructions: str, voice_context: dict | None) -> str:
+    """Append one sentence naming the space the person is asking about.
+
+    Only a `{"kind": "space", "id": <non-empty str>}` context adds anything;
+    `None`, `{"kind": "none"}`, or a malformed payload returns
+    `base_instructions` byte-for-byte unchanged. A missing `name` falls back
+    to the id rather than inventing one.
+    """
+    if not isinstance(voice_context, dict) or voice_context.get("kind") != "space":
+        return base_instructions
+
+    space_id = voice_context.get("id")
+    if not isinstance(space_id, str) or not space_id:
+        return base_instructions
+
+    name = voice_context.get("name")
+    if not isinstance(name, str) or not name:
+        name = space_id
+
+    return (
+        f"{base_instructions} The person is asking about {name} (space_id {space_id}) -- "
+        "use that space_id with space-scoped tools when the question is about it."
+    )
+
+
+def build_instructions(
+    config: AgentConfig,
+    *,
+    space_id: str | None = None,
+    agent_roster: list[dict] | None = None,
+    voice_context: dict | None = None,
+) -> str:
+    """The ONE instruction builder: construction and every `mva.context`
+    update call this, so a rebuilt prompt matches a fresh one exactly."""
+    instructions = _instructions_with_space_context(config.instructions, space_id)
+    instructions = _instructions_with_roster_context(instructions, agent_roster)
+    return _instructions_with_voice_context(instructions, voice_context)
+
+
+logger = logging.getLogger("meeting_voice_agent")
+
+#: Data-channel topic Core's `Platform.Meetings.VoiceSession.set_context/2`
+#: sends on. Mirrors `ask_floor_gate.ASK_FLOOR_TOPIC`'s naming.
+VOICE_CONTEXT_TOPIC = "mva.context"
+
+_NOT_A_CONTEXT_PACKET = object()
+
+
+def parse_voice_context_packet(topic: str | None, data: bytes):
+    """Pure: the voice context one data packet carries.
+
+    Returns the context dict for `kind == "space"`, `None` for
+    `kind == "none"` (context cleared), and `_NOT_A_CONTEXT_PACKET` for
+    anything else (another topic, bad JSON, unknown kind). Never raises.
+    """
+    if topic != VOICE_CONTEXT_TOPIC:
+        return _NOT_A_CONTEXT_PACKET
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return _NOT_A_CONTEXT_PACKET
+    if not isinstance(payload, dict):
+        return _NOT_A_CONTEXT_PACKET
+    kind = payload.get("kind")
+    if kind == "none":
+        return None
+    if kind == "space":
+        return payload
+    return _NOT_A_CONTEXT_PACKET
+
+
 class MeetingVoiceAgent(Agent):
     def __init__(
         self,
@@ -113,7 +195,46 @@ class MeetingVoiceAgent(Agent):
         tools: list[llm.Tool | llm.Toolset] | None = None,
         space_id: str | None = None,
         agent_roster: list[dict] | None = None,
+        voice_context: dict | None = None,
     ) -> None:
-        instructions = _instructions_with_space_context(config.instructions, space_id)
-        instructions = _instructions_with_roster_context(instructions, agent_roster)
+        self._config = config
+        self._space_id = space_id
+        self._agent_roster = agent_roster
+        self.voice_context = voice_context
+        instructions = build_instructions(
+            config, space_id=space_id, agent_roster=agent_roster, voice_context=voice_context
+        )
         super().__init__(instructions=instructions, tools=tools or [])
+
+    def instructions_for_context(self, voice_context: dict | None) -> str:
+        """The instructions this agent would have been built with under
+        `voice_context`, via the same `build_instructions`."""
+        return build_instructions(
+            self._config,
+            space_id=self._space_id,
+            agent_roster=self._agent_roster,
+            voice_context=voice_context,
+        )
+
+    async def apply_voice_context(self, voice_context: dict | None) -> None:
+        self.voice_context = voice_context
+        await self.update_instructions(self.instructions_for_context(voice_context))
+
+
+def attach_voice_context_handler(agent: MeetingVoiceAgent, room) -> None:
+    """Rebuild the agent's instructions on every `mva.context` packet."""
+
+    async def _apply(voice_context: dict | None) -> None:
+        try:
+            await agent.apply_voice_context(voice_context)
+            logger.info("voice context updated: %r", voice_context)
+        except Exception:  # an inactive agent must not crash the room loop
+            logger.exception("voice context update failed")
+
+    def _on_data_received(packet) -> None:
+        voice_context = parse_voice_context_packet(packet.topic, packet.data)
+        if voice_context is _NOT_A_CONTEXT_PACKET:
+            return
+        asyncio.ensure_future(_apply(voice_context))
+
+    room.on("data_received", _on_data_received)
