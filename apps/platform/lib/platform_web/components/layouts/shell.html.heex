@@ -51,6 +51,14 @@
        saved URL rather than the module root. Singleton hook — one instance
        covers the whole shell. See `apps/platform/assets/js/hooks/route_resume.js`. --%>
   <div id="route-resume" phx-hook="RouteResume" class="hidden"></div>
+  <%!-- Tab-switch placeholder: a tapped tab's last-seen view (in memory only)
+       or a shimmer skeleton, shown in <main> until the destination renders.
+       See `PlatformWeb.Components.TabSwitchCache`. --%>
+  <PlatformWeb.Components.TabSwitchCache.tab_switch_cache
+    current_path={@current_path}
+    user={assigns[:current_user_record]}
+    masked?={assigns[:mask_names?] == true}
+  />
   <%!-- Unread-count badge mirror. Singleton hook, same pattern as the two
        above. Markup and rationale live on `Layouts.app_badge_mount/1`'s
        @doc — shared with the `:external` layout. --%>
@@ -177,7 +185,7 @@
           >
           </span>
         </button>
-        <span class="min-w-0 truncate text-sm font-semibold">
+        <span class="min-w-0 truncate text-sm font-semibold" data-role="phone-top-bar-title">
           {@active_module}
         </span>
       </div>
