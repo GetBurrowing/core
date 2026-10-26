@@ -226,12 +226,29 @@ final class NativeTabBarContractTests: XCTestCase {
             XCTAssertGreaterThan(inked, 60, "\(tab.image): \(inked) inked pixels at 25pt @3x")
             XCTAssertLessThan(inked, map.pixels.count / 2, "\(tab.image): an outline, not a filled block")
         }
-        let chat = alpha(try XCTUnwrap(NativeTab.glyph(named: "tab-chat", traits: traits)), scale: scale)
-        for x in [9.0, 12.0, 15.0] {
-            XCTAssertGreaterThan(peak(chat, at: CGPoint(x: x, y: 11.5), radius: 0.5, scale: scale), 127, "chat dot at x=\(x)")
+        let chatGlyph = try XCTUnwrap(NativeTab.glyph(named: "tab-chat", traits: traits))
+        let chat = alpha(chatGlyph, scale: scale)
+        let dots = [9.0, 12.0, 15.0].map { peak(chat, at: CGPoint(x: $0, y: 11.5), radius: 0.5, scale: scale) }
+        let gaps = [10.5, 13.5].map { peak(chat, at: CGPoint(x: $0, y: 11.5), radius: 0.1, scale: scale) }
+        // Keep the raster so a failure can be looked at, not just read.
+        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(size: CGSize(width: 25, height: 25)).image { _ in
+            chatGlyph.draw(in: CGRect(x: 0, y: 0, width: 25, height: 25))
+        })
+        attachment.name = "tab-chat dots \(dots) gaps \(gaps)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        for (x, dot) in zip([9.0, 12.0, 15.0], dots) {
+            XCTAssertGreaterThan(dot, 127, "chat dot at x=\(x)")
         }
-        for x in [10.5, 13.5] {
-            XCTAssertLessThan(peak(chat, at: CGPoint(x: x, y: 11.5), radius: 0.1, scale: scale), 64, "chat gap at x=\(x)")
+        // A filled bubble puts full ink in the gaps; three dots leave them
+        // well under the dots. The iPad simulator's antialiasing leaves a
+        // softer edge (84 at x=10.5 on rock, iOS 27.0) than the iPhone, so
+        // the gap is held to clearly below half ink and clearly below every
+        // dot rather than to one runtime's exact edge.
+        let weakestDot = dots.min() ?? 0
+        for (x, gap) in zip([10.5, 13.5], gaps) {
+            XCTAssertLessThan(gap, 112, "chat gap at x=\(x): dots \(dots)")
+            XCTAssertGreaterThanOrEqual(Int(weakestDot) - Int(gap), 96, "chat gap at x=\(x) not clearly below the dots \(dots)")
         }
     }
 }
