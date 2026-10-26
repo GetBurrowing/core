@@ -823,7 +823,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       d = doc(view)
 
       assert text(d, "#listen-text") ==
-               "Microphone is blocked. Allow it in your browser settings."
+               "Microphone is blocked. Allow it in your browser or app settings."
 
       assert has_element?(view, "#listen-text.text-error")
       refute has_element?(view, "#voice-type-form")
