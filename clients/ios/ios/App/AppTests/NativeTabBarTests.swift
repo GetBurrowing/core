@@ -27,8 +27,12 @@ final class NativeTabBarTests: XCTestCase {
             let item = NativeTabBarFactory.item(tab, index: index)
             let image = try? XCTUnwrap(item.image, tab.image)
             XCTAssertEqual(image?.renderingMode, .alwaysTemplate, tab.image)
-            XCTAssertTrue(item.selectedImage === item.image, "\(tab.key): one glyph for both states")
-            XCTAssertTrue(item.largeContentSizeImage === item.image, "\(tab.key): the Large Content Viewer shows the glyph")
+            // Compare pixels, not identity: UIKit may hand back a different
+            // UIImage object for the same glyph (iOS 27.0 runtime does).
+            let pixels = image?.pngData()
+            XCTAssertNotNil(pixels, tab.image)
+            XCTAssertEqual(item.selectedImage?.pngData(), pixels, "\(tab.key): one glyph for both states")
+            XCTAssertEqual(item.largeContentSizeImage?.pngData(), pixels, "\(tab.key): the Large Content Viewer shows the glyph")
             for state in [UIControl.State.normal, .selected] {
                 let font = item.titleTextAttributes(for: state)?[.font] as? UIFont
                 XCTAssertEqual(font?.familyName, "Public Sans", "\(tab.key) \(state)")

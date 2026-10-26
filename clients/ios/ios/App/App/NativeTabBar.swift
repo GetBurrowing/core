@@ -38,8 +38,10 @@ struct NativeTab: Equatable {
     /// inks paint it. Nil only if the asset is missing from the bundle.
     var glyph: UIImage? { Self.glyph(named: image) }
 
-    static func glyph(named name: String) -> UIImage? {
-        UIImage(named: name, in: Bundle(for: StandaloneTabBarHost.self), compatibleWith: nil)?.withRenderingMode(.alwaysTemplate)
+    /// `traits` picks the display scale the vector is rasterised at; nil
+    /// takes the current traits, which is what the bar uses.
+    static func glyph(named name: String, traits: UITraitCollection? = nil) -> UIImage? {
+        UIImage(named: name, in: Bundle(for: StandaloneTabBarHost.self), compatibleWith: traits)?.withRenderingMode(.alwaysTemplate)
     }
 }
 

@@ -215,14 +215,18 @@ final class NativeTabBarContractTests: XCTestCase {
     /// each dot region is checked, and the gaps between them stay clear (a
     /// filled bubble would also put ink on the dots).
     func testEveryGlyphRastersWithInkAndChatHasItsThreeDots() throws {
+        // Rasterise the vector at the scale it is drawn into. With the
+        // current traits a 2x iPad hands back a 2x raster, and upsampling it
+        // into a 3x context blurs ink into chat's gaps (task 01a174e8).
         let scale: CGFloat = 3
+        let traits = UITraitCollection(displayScale: scale)
         for tab in NativeTab.catalog {
-            let map = alpha(try XCTUnwrap(tab.glyph, tab.image), scale: scale)
+            let map = alpha(try XCTUnwrap(NativeTab.glyph(named: tab.image, traits: traits), tab.image), scale: scale)
             let inked = map.pixels.filter { $0 > 127 }.count
             XCTAssertGreaterThan(inked, 60, "\(tab.image): \(inked) inked pixels at 25pt @3x")
             XCTAssertLessThan(inked, map.pixels.count / 2, "\(tab.image): an outline, not a filled block")
         }
-        let chat = alpha(try XCTUnwrap(NativeTab.named("chat")?.glyph), scale: scale)
+        let chat = alpha(try XCTUnwrap(NativeTab.glyph(named: "tab-chat", traits: traits)), scale: scale)
         for x in [9.0, 12.0, 15.0] {
             XCTAssertGreaterThan(peak(chat, at: CGPoint(x: x, y: 11.5), radius: 0.5, scale: scale), 127, "chat dot at x=\(x)")
         }
