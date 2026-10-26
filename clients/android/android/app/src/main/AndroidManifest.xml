@@ -11,6 +11,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- The large-upload worker watches the default network to pause at once when it is lost. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice and meetings: the web app's getUserMedia reaches Capacitor's
+         BridgeWebChromeClient, which can only prompt for permissions declared
+         here. Undeclared, the mic request is refused at once and the voice tab
+         shows "Microphone is blocked". -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Declaring the permissions implies required hardware; keep devices
+         without a camera (or mic) installable. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- Custom Tabs: find a browser that supports them (Android 11+ package visibility). -->
     <queries>
