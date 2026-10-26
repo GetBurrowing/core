@@ -12,8 +12,8 @@ defmodule Platform.Meetings.IntentFrames do
   cancels it, and the model lifts the predicate out as its
   `evidence_quote` while dropping the frame:
 
-      "No, actually, never mind. As an action item, Chris needs to …"
-        -> action_items, quote "As an action item, Chris needs to …"
+      "No, actually, never mind. As an action item, Casey needs to …"
+        -> action_items, quote "As an action item, Casey needs to …"
 
       "I wonder if this is really briefworthy."
         -> brief_worthy,  quote "I wonder if this is really briefworthy"
@@ -144,7 +144,7 @@ defmodule Platform.Meetings.IntentFrames do
   It is a lexical rule with no semantics, so it cannot tell a retraction
   of an ask from a retraction *inside* one:
 
-      "Scribe, never mind the colour — log an action item for Chris."
+      "Scribe, never mind the colour — log an action item for Casey."
 
   is a real ask and this gate demotes it. That cost is pinned as a test
   (`intent_frames_test.exs`, "the accepted cost"), not left to be

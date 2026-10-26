@@ -113,7 +113,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
 
     test "the remaining delegation_probe off-roster rows are rejected" do
       for text <- [
-            "Chris, can you file a ticket for the purse-based meeting problem?",
+            "Casey, can you file a ticket for the purse-based meeting problem?",
             "Sam, open a task to track the flaky deploy, would you?",
             "Marcus, put together a ticket for that login timeout thing.",
             "Agent Voice, can you hear me?"
@@ -152,7 +152,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # to have.
       for text <- [
             "Capture that as an action item: Alex sends the Globex contract by Friday.",
-            "Log an action item for Chris to stand up the podcast control center.",
+            "Log an action item for Casey to stand up the podcast control center.",
             "Put that in the brief — Atlas is Globex's brand strategy platform.",
             "Record the decision: we're shipping Tuesday.",
             "Write down that we decided not to swap models, the 2B stays.",
@@ -170,14 +170,14 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
 
     test "a non-vocative person name inside the ask survives" do
-      # "Chris" and "Alex" are people and are NOT on the roster, but
+      # "Casey" and "Alex" are people and are NOT on the roster, but
       # they are the SUBJECT of the action item, not its addressee. A
       # gate that fired on any off-roster name anywhere would kill
       # both, and both are labelled positives.
       assert :ok =
                IntentAddressee.verdict(
-                 "Log an action item for Chris to stand up the podcast control center.",
-                 "Log an action item for Chris",
+                 "Log an action item for Casey to stand up the podcast control center.",
+                 "Log an action item for Casey",
                  @roster
                )
     end
@@ -208,7 +208,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # would improve without the roster doing any work.
       for text <- [
             "Yeah, but the interaction design part is probably wrong.",
-            "No, actually, never mind. As an action item, Chris needs to start developing.",
+            "No, actually, never mind. As an action item, Casey needs to start developing.",
             "Okay, so I think we need to build a live canvas.",
             "Um, wrong intent.",
             "Nah, I'm gonna get Sam in here.",

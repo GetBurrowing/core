@@ -13,7 +13,7 @@ defmodule Platform.Org.Wiki.Indexer.Payload do
     * Journal — built from `%Platform.Org.WikiJournalEntry{}` rows.
       `memory_type` is `"journal"`. `date` is the entry's own date.
 
-  The memory-service contract (`/home/sloane/Code/suite/memory-service/src/memory_service/models.py`)
+  The memory-service contract (`memory-service/src/memory_service/models.py`, in the memory-service repo)
   accepts `memory_type` as free-form `str` — `"page"` and `"journal"` pass
   through unchanged. No follow-up PR to memory-service is required.
 

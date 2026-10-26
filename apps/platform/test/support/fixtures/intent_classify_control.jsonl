@@ -1,0 +1,60 @@
+{"text": "Designer, make that primary button teal instead of the blue.", "expected_intent": "visual_adjust"}
+{"text": "Hey designer agent, bump the heading size up on the landing page, it's too small.", "expected_intent": "visual_adjust"}
+{"text": "Can the designer tighten the spacing between those cards? They're way too far apart.", "expected_intent": "visual_adjust"}
+{"text": "Designer, swap the body typeface to Inter across the canvas.", "expected_intent": "visual_adjust"}
+{"text": "Ask the designer to darken the sidebar background so it reads better in light mode.", "expected_intent": "visual_adjust"}
+{"text": "Designer agent, round the corners on the avatar and drop the border.", "expected_intent": "visual_adjust"}
+{"text": "Designer, the CTA needs more contrast, make the text white on that green.", "expected_intent": "visual_adjust"}
+{"text": "Have the designer widen the modal, it's cramped at 375.", "expected_intent": "visual_adjust"}
+{"text": "Designer, put the logo in the top left and shrink it about twenty percent.", "expected_intent": "visual_adjust"}
+{"text": "Designer agent, change the error state color from orange to red.", "expected_intent": "visual_adjust"}
+{"text": "Designer, make the row expand on click instead of navigating away.", "expected_intent": "interaction_design"}
+{"text": "Designer agent, add an undo affordance after the user clears the inbox.", "expected_intent": "interaction_design"}
+{"text": "Can the designer make that form submit on enter rather than needing the button?", "expected_intent": "interaction_design"}
+{"text": "Designer, the drawer should close when you tap outside it.", "expected_intent": "interaction_design"}
+{"text": "Have the designer add a confirm step before the destructive delete.", "expected_intent": "interaction_design"}
+{"text": "Designer agent, let people drag the cards to reorder them.", "expected_intent": "interaction_design"}
+{"text": "Designer, add a loading state so the button can't be double submitted.", "expected_intent": "interaction_design"}
+{"text": "Ask the designer to make the search filter as you type instead of on submit.", "expected_intent": "interaction_design"}
+{"text": "Designer, keyboard users need to tab through that menu, wire up focus order.", "expected_intent": "interaction_design"}
+{"text": "Designer agent, make the FAB stick to the bottom instead of scrolling with the list.", "expected_intent": "interaction_design"}
+{"text": "Scribe, take an action item: Alex to send the Globex contract by Friday.", "expected_intent": "action_items"}
+{"text": "Meeting scribe, log an action item for Casey to stand up the podcast control center.", "expected_intent": "action_items"}
+{"text": "Scribe agent, capture that I'm going to fix the transcriber label before the demo.", "expected_intent": "action_items"}
+{"text": "Scribe, action item: Sam owns the landing page copy, due Tuesday.", "expected_intent": "action_items"}
+{"text": "Note that as an action item, scribe — someone needs to rerun the failed CI job.", "expected_intent": "action_items"}
+{"text": "Meeting scribe, add an action item to migrate the exp environment secrets this week.", "expected_intent": "action_items"}
+{"text": "Scribe, put down an action item for me to write up the pricing one pager.", "expected_intent": "action_items"}
+{"text": "Scribe agent, track this: Riley will schedule the follow up with their testers.", "expected_intent": "action_items"}
+{"text": "Meeting scribe, action item — audit the external users permission gate before launch.", "expected_intent": "action_items"}
+{"text": "Scribe, log an action item that we owe them a markdown version of the deck.", "expected_intent": "action_items"}
+{"text": "Scribe, put in the brief that Atlas is Globex's brand strategy platform, not a generic tool.", "expected_intent": "brief_worthy"}
+{"text": "Meeting scribe, capture for the brief: the 2B classifier matched the larger model at a fraction of the latency.", "expected_intent": "brief_worthy"}
+{"text": "Scribe agent, add background to the brief that they were paying Casey on retainer before this.", "expected_intent": "brief_worthy"}
+{"text": "Scribe, this is brief worthy — their testers will come in as external users, not org members.", "expected_intent": "brief_worthy"}
+{"text": "Meeting scribe, note in the brief that the prompts live in the database, not in code.", "expected_intent": "brief_worthy"}
+{"text": "Scribe, add framing to the brief: we are not doing color by color review with the client.", "expected_intent": "brief_worthy"}
+{"text": "Scribe agent, put in the brief that the podcast control center is moving onto Suite itself.", "expected_intent": "brief_worthy"}
+{"text": "Meeting scribe, capture the context that this is Acme's first client engagement.", "expected_intent": "brief_worthy"}
+{"text": "Scribe, brief worthy — LiveKit names the transcriber participant wrong today.", "expected_intent": "brief_worthy"}
+{"text": "Scribe agent, record for the brief that the timeline view for Globex is currently a spreadsheet.", "expected_intent": "brief_worthy"}
+{"text": "Historian, record the decision: we're shipping Tuesday.", "expected_intent": "decision_recorded"}
+{"text": "Historian agent, log that we decided to give Globex the controls rather than keep them on retainer.", "expected_intent": "decision_recorded"}
+{"text": "Historian, write down that we've decided not to swap models — the 2B stays.", "expected_intent": "decision_recorded"}
+{"text": "Record this decision, historian: no per member PRs, stacks ship as one rollup.", "expected_intent": "decision_recorded"}
+{"text": "Historian agent, we decided the review page ships before the mobile polish. Log it.", "expected_intent": "decision_recorded"}
+{"text": "Historian, capture the decision that external testers get read only access.", "expected_intent": "decision_recorded"}
+{"text": "Historian, log the decision to send them a markdown file instead of the slides.", "expected_intent": "decision_recorded"}
+{"text": "Historian agent, record that we're standardizing on the exp lane for live edits.", "expected_intent": "decision_recorded"}
+{"text": "Historian, decision made: off_topic is the classifier's default answer. Write it down.", "expected_intent": "decision_recorded"}
+{"text": "Historian, record that we agreed to build the landing page as one review surface, not item by item.", "expected_intent": "decision_recorded"}
+{"text": "Triage officer, open question: do we know who owns the identity system setup on their side?", "expected_intent": "open_question"}
+{"text": "Triage agent, we don't have an answer for how testers get invited. Track that as an open question.", "expected_intent": "open_question"}
+{"text": "Triage officer, flag an open question — is the podcast control center in scope for v1?", "expected_intent": "open_question"}
+{"text": "Triage, open question for someone: what happens to saved prompts when an agent is deleted?", "expected_intent": "open_question"}
+{"text": "Triage officer, log the unresolved question of whether Globex or Acme owns the AWS account.", "expected_intent": "open_question"}
+{"text": "Triage agent, open question: what's the story for voice feedback in the meeting UI?", "expected_intent": "open_question"}
+{"text": "Triage officer, nobody could answer whether the sales pitch is written yet. Track it.", "expected_intent": "open_question"}
+{"text": "Triage, raise an open question about the library dependency we're going to hit a wall on.", "expected_intent": "open_question"}
+{"text": "Triage agent, unresolved: do we need closed captions on by default? Log it as an open question.", "expected_intent": "open_question"}
+{"text": "Triage officer, open question — who is reviewing the pricing before it goes to the client?", "expected_intent": "open_question"}

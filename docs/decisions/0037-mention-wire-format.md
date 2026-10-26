@@ -31,7 +31,7 @@ The composer emits the bracketed form on mention accept. The renderer matches `@
 
 ### 1. Greedy "capitalized tokens" regex
 
-`~r/@([A-Z]\w*(?:\s+[A-Z]\w*)*)/`. One-line change. Handles `@Alex Rivera` and `@Sloane Scott`.
+`~r/@([A-Z]\w*(?:\s+[A-Z]\w*)*)/`. One-line change. Handles `@Alex Rivera` and `@Taylor Reed`.
 
 **Rejected** because it breaks for lowercase handles (every agent: `higgins`, `mycroft`, `geordi`) and over-matches on capitalized follow-on words: `@Alex Have you seen this` would highlight "Alex Have". No improvement to the routing ambiguity.
 

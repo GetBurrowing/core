@@ -170,7 +170,7 @@ handle_event("switch_tab", %{"tab" => "journal"}, socket) ->
 
 `Wiki.versions/2` **does not exist** on T2. There is no per-edit version table — `org_wiki_pages` carries a monotonic `version` integer that bumps on each `upsert_page`, but prior versions are not retained.
 
-**Sloane's call (2026-05-20):** *"Version stamp is fine for history, we don't need full history."*
+**Alex's call (2026-05-20):** *"Version stamp is fine for history, we don't need full history."*
 
 **T7 scope decision:** Version history reduces to a single line in the right pane:
 
@@ -208,7 +208,7 @@ This locks in: (a) humans-writing works because of structural type discriminatio
 
 | # | Question | Status |
 | --- | --- | --- |
-| 1 | Full version history (diff view, list of prior versions)? | **Resolved** — Sloane approved version-stamp-only scope on 2026-05-20. No follow-up. |
+| 1 | Full version history (diff view, list of prior versions)? | **Resolved** — Alex approved version-stamp-only scope on 2026-05-20. No follow-up. |
 | 2 | Global Cmd-K palette spanning conversations + memory? | Out of scope for T7. Possible follow-up post-merge. |
 | 3 | Mobile responsive layout for the three-pane shell? | T7 stage TBD — likely "right pane drawer on narrow viewports, main pane full-width, sidebar slide-over." Punt to implementation stage. |
 

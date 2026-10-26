@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "task": "01a03fbb-3ef1-73b1-9fe9-eb1d37a5484a",
+  "stage": 3,
+  "description": "Labelled evaluation set for meeting intent classification. Shipped in priv so a running release can replay it; test/support is compiled only under MIX_ENV=test and never leaves the repo.",
+  "row_schema": {
+    "id": "sha256(\"<slice>|<text>\")[0..15] — stable under re-generation of the same text",
+    "text": "the utterance under classification",
+    "label": "ground truth: off_topic, or an intent name",
+    "slice": "which slice the row belongs to",
+    "prior": "up to three preceding utterances; empty for the curated seed slices",
+    "origin": "curated | archive | synthetic",
+    "source_file": "where the row was normalised from",
+    "source_reason": "negatives only: the reason recorded on the original correction. Observed values are wrong_target (87), wrong_intent (6), other (5), not_actionable (4) — wider than the wrong_intent|wrong_target the ticket named, so the value is carried through rather than collapsed.",
+    "expected_target_role": "unaddressed_meeting_speech_48 only: the target_role a correct answer carries. null on every row in that slice — an unaddressed ask keeps its intent and names no role (stage 3 of task 01a06575).",
+    "probe": "unaddressed_meeting_speech_48 only: what this row is in the set to measure. See the slice header's `probes` map. `frame_delegation` rows are expected to FAIL — they are there to make a known deterministic-gate conflict visible.",
+    "scored_by_default": "slice-level, not row-level: whether a run with no --slice includes this slice. False means the slice has no recording anywhere and would fail every replay."
+  },
+  "adjudicated": false,
+  "prelabel": {
+    "run": false,
+    "agent_slug": null,
+    "model": null,
+    "at": null,
+    "policy": "The pre-labeller MUST be a larger, stronger model than the classifier under test — resolved through the agents table by slug. mix platform.intent_eval.prelabel refuses an --agent that resolves to the meetings.intent_classify assignee, because a ~2B classifier pre-labelling its own benchmark measures nothing. The slug actually used is written here by that task.",
+    "confidence_threshold": 0.75
+  },
+  "adjudication": {
+    "workflow": "mix platform.intent_eval.adjudicate --emit writes adjudication/open.csv (only disagreements and low-confidence rows); a human fills human_label; mix platform.intent_eval.adjudicate --ingest <file> --by <identity> merges it back.",
+    "no_screen": "Deliberately a file round-trip, not a LiveView. A keyboard-driven agree/disagree screen is a real design surface with no design pass behind it; if one proves necessary it is a separate ticket with a manual_approval gate.",
+    "self_adjudication": "--ingest refuses, writing nothing, when --by matches the agent slug that produced the pre-label for any filled row."
+  },
+  "provenance": {
+    "duplicated_from": {
+      "branch": "task/01a03f57-362a-709f-801e-fb5cad1195e0",
+      "canonical": "apps/platform/priv/intent_eval/slices (THIS copy)",
+      "note": "The test/support/fixtures originals are intentionally NOT deleted: task 01a03f57's own tests read them and removing them here would break that branch. A later cleanup should collapse onto the priv copy.",
+      "pairs": [
+        {
+          "priv": "slices/negatives_102.jsonl",
+          "fixture": "apps/platform/test/support/fixtures/intent_classify_negatives.jsonl"
+        },
+        {
+          "priv": "slices/control_60.jsonl",
+          "fixture": "apps/platform/test/support/fixtures/intent_classify_control.jsonl"
+        },
+        {
+          "priv": "slices/unaddressed_probe_12.jsonl",
+          "fixture": "apps/platform/test/support/fixtures/intent_classify_unaddressed_probe.jsonl"
+        }
+      ]
+    },
+    "normalisation": "Each fixture row was mapped into the common schema: the 102 recorded removed_no_action corrections all carry label off_topic (their reason is retained as source_reason); control and probe rows carry their stated expected_intent.",
+    "names_replaced": "Task 01a14dce replaced every real person, org and client name in these slices (and in exemplars/recorded_removals_8.jsonl) with invented ones: people Alex, Sam, Riley, Casey; org Acme; client org Globex; the client product Atlas. Each changed row keeps its label, its addressee status and its probe tag, and its id was recomputed from the new text. So for those rows the priv copy no longer equals its fixture original.",
+    "hand_written_slices": {
+      "slices": [
+        "unaddressed_meeting_speech_48"
+      ],
+      "checked_for_real_data": "2026-09-02: all 21 databases in the local suite-dev-postgres container were queried for meeting_transcripts segments and meeting_intent_corrections rows. Zero transcript segments and zero corrections exist anywhere locally (platform_dev: 2 meetings / 0 segments / 0 corrections; platform_agentface_dev: 1 meeting / 0 segments / 0 corrections).",
+      "consequence": "The slice is hand-written by one author and carries the SAME blindness that made control_60 unrepresentative: it is a model of how people talk, not a sample of it. It is labelled hand_written in its header and in every row's `origin`. Until task 01a14dce one row was real transcribed speech; it named real people and was replaced by an invented row of the same shape (probe=former_verbatim), so all 48 rows are now hand-written."
+    }
+  },
+  "slices": [
+    {
+      "name": "negatives_102",
+      "file": "slices/negatives_102.jsonl",
+      "count": 102,
+      "sha256": "745f1dc83bc1b386387260c1504b58b2c9dc232aa270b87d5226990458fe174e",
+      "scored_by_default": true
+    },
+    {
+      "name": "control_60",
+      "file": "slices/control_60.jsonl",
+      "count": 60,
+      "sha256": "76798d8b687091664fd9bd52e755fb8719a4dc0678112f1cb95b5da0042178ce",
+      "scored_by_default": true
+    },
+    {
+      "name": "unaddressed_probe_12",
+      "file": "slices/unaddressed_probe_12.jsonl",
+      "count": 12,
+      "sha256": "3e1468e245b7526c99f9e6e0b9fd4d5dd275406951752a94645be99b48696016",
+      "scored_by_default": true
+    },
+    {
+      "name": "delegation_probe",
+      "file": "slices/delegation_probe.jsonl",
+      "count": 9,
+      "sha256": "663c4c0a7e05539848e858a5844cb118a01fe795602f5ff35d089609a8c44096",
+      "scored_by_default": true,
+      "provenance": "Authored for task 01a05997 stage 4, not normalised from a fixture: the brief's reproduction utterance plus off-roster minimal pairs of the same ask. Its job is to show the roster-grounded prompt DISCRIMINATING \u2014 the positive and the Octavius row differ only in the addressed name."
+    },
+    {
+      "name": "unaddressed_meeting_speech_48",
+      "file": "slices/unaddressed_meeting_speech_48.jsonl",
+      "count": 48,
+      "sha256": "0a3dc83dd2cc1a23702e1998fa4f18072b7e97e31f3f35577078255acb033b41",
+      "scored_by_default": false,
+      "excluded_reason": "No cassette exists for these 48 rows against ANY config, so no committed replay can score them. Including them in the default run would only turn every run into a 48-row cassette miss. Score them with `--slice unaddressed_meeting_speech_48 --record` once a classifier endpoint is reachable. Every run's report names this slice as excluded; it is never silently dropped."
+    }
+  ]
+}

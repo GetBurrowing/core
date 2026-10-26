@@ -16,7 +16,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   `/`-separated segments of each `file_key` (`org/page/identity.md`,
   `project/<uuid>/page/decisions.md`, `space/<uuid>/page/playbook.md`, ...).
 
-  Page-grammar display (Sloane-authorized, 2026-06-11): canonical page
+  Page-grammar display (Alex-authorized, 2026-06-11): canonical page
   keys carry a `page/` segment right after the namespace
   (`<ns>/page/<rest>` — T5 routing grammar). The interposed `page`
   folder is pure routing noise for humans, so rendering collapses it:

@@ -144,7 +144,7 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplatesSecurityGuard do
 
       Take judgment on:
         * Boot-crash likelihood. A missing required env var whose absence trips `System.fetch_env!/1` is `critical` (the release crash-loops on start). Expired TLS on a low-traffic subdomain is `medium` (users see a warning; not a crash). Weak cipher on internal-only endpoints is `low`.
-        * Rollout mitigation ordering. Do NOT restart the service before the config gap is patched — that racecondition ships downtime. Prefer: (1) append to the core-ops secrets file first, (2) verify the value is present (e.g. `sudo cat /srv/dev/core-ops/secrets/moon-production/platform.secrets.env | grep <KEY>`), (3) then bounce with `systemctl --user restart core-platform.service`.
+        * Rollout mitigation ordering. Do NOT restart the service before the config gap is patched — that racecondition ships downtime. Prefer: (1) append to the core-ops secrets file first, (2) verify the value is present (e.g. `sudo cat ~/core-ops/secrets/<host>-production/platform.secrets.env | grep <KEY>`), (3) then bounce with `systemctl --user restart core-platform.service`.
 
       Output a single JSON object matching this exact shape — no prose, no wrapping:
 

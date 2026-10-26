@@ -2,7 +2,7 @@ defmodule Platform.Repo.Migrations.PageGrammarFileKeysAndAliasBackfill do
   use Ecto.Migration
 
   @moduledoc """
-  Stack rollup data migration (Sloane-authorized, 2026-06-11).
+  Stack rollup data migration (Alex-authorized, 2026-06-11).
 
   T1's path-style migration (`20260519210000`) produced FLAT page keys
   (`org/identity.md`) — but the T5 policy grammar in
@@ -64,7 +64,7 @@ defmodule Platform.Repo.Migrations.PageGrammarFileKeysAndAliasBackfill do
   those alias rows. Pages created directly under the page grammar
   (no flat alias) are untouched.
 
-  Admitted by PR #433 (ADR-0041 org-memory stack rollup), Sloane-authorized
+  Admitted by PR #433 (ADR-0041 org-memory stack rollup), Alex-authorized
   2026-06-11 — flat page keys to the `<ns>/page/<rest>` routing grammar plus
   alias backfill.
   """

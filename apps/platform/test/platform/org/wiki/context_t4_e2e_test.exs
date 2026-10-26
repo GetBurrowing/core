@@ -16,7 +16,7 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
        deterministic across runs.
     C. Single-page paragraph-boundary truncation — bigref page cut at
        \\n\\n above budget cliff, literal `[truncated]` sentinel
-       (per Sloane's override — NOT the HTML-comment form), used_tokens
+       (per Alex's override — NOT the HTML-comment form), used_tokens
        respects budget.
     D. Workspace isolation — same file_key in two workspaces, no leak.
     E. Output-shape stability — top-level keys of `ContextAssembler.build/1`
@@ -144,7 +144,7 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
 
     # The literal `[truncated]` sentinel appears, preceded by \n\n
     # (paragraph-boundary join) and followed by \n then the END marker.
-    # NOTE: T4 uses the literal `[truncated]` sentinel per Sloane's
+    # NOTE: T4 uses the literal `[truncated]` sentinel per Alex's
     # binding override of the plan body's HTML-comment form. The
     # task-AC sentinel wins. Stage-1 recon note documents.
     suffix = "\n\n[truncated]\n" <> end_marker("org/bigref.md")

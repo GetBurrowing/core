@@ -56,7 +56,7 @@ defmodule Platform.Org.ContextTest do
             ORG_AGENTS.md
             org/identity.md
             project/abc-123/decisions/2026-05.md
-            private/sloane/notes.md
+            private/alex/notes.md
           ) do
         changeset =
           WikiPage.changeset(%WikiPage{}, %{

@@ -2,7 +2,7 @@
 
 **Status:** Accepted (Phase 3 revised 2026-04-16)  
 **Date:** 2026-04-08  
-**Author:** Sloane Scott / Hal
+**Author:** Taylor Reed / Hal
 
 ---
 

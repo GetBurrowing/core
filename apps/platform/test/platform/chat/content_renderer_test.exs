@@ -312,13 +312,13 @@ defmodule Platform.Chat.ContentRendererTest do
     end
 
     test "decorates bracketed multi-word mentions (ADR 0037)" do
-      result = render("Hello @[Alex Rivera] and @[Sloane Scott]")
+      result = render("Hello @[Alex Rivera] and @[Taylor Reed]")
 
       assert result =~
                ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Alex Rivera</span>)
 
       assert result =~
-               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Sloane Scott</span>)
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Taylor Reed</span>)
 
       # Raw brackets must not survive in the rendered output.
       refute result =~ "@["

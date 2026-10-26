@@ -55,8 +55,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
 
     test "prefix matches rank before infix matches within a group" do
       map = %{
-        # infix "ob" (in "Sloane"), alphabetically first
-        "u1" => participant("u1", "Sloane"),
+        # infix "ob" (in "Bob"), alphabetically first
+        "u1" => participant("u1", "Bob"),
         # prefix "ob"
         "u2" => participant("u2", "Oberon"),
         "a1" => participant("a1", "Cobalt", "agent"),
@@ -64,7 +64,7 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
       }
 
       assert names(MentionsHooks.build_suggestions("ob", map)) ==
-               ["Obsidian", "Cobalt", "Oberon", "Sloane"]
+               ["Obsidian", "Cobalt", "Oberon", "Bob"]
     end
 
     test "an infix-only match is offered" do

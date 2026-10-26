@@ -1307,7 +1307,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   ]
 
   @gate_must_keep [
-    "As an action item, Chris needs to start developing the podcast software on suite.",
+    "As an action item, Casey needs to start developing the podcast software on suite.",
     "A pretty simple HTML page for now, what we're trying to build is a dog training app.",
     "Give me the Acme stuff so I can just make this Acme",
     "Yeah, I mean, that's all well and good. This is on Cloudflare. Again, I have not been shown where the domain or anything like that is registered.",
@@ -1355,7 +1355,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "short imperatives survive — they are exactly what must never be lost" do
       assert IntentClassifier.content_bearing?("ship it")
       assert IntentClassifier.content_bearing?("file a ticket")
-      assert IntentClassifier.content_bearing?("Chris, own this.")
+      assert IntentClassifier.content_bearing?("Casey, own this.")
     end
 
     test "fragments merged back into a whole survive even though each half would not" do
@@ -1456,7 +1456,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         broadcast_chunk("room-gate",
           segment: %{
             id: "seg-gate-5",
-            text: "As an action item, Chris needs to start developing the podcast software"
+            text: "As an action item, Casey needs to start developing the podcast software"
           }
         )
 
@@ -3610,7 +3610,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     # turns this test red and returns the cassette's false-positive count
     # to 8.
     test "a verbatim quote lifted out of a cancelling frame is demoted to off_topic" do
-      chunk = "No, actually, never mind. As an action item, Chris needs to start the podcast."
+      chunk = "No, actually, never mind. As an action item, Casey needs to start the podcast."
 
       stub!(fn _c, _m, _o ->
         {:ok,
@@ -3620,7 +3620,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
                "intent" => "action_items",
                "target_role" => "meeting_scribe",
                "confidence" => 0.95,
-               "evidence_quote" => "As an action item, Chris needs to start the podcast."
+               "evidence_quote" => "As an action item, Casey needs to start the podcast."
              })
          }}
       end)
@@ -3635,7 +3635,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     # frame and the identical answer must survive untouched. Without this
     # a gate that demoted every positive would pass the test above.
     test "the same quote with no cancelling frame is returned unchanged" do
-      chunk = "As an action item, Chris needs to start the podcast."
+      chunk = "As an action item, Casey needs to start the podcast."
 
       stub!(fn _c, _m, _o ->
         {:ok,
@@ -3645,7 +3645,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
                "intent" => "action_items",
                "target_role" => "meeting_scribe",
                "confidence" => 0.95,
-               "evidence_quote" => "As an action item, Chris needs to start the podcast."
+               "evidence_quote" => "As an action item, Casey needs to start the podcast."
              })
          }}
       end)
@@ -3965,7 +3965,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         "intent" => "action_items",
         "target_role" => "meeting_scribe",
         "confidence" => 0.95,
-        "evidence_quote" => "as an action item, Chris owns the podcast"
+        "evidence_quote" => "as an action item, Casey owns the podcast"
       })
 
       _ =
@@ -3973,7 +3973,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
           meeting_id: meeting_id,
           segment: %{
             id: "seg-evidence-frame-#{System.unique_integer([:positive])}",
-            text: "No, actually, never mind — as an action item, Chris owns the podcast.",
+            text: "No, actually, never mind — as an action item, Casey owns the podcast.",
             speaker_name: "alice"
           }
         )

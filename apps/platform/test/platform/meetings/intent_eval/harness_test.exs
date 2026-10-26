@@ -811,14 +811,18 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
         |> Enum.map(& &1["text"])
         |> Enum.sort()
 
-      # Four since the task 01a14dce re-record. The fifth, "I do see the
-      # action items, briefly, ...", is still declined: the model now answers
-      # off_topic itself, so the gate has nothing to demote.
+      # Four since the task 01a14dce re-record. The fifth, the perception
+      # row ("We can see the action items up there, ..."), is still
+      # declined: the model now answers off_topic itself, so the gate has
+      # nothing to demote. The texts are the synthetic stand-ins the
+      # pre-public scrub put in place of the recorded removals; each keeps
+      # the frame that cancels it (evaluative, epistemic, retraction,
+      # delegation).
       assert suppressed == [
-               "I wonder if this is really briefworthy.",
-               "No, actually, never mind. As an action item, Casey needs to start developing the podcast.",
-               "We can ask him to bring it in here.",
-               "Yeah, but the interaction design part is probably wrong."
+               "Hmm, but the interaction design piece is probably wrong.",
+               "I wonder if this one is actually briefworthy.",
+               "Scratch that. Put down an action item for Sam to own the newsletter draft.",
+               "We can ask her to pull it up in here."
              ]
 
       # The three it does NOT reach, stated rather than left as a
@@ -835,9 +839,9 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
         |> Enum.sort()
 
       assert still_firing == [
-               "Let's put together some kind of plan here.",
-               "Promote to prod. Yeah, I know, me too. Okay, so let's go.",
-               "and assign them."
+               "Let's sketch out some kind of roadmap here.",
+               "Push it to staging. Ugh, I know, me too. Fine, let's go then.",
+               "and schedule them."
              ]
     end
 

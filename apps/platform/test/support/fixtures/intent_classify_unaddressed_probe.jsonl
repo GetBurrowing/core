@@ -1,0 +1,12 @@
+{"text": "Capture that as an action item: Alex sends the Globex contract by Friday.", "expected_intent": "action_items"}
+{"text": "Log an action item for Casey to stand up the podcast control center.", "expected_intent": "action_items"}
+{"text": "Put that in the brief — Atlas is Globex's brand strategy platform.", "expected_intent": "brief_worthy"}
+{"text": "Record the decision: we're shipping Tuesday.", "expected_intent": "decision_recorded"}
+{"text": "Write down that we decided not to swap models, the 2B stays.", "expected_intent": "decision_recorded"}
+{"text": "Track this open question: who owns the identity system story?", "expected_intent": "open_question"}
+{"text": "Flag as an open question whether the podcast control center is in scope.", "expected_intent": "open_question"}
+{"text": "Make that primary button teal instead of the blue.", "expected_intent": "visual_adjust"}
+{"text": "Bump the heading size up on the landing page, it's too small.", "expected_intent": "visual_adjust"}
+{"text": "Make the row expand on click instead of navigating away.", "expected_intent": "interaction_design"}
+{"text": "Add a confirm step before the destructive delete.", "expected_intent": "interaction_design"}
+{"text": "Note for the brief that the prompts live in the database, not the source.", "expected_intent": "brief_worthy"}

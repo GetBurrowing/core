@@ -1147,7 +1147,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 
-  # Page-grammar normalization for the create path (Sloane-authorized,
+  # Page-grammar normalization for the create path (Alex-authorized,
   # 2026-06-11). The T5 routing grammar only recognises pages at
   # `<ns>/page/<rest>` (ns ∈ org | project/<uuid> | space/<uuid>) —
   # flat keys (`org/custom.md`) classify :unknown and are dropped by

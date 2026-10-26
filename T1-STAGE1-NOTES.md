@@ -79,7 +79,7 @@ None of substance:
 - Note `main` at the time of the dispatch's "pre-T1 head 86e4b41" has moved on. `origin/main` is now at `cb6b9f2` ("raise space_get_messages content cap to 64KB"). The plan's e2e_behavior `setup` field still references `86e4b41` as the baseline — that's fine for the review-stage setup (reviewers can manually check out 86e4b41 to seed legacy rows), but flag it so we don't get confused if the data-migration test setup hits a schema drift from intervening migrations. No new migrations touching `org_context_files` exist between `86e4b41` and `cb6b9f2` (verified by `git log 86e4b41..cb6b9f2 -- apps/platform/priv/repo/migrations/`), so the baseline assumption holds.
 - pgvector "drop" scope item: confirmed there's no `pgvector` / `CREATE EXTENSION vector` / `:vector` column anywhere in `apps/` or `priv/`. Embedding storage already routes through `memory-service` via `Platform.Memory.Provider`. The "Drop pgvector" line resolves to a documentation note — no actual schema work.
 
-## Branch reconciliation tension — TO SURFACE TO JACOB
+## Branch reconciliation tension — TO SURFACE TO ALEX
 
 The plan stage-1 description explicitly says:
 
@@ -89,12 +89,12 @@ The engine dispatch instead instructed:
 
 > Branch name MUST be `task/019e41d9-69bc-7245-94c0-ebd3fa6e0646`. This is the engine's hard contract for the deployer phase.
 
-These contradict. The engine's per-task branch is what's currently checked out; the plan's shared rollup branch (`stack/0041-org-memory-impl`) is not used. **Followed the engine's instruction** per dispatch's "do not block on it" guidance. The rollup-vs-per-task tension needs Sloane's decision before deploy:
+These contradict. The engine's per-task branch is what's currently checked out; the plan's shared rollup branch (`stack/0041-org-memory-impl`) is not used. **Followed the engine's instruction** per dispatch's "do not block on it" guidance. The rollup-vs-per-task tension needs Alex's decision before deploy:
 
 - **If per-task branches stand:** each task PRs separately; the stack reconciliation happens at deploy time via `git merge` of sibling task branches into the rollup. The plan's "no PR opened" assumption from stage 5 should be re-read in that light (T1 may need its own PR).
 - **If shared rollup stands:** T1 should `git checkout -B stack/0041-org-memory-impl origin/main` and commit there; subsequent tasks commit onto the same branch. The per-task branch above gets abandoned.
 
-Flagging for Sloane. Not a blocker for stage 1.
+Flagging for Alex. Not a blocker for stage 1.
 
 ## Validation status (this stage)
 

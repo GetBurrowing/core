@@ -69,11 +69,13 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
     "apps/platform/assets/emoji/data.js" => 37
   }
 
-  @applied_migrations %{
-    "apps/platform/priv/repo/migrations/20260708130000_seed_prompt_templates_security_guard.exs" =>
-      {"b50b33817af05bc3ef0605ce0e01f4dda9b6ba475ea43ff747ea337760884200",
-       "frozen security.deploy_audit.v1 body a fresh install still serves (fresh-DB proof: editing it changes prompt_templates)"}
-  }
+  # Empty since the pre-public scrub. Its one entry, the security guard
+  # template seed migration, carried an operator home path and host in an
+  # example command inside the `security.deploy_audit.v1` prompt body. That
+  # text is prompt prose, not a path the migration reads or writes, so it was
+  # neutralised in place; a fresh install now seeds the neutral example and an
+  # existing install keeps its row (the migration skips a slug that exists).
+  @applied_migrations %{}
 
   setup_all do
     case Scanner.tracked_files(@repo_root) do

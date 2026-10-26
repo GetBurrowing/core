@@ -46,7 +46,7 @@ defmodule Platform.Org.Context do
   # (`org/identity.md`) classify :unknown and get dropped by
   # memory_search's read-gate hydration. Keys migrated from the flat
   # form by 20260611120000_page_grammar_file_keys_and_alias_backfill
-  # (Sloane-authorized change, 2026-06-11).
+  # (Alex-authorized change, 2026-06-11).
   @default_templates %{
     "org/page/identity.md" => """
     # Organization Identity

@@ -1,0 +1,102 @@
+{"text": "Nah, I'm gonna pull Riley in here.", "reason": "wrong_intent"}
+{"text": "Okay, I'm waiting for the chime.", "reason": "wrong_target"}
+{"text": "check again whether or not", "reason": "wrong_target"}
+{"text": "hardware in the", "reason": "wrong_intent"}
+{"text": "Globex wants", "reason": "wrong_target"}
+{"text": "in the workspace itself, right? So the newsletter dashboard needs to start living in the workspace.", "reason": "wrong_intent"}
+{"text": "Scratch that. Put down an action item for Sam to own the newsletter draft.", "reason": "wrong_target"}
+{"text": "Alright, my sense is we should put up a shared whiteboard.", "reason": "wrong_target"}
+{"text": "Just a plain one-page site to start, the thing we're actually making is a plant watering tracker.", "reason": "wrong_target"}
+{"text": "Hi. I wasn't sure where to kick things off. So, um, I dropped a spreadsheet in.", "reason": "wrong_target"}
+{"text": "over the last two hours.", "reason": "wrong_target"}
+{"text": "Do you see this damn weird thing in the corner?", "reason": "wrong_target"}
+{"text": "We can see the action items up there, more or less, design bits, et cetera, et cetera.", "reason": "wrong_target"}
+{"text": "Okay, I'll be audio only for a bit. Gonna make some tea while the welcome slides play, then I'm back.", "reason": "wrong_target"}
+{"text": "Yeah, you're all set. I might have to drop off early because of a dentist appointment, but we'll see.", "reason": "wrong_target"}
+{"text": "Okay, well, we'll sort it out. We can chat in the workspace while it's running, all right?", "reason": "wrong_target"}
+{"text": "Okay, sounds great. All right, see you.", "reason": "wrong_target"}
+{"text": "Pass me the Acme assets and I'll swap the branding over since honestly the chat side is ready to go I tested that last week and meetings could land soon too someone has a branch open for exactly that at the moment around", "reason": "wrong_target"}
+{"text": "The agenda.", "reason": "wrong_target"}
+{"text": "Maybe later on if we bring in their reviewers, for example, maybe those reviewers are", "reason": "wrong_target"}
+{"text": "sure sure so the idea was we open it up to everyone at the client or whatever but hold on i won't click anything yet because i know the call drops when i do that but somewhere in the admin area there's a section i think labelled guest access", "reason": "wrong_target"}
+{"text": "And once you're in there later, you'll spot this guest access thing.", "reason": "wrong_target"}
+{"text": "I didn't catch that.", "reason": "wrong_target"}
+{"text": "So when that kicks in, like when they try that,", "reason": "wrong_target"}
+{"text": "When they go and set up their account in the login system,", "reason": "wrong_target"}
+{"text": "and schedule them.", "reason": "wrong_target"}
+{"text": "From their side, okay.", "reason": "wrong_target"}
+{"text": "Yeah, sorry. I'm cluttering it. We should clear it out.", "reason": "wrong_target"}
+{"text": "Yep, that's the check on their account settings.", "reason": "wrong_target"}
+{"text": "You can see the board now.", "reason": "wrong_target"}
+{"text": "Templates.", "reason": "wrong_target"}
+{"text": "That's a separate topic entirely. It all ties together, though. You'd want the full picture...", "reason": "wrong_target"}
+{"text": "Honestly, they want the workspace since it's the only way they get to plug in templates and such.", "reason": "wrong_target"}
+{"text": "the docs and the templates.", "reason": "wrong_target"}
+{"text": "the backlog.", "reason": "wrong_target"}
+{"text": "they want the whole package again every single part of it sure they could live in a spreadsheet but the gap is the gap between what the workspace does and what they've got which is roughly what atlas turns into eventually and then there's a corner for whatever riley's", "reason": "wrong_target"}
+{"text": "the agents and the board don't talk to each other, so you end up going, hey, can this template say something else? And I mention it to whoever's around.", "reason": "wrong_target"}
+{"text": "reviewer bot over and over and you'd assume that's some giant rewrite when really nobody touches the code you just swap a paragraph in the template and suddenly it behaves another way since the templates live alongside the co", "reason": "wrong_target"}
+{"text": "Right, that was my job for onboarding, tweaking the help desk bot. Every change meant a pull request in the repo just to fix one line. Yep, yep.", "reason": "wrong_target"}
+{"text": "Yeah, but it is archived.", "reason": "wrong_target"}
+{"text": "with the database.", "reason": "wrong_target"}
+{"text": "Right. So, like, hand it to Riley and she'll do it her own way, not this way. She'll just go, like.", "reason": "wrong_target"}
+{"text": "hmm fine it's probably quicker if i just patch it myself or you drop me the text and i'll patch it but the bigger point is down the line they'll end up with two things over in atlas they'll basically get the knobs to go chang", "reason": "wrong_target"}
+{"text": "Uh-huh.", "reason": "wrong_target"}
+{"text": "That's why it diverging.", "reason": "wrong_target"}
+{"text": "Yeah, that's new.", "reason": "wrong_target"}
+{"text": "and that's the pitch really hey we already built this for you so there's no need for a standing contract with us or with sam you can just spin it up yourself and poke at it in staging", "reason": "wrong_target"}
+{"text": "Yeah, that looks great.", "reason": "wrong_target"}
+{"text": "Left of the B.", "reason": "wrong_target"}
+{"text": "Push it to staging. Ugh, I know, me too. Fine, let's go then.", "reason": "wrong_target"}
+{"text": "Okay, I'm testing the camera toggle.", "reason": "wrong_intent"}
+{"text": "Uh, wrong label.", "reason": "wrong_intent"}
+{"text": "I would head back to the call.", "reason": "wrong_target"}
+{"text": "Excuse me. We could walk them through it.", "reason": "wrong_target"}
+{"text": "Sure, I can take it on. Sooner or later though we'll hit a ceiling where the answer is, well, it's the framework. So.", "reason": "wrong_target"}
+{"text": "Yeah, so I I guess what I I genuinely liked how you laid out the slides I'd say that's sort of", "reason": "wrong_target"}
+{"text": "freaking risky. I think it's freaking risky because it's like", "reason": "wrong_target"}
+{"text": "Nobody wants a line-by-line review with your whole team or a font-by-font one, we are not doing that, seriously not doing that If you'd rather skim the site, and look, it's fair, I can sketch something.", "reason": "wrong_target"}
+{"text": "one page that just lists everything like the icons the fonts the badges the shades and so on and so on and the ask is skim this single page and flag what bugs you and we'll swap it But.", "reason": "wrong_target"}
+{"text": "My worry is that going line by line, we're going to lose the the", "reason": "wrong_target"}
+{"text": "Yeah, so... look, it's only the fallback. I'd rather not hand over the deck at all. A plain text file would do, honestly.", "reason": "wrong_target"}
+{"text": "I would try that.", "reason": "wrong_target"}
+{"text": "All I'd say is, like, just email it over. Like, like, as soon as it lands with us,", "reason": "wrong_target"}
+{"text": "If they don't, then screw them. It's absurd. Like. Yeah.", "reason": "wrong_target"}
+{"text": "One sec. I'll hop back.", "reason": "wrong_target"}
+{"text": "It's alright. I'm not like, like.", "reason": "wrong_target"}
+{"text": "She won't touch it. No clue why she keeps getting looped into this stuff right now. There's zero for her to pick up yet. When you.", "reason": "wrong_target"}
+{"text": "Maybe the task board covers it, since, for instance, Globex wants a calendar layout from us, and I've got a grid version going, but honestly I'd rather not live in spreadsheets. Ha!", "reason": "wrong_target"}
+{"text": "Then it showed up on the chart. Hmm, your audio cut out I think. if you moved back to the headset.", "reason": "wrong_target"}
+{"text": "The whole house naps through the afternoon and then stays up all night being loud.", "reason": "wrong_target"}
+{"text": "Let's sketch out some kind of roadmap here.", "reason": "wrong_target"}
+{"text": "He's not at all. Nobody is. And like, I have no clue how to.", "reason": "wrong_target"}
+{"text": "Best case is, like. Sure we could fake it, but I'd still rather. Build the real screens.", "reason": "wrong_target"}
+{"text": "I completely agree with you, Casey.", "reason": "wrong_target"}
+{"text": "I completely agree. With you, I can't, I can't say why.", "reason": "wrong_target"}
+{"text": "They're so, again, so sunny about all of it and so anxious, again, like,", "reason": "wrong_target"}
+{"text": "I got the alert on my watch.", "reason": "wrong_target"}
+{"text": "I wonder if this one is actually briefworthy.", "reason": "wrong_target"}
+{"text": "Okay, got you. Loud and clear. Loud and clear. Am I coming through?", "reason": "wrong_target"}
+{"text": "Firefox. Is that still Firefox? Didn't you install it as an app on the on the desktop?", "reason": "wrong_target"}
+{"text": "I'm like ghosting this guy. Oh.", "reason": "wrong_target"}
+{"text": "But there's this sense of Like, it really does seem like the thing is building its own momentum now, like. Like, it's rolling. Good or bad, it's all in motion like", "reason": "wrong_target"}
+{"text": "Okay, so it might, let me turn on live subtitles here. a bit", "reason": "wrong_target"}
+{"text": "pick up a chunk of that right so basically this is the input it works from and then layered over that", "reason": "wrong_target"}
+{"text": "Oh, it's only, it's that the video service can't tell what to label it. Some kind of mismatch. Easy to rename. I believe it shows in the room list as. Um,", "reason": "not_actionable"}
+{"text": "as transcriber and honestly we could tidy it up plus a bunch of other junk too", "reason": "not_actionable"}
+{"text": "Yeah, mostly so it sounds less like a robot. Okay, so.", "reason": "not_actionable"}
+{"text": "loading right now. Oh, there it is. Um.", "reason": "wrong_target"}
+{"text": "There's a lot on our plate here. At the most basic level, what we need is our. What we need is our pitch deck.", "reason": "wrong_target"}
+{"text": "Just super quick, can you look at the, uh...", "reason": "wrong_target"}
+{"text": "If a few bugs need patching that... gets us to", "reason": "wrong_target"}
+{"text": "Okay, I can hear it though.", "reason": "other"}
+{"text": "um Man, tablets are always so glitchy. Uh, sort of, yeah.", "reason": "wrong_target"}
+{"text": "Do you, maybe it's me, well, now and then I just tap the wrong spot.", "reason": "not_actionable"}
+{"text": "No, it ought to be over there. It isn't showing for me. It ought to be next to the volume control.", "reason": "other"}
+{"text": "Um. Okay. Uh... Right, so there's one thing we definitely ought to do.", "reason": "other"}
+{"text": "We can ask her to pull it up in here.", "reason": "other"}
+{"text": "Some audio cues would really help, but.", "reason": "other"}
+{"text": "Hmm, but the interaction design piece is probably wrong.", "reason": "wrong_intent"}
+{"text": "Tap, can you tap the link and check what comes up?", "reason": "wrong_target"}
+{"text": "Did you reject it by accident? Looks like you're in.", "reason": "wrong_target"}
+{"text": "Sort of. No, you popped up for a second and then, no idea. Let's poke at it tomorrow.", "reason": "wrong_target"}

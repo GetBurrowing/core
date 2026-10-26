@@ -16,7 +16,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
 
   wiki.ex was originally guarded by byte-identity against T5 HEAD
   (nothing outside the stack ever touched it). Amended 2026-06-11:
-  Sloane authorized the basename wikilink resolution change
+  Alex authorized the basename wikilink resolution change
   (`Wiki.resolve_basename/2`), which legitimately modifies the T2
   domain surface on the rollup branch — the byte-identity guard is
   replaced by a sha256 pin of the NEW authorized content (pure
@@ -24,7 +24,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   memory_* definition + execute-clause counts instead: `origin/main`
   legitimately evolves that file for non-memory reasons and the
   rollup merges main, so byte-identity cannot hold there (amended
-  2026-06-11 alongside the Sloane-approved doc-string fix that retired
+  2026-06-11 alongside the Alex-approved doc-string fix that retired
   the `daily_summary` mention).
 
   Git availability: mirrors the T5 guard idiom in
@@ -79,11 +79,11 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
     |> length()
   end
 
-  # Rollup amendment (Sloane, 2026-06-11): the original guard byte-pinned
+  # Rollup amendment (Alex, 2026-06-11): the original guard byte-pinned
   # wiki.ex against T5 HEAD (#{@t5_head}). This commit's basename
   # wikilink resolution (`Wiki.resolve_basename/2` + its private
   # `basename_stem/1` helper and doc updates) legitimately modifies the
-  # T2 domain surface under Sloane's authorization, so the byte-identity
+  # T2 domain surface under Alex's authorization, so the byte-identity
   # check is replaced by a sha256 pin of the NEW wiki.ex content. Any
   # further drift still fails here — regenerate the constant only in
   # the same commit as another authorized domain change. Pure
@@ -195,7 +195,10 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # (a denied alias target too), through the new `scope_by/3` /
   # `maybe_scope_by/2`, a thin call to `Platform.Access.Query`. Without the
   # opt every query is byte-identical to before; no write path moved.
-  @wiki_ex_sha256_2026_09_08 "e4a425035a0c843dc3ad022cd8e44b508ccfe2a8c723d629f99bb1e5995c714d"
+  #
+  # Re-pinned by the pre-public scrub: one moduledoc line renamed a person
+  # to a neutral persona. No code moved.
+  @wiki_ex_sha256_2026_09_08 "b046477a8a90b9a1e3cce63a2bb3fd6a73582ce358d79c08439614b3e68e3c40"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
@@ -214,7 +217,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
            """
   end
 
-  # Rollup amendment (Sloane, 2026-06-11): the original guard byte-pinned
+  # Rollup amendment (Alex, 2026-06-11): the original guard byte-pinned
   # tool_surface.ex against T5 HEAD. That cannot hold on the rollup
   # branch — `origin/main` legitimately evolves this file for non-memory
   # reasons (e.g. StackDeployer wiring) and the rollup merges main. The

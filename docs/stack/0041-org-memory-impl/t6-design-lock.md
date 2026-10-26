@@ -13,7 +13,7 @@ Stage 1 was auto-skipped by the engine (markdown-only, no enforced validation ro
 
 ## New `historian` event (replaces both legacy events)
 
-T6 replaces `daily_summary` + `dreaming` with a single `historian` system event. Per Sloane's approval there is **no deprecation window** — legacy strings become invalid in one step. Lockstep changes (executed in later stages 3–6 of this stack):
+T6 replaces `daily_summary` + `dreaming` with a single `historian` system event. Per Alex's approval there is **no deprecation window** — legacy strings become invalid in one step. Lockstep changes (executed in later stages 3–6 of this stack):
 
 - `SystemEventScheduler.@anchors = [0, 6, 12, 18]` (UTC hours). Stagger per workspace via `offset_minutes = :erlang.phash2(workspace_id, 360)` (0–359, uniform across the 6h window).
 - `Agent.@valid_system_events = ~w(historian)`.

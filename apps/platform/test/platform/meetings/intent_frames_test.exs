@@ -33,7 +33,7 @@ defmodule Platform.Meetings.IntentFramesTest do
     * **M2** — drop the forward-scope guard: change `start < quote_end`
       in `first_hit/3` to a tautology. Its FIRST run killed only one
       test, and not the one whose comment claimed to be about scope —
-      "Promote to prod." survives the gate because no operator matches
+      "Push it to staging." survives the gate because no operator matches
       it at any position, not because of scope. That comment was wrong
       and the tests below were restructured rather than the mutant
       patched away.
@@ -87,49 +87,51 @@ defmodule Platform.Meetings.IntentFramesTest do
   alias Platform.Meetings.IntentFrames
 
   # The 8 rows that fire on `priv/intent_eval/cassettes/off_topic_default.jsonl`,
-  # each with the `evidence_quote` the model actually returned. Copied
-  # verbatim from the replay; the harness test re-derives the counts from
-  # the cassette itself so these two can never quietly disagree.
+  # each with the `evidence_quote` the cassette returns. Since the pre-public
+  # scrub these are the SYNTHETIC stand-ins for the recorded removals (same
+  # frame, invented content), copied from the replay; the harness test
+  # re-derives the counts from the cassette itself so these two can never
+  # quietly disagree.
   describe "the five measured false positives it catches" do
     # M2 kills this one: without forward scope, "No, actually" would
     # still match, but so would every operator anywhere in any chunk.
     test "a retraction before the quote cancels it" do
       assert {:cancelled, :frame_retraction} =
                IntentFrames.cancelling_frame(
-                 "No, actually, never mind. As an action item, Chris needs to start developing the podcast.",
-                 "As an action item, Chris needs to start developing the podcast."
+                 "Scratch that. Put down an action item for Sam to own the newsletter draft.",
+                 "Put down an action item for Sam to own the newsletter draft"
                )
     end
 
     test "a first-person perception report of a taxonomy label cancels it" do
       assert {:cancelled, :frame_perception} =
                IntentFrames.cancelling_frame(
-                 "I do see the action items, briefly, visual address, blah, blah, blah, blah.",
-                 "I do see the action items"
+                 "We can see the action items up there, more or less, design bits, et cetera, et cetera.",
+                 "We can see the action items up there"
                )
     end
 
     test "first-person doubt about a taxonomy label cancels it" do
       assert {:cancelled, :frame_epistemic} =
                IntentFrames.cancelling_frame(
-                 "I wonder if this is really briefworthy.",
-                 "I wonder if this is really briefworthy"
+                 "I wonder if this one is actually briefworthy.",
+                 "I wonder if this one is actually briefworthy"
                )
     end
 
     test "handing the work to an unnamed person cancels it" do
       assert {:cancelled, :frame_delegation} =
                IntentFrames.cancelling_frame(
-                 "We can ask him to bring it in here.",
-                 "bring it in here"
+                 "We can ask her to pull it up in here.",
+                 "pull it up in here"
                )
     end
 
     test "a quality predicated of a taxonomy label cancels it" do
       assert {:cancelled, :frame_evaluative} =
                IntentFrames.cancelling_frame(
-                 "Yeah, but the interaction design part is probably wrong.",
-                 "the interaction design part is probably wrong"
+                 "Hmm, but the interaction design piece is probably wrong.",
+                 "the interaction design piece is probably wrong"
                )
     end
   end
@@ -142,7 +144,7 @@ defmodule Platform.Meetings.IntentFramesTest do
     # Honest account of WHY this one survives, because the obvious
     # story is the wrong one. It is not forward scope that saves it:
     # M2 (drop the scope guard) leaves this test GREEN, because the
-    # peer-agreement run that cancels the ask — "Yeah, I know, me too"
+    # peer-agreement run that cancels the ask — "Ugh, I know, me too"
     # — is not in any of the gate's five lexicons at any position. It
     # survives for want of an operator, not for want of scope. Forward
     # scope is tested on its own two tests down; that separation was
@@ -150,8 +152,8 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a peer-agreement backchannel is not a frame class the gate knows" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Promote to prod. Yeah, I know, me too. Okay, so let's go.",
-                 "Promote to prod."
+                 "Push it to staging. Ugh, I know, me too. Fine, let's go then.",
+                 "Push it to staging."
                )
     end
 
@@ -162,8 +164,8 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a retraction AFTER the quote does not scope backwards over it" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Promote to prod. No, actually, never mind.",
-                 "Promote to prod."
+                 "Push it to staging. No, actually, never mind.",
+                 "Push it to staging."
                )
 
       # Same words, quote taken from the other side of the operator:
@@ -171,8 +173,8 @@ defmodule Platform.Meetings.IntentFramesTest do
       # test above would also pass on a gate that never cancels at all.
       assert {:cancelled, :frame_retraction} =
                IntentFrames.cancelling_frame(
-                 "No, actually, never mind. Promote to prod.",
-                 "Promote to prod."
+                 "No, actually, never mind. Push it to staging.",
+                 "Push it to staging."
                )
     end
 
@@ -183,8 +185,8 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a hortative is not a cancelling frame" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Let's put together some kind of plan here.",
-                 "put together some kind of plan here"
+                 "Let's sketch out some kind of roadmap here.",
+                 "sketch out some kind of roadmap here"
                )
 
       assert :ok =
@@ -277,20 +279,20 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a genuine ask that names a taxonomy label but carries no frame survives" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Scribe, log an action item for Chris to stand up the podcast control center.",
-                 "log an action item for Chris to stand up the podcast control center"
+                 "Scribe, log an action item for Casey to stand up the podcast control center.",
+                 "log an action item for Casey to stand up the podcast control center"
                )
     end
   end
 
   # M4's target. Without word boundaries "scribe" matches inside
   # "transcriber", and one of the 94 correct declines
-  # ("as transcriber and we should probably also shrink it …") turns
+  # ("as transcriber and honestly we could tidy it up …") turns
   # into a label mention — which is how the "0 of 94" signal would stop
   # being true without anyone touching the gate.
   describe "mentions_taxonomy_label?/1" do
     test "recognises the enum labels as a person says them" do
-      assert IntentFrames.mentions_taxonomy_label?("as an action item, Chris needs to")
+      assert IntentFrames.mentions_taxonomy_label?("as an action item, Casey needs to")
       assert IntentFrames.mentions_taxonomy_label?("is this really briefworthy")
       assert IntentFrames.mentions_taxonomy_label?("the brief-worthy stuff")
       assert IntentFrames.mentions_taxonomy_label?("the interaction design part")
@@ -299,7 +301,7 @@ defmodule Platform.Meetings.IntentFramesTest do
 
     test "does not match a label spelled inside a longer word" do
       refute IntentFrames.mentions_taxonomy_label?(
-               "as transcriber and we should probably also shrink it and all kinds of other shit too"
+               "as transcriber and honestly we could tidy it up plus a bunch of other junk too"
              )
     end
 
@@ -328,7 +330,7 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a quote that is not a verbatim span is not this gate's business" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "No, actually, never mind. Chris needs to start the podcast.",
+                 "No, actually, never mind. Casey needs to start the podcast.",
                  "ship the redesign by friday"
                )
     end
@@ -344,8 +346,8 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "the match is case-insensitive on both the chunk and the quote" do
       assert {:cancelled, :frame_retraction} =
                IntentFrames.cancelling_frame(
-                 "NEVER MIND. As an action item, Chris owns the podcast.",
-                 "as AN action ITEM, Chris owns the podcast."
+                 "NEVER MIND. As an action item, Casey owns the podcast.",
+                 "as AN action ITEM, Casey owns the podcast."
                )
     end
 
@@ -390,8 +392,8 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "a retraction of the SUBJECT, followed by a real ask, is suppressed" do
       assert {:cancelled, :frame_retraction} =
                IntentFrames.cancelling_frame(
-                 "Scribe, never mind the colour — log an action item for Chris to fix the nav.",
-                 "log an action item for Chris to fix the nav"
+                 "Scribe, never mind the colour — log an action item for Casey to fix the nav.",
+                 "log an action item for Casey to fix the nav"
                )
     end
 
@@ -460,7 +462,7 @@ defmodule Platform.Meetings.IntentFramesTest do
       # row this class was proposed to catch.
       negatives = Enum.filter(slice_texts("negatives_102"), &Regex.match?(@hortative, &1))
       assert length(negatives) == 3
-      assert "Let's put together some kind of plan here." in negatives
+      assert "Let's sketch out some kind of roadmap here." in negatives
 
       # And the reason the control slice is blind, made concrete: the
       # prompt's worked positive is the HORTATIVE "let's make that
@@ -483,7 +485,7 @@ defmodule Platform.Meetings.IntentFramesTest do
       negatives = Enum.filter(slice_texts("negatives_102"), &Regex.match?(@peer_agreement, &1))
       assert length(negatives) == 2
 
-      assert "Promote to prod. Yeah, I know, me too. Okay, so let's go." in negatives
+      assert "Push it to staging. Ugh, I know, me too. Fine, let's go then." in negatives
     end
 
     # The gate must keep its hands off both shapes until that changes.
@@ -492,22 +494,22 @@ defmodule Platform.Meetings.IntentFramesTest do
     test "the gate leaves both refused shapes alone" do
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Let's put together some kind of plan here.",
-                 "put together some kind of plan here"
+                 "Let's sketch out some kind of roadmap here.",
+                 "sketch out some kind of roadmap here"
                )
 
       assert :ok =
                IntentFrames.cancelling_frame(
-                 "Promote to prod. Yeah, I know, me too. Okay, so let's go.",
-                 "Promote to prod."
+                 "Push it to staging. Ugh, I know, me too. Fine, let's go then.",
+                 "Push it to staging."
                )
 
       # Discrimination: a row that IS in a lexicon still cancels, so a
       # gate short-circuited to `:ok` fails here.
       assert {:cancelled, :frame_retraction} =
                IntentFrames.cancelling_frame(
-                 "No, actually, never mind. Promote to prod.",
-                 "Promote to prod."
+                 "No, actually, never mind. Push it to staging.",
+                 "Push it to staging."
                )
     end
   end

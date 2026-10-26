@@ -503,7 +503,7 @@ config :platform, :tool_call_ledger_sync, true
 # `search_memory_with_scores/2` doc-string). The module body otherwise
 # remains untouched; T7 retires the module.
 #
-# Rollup re-pin (Sloane-authorized, 2026-06-11): @default_templates keys
+# Rollup re-pin (Alex-authorized, 2026-06-11): @default_templates keys
 # moved from the flat form (`org/identity.md`) to the T5 routing page
 # grammar (`org/page/identity.md`) alongside the 20260611120000 key
 # migration — flat keys classify :unknown and are dropped by
@@ -584,7 +584,10 @@ config :platform,
        # sweep hook calls `Insights.ingest_from_journal/4`, passing nil as the
        # author (a whole-file journal write carries no per-block author), plus
        # a three-line comment saying so. T5 still retires this module.
-       "781a8f7ded42b6af42060362b8318d94ec37f794ab5cd7aff1766314d08cd048"
+       #
+       # Bumped again by the pre-public scrub: one comment line renamed a
+       # person to a neutral persona. No code moved.
+       "abfa4907d61efac1a2643337eefc4e179001e7a3d81e9ec8f41d89e52c0a671d"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

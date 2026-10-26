@@ -212,7 +212,7 @@ defmodule Platform.Org.WikiTest do
     end
   end
 
-  # ── Basename resolution (Sloane-authorized, 2026-06-11) ─────────────
+  # ── Basename resolution (Alex-authorized, 2026-06-11) ─────────────
 
   describe "resolve_basename/2" do
     test "unique basename resolves, with and without the .md extension" do

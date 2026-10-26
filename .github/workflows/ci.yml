@@ -37,6 +37,11 @@ on:
 jobs:
   test:
     name: Test
+    # FORK SAFETY: a pull_request from a fork never reaches a self-hosted
+    # runner (it would run untrusted code on our host). Same-repo PRs and
+    # every push run exactly as before; fork PRs get `Fork PR (no self-hosted
+    # run)` and `Installer (validate + render, fork PR)` instead.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
     # WORKSPACE OWNERSHIP ON A SELF-HOSTED RUNNER
     #
@@ -606,6 +611,9 @@ jobs:
   first-run-green:
     name: first-run-green
     needs: test
+    # FORK SAFETY: the `test` job's condition, by De Morgan, because this
+    # job's code may not contain `||` (Platform.CiFirstRunGreenTest).
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: [self-hosted, linux, x64]
     continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
@@ -645,6 +653,8 @@ jobs:
   # Both `Test` and `Test (with Play)` are meant to be required checks.
   test-with-play:
     name: Test (with Play)
+    # FORK SAFETY: see the `test` job.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
     # Root container for apt, and the workspace handed back at the end: the
     # same WORKSPACE OWNERSHIP reasoning as `test` above.
@@ -893,6 +903,8 @@ jobs:
   # `Test (with Play)`, whose host config registers both modules.
   test-with-social:
     name: Test (with Social)
+    # FORK SAFETY: see the `test` job.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
     container:
       image: elixir:1.20.4-otp-28-slim
@@ -1510,12 +1522,63 @@ jobs:
   # own .git fixtures and does not depend on the checkout being a repository.
   installer:
     name: Installer (validate + render)
+    # FORK SAFETY: see the `test` job; `installer-fork` runs this for forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
     container:
       image: python:3.12-slim
       options: --user 1000:1000
     steps:
       - uses: actions/checkout@v5
+
+      - name: Run installer unit tests
+        env:
+          PYTHONPATH: deployment/installer
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s deployment/installer/tests -v
+
+  # FORK PULL REQUESTS. The jobs above run on self-hosted runners, so they are
+  # skipped for a pull_request whose head is in a fork: that would run code
+  # from outside the org on our hosts. These two run on GitHub-hosted runners
+  # instead, and only for fork PRs (the opposite condition).
+  #
+  # The installer suite needs nothing but Python, so it runs for real. The
+  # Elixir suite does not run here: `Test` is a self-hosted job with a
+  # Postgres service, a test-count floor and host-specific workspace handling,
+  # and a hosted copy of it would drift from the original. So a fork PR's
+  # Elixir tests run once a maintainer pushes the branch to this repository
+  # (a same-repo branch runs the full `Test` job); this job says so on the PR.
+  fork-pr-notice:
+    name: Fork PR (no self-hosted run)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Explain what did and did not run
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          echo "::notice::This pull request comes from a fork ($HEAD_REPO). The self-hosted jobs (Test, first-run-green, Test (with Play), Test (with Social), Installer) do not run on fork PRs. The installer suite runs on a GitHub-hosted runner below. A maintainer runs the full Elixir suite by pushing this branch to the repository."
+          {
+            echo "### Fork pull request"
+            echo
+            echo "The self-hosted jobs were skipped because the head branch is in \`$HEAD_REPO\`."
+            echo "A maintainer runs the full suite by pushing this branch to the repository."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  installer-fork:
+    name: Installer (validate + render, fork PR)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: python:3.12-slim
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Run installer unit tests
         env:

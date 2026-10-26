@@ -27,7 +27,7 @@ defmodule Platform.Design.PaintedMix do
   ink x ground x strength) and `chrome<build>_tokens.csv` (the shipped
   `--ag-<id>-tint` tokens at each block's declared strength). The 1..14%
   rows stay as measurements; the shipped tint is 8% (0% in high contrast).
-  Painted by `/home/dev/sources/tmp/01a1557a-760e-1372732/paint_mix_01a1557a.mjs`.
+  Painted by a one-off headless-Chrome script (`paint_mix_01a1557a.mjs`, not tracked).
   """
 
   alias Platform.Design.WcagContrast, as: W

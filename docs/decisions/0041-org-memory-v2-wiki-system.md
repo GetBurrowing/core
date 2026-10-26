@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-14
-**Author:** Sloane Scott / Clam
+**Author:** Taylor Reed / Clam
 **Supersedes:** ADR-0033 (Org-Level Context Management)
 
 ---
@@ -410,7 +410,7 @@ Incremental. V1 data is preserved.
 
 ## Open Questions
 
-1. **User-scoping** — agents accumulate facts about specific people ("Sloane prefers worktrees"). Currently parked: agents record people facts in `org/people/{slug}.md` or `project/{id}/people/{slug}.md`. Revisit if cross-project person memory becomes a recurring pain.
+1. **User-scoping** — agents accumulate facts about specific people ("Taylor prefers worktrees"). Currently parked: agents record people facts in `org/people/{slug}.md` or `project/{id}/people/{slug}.md`. Revisit if cross-project person memory becomes a recurring pain.
 2. **Stale page detection** — if a page's underlying facts change and no one writes a correction, the page silently goes stale. Possible mitigation: Historian periodically re-reads pages and flags low-confidence candidates for refresh. Not in v2 initial scope.
 3. **Preamble token-budget overflow policy** — currently truncates by lex order. May want a priority field on preamble pages instead. Defer until we have overflow in practice.
 4. **Non-Claude agent behavior** — same tool surface, but without trained `list-then-read` instinct. Orchestration prompt template carries explicit guidance for non-Claude providers. Effectiveness to be measured.

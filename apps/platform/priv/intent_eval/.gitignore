@@ -1,0 +1,25 @@
+# Run outputs are per-run artefacts, not source: a fresh replay writes one
+# every time and committing them all would bury the ones that mean something.
+runs/*
+!.gitignore
+
+# The committed runs. Task 01a14dce replaced every real name in the slices and
+# prompts and re-recorded the cassettes; the eleven runs committed before it
+# were removed from the tree because their rows, recorded answers and
+# manifests carried real names and a LAN address. Their headline numbers are
+# kept in README.md.
+#
+# The pre-public scrub then replaced the 102 negatives_102 rows (recorded
+# producer removals) with synthetic stand-ins and re-keyed every cassette entry
+# for them (see README "Synthetic negatives"). The runs below are one replay
+# per committed cassette, written with no network. Every summary number in them
+# equals the replay committed before the scrub: per-row predicted intent,
+# demotion and its reason, error class and addressee outcome were compared row
+# by row across all six configs and none moved. If a replay does not reproduce
+# them, that is a finding about the harness to report, not a number to adjust.
+!runs/20261026T201759Z-off_topic_default.json
+!runs/20261026T201759Z-agent_roster_20260831.json
+!runs/20261026T201759Z-binary_actionable.json
+!runs/20261026T201759Z-broken_always_off_topic.json
+!runs/20261026T201759Z-broken_malformed_schema.json
+!runs/20261026T201759Z-broken_never_off_topic.json

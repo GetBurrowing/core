@@ -18,7 +18,7 @@ defmodule Platform.Org.Wiki do
     * `parse_wikilinks/1`    — pure: list of link descriptors
     * `resolve_alias/2`      — alias-table lookup
     * `resolve_basename/2`   — unique-basename fallback (added on the
-      stack rollup under Sloane's 2026-06-11 authorization)
+      stack rollup under Alex's 2026-06-11 authorization)
 
   ## PubSub
 
