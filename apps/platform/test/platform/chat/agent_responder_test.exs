@@ -1,6 +1,8 @@
 defmodule Platform.Chat.AgentResponderTest do
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
@@ -904,6 +906,122 @@ defmodule Platform.Chat.AgentResponderTest do
 
       RuntimePresence.untrack(runtime.runtime_id)
       _ = AgentRuntime
+    end
+  end
+
+  # Task 01a174f5 stage 1: an agent answers a member's reply relative to the
+  # trigger: a main-log reply gets a main-log answer, a thread post an
+  # in-thread one.
+  describe "answering a reply" do
+    defp answers(space_id, agent_participant_id) do
+      from(m in Platform.Chat.Message,
+        where: m.space_id == ^space_id and m.participant_id == ^agent_participant_id,
+        where: fragment("?->>'source' = 'agent_responder'", m.metadata)
+      )
+      |> Repo.all()
+    end
+
+    test "a native agent answers a reply in the main log, quoting the reply" do
+      space = create_space()
+      user = create_participant(space.id, %{display_name: "Member"})
+      agent = create_agent(%{slug: "reply-b", name: "Agent B"})
+      {:ok, b} = Chat.add_agent_participant(space.id, agent, display_name: "Agent B")
+      b_id = b.id
+
+      b_message = create_message(space.id, b.id, %{content: "The viewer fix is in review."})
+
+      reply =
+        create_message(space.id, user.id, %{
+          content: "When does it ship?",
+          reply_to_message_id: b_message.id
+        })
+
+      assert reply.metadata["reply_to_message_id"] == b_message.id
+      assert is_nil(reply.thread_id)
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} = AttentionRouter.route(reply)
+
+      assert_receive {:agent_chat_called, body, _opts}, 1000
+
+      assert body ==
+               "(Replying to Agent B: \"The viewer fix is in review.\")\n\nWhen does it ship?"
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert [answer | _] = answers(space.id, b.id)
+      assert answer.thread_id == nil
+      assert answer.metadata["trigger"] == "reply"
+      assert answer.metadata["reply_to_message_id"] == reply.id
+
+      # No chat_threads row exists for the agent's message after the exchange.
+      assert Chat.get_thread_for_message(b_message.id) == nil
+      assert Chat.get_thread_for_message(reply.id) == nil
+    end
+
+    test "a native answer to a thread post stays in that thread" do
+      space = create_space()
+      user = create_participant(space.id, %{display_name: "Member"})
+      agent = create_agent(%{slug: "reply-a", name: "Agent A"})
+      {:ok, a} = Chat.add_agent_participant(space.id, agent, display_name: "Agent A")
+      a_id = a.id
+
+      a_message = create_message(space.id, a.id, %{content: "The plan."})
+      {:ok, thread} = Chat.create_thread_for_message(space.id, a_message.id)
+      post = create_message(space.id, user.id, %{content: "a follow-up", thread_id: thread.id})
+
+      assert {:ok, [%{participant_id: ^a_id, reason: :reply}]} = AttentionRouter.route(post)
+      assert_receive {:agent_chat_called, "a follow-up", _opts}, 1000
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert [answer | _] = answers(space.id, a.id)
+      assert answer.thread_id == thread.id
+      assert answer.metadata["reply_to_message_id"] == post.id
+    end
+
+    test "the external payload carries message.reply_to and message.thread_id" do
+      space = create_space()
+      user = create_participant(space.id, %{display_name: "Member"})
+      {agent, topic} = federated_runtime("reply-ext")
+      {:ok, b} = Chat.add_agent_participant(space.id, agent, display_name: "Agent B")
+
+      long = String.duplicate("word ", 80)
+      b_message = create_message(space.id, b.id, %{content: long})
+
+      reply =
+        create_message(space.id, user.id, %{
+          content: "and then?",
+          reply_to_message_id: b_message.id
+        })
+
+      assert {:ok, [%{reason: :reply}]} = AttentionRouter.route(reply)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      assert payload.message.thread_id == nil
+      assert payload.message.reply_to.message_id == b_message.id
+      assert payload.message.reply_to.author == "Agent B"
+      # Capped like a ReplyContext preview.
+      assert payload.message.reply_to.content == Platform.Chat.ReplyContext.excerpt(long)
+      assert String.length(payload.message.reply_to.content) == 200
+
+      {:ok, thread} = Chat.create_thread_for_message(space.id, b_message.id)
+      post = create_message(space.id, user.id, %{content: "in thread", thread_id: thread.id})
+      assert {:ok, [%{reason: :reply}]} = AttentionRouter.route(post)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: %{message: %{content: "in thread"}} = thread_payload
+                     },
+                     1500
+
+      assert thread_payload.message.thread_id == thread.id
+      assert thread_payload.message.reply_to == nil
     end
   end
 end

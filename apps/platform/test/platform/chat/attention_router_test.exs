@@ -2221,7 +2221,7 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       assert log =~
                "[AttentionRouter] agent_route space=#{space.id} message=#{message.id} " <>
-                 "policy=on_mention awake=true decisions= silenced_skipped=#{holder.id}\n"
+                 "policy=on_mention awake=true decisions= silenced_skipped=#{holder.id} reply_target=\n"
 
       # And a routed decision renders as `<participant_id>:<reason>`.
       awake = roster_agent!(space, "Nova", "member")
@@ -2234,7 +2234,7 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       assert log =~
                "[AttentionRouter] agent_route space=#{space.id} message=#{mention.id} " <>
-                 "policy=on_mention awake=true decisions=#{awake.id}:mention silenced_skipped=\n"
+                 "policy=on_mention awake=true decisions=#{awake.id}:mention silenced_skipped= reply_target=\n"
 
       drain()
     end
@@ -2465,6 +2465,247 @@ defmodule Platform.Chat.AttentionRouterTest do
       message = create_message(space.id, user.id, %{content: "status now?"})
       assert {:ok, []} = AttentionRouter.route(message)
       assert ActiveAgentStore.get_active(space.id) == nil
+      drain()
+    end
+  end
+
+  # Task 01a174f5 stage 1: a member's reply to an agent's message is an
+  # implicit @mention of that agent (moduledoc rule 3, "reply target").
+  describe "reply target" do
+    defp reply_to!(space, author, target, content \\ "when does it ship?") do
+      create_message(space.id, author.id, %{
+        content: content,
+        metadata: %{"reply_to_message_id" => target.id}
+      })
+    end
+
+    for policy <- ["directed", "collaborative"] do
+      test "reply to B's message with A holding the mutex routes only B (:reply), #{policy}" do
+        space =
+          create_space(%{kind: "channel"})
+          |> attention!(%{agent_attention_policy: unquote(policy)})
+
+        user = create_participant(space.id)
+        a = roster_agent!(space, "Agent A", "principal")
+        b = roster_agent!(space, "Agent B", "member")
+        ActiveAgentStore.set_active(space.id, a.id)
+        a_id = a.id
+        b_id = b.id
+
+        b_message = create_message(space.id, b.id, %{content: "the viewer fix is in review"})
+
+        # POSITIVE CONTROL: an un-addressed message in this space reaches A
+        # (the mutex holder), so the reply below is what moves it to B.
+        control = create_message(space.id, user.id, %{content: "anyone?"})
+
+        assert {:ok, [%{participant_id: ^a_id, reason: :active_agent}]} =
+                 AttentionRouter.route(control)
+
+        reply = reply_to!(space, user, b_message)
+        assert {:ok, decisions} = AttentionRouter.route(reply)
+
+        assert Enum.filter(decisions, &(&1.participant_id in [a_id, b_id])) == [
+                 %{participant_id: b_id, reason: :reply}
+               ]
+
+        assert Enum.map(decisions, & &1.participant_id) -- [b_id] == []
+
+        # A single reply arms B, exactly as a single mention would.
+        assert ActiveAgentStore.get_active(space.id) == b_id
+        drain()
+      end
+    end
+
+    test "with A as the directed principal and no mutex, a reply still routes only B" do
+      space =
+        create_space(%{kind: "channel"}) |> attention!(%{agent_attention_policy: "directed"})
+
+      user = create_participant(space.id)
+      a = roster_agent!(space, "Agent A", "principal")
+      b = roster_agent!(space, "Agent B", "member")
+      a_id = a.id
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "the viewer fix is in review"})
+
+      control = create_message(space.id, user.id, %{content: "anyone?"})
+      assert {:ok, [%{participant_id: ^a_id, reason: :directed}]} = AttentionRouter.route(control)
+      ActiveAgentStore.clear_active(space.id)
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      drain()
+    end
+
+    test "in an on_mention space, a reply reaches the agent" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "member")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      control = create_message(space.id, user.id, %{content: "thanks"})
+      assert {:ok, []} = AttentionRouter.route(control)
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      drain()
+    end
+
+    test "an agent-authored message with reply_to_message_id wakes nobody by reply" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      a = roster_agent!(space, "Agent A", "member")
+      b = roster_agent!(space, "Agent B", "member")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      # POSITIVE CONTROL: the same reply by a human reaches B.
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      ActiveAgentStore.clear_active(space.id)
+
+      # An agent's answer carries reply_to_message_id too (AgentResponder).
+      assert {:ok, []} = AttentionRouter.route(reply_to!(space, a, b_message, "agent answer"))
+      assert ActiveAgentStore.get_active(space.id) == nil
+      drain()
+    end
+
+    test "reply reaches silenced B once, the next un-addressed message does not" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "principal")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+      silence!(b)
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      # Mention-only: the reply did not arm the mutex.
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      followup = create_message(space.id, user.id, %{content: "and another thing"})
+      assert {:ok, []} = AttentionRouter.route(followup)
+      drain()
+    end
+
+    test "agents_awake false: a reply still routes, but does not arm the mutex" do
+      space = create_space(%{kind: "channel"}) |> attention!(%{agents_awake: false})
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "member")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      assert ActiveAgentStore.get_active(space.id) == nil
+      drain()
+    end
+
+    test "a thread post under A's message with no @ routes A" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      a = roster_agent!(space, "Agent A", "member")
+      b = roster_agent!(space, "Agent B", "member")
+      ActiveAgentStore.set_active(space.id, b.id)
+      a_id = a.id
+      a_message = create_message(space.id, a.id, %{content: "the plan"})
+      {:ok, thread} = Chat.create_thread_for_message(space.id, a_message.id)
+
+      post = create_message(space.id, user.id, %{content: "a follow-up", thread_id: thread.id})
+      assert is_nil(post.metadata["reply_to_message_id"])
+      assert {:ok, [%{participant_id: ^a_id, reason: :reply}]} = AttentionRouter.route(post)
+      drain()
+    end
+
+    test "a reply to an off-roster agent's message routes nobody" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "member")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      # POSITIVE CONTROL: on the roster, the reply routes B.
+      assert {:ok, [%{participant_id: ^b_id, reason: :reply}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      ActiveAgentStore.clear_active(space.id)
+
+      b |> Platform.Chat.Participant.changeset(%{role: "observer"}) |> Repo.update!()
+
+      assert {:ok, []} = AttentionRouter.route(reply_to!(space, user, b_message))
+      drain()
+    end
+
+    test "a reply plus an explicit @mention routes the union as multi_mention" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      a = roster_agent!(space, "Agent A", "member")
+      b = roster_agent!(space, "Agent B", "member")
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      reply = reply_to!(space, user, b_message, "@[Agent A] can you check this too?")
+      assert {:ok, decisions} = AttentionRouter.route(reply)
+
+      assert Enum.sort(decisions) ==
+               Enum.sort([
+                 %{participant_id: a.id, reason: :multi_mention},
+                 %{participant_id: b.id, reason: :multi_mention}
+               ])
+
+      drain()
+    end
+
+    test "a reply that also @mentions its own target is one :mention" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "member")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :mention}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message, "@[Agent B] ok"))
+
+      drain()
+    end
+
+    test "a reply in a DM is unchanged (:directed)" do
+      space = create_space(%{kind: "dm"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Agent B"})
+      {:ok, b} = Chat.add_agent_participant(space.id, agent, display_name: "Agent B")
+      b_id = b.id
+      b_message = create_message(space.id, b.id, %{content: "done"})
+
+      assert {:ok, [%{participant_id: ^b_id, reason: :directed}]} =
+               AttentionRouter.route(reply_to!(space, user, b_message))
+
+      drain()
+    end
+
+    test "the debug line names the reply target" do
+      space = create_space(%{kind: "channel"}) |> on_mention!()
+      user = create_participant(space.id)
+      b = roster_agent!(space, "Agent B", "member")
+      b_message = create_message(space.id, b.id, %{content: "done"})
+      reply = reply_to!(space, user, b_message)
+
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, _} = AttentionRouter.route(reply)
+        end)
+
+      assert log =~
+               "decisions=#{b.id}:reply silenced_skipped= reply_target=#{b.id}\n"
+
       drain()
     end
   end

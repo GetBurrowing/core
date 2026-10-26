@@ -2011,7 +2011,11 @@ defmodule Platform.Chat do
   Post a new message to a space.
 
   Required attrs: `:space_id`, `:participant_id`, `:content_type`.
-  Optional: `:thread_id`, `:content`, `:structured_content`, `:metadata`.
+  Optional: `:thread_id`, `:content`, `:structured_content`, `:metadata`, and
+  `:reply_to_message_id`: a main-log reply to an agent's top-level message,
+  kept as `metadata["reply_to_message_id"]` only when
+  `Platform.Chat.ReplyTarget.validate/3` accepts it and the message is
+  top-level, else dropped silently (the message still posts).
   """
   @spec post_message(map(), keyword()) ::
           {:ok, Message.t()}
@@ -2027,7 +2031,10 @@ defmodule Platform.Chat do
   end
 
   defp do_post_message(attrs, opts) do
-    attrs = put_author_snapshot(attrs, :participant_id, :author)
+    attrs =
+      attrs
+      |> Platform.Chat.ReplyTarget.apply_to_attrs()
+      |> put_author_snapshot(:participant_id, :author)
 
     # Wrap the insert + v1 history record in a single transaction. The
     # v1 row is the source-of-truth baseline for the `(edited)` affix
@@ -2081,7 +2088,10 @@ defmodule Platform.Chat do
   end
 
   defp do_post_message_with_attachments(attrs, attachment_attrs_list, opts) do
-    attrs = put_author_snapshot(attrs, :participant_id, :author)
+    attrs =
+      attrs
+      |> Platform.Chat.ReplyTarget.apply_to_attrs()
+      |> put_author_snapshot(:participant_id, :author)
 
     multi =
       Multi.new()
@@ -2880,6 +2890,9 @@ defmodule Platform.Chat do
   to refresh many currently-rendered stream rows after a parent assign
   changes, avoiding the N+1 that would result from per-message
   `get_message/1` calls.
+
+  `include_deleted: true` keeps soft-deleted rows too, for a reader that must
+  tell "deleted" from "missing" (the main-log reply quote, task 01a174f5).
   """
   @spec get_messages_by_ids([binary()], keyword()) :: [Message.t()]
   def get_messages_by_ids(ids, opts \\ [])
@@ -2889,9 +2902,14 @@ defmodule Platform.Chat do
   def get_messages_by_ids(ids, opts) when is_list(ids) do
     scope = Keyword.get(opts, :scope)
 
-    from(m in Message,
-      where: m.id in ^ids and is_nil(m.deleted_at)
-    )
+    query = from(m in Message, where: m.id in ^ids)
+
+    query =
+      if Keyword.get(opts, :include_deleted, false),
+        do: query,
+        else: where(query, [m], is_nil(m.deleted_at))
+
+    query
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end

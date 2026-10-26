@@ -70,6 +70,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
+  import PlatformWeb.Components.ReplyQuote, only: [reply_quote: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Chat
@@ -574,6 +575,9 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:canvases, :list, default: [])
   attr(:attach_canvas, :any, default: nil)
   attr(:attach_failed, :list, default: [])
+  # A main-log reply to an agent message (task 01a174f5 stage 2): nil, or
+  # `ReplyHooks`' `%{message_id, author, preview, agent_slot, space_id}`.
+  attr(:reply_target, :map, default: nil)
 
   @doc """
   The compose input area: the compose form with its in-flow @mention list, the
@@ -641,6 +645,17 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           <.attach_popover :if={@attach_menu_open} canvases={@canvases} />
         </div>
 
+        <%!-- The 'Replying to' chip (task 01a174f5 stage 2), in an
+             always-rendered, box-less slot for the same reason as the
+             popover's above: its coming and going is never a new sibling
+             ahead of the pill. Shown only for a target set in THIS space. --%>
+        <div id="compose-reply-slot" class="contents">
+          <.reply_chip
+            :if={@reply_target && @reply_target.space_id == @active_space.id}
+            target={@reply_target}
+          />
+        </div>
+
         <%!-- Pill-shaped compose bar --%>
         <div class="compose-pill-bar">
           <%!-- The staged tray (rung 11): first in the glass field, above
@@ -685,7 +700,11 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                `type="hidden"`: it is equally invisible, unfocusable and
                absent from the accessibility tree, and LiveViewTest's
                `form/3` accepts a typed value for it, which it refuses for a
-               hidden input (one fixed value only). --%>
+               hidden input (one fixed value only). The explicit
+               `tabindex="0"` is what lets `JS.focus/1` (Reply on an agent
+               message, task 01a174f5 stage 2) take it: Chrome reports a
+               contenteditable's `tabIndex` as -1, and LiveView's
+               focusability check reads that property. --%>
           <input
             type="text"
             name="compose[text]"
@@ -698,6 +717,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             id={@compose_form[:text].id}
             class="compose-field"
             contenteditable="true"
+            tabindex="0"
             phx-hook="ComposeInput"
             phx-update="ignore"
             role="combobox"
@@ -761,6 +781,48 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         Unable to join space — messages are read-only.
       </p>
     </div>
+    """
+  end
+
+  attr(:target, :map, required: true)
+
+  @doc """
+  'Replying to <author>' above the composer field while a main-log reply to
+  an agent message is being written (task 01a174f5 stage 2). Built from
+  rung 9's `message-context-reply-to` block (`Partials.MessageContext`):
+  rounded-box on `base-200`, a 13px author line and the excerpt; since
+  stage 3 it is the shared `PlatformWeb.Components.ReplyQuote` block. The
+  2px leading bar is the quoted agent's accent (`--ag`, set by
+  `data-agent-slot`); text never sits on it. The author is `base-content` semibold, the excerpt `text-subtle`
+  (two lines). The x cancels (`cancel_reply`), as does Escape.
+  """
+  def reply_chip(assigns) do
+    assigns = assign(assigns, :quote, Map.put(assigns.target, :status, :visible))
+
+    ~H"""
+    <.reply_quote
+      id="compose-reply-chip"
+      quote={@quote}
+      role="compose-reply-chip"
+      part="compose-reply"
+      lead="Replying to"
+      data-reply-to={@target.message_id}
+      phx-window-keydown="cancel_reply"
+      phx-key="Escape"
+    >
+      <:action>
+        <button
+          type="button"
+          data-role="compose-reply-cancel"
+          aria-label="Cancel reply"
+          title="Cancel reply"
+          phx-click="cancel_reply"
+          class="inline-flex size-11 shrink-0 items-center justify-center self-start rounded-full text-base-content lg:size-9 lg:min-h-9 lg:hover:bg-base-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <span class="hero-x-mark size-5" aria-hidden="true"></span>
+        </button>
+      </:action>
+    </.reply_quote>
     """
   end
 

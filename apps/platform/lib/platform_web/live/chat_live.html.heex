@@ -286,7 +286,12 @@
         participants_map={@participants_map}
         quick_emojis={@quick_emojis}
         pinned_message_ids={@pinned_message_ids}
-        highlighted_message_id={@highlighted_message_id}
+        highlighted_message_id={
+          PlatformWeb.ChatLive.MessageContextHooks.row_highlight(
+            @highlighted_message_id,
+            @quote_jump_message_id
+          )
+        }
         canvases_by_id={@canvases_by_id}
         attachments_map={@attachments_map}
         thread_previews={@thread_previews}
@@ -468,6 +473,7 @@
           canvases={@canvases}
           attach_canvas={@attach_canvas_id && Map.get(@canvases_by_id, @attach_canvas_id)}
           attach_failed={@attach_failed}
+          reply_target={@reply_target}
         />
       </div>
 

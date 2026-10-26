@@ -164,7 +164,10 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
 
       rows = labels(view, "#message-actions-sheet")
 
+      # 'Reply' (a main-log reply, task 01a174f5 stage 2) heads an agent's
+      # top-level message, above Reply in thread.
       assert rows == [
+               "Reply",
                "Reply in thread",
                "Get someone's attention",
                "What this is answering",

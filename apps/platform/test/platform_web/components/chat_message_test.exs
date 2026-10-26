@@ -218,7 +218,15 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       assert LazyHTML.attribute(p, "aria-label") == ["Message actions"]
 
       labels = for b <- pill_buttons(html), do: b |> LazyHTML.attribute("aria-label") |> hd()
-      assert labels == @pill_labels
+
+      # Task 01a174f5 stage 2: on an agent's top-level message the arrow is
+      # 'Reply' (a main-log reply); on a person's it stays Reply in thread.
+      expected =
+        if Keyword.get(opts, :agent?, true),
+          do: List.replace_at(@pill_labels, 1, "Reply"),
+          else: @pill_labels
+
+      assert labels == expected
     end
   end
 
@@ -242,8 +250,19 @@ defmodule PlatformWeb.Components.ChatMessageTest do
     assert LazyHTML.attribute(thumbs, "phx-value-emoji") == [hd(quick)]
     assert LazyHTML.attribute(thumbs, "phx-value-message-id") == ["msg-a"]
 
-    assert LazyHTML.attribute(reply, "phx-click") == ["open_inline_thread"]
-    assert LazyHTML.attribute(reply, "phx-value-message-id") == ["msg-a"]
+    # Task 01a174f5 stage 2: an agent's top-level message gets Reply, a
+    # main-log reply that focuses the composer and opens no thread.
+    [reply_js] = LazyHTML.attribute(reply, "phx-click")
+
+    assert Jason.decode!(reply_js) == [
+             ["push", %{"event" => "start_reply", "value" => %{"message-id" => "msg-a"}}],
+             ["focus", %{"to" => "#compose_text"}]
+           ]
+
+    # A person's message keeps Reply in thread.
+    [_, human_reply | _] = pill_buttons(agent_row_html(nil, agent?: false))
+    assert LazyHTML.attribute(human_reply, "phx-click") == ["open_inline_thread"]
+    assert LazyHTML.attribute(human_reply, "phx-value-message-id") == ["msg-a"]
 
     assert LazyHTML.attribute(attention, "phx-click") == ["open_message_attention"]
     assert LazyHTML.attribute(attention, "phx-value-message-id") == ["msg-a"]

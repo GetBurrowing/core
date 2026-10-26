@@ -432,6 +432,9 @@ defmodule PlatformWeb.RuntimeChannel do
 
         message_attrs = %{
           space_id: space_id,
+          # A reply to a thread message answers in that thread; anything else
+          # posts top-level, as before (task 01a174f5).
+          thread_id: ReplyContext.placement_thread_id(reply_additions),
           participant_id: participant_id,
           content_type: "text",
           content: content,
@@ -636,6 +639,7 @@ defmodule PlatformWeb.RuntimeChannel do
           case Chat.post_message_with_attachments(
                  %{
                    space_id: space_id,
+                   thread_id: ReplyContext.placement_thread_id(reply_additions),
                    participant_id: agent_participant_id,
                    content_type: "text",
                    content: message_content,

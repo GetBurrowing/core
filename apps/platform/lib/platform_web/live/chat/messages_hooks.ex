@@ -108,6 +108,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.LinkCards
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListData
+  alias PlatformWeb.ChatLive.ReplyHooks
+  alias PlatformWeb.ChatLive.ReplyQuoteHooks
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.NativeDonation
 
@@ -134,6 +136,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
     socket
+    # First, so its `{:message_deleted, _}` re-insert runs before this
+    # module's handler halts the message (task 01a174f5 stage 3).
+    |> ReplyQuoteHooks.attach()
     |> assign(:attachments_map, %{})
     |> assign(:reaction_picker_for, nil)
     |> assign(:thread_previews, %{})
@@ -179,8 +184,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     mark_read_at_channel_tip(participant, messages)
 
     # The default window always ends at the live tail, so nothing newer
-    # has been evicted.
-    assign_message_window(socket, space, messages, false)
+    # has been evicted. A reply target set in another space is dropped on
+    # the way in (task 01a174f5 stage 2).
+    socket
+    |> ReplyHooks.clear_unless_space(space.id)
+    |> assign_message_window(space, messages, false)
   end
 
   @doc """
@@ -232,7 +240,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
             top_level_only: true
           )
 
-        assign_message_window(socket, space, messages, newest_evicted?)
+        socket
+        |> ReplyHooks.clear_unless_space(space.id)
+        |> assign_message_window(space, messages, newest_evicted?)
     end
   end
 
@@ -318,6 +328,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       |> enrich_messages_with_reactions(socket)
 
     {labelled, day_labels, last_day} = label_messages_for_initial_load(enriched)
+
+    # The reply quotes, in the same pass (task 01a174f5 stage 3).
+    {labelled, socket} = ReplyQuoteHooks.annotate_window(socket, labelled, :reset)
 
     # Cursor + boundary state for infinite scroll. `labelled` is in ASC
     # order (oldest first), so the head is the cursor for "load older"
@@ -435,6 +448,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
           {labelled, new_day_labels, new_first_day} =
             label_messages_for_older_batch(enriched, socket.assigns[:first_msg_day])
+
+          {labelled, socket} = ReplyQuoteHooks.annotate_window(socket, labelled, :prepend)
 
           new_ids = Enum.map(labelled, & &1.id)
 
@@ -580,8 +595,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
             %{space_id: space_id}
           )
 
+          # The batch follows the cursor, so the cursor is its first row's
+          # predecessor for the reply-quote adjacency (task 01a174f5).
           socket =
-            Enum.reduce(enriched, socket, &stream_insert_with_day_label(&2, &1))
+            Enum.reduce(
+              enriched,
+              ReplyQuoteHooks.put_tail(socket, cursor),
+              &stream_insert_with_day_label(&2, &1)
+            )
             |> assign(:attachments_map, merged_attachments)
             |> assign(:thread_previews, merged_thread_previews)
             |> assign(:latest_message_id, new_latest)
@@ -857,7 +878,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         participant_id: participant.id,
         content_type: "text",
         content: String.trim(content || ""),
-        canvas_id: socket.assigns[:attach_canvas_id]
+        canvas_id: socket.assigns[:attach_canvas_id],
+        # A main-log reply to an agent message (task 01a174f5 stage 2): the
+        # composer chip's target, re-validated by `Chat.ReplyTarget` at the
+        # write. Thread sends never carry it.
+        reply_to_message_id: ReplyHooks.reply_to_message_id(socket)
       }
 
       case post_message_with_upload(socket, :attachments, attrs) do
@@ -874,7 +899,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
            socket
            |> stream_insert_with_day_label(enriched)
            |> put_attachment_map_entry(msg.id, attachments_with_links(msg, socket, attachments))
-           |> clear_compose()}
+           |> clear_compose()
+           |> ReplyHooks.clear()}
 
         {:noop, socket} ->
           {:halt, socket}
@@ -1395,7 +1421,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp stream_insert_frozen(socket, %Platform.Chat.Message{} = msg) do
     enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
-    stream_insert(socket, :messages, enriched)
+    stream_insert(socket, :messages, ReplyQuoteHooks.annotate_existing(socket, enriched))
   end
 
   # ── Internals ────────────────────────────────────────────────────────
@@ -1804,6 +1830,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     next_last_day = date || prev_day
     rendered_ids = MapSet.put(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
 
+    # The reply quote against the live tail (task 01a174f5 stage 3).
+    {msg, socket} = ReplyQuoteHooks.annotate_new(socket, msg)
+
     socket
     |> assign(:msg_day_labels, new_labels)
     |> assign(:last_msg_day, next_last_day)
@@ -1822,6 +1851,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     case Map.fetch(labels, msg.id) do
       {:ok, label} ->
+        msg = ReplyQuoteHooks.annotate_existing(socket, msg)
         stream_insert(socket, :messages, %{msg | day_label: label})
 
       :error ->

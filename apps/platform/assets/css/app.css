@@ -2055,6 +2055,39 @@ body, .font-suite {
   .chat-message-jump::after { animation: none; opacity: 0.1; }
 }
 
+/* Reply-quote jump (task 01a174f5 stage 3, canvas 01a174f6): tapping a
+   main-log reply quote marks the quoted row with a NEUTRAL flash, a base-200
+   fill fading over 1.2s. No colour, no rail, no transform; the fill is a
+   pseudo-element below the row's text, as `.chat-message-jump`'s tint is.
+   Applied and removed by the ChatScrollToMessage hook for the "quote"
+   variant of `chat:message-jump`; the Answering panel's jump keeps
+   `.chat-message-jump`. It replaces the arrival pulse on the same row. */
+@keyframes chat-message-jump-quote-flash {
+  0%, 40% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.chat-message-jump-quote.chat-message-pulse { animation: none; }
+.chat-message-jump-quote { isolation: isolate; }
+.chat-message-jump-quote::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 1rem;
+  pointer-events: none;
+  background-color: var(--color-base-200);
+  opacity: 0;
+  animation: chat-message-jump-quote-flash 1.2s ease-out forwards;
+}
+.chat-message-jump-quote:focus { outline: none; }
+.chat-message-jump-quote:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-jump-quote::after { animation: none; opacity: 1; }
+}
+
 /* The agent's name in the 'Answering' panel's lead line ("<agent> was
    answering:", redesign rung 9 stage 2): the agent's accent text token,
    resolved by the `data-agent-slot` on the span (rung 3's pointer rules

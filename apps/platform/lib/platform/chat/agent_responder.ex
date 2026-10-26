@@ -20,7 +20,7 @@ defmodule Platform.Chat.AgentResponder do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{ContextPlane, Message, Participant, ReplyFailure}
+  alias Platform.Chat.{ContextPlane, Message, Participant, ReplyContext, ReplyFailure}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
   alias Platform.Repo
@@ -116,6 +116,9 @@ defmodule Platform.Chat.AgentResponder do
     :active_agent,
     :watch,
     :multi_mention,
+    # A member's reply to this agent's message (main log or thread), routed
+    # by AttentionRouter as an implicit @mention (task 01a174f5).
+    :reply,
     :system_event,
     # Role-scoped system dispatch bound to the role holder by AttentionRouter.
     # Must be routable, or narrowing delivery to the correct recipient would
@@ -180,6 +183,7 @@ defmodule Platform.Chat.AgentResponder do
     body =
       context.user_message
       |> agent_body(context.attachments)
+      |> reply_preamble(context[:reply_to])
       |> attention_preamble(signal)
 
     result =
@@ -399,8 +403,43 @@ defmodule Platform.Chat.AgentResponder do
       author_type: author_type,
       author_user_id: user_id,
       author_agent_id: agent_id,
-      attachments: context.attachments
+      attachments: context.attachments,
+      # Additive (task 01a174f5): where the trigger sits, and what it quotes.
+      thread_id: thread_id(context),
+      reply_to: Map.get(context, :reply_to)
     }
+  end
+
+  defp thread_id(%{message: %Message{thread_id: thread_id}}), do: thread_id
+  defp thread_id(_context), do: nil
+
+  # The message the trigger quotes (`metadata["reply_to_message_id"]`), as
+  # `%{message_id, author, content}`, or nil. Checked with the SAME rules a
+  # federated reply annotation is (`ReplyContext.check/3`, against the
+  # answering agent's history grant), so the quote never shows the agent a
+  # message it could not read. `content` is capped like a reply preview.
+  defp reply_to(%Message{space_id: space_id, metadata: %{"reply_to_message_id" => id}}, agent_pid)
+       when is_binary(id) do
+    case ReplyContext.check(id, space_id, agent_pid) do
+      {:ok, %Message{} = target} ->
+        %{
+          message_id: target.id,
+          author: reply_to_author(target),
+          content: ReplyContext.excerpt(target.content)
+        }
+
+      {:drop, _reason} ->
+        nil
+    end
+  end
+
+  defp reply_to(_message, _agent_pid), do: nil
+
+  defp reply_to_author(%Message{participant_id: pid, author_display_name: snapshot}) do
+    case Chat.get_participant(pid) do
+      %Participant{display_name: name} when is_binary(name) and name != "" -> name
+      _ -> snapshot || "Unknown"
+    end
   end
 
   @doc """
@@ -440,6 +479,7 @@ defmodule Platform.Chat.AgentResponder do
          # attachment-only message. One query, one source (task 019ff107).
          attachments: message_attachments(message),
          user_message: String.trim(message.content || ""),
+         reply_to: reply_to(message, active_agent_participant.id),
          history: history
        }}
     else
@@ -1075,6 +1115,13 @@ defmodule Platform.Chat.AgentResponder do
     do: "(#{name} asked you to look at this message.)\n\n" <> body
 
   defp attention_preamble(body, _signal), do: body
+
+  # A reply (task 01a174f5): tell a built-in agent which message the person
+  # is answering, as the external payload's `message.reply_to` does.
+  defp reply_preamble(body, %{author: author, content: content}),
+    do: "(Replying to #{author}: \"#{content}\")\n\n" <> body
+
+  defp reply_preamble(body, _reply_to), do: body
 
   defp agent_body(text, _attachments) when is_binary(text) and text != "", do: text
   defp agent_body(text, []), do: text || ""

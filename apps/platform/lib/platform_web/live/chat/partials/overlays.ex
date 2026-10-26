@@ -307,7 +307,8 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
 
   @doc """
   The rows of the actions surface, in the masters' order: the message
-  preview, the quick strip (the six `@quick_emojis` + ＋), Reply in thread,
+  preview, the quick strip (the six `@quick_emojis` + ＋), Reply (an agent's
+  top-level message only; task 01a174f5 stage 2), Reply in thread,
   Get someone's attention (every message; rung 12), What this is answering (agent messages only), Pin or Unpin message, Copy
   text, Copy link, and Edit / Delete on the viewer's own messages.
 
@@ -327,6 +328,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       assigns
       |> assign(:row_class, @row_class)
       |> assign(:agent?, agent?)
+      |> assign(:reply?, agent? and is_nil(Map.get(msg, :thread_id)))
       |> assign(:own?, own?)
       |> assign(:editable?, own? and msg.content_type == "text")
       |> assign(
@@ -399,6 +401,26 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       </div>
       <div class="mx-1 border-t border-edge" aria-hidden="true"></div>
       <div class="flex flex-col pt-1" data-role="message-actions-rows">
+        <%!-- Task 01a174f5 stage 2: on an agent's top-level message, a
+             main-log reply (the composer's 'Replying to' chip), above Reply
+             in thread. It opens no thread. `start_reply` re-checks the
+             message on the server. --%>
+        <button
+          :if={@reply?}
+          type="button"
+          data-role="message-actions-main-reply"
+          phx-click={
+            Phoenix.LiveView.JS.push("start_reply",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+            |> Phoenix.LiveView.JS.push("close_message_actions")
+            |> Phoenix.LiveView.JS.focus(to: "#compose_text")
+          }
+          class={@row_class}
+        >
+          <.icon name="hero-chat-bubble-left" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">Reply</span>
+        </button>
         <button
           type="button"
           data-role="message-actions-reply"

@@ -3597,4 +3597,102 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert count.() == before
     end
   end
+
+  # Task 01a174f5 stage 1: a federated reply answers in the thread its
+  # in_reply_to_message_id target sits in, and top-level otherwise.
+  describe "federated reply placement" do
+    defp thread_target!(ctx) do
+      member =
+        Chat.add_participant(ctx.space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Member",
+          joined_at: DateTime.utc_now()
+        })
+        |> elem(1)
+
+      parent = post_as!(ctx.space.id, ctx.agent_participant.id, "the plan")
+      {:ok, thread} = Chat.create_thread_for_message(ctx.space.id, parent.id)
+
+      {:ok, in_thread} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: member.id,
+          thread_id: thread.id,
+          content_type: "text",
+          content: "a follow-up"
+        })
+
+      {thread, in_thread, member}
+    end
+
+    test "a federated reply whose in_reply_to is a thread message posts into that thread", ctx do
+      socket = joined_socket(ctx)
+      {thread, in_thread, member} = thread_target!(ctx)
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "answer in thread",
+          "in_reply_to_message_id" => in_thread.id
+        })
+
+      assert_reply ref, :ok, ack
+      message = Repo.get!(Chat.Message, ack.message_id)
+      assert message.thread_id == thread.id
+      assert message.metadata["reply_to_message_id"] == in_thread.id
+
+      # The top-level case stays top-level.
+      top = post_as!(ctx.space.id, member.id, "a main-log question")
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "answer in the log",
+          "in_reply_to_message_id" => top.id
+        })
+
+      assert_reply ref, :ok, ack
+      message = Repo.get!(Chat.Message, ack.message_id)
+      assert message.thread_id == nil
+      assert message.metadata["reply_to_message_id"] == top.id
+
+      # A dropped target posts top-level, as before.
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "bad target",
+          "in_reply_to_message_id" => "nope"
+        })
+
+      assert_reply ref, :ok, ack
+      assert Repo.get!(Chat.Message, ack.message_id).thread_id == nil
+    end
+
+    test "reply_with_media to a thread message posts into that thread", ctx do
+      socket = joined_socket(ctx)
+      {thread, in_thread, _member} = thread_target!(ctx)
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "here",
+          "in_reply_to_message_id" => in_thread.id,
+          "attachments" => []
+        })
+
+      assert_reply ref, :ok, ack
+      assert Repo.get!(Chat.Message, ack.message_id).thread_id == thread.id
+
+      ref =
+        push(socket, "reply_with_media", %{
+          "space_id" => ctx.space.id,
+          "content" => "no target",
+          "attachments" => []
+        })
+
+      assert_reply ref, :ok, ack
+      assert Repo.get!(Chat.Message, ack.message_id).thread_id == nil
+    end
+  end
 end

@@ -254,4 +254,58 @@ defmodule Platform.Chat.ReplyContextTest do
                ctx.participant.id
              )
   end
+
+  # Task 01a174f5 stage 1: the helpers ReplyTarget and the runtime channel share.
+  describe "check/3, placement_thread_id/1, excerpt/1" do
+    test "check/3 returns the target message, or the first failing reason", ctx do
+      target = post!(ctx.space.id, ctx.participant.id, "the question")
+      assert {:ok, %{id: id}} = ReplyContext.check(target.id, ctx.space.id, ctx.participant.id)
+      assert id == target.id
+
+      other = channel!()
+      assert {:drop, "other_space"} = ReplyContext.check(target.id, other.id, ctx.participant.id)
+      assert {:drop, "invalid_uuid"} = ReplyContext.check("x", ctx.space.id, ctx.participant.id)
+    end
+
+    test "placement_thread_id/1 is the accepted target's thread, else nil", ctx do
+      parent = post!(ctx.space.id, ctx.participant.id, "parent")
+      {:ok, thread} = Chat.create_thread_for_message(ctx.space.id, parent.id)
+
+      {:ok, in_thread} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          thread_id: thread.id,
+          content_type: "text",
+          content: "in thread"
+        })
+
+      {additions, []} =
+        ReplyContext.normalize(
+          %{"in_reply_to_message_id" => in_thread.id},
+          ctx.space.id,
+          ctx.participant.id
+        )
+
+      assert ReplyContext.placement_thread_id(additions) == thread.id
+
+      {additions, []} =
+        ReplyContext.normalize(
+          %{"in_reply_to_message_id" => parent.id},
+          ctx.space.id,
+          ctx.participant.id
+        )
+
+      assert ReplyContext.placement_thread_id(additions) == nil
+      assert ReplyContext.placement_thread_id(%{}) == nil
+    end
+
+    test "excerpt/1 caps like a context preview" do
+      assert ReplyContext.excerpt(nil) == ""
+      assert ReplyContext.excerpt("  two\nlines ") == "two lines"
+      long = ReplyContext.excerpt(String.duplicate("a", 300))
+      assert String.length(long) == 200
+      assert String.ends_with?(long, "…")
+    end
+  end
 end

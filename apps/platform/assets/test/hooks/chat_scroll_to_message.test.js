@@ -135,3 +135,73 @@ describe("ChatScrollToMessage — survives the stream-patch race", () => {
     expect(rafQueue).toHaveLength(0)
   })
 })
+
+// Task 01a174f5 stage 3: a main-log reply quote's tap pushes
+// `chat:message-jump` with `variant: "quote"`, which marks the row with the
+// neutral `.chat-message-jump-quote` flash; the Answering panel's jump (no
+// variant) keeps `.chat-message-jump`.
+describe("ChatScrollToMessage — the quote jump variant", () => {
+  let priorDocument
+  let registry
+
+  function jumpTarget() {
+    return {
+      classList: {
+        added: [],
+        add(c) {
+          this.added.push(c)
+        },
+        remove() {},
+      },
+      offsetWidth: 0,
+      hasAttribute() {
+        return true
+      },
+      focus() {},
+    }
+  }
+
+  function buildHook() {
+    const hook = Object.create(ChatScrollToMessage)
+    hook.el = {}
+    hook._handlers = {}
+    hook.handleEvent = (name, cb) => {
+      hook._handlers[name] = cb
+    }
+    hook.mounted()
+    return hook
+  }
+
+  beforeEach(() => {
+    registry = new Map()
+    priorDocument = globalThis.document
+    globalThis.document = {
+      querySelector(sel) {
+        const match = /^\[data-message-id="(.+)"\]$/.exec(sel)
+        return match ? registry.get(match[1]) || null : null
+      },
+    }
+  })
+
+  afterEach(() => {
+    globalThis.document = priorDocument
+  })
+
+  it("variant quote adds the neutral flash class, not the primary jump", () => {
+    const target = jumpTarget()
+    registry.set("q-1", target)
+    const hook = buildHook()
+    hook._handlers["chat:message-jump"]({ id: "q-1", variant: "quote" })
+    clearTimeout(hook._jumpTimer)
+    expect(target.classList.added).toEqual(["chat-message-jump-quote"])
+  })
+
+  it("CONTROL: no variant keeps the panel's primary jump class", () => {
+    const target = jumpTarget()
+    registry.set("q-2", target)
+    const hook = buildHook()
+    hook._handlers["chat:message-jump"]({ id: "q-2" })
+    clearTimeout(hook._jumpTimer)
+    expect(target.classList.added).toEqual(["chat-message-jump"])
+  })
+})

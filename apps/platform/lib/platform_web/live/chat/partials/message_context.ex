@@ -29,7 +29,7 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
   use Phoenix.Component
 
   import PlatformWeb.CoreComponents, only: [icon: 1]
-  import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
+  import PlatformWeb.Components.ReplyQuote, only: [reply_quote: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
   attr(:message_context, :any, required: true)
@@ -142,30 +142,16 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
         was answering:
       </p>
 
+      <%!-- The shared reply quote (task 01a174f5 stage 3). The panel keeps
+           its own 'Jump to message' button below, so the block is not one. --%>
       <section :if={@context.reply_to} data-role="message-context-reply-to">
-        <%= case @context.reply_to do %>
-          <% %{status: :visible} = reply -> %>
-            <div class="rounded-box bg-base-200 px-3 py-2">
-              <p class="flex items-baseline gap-1.5 text-[13px] text-subtle">
-                <span class="truncate font-medium" data-role="message-context-reply-author">
-                  {reply.author}
-                </span>
-                <span aria-hidden="true">·</span>
-                <.local_time
-                  id={"#{@id_prefix}-reply-time"}
-                  timestamp={reply.at}
-                  class="shrink-0"
-                />
-              </p>
-              <p data-role="message-context-reply-preview" class="mt-0.5 break-words">
-                {reply.preview}
-              </p>
-            </div>
-          <% _ -> %>
-            <p data-role="message-context-no-access" class="rounded-box bg-base-200 px-3 py-2">
-              Replying to a message you don't have access to
-            </p>
-        <% end %>
+        <.reply_quote
+          quote={@context.reply_to}
+          role="message-context-reply-quote"
+          part="message-context-reply"
+          time_id={"#{@id_prefix}-reply-time"}
+          clamp={false}
+        />
       </section>
 
       <section :if={@context.agent_context} data-role="message-context-agent">

@@ -20,24 +20,30 @@ const ChatScrollToMessage = {
     // jump highlight and moves focus to it for keyboard and screen-reader
     // users. The row may land a few frames after this event when the window
     // is reloaded around it, so the lookup retries, bounded.
-    this.handleEvent("chat:message-jump", ({ id }) => this.markJump(id, 10))
+    // `variant: "quote"` is a main-log reply quote's tap (task 01a174f5
+    // stage 3): the neutral base-200 flash (1.2s) instead of the primary
+    // jump highlight.
+    this.handleEvent("chat:message-jump", ({ id, variant }) =>
+      this.markJump(id, 10, variant === "quote"),
+    )
   },
 
-  markJump(id, framesLeft) {
+  markJump(id, framesLeft, quote = false) {
     const target = document.querySelector(`[data-message-id="${id}"]`)
     if (!target) {
-      if (framesLeft > 0) requestAnimationFrame(() => this.markJump(id, framesLeft - 1))
+      if (framesLeft > 0) requestAnimationFrame(() => this.markJump(id, framesLeft - 1, quote))
       return
     }
 
-    target.classList.remove("chat-message-jump")
+    const cls = quote ? "chat-message-jump-quote" : "chat-message-jump"
+    target.classList.remove("chat-message-jump", "chat-message-jump-quote")
     // Restart the fade when the same row is jumped to twice in a row.
     void target.offsetWidth
-    target.classList.add("chat-message-jump")
+    target.classList.add(cls)
     if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1")
     try { target.focus({ preventScroll: true }) } catch (_e) { /* detached */ }
     clearTimeout(this._jumpTimer)
-    this._jumpTimer = setTimeout(() => target.classList.remove("chat-message-jump"), 2200)
+    this._jumpTimer = setTimeout(() => target.classList.remove(cls), quote ? 1400 : 2200)
   },
   // `retry` covers the deep-link race (task 019fabe8 stage 3): the LV
   // pushes this event in the same reply as the anchored window, so the

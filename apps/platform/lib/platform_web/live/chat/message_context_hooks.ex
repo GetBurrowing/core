@@ -22,6 +22,13 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
 
     * `:message_context` — nil, or the open panel's state (see
       `t:state/0`).
+    * `:quote_jump_message_id` — the row a main-log reply quote last jumped
+      to (task 01a174f5 fix stage), or nil. The `?message=` patch that jump
+      makes sets `:highlighted_message_id` like any deep link; while this
+      marker names the same row, `row_highlight/2` withholds the primary
+      tint and ring from it, so the quote jump shows only the neutral
+      base-200 flash. Cleared by the next panel jump and by the arrival
+      ring's own expiry (`{:clear_anchor_highlight, id}`, passed through).
     * `:message_context_mobile?` — which side of `lg` the viewport is on,
       reported by the `ViewportBreakpoint` hook. It picks the panel's frame:
       a non-modal popover on desktop, a bottom sheet on mobile. The server
@@ -51,7 +58,9 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
   `external_scope`, checked against the ACTIVE space and `deleted_at`, and
   for the answered message also against the viewer's `history_visible_from`.
   A target that fails any check renders as "a message you don't have access
-  to"; its content, author and time never reach the assigns.
+  to"; its content, author and time never reach the assigns. A target the
+  viewer could see but that is deleted renders "Original message deleted"
+  (task 01a174f5 stage 3). Both rules live in `QuotedMessage`.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -60,8 +69,8 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
   alias Platform.Chat
   alias Platform.Chat.ContextSummary
   alias Platform.Chat.Message
-  alias Platform.Chat.Participant
   alias PlatformWeb.ChatLive.PresenceHooks
+  alias PlatformWeb.ChatLive.QuotedMessage
 
   @summary_timeout_ms 30_000
 
@@ -74,6 +83,7 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
               at: DateTime.t() | nil,
               preview: String.t()
             }
+          | %{status: :deleted}
           | %{status: :no_access}
 
   @type state :: %{
@@ -92,6 +102,7 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     socket
     |> assign(:message_context, nil)
     |> assign(:message_context_mobile?, false)
+    |> assign(:quote_jump_message_id, nil)
     |> attach_hook(:message_context_events, :handle_event, &handle_event/3)
     |> attach_hook(:message_context_info, :handle_info, &handle_info/2)
   end
@@ -106,12 +117,7 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     end
   end
 
-  defp reply_to_id(msg) do
-    case Map.get(msg, :metadata) do
-      %{"reply_to_message_id" => id} when is_binary(id) and id != "" -> id
-      _ -> nil
-    end
-  end
+  defp reply_to_id(msg), do: QuotedMessage.reply_to_id(msg)
 
   # ── Events ─────────────────────────────────────────────────────────
 
@@ -134,7 +140,10 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     {:halt, assign(socket, :message_context, nil)}
   end
 
-  defp handle_event("jump_to_answered_message", %{"message-id" => id}, socket) do
+  # `variant` "quote" is the main-log reply quote's tap (task 01a174f5
+  # stage 3): the same re-read and patch, and the hook marks the row with the
+  # neutral quote flash instead of the panel's primary jump highlight.
+  defp handle_event("jump_to_answered_message", %{"message-id" => id} = params, socket) do
     space = socket.assigns[:active_space]
 
     case visible_message(socket, id) do
@@ -142,7 +151,8 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
         {:halt,
          socket
          |> assign(:message_context, nil)
-         |> push_event("chat:message-jump", %{id: target.id})
+         |> assign(:quote_jump_message_id, quote_jump_id(target.id, params["variant"]))
+         |> push_event("chat:message-jump", jump_payload(target.id, params["variant"]))
          |> push_patch(to: "/chat/#{Chat.space_path_segment(space)}?message=#{target.id}")}
 
       _ ->
@@ -160,6 +170,25 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
   defp handle_event("message_context_viewport", _params, socket), do: {:halt, socket}
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  defp jump_payload(id, "quote"), do: %{id: id, variant: "quote"}
+  defp jump_payload(id, _variant), do: %{id: id}
+
+  defp quote_jump_id(id, "quote"), do: id
+  defp quote_jump_id(_id, _variant), do: nil
+
+  @doc """
+  The id the message list should paint with the primary jump highlight
+  (`bg-primary/5 ring-1 ring-primary/20`), given `:highlighted_message_id`
+  and `:quote_jump_message_id`. A row reached through a reply quote gets
+  nil: the quote jump's only mark is the neutral `.chat-message-jump-quote`
+  flash. Every other highlight (search, deep link, the panel's jump) passes
+  through unchanged.
+  """
+  @spec row_highlight(binary() | nil, binary() | nil) :: binary() | nil
+  def row_highlight(highlighted_id, quote_jump_id)
+  def row_highlight(id, id) when is_binary(id), do: nil
+  def row_highlight(highlighted_id, _quote_jump_id), do: highlighted_id
 
   # ── Info ───────────────────────────────────────────────────────────
 
@@ -182,6 +211,17 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
       _ ->
         {:halt, socket}
     end
+  end
+
+  # The arrival ring's expiry belongs to `ChatLive`; this only drops the
+  # quote marker for the same row and passes the message on.
+  defp handle_info({:clear_anchor_highlight, id}, socket) do
+    socket =
+      if socket.assigns[:quote_jump_message_id] == id,
+        do: assign(socket, :quote_jump_message_id, nil),
+        else: socket
+
+    {:cont, socket}
   end
 
   defp handle_info(_msg, socket), do: {:cont, socket}
@@ -222,58 +262,13 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     MapSet.member?(socket.assigns[:agent_participant_ids] || MapSet.new(), pid)
   end
 
-  # A message the viewer may see: inside their external scope, in the
-  # ACTIVE space (a hand-built event naming another space's message is
-  # refused here), not deleted, and not before their history grant.
-  defp visible_message(socket, id) do
-    space = socket.assigns[:active_space]
+  # A message the viewer may see, and the answered message's state: the
+  # shared reader (`QuotedMessage`, task 01a174f5 stage 3), so the panel and
+  # the main-log reply quote apply one set of rules. A deleted target has its
+  # own `:deleted` state; it used to fold into `:no_access`.
+  defp visible_message(socket, id), do: QuotedMessage.visible_message(socket, id)
 
-    with %{id: space_id} <- space,
-         %Message{} = msg <- Chat.get_message(id, scope: socket.assigns[:external_scope]),
-         true <- msg.space_id == space_id,
-         true <- is_nil(msg.deleted_at),
-         true <- within_grant?(msg, socket.assigns[:current_participant]) do
-      msg
-    else
-      _ -> nil
-    end
-  end
-
-  defp within_grant?(%Message{inserted_at: at}, %Participant{
-         history_visible_from: %DateTime{} = from
-       })
-       when not is_nil(at) do
-    DateTime.compare(at, from) != :lt
-  end
-
-  defp within_grant?(_msg, _participant), do: true
-
-  defp resolve_reply_to(_socket, nil), do: nil
-
-  defp resolve_reply_to(socket, id) do
-    case visible_message(socket, id) do
-      %Message{} = target ->
-        %{
-          status: :visible,
-          message_id: target.id,
-          author: PresenceHooks.sender_name(socket.assigns[:participants_map] || %{}, target),
-          at: Chat.message_ordered_at(target),
-          preview: preview(target.content)
-        }
-
-      nil ->
-        %{status: :no_access}
-    end
-  end
-
-  defp preview(content) when is_binary(content) do
-    content
-    |> String.replace(~r/\s+/u, " ")
-    |> String.trim()
-    |> String.slice(0, 280)
-  end
-
-  defp preview(_), do: ""
+  defp resolve_reply_to(socket, id), do: QuotedMessage.resolve(socket, id)
 
   # ── The summary task ───────────────────────────────────────────────
 

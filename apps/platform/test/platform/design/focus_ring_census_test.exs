@@ -145,8 +145,10 @@ defmodule Platform.Design.FocusRingCensusTest do
   # map (3 -> 0). Total 30 -> 27.
   @expected_required_sites %{
     # +2 in rung 12 (task 01a1557a-a30a stage 2): the pill's +@ and the
-    # "+@ add someone" button.
-    "lib/platform_web/components/chat_message.ex" => 11,
+    # "+@ add someone" button. +1 in task 01a174f5 stage 2: the pill's Reply
+    # on an agent's top-level message, a second ↩ button beside Reply in
+    # thread (only one of the two renders on a row).
+    "lib/platform_web/components/chat_message.ex" => 12,
     "lib/platform_web/components/chat_message_editor.ex" => 3,
     "lib/platform_web/components/empty_state.ex" => 1,
     "lib/platform_web/components/inbox_item.ex" => 1,
@@ -156,7 +158,7 @@ defmodule Platform.Design.FocusRingCensusTest do
     "lib/platform_web/live/chat/partials/overlays.ex" => 4
   }
 
-  @expected_required_total 27
+  @expected_required_total 28
 
   # ── (a) the scan surface ──────────────────────────────────────────────────
 

@@ -226,7 +226,7 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
                asker.display_name
 
       assert html =~ ~s(data-role="message-context-jump")
-      refute html =~ ~s(data-role="message-context-no-access")
+      refute html =~ ~s(data-role="message-context-reply-no-access")
       # Context was supplied, so nothing was generated.
       refute html =~ ~s(data-role="message-context-generated")
     end
@@ -282,7 +282,7 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
   end
 
   describe "an answered message the viewer may not see" do
-    test "renders the no-access line for another space, a deleted target, and one before the grant",
+    test "renders the no-access line for another space and one before the grant, and the deleted line for a deleted target",
          %{conn: conn, space: space, viewer: viewer, asker: asker, agent: agent} do
       visible = post_msg(space, asker, "visible-question")
       early = post_msg(space, asker, "before-the-grant")
@@ -335,14 +335,23 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
              ) =~
                "after-grant-question"
 
-      refute html =~ ~s(data-role="message-context-no-access")
+      refute html =~ ~s(data-role="message-context-reply-no-access")
 
       for {target, reply} <- denied do
         html = open_context(view, reply)
 
-        assert text_of(html, ~s(#message-context-popover [data-role="message-context-no-access"])) =~
-                 "Replying to a message you don't have access to",
-               "expected no-access for #{target.content}"
+        # A deleted target the viewer could otherwise see has its own state
+        # since task 01a174f5 stage 3 (`QuotedMessage`): it says so, and
+        # still shows nothing of the message.
+        {role, words} =
+          if target.id == deleted.id,
+            do: {"message-context-reply-deleted", "Original message deleted"},
+            else:
+              {"message-context-reply-no-access",
+               "Replying to a message you don't have access to"}
+
+        assert text_of(html, ~s(#message-context-popover [data-role="#{role}"])) =~ words,
+               "expected #{role} for #{target.content}"
 
         refute html =~ ~s(data-role="message-context-jump")
         refute text_of(html, "#message-context-popover") =~ target.content

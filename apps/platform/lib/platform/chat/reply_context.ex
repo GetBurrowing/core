@@ -85,8 +85,8 @@ defmodule Platform.Chat.ReplyContext do
   defp put_reply_to(acc, nil, _space_id, _agent_participant_id), do: acc
 
   defp put_reply_to({additions, dropped}, id, space_id, agent_participant_id) do
-    case check_reply_to(id, space_id, agent_participant_id) do
-      :ok ->
+    case check(id, space_id, agent_participant_id) do
+      {:ok, _message} ->
         {Map.put(additions, "reply_to_message_id", id), dropped}
 
       {:drop, reason} ->
@@ -94,15 +94,46 @@ defmodule Platform.Chat.ReplyContext do
     end
   end
 
-  defp check_reply_to(id, space_id, agent_participant_id) do
+  @doc """
+  The `in_reply_to_message_id` checks above, in that order, for a reply posted
+  to `space_id` by `participant_id`. `{:ok, message}` when every one holds,
+  else `{:drop, reason}` naming the first failure. Shared with
+  `Platform.Chat.ReplyTarget` so there is one validator, not two.
+  """
+  @spec check(term(), binary(), binary() | nil) :: {:ok, Message.t()} | {:drop, String.t()}
+  def check(id, space_id, participant_id) do
     with true <- Platform.UUID.valid?(id) || {:drop, "invalid_uuid"},
          %Message{} = msg <- Chat.get_message(id) || {:drop, "not_found"},
          true <- msg.space_id == space_id || {:drop, "other_space"},
          true <- is_nil(msg.deleted_at) || {:drop, "deleted"},
-         true <- inside_grant?(msg, agent_participant_id) || {:drop, "outside_grant"} do
-      :ok
+         true <- inside_grant?(msg, participant_id) || {:drop, "outside_grant"} do
+      {:ok, msg}
     end
   end
+
+  @doc """
+  The thread a reply should be posted INTO, given the `metadata_additions`
+  `normalize/3` returned: the accepted `reply_to_message_id` target's
+  `thread_id`, or `nil` (top-level) when there is no accepted target or the
+  target is itself top-level (task 01a174f5 stage 1).
+  """
+  @spec placement_thread_id(map()) :: binary() | nil
+  def placement_thread_id(%{"reply_to_message_id" => id}) when is_binary(id) do
+    case Chat.get_message(id) do
+      %Message{thread_id: thread_id} -> thread_id
+      _ -> nil
+    end
+  end
+
+  def placement_thread_id(_additions), do: nil
+
+  @doc """
+  `text` as a one-line preview, normalised and capped exactly like `context`
+  (200 graphemes, ellipsis when cut, mentions escaped). `nil` becomes `""`.
+  """
+  @spec excerpt(String.t() | nil) :: String.t()
+  def excerpt(nil), do: ""
+  def excerpt(text) when is_binary(text), do: sanitize_context(text)
 
   defp inside_grant?(%Message{inserted_at: inserted_at}, agent_participant_id) do
     case participant(agent_participant_id) do

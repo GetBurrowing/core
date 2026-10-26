@@ -9,7 +9,8 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
 
   `attach/1` also attaches `MessageAttentionHooks` ("Get someone's
   attention", redesign rung 12), the picker the sheet's second row opens,
-  so that hook needs no line in the ratcheted `chat_live.ex`.
+  and `ReplyHooks` (the main-log 'Reply' to an agent message, task 01a174f5
+  stage 2), so neither needs a line in the ratcheted `chat_live.ex`.
 
   `open_message_actions` / `close_message_actions` were moved here from
   `ChatLive` in place; `delete_message` is new. Stage 3 added the reactors
@@ -60,6 +61,7 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
   alias Platform.Chat.Message
   alias PlatformWeb.ChatLive.MessageAttentionHooks
   alias PlatformWeb.ChatLive.MessagesHooks
+  alias PlatformWeb.ChatLive.ReplyHooks
 
   @doc "Attach the message-actions handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -69,6 +71,7 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
     |> assign(:open_reactors, nil)
     |> attach_hook(:message_actions_events, :handle_event, &handle_event/3)
     |> MessageAttentionHooks.attach()
+    |> ReplyHooks.attach()
   end
 
   defp handle_event("open_message_actions", %{"id" => msg_id}, socket) when is_binary(msg_id) do

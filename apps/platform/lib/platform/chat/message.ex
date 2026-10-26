@@ -70,6 +70,12 @@ defmodule Platform.Chat.Message do
     # so the separator must live INSIDE the stream item to survive.
     field(:day_label, :string, virtual: true, default: nil)
 
+    # The main-log reply quote this VIEWER sees above the body (task 01a174f5
+    # stage 3): nil, or `PlatformWeb.ChatLive.QuotedMessage`'s state for the
+    # message's `metadata["reply_to_message_id"]`. Set at stream-insert time
+    # by `PlatformWeb.ChatLive.ReplyQuoteHooks`; never stored.
+    field(:reply_quote, :map, virtual: true, default: nil)
+
     # Redesign rung 13 stage 1: the link cards THIS viewer sees under the
     # message (`Platform.Chat.LinkCards.annotate/2`, set by MessagesHooks).
     # nil = not annotated (thread panel, search), which renders plain links.

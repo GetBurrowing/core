@@ -10,11 +10,23 @@ defmodule Platform.Chat.AttentionRouter do
      every rule below. See `untrusted_inbound?/1`.
   1. **Execution spaces** — `log_only` messages are silently skipped.
   2. **DM spaces** — always route to the single agent participant (`:directed`).
-  3. **Single @mention** — route (`:mention`) and set the mentioned agent as
+  3. **Single @mention or reply** — route (`:mention`, or `:reply` when the
+     agent is addressed only as the REPLY TARGET, below) and set the agent as
      active (mutex), unless it is SILENCED or the space's agents are not
-     awake: a mention of a silenced agent routes but never arms the mutex.
-  4. **Multi @mention** — route to all mentioned agents, clear the mutex.
-     Silenced agents still receive mentions (rules 3 and 4).
+     awake: a mention or reply to a silenced agent routes but never arms the
+     mutex.
+  4. **Multi @mention** — route to all addressed agents (explicit mentions
+     plus the reply target), clear the mutex. Silenced agents still receive
+     mentions and replies (rules 3 and 4), in an `on_mention` space too.
+
+  The **reply target** (task 01a174f5) of a message whose AUTHOR IS A HUMAN
+  is an implicit @mention of one agent: for a top-level message, the author
+  of its `metadata["reply_to_message_id"]` (a main-log reply, see
+  `Platform.Chat.ReplyTarget`); for a thread post, the author of the thread's
+  parent message. It obeys every rule an @mention does (the roster rule, the
+  wake gate, rules 0 and 1 and role-scoped precedence). So replying to Agent
+  B's message wakes only B, whoever holds the mutex and whatever the policy.
+  An agent-authored message has no reply target (two agents cannot loop).
   5. **No mention + agents not awake** (`chat_spaces.agents_awake == false`,
      the space's master switch) — no agent decision at all.
   6. **No mention + active agent** — route to the mutex holder, refresh
@@ -44,10 +56,11 @@ defmodule Platform.Chat.AttentionRouter do
 
   Every routed non-DM message logs ONE debug line, in exactly this format:
 
-      [AttentionRouter] agent_route space=<id> message=<id> policy=<effective> awake=<bool> decisions=<participant_id>:<reason>,... silenced_skipped=<participant_id>,...
+      [AttentionRouter] agent_route space=<id> message=<id> policy=<effective> awake=<bool> decisions=<participant_id>:<reason>,... silenced_skipped=<participant_id>,... reply_target=<participant_id>
 
   `silenced_skipped` lists the silenced agents an un-mentioned message did
-  not reach. Empty lists render as nothing after `=`.
+  not reach. `reply_target` is the message's reply-target participant (rule
+  3), whether or not it was routed. Empty values render as nothing after `=`.
 
   ## Human participant routing
 
@@ -105,8 +118,8 @@ defmodule Platform.Chat.AttentionRouter do
 
   ## Decision reasons (free atoms — extend as new flows land)
 
-    * `:directed`, `:mention`, `:multi_mention`, `:active_agent`, `:watch`,
-      `:collaborative` — agent routing outcomes.
+    * `:directed`, `:mention`, `:reply`, `:multi_mention`, `:active_agent`,
+      `:watch`, `:collaborative` — agent routing outcomes.
     * `:all`, `:active`, `:mention`, `:heartbeat` — per-participant human
       routing outcomes from `decide_human/2`.
     * `:here` — channel-wide broadcast from `@[here]` fan-out.
@@ -449,9 +462,11 @@ defmodule Platform.Chat.AttentionRouter do
       )
       |> Map.put(:attention?, not is_nil(attention))
 
+    wake = Map.put(wake, :reply_target_id, reply_target_participant_id(message, wake))
+
     {agent_decisions, silenced_skipped} = route_agents(space, message, agent_recipients, wake)
 
-    log_agent_route(space, message, agent_decisions, silenced_skipped)
+    log_agent_route(space, message, agent_decisions, silenced_skipped, wake.reply_target_id)
 
     # ── Human participant routing ────────────────────────────────────────────
     #
@@ -779,18 +794,20 @@ defmodule Platform.Chat.AttentionRouter do
         # added agent, so it counts as mentioned. The roster rule still holds.
         (wake.attention? or
            mentioned?(participant, message, agent: roster_entry && roster_entry.agent)) and
-          case roster_entry do
-            %{role: role} when role in ["principal", "member"] -> true
-            # Agent is a participant but NOT on the space roster — never
-            # mention-route it (ADR 0027). This clause previously read
-            # `nil -> roster == []`, which routed a mention to an off-roster
-            # agent whenever the roster happened to be empty: an
-            # "everyone is allowed because nobody is listed" fallback, which is
-            # the opposite of what an allow-list means. Task 01a0ac64 stage 3.
-            nil -> false
-            _ -> false
-          end
+          mention_roster_ok?(roster_entry)
       end)
+
+    # The reply target (moduledoc rule 3) is an implicit @mention: it joins
+    # the mentioned agents under the same roster rule. It is drawn from
+    # `agent_recipients`, so the wake gate and author exclusion already hold.
+    reply_agents =
+      Enum.filter(agent_recipients, fn participant ->
+        participant.id == wake.reply_target_id and
+          participant not in mentioned_agents and
+          mention_roster_ok?(Map.get(roster_by_agent_id, participant.participant_id))
+      end)
+
+    mentioned_agents = mentioned_agents ++ reply_agents
 
     case length(mentioned_agents) do
       # Added attention never takes the un-mentioned fallback: that would
@@ -811,7 +828,9 @@ defmodule Platform.Chat.AttentionRouter do
           ActiveAgentStore.set_active(space.id, agent_p.id)
         end
 
-        {[%{participant_id: agent_p.id, reason: :mention}], []}
+        reason = if agent_p in reply_agents, do: :reply, else: :mention
+
+        {[%{participant_id: agent_p.id, reason: reason}], []}
 
       _multi ->
         # Multi @mention → route to all, clear mutex
@@ -822,6 +841,48 @@ defmodule Platform.Chat.AttentionRouter do
          end), []}
     end
   end
+
+  # Agent is a participant but NOT on the space roster — never mention-route
+  # it, nor reply-route it (ADR 0027). This clause previously read
+  # `nil -> roster == []`, which routed a mention to an off-roster agent
+  # whenever the roster happened to be empty: an "everyone is allowed because
+  # nobody is listed" fallback, which is the opposite of what an allow-list
+  # means. Task 01a0ac64 stage 3.
+  defp mention_roster_ok?(%{role: role}) when role in ["principal", "member"], do: true
+  defp mention_roster_ok?(_roster_entry), do: false
+
+  # The `chat_participants.id` of the agent a human-authored message replies
+  # to (moduledoc rule 3), or nil. Top-level: the author of
+  # `metadata["reply_to_message_id"]`. Thread post: the author of the thread's
+  # parent message. Either target must be a live message in the same space.
+  # Added attention (`route_attention/3`) is not a new turn, so it has none.
+  defp reply_target_participant_id(
+         %Message{space_id: space_id} = message,
+         %{human_author?: true, attention?: false}
+       ) do
+    with target_id when is_binary(target_id) <- reply_target_message_id(message),
+         %Message{space_id: ^space_id, deleted_at: nil, participant_id: target_author_id} <-
+           Chat.get_message(target_id) do
+      target_author_id
+    else
+      _ -> nil
+    end
+  end
+
+  defp reply_target_participant_id(_message, _wake), do: nil
+
+  defp reply_target_message_id(%Message{thread_id: nil, metadata: %{"reply_to_message_id" => id}})
+       when is_binary(id),
+       do: id
+
+  defp reply_target_message_id(%Message{thread_id: thread_id}) when is_binary(thread_id) do
+    case Chat.get_thread(thread_id) do
+      %{parent_message_id: parent_id} when is_binary(parent_id) -> parent_id
+      _ -> nil
+    end
+  end
+
+  defp reply_target_message_id(_message), do: nil
 
   # No @mention. Silenced agents are dropped first, so no branch below can
   # reach one; the master switch then decides whether anyone is reached.
@@ -1011,15 +1072,17 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp return_empty, do: []
 
-  defp log_agent_route(%Space{kind: "dm"}, _message, _decisions, _skipped), do: :ok
+  defp log_agent_route(%Space{kind: "dm"}, _message, _decisions, _skipped, _reply_target),
+    do: :ok
 
-  defp log_agent_route(%Space{} = space, %Message{} = message, decisions, silenced_skipped) do
+  defp log_agent_route(%Space{} = space, %Message{} = message, decisions, skipped, reply_target) do
     Logger.debug(fn ->
       decided = Enum.map_join(decisions, ",", &"#{&1.participant_id}:#{&1.reason}")
 
       "[AttentionRouter] agent_route space=#{space.id} message=#{message.id} " <>
         "policy=#{resolve_attention_mode(space, nil)} awake=#{space.agents_awake} " <>
-        "decisions=#{decided} silenced_skipped=#{Enum.join(silenced_skipped, ",")}"
+        "decisions=#{decided} silenced_skipped=#{Enum.join(skipped, ",")} " <>
+        "reply_target=#{reply_target}"
     end)
   end
 

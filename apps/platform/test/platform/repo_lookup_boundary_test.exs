@@ -843,6 +843,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform_web/plugs/runtime_bearer_auth.ex", :get_by, "AgentRuntime", 1, :safe_internal,
      "keyed `auth_token_hash:`, a string column"},
     # ── Web: LiveViews ─────────────────────────────────────────────────
+    {"platform_web/live/chat/quoted_message.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "resolve/2 guards a message's `metadata[\"reply_to_message_id\"]` (written by agents and runtimes) with Platform.UUID.valid?/1 before Chat.get_message/2, and resolve_many/2 filters the same ids through it before Chat.get_messages_by_ids/2's `where: m.id in ^ids`; a malformed id folds into the :no_access quote state instead of raising in the chat render (task 01a174f5 stage 3)"},
     {"platform_web/live/chat/large_upload_hooks.ex", :get, "Attachment", 1, :must_cast,
      "task 01a120be. `delete_reservation/2` takes the `\"id\"` of the `\"large_upload_cancel\"` LiveView event, a client params value. Guarded by the `Platform.UUID.valid?/1` entry below in the same `with`, so a malformed id falls out of the `with` (nothing deleted) instead of raising `Ecto.Query.CastError`"},
     {"platform_web/live/chat/large_upload_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,

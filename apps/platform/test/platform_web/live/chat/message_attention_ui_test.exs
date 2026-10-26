@@ -149,7 +149,14 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
 
         for frame <- ["#message-actions-sheet", "#message-actions-popover"] do
           labels = texts(view, ~s(#{frame} [data-role="message-actions-label"]))
-          assert Enum.at(labels, 1) == "Get someone's attention", inspect(labels)
+
+          # Second, right after Reply in thread. An agent's top-level message
+          # is headed by 'Reply' (task 01a174f5 stage 2), so there it is third.
+          lead =
+            if msg.id == agent.id, do: ["Reply", "Reply in thread"], else: ["Reply in thread"]
+
+          assert Enum.take(labels, length(lead)) == lead, inspect(labels)
+          assert Enum.at(labels, length(lead)) == "Get someone's attention", inspect(labels)
 
           assert texts(view, ~s(#{frame} [data-role="message-actions-attention-meta"])) == [meta]
         end

@@ -17,6 +17,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   import PlatformWeb.Components.ChatLinkCard, only: [link_cards: 1, file_card: 1]
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1, agent_avatar: 1]
   import PlatformWeb.Components.ChatHelpers
+  import PlatformWeb.Components.ReplyQuote, only: [reply_quote: 1]
 
   import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1]
 
@@ -148,7 +149,15 @@ defmodule PlatformWeb.Components.ChatMessage do
            base-300 while the pill shows, and on desktop on hover, in
            media-gated CSS rather than a `hover:` utility. --%>
       <div class="message-row-inner relative flex gap-3 px-2 py-2 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.99] rounded-2xl">
-        <.message_pill :if={!@read_only} msg={@msg} quick_emojis={@quick_emojis} />
+        <.message_pill
+          :if={!@read_only}
+          msg={@msg}
+          quick_emojis={@quick_emojis}
+          reply?={
+            MapSet.member?(@agent_participant_ids, @msg.participant_id) and
+              is_nil(Map.get(@msg, :thread_id))
+          }
+        />
         <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
         <div class="flex-shrink-0 mt-0.5 message-avatar">
           <%= if MapSet.member?(@agent_participant_ids, @msg.participant_id) do %>
@@ -205,6 +214,20 @@ defmodule PlatformWeb.Components.ChatMessage do
               class="text-[10px] text-subtle"
             />
           </div>
+
+          <%!-- The main-log reply quote (task 01a174f5 stage 3): the one
+               message this row answers, one level only, set on the stream
+               item by `ReplyQuoteHooks` (nil on a thread message and on an
+               agent answer directly under its target). A visible quote is a
+               button that jumps to the target; a deleted or no-access one is
+               not. --%>
+          <.reply_quote
+            :if={is_nil(Map.get(@msg, :thread_id)) and Map.get(@msg, :reply_quote)}
+            id={"reply-quote-#{@msg.id}"}
+            quote={@msg.reply_quote}
+            jump={true}
+            class="mt-1 mb-1 max-w-xl"
+          />
 
           <%!-- A text message can carry a canvas too: the composer's tray
                stages one beside the caption (redesign rung 11). --%>
@@ -786,6 +809,11 @@ defmodule PlatformWeb.Components.ChatMessage do
 
   attr(:msg, :map, required: true)
   attr(:quick_emojis, :list, required: true)
+  # An agent-authored top-level message (task 01a174f5 stage 2): the arrow is
+  # 'Reply', a main-log reply through the composer chip (`start_reply`,
+  # `ReplyHooks`), and focuses the composer. It opens no thread; 'Reply in
+  # thread' stays a row in the actions sheet and popover.
+  attr(:reply?, :boolean, default: false)
 
   # The tap pill (redesign rung 9, task 01a1557a-9406; masters `.m .acts`,
   # direction canvas 01a1666e node m3). Hidden until the row carries
@@ -814,10 +842,26 @@ defmodule PlatformWeb.Components.ChatMessage do
         <span aria-hidden="true">👍</span>
       </button>
       <button
+        :if={@reply?}
+        type="button"
+        class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="Reply"
+        title="Reply"
+        data-role="message-pill-reply"
+        phx-click={
+          Phoenix.LiveView.JS.push("start_reply", value: %{"message-id" => @msg.id})
+          |> Phoenix.LiveView.JS.focus(to: "#compose_text")
+        }
+      >
+        <span aria-hidden="true">↩</span>
+      </button>
+      <button
+        :if={!@reply?}
         type="button"
         class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         aria-label="Reply in thread"
         title="Reply in thread"
+        data-role="message-pill-thread"
         phx-click="open_inline_thread"
         phx-value-message-id={@msg.id}
       >

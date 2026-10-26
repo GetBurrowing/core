@@ -212,7 +212,7 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       assert log =~
                "[AttentionRouter] agent_route space=#{space.id} message=#{message.id} " <>
-                 "policy=on_mention awake=true decisions=#{zip.id}:mention silenced_skipped=\n"
+                 "policy=on_mention awake=true decisions=#{zip.id}:mention silenced_skipped= reply_target=\n"
 
       # R6: content, edited_at and metadata byte-identical; still one version.
       assert raw_message(message.id) == before
