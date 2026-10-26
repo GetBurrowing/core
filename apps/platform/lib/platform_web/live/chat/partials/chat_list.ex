@@ -97,10 +97,15 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   list has one Spaces header). `ChatLive` reads the set into
   `@list_collapsed` at mount and in every `recompute_sidebar/1`.
 
-  A folded section renders no rows (nor its empty state). Its header shows
-  the unread dot plus the number of unread CONVERSATIONS (not messages) when
-  any row in it has unread, Pinned counting the Agents row, and nothing when
-  quiet. Archived never shows a marker. Archived is still shown only behind
+  A folded section renders no rows (nor its empty state). Its header always
+  shows how many rows the fold hides beside the label ("SPACES · 41", the
+  label's own `text-subtle`, `aria-hidden` with an sr-only "41
+  conversations"), counted from the same rows the section renders when
+  expanded, Pinned counting the Agents row. A folded section with 0 rows
+  keeps its bare header, so "· 0" never appears. Separately, on the right,
+  it shows the unread dot plus the number of unread CONVERSATIONS (not
+  messages) when any row in it has unread. An expanded header shows neither.
+  Archived never shows a count or a marker. Archived is still shown only behind
   the "Show archived" switch; once shown it folds like the rest.
 
   Accepted side effect: `Sidebar.reset_to_default/1` clears the whole
@@ -1084,7 +1089,18 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         }
         class="flex min-h-11 w-full items-center gap-2 px-4 text-left text-xs font-medium uppercase tracking-widest text-subtle active:bg-base-100 focus-visible-ring"
       >
-        <span class="min-w-0 flex-1 truncate">{render_slot(@inner_block)}</span>
+        <span class="flex min-w-0 flex-1 items-center gap-1">
+          <span class="min-w-0 truncate">{render_slot(@inner_block)}</span>
+          <span
+            :if={@fold.total}
+            data-role="chat-list-section-count"
+            aria-hidden="true"
+            class="shrink-0 tabular-nums"
+          >
+            · {@fold.total}
+          </span>
+          <span :if={@fold.total} class="sr-only">, {@fold.total} conversations</span>
+        </span>
         <span
           :if={@fold.marker}
           data-role="chat-list-section-unread"
@@ -1729,8 +1745,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   def fold_keys, do: @fold_keys
 
   # One fold per section: its key, whether it is collapsed, the id of the rows
-  # container its button controls, and the collapsed unread marker (the
-  # number of rows with unread, or nil). Archived never carries a marker.
+  # container its button controls, the collapsed unread marker (the number of
+  # rows with unread, or nil) and the collapsed hidden-row total (the number
+  # of rows the section renders when expanded, or nil when expanded or 0).
+  # Archived never carries a marker or a total.
   defp assign_folds(assigns) do
     collapsed = assigns.list_collapsed || MapSet.new()
     unread = assigns.unread_counts
@@ -1763,12 +1781,27 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
            key: key,
            collapsed?: collapsed?,
            controls: "chat-list-rows-#{section}",
-           marker: if(collapsed? and count > 0, do: count)
+           marker: if(collapsed? and count > 0, do: count),
+           total: fold_total(section, collapsed?, rows[section])
          }}
       end)
 
     assign(assigns, :folds, folds)
   end
+
+  # The rows the fold hides are the rows it renders when expanded, so the total
+  # counts the same lists the section `for`s over (Pinned's Agents row
+  # included, restricted rows included). Archived is "don't nag me": no total.
+  defp fold_total(:archived, _collapsed?, _rows), do: nil
+
+  defp fold_total(_section, true, rows) do
+    case length(rows) do
+      0 -> nil
+      total -> total
+    end
+  end
+
+  defp fold_total(_section, false, _rows), do: nil
 
   defp pinned_ids(pinned), do: Enum.map(pinned, & &1.space.id)
 

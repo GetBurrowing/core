@@ -1669,6 +1669,21 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
   defp tap_header(view, key), do: view |> element(toggle_sel(key)) |> render_click()
 
+  defp count_sel(key), do: "#{toggle_sel(key)} [data-role='chat-list-section-count']"
+
+  @fold_spaces_rows "[data-role='chat-list-spaces'] [data-role='chat-list-row']"
+
+  # The trimmed, whitespace-collapsed text of everything `selector` finds
+  # (LazyHTML.query descends the whole tree).
+  defp query_text(html, selector) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
   defp collapsed_pref(user),
     do: Platform.Accounts.get_user_preferences(user.id)["chat_collapsed_sections"]
 
@@ -1840,6 +1855,182 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       tap_header(view, "chat-list:spaces")
       refute has_element?(view, "#chat-list [data-role='chat-list-spaces-empty']")
       assert has_element?(view, "#{toggle_sel("chat-list:spaces")}[aria-expanded='false']")
+    end
+
+    # ── task 01a17493: a folded header shows how many rows it hides ──
+
+    test "a folded quiet Spaces shows \"· N\" for the N rows it renders expanded, and no marker",
+         %{conn: conn} do
+      user = member!()
+      quiet_a = channel_in(acme(), "Quiet A")
+      quiet_b = channel_in(acme(), "Quiet B")
+      {:ok, view, _} = live(login(conn, user.id), ~p"/chat")
+
+      rows = list_html(view) |> ids_in(@fold_spaces_rows)
+      n = length(rows)
+      assert quiet_a.id in rows and quiet_b.id in rows
+      assert n >= 2
+      refute has_element?(view, count_sel("chat-list:spaces"))
+
+      tap_header(view, "chat-list:spaces")
+      html = list_html(view)
+      assert ids_in(html, @fold_spaces_rows) == []
+
+      assert query_text(html, count_sel("chat-list:spaces")) == "· #{n}"
+      assert has_element?(view, "#{count_sel("chat-list:spaces")}[aria-hidden='true']")
+      refute has_element?(view, marker_sel("chat-list:spaces"))
+
+      assert query_text(html, "#{toggle_sel("chat-list:spaces")} .sr-only") =~
+               "#{n} conversations"
+    end
+
+    test "a folded Spaces with one unread row shows the count AND the marker, apart",
+         %{conn: conn} do
+      w = world(conn)
+      loud = channel_in(acme(), "Loud Room")
+      join!(loud, w.user.id, w.user.name)
+      poster = join!(loud, Ecto.UUID.generate(), "Riley")
+      say!(loud, poster, "one unread note")
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      rows = list_html(view) |> ids_in(@fold_spaces_rows)
+      n = length(rows)
+      assert loud.id in rows
+
+      assert Enum.count(rows, &(Map.get(lv_assigns(view).unread_counts, &1, 0) > 0)) == 1
+      assert n >= 2 and n != 1
+
+      tap_header(view, "chat-list:spaces")
+      html = list_html(view)
+
+      assert query_text(html, count_sel("chat-list:spaces")) == "· #{n}"
+
+      assert query_text(
+               html,
+               "#{marker_sel("chat-list:spaces")} [data-role='chat-list-section-unread-count']"
+             ) == "1"
+
+      # Separate elements: the count is not inside the marker, nor the reverse.
+      refute has_element?(
+               view,
+               "#{marker_sel("chat-list:spaces")} [data-role='chat-list-section-count']"
+             )
+
+      refute has_element?(
+               view,
+               "#{count_sel("chat-list:spaces")} [data-role='chat-list-section-unread']"
+             )
+    end
+
+    test "a folded Pinned counts the Agents row with its pinned rows", %{conn: conn} do
+      w = world(conn)
+      agent = Repo.insert!(%Agent{slug: "fold-lead-#{w.user.id}", name: "Lead", status: "active"})
+
+      agents_space =
+        channel!(%{
+          name: "Agents",
+          slug: "fold-agents-#{System.unique_integer([:positive])}",
+          goal: "Ship the list",
+          leader_agent_id: agent.id,
+          org_id: acme().id
+        })
+
+      Application.put_env(:platform, @flag_key, true)
+      _ = Sidebar.set_space_pinned(w.user.id, w.beta.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      assert ids_in(list_html(view), "[data-role='chat-list-pinned'] [data-role='chat-list-row']") ==
+               [agents_space.id, w.beta.id]
+
+      tap_header(view, "chat-list:pinned")
+      assert query_text(list_html(view), count_sel("chat-list:pinned")) == "· 2"
+    end
+
+    test "an expanded list renders no count element on any header", %{conn: conn} do
+      w = world(conn)
+      _ = Sidebar.set_space_pinned(w.user.id, w.beta.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      for key <- ["chat-list:pinned", "chat-list:spaces", "chat-list:direct"] do
+        assert has_element?(view, "#{toggle_sel(key)}[aria-expanded='true']")
+      end
+
+      refute has_element?(view, "#chat-list [data-role='chat-list-section-count']")
+      refute list_html(view) =~ "conversations</span>"
+
+      # Positive control on the same fixture: folding one makes it appear.
+      tap_header(view, "chat-list:direct")
+      assert query_text(list_html(view), count_sel("chat-list:direct")) == "· 1"
+    end
+
+    test "a shown, folded Archived carries no count and no marker", %{conn: conn} do
+      w = world(conn)
+      archived = channel_in(acme(), "Old Room")
+      join!(archived, w.user.id, w.user.name)
+      poster = join!(archived, Ecto.UUID.generate(), "Priya")
+      say!(archived, poster, "an archived note")
+      {:ok, _} = Chat.archive_space(archived)
+
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      render_click(view, "toggle_archived_section", %{})
+      assert has_element?(view, "#chat-list-row-#{archived.id}")
+      assert lv_assigns(view).unread_counts[archived.id] == 1
+
+      tap_header(view, "chat-list:archived")
+      tap_header(view, "chat-list:spaces")
+
+      assert has_element?(view, "#{toggle_sel("chat-list:archived")}[aria-expanded='false']")
+      refute has_element?(view, "#chat-list-row-#{archived.id}")
+      refute has_element?(view, count_sel("chat-list:archived"))
+      refute has_element?(view, marker_sel("chat-list:archived"))
+      refute query_text(list_html(view), toggle_sel("chat-list:archived")) =~ "·"
+      # Positive control: the folded Spaces beside it does carry a count.
+      assert has_element?(view, count_sel("chat-list:spaces"))
+    end
+
+    test "a folded Direct with no DMs keeps a bare header: no count, never \"· 0\"",
+         %{conn: conn} do
+      user = member!()
+      _ = channel_in(acme(), "Only Room")
+      {:ok, view, _} = live(login(conn, user.id), ~p"/chat")
+      assert has_element?(view, "#chat-list [data-role='chat-list-direct-empty']")
+
+      tap_header(view, "chat-list:direct")
+      tap_header(view, "chat-list:spaces")
+      html = list_html(view)
+
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='false']")
+      refute has_element?(view, count_sel("chat-list:direct"))
+      header = query_text(html, toggle_sel("chat-list:direct"))
+      assert header =~ "Direct"
+      refute header =~ "·"
+      refute header =~ "0 conversations"
+      # Positive control: the folded Spaces on the same fixture counts.
+      assert query_text(html, count_sel("chat-list:spaces")) =~ ~r/^· [1-9]\d*$/
+    end
+
+    test "the folded count follows a new channel live, N to N+1", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      n = list_html(view) |> ids_in(@fold_spaces_rows) |> length()
+
+      tap_header(view, "chat-list:spaces")
+      assert query_text(list_html(view), count_sel("chat-list:spaces")) == "· #{n}"
+
+      fresh = channel_in(acme(), "Freshly Made")
+      join!(fresh, w.user.id, w.user.name)
+      _ = render(view)
+
+      assert query_text(list_html(view), count_sel("chat-list:spaces")) == "· #{n + 1}"
+
+      assert query_text(list_html(view), "#{toggle_sel("chat-list:spaces")} .sr-only") =~
+               "#{n + 1} conversations"
+
+      # And the expanded list agrees with the count it showed.
+      tap_header(view, "chat-list:spaces")
+      rows = list_html(view) |> ids_in(@fold_spaces_rows)
+      assert fresh.id in rows
+      assert length(rows) == n + 1
     end
   end
 

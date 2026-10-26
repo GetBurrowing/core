@@ -254,6 +254,43 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     assert failures == []
   end
 
+  test "folded row count: --subtle on base-200 via its parent, no colour of its own",
+       %{blocks: blocks, source: src} do
+    # Task 01a17493: "SPACES · 41". The pair assumes the markup: the count
+    # inherits the header button's text-subtle (already measured as
+    # "subtle / base-200 (painted)") and names no text colour itself, so it
+    # adds no new pair.
+    [count_tag] =
+      Regex.scan(~r/<span\s[^>]*data-role="chat-list-section-count"[^>]*>/s, src)
+      |> Enum.map(&hd/1)
+
+    assert count_tag =~ ~s(aria-hidden="true")
+    assert count_tag =~ ~s(class="shrink-0 tabular-nums")
+    refute count_tag =~ ~r/\btext-/
+    refute count_tag =~ ~r/\b(bg|border|rounded)-/
+
+    # The parent that colours it: the header button, text-subtle.
+    {toggle_at, _} = :binary.match(src, ~s(data-role="chat-list-section-toggle"))
+    {count_at, _} = :binary.match(src, ~s(data-role="chat-list-section-count"))
+    {chevron_at, _} = :binary.match(src, ~s(data-role="chat-list-section-chevron"))
+    assert toggle_at < count_at and count_at < chevron_at
+
+    between = binary_part(src, toggle_at, count_at - toggle_at)
+    assert between =~ "font-medium uppercase tracking-widest text-subtle active:bg-base-100"
+    # No element between the button and the count re-colours it.
+    refute between =~ ~r/class="[^"]*\btext-base-content/
+
+    assert length(blocks) == 10
+
+    failures =
+      for b <- blocks,
+          r = subtle_on(b, "--color-base-200"),
+          r < @aa_text,
+          do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
+
+    assert failures == []
+  end
+
   test "channel unread count: base-content on base-300", %{blocks: blocks, source: src} do
     # The pair assumes the markup: the dense row's count pill is neutral.
     assert src =~ ~s(data-role="chat-list-unread-count")
