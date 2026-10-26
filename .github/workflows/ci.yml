@@ -67,10 +67,16 @@ jobs:
     # postgres`), which resolves on the per-job container network Actions
     # creates for a container job.
     container:
-      image: elixir:1.20.4-otp-28-slim
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -439,10 +445,16 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6]
     # Root container, as in `test-checks`.
     container:
-      image: elixir:1.20.4-otp-28-slim
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -921,10 +933,16 @@ jobs:
     runs-on: ubuntu-latest
     # Root container for apt, as in `test` above.
     container:
-      image: elixir:1.20.4-otp-28-slim
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -1182,10 +1200,16 @@ jobs:
     name: Test (with Social)
     runs-on: ubuntu-latest
     container:
-      image: elixir:1.20.4-otp-28-slim
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -1395,11 +1419,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # No Docker Hub login: the shared-egress rate limit it worked around
-      # belonged to the self-hosted runners, and this repository has no
-      # Docker Hub secrets (the login failed with "Username and password
-      # required"). Base images are pulled anonymously; nothing is pushed to
-      # docker.io (task 01a14afe).
+      # Every image this job pulls (the buildkit builder below, the
+      # Dockerfiles' FROM bases) comes from the ghcr.io/getburrowing mirrors
+      # (.github/workflows/mirror-images.yml), so the GHCR login is the only one.
+      # Nothing is pulled from or pushed to Docker Hub.
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1407,6 +1430,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Build and push by digest
         id: build
@@ -1506,11 +1531,10 @@ jobs:
           pattern: suite-core-digest-*
           merge-multiple: true
 
-      # No Docker Hub login: the shared-egress rate limit it worked around
-      # belonged to the self-hosted runners, and this repository has no
-      # Docker Hub secrets (the login failed with "Username and password
-      # required"). Base images are pulled anonymously; nothing is pushed to
-      # docker.io (task 01a14afe).
+      # Every image this job pulls (the buildkit builder below, the
+      # Dockerfiles' FROM bases) comes from the ghcr.io/getburrowing mirrors
+      # (.github/workflows/mirror-images.yml), so the GHCR login is the only one.
+      # Nothing is pulled from or pushed to Docker Hub.
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1518,6 +1542,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Collect digests
         id: digests
@@ -1597,11 +1623,10 @@ jobs:
           BRANCH_TAG="${BRANCH_TAG//\//-}"
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
-      # No Docker Hub login: the shared-egress rate limit it worked around
-      # belonged to the self-hosted runners, and this repository has no
-      # Docker Hub secrets (the login failed with "Username and password
-      # required"). Base images are pulled anonymously; nothing is pushed to
-      # docker.io (task 01a14afe).
+      # Every image this job pulls (the buildkit builder below, the
+      # Dockerfiles' FROM bases) comes from the ghcr.io/getburrowing mirrors
+      # (.github/workflows/mirror-images.yml), so the GHCR login is the only one.
+      # Nothing is pulled from or pushed to Docker Hub.
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1609,6 +1634,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Build and push play (main)
         if: github.ref == 'refs/heads/main'
@@ -1700,17 +1727,10 @@ jobs:
             echo "agent_host=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Typecheck and unit-test the agent host
-        if: steps.changed.outputs.agent_host == 'true'
-        run: |
-          docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
-            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
-
-      # No Docker Hub login: the shared-egress rate limit it worked around
-      # belonged to the self-hosted runners, and this repository has no
-      # Docker Hub secrets (the login failed with "Username and password
-      # required"). Base images are pulled anonymously; nothing is pushed to
-      # docker.io (task 01a14afe).
+      # Every image this job pulls (the buildkit builder below, the
+      # Dockerfiles' FROM bases) comes from the ghcr.io/getburrowing mirrors
+      # (.github/workflows/mirror-images.yml), so the GHCR login is the only one.
+      # Nothing is pulled from or pushed to Docker Hub.
       - uses: docker/login-action@v4
         if: steps.changed.outputs.agent_host == 'true'
         with:
@@ -1718,8 +1738,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # After the GHCR login: the bun image is a ghcr.io/getburrowing mirror.
+      - name: Typecheck and unit-test the agent host
+        if: steps.changed.outputs.agent_host == 'true'
+        run: |
+          docker run --rm -v "$PWD/services/agent-host:/src:ro" ghcr.io/getburrowing/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d sh -c \
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
+
       - uses: docker/setup-buildx-action@v4
         if: steps.changed.outputs.agent_host == 'true'
+        with:
+          driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Build and push agent-host
         if: steps.changed.outputs.agent_host == 'true'
@@ -1747,7 +1776,10 @@ jobs:
     name: Installer (validate + render)
     runs-on: ubuntu-latest
     container:
-      image: python:3.12-slim
+      image: ghcr.io/getburrowing/python:3.12-slim@sha256:5b8b1421ccb6a525860a77863c049eab5847076cda34e030c75a80c58faf3f3c
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v5
 

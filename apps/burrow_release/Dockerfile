@@ -12,7 +12,7 @@
 # images cannot drift apart in what they install, expose or run.
 
 # ── Stage 1: Build ────────────────────────────────────────────
-FROM elixir:1.20.4-otp-28-slim AS build
+FROM ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244 AS build
 
 RUN apt-get update -y \
  && apt-get install -y build-essential git curl ca-certificates \
@@ -100,7 +100,7 @@ RUN mix release
 # compressed per arch. Fetched and sha256-verified here so curl and xz never
 # reach the runtime stage, which only COPYs the two binaries.
 #
-# Source: a byte-identical mirror on the Startup-Suite/core GitHub release
+# Source: a byte-identical mirror on the GetBurrowing/core GitHub release
 # vendor-ffmpeg-7.0.2, so a build does not depend on johnvansickle.com being
 # up. The repo is private, so the mirror is fetched through the API asset
 # endpoint with an optional BuildKit secret `gh_token`
@@ -112,14 +112,14 @@ RUN mix release
 #
 # To bump: upload the new tarballs to a new vendor-ffmpeg-<version> release,
 # then change FFMPEG_VERSION, both checksums (sha256 of each arch's tarball)
-# and both asset ids (gh api repos/Startup-Suite/core/releases/tags/<tag>).
-FROM elixir:1.20.4-otp-28-slim AS ffmpeg
+# and both asset ids (gh api repos/GetBurrowing/core/releases/tags/<tag>).
+FROM ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244 AS ffmpeg
 ARG TARGETARCH
 ARG FFMPEG_VERSION=7.0.2
 ARG FFMPEG_SHA256_AMD64=abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
 ARG FFMPEG_SHA256_ARM64=f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1
-ARG FFMPEG_ASSET_ID_AMD64=647225386
-ARG FFMPEG_ASSET_ID_ARM64=647225387
+ARG FFMPEG_ASSET_ID_AMD64=679857169
+ARG FFMPEG_ASSET_ID_ARM64=679857160
 ARG FFMPEG_FALLBACK_BASE=https://johnvansickle.com/ffmpeg/releases
 RUN --mount=type=secret,id=gh_token,required=false \
     apt-get update -y \
@@ -135,7 +135,7 @@ RUN --mount=type=secret,id=gh_token,required=false \
       && curl -fsSL -o /tmp/ffmpeg.tar.xz \
            -H "Authorization: Bearer $(cat /run/secrets/gh_token)" \
            -H 'Accept: application/octet-stream' \
-           "https://api.github.com/repos/Startup-Suite/core/releases/assets/${asset}"; then \
+           "https://api.github.com/repos/GetBurrowing/core/releases/assets/${asset}"; then \
       echo 'ffmpeg source: release'; \
     else \
       rm -f /tmp/ffmpeg.tar.xz \
@@ -155,7 +155,7 @@ RUN --mount=type=secret,id=gh_token,required=false \
  && /out/ffprobe -version
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
-FROM elixir:1.20.4-otp-28-slim AS app
+FROM ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244 AS app
 
 # Same build arg re-declared for this stage (ARGs do not cross stages) so the
 # image carries its commit as an OCI label:
