@@ -72,6 +72,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.ReplyQuote, only: [reply_quote: 1]
 
+  alias PlatformWeb.Components.ThreadActivityRow
+
   alias Phoenix.LiveView.JS
   alias Platform.Chat
   alias PlatformWeb.ChatLive
@@ -193,6 +195,12 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     doc: "True when the last `load_older_messages` raised; the top sentinel offers a retry."
   )
 
+  attr(:thread_activity_overflow, :integer,
+    default: 0,
+    doc:
+      "Active threads beyond the row cap (task 01a174f5 stage 2); see `PlatformWeb.ChatLive.ThreadActivityHooks`."
+  )
+
   attr(:rendered_message_ids, :any,
     required: true,
     doc:
@@ -306,6 +314,31 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           viewer_user_id={@viewer_user_id}
           mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
         />
+      </div>
+
+      <%!-- Thread activity (task 01a174f5 stage 2, canvas 01a175ca): "↳ N new
+           replies to …" rows for threads with unseen replies, at the bottom
+           of the log. Their OWN stream, never items in `:messages` (see
+           `ThreadActivityHooks`). The summary sits ABOVE the rows.
+
+           Embedded chat has none. While the newest messages are evicted the
+           region is `hidden`, not removed: a stream container dropped by
+           `:if` comes back EMPTY, because a stream's items are not kept on
+           the server, so the rows would vanish until the next change. --%>
+      <div
+        :if={not @embedded}
+        id="thread-activity-region"
+        data-role="thread-activity-region"
+        class={[@newest_evicted? && "hidden"]}
+      >
+        <ThreadActivityRow.summary overflow={@thread_activity_overflow} />
+        <div id="thread-activity" phx-update="stream">
+          <ThreadActivityRow.row
+            :for={{dom_id, row} <- @streams.thread_activity_rows}
+            dom_id={dom_id}
+            row={row}
+          />
+        </div>
       </div>
 
       <%!-- Pending large-file uploads (task 01a120be): rows at the end of the

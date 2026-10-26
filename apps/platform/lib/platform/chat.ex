@@ -7256,6 +7256,20 @@ defmodule Platform.Chat do
 
   # ── Unread counts ──────────────────────────────────────────────────────────
 
+  # ── Thread read cursor and thread activity (task 01a174f5) ────────────────
+  # The rule lives in `Platform.Chat.ThreadActivity`; see its moduledoc.
+
+  @doc "Advance a participant's read cursor on a thread. See `Platform.Chat.ThreadActivity`."
+  defdelegate mark_thread_read(participant_id, thread_id, message_id),
+    to: Platform.Chat.ThreadActivity
+
+  @doc "The viewer's threads with unseen replies, newest last. See `Platform.Chat.ThreadActivity`."
+  defdelegate thread_activity_for(participant, opts \\ []), to: Platform.Chat.ThreadActivity
+
+  @doc "The thread-activity rule for one thread, or nil. See `Platform.Chat.ThreadActivity`."
+  defdelegate thread_activity_entry(participant, thread_id, opts \\ []),
+    to: Platform.Chat.ThreadActivity
+
   @doc "Persist the last-read cursor for a participant."
   @spec mark_space_read(binary(), binary()) :: :ok
   def mark_space_read(participant_id, message_id) do

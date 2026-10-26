@@ -167,6 +167,58 @@ defmodule PlatformWeb.ChatLive.MessagesHooksOwnMessageBooleanTest do
     end
   end
 
+  # Task 01a174f5 stage 1. The persisted main-log unread (`count_unread/3`)
+  # excludes thread replies, but the live path bumped `:unread_counts` for ANY
+  # background message, so the badge drifted until a reload. Control first:
+  # a top-level message from someone else in the same background space bumps
+  # it by exactly one, so the thread-reply assertion cannot pass on a socket
+  # that never counts anything.
+  describe "{:new_message, msg} unread for a background space" do
+    test "a thread reply leaves :unread_counts unchanged; a top-level message bumps it by 1",
+         %{conn: conn} do
+      viewer = create_user!("viewer")
+      second = create_user!("second")
+
+      active = create_space!()
+      background = create_space!()
+
+      {:ok, _} = add_participant!(active, viewer)
+      {:ok, _} = add_participant!(background, viewer)
+      {:ok, second_participant} = add_participant!(background, second)
+
+      {:ok, parent} =
+        Chat.post_message(%{
+          space_id: background.id,
+          participant_id: second_participant.id,
+          content_type: "text",
+          content: "a parent elsewhere"
+        })
+
+      {:ok, thread} = Chat.create_thread_for_message(background.id, parent.id)
+
+      {:ok, reply} =
+        Chat.reply_to_thread(thread.id, second_participant.id, %{content: "a reply elsewhere"})
+
+      conn = init_test_session(conn, current_user_id: viewer.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      assert assigns(view).active_space.id == active.id
+      before = Map.get(assigns(view).unread_counts, background.id, 0)
+
+      send(view.pid, {:new_message, parent})
+      _ = render(view)
+
+      assert Map.get(assigns(view).unread_counts, background.id, 0) == before + 1,
+             "control failed: a top-level background message did not bump unread"
+
+      send(view.pid, {:new_message, reply})
+      _ = render(view)
+
+      assert Map.get(assigns(view).unread_counts, background.id, 0) == before + 1,
+             "a thread reply moved the main-log unread count"
+    end
+  end
+
   # ── Fixtures ──────────────────────────────────────────────────────────
 
   defp assigns(view), do: :sys.get_state(view.pid).socket.assigns

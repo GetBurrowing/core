@@ -270,6 +270,10 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       '.chat-dock--glass > [data-role="typing-indicator"]',
       '[data-preset="high-contrast"] .chat-dock--glass > [data-role="typing-indicator"]',
       "#chat-drop-zone:has(> .chat-dock--glass) #message-list",
+      // Task 01a174f5: the thread-activity rows sit between the log and the
+      // dock, so they get the same glass-dock clearance as #message-list.
+      // Still no `.chat-jump` selector.
+      "#chat-drop-zone:has(> .chat-dock--glass) #thread-activity-region",
       ":root:has([data-bottom-rail])",
       // Task 01a1557b stage 3: inside the iOS app the clearance tracks the
       // native tab bar, and the hide rules restate the drop to 0. Still the

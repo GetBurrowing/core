@@ -553,6 +553,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386d-e528 stage 2: `revoke/1` takes a raw grant id from its caller. Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning the site's `{:error, :not_found}`; covered by precedence_test.exs \"malformed ids are not found and decide nothing\". 1 → 2 for task 01a1386e-30bd stage 1: `revoke/2` re-reads the same id inside its ledgered mutation (`Platform.Access.Changes.commit/4`), reached only after that guard has passed. 2 → 4 for member9: prepare_op/revoke guards its supplied id before the preview lookup; apply_ops re-reads that same guarded id inside the ledger mutation"},
     {"platform/access/changes.ex", :get, "Change", 1, :must_cast,
      "task 01a1386e-30bd stage 1: `undo/3` takes a raw change id from its caller (stage 2's delegation and a later MCP tool will pass it through). Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning `{:error, :not_found}`; covered by changes_test.exs \"a second undo is refused; undoing the undo redoes the change\" (`undo(\"nope\", _)`)"},
+    {"platform/chat/thread_activity.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a174f5 stage 1: `cast/1` runs Platform.UUID.cast/1 on `mark_thread_read/3`'s three ids and `thread_activity_entry/3`'s thread id (the thread a LiveView event names) before the upsert and the `Repo.one` (this file's `@repo_one_counts` entry); a malformed id is `{:error, :invalid_id}` or nil. Pinned by thread_activity_test.exs \"rejects ids that are not UUIDs\""},
     {"platform/access/changes.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386e-30bd stage 1: `undo/3`'s change id, checked before the `get(Change)` above. Used as a BOOLEAN and the string discarded"},
     {"platform/access/grants.ex", :get, "Node", 1, :must_cast,
@@ -998,6 +1000,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # file's guidance requires. A malformed id degrades to "no mention"
     # instead of raising `Ecto.Query.CastError` inside the routing pipeline.
     "platform/chat/attention_router.ex" => 1,
+    # 0 → 1 for task 01a174f5 stage 1: `ThreadActivity.thread_activity_entry/3`.
+    # Its `where:` pins `m.thread_id == ^thread_id`, which a LiveView event can
+    # carry, so it is boundary-reachable: the id goes through
+    # Platform.UUID.cast/1 first and a malformed one answers nil. The other
+    # pinned ids are fields of a loaded `%Participant{}`.
+    "platform/chat/thread_activity.ex" => 1,
     # 0 → 1 for task 01a07402 stage 3's `CanvasSearchIndex.unindexed_count/1`,
     # the single source of truth for "is this space's canvas body index still
     # partial". Triaged by hand: the `where:` clause DOES pin ids

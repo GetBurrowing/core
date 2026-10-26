@@ -97,6 +97,19 @@ defmodule Platform.Chat.PubSub do
   @spec sidebar_defaults_topic() :: String.t()
   def sidebar_defaults_topic, do: "chat:sidebar:defaults"
 
+  @doc """
+  Returns the per-participant topic for thread read-cursor changes (task
+  01a174f5 stage 1).
+
+  Subscribers receive `{:thread_read, %{participant_id, thread_id,
+  last_read_message_id}}` after `Platform.Chat.mark_thread_read/3` advances
+  that participant's cursor. Keyed by the chat participant id (one per
+  space), and deliberately NOT on `space_topic/1`: every viewer of a space
+  subscribes that, and none of them needs another member's read state.
+  """
+  @spec thread_reads_topic(binary()) :: String.t()
+  def thread_reads_topic(participant_id), do: "chat:thread_reads:#{participant_id}"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -193,6 +206,18 @@ defmodule Platform.Chat.PubSub do
     Phoenix.PubSub.unsubscribe(@pubsub, sidebar_defaults_topic())
   end
 
+  @doc "Subscribe the calling process to a participant's thread read-cursor topic."
+  @spec subscribe_thread_reads(binary()) :: :ok | {:error, term()}
+  def subscribe_thread_reads(participant_id) do
+    Phoenix.PubSub.subscribe(@pubsub, thread_reads_topic(participant_id))
+  end
+
+  @doc "Unsubscribe the calling process from a participant's thread read-cursor topic."
+  @spec unsubscribe_thread_reads(binary()) :: :ok
+  def unsubscribe_thread_reads(participant_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, thread_reads_topic(participant_id))
+  end
+
   # ── Broadcast ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -247,6 +272,15 @@ defmodule Platform.Chat.PubSub do
   @spec broadcast_canvas_room(binary(), binary(), term()) :: :ok
   def broadcast_canvas_room(canvas_id, node_id, event) do
     Phoenix.PubSub.broadcast(@pubsub, canvas_room_topic(canvas_id, node_id), event)
+  end
+
+  @doc """
+  Broadcast `{:thread_read, payload}` on `participant_id`'s thread-reads topic.
+  THE producer; called only by `Platform.Chat.mark_thread_read/3`.
+  """
+  @spec broadcast_thread_read(binary(), map()) :: :ok | {:error, term()}
+  def broadcast_thread_read(participant_id, payload) do
+    Phoenix.PubSub.broadcast(@pubsub, thread_reads_topic(participant_id), {:thread_read, payload})
   end
 
   @doc "Broadcast a space-lifecycle event to every connected chat session."

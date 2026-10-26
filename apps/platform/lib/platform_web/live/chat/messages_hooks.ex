@@ -111,6 +111,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias PlatformWeb.ChatLive.ReplyHooks
   alias PlatformWeb.ChatLive.ReplyQuoteHooks
   alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.ChatLive.ThreadActivityHooks
   alias PlatformWeb.NativeDonation
 
   @message_limit 50
@@ -139,6 +140,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     # First, so its `{:message_deleted, _}` re-insert runs before this
     # module's handler halts the message (task 01a174f5 stage 3).
     |> ReplyQuoteHooks.attach()
+    # Also ahead of `:messages_info`, which halts every `{:new_message, _}`:
+    # the thread-activity rows need to see thread replies (task 01a174f5
+    # stage 2).
+    |> ThreadActivityHooks.attach()
     |> assign(:attachments_map, %{})
     |> assign(:reaction_picker_for, nil)
     |> assign(:thread_previews, %{})
@@ -375,6 +380,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:mounted_inline_canvas_ids, MapSet.new())
     |> assign(:load_older_failed?, false)
     |> stream(:messages, labelled, reset: true)
+    |> ThreadActivityHooks.load()
     |> restore_draft(space.id)
   end
 
@@ -747,11 +753,27 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec open_thread_context(Phoenix.LiveView.Socket.t(), binary(), [map()]) ::
           Phoenix.LiveView.Socket.t()
   def open_thread_context(socket, parent_msg_id, thread_msgs) do
+    thread_id =
+      case thread_msgs do
+        [%{thread_id: thread_id} | _] ->
+          thread_id
+
+        [] ->
+          case Map.get(socket.assigns.thread_previews, parent_msg_id) do
+            %{thread_id: thread_id} -> thread_id
+            _ -> nil
+          end
+      end
+
     socket
     |> update(:expanded_threads, &MapSet.put(&1, parent_msg_id))
     |> update(:inline_thread_messages, &Map.put(&1, parent_msg_id, thread_msgs))
+    |> ThreadActivityHooks.thread_opened(thread_id, latest_id(thread_msgs))
     |> reinsert_stream_message(parent_msg_id)
   end
+
+  defp latest_id([]), do: nil
+  defp latest_id(thread_msgs), do: List.last(thread_msgs).id
 
   @doc "Parent-visible helper to load thread messages for a thread id."
   @spec load_thread_messages(binary(), binary()) :: [map()]
@@ -801,6 +823,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
             last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
           })
         )
+        |> ThreadActivityHooks.thread_opened(thread.id, latest_id(thread_msgs))
         |> maybe_focus_compose(msg_id, Keyword.get(opts, :focus, true))
         |> reinsert_stream_message(msg_id)
     end
@@ -1085,7 +1108,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     socket =
       if is_background_dm and not is_own_message do
         socket
-        |> increment_unread(msg.space_id)
+        |> increment_unread(msg)
         |> maybe_return_closed_dm(msg)
       else
         streaming =
@@ -1592,7 +1615,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end)
 
     if is_nil(msg_id) do
-      socket
+      first_thread_preview(socket, thread_id)
     else
       socket
       |> update(:inline_thread_messages, fn itm ->
@@ -1612,6 +1635,28 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp maybe_update_inline_thread(socket, _msg), do: socket
+
+  # The miss path of `maybe_update_inline_thread/2` (task 01a174f5 fix stage).
+  # A parent with no thread replies yet has no `:thread_previews` entry, so the
+  # FIRST reply used to find nothing to bump and other viewers never got a chip
+  # until a reload. When that parent is in this window, read its preview from
+  # the database (the count already includes this reply) and re-render the row
+  # in place. A parent outside the window is left alone: reinserting it would
+  # append a row the window never held.
+  defp first_thread_preview(socket, thread_id) do
+    rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+
+    with %{parent_message_id: parent_id} when is_binary(parent_id) <-
+           Chat.get_thread(thread_id),
+         true <- MapSet.member?(rendered, parent_id),
+         %{} = preview <- Map.get(Chat.thread_previews_for_messages([parent_id]), parent_id) do
+      socket
+      |> update(:thread_previews, &Map.put(&1, parent_id, preview))
+      |> reinsert_stream_message(parent_id)
+    else
+      _ -> socket
+    end
+  end
 
   # Cap on eagerly-hydrated reactor names per emoji. A message with more
   # reactors than this fills its :reactors list with the first N and
@@ -2006,7 +2051,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     assign(socket, :attachments_map, Map.delete(socket.assigns.attachments_map, message_id))
   end
 
-  defp increment_unread(socket, space_id) do
+  # A thread reply never moves the main-log unread count: the persisted count
+  # (`Chat.count_unread/3`) excludes `thread_id` rows, so a live bump would
+  # drift from it until the next reload (task 01a174f5 stage 1).
+  defp increment_unread(socket, %{thread_id: thread_id}) when not is_nil(thread_id), do: socket
+
+  defp increment_unread(socket, %{space_id: space_id}) do
     current = Map.get(socket.assigns.unread_counts, space_id, 0)
     update(socket, :unread_counts, &Map.put(&1, space_id, current + 1))
   end

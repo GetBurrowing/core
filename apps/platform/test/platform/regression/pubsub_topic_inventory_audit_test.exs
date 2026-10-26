@@ -149,6 +149,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # No production subscriber: Chat.Messages.Edit publishes, only tests listen.
     {"chat:participant:<id>", :user},
     {"chat:sidebar:<id>", :user},
+    # Keyed by a chat PARTICIPANT id (task 01a174f5 stage 1), and a participant
+    # row is one user in one space, so the reachable set is that one user's
+    # sessions. The payload is that participant's own thread read cursor.
+    {"chat:thread_reads:<id>", :user},
     {"external_admission:<id>", :user},
     {"inbox:<id>", :user},
     {"meeting:state:<id>", :user},

@@ -349,7 +349,19 @@ const ScrollToBottom = {
     }, 100);
 
     this._safeUpdate();
+    this._observeLog();
+  },
+  // The log's own children, plus the thread-activity rows rendered after it
+  // (task 01a174f5): a row arriving there grows the scroller exactly as a
+  // message does, so it goes through the same `_safeUpdate()` follow rule.
+  _observeLog() {
     this._observer.observe(this.el, { childList: true, subtree: false });
+    const parent = this.el.parentElement;
+    const rows =
+      typeof parent?.querySelector === "function"
+        ? parent.querySelector("#thread-activity")
+        : null;
+    if (rows) this._observer.observe(rows, { childList: true, subtree: true });
   },
   // Entering a conversation — on mount, and again whenever `updated()`
   // observes `data-space-id` take a NEW value. Both callers get the same
@@ -886,9 +898,7 @@ const ScrollToBottom = {
     this.applyGrouping();
     this.scrollToBottom(preDistance);
     // Reconnect after our changes are done
-    if (this._observer) {
-      this._observer.observe(this.el, { childList: true, subtree: false });
-    }
+    if (this._observer) this._observeLog();
     // An arriving message grows the scroller, which moves the reader further
     // from the bottom without any scroll event firing. Re-evaluate here or
     // the chip never appears for a stationary reader.

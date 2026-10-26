@@ -3695,6 +3695,14 @@ body, .font-suite {
   #chat-drop-zone:has(> .chat-dock--glass) #message-list {
     padding-bottom: var(--phone-chrome-bottom);
   }
+
+  /* The thread-activity rows sit AFTER #message-list (task 01a174f5 stage 2),
+     so that padding would put them under the dock. Pull the region up into
+     the padding and pad below it instead: net zero when it is empty. */
+  #chat-drop-zone:has(> .chat-dock--glass) #thread-activity-region {
+    margin-top: calc(-1 * var(--phone-chrome-bottom));
+    padding-bottom: var(--phone-chrome-bottom);
+  }
 }
 
 /* -- Meeting Panel ------------------------------------------------- */
