@@ -60,7 +60,12 @@ defmodule PlatformWeb.TerminalViewChannel do
   def join(_topic, _params, _socket), do: {:error, %{reason: "unauthorized"}}
 
   defp refuse(user_id, runtime_id, reason) do
-    Audit.record("refused", user_id, runtime_id, %{reason: reason})
+    # At most one refused row per (actor, runtime, reason) per window: a client
+    # that keeps rejoining must not be able to flood the audit log.
+    if Terminal.audit_refusal?(user_id, runtime_id, reason) do
+      Audit.record("refused", user_id, runtime_id, %{reason: reason})
+    end
+
     {:error, %{reason: reason}}
   end
 

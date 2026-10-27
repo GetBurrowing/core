@@ -186,6 +186,85 @@ defmodule PlatformWeb.TerminalRelayTest do
     assert [%{metadata: %{"reason" => "offline"}}] = rows(ctx.owner)
   end
 
+  describe "refusal audit window" do
+    setup do
+      Platform.Terminal.reset_refusals()
+      previous = Application.get_env(:platform, :terminal_refusal_window_ms)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, :terminal_refusal_window_ms, previous),
+          else: Application.delete_env(:platform, :terminal_refusal_window_ms)
+      end)
+
+      :ok
+    end
+
+    test "many rapid refused joins from one actor and runtime write exactly one row", ctx do
+      online!(ctx)
+      join_cli(ctx)
+
+      for _ <- 1..25 do
+        assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+      end
+
+      assert types(ctx.other) == ["terminal.session.refused"]
+      # the refusal itself is not softened, only its audit rows are capped
+      assert rows(ctx.other, "terminal.session.opened") == []
+    end
+
+    test "flag_off and offline are capped the same way, and each reason, actor and runtime gets its own row",
+         ctx do
+      online!(ctx)
+      for _ <- 1..10, do: assert({:error, %{reason: "flag_off"}} = join_view(ctx, ctx.owner))
+      assert [%{metadata: %{"reason" => "flag_off"}}] = rows(ctx.owner)
+
+      join_cli(ctx)
+      RuntimePresence.untrack(ctx.runtime_id)
+      for _ <- 1..10, do: assert({:error, %{reason: "offline"}} = join_view(ctx, ctx.owner))
+      assert rows(ctx.owner) |> Enum.map(& &1.metadata["reason"]) == ["flag_off", "offline"]
+
+      for _ <- 1..3, do: assert({:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other))
+      assert types(ctx.other) == ["terminal.session.refused"]
+    end
+
+    test "a second row is written once the window has passed", ctx do
+      Application.put_env(:platform, :terminal_refusal_window_ms, 40)
+      online!(ctx)
+      join_cli(ctx)
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+      assert length(rows(ctx.other)) == 1
+
+      assert_eventually(fn ->
+        {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+        length(rows(ctx.other)) == 2
+      end)
+    end
+
+    test "concurrent joins cannot both win the window" do
+      for _ <- 1..20 do
+        key = {Ecto.UUID.generate(), "rt", "forbidden"}
+        parent = self()
+
+        tasks =
+          for _ <- 1..8 do
+            Task.async(fn ->
+              send(parent, :ready)
+
+              receive do
+                :go -> Platform.Terminal.audit_refusal?(elem(key, 0), "rt", "forbidden")
+              end
+            end)
+          end
+
+        for _ <- tasks, do: assert_receive(:ready)
+        for t <- tasks, do: send(t.pid, :go)
+        assert tasks |> Task.await_many() |> Enum.count(& &1) == 1
+      end
+    end
+  end
+
   test "a bad or expired token cannot connect" do
     assert :error = connect(PlatformWeb.TerminalSocket, %{"token" => "junk"})
     assert :error = connect(PlatformWeb.TerminalSocket, %{})

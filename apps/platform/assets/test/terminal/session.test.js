@@ -187,6 +187,101 @@ describe("binary pushes", () => {
   })
 })
 
+/**
+ * A Phoenix-like channel: after a failed join it rejoins on its own backoff
+ * until `leave()` is called, exactly the behaviour that flooded core's audit
+ * log. `joins` counts every join attempt, first or rejoin.
+ */
+class RejoiningChannel {
+  constructor(clock, reason) {
+    this.clock = clock
+    this.reason = reason
+    this.joins = 0
+    this.left = false
+    this.handlers = {}
+    this.backoff = [1000, 2000, 5000, 10000]
+  }
+  adapter() {
+    return {
+      on: (e, cb) => (this.handlers[e] = cb),
+      onClose: () => {},
+      push: () => Promise.resolve(),
+      leave: () => (this.left = true),
+      join: () => {
+        this.joins += 1
+        this.scheduleRejoin(0)
+        return Promise.reject({ reason: this.reason })
+      },
+    }
+  }
+  scheduleRejoin(step) {
+    this.clock.at(this.backoff[Math.min(step, this.backoff.length - 1)], () => {
+      if (this.left) return
+      this.joins += 1
+      this.scheduleRejoin(step + 1)
+    })
+  }
+}
+
+function fakeClock() {
+  const timers = []
+  let now = 0
+  return {
+    at: (ms, fn) => timers.push({ due: now + ms, fn }),
+    advance(ms) {
+      const end = now + ms
+      for (;;) {
+        const next = timers.filter((t) => t.due <= end).sort((a, b) => a.due - b.due)[0]
+        if (!next) break
+        timers.splice(timers.indexOf(next), 1)
+        now = next.due
+        next.fn()
+      }
+      now = end
+    },
+  }
+}
+
+describe("a refusal is final for the page load", () => {
+  it.each(["forbidden", "flag_off"])("%s leaves the channel and nothing rejoins past several backoff steps", async (reason) => {
+    const clock = fakeClock()
+    const chan = new RejoiningChannel(clock, reason)
+    const { session, states } = makeSession([{ adapter: () => chan.adapter() }], {
+      schedule: (fn, ms) => (clock.at(ms, fn), () => {}),
+    })
+    await session.start()
+    expect(states).toEqual(["connecting", `refused:${reason}`])
+    expect(chan.left).toBe(true)
+    expect(chan.joins).toBe(1)
+
+    clock.advance(10 * 60 * 1000)
+    expect(chan.joins).toBe(1)
+  })
+
+  it("a failed offline join also leaves its channel, so retries do not stack rejoining channels", async () => {
+    const clock = fakeClock()
+    const made = []
+    const connect = () => {
+      const c = new RejoiningChannel(clock, "offline")
+      made.push(c)
+      return c.adapter()
+    }
+    const { session } = makeSession([], {
+      connect,
+      schedule: (fn, ms) => (clock.at(ms, fn), () => {}),
+    })
+    await session.start()
+    clock.advance(60 * 1000)
+    await tick()
+    clock.advance(60 * 1000)
+    await tick()
+    expect(made.length).toBeGreaterThan(1)
+    expect(made.every((c) => c.left)).toBe(true)
+    // every channel joined exactly once: its own rejoin loop never ran
+    expect(made.every((c) => c.joins === 1)).toBe(true)
+  })
+})
+
 describe("refusals", () => {
   it.each(["forbidden", "flag_off"])("%s is final: it is shown and not retried", async (reason) => {
     const cli = new FakeCli()

@@ -119,6 +119,14 @@ export class TerminalSession {
     } catch (err) {
       this.#chan = null
       joinedResolve()
+      // Leave the failed channel. Phoenix would otherwise keep rejoining it on
+      // its own backoff, and every rejoin is another refused join for core to
+      // audit; a retry here makes a fresh channel with a fresh token instead.
+      try {
+        chan.leave()
+      } catch {
+        /* already gone */
+      }
       return this.#refused(err)
     }
     sessionId = resp?.session_id ?? null
@@ -132,7 +140,8 @@ export class TerminalSession {
   #refused(err) {
     const reason = err?.reason ?? "error"
     if (reason === "forbidden" || reason === "flag_off") {
-      // A setting or a boundary, not a failure to retry through.
+      // A setting or a boundary, not a failure to retry through: terminal for
+      // this page load (the channel was left above, so nothing rejoins).
       this.o.onState("refused", reason)
       return
     }

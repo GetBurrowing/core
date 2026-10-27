@@ -47,6 +47,69 @@ defmodule Platform.Terminal do
     end
   end
 
+  @refusals :terminal_refusals
+  @max_refusal_keys 10_000
+
+  @doc """
+  Create the refusal-window table. Called once from `Platform.Application`, whose
+  start process owns it for the life of the app. No DB, nothing persisted.
+  """
+  def init_refusals do
+    if :ets.whereis(@refusals) == :undefined do
+      :ets.new(@refusals, [:named_table, :public, :set, read_concurrency: true])
+    end
+
+    :ok
+  end
+
+  @doc "Forget every refusal window (tests)."
+  def reset_refusals do
+    if :ets.whereis(@refusals) != :undefined, do: :ets.delete_all_objects(@refusals)
+    :ok
+  end
+
+  @doc """
+  True when a refusal for `{actor_id, runtime_id, reason}` should be audited now:
+  the first one inside a window. Later identical refusals inside it are dropped,
+  so a client stuck in a rejoin loop, or a hostile one, cannot flood the audit
+  log. The window is `:terminal_refusal_window_ms` (default 60 seconds). The
+  decision is one atomic ETS step, so concurrent joins cannot both win.
+  """
+  def audit_refusal?(actor_id, runtime_id, reason) do
+    # No table means the app did not start it; audit rather than lose a refusal.
+    if :ets.whereis(@refusals) == :undefined do
+      true
+    else
+      decide_refusal(actor_id, runtime_id, reason)
+    end
+  end
+
+  defp decide_refusal(actor_id, runtime_id, reason) do
+    now = System.monotonic_time(:millisecond)
+    window = Application.get_env(:platform, :terminal_refusal_window_ms, 60_000)
+    key = {actor_id, runtime_id, reason}
+
+    if :ets.info(@refusals, :size) > @max_refusal_keys, do: sweep(now)
+
+    cond do
+      :ets.insert_new(@refusals, {key, now + window}) ->
+        true
+
+      # Replace an EXPIRED window; one caller can win this, never two.
+      :ets.select_replace(@refusals, [
+        {{key, :"$1"}, [{:"=<", :"$1", now}], [{{{:const, key}, now + window}}]}
+      ]) == 1 ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp sweep(now) do
+    :ets.select_delete(@refusals, [{{:_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+  end
+
   @doc "Join-time plumbing for the view channel."
   def subscribe(session_id),
     do: Phoenix.PubSub.subscribe(Platform.PubSub, session_topic(session_id))
