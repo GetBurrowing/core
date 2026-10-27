@@ -14,7 +14,19 @@ config :platform, PlatformWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      paths: ["/health", "/runtime/ws/websocket", "/live/websocket"],
+      # Every websocket path the endpoint mounts: the tunnel in front of core
+      # does not send x-forwarded-proto on a websocket upgrade, so an
+      # unlisted socket is answered with a 301 and reconnects forever. That
+      # is how the remote terminal (/terminal/ws, task 01a17b17) shipped
+      # broken on prod. PlatformWeb.ForceSslSocketsTest pins this list to
+      # the endpoint's sockets.
+      paths: [
+        "/health",
+        "/runtime/ws/websocket",
+        "/live/websocket",
+        "/terminal/ws/websocket",
+        "/agent-host/websocket"
+      ],
       # `core-platform` is the name the contained agent host and its agents
       # reach core at over the agents network, plain HTTP (task 01a17b10;
       # deployment/installer registry.py AGENT_HOST_CORE_URL). The name only
