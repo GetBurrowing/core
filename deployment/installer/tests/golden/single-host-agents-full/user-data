@@ -46,9 +46,9 @@ write_files:
       BUN_VERSION=1.4.2
       CLAUDE_CODE_VERSION=2.1.295
       CODEX_VERSION=0.162.0
-      # burrow-cli v0.10.3 (GetBurrowing/burrow-cli 1fcb69e, PR #45): agent-root suite.* files renamed to burrow.* (0.10.2); an attach never renames a running agent's root (0.10.3).
-      BURROW_CLI_REF=1fcb69e315a21f3f793955281911f108d9689f58
-      SUITE_CLI_REF=1fcb69e315a21f3f793955281911f108d9689f58
+      # burrow-cli v0.17.1 (GetBurrowing/burrow-cli 9a8ef75, PR #57): the plugin bun install is bounded (90 s per attempt, tree kill, two retries); 0.15.0 added --remote-terminal.
+      BURROW_CLI_REF=9a8ef75be6961d4aa61c09ab35bec3d3accf922f
+      SUITE_CLI_REF=9a8ef75be6961d4aa61c09ab35bec3d3accf922f
   - path: "/etc/sudoers.d/burrow-agents"
     owner: "root:root"
     permissions: "0440"
