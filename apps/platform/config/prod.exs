@@ -15,7 +15,11 @@ config :platform, PlatformWeb.Endpoint,
     rewrite_on: [:x_forwarded_proto],
     exclude: [
       paths: ["/health", "/runtime/ws/websocket", "/live/websocket"],
-      hosts: ["localhost", "127.0.0.1"]
+      # `core-platform` is the name the contained agent host and its agents
+      # reach core at over the agents network, plain HTTP (task 01a17b10;
+      # deployment/installer registry.py AGENT_HOST_CORE_URL). The name only
+      # resolves inside the install's container networks.
+      hosts: ["localhost", "127.0.0.1", "core-platform"]
     ]
   ]
 
