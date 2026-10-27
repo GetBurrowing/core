@@ -128,6 +128,24 @@ defmodule Platform.Chat.MessageVersions do
     |> Repo.one()
   end
 
+  @doc """
+  `count_versions/1` for many messages in ONE query: `%{message_id => count}`.
+  Messages with no versions are absent from the map (read them as 0). The
+  chat window loaders use this so a 50-message window costs one COUNT, not
+  fifty (task 01a17bf4 stage 2).
+  """
+  @spec count_versions_for([binary()]) :: %{binary() => non_neg_integer()}
+  def count_versions_for([]), do: %{}
+
+  def count_versions_for(message_ids) when is_list(message_ids) do
+    MessageVersion
+    |> where([v], v.message_id in ^message_ids)
+    |> group_by([v], v.message_id)
+    |> select([v], {v.message_id, count()})
+    |> Repo.all()
+    |> Map.new()
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Freeze
   # ──────────────────────────────────────────────────────────────────────────

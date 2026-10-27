@@ -303,10 +303,14 @@ config :platform, :github_webhook_signature_required, true
 # Chat first-frame knobs (task 01a17bf4). Read at call time by
 # `PlatformWeb.ChatLive.FirstFrame`, so a running dev node can flip them.
 # `initial_message_count`: newest top-level messages a default space entry
-# loads (50 is the window chat has always loaded). `deferred_side_state`:
-# enter_space segments loaded after the join reply instead of in it.
+# puts in the join reply; the connected mount backfills the rest of the
+# 50-message window right after it. 10 is measured, not guessed: stage 1's
+# before-run (docs/perf/tab-switch-first-frame.data.json) saw at most 3
+# message rows in view (1280x800; 2 at 390x844), so ceil(3) + 3 = 6,
+# clamped to the 10..25 floor. `deferred_side_state`: enter_space segments
+# loaded after the join reply instead of in it.
 config :platform, PlatformWeb.ChatLive,
-  initial_message_count: 50,
+  initial_message_count: 10,
   deferred_side_state: []
 
 # Configure the endpoint

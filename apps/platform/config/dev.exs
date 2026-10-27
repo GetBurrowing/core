@@ -107,3 +107,8 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# Chat async fault seam (task 01a17bf4): compile-time gate for the dev/test-only
+# `:chat_async_fault` env (a list of segment atoms, e.g. [:history_backfill]).
+# Never set in prod, so a prod build has no fault path.
+config :platform, :chat_async_fault_injection, true

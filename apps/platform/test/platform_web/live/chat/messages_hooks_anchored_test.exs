@@ -196,7 +196,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooksAnchoredTest do
 
       assert socket.assigns.latest_message_id == newest.id
       refute socket.assigns.newest_evicted?
-      assert MapSet.size(socket.assigns.rendered_message_ids) == @message_limit
+      # The fallback is the default entry's FIRST FRAME (task 01a17bf4 stage
+      # 2): the newest `initial_message_count`. This bare socket is not
+      # connected, so no backfill runs to complete the 50-message window.
+      assert MapSet.size(socket.assigns.rendered_message_ids) ==
+               min(PlatformWeb.ChatLive.FirstFrame.initial_message_count(), @message_limit)
     end
 
     test "anchor from a different space is refused and falls back", ctx do

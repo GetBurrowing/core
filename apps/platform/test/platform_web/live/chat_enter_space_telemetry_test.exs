@@ -141,8 +141,10 @@ defmodule PlatformWeb.ChatEnterSpaceTelemetryTest do
     end
   end
 
-  test "the first-frame knobs default to today's behaviour" do
-    assert FirstFrame.initial_message_count() == 50
+  # config/config.exs carries the N stage 1 measured (task 01a17bf4: 3 rows
+  # visible at most, ceil(3) + 3 clamped to 10). Nothing is deferred yet.
+  test "the first-frame knobs read the measured config" do
+    assert FirstFrame.initial_message_count() == 10
     assert FirstFrame.deferred_side_state() == []
   end
 end

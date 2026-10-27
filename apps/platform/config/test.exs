@@ -624,3 +624,8 @@ config :platform, :intent_queue_mirror_fatal, true
 # Task 01a10322 stage 7: the native no-reply watchdog is off, so a watch armed
 # by one test never fires a verdict into a later one. Its tests turn it on.
 config :platform, :native_reply_watchdog_ms, false
+
+# Chat async fault seam (task 01a17bf4): compile-time gate for the dev/test-only
+# `:chat_async_fault` env (a list of segment atoms, e.g. [:history_backfill]).
+# Never set in prod, so a prod build has no fault path.
+config :platform, :chat_async_fault_injection, true

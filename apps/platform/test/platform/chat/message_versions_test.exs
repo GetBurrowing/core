@@ -216,6 +216,35 @@ defmodule Platform.Chat.MessageVersionsTest do
     end
   end
 
+  describe "count_versions_for/1" do
+    test "counts versions for many messages in one call; absent means none" do
+      space = create_space!()
+      p = create_participant!(space.id)
+      none = create_message!(space.id, p.id)
+      one = create_message!(space.id, p.id)
+      two = create_message!(space.id, p.id)
+
+      MessageVersions.record_v1!(one)
+      MessageVersions.record_v1!(two)
+
+      {:ok, _} =
+        MessageVersions.record_edit(two.id, %{
+          content: "v2",
+          edited_by_participant_id: p.id,
+          edited_by_display_name: "Alice"
+        })
+
+      counts = MessageVersions.count_versions_for([none.id, one.id, two.id])
+
+      assert counts == %{one.id => 1, two.id => 2}
+      # Same answers as the per-message function it replaces in the window.
+      for m <- [none, one, two],
+          do: assert(Map.get(counts, m.id, 0) == MessageVersions.count_versions(m.id))
+
+      assert MessageVersions.count_versions_for([]) == %{}
+    end
+  end
+
   # ── freeze/2 ─────────────────────────────────────────────────────────────────
 
   describe "freeze/2" do

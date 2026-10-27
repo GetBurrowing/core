@@ -389,6 +389,49 @@ const ScrollToBottom = {
   // visibility boundary.
   beforeUpdate() {
     this._preUpdateDistance = this.distanceFromBottom();
+    this._capturePrependAnchor();
+  },
+  // ── A SERVER-initiated prepend keeps the reading position (task 01a17bf4)
+  //
+  // Chat's first frame carries only the newest few messages and the server
+  // prepends the rest of the window right after connect, with no client
+  // request. InfiniteScroll's anchor compensation only covers loads IT
+  // started (it captures geometry before its own pushEvent), so a prepend
+  // the server sends on its own grew the scroller ABOVE the reader with
+  // nothing putting them back: a reader who had scrolled up saw the page
+  // jump by the height of the batch, and one within NEAR_BOTTOM_PX was
+  // snapped to the bottom by the follow rule, which is for messages
+  // arriving at the BOTTOM.
+  //
+  // So: before every patch, remember the first row and where it sits on
+  // screen. After the patch, if rows now stand in front of it, the patch
+  // was a prepend, and scrolling by exactly how far that row moved puts it,
+  // and every row below it, back where it was. For a bottom-parked reader
+  // that also keeps the distance from the bottom unchanged (0 stays 0); for
+  // a reader who scrolled up, the topmost visible message keeps its offset.
+  // The follow rule is skipped for that patch (see `scrollToBottom`): a
+  // prepend is not an arrival. A client-initiated load still runs
+  // InfiniteScroll's own compensation afterwards; it ASSIGNS the same
+  // absolute offset, so the two agree rather than add up.
+  _capturePrependAnchor() {
+    const first = this.el.firstElementChild;
+    this._prependAnchor =
+      first && typeof first.getBoundingClientRect === "function"
+        ? { node: first, top: first.getBoundingClientRect().top }
+        : null;
+  },
+  _compensatePrepend() {
+    const anchor = this._prependAnchor;
+    this._prependAnchor = null;
+    if (!anchor) return false;
+    const first = this.el.firstElementChild;
+    if (!first || first === anchor.node) return false;
+    if (typeof this.el.contains !== "function" || !this.el.contains(anchor.node)) {
+      return false;
+    }
+    const shift = anchor.node.getBoundingClientRect().top - anchor.top;
+    if (shift !== 0) this.scrollEl.scrollTop = this.scrollEl.scrollTop + shift;
+    return true;
   },
   _beginConversation(spaceId) {
     this._spaceId = spaceId;
@@ -932,6 +975,8 @@ const ScrollToBottom = {
     const spaceId = this.el.dataset.spaceId ?? null;
     if (spaceId !== this._spaceId) this._beginConversation(spaceId);
 
+    // Before the follow rule reads anything: see `_capturePrependAnchor`.
+    this._prepended = this._compensatePrepend();
     this._safeUpdate();
     // Release the capture once this patch is fully serviced. Queued as a
     // microtask so a MutationObserver callback for the same patch still sees
@@ -940,6 +985,7 @@ const ScrollToBottom = {
     // fall back to measuring.
     queueMicrotask(() => {
       this._preUpdateDistance = null;
+      this._prepended = false;
     });
   },
   destroyed() {
@@ -1110,6 +1156,9 @@ const ScrollToBottom = {
       this._armSettleTimer();
       return;
     }
+    // A prepend already put the reader back where they were; it is not an
+    // arrival, so the follow rule has nothing to do (task 01a17bf4).
+    if (this._prepended) return;
     // After initial load, only auto-scroll if the user is near the bottom —
     // where they were BEFORE this patch grew the scroller, not after. Falls
     // back to the live measurement only when there is no capture.
