@@ -137,8 +137,7 @@ final class WebLoadRecovery {
         committed = false
         awaitingRecoveredCommit = true
         log("recovery reissue attempt=\(attempts) reason=\(reason)")
-        // MUTATION (anti-vacuity, reverted next commit): re-issue is a no-op.
-        _ = intended
+        load(intended)
         armWatchdog()
     }
 
