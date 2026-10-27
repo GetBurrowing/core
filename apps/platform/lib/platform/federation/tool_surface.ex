@@ -3411,7 +3411,7 @@ defmodule Platform.Federation.ToolSurface do
 
   defp meeting_completion_access(args, context) do
     with %Platform.Access.Scope{} = scope <- prompt_update_scope(context),
-         {:ok, meeting_id} <- Ecto.UUID.cast(Map.get(args, "meeting_id")),
+         {:ok, meeting_id} <- Platform.UUID.cast(Map.get(args, "meeting_id")),
          %Platform.Meetings.Meeting{} = meeting <- Meetings.get_meeting(meeting_id),
          %Platform.Tasks.Project{} = project <-
            Repo.get(Platform.Tasks.Project, meeting.project_id),

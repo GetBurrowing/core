@@ -4965,8 +4965,17 @@ defmodule Platform.Meetings do
   """
   @spec create_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def create_transcript(attrs) do
+    attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+    started_at = Map.get(attrs, "started_at") || DateTime.utc_now()
+    owner = transcript_meeting_at(attrs["space_id"], started_at)
+
+    attrs =
+      attrs
+      |> Map.put("started_at", started_at)
+      |> Map.put("meeting_id", if(owner, do: owner.id))
+
     %Transcript{}
-    |> Transcript.changeset(Map.put_new(attrs, :started_at, DateTime.utc_now()))
+    |> Transcript.changeset(attrs)
     |> Repo.insert()
   end
 
@@ -5353,7 +5362,12 @@ defmodule Platform.Meetings do
   saw only the empty shadow. Rejoining after the end is legitimate;
   shadowing the row that holds the content is not.
 
-  So: reuse any row for the room that is not `complete`, preferring the
+  Reuse is bounded to the meeting owning the capture start. A failed or
+  processing row from a prior meeting must never absorb a new meeting's speech.
+  Legacy rows without ownership match only when their start is within the
+  current meeting, never by their eventual summary completion time.
+
+  So: reuse an eligible row for the room that is not `complete`, preferring the
   one with the most segments (ties toward the oldest), and reopen it to
   `recording` when it had already left that state. Only a room with no
   reusable row gets an insert.
@@ -5367,12 +5381,58 @@ defmodule Platform.Meetings do
   """
   @spec ensure_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def ensure_transcript(%{room_id: room_id} = attrs) do
-    case get_reattachable_transcript_for_room(room_id) do
+    started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
+    owner = transcript_meeting_at(Map.get(attrs, :space_id), started_at)
+
+    transcript =
+      room_id
+      |> list_transcripts_for_room()
+      |> Enum.reject(&(&1.status == "complete"))
+      |> Enum.filter(&transcript_owned_by?(&1, owner))
+      |> Enum.min_by(
+        fn t -> {-length(t.segments), DateTime.to_unix(t.inserted_at, :microsecond)} end,
+        fn -> nil end
+      )
+
+    case transcript do
       nil -> create_transcript(attrs)
       %Transcript{status: "recording"} = transcript -> {:ok, transcript}
       %Transcript{} = transcript -> reopen_transcript(transcript)
     end
   end
+
+  defp transcript_meeting_at(nil, _started_at), do: nil
+
+  defp transcript_meeting_at(space_id, started_at) do
+    with true <- Platform.UUID.valid?(space_id),
+         {:ok, capture_start} <- Ecto.Type.cast(:utc_datetime_usec, started_at) do
+      from(m in Meeting,
+        where:
+          m.chat_space_id == ^space_id and m.status in ["live", "ended"] and
+            m.started_at <= ^capture_start and
+            (is_nil(m.ended_at) or m.ended_at >= ^capture_start),
+        order_by: [desc: m.started_at],
+        limit: 1
+      )
+      |> Repo.one()
+    else
+      _ -> nil
+    end
+  end
+
+  defp transcript_owned_by?(%Transcript{meeting_id: id}, %Meeting{id: id})
+       when not is_nil(id),
+       do: true
+
+  defp transcript_owned_by?(%Transcript{meeting_id: nil} = transcript, %Meeting{} = meeting) do
+    started_at = transcript.started_at || transcript.inserted_at
+
+    DateTime.compare(started_at, meeting.started_at) != :lt and
+      (is_nil(meeting.ended_at) or DateTime.compare(started_at, meeting.ended_at) != :gt)
+  end
+
+  defp transcript_owned_by?(%Transcript{meeting_id: nil}, nil), do: true
+  defp transcript_owned_by?(_, _), do: false
 
   @doc """
   The row a rejoin should attach to: the room's non-`complete` row holding
@@ -5674,8 +5734,18 @@ defmodule Platform.Meetings do
 
         updated_segments = (transcript.segments || []) ++ [segment]
 
+        # room_started can arrive just before the meeting's live transition.
+        # Bind an empty, unowned capture when its first actual segment arrives;
+        # never reassign a populated transcript from an earlier session.
+        owner =
+          if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
+            do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
+
+        changes = %{segments: updated_segments}
+        changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
+
         transcript
-        |> Ecto.Changeset.change(segments: updated_segments)
+        |> Ecto.Changeset.change(changes)
         |> Repo.update()
         |> tap(fn
           {:ok, updated} ->

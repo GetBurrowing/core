@@ -1908,6 +1908,10 @@ defmodule Platform.Orchestration.PromptTemplates do
         ordered segment snapshot across the meeting's recordings. Use it, not the latest chunk
         or summary alone. Preserve these canonical identities unchanged in the callback.
         Use `space_get_context` for supporting context only. No task or stage ack is needed.
+        If the signal has a canvas_id, update that existing canvas and preserve action checklist
+        node ids for the same work. Do not create a replacement canvas or mint new item ids.
+        Only the first run without canvas_id uses canvas_create. This rule overrides the
+        single canvas_create instruction below on a refreshed snapshot.
 
         ## Deliverable — ONE canvas in `space_id={{space_id}}` with five cards
 

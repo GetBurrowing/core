@@ -4397,6 +4397,9 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       # instruction, action items sit stranded on the canvas.
       content = PromptTemplates.default_content_for_slug(@scribe_slug)
 
+      assert content =~ "preserve action checklist"
+      assert content =~ "Only the first run without canvas_id uses canvas_create"
+
       assert content =~ "meeting_scribe_complete",
              "#{@scribe_slug} must instruct the scribe to call meeting_scribe_complete after canvas_create"
     end

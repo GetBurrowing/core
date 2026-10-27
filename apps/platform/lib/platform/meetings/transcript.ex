@@ -20,6 +20,7 @@ defmodule Platform.Meetings.Transcript do
   schema "meeting_transcripts" do
     field(:room_id, :string)
     field(:space_id, :binary_id)
+    field(:meeting_id, :binary_id)
     field(:segments, {:array, :map}, default: [])
     field(:summary, :string)
     field(:status, :string, default: "recording")
@@ -64,13 +65,14 @@ defmodule Platform.Meetings.Transcript do
   end
 
   @required_fields ~w(room_id)a
-  @optional_fields ~w(space_id segments summary status started_at completed_at router_dispatched_at failure_reason)a
+  @optional_fields ~w(space_id meeting_id segments summary status started_at completed_at router_dispatched_at failure_reason)a
 
   @doc "Changeset for creating or updating a transcript."
   def changeset(transcript, attrs) do
     transcript
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> foreign_key_constraint(:meeting_id)
     |> validate_inclusion(:status, @statuses)
     # Surfaces the DB-level invariant as `{:error, changeset}` instead of a
     # raised `Postgrex.Error` mid-success-path — task 01a089b3-7f84 stage 3.

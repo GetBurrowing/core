@@ -24,10 +24,20 @@ defmodule Platform.Meetings.Completion do
 
   def transcript_changed(%Transcript{space_id: nil}), do: :ok
 
-  def transcript_changed(%Transcript{space_id: space_id}) do
+  def transcript_changed(%Transcript{meeting_id: meeting_id}) when is_binary(meeting_id) do
+    case Repo.get(Meeting, meeting_id) do
+      %Meeting{status: "ended"} -> resume(meeting_id)
+      _ -> :ok
+    end
+  end
+
+  def transcript_changed(%Transcript{space_id: space_id} = transcript) do
+    started_at = transcript.started_at || transcript.inserted_at
+
     case Repo.one(
            from(m in Meeting,
              where: m.chat_space_id == ^space_id and m.status == "ended",
+             where: m.started_at <= ^started_at and m.ended_at >= ^started_at,
              order_by: [desc: m.started_at],
              limit: 1
            )
@@ -54,7 +64,7 @@ defmodule Platform.Meetings.Completion do
         Repo.all(
           from(t in Transcript, where: t.space_id == ^space_id and t.status == "recording")
         )
-        |> Enum.filter(&(&1.segments != []))
+        |> Enum.filter(&(&1.segments != [] and belongs_to_meeting?(&1, meeting)))
         |> Enum.each(fn transcript ->
           case Meetings.finalize_transcript(transcript.id) do
             {:ok, finalized} -> Platform.Meetings.Summarizer.summarize_async(finalized)
@@ -76,7 +86,6 @@ defmodule Platform.Meetings.Completion do
         capture_finished_at: nil,
         dispatched_at: nil,
         status: "waiting",
-        canvas_id: nil,
         snapshot_hash: nil
       ]
     )
@@ -242,7 +251,6 @@ defmodule Platform.Meetings.Completion do
                 snapshot: snap,
                 snapshot_hash: hash(snap),
                 transcript_id: transcript.id,
-                canvas_id: nil,
                 status: "scribe_pending",
                 dispatched_at: nil
               ),
@@ -255,7 +263,7 @@ defmodule Platform.Meetings.Completion do
           run.dispatched_at && DateTime.diff(DateTime.utc_now(), run.dispatched_at) < 120 ->
             result(run)
 
-          run.canvas_id ->
+          run.canvas_id && run.status in ["triage_pending", "triage_dispatched"] ->
             dispatch_triage(run, meeting)
 
           true ->
@@ -289,14 +297,7 @@ defmodule Platform.Meetings.Completion do
           order_by: [asc: t.started_at, asc: t.id]
         )
       )
-      |> Enum.filter(fn t ->
-        is_nil(meeting.started_at) or
-          DateTime.compare(t.completed_at || DateTime.utc_now(), meeting.started_at) != :lt
-      end)
-      |> Enum.filter(fn t ->
-        is_nil(meeting.ended_at) or
-          DateTime.compare(t.started_at || t.inserted_at, meeting.ended_at) != :gt
-      end)
+      |> Enum.filter(&belongs_to_meeting?(&1, meeting))
 
     active_recording =
       room &&
@@ -338,6 +339,18 @@ defmodule Platform.Meetings.Completion do
          %{"source_transcript_ids" => Enum.map(transcripts, & &1.id), "segments" => segments},
          canonical}
     end
+  end
+
+  defp belongs_to_meeting?(%Transcript{meeting_id: id}, %Meeting{id: id}) when not is_nil(id),
+    do: true
+
+  defp belongs_to_meeting?(%Transcript{meeting_id: id}, _) when not is_nil(id), do: false
+
+  defp belongs_to_meeting?(transcript, meeting) do
+    started_at = transcript.started_at || transcript.inserted_at
+
+    not is_nil(meeting.started_at) and DateTime.compare(started_at, meeting.started_at) != :lt and
+      (is_nil(meeting.ended_at) or DateTime.compare(started_at, meeting.ended_at) != :gt)
   end
 
   defp dispatch_triage(run, _meeting) do

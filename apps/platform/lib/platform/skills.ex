@@ -254,7 +254,11 @@ defmodule Platform.Skills do
     `decision`; these create no tasks. Never call task_create independently.
     The tool invokes the internal Triage function with its dedup and caps.
     Reuse the same run, snapshot_hash and canonical item ids on retry,
-    including after a filed task is done. Report callback failures and wait
+    including after a filed task is done. When the signal carries canvas_id,
+    update that existing canvas and preserve checklist node ids for the same
+    work. Never replace the canvas or mint new ids for previously reviewed
+    work. Only the first run without canvas_id uses canvas_create.
+    Report callback failures and wait
     for a refreshed dispatch if the snapshot changed.
 
     The `meeting_triage_dispatch` attention signal (broadcast by

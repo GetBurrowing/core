@@ -25,6 +25,10 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionTools do
      ordered segment snapshot across the meeting's recordings. Use it, not the latest chunk
      or summary alone. Preserve these canonical identities unchanged in the callback.
      Use `space_get_context` for supporting context only. No task or stage ack is needed.
+     If the signal has a canvas_id, update that existing canvas and preserve action checklist
+     node ids for the same work. Do not create a replacement canvas or mint new item ids.
+     Only the first run without canvas_id uses canvas_create. This rule overrides the
+     single canvas_create instruction below on a refreshed snapshot.
 
      """},
     {~S"""
@@ -134,7 +138,11 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionTools do
      `decision`; these create no tasks. Never call task_create independently.
      The tool invokes the internal Triage function with its dedup and caps.
      Reuse the same run, snapshot_hash and canonical item ids on retry,
-     including after a filed task is done. Report callback failures and wait
+     including after a filed task is done. When the signal carries canvas_id,
+     update that existing canvas and preserve checklist node ids for the same
+     work. Never replace the canvas or mint new ids for previously reviewed
+     work. Only the first run without canvas_id uses canvas_create.
+     Report callback failures and wait
      for a refreshed dispatch if the snapshot changed.
 
      The `meeting_triage_dispatch` attention signal (broadcast by

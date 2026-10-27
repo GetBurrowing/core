@@ -230,6 +230,32 @@ defmodule Platform.Meetings.CompletionTest do
     task |> Ecto.Changeset.change(status: "done") |> Repo.update!()
     assert {:ok, %{task_ids: [^task_id]}} = Completion.triage_file(ctx.triage.id, args)
 
+    {:ok, _} =
+      Meetings.append_segment(run.transcript_id, %{
+        "text" => "A late final clarification",
+        "start_time" => 4
+      })
+
+    refreshed = run!(meeting)
+    assert refreshed.canvas_id == canvas.id
+    assert refreshed.status == "scribe_dispatched"
+    replacement_canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+
+    assert {:error, :canvas_mismatch} =
+             Completion.scribe_complete(
+               ctx.scribe.id,
+               params(meeting, refreshed, replacement_canvas)
+             )
+
+    refreshed_args = params(meeting, refreshed, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, refreshed_args)
+
+    assert {:ok, %{task_ids: [^task_id]}} =
+             Completion.triage_file(
+               ctx.triage.id,
+               Map.put(refreshed_args, "action_items", [item])
+             )
+
     assert Repo.aggregate(
              from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id),
              :count
