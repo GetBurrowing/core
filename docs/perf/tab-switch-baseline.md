@@ -366,10 +366,10 @@ measurement was taken for the per-connection deflate context.
 | exp wire bytes per tab | **pending deploy** |
 | exp tap-to-interactive | **pending deploy** |
 
-Exp numbers exist only once this is merged and deployed and an account Ryan
-provided is available. The estimated-deflate column in the stage 1 table stands
+Exp numbers exist only once this is merged and deployed and a human-provided account
+is available. The estimated-deflate column in the stage 1 table stands
 as the forecast. Nothing here used a borrowed credential, wrote to prod, or ran
-on hive.
+on a shared production host.
 
 
 ## Stage 3: attribution on a 4G link, recommendation, 01a166be verdict (task 01a17b00)
@@ -543,9 +543,9 @@ mount of the destination view: 271 of 271 across the 9 runs (4 full matrices of
 - Stage 1 reading of the 313 KiB chat reply as mostly a server cost is wrong:
   server is 80 of 380 ms.
 
-**(c) Exp.** **Still pending.** No account from Ryan is available to this
+**(c) Exp.** **Still pending.** No human-provided account is available to this
 stage, so no exp row was measured. The command in "Not measured yet" stands. Nothing here borrowed a
-credential, wrote to prod, ran on hive, or kept PII telemetry (the probe keeps
+credential, wrote to prod, ran on a shared production host, or kept PII telemetry (the probe keeps
 module names, durations and counts; the fixture users are fake).
 
 ### Limits
