@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { Runner } from "../src/exec.ts";
-import { CHANNEL_SERVER, TOOLS_SERVER, burrowAgentsDir, refreshedClaudeJson, renderAgentRecord, writeConnection } from "../src/agents.ts";
+import { CHANNEL_SERVER, TOOLS_SERVER, refreshedClaudeJson, renderAgentRecord, writeConnection } from "../src/agents.ts";
 import { connectionKey } from "../src/ids.ts";
 import type { AgentUser } from "../src/users.ts";
 
@@ -73,8 +73,8 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-const credsPath = () => `${burrowAgentsDir(user)}/${connectionKey(user.work)}.credentials.json`;
-const recordPath = () => `${burrowAgentsDir(user)}/${connectionKey(user.work)}.json`;
+const credsPath = () => `${home}/.config/burrow/agents/${connectionKey(user.work)}.credentials.json`;
+const recordPath = () => `${home}/.config/burrow/agents/${connectionKey(user.work)}.json`;
 const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 
 describe("writeConnection: two starts with a rotated token", () => {
@@ -117,7 +117,7 @@ describe("writeConnection: two starts with a rotated token", () => {
   });
 
   test("a record burrow-cli wrote keeps its own fields and loses suiteUrl and token refs", async () => {
-    mkdirSync(burrowAgentsDir(user), { recursive: true });
+    mkdirSync(`${home}/.config/burrow/agents`, { recursive: true });
     writeFileSync(
       recordPath(),
       JSON.stringify({ dir: user.work, suiteUrl: "https://old.test", runtimeId: "old", headerNames: [], tokenRef: "file:/x", configAccess: "admins", remoteTerminal: "s1" }),
