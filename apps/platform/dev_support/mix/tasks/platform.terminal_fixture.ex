@@ -46,7 +46,11 @@ defmodule Mix.Tasks.Platform.TerminalFixture do
 
     {:ok, agent} =
       %Agent{}
-      |> Agent.changeset(%{slug: "terminal-fixture-#{n}", name: "Terminal Fixture #{n}", status: "active"})
+      |> Agent.changeset(%{
+        slug: "terminal-fixture-#{n}",
+        name: "Terminal Fixture #{n}",
+        status: "active"
+      })
       |> Repo.insert()
 
     {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: "terminal-fixture-#{n}"})

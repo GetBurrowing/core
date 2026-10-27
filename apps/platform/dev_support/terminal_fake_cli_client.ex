@@ -33,7 +33,9 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
 
   def handle_info(:heartbeat, state) do
     Process.send_after(self(), :heartbeat, 25_000)
-    {:reply, {:text, Jason.encode!([nil, to_string(state.ref), "phoenix", "heartbeat", %{}])}, %{state | ref: state.ref + 1}}
+
+    {:reply, {:text, Jason.encode!([nil, to_string(state.ref), "phoenix", "heartbeat", %{}])},
+     %{state | ref: state.ref + 1}}
   end
 
   def handle_info({:queued, frame}, state), do: {:reply, frame, state}
@@ -46,7 +48,10 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
   def handle_frame({:text, text}, state) do
     case Jason.decode(text) do
       {:ok, [_jr, _r, _topic, "phx_reply", %{"status" => "ok"}]} ->
-        if state.terminal?, do: IO.puts("joined #{state.topic}"), else: IO.puts("joined #{state.topic} (no terminal)")
+        if state.terminal?,
+          do: IO.puts("joined #{state.topic}"),
+          else: IO.puts("joined #{state.topic} (no terminal)")
+
         {:ok, state}
 
       {:ok, [_jr, _r, _topic, "phx_reply", %{"status" => "error"} = reply]} ->
@@ -61,7 +66,12 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
     end
   end
 
-  def handle_frame({:binary, <<0, jrs, ts, es, _jr::binary-size(jrs), _t::binary-size(ts), event::binary-size(es), data::binary>>}, state) do
+  def handle_frame(
+        {:binary,
+         <<0, jrs, ts, es, _jr::binary-size(jrs), _t::binary-size(ts), event::binary-size(es),
+           data::binary>>},
+        state
+      ) do
     run_actions(state, TerminalFakeCli.handle_binary(state.cli, event, data))
   end
 
@@ -81,15 +91,16 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
           {[], st}
 
         {:push, event, payload}, st ->
-          {[{:text, Jason.encode!([st.join_ref, to_string(st.ref), st.topic, event, payload])}], %{st | ref: st.ref + 1}}
+          {[{:text, Jason.encode!([st.join_ref, to_string(st.ref), st.topic, event, payload])}],
+           %{st | ref: st.ref + 1}}
 
         {:push_binary, event, bin}, st ->
           ref = to_string(st.ref)
           jr = st.join_ref
 
           frame =
-            <<0, byte_size(jr), byte_size(ref), byte_size(st.topic), byte_size(event), jr::binary, ref::binary,
-              st.topic::binary, event::binary, bin::binary>>
+            <<0, byte_size(jr), byte_size(ref), byte_size(st.topic), byte_size(event), jr::binary,
+              ref::binary, st.topic::binary, event::binary, bin::binary>>
 
           {[{:binary, frame}], %{st | ref: st.ref + 1}}
       end)

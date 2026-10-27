@@ -22,7 +22,13 @@ defmodule Mix.Tasks.Platform.TerminalFakeCli do
   def run(args) do
     {opts, _, _} =
       OptionParser.parse(args,
-        strict: [runtime_id: :string, token: :string, no_terminal: :boolean, url: :string, seconds: :integer]
+        strict: [
+          runtime_id: :string,
+          token: :string,
+          no_terminal: :boolean,
+          url: :string,
+          seconds: :integer
+        ]
       )
 
     runtime_id = opts[:runtime_id] || Mix.raise("--runtime-id is required")
