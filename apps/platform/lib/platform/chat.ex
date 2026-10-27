@@ -6978,7 +6978,11 @@ defmodule Platform.Chat do
                  )
              end)
            end) do
-        {:ok, _pid} -> :ok
+        {:ok, _pid} ->
+          Logger.info(
+            "[Chat] add_message_attention phase=handoff message=#{message.id} " <>
+              "space=#{message.space_id} recipients=#{Enum.join(added_ids, ",") } outcome=accepted"
+          )
         {:error, reason} -> raise "attention routing handoff failed: #{inspect(reason)}"
       end
     end)
@@ -7013,11 +7017,14 @@ defmodule Platform.Chat do
       log_attention_failure(message, recipient_ids, operation, kind, reason, __STACKTRACE__)
   end
 
-  defp log_attention_failure(message, recipient_ids, operation, kind, reason, stacktrace) do
+  defp log_attention_failure(message, recipient_ids, operation, kind, reason, _stacktrace) do
+    # Exception messages and exit tuples can contain the entire GenServer request,
+    # including message content. Log only the failure category and exception module.
+    category = if is_exception(reason), do: inspect(reason.__struct__), else: inspect(kind)
     Logger.error(
       "[Chat] add_message_attention #{operation} failed " <>
         "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(recipient_ids, ",")}: " <>
-        Exception.format(kind, reason, stacktrace)
+        "kind=#{kind} category=#{category}"
     )
 
     :ok

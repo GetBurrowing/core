@@ -256,7 +256,8 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       assert log =~ "add_message_attention routing worker failed"
       assert log =~ "message=#{message.id} space=#{space.id} recipients=#{zip.id}"
-      assert log =~ "exited in: GenServer.call"
+      assert log =~ "kind=exit category=:exit"
+      refute log =~ "router exit"
     end
   end
 
@@ -699,6 +700,47 @@ defmodule Platform.Chat.MessageAttentionTest do
   # ── Router entry (D3) ──────────────────────────────────────────────────────
 
   describe "AttentionRouter.route_attention/3" do
+    test "added attention decisions are visible at info without message content" do
+      space = channel!(%{agent_attention_policy: "on_mention", agents_awake: true})
+      alice = member!(space, user!("Alice"))
+      {_agent, zip} = agent!(space, "Zip")
+      message = post!(space, alice, "private-content-sentinel")
+      previous = Logger.level()
+      Logger.configure(level: :info)
+
+      try do
+        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:ok, [%{participant_id: id, reason: :mention}]} =
+                   AttentionRouter.route_attention(message, [zip.id], alice)
+          assert id == zip.id
+        end)
+
+        assert log =~ "added_attention phase=decision"
+        assert log =~ "space=#{space.id} message=#{message.id} requested=#{zip.id}"
+        assert log =~ "policy=on_mention awake=true outcome=selected"
+        assert log =~ "decisions=#{zip.id}:mention"
+        refute log =~ "private-content-sentinel"
+
+        ghost = %{message | space_id: Ecto.UUID.generate()}
+        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:ok, []} = AttentionRouter.route_attention(ghost, [zip.id], alice)
+        end)
+        assert log =~ "space=#{ghost.space_id} message=#{message.id} requested=#{zip.id}"
+        assert log =~ "outcome=empty"
+        assert log =~ "skipped_reason=space_not_found"
+
+        missing = Ecto.UUID.generate()
+        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:ok, []} = AttentionRouter.route_attention(message, [missing], alice)
+        end)
+        assert log =~ "requested=#{missing}"
+        assert log =~ "outcome=empty"
+        assert log =~ "not_selected=#{missing}"
+      after
+        Logger.configure(level: previous)
+      end
+    end
+
     test "takes the same early exits as route/1: a message whose space is gone routes nobody" do
       space = channel!()
       alice = member!(space, user!("Alice"))

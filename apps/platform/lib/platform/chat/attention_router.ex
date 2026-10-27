@@ -378,18 +378,18 @@ defmodule Platform.Chat.AttentionRouter do
     cond do
       is_nil(space) ->
         Logger.warning("[AttentionRouter] space not found: #{space_id}")
-        return_empty()
+        empty_attention_route(space, message, attention, :space_not_found)
 
       # Execution spaces: log_only messages skip attention routing entirely
       space.kind == "execution" and message.log_only == true ->
-        return_empty()
+        empty_attention_route(space, message, attention, :execution_log_only)
 
       # A reply-failure notice (task 01a10322 stage 1) is a system row about
       # an agent that could not answer. It is never a turn: routing it would
       # hand it to the active-agent mutex holder, which is usually the agent
       # that just failed. See `Platform.Chat.ReplyFailure.notice?/1`.
       ReplyFailure.notice?(message) ->
-        return_empty()
+        empty_attention_route(space, message, attention, :reply_failure_notice)
 
       # A meeting notice (task 01a174e2 stage 2) is a system row the meeting
       # pipeline posts after a call: the summary, the action items, the
@@ -400,7 +400,7 @@ defmodule Platform.Chat.AttentionRouter do
       # `Platform.Meetings.complete_transcript/2`, not through here. See
       # `meeting_notice?/1`.
       meeting_notice?(message) ->
-        return_empty()
+        empty_attention_route(space, message, attention, :meeting_notice)
 
       true ->
         route_in_space(space, message, attention)
@@ -530,6 +530,8 @@ defmodule Platform.Chat.AttentionRouter do
       end
 
     decisions = human_decisions ++ agent_decisions
+
+    log_added_attention(space, message, attention, decisions, silenced_skipped, :none)
 
     # Determine which participants are currently online via presence.
     online_user_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
@@ -1073,7 +1075,29 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp execution_space_task_id(_space), do: nil
 
-  defp return_empty, do: []
+  defp empty_attention_route(space, message, attention, reason) do
+    log_added_attention(space, message, attention, [], [], reason)
+    []
+  end
+
+  defp log_added_attention(_space, _message, nil, _decisions, _skipped, _reason), do: :ok
+
+  defp log_added_attention(space, message, attention, decisions, skipped, reason) do
+    Logger.info(fn ->
+      requested = attention.ids |> Enum.sort() |> Enum.join(",")
+      chosen = Enum.map_join(decisions, ",", &"#{&1.participant_id}:#{&1.reason}")
+      missing = MapSet.difference(attention.ids, MapSet.new(decisions, & &1.participant_id))
+      policy = if space, do: resolve_attention_mode(space, nil), else: :unknown
+      awake = if space, do: space.agents_awake, else: :unknown
+      outcome = if decisions == [], do: :empty, else: :selected
+
+      "[AttentionRouter] added_attention phase=decision space=#{message.space_id} " <>
+        "message=#{message.id} requested=#{requested} policy=#{policy} awake=#{awake} " <>
+        "outcome=#{outcome} decisions=#{chosen} skipped_reason=#{reason} " <>
+        "not_selected=#{missing |> Enum.sort() |> Enum.join(",")} " <>
+        "silenced_skipped=#{Enum.join(skipped, ",")}"
+    end)
+  end
 
   defp log_agent_route(%Space{kind: "dm"}, _message, _decisions, _skipped, _reply_target),
     do: :ok
