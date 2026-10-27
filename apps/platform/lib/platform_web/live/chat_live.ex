@@ -47,6 +47,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.ChatListData
   alias PlatformWeb.ChatLive.ChatListHooks
+  import PlatformWeb.ChatLive.FirstFrame, only: [span: 2, span: 3]
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
@@ -1015,7 +1016,7 @@ defmodule PlatformWeb.ChatLive do
         end
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
-      participants = Chat.list_participants(space.id)
+      participants = span(:participants, fn -> Chat.list_participants(space.id) end)
 
       page_title =
         space_page_title(
@@ -1030,24 +1031,28 @@ defmodule PlatformWeb.ChatLive do
       # the SAME filtered rail rather than re-broadening it workspace-wide.
       # Internal / nil scope is pass-through, so the internal path is unchanged.
       scope = socket.assigns[:access_scope] || socket.assigns.external_scope
-      readable_channels = rail_channels(socket)
+      readable_channels = span(:rail_channels, fn -> rail_channels(socket) end)
 
       listed_channels =
-        Chat.list_spaces(
-          kind: "channel",
-          scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
-        )
-        |> ReadScope.within_org_fence(socket.assigns[:access_scope])
+        span(:list_spaces, fn ->
+          Chat.list_spaces(
+            kind: "channel",
+            scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
+          )
+          |> ReadScope.within_org_fence(socket.assigns[:access_scope])
+        end)
 
-      archived_channels = rail_archived_channels(socket)
+      archived_channels = span(:rail_archived_channels, fn -> rail_archived_channels(socket) end)
 
       restricted_channel_ids =
-        restricted_channel_ids(socket, readable_channels ++ listed_channels, archived_channels)
+        span(:restricted_channel_ids, fn ->
+          restricted_channel_ids(socket, readable_channels ++ listed_channels, archived_channels)
+        end)
 
       channels =
         include_restricted_channels(readable_channels, listed_channels, restricted_channel_ids)
 
-      dm_convos = rail_dm_conversations(socket)
+      dm_convos = span(:rail_dm_conversations, fn -> rail_dm_conversations(socket) end)
 
       # `?message=<id>` deep link (task 019fabe8 stage 2). `Platform.Chat`
       # has always written this param into the inbox url and `InboxLive`
@@ -1080,15 +1085,15 @@ defmodule PlatformWeb.ChatLive do
        # so the LiveKit session (kept alive in stage 1) is rejoined. No-op
        # on a fresh first mount — that still needs the explicit Join button.
        |> MeetingHooks.maybe_restore_on_reconnect(space)
-       |> PresenceHooks.enter_space(space, participant, participants)
-       |> enter_space_window(anchor, space, participant)
+       |> span(:presence, &PresenceHooks.enter_space(&1, space, participant, participants))
+       |> span(:message_window, &enter_space_window(&1, anchor, space, participant))
        |> SearchHooks.reset_for_space()
        |> ChatListHooks.leave_list()
-       |> SpaceSheetHooks.enter_space()
+       |> span(:space_sheet, &SpaceSheetHooks.enter_space/1)
        |> MentionsHooks.reset_for_space()
-       |> PinHooks.load_for_space(space.id)
-       |> CanvasHooks.load_for_space(space.id)
-       |> AgentsSheetHooks.resolve_for_space(space.id, participants)
+       |> span(:pins, &PinHooks.load_for_space(&1, space.id))
+       |> span(:canvases, &CanvasHooks.load_for_space(&1, space.id))
+       |> span(:agents_sheet, &AgentsSheetHooks.resolve_for_space(&1, space.id, participants))
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
        |> assign(:restricted_channel_ids, restricted_channel_ids)
@@ -1097,28 +1102,32 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:closed_dm_at, closed_dm_at)
        |> assign(
          :channel_sections,
-         channel_sections(
-           channels,
-           dm_convos,
-           socket.assigns.pinned_space_ids,
-           socket.assigns.hidden_channel_ids,
-           closed_dm_at
-         )
+         span(:channel_sections, fn ->
+           channel_sections(
+             channels,
+             dm_convos,
+             socket.assigns.pinned_space_ids,
+             socket.assigns.hidden_channel_ids,
+             closed_dm_at
+           )
+         end)
        )
        |> assign(
          :sidebar_sections,
-         resolve_sidebar_sections(
-           socket.assigns.user_id,
-           channels,
-           socket.assigns.hidden_channel_ids,
-           socket.assigns.agents_block
-         )
+         span(:sidebar_sections, fn ->
+           resolve_sidebar_sections(
+             socket.assigns.user_id,
+             channels,
+             socket.assigns.hidden_channel_ids,
+             socket.assigns.agents_block
+           )
+         end)
        )
        |> clear_unread(space.id)
        # The desktop list pane renders beside the conversation (Burrow
        # redesign 22 stage 2): a socket that mounted straight into a space
        # loads the list's excerpts and names once here.
-       |> ChatListData.ensure_loaded()
+       |> span(:chat_list_data, &ChatListData.ensure_loaded/1)
        # AFTER `SearchHooks.reset_for_space/1`, which clears
        # `:highlighted_message_id` — setting the arrival highlight any
        # earlier in this pipeline would be wiped a line later.

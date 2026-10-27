@@ -108,6 +108,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.LinkCards
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListData
+  alias PlatformWeb.ChatLive.FirstFrame
   alias PlatformWeb.ChatLive.ReplyHooks
   alias PlatformWeb.ChatLive.ReplyQuoteHooks
   alias PlatformWeb.ChatLive.SearchHooks
@@ -184,7 +185,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec enter_space(Phoenix.LiveView.Socket.t(), map(), map() | nil) ::
           Phoenix.LiveView.Socket.t()
   def enter_space(socket, space, participant) do
-    messages = load_channel_messages(space.id)
+    # Read at call time (task 01a17bf4): 50 by default, today's window.
+    messages = load_channel_messages(space.id, FirstFrame.initial_message_count())
 
     mark_read_at_channel_tip(participant, messages)
 
@@ -1493,9 +1495,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     assign_compose(socket, draft)
   end
 
-  defp load_channel_messages(space_id) do
+  defp load_channel_messages(space_id, limit) do
     space_id
-    |> Chat.list_messages(limit: @message_limit, top_level_only: true)
+    |> Chat.list_messages(limit: limit, top_level_only: true)
     |> Enum.reverse()
   end
 
