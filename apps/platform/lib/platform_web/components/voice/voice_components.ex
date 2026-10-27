@@ -540,7 +540,7 @@ defmodule PlatformWeb.Components.Voice do
   @doc "Whether the talk state is a live turn (the mic is on)."
   def live?(state), do: state in [:listening, :toggled]
 
-  @blocked_line "Microphone is blocked. Allow it in your browser settings."
+  @blocked_line "Microphone is blocked. Allow it in your browser or app settings."
 
   @doc "The listen line's copy for a partner in a talk state."
   def listen_text(nil, _state), do: "No voice partner"
