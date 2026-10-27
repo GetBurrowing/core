@@ -71,6 +71,56 @@ defmodule Platform.Social.ClipJobs do
 
   # ── Human side ───────────────────────────────────────────────────────
 
+  @doc "Queues a typed text fix against the current immutable render, without changing playback."
+  def enqueue_fix(org_id, clip_id, user_id, attrs) do
+    attrs = normalize(attrs)
+
+    with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found},
+         {:ok, profile} <- human_profile(org_id, found.profile_id, user_id) do
+      Repo.transaction(fn ->
+        clip = Repo.one!(from(c in Clip, where: c.id == ^found.id, lock: "FOR UPDATE"))
+
+        base =
+          ok_or_rollback(ClipVersions.get(org_id, profile.id, clip.id, attrs["base_render_id"]))
+
+        if base.rev != clip.rev, do: Repo.rollback(:stale_version)
+
+        unless is_binary(base.file_id) && Platform.Files.get_file(base.file_id),
+          do: Repo.rollback(:version_unplayable)
+
+        fix = ok_or_rollback(Platform.Social.ClipFixes.validate(base, attrs))
+        look = ClipLook.effective(base.look)
+
+        payload =
+          payload("rerender", profile, clip, look, fix["in_s"], fix["out_s"], nil, clip.rev + 1)
+          |> Map.merge(%{
+            "base_render_id" => base.id,
+            "candidate_id" => base.candidate_id,
+            "title" => base.headline,
+            "caption" => base.caption,
+            "episode" => base.source || %{},
+            "fix" => fix,
+            "caption_fixes" => caption_fix_history(base.caption_fixes, fix["caption_fixes"])
+          })
+
+        insert_job!(profile, clip, "rerender", payload, user_id)
+      end)
+    end
+  end
+
+  defp caption_fix_history(previous, nil), do: previous
+
+  defp caption_fix_history(previous, correction) do
+    edits =
+      case previous do
+        %{"edits" => edits} when is_list(edits) -> edits
+        previous when is_map(previous) -> [previous]
+        _ -> []
+      end
+
+    %{"edits" => edits ++ [correction]}
+  end
+
   @doc """
   Queues a new clip from an episode: `attrs` has `source_url` OR
   `source_file_id` (+ optional `transcript_file_id`, both in the profile's
@@ -432,6 +482,10 @@ defmodule Platform.Social.ClipJobs do
       end
 
     payload = job.payload || %{}
+
+    if payload["base_render_id"] && payload["expected_rev"] != clip.rev + 1,
+      do: Repo.rollback(:stale_version)
+
     look = payload["look"] || clip.look
     meta = AgentDrafts.clip_file_meta(file, result)
 
@@ -446,8 +500,13 @@ defmodule Platform.Social.ClipJobs do
     render_attrs =
       if platforms, do: Map.put(render_attrs, "platforms", platforms), else: render_attrs
 
+    effective_result =
+      if payload["fix"],
+        do: Map.merge(Map.take(payload, ~w(title caption)), result),
+        else: result
+
     changes =
-      result
+      effective_result
       |> Map.take(@meta_keys)
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
@@ -471,8 +530,8 @@ defmodule Platform.Social.ClipJobs do
       requested_end_s: payload["out_s"],
       actual_start_s: result["actual_in_s"],
       actual_end_s: result["actual_out_s"],
-      headline: result["title"],
-      caption: result["caption"],
+      headline: effective_result["title"],
+      caption: effective_result["caption"],
       caption_fixes: result["caption_fixes"] || payload["caption_fixes"],
       candidate_id: result["candidate_id"] || payload["candidate_id"],
       alternate_id: result["alternate_id"] || payload["alternate_id"],
