@@ -18,7 +18,7 @@ from livekit.agents import AgentSession, JobContext, JobRequest, WorkerOptions, 
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.room_io import RoomOptions
 
-from meeting_voice_agent import ask_floor_gate, mcp_tools, tool_telemetry
+from meeting_voice_agent import ask_floor_gate, mcp_tools, routing, tool_telemetry
 from meeting_voice_agent.config import AgentConfig
 from meeting_voice_agent.persona import MeetingVoiceAgent, attach_voice_context_handler
 from meeting_voice_agent.session import VOICE_1TO1_MODE, build_agent_session
@@ -130,6 +130,52 @@ def build_tool_surface(config: AgentConfig, room_name: str, *, space_id: str | N
     return [toolset, handoff]
 
 
+def build_voice_router(
+    config: AgentConfig,
+    toolset,
+    *,
+    space_id: str | None,
+    meeting_id: str | None = None,
+    on_answer=None,
+) -> routing.VoiceRouter | None:
+    """The turn router, or `None` when every class is routed `local`.
+
+    Task 01a17b10 stage 4: the classifier is the mouth model on `MVA_LLM_*`
+    (falling back to rules if that host is down); a `burrow` class is asked
+    through Core's `voice_ask_agent` on the same MCP toolset.
+    """
+    if "burrow" not in config.routing.routes.values():
+        return None
+    call_tool = routing.mcp_tool_caller(toolset)
+    classifier = routing.LocalClassifier.from_llm_config(
+        config.llm, timeout_s=config.routing.classifier_timeout_s
+    )
+
+    def source_factory():
+        return routing.BurrowAnswerSource(
+            call_tool,
+            space_id=space_id,
+            agent_id=config.routing.burrow_agent_id,
+            meeting_id=meeting_id,
+            poll_wait_ms=config.routing.poll_wait_ms,
+        )
+
+    return routing.VoiceRouter(config.routing, classifier, source_factory, on_answer=on_answer)
+
+
+def publish_routing_provenance(room):
+    """`on_answer` callback: publish each routed answer's provenance in-room."""
+    import asyncio
+
+    def _on_answer(record: routing.RoutedAnswer) -> None:
+        payload = json.dumps(routing.provenance_payload(record)).encode("utf-8")
+        asyncio.ensure_future(
+            room.local_participant.publish_data(payload, reliable=True, topic=routing.ROUTING_TOPIC)
+        )
+
+    return _on_answer
+
+
 def build_room_options(human_identity: str | None, mode: str | None) -> NotGivenOr[RoomOptions]:
     """Pin the `AgentSession`'s linked participant to the human, when known.
 
@@ -191,6 +237,13 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = build_agent_session(config, mode)
     tools = build_tool_surface(config, ctx.room.name, space_id=space_id)
+    router = build_voice_router(
+        config,
+        tools[0],
+        space_id=space_id or mcp_tools.space_id_from_room_name(ctx.room.name),
+        meeting_id=job_metadata.get("meeting_id"),
+        on_answer=publish_routing_provenance(ctx.room),
+    )
     agent = MeetingVoiceAgent(
         config,
         tools=tools,
@@ -198,6 +251,7 @@ async def entrypoint(ctx: JobContext) -> None:
         agent_roster=agent_roster,
         voice_context=voice_context,
         drop_empty_turns=mode == VOICE_1TO1_MODE,
+        router=router,
     )
 
     if mode == VOICE_1TO1_MODE:
