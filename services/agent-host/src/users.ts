@@ -84,6 +84,16 @@ export async function ensureAgentUser(runner: Runner, agentId: string): Promise<
     await must(runner, ["chown", "-R", `${name}:${AGENTS_GROUP}`, home], "chown home");
   }
 
+  // The user exists but its home does not: removed by hand, or the homes
+  // volume was lost while the image kept its users. useradd only makes a home
+  // for a NEW user, so make it here, seeded from /etc/skel as useradd would.
+  if ((await runner.run(["stat", "--format", "%F", home])).exitCode !== 0) {
+    await must(runner, ["install", "-d", "-m", "0700", "-o", name, "-g", AGENTS_GROUP, home], "install home");
+    await must(runner, ["cp", "-a", "/etc/skel/.", `${home}/`], "seed home from skel");
+    await must(runner, ["chown", "-R", `${name}:${AGENTS_GROUP}`, home], "chown home");
+    console.error(`agent-host: recreated missing home ${home} for ${name}`);
+  }
+
   // Re-asserted every time: a mode someone loosened by hand comes back.
   await must(runner, ["chmod", "0700", home], "chmod home");
   await must(runner, ["install", "-d", "-m", "0700", "-o", name, "-g", AGENTS_GROUP, work], "install work dir");

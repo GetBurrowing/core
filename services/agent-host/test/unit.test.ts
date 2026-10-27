@@ -32,6 +32,8 @@ import type { Runner } from "../src/exec.ts";
 import { LOGIN_MARKERS, captureArgv, redactPane, scrubLine } from "../src/pane.ts";
 import { Host, withAuth, type AuthDeps } from "../src/host.ts";
 import { FALLBACK, HEADER, loadSuiteConventions, renderUserMemory, userMemoryPath, writeUserMemory } from "../src/conventions.ts";
+import { ensureAgentUser } from "../src/users.ts";
+import { homeDir } from "../src/ids.ts";
 import { checkApiKey, parseEnvFile, type Fetch } from "../src/auth.ts";
 import { writeConventions } from "../src/agents.ts";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -942,5 +944,68 @@ describe("full root (task 01a17b10 stage 3)", () => {
     await host.handleEnvNames({ agent_id: A, ref: "r" });
     expect(pushed).toEqual([["host.reply", { ref: "r", result: { names: ["ALPHA", "ZED"] } }]]);
     expect(JSON.stringify(pushed)).not.toContain("secret-value");
+  });
+});
+
+describe("ensureAgentUser with a missing home", () => {
+  const id = "01a17b51-76e1-7000-8eab-0288b6aa15b0";
+
+  /** A runner over a tiny fake fs: the user exists; `homes` maps path to its mode, owner and whether skel was copied in. */
+  function fakeHost(homeExists: boolean) {
+    const homes = new Map<string, { mode: string; owner: string; skel: boolean }>();
+    const calls: string[][] = [];
+    const runner: Runner = {
+      run: async (argv) => {
+        calls.push(argv);
+        const [cmd, ...a] = argv;
+        const last = a[a.length - 1]!;
+        const ok = (stdout = "") => ({ exitCode: 0, stdout, stderr: "" });
+        if (cmd === "stat") {
+          const h = homes.get(last);
+          return h === undefined ? { exitCode: 1, stdout: "", stderr: "No such file or directory" } : ok("directory 1001");
+        }
+        if (cmd === "id") return ok("1001");
+        if (cmd === "install" && a.includes("-d")) {
+          homes.set(last, { mode: a[a.indexOf("-m") + 1]!, owner: a[a.indexOf("-o") + 1]!, skel: false });
+          return ok();
+        }
+        if (cmd === "cp") {
+          const h = homes.get(last.replace(/\/$/, ""));
+          if (h === undefined) return { exitCode: 1, stdout: "", stderr: "no such dir" };
+          h.skel = a[a.length - 2] === "/etc/skel/.";
+          return ok();
+        }
+        if (cmd === "chown") {
+          const h = homes.get(last);
+          if (h !== undefined) h.owner = a[a.length - 2]!.split(":")[0]!;
+          return ok();
+        }
+        if (cmd === "chmod") {
+          const h = homes.get(last);
+          if (h === undefined) return { exitCode: 1, stdout: "", stderr: `chmod: cannot access '${last}': No such file or directory` };
+          h.mode = a[0]!;
+          return ok();
+        }
+        return ok(); // getent (user and group exist), loginctl, the other installs
+      },
+    };
+    if (homeExists) homes.set(homeDir(id), { mode: "0755", owner: "agent-x", skel: false });
+    return { runner, homes, calls };
+  }
+
+  test("user exists, home missing: home is created 0700, owned by the agent, seeded from skel, then chmod succeeds", async () => {
+    const { runner, homes } = fakeHost(false);
+    const user = await ensureAgentUser(runner, id);
+    const h = homes.get(user.home);
+    expect(h).toBeDefined();
+    expect(h!.mode).toBe("0700");
+    expect(h!.owner).toBe(user.name);
+    expect(h!.skel).toBe(true);
+  });
+
+  test("an existing home is not recreated or re-seeded", async () => {
+    const { runner, calls } = fakeHost(true);
+    await ensureAgentUser(runner, id);
+    expect(calls.some((c) => c[0] === "cp")).toBe(false);
   });
 });
