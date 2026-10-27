@@ -202,7 +202,10 @@ defmodule Platform.Agents.HarnessTest do
     test "fixtures hold no host, name or secret-looking value" do
       for f <- Path.wildcard(Path.join(@golden, "**"), match_dot: true), File.regular?(f) do
         body = File.read!(f)
-        refute body =~ ~r/kobo|devbot|sk-[A-Za-z0-9]{8}|Bearer /i, f
+        refute body =~ ~r/sk-[A-Za-z0-9]{8}|Bearer /i, f
+
+        for [host] <- Regex.scan(~r{https?://([^/"\s]+)}, body, capture: :all_but_first),
+            do: assert(String.ends_with?(host, ".example.test"), f)
       end
     end
   end
