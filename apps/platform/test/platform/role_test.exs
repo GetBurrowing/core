@@ -199,7 +199,8 @@ defmodule Platform.RoleTest do
                Platform.Mail.Outbox,
                :canvas_search_backfill,
                :burrow_docs_seed,
-               :default_space_seed
+               :default_space_seed,
+               :burrow_seed
              ]
     end
 

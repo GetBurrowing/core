@@ -24,27 +24,26 @@ defmodule Platform.Agents.Burrow do
 
   ## Owner and admins
 
-  The owner is the earliest root-org admin (by membership insert time); admins
-  are every root-org admin. `admins_section/0` reads them from the database
+  The owner is `Platform.Accounts.install_owner/0` (the earliest non-archived
+  root-org admin); admins are `Platform.Accounts.install_admins/0`. `admins_section/0` reads them from the database
   each time and renders name and principal id (the user id). `start_files/1`
   in `NativeAgents` appends that section to Burrow's instructions file, so
   every `agent.start` carries the current list and a removed admin is gone at
   the next start. The section is generated, never stored.
 
-  ## Hook
+  ## Hooks
+
+  `run_at_boot/0` runs once at boot from a supervised one-shot, so installs that
+  already have users get Burrow too.
 
   `ensure_async/0` is called after a user is inserted
   (`Platform.Accounts.find_or_create_from_oidc/1`), from a supervised
   one-shot task, so a failure there never breaks login.
   """
 
-  import Ecto.Query
   require Logger
 
   alias Platform.Agents.{Agent, NativeAgents}
-  alias Platform.Repo
-  alias Platform.Tenancy
-  alias Platform.Tenancy.OrgMembership
 
   @name "Burrow"
   @slug "burrow"
@@ -84,6 +83,25 @@ defmodule Platform.Agents.Burrow do
     end
   end
 
+  @doc """
+  Boot-time entry point (supervised one-shot, `:transient`): create Burrow on
+  an install that already has users. Never raises. Guarded by
+  `AGENT_HOST_TOKEN` and at least one root admin, both checked in `ensure/1`.
+  """
+  @spec run_at_boot() :: :ok
+  def run_at_boot do
+    case ensure() do
+      {:error, reason} -> Logger.warning("[Burrow] boot ensure failed: #{inspect(reason)}")
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Burrow] boot ensure crashed: #{Exception.message(e)}")
+      :ok
+  end
+
   @doc "Run `ensure/1` in a supervised one-shot task; failures are logged, never raised."
   @spec ensure_async() :: :ok
   def ensure_async do
@@ -115,27 +133,11 @@ defmodule Platform.Agents.Burrow do
   def burrow?(%Agent{slug: @slug} = agent), do: NativeAgents.managed?(agent)
   def burrow?(_), do: false
 
-  @doc "Root-org admins as `%{id, name}`, earliest membership first."
-  @spec admins() :: [%{id: String.t(), name: String.t()}]
-  def admins do
-    case Tenancy.get_root_org() do
-      nil ->
-        []
+  @doc "Root-org admins as `%{id, name}`; see `Platform.Accounts.install_admins/0`."
+  defdelegate admins, to: Platform.Accounts, as: :install_admins
 
-      org ->
-        from(m in OrgMembership,
-          join: u in Platform.Accounts.User,
-          on: u.id == m.user_id,
-          where: m.org_id == ^org.id and m.role == "admin" and is_nil(u.archived_at),
-          order_by: [asc: m.inserted_at, asc: m.id],
-          select: %{id: u.id, name: u.name}
-        )
-        |> Repo.all()
-    end
-  end
-
-  @doc "The install owner: the earliest root-org admin, or nil."
-  def owner, do: List.first(admins())
+  @doc "The install owner; see `Platform.Accounts.install_owner/0`."
+  defdelegate owner, to: Platform.Accounts, as: :install_owner
 
   @doc "The generated owner / admins section appended to Burrow's instructions file."
   @spec admins_section() :: String.t()

@@ -127,6 +127,48 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  describe "boot hook" do
+    test "an install that already has users plus the token gets Burrow at boot, once" do
+      admin!()
+      _later_admin = admin!()
+      assert burrow_count() == 0
+
+      assert :ok = Burrow.run_at_boot()
+      assert burrow_count() == 1
+      assert :ok = Burrow.run_at_boot()
+      assert burrow_count() == 1
+    end
+
+    test "boot without the token or without an admin creates nothing" do
+      assert :ok = Burrow.run_at_boot()
+      assert burrow_count() == 0
+
+      admin!()
+      Application.delete_env(:platform, :agent_host_token)
+      capture_log(fn -> assert :ok = Burrow.run_at_boot() end)
+      assert burrow_count() == 0
+    end
+
+    test "the boot child is wired and off in test config" do
+      src = File.read!("lib/platform/application.ex")
+      assert src =~ "|> maybe_add_burrow_seed(flag)"
+      assert src =~ "id: :burrow_seed"
+      assert Application.get_env(:platform, :start_burrow_seed) == false
+    end
+  end
+
+  describe "install_owner/0" do
+    test "is the earliest non-archived root admin" do
+      first = admin!()
+      second = admin!()
+      assert Platform.Accounts.install_owner().id == first.id
+
+      first |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
+      assert Platform.Accounts.install_owner().id == second.id
+      refute Enum.any?(Platform.Accounts.install_admins(), &(&1.id == first.id))
+    end
+  end
+
   describe "owner and admins in context" do
     test "start_files carries each principal id; a removed admin is gone at restart" do
       owner = admin!()

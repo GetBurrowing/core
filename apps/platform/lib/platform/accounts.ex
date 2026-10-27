@@ -194,6 +194,39 @@ defmodule Platform.Accounts do
   end
 
   @doc """
+  The install's root-org admins as `%{id, name}`, earliest membership first.
+  Archived users are excluded. The `id` is the user's principal id.
+  """
+  @spec install_admins() :: [%{id: String.t(), name: String.t()}]
+  def install_admins do
+    case Tenancy.get_root_org() do
+      nil ->
+        []
+
+      org ->
+        from(m in Platform.Tenancy.OrgMembership,
+          join: u in User,
+          on: u.id == m.user_id,
+          where: m.org_id == ^org.id and m.role == "admin" and is_nil(u.archived_at),
+          order_by: [asc: m.inserted_at, asc: m.id],
+          select: %{id: u.id, name: u.name}
+        )
+        |> Repo.all()
+    end
+  end
+
+  @doc """
+  The install owner: the earliest non-archived root-org admin (by membership
+  insert time, then id), as `%{id, name}`, or nil when the install has none.
+
+  There is no owner column. This is the one place the rule lives; the Burrow
+  agent's creation, its generated start-file section and the admin tools'
+  audit actor all call it. Read from the database on every call, never cached.
+  """
+  @spec install_owner() :: %{id: String.t(), name: String.t()} | nil
+  def install_owner, do: List.first(install_admins())
+
+  @doc """
   Give an ARCHIVED user a new OIDC identity and unarchive them, in one row
   write: `oidc_sub` becomes `new_sub` and all three archive columns are
   cleared.
