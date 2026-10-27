@@ -50,7 +50,6 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Archive
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Triage
   alias Platform.Repo

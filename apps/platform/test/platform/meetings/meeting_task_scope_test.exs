@@ -34,7 +34,6 @@ defmodule Platform.Meetings.MeetingTaskScopeTest do
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Archive
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefings
   alias Platform.Meetings.Triage

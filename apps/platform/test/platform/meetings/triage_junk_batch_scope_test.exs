@@ -37,7 +37,6 @@ defmodule Platform.Meetings.TriageJunkBatchScopeTest do
   use Platform.DataCase, async: false
 
   alias Platform.Chat
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Triage
   alias Platform.Repo
