@@ -29,7 +29,15 @@
       #native { font: 11px ui-monospace, monospace; white-space: pre-wrap; margin: 0 0 12px; }
       :root[data-backdrop="white"], :root[data-backdrop="white"] body { --ink: #000000; --edge: #000000; background: #ffffff; }
       :root[data-backdrop="black"], :root[data-backdrop="black"] body { --ink: #ffffff; --edge: #ffffff; background: #000000; }
-      :root[data-backdrop] #rows { display: none; }
+      :root[data-backdrop] #rows, :root[data-backdrop] #native, :root[data-backdrop] #glass,
+      :root[data-backdrop] #doc, :root[data-backdrop] #viewport, :root[data-backdrop] #events { display: none; }
+      /* Compact, so nothing but the flat colour reaches the bottom half
+         of the screen, where the glass samples. */
+      :root[data-backdrop] main { font-size: 11px; }
+      :root[data-backdrop] h1 { font-size: 14px; }
+      :root[data-backdrop] .controls { gap: 4px; margin-bottom: 4px; }
+      :root[data-backdrop] button { font-size: 11px; padding: 3px 6px; border-radius: 6px; }
+      :root[data-backdrop] p { margin: 2px 0; }
       .row { height: 64px; margin: 8px 0; border-radius: 12px; display: flex; align-items: center; padding: 0 16px; color: #fff; font-weight: 600; }
     </style>
   </head>
