@@ -149,7 +149,7 @@ final class TabBarUITests: XCTestCase {
     }
 
     /// The Burrow preset's inks as the fixture sends them (BURROW_INK).
-    private let inks = ["light": "ad4b07ff/0000008c", "dark": "f47721ff/eeeff18c"]
+    private let inks = ["light": "8b3b04ff/000000ff", "dark": "f47721ff/eeeff1ff"]
 
     /// Task 01a174e8 stage 2: the bar paints the web's inks and scheme, a
     /// theme change repaints it with no restart, a malformed ink keeps the
@@ -280,7 +280,10 @@ final class TabBarUITests: XCTestCase {
     // MARK: Contrast over the real glass (task 01a174e8 stage 3)
 
     private let keys = ["chat", "voice", "tasks", "meetings", "more"]
-    private let largestType = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge"]
+    /// AX5. The launch argument takes the category's raw value
+    /// (`UICTContentSizeCategoryAccessibilityXXXL`); the spelled-out name
+    /// is not a category and leaves the default size.
+    private let largestType = ["-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
 
     /// Merges `value` under `key` into $EVIDENCE_DIR/contrast.json, so each
     /// test adds its own section and a failure later on keeps what is there.
@@ -334,7 +337,7 @@ final class TabBarUITests: XCTestCase {
             let button = byId.exists ? byId : bar.buttons.element(boundBy: index)
             let state = key == selected ? "selected" : "unselected"
             let ink = key == selected ? inks.selected : inks.unselected
-            let measurement = TabContrast.measure(raster, frame: button.frame, ink: ink)
+            let measurement = TabContrast.measure(raster, frame: button.frame, ink: ink, drawnWhenVibrant: state == "unselected")
             var json = measurement.json
             json["state"] = state
             json["sent_ink"] = ink.hex
@@ -605,9 +608,10 @@ struct Raster {
 /// the 5th percentile, so the worst glass around the ink decides it.
 /// The ink the system actually drew (the strongest quarter of the ink
 /// pixels) is reported beside it, so a vibrant ink that ignores the tint
-/// shows up as a large `drawn_vs_sent`.
+/// shows up as a large `drawn_vs_sent`; for unselected items that value is
+/// then measured with the drawn ink (`measured_against: drawn`).
 enum TabContrast {
-    static let method = "sent ink composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; label >= 4.5, glyph >= 3"
+    static let method = "sent ink (with its alpha) composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; an unselected item whose drawn ink is not the sent one (iOS 26 vibrant ink) is measured with the drawn ink, opaque; label >= 4.5, glyph >= 3"
 
     static func linear(_ c: Double) -> Double { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
 
@@ -693,7 +697,14 @@ enum TabContrast {
         ]
     }
 
-    static func measure(_ raster: Raster, frame: CGRect, ink: SentInk) -> (json: [String: Any], ratios: [String: Double]) {
+    /// Past this (0-255, any channel) the drawn ink is not the sent one.
+    static let vibrantApart = 32
+
+    /// `drawnWhenVibrant`: when the system drew its own ink instead of the
+    /// tint (iOS 26 glass does this for unselected items), the value is
+    /// taken with the DRAWN ink, opaque, over each glass pixel; the sent
+    /// ink's value is still reported as `ratio_p5_sent`.
+    static func measure(_ raster: Raster, frame: CGRect, ink: SentInk, drawnWhenVibrant: Bool = false) -> (json: [String: Any], ratios: [String: Double]) {
         let s = raster.scale
         let x0 = max(0, Int((Double(frame.minX) * s).rounded()))
         let x1 = min(raster.width - 1, Int((Double(frame.maxX) * s).rounded()) - 1)
@@ -798,7 +809,6 @@ enum TabContrast {
         }
         var ratios: [String: Double] = [:]
         for (name, rowRange, colRange) in regions {
-            var values: [Double] = []
             var glass: [RGB] = []
             var inkPixels: [(Double, RGB)] = []
             var edge = 0
@@ -808,7 +818,6 @@ enum TabContrast {
                     let p = colours[j * w + i]
                     if value < 0.2 {
                         glass.append(p)
-                        values.append(ratio(over(ink, p), p))
                     } else if value > 0.5 {
                         // The badge's system red is not tab ink.
                         if !(p.r > 0.85 && p.g < 0.4 && p.b < 0.4) { inkPixels.append((value, p)) }
@@ -817,16 +826,43 @@ enum TabContrast {
                     }
                 }
             }
-            guard !values.isEmpty else {
+            guard !glass.isEmpty else {
                 json[name] = ["error": "no glass pixels"]
                 continue
             }
-            values.sort()
-            let p5 = values[min(values.count - 1, values.count * 5 / 100)]
             let regionGround = medianColour(glass)
             let regionExpected = over(ink, regionGround)
+            var drawn: RGB?
+            var apart = 0
+            if !inkPixels.isEmpty {
+                let strongest = inkPixels.sorted { $0.0 > $1.0 }.prefix(max(1, inkPixels.count / 4)).map { $0.1 }
+                let n = Double(strongest.count)
+                let mean = RGB(
+                    r: strongest.map(\.r).reduce(0, +) / n, g: strongest.map(\.g).reduce(0, +) / n, b: strongest.map(\.b).reduce(0, +) / n
+                )
+                drawn = mean
+                let gap = [abs(mean.r - regionExpected.r), abs(mean.g - regionExpected.g), abs(mean.b - regionExpected.b)].max() ?? 0
+                apart = Int((gap * 255).rounded())
+            }
+            func percentile(_ ratios: [Double]) -> Double {
+                let sorted = ratios.sorted()
+                return sorted[min(sorted.count - 1, sorted.count * 5 / 100)]
+            }
+            let sentValues = glass.map { ratio(over(ink, $0), $0) }
+            let sentP5 = percentile(sentValues)
+            var p5 = sentP5
+            var against = "sent"
+            var values = sentValues
+            if drawnWhenVibrant, let drawn, apart > vibrantApart {
+                values = glass.map { ratio(drawn, $0) }
+                p5 = percentile(values)
+                against = "drawn"
+            }
+            values.sort()
             var entry: [String: Any] = [
                 "ratio_p5": round(p5),
+                "ratio_p5_sent": round(sentP5),
+                "measured_against": against,
                 "ratio_min": round(values[0]),
                 "ratio_median": round(values[values.count / 2]),
                 "glass_pixels": values.count,
@@ -837,16 +873,10 @@ enum TabContrast {
                 "rows_px": "\(rowRange.lowerBound)-\(rowRange.upperBound)",
                 "cols_px": "\(colRange.lowerBound)-\(colRange.upperBound)",
             ]
-            if !inkPixels.isEmpty {
-                let strongest = inkPixels.sorted { $0.0 > $1.0 }.prefix(max(1, inkPixels.count / 4)).map { $0.1 }
-                let n = Double(strongest.count)
-                let drawn = RGB(
-                    r: strongest.map(\.r).reduce(0, +) / n, g: strongest.map(\.g).reduce(0, +) / n, b: strongest.map(\.b).reduce(0, +) / n
-                )
-                let apart = [abs(drawn.r - regionExpected.r), abs(drawn.g - regionExpected.g), abs(drawn.b - regionExpected.b)].max() ?? 0
+            if let drawn {
                 entry["drawn_ink"] = hex(drawn)
                 entry["drawn_ratio"] = round(ratio(drawn, regionGround))
-                entry["drawn_vs_sent"] = Int((apart * 255).rounded())
+                entry["drawn_vs_sent"] = apart
             }
             json[name] = entry
             ratios[name] = p5

@@ -186,36 +186,39 @@ describe("native tab bar inks: the fixture vs the Burrow preset tokens in app.cs
   }
   const token = (block, name) => block.match(new RegExp(`\\n\\s*${name}:\\s*([^;]+);`))?.[1].trim()
 
+  // The token layer's --native-tab-* slots (task 01a174e8 stage 3): light
+  // selected is --color-interactive (from :root), dark selected stays
+  // --color-primary, unselected is opaque --color-base-content.
+  const rootInteractive = appCss.match(/\n {2}--color-interactive: (#[0-9a-f]{6});/)?.[1]
+
   // What the hook's 1x1-canvas normaliser sends for a token: '#rrggbbaa'.
   function expected(name) {
     const block = themeBlock(name)
     const primary = token(block, "--color-primary")
     const content = token(block, "--color-base-content")
-    const subtle = token(block, "--subtle")
     expect(primary).toMatch(/^#[0-9a-f]{6}$/)
     expect(content).toMatch(/^#[0-9a-f]{6}$/)
-    const strength = subtle.match(/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/)
-    expect(strength, subtle).not.toBeNull()
-    const alpha = Math.round((Number(strength[1]) / 100) * 255)
-      .toString(16)
-      .padStart(2, "0")
-    return { selected: `${primary}ff`, unselected: `${content}${alpha}` }
+    expect(rootInteractive).toMatch(/^#[0-9a-f]{6}$/)
+    const selected = name === "light" ? rootInteractive : primary
+    return { selected: `${selected}ff`, unselected: `${content}ff` }
   }
 
-  it("BURROW_INK is the Burrow light and dark --color-primary and --tab-ink (--subtle)", () => {
+  it("BURROW_INK is the token layer's --native-tab-selected and --native-tab-unselected", () => {
     const m = fixture.match(/var BURROW_INK = (\{[\s\S]*?\n {8}\});/)
     expect(m).not.toBeNull()
     const ink = Function(`"use strict"; return (${m[1]})`)()
     expect(ink).toEqual({ light: expected("light"), dark: expected("dark") })
     // The pinned values, so a token edit shows up here as well.
     expect(ink).toEqual({
-      light: { selected: "#ad4b07ff", unselected: "#0000008c" },
-      dark: { selected: "#f47721ff", unselected: "#eeeff18c" },
+      light: { selected: "#8b3b04ff", unselected: "#000000ff" },
+      dark: { selected: "#f47721ff", unselected: "#eeeff1ff" },
     })
-    // --tab-ink is --color-subtle (= --subtle) on the bar, the probe's
-    // unselected fallback.
-    expect(appCss).toMatch(/\.bottom-nav \{\n[\s\S]*?--tab-ink: var\(--color-subtle\);/)
-    expect(appCss).toContain("--color-subtle: var(--subtle);")
+    // The slots live at the token layer: :root sets both, each dark selector
+    // puts selected back on --color-primary; never a .bottom-nav* rule.
+    expect(appCss).toMatch(/:root \{[^}]*--native-tab-selected: var\(--color-interactive\);[^}]*--native-tab-unselected: var\(--color-base-content\);/)
+    expect(appCss).toMatch(/\[data-theme="dark"\] \{[^}]*--native-tab-selected: var\(--color-primary\);/)
+    expect(appCss).toMatch(/:root:not\(\[data-theme="light"\]\) \{[^}]*--native-tab-selected: var\(--color-primary\);/)
+    expect(appCss).not.toMatch(/\.bottom-nav[^{]*\{[^}]*--native-tab-(selected|unselected):/)
   })
 
   it("the fixture sends ink and scheme in the hook's shape", () => {

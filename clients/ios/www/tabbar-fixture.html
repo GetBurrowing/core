@@ -72,11 +72,13 @@
     <script>
       (function () {
         // The Burrow preset's tab inks as the NativeTabBar hook sends them
-        // ('#rrggbbaa'): --color-primary selected, --tab-ink (--subtle,
-        // base-content at 55%) unselected, per daisyUI theme in app.css.
+        // ('#rrggbbaa'): --native-tab-selected (--color-interactive light,
+        // --color-primary dark) and --native-tab-unselected (opaque
+        // --color-base-content), the token layer in app.css (task 01a174e8
+        // stage 3's contrast substitution).
         var BURROW_INK = {
-          light: { selected: "#ad4b07ff", unselected: "#0000008c" },
-          dark: { selected: "#f47721ff", unselected: "#eeeff18c" },
+          light: { selected: "#8b3b04ff", unselected: "#000000ff" },
+          dark: { selected: "#f47721ff", unselected: "#eeeff1ff" },
         };
         function pageScheme() {
           return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
