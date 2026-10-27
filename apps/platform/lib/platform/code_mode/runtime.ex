@@ -38,9 +38,9 @@ defmodule Platform.CodeMode.Runtime do
   every run's native work (Store, instance, setup and `cm_run`) holds one of
   the node's `Platform.CodeMode.Permits`: at most one fewer guest than
   wasmex has tokio workers runs at once, node-wide, whichever pool started
-  it, and no one `:permit_key` holds all of them. The wall deadline is
-  taken when `run/3` is called and the wait for a
-  permit is charged to it: `cm_run` gets `wall_ms` minus that wait, and a
+  it, and no one `:permit_key` holds all of them. The wall clock starts
+  when the run asks for its permit (after the node's one-time module
+  compile) and the wait for a permit is charged to it: `cm_run` gets `wall_ms` minus that wait, and a
   run still waiting at its deadline returns `timeout` without running.
   Setup calls keep their own 5 s bound and are not charged. The permit is
   returned once the Store is idle.
@@ -122,8 +122,6 @@ defmodule Platform.CodeMode.Runtime do
     config =
       Jason.encode!(%{tools: Keyword.get(opts, :tools, []), log_cap: limits.log_bytes})
 
-    started_at = System.monotonic_time(:millisecond)
-
     with {:ok, inputs_json} <- encode_inputs(inputs),
          {:ok, {engine, module}} <- compiled() do
       execute(script, inputs_json, config, %{
@@ -131,8 +129,6 @@ defmodule Platform.CodeMode.Runtime do
         module: module,
         limits: limits,
         wall_ms: wall_ms,
-        started_at: started_at,
-        deadline: started_at + wall_ms,
         host: host,
         on_store: on_store,
         permit_key: Keyword.get(opts, :permit_key)
@@ -151,10 +147,14 @@ defmodule Platform.CodeMode.Runtime do
   # a node-wide permit (`Platform.CodeMode.Permits`). The wait for one is
   # charged to the run's wall budget; a run that cannot get one before its
   # deadline times out like any other.
+  # The clock starts at the permit request, after the node's one-time
+  # module compile, so only the queueing is charged.
   defp execute(script, inputs_json, config, ctx) do
-    case Permits.acquire(ctx.permit_key, ctx.deadline) do
+    started_at = System.monotonic_time(:millisecond)
+
+    case Permits.acquire(ctx.permit_key, started_at + ctx.wall_ms) do
       {:ok, permit} ->
-        waited = max(System.monotonic_time(:millisecond) - ctx.started_at, 0)
+        waited = max(System.monotonic_time(:millisecond) - started_at, 0)
         execute_with_permit(script, inputs_json, config, ctx, permit, ctx.wall_ms - waited)
 
       {:error, :timeout} ->
