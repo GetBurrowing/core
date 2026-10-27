@@ -162,7 +162,9 @@ defmodule Platform.Integration.MeetingCandidateGraduationE2ETest do
   # ── The rail ───────────────────────────────────────────────────────────────
 
   describe "a correctly classified action_items utterance" do
-    test "reaches its deadline and mints a row in `tasks`", %{classifier_pid: classifier_pid} do
+    test "records live work without a countdown task or a completed-ack task", %{
+      classifier_pid: classifier_pid
+    } do
       :ok = Phoenix.PubSub.subscribe(Platform.PubSub, @action_items_topic)
 
       plant_stub_fun(classifier_pid, fn _credentials, _messages, _opts ->

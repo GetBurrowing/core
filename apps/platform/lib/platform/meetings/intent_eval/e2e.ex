@@ -1,69 +1,15 @@
 defmodule Platform.Meetings.IntentEval.E2E do
   @moduledoc """
-  The end-to-end arm of the intent eval: score a labelled utterance by
-  whether it produces a **row in `tasks`** (task `01a06575` stage 4).
+  Pure historical task-delivery scoring helpers for the intent eval.
 
-  ## Why the offline harness could not have caught the live failure
+  Live candidate filing was removed by task 01a17f00-832c-7000-b480-64ab6d710532.
+  A live transcript replay now correctly produces zero tasks before final
+  triage; the legacy `graduated`/`correct` metrics describe historical task
+  delivery observations, not the success criterion for the live rail.
 
-  `Platform.Meetings.IntentEval.Harness` calls
-  `IntentClassifier.decide/1` and stops there. `decide/1` is a
-  provider call, a JSON parse and an evidence check — and it is THREE
-  stages upstream of anything a meeting produces. It never touches the
-  five-check skip chain in `deliver_chunk/3`, the debounce buffer,
-  `IntentQueue`, the candidate mirror, `IntentDispatcher`, the 30-second
-  countdown, `Candidates.claim_due/2` or `graduate/2`.
-
-  Production had **280 `meeting_candidates` rows and zero with a
-  `task_id`** while that harness scored `0.975` f1 on `off_topic` and
-  fired on `59 of 60` control rows. Both numbers were honest. Neither
-  was about the thing that was broken: the defect was a `state != :acting`
-  predicate in `claim_due/2`, which no amount of classification accuracy
-  reaches. An instrument that stops at `decide/1` is *demonstrably
-  compatible with total failure*, and this module exists so that is no
-  longer true of the eval as a whole.
-
-  ## What this measures, and what it deliberately does NOT
-
-  The stub answers with the row's **gold label**. That is not a
-  concession, it is the design:
-
-    * IN SCOPE — given a correct classification, does the platform turn
-      it into a deliverable? Every stage from `classify_and_enqueue/4`
-      to a `tasks` row, plus the deterministic gates
-      (`IntentFrames`) that can veto a correct classification after the
-      fact.
-    * OUT OF SCOPE — whether the model classifies correctly. That is
-      what `Harness` measures, and it needs a reachable endpoint. The
-      two arms answer different questions and neither substitutes for
-      the other.
-
-  So a `graduated` count of 0 here means the plumbing is broken; it can
-  never mean the model is bad. That separation is the point.
-
-  ## Declines are scored too
-
-  A row labelled `off_topic` must produce **no** task. Until task
-  01a06575 stage 5 that was not a property of the platform: the
-  candidate was armed at mirror time, before any dispatch decision for
-  it existed, and only stopped counting down because the dispatcher
-  reached it first and closed it. A dispatch slow enough to lose that
-  race — a responsibility handler holding the meeting's serial cursor
-  across a model round-trip, with small talk queued behind it — turned
-  an aside into a task. `Candidates.routable_attrs?/1` now disarms an
-  unroutable classification at classification time, so the decline is a
-  rule rather than a race.
-
-  So `expected_task?/1` is a two-sided prediction and both sides are
-  counted: `graduated` and `correctly_declined` are separate columns and
-  a report that only shows one is hiding half the failure modes.
-
-  ## This module owns no processes
-
-  It is pure. The caller supervises the classifier, the dispatcher and
-  the queue, owns the DB sandbox, and drives the sweeper — because all
-  of that is ExUnit's job and none of it belongs in a release. What
-  lives here is the part that must not be re-derived per caller: the
-  stub answer, the citation, the frame probe, and the scoring.
+  The caller owns the classifier, dispatcher, queue and database sandbox.
+  This module provides gold-label stub answers, frame probes and scoring;
+  it never files tasks itself.
   """
 
   alias Platform.Meetings.IntentFrames
