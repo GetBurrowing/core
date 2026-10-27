@@ -127,6 +127,12 @@ External mode needs all three of `issuer`, `client_id` and `client_secret_ref`. 
 | `path` | string | none | Absolute path. Required for `local-path`. |
 | `bucket`, `endpoint`, `access_key_ref`, `secret_key_ref` | string | none | Required for `s3-compatible`. `endpoint` is an http(s) URL. |
 | `region` | string | none | Optional, `s3-compatible` only. |
+| `keep` | int | `14` | Retention: the newest `keep` nightly snapshots survive. |
+| `hosted_opt_out` | bool | `false` | Hosted installs only: run without backups on purpose. Contradicts any target but `none`. |
+
+A target other than `none` makes the single-host renderer emit a nightly systemd timer (`burrow-backup.timer`) that runs `bin/burrow-backup`: a `pg_dump -Fc` of every database in `core-postgres`, a tar snapshot of each data volume (`core-data`, and `agent-homes` or the host `/home` when native agents run), and retention. `bin/burrow-restore-drill <backup dir>` restores the newest snapshot into a throwaway postgres and a temp dir and prints `restored <db> <rows>`. `s3-compatible` credentials are secret refs read from `customer-secrets.env`; no rendered file other than that one holds a value. The job writes `backup-status.json` (last success time, size) into the `core-data` volume for `admin_health`.
+
+`install.hosted = true` marks an install we provision. With no `[backup] target` it defaults to `local-path` at `/var/backups/burrow`, and `target = "none"` is `backup_required_hosted` unless `hosted_opt_out = true`.
 
 A missing required field gives one `backup_incomplete` error. A field the target does not use gives `field_not_applicable`.
 
@@ -243,6 +249,7 @@ A valid manifest prints `ok` and exits `0`.
 | `embeddings_endpoint_required` | `embeddings.mode = "endpoint"` without `base_url` |
 | `external_oidc_incomplete` | `auth.mode = "external-oidc"` missing issuer, client_id or client_secret_ref |
 | `backup_incomplete` | the backup target is missing a field it requires |
+| `backup_required_hosted` | `install.hosted` with `backup.target = "none"` and no `hosted_opt_out` |
 | `duplicate_endpoint_name` | two `[[models.endpoints]]` entries share a `name` |
 | `mac_voice_unsupported` | `target = "mac"` with `services.voice = true` |
 | `mac_local_embeddings_unsupported` | `target = "mac"` with `services.embeddings = true`, or an explicit `embeddings.mode = "local"` |

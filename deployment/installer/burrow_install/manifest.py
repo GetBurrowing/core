@@ -79,6 +79,10 @@ SCHEMA = {
         "target": _enum(TARGETS, "single-host"),
         # Build-time modules (ADR 0055): selects the core image flavour.
         "modules": _set(registry.MODULES),
+        # An install we provision and run for a customer (core task 01a17b10
+        # stage 5). A hosted install must have a backup target: the validator
+        # refuses `[backup] target = "none"` unless `backup.hosted_opt_out`.
+        "hosted": _bool(False),
     },
     "domain": {
         "primary": _str(),
@@ -130,6 +134,10 @@ SCHEMA = {
         "region": _str(),
         "access_key_ref": _str(),
         "secret_key_ref": _str(),
+        # Nightly retention: the newest `keep` snapshots survive.
+        "keep": Field("int", default=14),
+        # hosted installs only: the explicit "no backups, on purpose".
+        "hosted_opt_out": _bool(False),
     },
     "images": {
         # Exactly ONE of the two, no default (a default would name one
