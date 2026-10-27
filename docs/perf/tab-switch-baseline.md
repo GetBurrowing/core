@@ -226,8 +226,9 @@ are unchanged: there is no measurement of them in this task, so no reason to.
   `compress: false`. That is why Chrome's offer was declined in stage 1.
 - `deps/phoenix/lib/phoenix/transports/websocket.ex:79` passes the socket's
   websocket opts to `WebSockAdapter.upgrade(handler, arg, opts)`.
-- `deps/websock_adapter/lib/websock_adapter.ex:84` (cowboy clause) shows
-  `compress` is forwarded; the Bandit clause hands the opts through untouched.
+- `deps/websock_adapter/lib/websock_adapter.ex:73` (`tuple_for(Bandit.Adapter, ...)`)
+  hands the opts through untouched to Bandit (the cowboy clause at :84 maps
+  `compress` explicitly; not used here).
 - `deps/bandit/lib/bandit/pipeline.ex:155` calls
   `Bandit.WebSocket.Handshake.handshake/3` with those per-upgrade opts.
 - `deps/bandit/lib/bandit/websocket/handshake.ex:21-23` negotiates only when
@@ -354,8 +355,8 @@ adds overhead, so these are upper bounds.
 LiveView mount (the view's own work, `[:phoenix, :live_view, :mount, :stop]`)
 is unchanged: it is not part of the deflate call and is on the table above.
 Deflate runs in the socket process after the reply is built and costs 1 to 5 ms
-of that process's time per full-page reply; it is paid once per navigation, and
-the small diffs that follow cost under 100 microseconds each. No memory
+of that process's time per full-page reply; it is paid once per navigation. The cost of the small
+diffs that follow was not measured. No memory
 measurement was taken for the per-connection deflate context.
 
 ### Exp
