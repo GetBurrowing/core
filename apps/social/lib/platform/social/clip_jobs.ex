@@ -102,11 +102,20 @@ defmodule Platform.Social.ClipJobs do
             "fix" => fix,
             "caption_fixes" => caption_fix_history(base.caption_fixes, fix["caption_fixes"])
           })
+          |> maybe_headline(fix)
+          |> Map.merge(%{
+            "source_id" => base.source["source_file_id"] || clip.id
+          })
 
         insert_job!(profile, clip, "rerender", payload, user_id)
       end)
     end
   end
+
+  defp maybe_headline(payload, %{"headline" => headline}),
+    do: payload |> Map.put("headline", headline) |> Map.delete("fix")
+
+  defp maybe_headline(payload, _fix), do: payload
 
   defp caption_fix_history(previous, nil), do: previous
 
@@ -501,9 +510,23 @@ defmodule Platform.Social.ClipJobs do
       if platforms, do: Map.put(render_attrs, "platforms", platforms), else: render_attrs
 
     effective_result =
-      if payload["fix"],
-        do: Map.merge(Map.take(payload, ~w(title caption)), result),
+      if payload["fix"] || payload["headline"],
+        do:
+          Map.merge(
+            Map.take(payload, ~w(title caption)),
+            Map.reject(result, fn {_k, v} -> is_nil(v) end)
+          ),
         else: result
+
+    # Only user-authored input may cross the local headline privacy boundary.
+    effective_result =
+      case payload["headline"] do
+        %{"consumer" => "edit", "requested_headline" => text} ->
+          Map.put(effective_result, "title", text)
+
+        _ ->
+          effective_result
+      end
 
     changes =
       effective_result

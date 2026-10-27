@@ -27,6 +27,23 @@ defmodule Platform.Social.ClipFixes do
      }}
   end
 
+  defp operation(%{"operation" => "edit_headline", "headline" => text}, a, b)
+       when is_binary(text) do
+    text = String.trim(text)
+
+    if String.length(text) in 1..200 and not String.match?(text, ~r/[\r\n\x00-\x1f]/u) do
+      {:ok,
+       %{
+         "operation" => "edit_headline",
+         "in_s" => a,
+         "out_s" => b,
+         "headline" => %{"consumer" => "edit", "requested_headline" => text}
+       }}
+    else
+      {:error, :invalid_headline}
+    end
+  end
+
   defp operation(%{"operation" => "regenerate_headline"}, a, b),
     do: {:ok, %{"operation" => "regenerate_headline", "in_s" => a, "out_s" => b}}
 
