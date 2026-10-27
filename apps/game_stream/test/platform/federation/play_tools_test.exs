@@ -158,7 +158,13 @@ defmodule Platform.Federation.PlayToolsTest do
     end
   end
 
-  defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
+  # The `admin` bundle (task 01a17b10 stage 3) is additive to main's list and
+  # is set aside here; the core tests assert it by name.
+  defp catalogue_names do
+    ToolSurface.tool_definitions()
+    |> Enum.reject(&(&1.bundle == "admin"))
+    |> Enum.map(& &1.name)
+  end
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
     test "tool_definitions/0 names equal main's 137, in order" do
