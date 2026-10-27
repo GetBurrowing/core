@@ -28,13 +28,22 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
 const CLIENT_HEIGHT = 666;
 const BATCH_HEIGHT = 40 * 110;
 
-function fakeRow(id, height) {
+// A grouped row (same author as the row above) collapses its header, as
+// app.css does, so `applyGrouping` changes heights inside a patch.
+const GROUPED_SAVES_PX = 40;
+
+function fakeRow(id, baseHeight, participantId = `p-${id}`) {
   const classes = new Set();
   const row = {
     id,
-    height,
+    get height() {
+      return baseHeight - (classes.has("message-row--grouped") ? GROUPED_SAVES_PX : 0);
+    },
+    set height(v) {
+      baseHeight = v + (classes.has("message-row--grouped") ? GROUPED_SAVES_PX : 0);
+    },
     parent: null,
-    dataset: { messageId: id, participantId: `p-${id}` },
+    dataset: { messageId: id, participantId },
     style: {},
     classList: {
       toggle(name, force) {
@@ -65,8 +74,17 @@ function fakeList(rows) {
     clientHeight: CLIENT_HEIGHT,
     clientWidth: 800,
     _scrollTop: 0,
+    // Content below the log inside the same scroller (the thread-activity
+    // rows), which a backfill patch can grow.
+    extraBottom: 0,
     get scrollHeight() {
-      return this.rows.reduce((a, r) => a + r.height, 0);
+      return this.rows.reduce((a, r) => a + r.height, 0) + this.extraBottom;
+    },
+    get children() {
+      return this.rows;
+    },
+    getBoundingClientRect() {
+      return { top: 0, bottom: this.clientHeight };
     },
     get scrollTop() {
       return this._scrollTop;
@@ -131,9 +149,16 @@ function settled({ distance }) {
 
 // LiveView's order for the backfill diff: capture, patch (40 rows inserted
 // in front of the first one), then updated(). No pushEvent precedes it.
-function serverPrepend(el, hook) {
+// `realistic`: what Chrome showed the backfill patch also doing. The old
+// first row loses its 60 px day separator (the boundary label moves to the
+// new oldest row) and the thread-activity rows under the log grow by 160 px.
+function serverPrepend(el, hook, { realistic = false } = {}) {
   hook.beforeUpdate();
   const older = Array.from({ length: 40 }, (_, i) => fakeRow(`old-${i}`, 110));
+  if (realistic) {
+    el.rows[0].height -= 60;
+    el.extraBottom += 160;
+  }
   el.setRows([...older, ...el.rows]);
   hook.updated();
 }
@@ -256,4 +281,47 @@ describe("ScrollToBottom: a server-initiated prepend", () => {
       else globalThis.document = priorDocument;
     }
   });
+
+  it("(a, realistic) a bottom-pinned reader stays at the bottom when the patch also grows the rows below", () => {
+    const { el, hook } = settled({ distance: 0 });
+
+    serverPrepend(el, hook, { realistic: true });
+
+    expect(Math.abs(distanceFromBottom(el))).toBeLessThanOrEqual(2);
+  });
+
+  it("(b, realistic) the topmost visible message keeps its offset when the old first row shrinks", () => {
+    // 300 px up from the bottom of 10 rows: the topmost visible row is NOT
+    // the first row, which is the case an old-first-row anchor gets wrong.
+    const { el, hook } = settled({ distance: 300 });
+    const row = topmostVisible(el);
+    expect(row).not.toBe(el.rows[0]);
+    const before = row.getBoundingClientRect().top;
+
+    serverPrepend(el, hook, { realistic: true });
+
+    expect(topmostVisible(el)).toBe(row);
+    expect(Math.abs(row.getBoundingClientRect().top - before)).toBeLessThanOrEqual(2);
+  });
+
+  it("compensates AFTER grouping: the old first row joining the batch's last author run", () => {
+    // The batch's newest message is by the same author as the old first
+    // row, so this patch's `applyGrouping` collapses the old first row's
+    // header (-40 px) after the rows are inserted. Measuring the anchor
+    // before grouping leaves the reader 40 px off.
+    const { el, hook } = settled({ distance: 300 });
+    const row = topmostVisible(el);
+    const before = row.getBoundingClientRect().top;
+
+    hook.beforeUpdate();
+    const older = Array.from({ length: 40 }, (_, i) =>
+      fakeRow(`old-${i}`, 110, i === 39 ? el.rows[0].dataset.participantId : undefined),
+    );
+    el.setRows([...older, ...el.rows]);
+    hook.updated();
+
+    expect(el.rows[40].classList.contains("message-row--grouped")).toBe(true);
+    expect(Math.abs(row.getBoundingClientRect().top - before)).toBeLessThanOrEqual(2);
+  });
 });
+

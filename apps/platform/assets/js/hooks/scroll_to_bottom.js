@@ -104,6 +104,11 @@ const NEAR_BOTTOM_PX = 150;
 // constant serves both widths.
 const DEEP_HISTORY_PX = 1800;
 
+// A reader within this many px of the bottom when a prepend lands is AT the
+// bottom and stays there (task 01a17bf4 stage 2). Sub-pixel scroll rounding
+// only; anyone further up keeps their topmost visible row instead.
+const PIN_EPSILON_PX = 2;
+
 // ── The hysteresis margin ───────────────────────────────────────────────────
 //
 // READ THIS BEFORE COUNTING THRESHOLDS. There are still exactly TWO
@@ -425,32 +430,67 @@ const ScrollToBottom = {
   // snapped to the bottom by the follow rule, which is for messages
   // arriving at the BOTTOM.
   //
-  // So: before every patch, remember the first row and where it sits on
-  // screen. After the patch, if rows now stand in front of it, the patch
-  // was a prepend, and scrolling by exactly how far that row moved puts it,
-  // and every row below it, back where it was. For a bottom-parked reader
-  // that also keeps the distance from the bottom unchanged (0 stays 0); for
-  // a reader who scrolled up, the topmost visible message keeps its offset.
+  // So: before every patch, remember the first row, the topmost VISIBLE row
+  // and where that one sits on screen. After the patch (and after grouping,
+  // which changes row heights), if rows now stand in front of the old first
+  // row, the patch was a prepend: a reader who was at the bottom is put back
+  // at the bottom, and anyone else is scrolled by exactly how far their
+  // topmost visible row moved, so it keeps its offset.
   // The follow rule is skipped for that patch (see `scrollToBottom`): a
   // prepend is not an arrival. A client-initiated load still runs
   // InfiniteScroll's own compensation afterwards; it ASSIGNS the same
   // absolute offset, so the two agree rather than add up.
   _capturePrependAnchor() {
     const first = this.el.firstElementChild;
-    this._prependAnchor =
-      first && typeof first.getBoundingClientRect === "function"
-        ? { node: first, top: first.getBoundingClientRect().top }
-        : null;
+    if (!first || typeof first.getBoundingClientRect !== "function") {
+      this._prependAnchor = null;
+      return;
+    }
+    const top = this._topmostVisibleRow() || first;
+    this._prependAnchor = {
+      first,
+      node: top,
+      top: top.getBoundingClientRect().top,
+    };
   },
-  _compensatePrepend() {
+  // The first row whose box reaches below the scroller's top edge. Rows are
+  // stacked in DOM order, so this is a binary search: a few layout reads per
+  // patch, not one per row (the stream holds up to 300).
+  _topmostVisibleRow() {
+    const rows = this.el.children;
+    if (!rows || !rows.length || typeof this.scrollEl.getBoundingClientRect !== "function") {
+      return null;
+    }
+    const edge = this.scrollEl.getBoundingClientRect().top;
+    let lo = 0;
+    let hi = rows.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].getBoundingClientRect().bottom > edge) hi = mid;
+      else lo = mid + 1;
+    }
+    return rows[lo];
+  },
+  // Measured in Chrome, a backfill patch does more than insert rows above:
+  // the old first row loses its day separator (the boundary label moves to
+  // the new oldest row), and the thread-activity rows below the log can
+  // grow. So the anchor is the topmost VISIBLE row, not the old first row,
+  // and a reader who was at the bottom is put back at the bottom rather
+  // than at their old offset.
+  _compensatePrepend(preDistance) {
     const anchor = this._prependAnchor;
     this._prependAnchor = null;
     if (!anchor) return false;
     const first = this.el.firstElementChild;
-    if (!first || first === anchor.node) return false;
-    if (typeof this.el.contains !== "function" || !this.el.contains(anchor.node)) {
+    if (!first || first === anchor.first) return false;
+    if (typeof this.el.contains !== "function" || !this.el.contains(anchor.first)) {
       return false;
     }
+    if (preDistance != null && preDistance <= PIN_EPSILON_PX) {
+      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      return true;
+    }
+    if (!this.el.contains(anchor.node)) return true;
     const shift = anchor.node.getBoundingClientRect().top - anchor.top;
     if (shift !== 0) this.scrollEl.scrollTop = this.scrollEl.scrollTop + shift;
     return true;
@@ -961,6 +1001,11 @@ const ScrollToBottom = {
     // Disconnect observer to prevent infinite loop from our own DOM changes
     if (this._observer) this._observer.disconnect();
     this.applyGrouping();
+    // A prepend is compensated AFTER grouping, which changes row heights,
+    // and BEFORE the follow rule, which it then switches off for this patch
+    // (see `_capturePrependAnchor`). Only the first `_safeUpdate` of a patch
+    // finds an anchor; it is consumed here.
+    if (this._prependAnchor) this._prepended = this._compensatePrepend(preDistance);
     this.scrollToBottom(preDistance);
     // Reconnect after our changes are done
     if (this._observer) this._observeLog();
@@ -997,8 +1042,6 @@ const ScrollToBottom = {
     const spaceId = this.el.dataset.spaceId ?? null;
     if (spaceId !== this._spaceId) this._beginConversation(spaceId);
 
-    // Before the follow rule reads anything: see `_capturePrependAnchor`.
-    this._prepended = this._compensatePrepend();
     this._safeUpdate();
     // Release the capture once this patch is fully serviced. Queued as a
     // microtask so a MutationObserver callback for the same patch still sees
