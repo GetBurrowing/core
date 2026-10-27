@@ -126,6 +126,14 @@ defmodule Platform.AgentHost.Reconciler do
   def request_auth_check(agent_id, ref),
     do: GenServer.call(server(), {:check_auth, agent_id, ref})
 
+  @doc """
+  Push any command `event` to the host (task 01a17b10 stage 3); the host
+  answers with `host.reply` under the `ref` carried in `payload`.
+  """
+  @spec host_call(String.t(), map()) :: :ok | {:error, :not_connected}
+  def host_call(event, payload) when is_binary(event) and is_map(payload),
+    do: GenServer.call(server(), {:host_call, event, payload})
+
   @doc "The connected host's channel pid, or nil."
   @spec host_pid() :: pid() | nil
   def host_pid do
@@ -178,7 +186,7 @@ defmodule Platform.AgentHost.Reconciler do
     if host?(state, pid) do
       profile = string_or_nil(payload["profile"])
       host = %{state.host | profile: profile}
-      State.put_host(Map.take(host, [:profile, :connected_at]))
+      State.put_host(Map.take(host, [:profile, :connected_at, :full_root]))
       State.clear_agents()
 
       for agent <- List.wrap(payload["agents"]), is_map(agent) do
@@ -249,6 +257,14 @@ defmodule Platform.AgentHost.Reconciler do
     {:reply, :ok, state}
   end
 
+  defp do_call({:host_call, _event, _payload}, _from, %{host: nil} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:host_call, event, payload}, _from, state) do
+    push(state.host, event, payload)
+    {:reply, :ok, state}
+  end
+
   defp do_call({:pane, _agent_id, _lines, _ref}, _from, %{host: nil} = state),
     do: {:reply, {:error, :not_connected}, state}
 
@@ -273,11 +289,13 @@ defmodule Platform.AgentHost.Reconciler do
       pid: pid,
       ref: ref,
       profile: string_or_nil(meta["profile"]),
+      # The host's hello says whether the install enabled `[agents] full_root`.
+      full_root: meta["full_root"] == true,
       connected_at: DateTime.utc_now()
     }
 
     State.clear()
-    State.put_host(Map.take(host, [:profile, :connected_at]))
+    State.put_host(Map.take(host, [:profile, :connected_at, :full_root]))
     broadcast(:host_connected)
     {:reply, :ok, %{state | host: host}}
   end

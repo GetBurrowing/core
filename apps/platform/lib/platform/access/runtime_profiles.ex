@@ -9,7 +9,7 @@ defmodule Platform.Access.RuntimeProfiles do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
-  @core_valid_modules ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
+  @core_valid_modules ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin)
 
   @spec get(AgentRuntime.t()) :: RuntimeProfile.t() | nil
   def get(%AgentRuntime{id: id}) when is_binary(id), do: Repo.get(RuntimeProfile, id)

@@ -255,6 +255,39 @@ defmodule Platform.AgentHost do
   defp parse_auth("rejected"), do: :rejected
   defp parse_auth(_), do: :unknown
 
+  @doc "True when the connected host advertised `full_root` in its hello."
+  @spec full_root?() :: boolean()
+  def full_root?, do: match?(%{full_root: true}, host())
+
+  @doc """
+  Send the host a command and wait for its `host.reply` (task 01a17b10 stage
+  3): `{:ok, result_map}`. Used by the admin tools for `host.env_names` and
+  `host.admin`.
+  """
+  @spec host_call(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, :not_connected | :timeout}
+  def host_call(event, payload, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @logs_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = reply_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with :ok <- Reconciler.host_call(event, Map.put(payload, "ref", ref)) do
+        receive do
+          {:agent_host_reply, ^ref, result} -> {:ok, result}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def reply_topic(ref), do: "agent_host:reply:" <> ref
+
   @doc "Subscribe the caller to observed-state changes."
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe, do: Phoenix.PubSub.subscribe(Platform.PubSub, Reconciler.status_topic())

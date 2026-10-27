@@ -502,7 +502,7 @@ class FullRootTest(unittest.TestCase):
         rendered, _ = self.render({"profile": "full_machine"})
         user_data = rendered.files["user-data"][0]
         self.assertNotIn("docker.sock", rendered.files["compose.yaml"][0])
-        self.assertNotIn("AGENT_HOST_FULL_ROOT", user_data)
+        self.assertNotIn("AGENT_HOST_FULL_ROOT=true", user_data)
         rendered, _ = self.render({"profile": "full_machine", "full_root": True})
         self.assertNotIn("docker.sock", rendered.files["compose.yaml"][0])
         self.assertIn("AGENT_HOST_FULL_ROOT=true", rendered.files["user-data"][0])

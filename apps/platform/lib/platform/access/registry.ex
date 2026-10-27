@@ -115,7 +115,8 @@ defmodule Platform.Access.Registry do
     "experiments" => "mcp.experiments",
     "code_mode" => "mcp.code_mode",
     "prototype" => "mcp.prototype",
-    "access" => "mcp.access"
+    "access" => "mcp.access",
+    "admin" => "mcp.admin"
   }
 
   @doc "The grant-rule values a role may map a permission to."

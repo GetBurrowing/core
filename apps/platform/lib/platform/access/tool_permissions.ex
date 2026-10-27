@@ -23,6 +23,8 @@ defmodule Platform.Access.ToolPermissions do
                ~w(attachment_get_inline file_get_metadata file_get_text file_list file_search)},
               {"files.write",
                ~w(attachment_upload_inline attachment_upload_start file_add file_delete)},
+              {"install.admin",
+               ~w(admin_health admin_logs admin_env_names admin_migrations admin_rpc admin_restart admin_deploy admin_rollback)},
               {"mail.use",
                ~w(mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},
               {"meetings.join", ~w(intent_ack meeting_activity_push meeting_create meeting_say)},
@@ -49,6 +51,8 @@ defmodule Platform.Access.ToolPermissions do
 
   @core_bundle_names %{
     "access" => ~w(access_explain access_propose access_apply access_undo),
+    "admin" =>
+      ~w(admin_health admin_logs admin_env_names admin_migrations admin_rpc admin_restart admin_deploy admin_rollback),
     "attachment" => ~w(attachment_upload_inline attachment_get_inline attachment_upload_start),
     "canvas" =>
       ~w(canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_restore),

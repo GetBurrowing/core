@@ -7,6 +7,9 @@ defmodule Platform.Application do
 
   @impl true
   def start(_type, _args) do
+    # Recent-log tail for the admin_logs tool (task 01a17b10 stage 3).
+    Platform.Admin.LogTail.install()
+
     Platform.Config.validate!()
 
     # Task 01a08b49 stage 1 — FIRST, ahead of the seven handlers below.
