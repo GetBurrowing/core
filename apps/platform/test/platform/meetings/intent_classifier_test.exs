@@ -236,9 +236,9 @@ defmodule Platform.Meetings.IntentClassifierTest do
     test "subscribes to the canonical transcript_chunk topic and logs on boot" do
       log =
         capture_log([level: :info], fn ->
-          {_pid, _name} = start_classifier!()
-          # Give init a beat to emit the log line.
-          Process.sleep(20)
+          {pid, _name} = start_classifier!()
+          # A call to the classifier is handled after init/1 and its log line.
+          _ = :sys.get_state(pid)
         end)
 
       assert log =~ "[IntentClassifier] started"
@@ -293,7 +293,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
       {pid, _name} = start_classifier!()
 
       _ = broadcast_chunk("room-liveness-check")
-      Process.sleep(50)
+      # :sys.get_state/1 is handled after every message already in the mailbox.
+      _ = :sys.get_state(pid)
 
       assert Process.alive?(pid)
     end
@@ -2158,7 +2159,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       send(pid, :garbage)
       send(pid, {:unrelated_topic, %{}})
-      Process.sleep(30)
+      # :sys.get_state/1 is handled after every message already in the mailbox.
+      _ = :sys.get_state(pid)
 
       assert Process.alive?(pid)
     end
@@ -2173,8 +2175,8 @@ defmodule Platform.Meetings.IntentClassifierTest do
           segment: %{id: "seg-1", text: "first chunk", speaker_name: "alice"}
         )
 
-      # Give the classifier's handle_info a beat to process.
-      Process.sleep(30)
+      # :sys.get_state/1 is handled after every chunk already in the mailbox.
+      _ = :sys.get_state(pid)
 
       state = :sys.get_state(pid)
       assert Map.has_key?(state.recent_chunks, "room-buffer-1")
@@ -2193,7 +2195,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
           )
       end
 
-      Process.sleep(50)
+      _ = :sys.get_state(pid)
 
       state = :sys.get_state(pid)
       window = state.recent_chunks["room-buffer-window"]
@@ -2218,7 +2220,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       _ =
         broadcast_chunk("room-A", segment: %{id: "a2", text: "A2", speaker_name: "alice"})
 
-      Process.sleep(50)
+      _ = :sys.get_state(pid)
 
       state = :sys.get_state(pid)
       assert Enum.map(state.recent_chunks["room-A"], & &1.text) == ["A2", "A1"]
@@ -2253,7 +2255,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       _ = broadcast_chunk("room-cleanup", segment: %{id: "c1", text: "c1"})
       _ = broadcast_chunk("room-cleanup", segment: %{id: "c2", text: "c2"})
-      Process.sleep(30)
+      _ = :sys.get_state(pid)
 
       assert Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup")
 
@@ -2264,7 +2266,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
           space_id: "s-cleanup"
         })
 
-      Process.sleep(30)
+      _ = :sys.get_state(pid)
 
       refute Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup")
       assert Process.alive?(pid)
@@ -2275,7 +2277,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       _ = broadcast_chunk("room-keep", segment: %{id: "k1", text: "k1"})
       _ = broadcast_chunk("room-drop", segment: %{id: "d1", text: "d1"})
-      Process.sleep(30)
+      _ = :sys.get_state(pid)
 
       :ok =
         MeetingsPubSub.broadcast_meeting_finished("room-drop", %{
@@ -2284,7 +2286,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
           space_id: "s-drop"
         })
 
-      Process.sleep(30)
+      _ = :sys.get_state(pid)
 
       state = :sys.get_state(pid)
       refute Map.has_key?(state.recent_chunks, "room-drop")
@@ -2599,7 +2601,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
           })
 
         # Wait for the cleanup to land in classifier state.
-        Process.sleep(30)
+        _ = :sys.get_state(pid)
         refute Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup-context")
 
         # Now broadcast a fresh chunk. Its prompt must render the

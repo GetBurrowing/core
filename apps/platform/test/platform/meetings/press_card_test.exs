@@ -271,9 +271,24 @@ defmodule Platform.Meetings.PressCardTest do
       {:ok, opened} = PressCard.open(meeting_id, identity, speaker: "alice", room_id: room_id)
       {:ok, _} = PressWindow.release(meeting_id, identity)
 
-      Process.sleep(PressWindow.release_grace_ms() + 200)
+      # Poll on a WALL-CLOCK deadline instead of sleeping the grace out first.
+      # The deadline is the one the old sleep plus `await_closed/2`'s 40 x 25 ms
+      # gave (grace + 200 + 1000 ms); it returns as soon as the card closes. Not
+      # `await_closed/2` with more tries: its bound is a try count, and each try
+      # costs a query on top of the 25 ms, so a scaled count drifts past the
+      # deadline (measured: a timer moved to grace + 1.5 s still passed).
+      card =
+        Platform.AsyncAssertions.assert_eventually(
+          fn ->
+            case Candidates.get_by_intent_id(opened.intent.id) do
+              %MeetingCandidate{state: :closed} = card -> card
+              _not_closed -> nil
+            end
+          end,
+          PressWindow.release_grace_ms() + 1_200,
+          25
+        )
 
-      card = await_closed(opened.intent.id)
       assert card.state == :closed
       assert card.closed_reason == :unclassified
     end

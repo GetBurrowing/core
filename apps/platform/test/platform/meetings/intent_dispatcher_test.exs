@@ -223,8 +223,9 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     {:ok, pid} = start_supervised({IntentDispatcher, child_opts})
 
     # Let `init/1` finish subscribing before the test enqueues, or the
-    # very first notify lands in nobody's mailbox.
-    Process.sleep(20)
+    # very first notify lands in nobody's mailbox. A call is handled after
+    # init/1 (and any handle_continue) has finished.
+    _ = :sys.get_state(pid)
 
     {pid, name}
   end

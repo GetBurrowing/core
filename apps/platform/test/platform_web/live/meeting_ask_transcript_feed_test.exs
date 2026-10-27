@@ -221,14 +221,17 @@ defmodule PlatformWeb.MeetingAskTranscriptFeedTest do
     # discipline `press_card_test.exs`'s "the REAL timer release/3 arms
     # is what delivers the close" case uses, so this proves the crumble
     # is driven by the SAME mechanism, not a client-side guess.
-    Process.sleep(PressWindow.release_grace_ms() + 300)
-
     candidate_id = card.id
 
-    assert_push_event(view, "meeting_ask_outcome", %{
-      "outcome" => "crumble",
-      "candidate_id" => ^candidate_id
-    })
+    # Bounded wait on the server's own grace timer instead of a fixed sleep:
+    # the deadline is the one the sleep plus the default 100 ms assert window
+    # gave (grace + 300 + 100 ms), but it returns as soon as the push lands.
+    assert_push_event(
+      view,
+      "meeting_ask_outcome",
+      %{"outcome" => "crumble", "candidate_id" => ^candidate_id},
+      PressWindow.release_grace_ms() + 400
+    )
 
     closed = Candidates.get(candidate_id)
     assert closed.state == :closed

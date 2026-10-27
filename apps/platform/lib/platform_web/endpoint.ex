@@ -34,7 +34,10 @@ defmodule PlatformWeb.Endpoint do
   # CONNECTED mount would read nil and quietly replace the browser-specific
   # instruction with the generic one a moment after the page settles.
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [:user_agent, session: @session_options]],
+    # `compress: true` lets Bandit negotiate permessage-deflate (Phoenix's
+    # default is false). Join replies for chat/tasks are 190-433 KiB of JSON
+    # (docs/perf/tab-switch-baseline.md). Do not strip it from /live.
+    websocket: [compress: true, connect_info: [:user_agent, session: @session_options]],
     longpoll: [connect_info: [:user_agent, session: @session_options]]
   )
 
