@@ -3413,7 +3413,8 @@ defmodule Platform.Federation.ToolSurface do
     with %Platform.Access.Scope{} = scope <- prompt_update_scope(context),
          {:ok, meeting_id} <- Ecto.UUID.cast(Map.get(args, "meeting_id")),
          %Platform.Meetings.Meeting{} = meeting <- Meetings.get_meeting(meeting_id),
-         %Platform.Tasks.Project{} = project <- Repo.get(Platform.Tasks.Project, meeting.project_id),
+         %Platform.Tasks.Project{} = project <-
+           Repo.get(Platform.Tasks.Project, meeting.project_id),
          :ok <- Platform.Access.check(scope, "meetings.join", project) do
       :ok
     else
@@ -3426,7 +3427,13 @@ defmodule Platform.Federation.ToolSurface do
 
     parameters =
       Map.new(~w(meeting_id run_id transcript_id canvas_id snapshot_hash), fn key ->
-        {String.to_atom(key), %{type: "string", required: true, description: "Canonical #{key} from the completion dispatch; identities must match the finalized run."}}
+        {String.to_atom(key),
+         %{
+           type: "string",
+           required: true,
+           description:
+             "Canonical #{key} from the completion dispatch; identities must match the finalized run."
+         }}
       end)
 
     parameters =
@@ -3434,7 +3441,8 @@ defmodule Platform.Federation.ToolSurface do
         Map.put(parameters, :action_items, %{
           type: "array",
           required: true,
-          description: "Officer-reviewed items with stable item_id, normalized imperative title, grounded description and transcript segment citations. Exclude duplicates, conflicts and questions."
+          description:
+            "Officer-reviewed items with stable item_id, normalized imperative title, grounded description and transcript segment citations. Exclude duplicates, conflicts and questions."
         })
       else
         parameters
@@ -3442,12 +3450,26 @@ defmodule Platform.Federation.ToolSurface do
 
     %{
       name: name,
-      description: if(filing?, do: "File the triage officer's reviewed follow-up work through the meeting's single persisted completion run.", else: "Complete the assigned scribe's finalized full-transcript canvas and dispatch the triage officer."),
+      description:
+        if(filing?,
+          do:
+            "File the triage officer's reviewed follow-up work through the meeting's single persisted completion run.",
+          else:
+            "Complete the assigned scribe's finalized full-transcript canvas and dispatch the triage officer."
+        ),
       parameters: parameters,
       returns_schema: ReturnSchemas.for_tool(name),
-      returns: "Canonical meeting_id, run_id and persisted completion status; filing includes task_ids, scribe completion includes canvas_id.",
-      limitations: "Authenticated assigned role only. The meeting must be ended and transcription finalized. Foreign tenant, transcript, run or canvas identities are refused. Replay uses the same run and stable item identities; it does not create another task.",
-      when_to_use: if(filing?, do: "On meeting_triage_dispatch after reviewing the full finalized transcript and scribe canvas.", else: "On meeting_scribe_completion after writing the canonical scribe canvas from the full finalized transcript.")
+      returns:
+        "Canonical meeting_id, run_id and persisted completion status; filing includes task_ids, scribe completion includes canvas_id.",
+      limitations:
+        "Authenticated assigned role only. The meeting must be ended and transcription finalized. Foreign tenant, transcript, run or canvas identities are refused. Replay uses the same run and stable item identities; it does not create another task.",
+      when_to_use:
+        if(filing?,
+          do:
+            "On meeting_triage_dispatch after reviewing the full finalized transcript and scribe canvas.",
+          else:
+            "On meeting_scribe_completion after writing the canonical scribe canvas from the full finalized transcript."
+        )
     }
   end
 
@@ -5374,17 +5396,28 @@ defmodule Platform.Federation.ToolSurface do
          :ok <- meeting_completion_access(args, context) do
       result =
         case name do
-          "meeting_scribe_complete" -> Platform.Meetings.Completion.scribe_complete(agent_id, args)
-          "meeting_triage_file" -> Platform.Meetings.Completion.triage_file(agent_id, args)
+          "meeting_scribe_complete" ->
+            Platform.Meetings.Completion.scribe_complete(agent_id, args)
+
+          "meeting_triage_file" ->
+            Platform.Meetings.Completion.triage_file(agent_id, args)
         end
 
       case result do
-        {:ok, response} -> {:ok, response}
+        {:ok, response} ->
+          {:ok, response}
+
         {:error, reason} ->
           {:error, %{error: "#{name}: #{inspect(reason)}", code: reason, recoverable: false}}
       end
     else
-      _ -> {:error, %{error: "#{name}: no authenticated calling agent", code: :unauthorized, recoverable: false}}
+      _ ->
+        {:error,
+         %{
+           error: "#{name}: no authenticated calling agent",
+           code: :unauthorized,
+           recoverable: false
+         }}
     end
   end
 

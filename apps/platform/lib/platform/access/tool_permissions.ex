@@ -65,7 +65,8 @@ defmodule Platform.Access.ToolPermissions do
     "federation" => ~w(federation_status vault_fetch vault_list feedback_submit),
     "files" => ~w(file_list file_get_text file_get_metadata file_search file_add file_delete),
     "mail" => ~w(mail_draft_create mail_draft_update mail_inbound_list mail_inbound_get),
-    "meetings" => ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_activity_push intent_ack),
+    "meetings" =>
+      ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_activity_push intent_ack),
     "memory" =>
       ~w(memory_view memory_create memory_str_replace memory_insert memory_delete memory_rename memory_search org_memory_recently_edited org_memory_recently_deleted org_memory_feedback_at_path),
     "messaging" => ~w(send_media react),

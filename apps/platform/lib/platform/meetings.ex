@@ -5926,13 +5926,16 @@ defmodule Platform.Meetings do
         {:error, :role_unassigned}
 
       agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_triage_attention(agent_id, Map.merge(Platform.Meetings.Completion.dispatch_payload(transcript.id), %{
-          reason: "meeting_triage_dispatch",
-          space_id: transcript.space_id,
-          room_id: transcript.room_id,
-          transcript_id: transcript.id,
-          canvas_id: canvas.id
-        }))
+        Platform.Federation.dispatch_triage_attention(
+          agent_id,
+          Map.merge(Platform.Meetings.Completion.dispatch_payload(transcript.id), %{
+            reason: "meeting_triage_dispatch",
+            space_id: transcript.space_id,
+            room_id: transcript.room_id,
+            transcript_id: transcript.id,
+            canvas_id: canvas.id
+          })
+        )
     end
   end
 

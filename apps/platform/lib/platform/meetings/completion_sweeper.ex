@@ -7,13 +7,17 @@ defmodule Platform.Meetings.CompletionSweeper do
     Process.send_after(self(), :tick, 30_000)
     {:ok, nil}
   end
+
   @impl true
   def handle_info(:tick, state) do
     try do
       Platform.Meetings.Completion.sweep()
     rescue
-      error -> require Logger; Logger.warning("Meeting completion retry failed: #{Exception.message(error)}")
+      error ->
+        require Logger
+        Logger.warning("Meeting completion retry failed: #{Exception.message(error)}")
     end
+
     Process.send_after(self(), :tick, 30_000)
     {:noreply, state}
   end

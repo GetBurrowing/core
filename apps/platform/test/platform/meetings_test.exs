@@ -2047,7 +2047,8 @@ defmodule Platform.MeetingsTest do
       transcript = create_processing_transcript_with_space()
       canvas = %Platform.Chat.Canvas{id: Ecto.UUID.generate()}
 
-      assert {:error, :runtime_unresolvable} = Meetings.on_scribe_canvas_created(transcript, canvas)
+      assert {:error, :runtime_unresolvable} =
+               Meetings.on_scribe_canvas_created(transcript, canvas)
 
       agent_id = agent.id
 
