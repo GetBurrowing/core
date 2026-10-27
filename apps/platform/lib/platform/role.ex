@@ -221,6 +221,9 @@ defmodule Platform.Role do
     Platform.Meetings.SayRegistry,
     Platform.Meetings.VoiceSeatCache,
     Platform.Meetings.AgentActivity.Store,
+    # Inert: a Registry and an empty DynamicSupervisor; an accumulator starts
+    # only on a voice_ask_agent call on this node (task 01a17b10 stage 4).
+    Platform.Meetings.VoiceAsk.Supervisor,
     # Inert: seeded from its own @built_in_steps in init/1, and the task
     # transition request path reads it (lifecycle/executor.ex).
     Platform.Lifecycle.StepRegistry,
@@ -274,7 +277,8 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     :canvas_search_backfill,
     :burrow_docs_seed,
-    :default_space_seed
+    :default_space_seed,
+    :burrow_seed
   ]
 
   # Web children that `Platform.Application.children/2` adds only under :web,

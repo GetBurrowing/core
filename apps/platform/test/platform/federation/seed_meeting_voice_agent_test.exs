@@ -185,7 +185,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
       assert MapSet.new(RuntimeProfiles.tool_profile(runtime)) ==
-               MapSet.new(~w(messaging context_read))
+               MapSet.new(~w(messaging context_read voice_ask))
 
       refute "task" in RuntimeProfiles.tool_profile(runtime)
       refute "plan" in RuntimeProfiles.tool_profile(runtime)

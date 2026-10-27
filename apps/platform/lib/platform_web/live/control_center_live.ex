@@ -216,6 +216,7 @@ defmodule PlatformWeb.ControlCenterLive do
     restarting? = socket.assigns.restarting_agent_id == entry.agent.id
     connected? = socket.assigns.agent_host_connected?
     key_set? = NativeLogin.api_key_set?(entry.agent)
+    login_mode = NativeLogin.login_mode()
 
     %{
       view: view,
@@ -233,7 +234,8 @@ defmodule PlatformWeb.ControlCenterLive do
       buttons: NativeStatus.header_buttons(view, connected?, restarting?),
       # Login (stage 6): is an API key saved, and which step to show.
       key_set?: key_set?,
-      login_step: NativeLogin.step(entry.observed, key_set?)
+      login_mode: login_mode,
+      login_step: NativeLogin.step(entry.observed, key_set?, login_mode)
     }
   end
 
@@ -992,6 +994,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 can_manage?={@native_header.can_manage?}
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
+                mode={@native_header.login_mode}
               />
 
               <NativeFiles.editor
@@ -1019,6 +1022,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 can_manage?={@native_header.can_manage?}
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
+                mode={@native_header.login_mode}
               />
 
               <NativeLoginPanel.logs

@@ -237,9 +237,17 @@ describe("observed state", () => {
     expect(loginScreenStatus({ state: "ready" })).toBe(false);
   });
 
-  test("needs_login carries the step and the url suite-cli reported, and nothing else", () => {
-    const o = observe(A, show("active"), { state: "needs_login", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
-    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
+  // Core task 01a17b10: Burrow never relays a login. observeAgent returns
+  // observe() of the status file, so this is what core would receive.
+  test("needs_login carries the step only: a url suite-cli reported is never copied", () => {
+    const url = "https://claude.com/cai/oauth/authorize?x=1";
+    const status = { state: "needs_login", login: { step: "login_url", url } } as Parameters<typeof observe>[2];
+    const o = observe(A, show("active"), status);
+    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url" } });
+    expect(Object.keys(o.login ?? {})).toEqual(["step"]);
+    expect("url" in (o.login ?? {})).toBe(false);
+    expect(JSON.stringify(o)).not.toContain(url);
+    expect(JSON.stringify(o)).not.toContain("oauth");
   });
 });
 
@@ -516,10 +524,26 @@ describe("no path from Burrow into an agent's pane", () => {
     }
   });
 
-  test("the commands core can send are exactly start, restart, stop, logs, pane and check_auth", () => {
+  test("the commands core can send are exactly start, restart, stop, logs, pane, check_auth, env_names and admin", () => {
     const main = readFileSync(resolve(src, "main.ts"), "utf8");
     const events = [...main.matchAll(/channel\.on\("([^"]+)"/g)].map((m) => m[1]).sort();
-    expect(events).toEqual(["agent.check_auth", "agent.logs", "agent.pane", "agent.restart", "agent.start", "agent.stop"]);
+    expect(events).toEqual([
+      "agent.check_auth",
+      "agent.logs",
+      "agent.pane",
+      "agent.restart",
+      "agent.start",
+      "agent.stop",
+      "host.admin",
+      "host.env_names",
+    ]);
+  });
+
+  test("the two host.* commands never reach a pane or a login: no pane, tmux or login code in docker.ts", () => {
+    const docker = readFileSync(resolve(src, "docker.ts"), "utf8");
+    expect(docker).not.toMatch(/tmux|capture-pane|statusSaysLogin|agentPane/);
+    // Counter-pin: the scan reads real source (docker.ts names the runtime socket).
+    expect(docker).toContain("AGENT_HOST_RUNTIME_SOCKET");
   });
 });
 
@@ -751,5 +775,67 @@ describe("BURROW_ env names with a SUITE_ fallback", () => {
     const main = readFileSync(resolve(import.meta.dir, "..", "src", "main.ts"), "utf8");
     expect(main).toContain('readEnv("BURROW_CORE_URL", "SUITE_CORE_URL")');
     expect(main).not.toContain('required("SUITE_CORE_URL")');
+  });
+});
+
+describe("full root (task 01a17b10 stage 3)", () => {
+  const deps = { runner: { async run() { return { exitCode: 0, stdout: "", stderr: "" }; } } as Runner, secrets: new SecretRegistry(), runnerCommand: ["x"], log: () => {} };
+  const auth = (env: Record<string, string> | null): AuthDeps => ({ readEnv: () => env, fetch: async () => ({ status: 200 }) });
+
+  function fakeDocker() {
+    const calls: string[] = [];
+    const docker = async (path: string, init: { method: string; body?: string }) => {
+      calls.push(`${init.method} ${path.split("?")[0]}`);
+      const body: unknown = path.startsWith("/containers/json")
+        ? [{ Id: "abc" }]
+        : path === "/containers/abc/json"
+          ? { Id: "abc", Name: "/core", Config: { Image: "registry.invalid/core:old" }, HostConfig: {}, NetworkSettings: { Networks: { default: {} } } }
+          : path.startsWith("/containers/create")
+            ? { Id: "new1" }
+            : {};
+      return { status: 200, json: async () => body, text: async () => "" };
+    };
+    return { docker, calls };
+  }
+
+  test("the hello advertises full_root, false by default", () => {
+    expect(new Host(deps, { push: async () => "ok" }, "contained").hello()).toEqual({ profile: "contained", full_root: false });
+    expect(new Host(deps, { push: async () => "ok" }, "contained", undefined, true, null).hello()).toEqual({ profile: "contained", full_root: true });
+  });
+
+  test("with full root off, restart/deploy/rollback answer requires_full_root and touch no socket", async () => {
+    const { docker, calls } = fakeDocker();
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, false, docker);
+    for (const op of ["restart", "deploy", "rollback"]) await host.handleAdmin({ op, service: "core", tag: "t", ref: op });
+    expect(calls).toEqual([]);
+    expect(pushed).toHaveLength(3);
+    for (const [event, p] of pushed) {
+      expect(event).toBe("host.reply");
+      expect((p.result as Record<string, unknown>).error).toBe("requires_full_root");
+      expect((p.result as Record<string, unknown>).manifest_key).toBe("agents.full_root");
+    }
+  });
+
+  test("with full root on, restart and deploy drive the runtime socket", async () => {
+    const { docker, calls } = fakeDocker();
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, true, docker);
+    await host.handleAdmin({ op: "restart", service: "core", ref: "r1" });
+    expect(calls).toContain("POST /containers/abc/restart");
+    await host.handleAdmin({ op: "deploy", service: "core", tag: "new", ref: "r2" });
+    expect(calls).toContain("POST /images/create");
+    expect(calls).toContain("POST /containers/new1/start");
+    expect((pushed[1]?.[1].result as Record<string, unknown>).image).toBe("registry.invalid/core:new");
+    await host.handleAdmin({ op: "rollback", service: "core", ref: "r3" });
+    expect((pushed[2]?.[1].result as Record<string, unknown>).image).toBe("registry.invalid/core:old");
+  });
+
+  test("env names reply carries names only, never values", async () => {
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", auth({ ZED: "secret-value-1", ALPHA: "secret-value-2" }));
+    await host.handleEnvNames({ agent_id: A, ref: "r" });
+    expect(pushed).toEqual([["host.reply", { ref: "r", result: { names: ["ALPHA", "ZED"] } }]]);
+    expect(JSON.stringify(pushed)).not.toContain("secret-value");
   });
 });

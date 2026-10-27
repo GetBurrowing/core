@@ -40,9 +40,10 @@ import asyncio
 import json
 import logging
 
-from livekit.agents import Agent, StopResponse, llm
+from livekit.agents import Agent, FlushSentinel, StopResponse, llm
 
 from meeting_voice_agent.config import AgentConfig
+from meeting_voice_agent.routing import RoutedAnswer, VoiceRouter, routed_clauses
 
 
 def _instructions_with_space_context(base_instructions: str, space_id: str | None) -> str:
@@ -197,8 +198,11 @@ class MeetingVoiceAgent(Agent):
         agent_roster: list[dict] | None = None,
         voice_context: dict | None = None,
         drop_empty_turns: bool = False,
+        router: VoiceRouter | None = None,
     ) -> None:
         self._config = config
+        self._router = router
+        self.routed_answers: list[RoutedAnswer] = []
         self._drop_empty_turns = drop_empty_turns
         self._space_id = space_id
         self._agent_roster = agent_roster
@@ -224,6 +228,49 @@ class MeetingVoiceAgent(Agent):
             logger.info("voice turn: committed turn has no transcript, no reply")
             raise StopResponse()
 
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        """Route the turn (task 01a17b10 stage 4).
+
+        With no router, or a class routed `local`, this is the SDK default:
+        the mouth model answers. A class routed `burrow` speaks the ack at
+        once, then Burrow's streamed answer clause by clause; a
+        `FlushSentinel` after each one makes TTS start on it without waiting
+        for the rest. Barge-in cancels this generator, which closes the
+        answer stream and stops polling Core.
+        """
+        question = _last_user_text(chat_ctx)
+        variant = "local"
+        turn_class = None
+        if self._router is not None and question:
+            classification = await self._router.classify(question)
+            turn_class = classification.turn_class
+            variant = self._router.variant_for(turn_class)
+
+        if variant != "burrow":
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+            return
+
+        routing = self._router.config
+        record = RoutedAnswer(question, turn_class, variant)
+        self.routed_answers.append(record)
+        yield routing.ack_text
+        yield FlushSentinel()
+        source = self._router.new_source()
+        try:
+            async for clause, _from_answer in routed_clauses(
+                source,
+                question,
+                turn_class=turn_class,
+                timeout_s=routing.answer_timeout_s,
+                no_answer_text=routing.no_answer_text,
+                record=record,
+            ):
+                yield clause + " "
+                yield FlushSentinel()
+        finally:
+            self._router.report(record)
+
     def instructions_for_context(self, voice_context: dict | None) -> str:
         """The instructions this agent would have been built with under
         `voice_context`, via the same `build_instructions`."""
@@ -237,6 +284,13 @@ class MeetingVoiceAgent(Agent):
     async def apply_voice_context(self, voice_context: dict | None) -> None:
         self.voice_context = voice_context
         await self.update_instructions(self.instructions_for_context(voice_context))
+
+
+def _last_user_text(chat_ctx) -> str:
+    for item in reversed(getattr(chat_ctx, "items", [])):
+        if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "user":
+            return (item.text_content or "").strip()
+    return ""
 
 
 def attach_voice_context_handler(agent: MeetingVoiceAgent, room) -> None:

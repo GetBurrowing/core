@@ -32,9 +32,20 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   The key is never rendered: the field has no `value`, and nothing about the
   key is ever put in an assign.
 
+  ## Operator login mode (task 01a17b10 stage 1)
+
+  When the install runs native agents in operator mode
+  (`Platform.Agents.NativeLogin.login_mode/0`), the login steps show the
+  attach-command TEMPLATE (placeholders only) in place of the API key field:
+  a person with access to the server attaches to the agent's pane and logs in
+  to Claude Code there, typing the code into Claude Code's own prompt. Burrow
+  shows no login page, takes no code and has no key form in this mode.
+
   Pure rendering: no socket, no DB.
   """
   use Phoenix.Component
+
+  alias Platform.Agents.NativeLogin, as: Login
 
   @doc "What a non-manager sees in place of the login controls."
   def locked_message(name), do: "Someone who manages #{name} can log it in."
@@ -42,19 +53,63 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   @doc "The success line, verbatim from the canvas."
   def logged_in_message(name), do: "#{name} is logged in to Claude."
 
+  @doc "What operator mode says the operator does, under the attach command."
+  def operator_code_line,
+    do: "Type the login code into Claude Code's own prompt there. Burrow never sees it."
+
   @doc "The subscription row's state."
   def subscription_unavailable, do: "Not available yet"
 
   attr :agent, :map, required: true
   attr :can_manage?, :boolean, required: true
   attr :key_set?, :boolean, required: true
-  # NativeLogin.step/2: :needs_key | :key_refused
+  # NativeLogin.step/3: :needs_key | :key_refused | :needs_operator
   attr :step, :atom, required: true
+  # NativeLogin.login_mode/0
+  attr :mode, :atom, default: :api_key
 
   @doc """
   The login steps. Shown in place of "Agent files" while the agent waits for
   a login (observed `needs_login`).
   """
+  def panel(%{mode: :operator} = assigns) do
+    assigns = assign(assigns, :command, Login.attach_command_template())
+
+    ~H"""
+    <section
+      id="native-login"
+      class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm"
+      data-step={@step}
+      data-mode="operator"
+    >
+      <h2 class="text-[22px] font-semibold leading-7 text-base-content">
+        Log {@agent.name} in to Claude
+      </h2>
+      <p class="mt-1 max-w-prose text-sm text-base-content">
+        This install logs agents in at their own terminal. {@agent.name} is waiting at
+        Claude Code's login for someone with access to this server.
+      </p>
+
+      <div :if={@can_manage?} id="native-login-operator" class="mt-4 min-w-0">
+        <h3 class="text-sm font-semibold text-base-content">Attach to {@agent.name}'s terminal</h3>
+        <p class="mt-1 text-sm text-subtle">
+          On the server, fill in the placeholders and run:
+        </p>
+        <pre
+          id="native-login-attach-command"
+          class="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-box bg-neutral p-3 font-mono text-xs leading-5 text-neutral-content"
+        >{@command}</pre>
+        <p id="native-login-operator-code" class="mt-2 text-sm text-base-content">
+          {operator_code_line()}
+        </p>
+      </div>
+      <p :if={!@can_manage?} id="native-login-locked" class="mt-4 text-sm text-subtle">
+        {locked_message(@agent.name)}
+      </p>
+    </section>
+    """
+  end
+
   def panel(assigns) do
     ~H"""
     <section
@@ -118,14 +173,40 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   attr :agent, :map, required: true
   attr :can_manage?, :boolean, required: true
   attr :key_set?, :boolean, required: true
-  # NativeLogin.step/2
+  # NativeLogin.step/3
   attr :step, :atom, required: true
+  # NativeLogin.login_mode/0
+  attr :mode, :atom, default: :api_key
 
   @doc """
   The compact "Claude login" card shown under "Agent files" when the agent is
   not waiting for a login: whether a key is saved, waiting while the agent
   starts with it, and the logged-in line.
   """
+  def summary(%{mode: :operator} = assigns) do
+    ~H"""
+    <section
+      id="native-login-summary"
+      class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm"
+      data-step={@step}
+      data-mode="operator"
+    >
+      <h2 class="text-lg font-semibold text-base-content">Claude login</h2>
+      <p :if={@step == :logged_in} id="native-login-success" class="mt-1 text-sm text-base-content">
+        <span class="hero-check-circle mr-1 inline-block h-4 w-4 align-text-bottom" />
+        {logged_in_message(@agent.name)}
+      </p>
+      <p :if={@step == :waiting} id="native-login-waiting" class="mt-1 text-sm text-base-content">
+        Waiting for {@agent.name} to start.
+      </p>
+      <p class="mt-1 text-sm text-subtle">
+        {@agent.name} logs in at its own terminal, by someone with access to this server.
+        No API key is used.
+      </p>
+    </section>
+    """
+  end
+
   def summary(assigns) do
     ~H"""
     <section

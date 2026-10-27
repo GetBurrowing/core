@@ -324,6 +324,101 @@ class McpConfig:
         )
 
 
+#: Turn classes the local mouth model sorts every committed turn into
+#: (task 01a17b10 stage 4).
+ROUTING_CLASSES = ("ack", "turn_taking", "substantive")
+
+#: Where a class is answered: `local` is the mouth model on `MVA_LLM_*`;
+#: `burrow` is the install's Burrow agent, asked through Core's
+#: `voice_ask_agent` tool and streamed back.
+ROUTING_VARIANTS = ("local", "burrow")
+
+DEFAULT_ROUTING = {"ack": "local", "turn_taking": "local", "substantive": "burrow"}
+
+
+def parse_routing(raw: str | None) -> dict[str, str]:
+    """`MVA_ROUTING` as data: `class=variant` pairs, comma separated, or a
+    JSON object. Unnamed classes keep `DEFAULT_ROUTING`. An unknown class or
+    variant raises `ConfigError` naming it, never silently routes."""
+    routing = dict(DEFAULT_ROUTING)
+    if raw is None or raw.strip() == "":
+        return routing
+
+    text = raw.strip()
+    if text.startswith("{"):
+        import json
+
+        try:
+            pairs = json.loads(text)
+        except ValueError as exc:
+            raise ConfigError(f"MVA_ROUTING is not valid JSON: {raw!r}") from exc
+        if not isinstance(pairs, dict):
+            raise ConfigError(f"MVA_ROUTING JSON must be an object: {raw!r}")
+        items = [(str(k), str(v)) for k, v in pairs.items()]
+    else:
+        items = []
+        for part in text.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" not in part:
+                raise ConfigError(f"MVA_ROUTING entry {part!r} is not class=variant")
+            key, value = part.split("=", 1)
+            items.append((key, value))
+
+    for key, value in items:
+        key, value = key.strip().lower(), value.strip().lower()
+        if key not in ROUTING_CLASSES:
+            raise ConfigError(
+                f"MVA_ROUTING class {key!r} is not one of {', '.join(ROUTING_CLASSES)}"
+            )
+        if value not in ROUTING_VARIANTS:
+            raise ConfigError(
+                f"MVA_ROUTING variant {value!r} for {key!r} is not one of "
+                f"{', '.join(ROUTING_VARIANTS)}"
+            )
+        routing[key] = value
+    return routing
+
+
+@dataclass(frozen=True)
+class RoutingConfig:
+    """Voice brain routing (task 01a17b10 stage 4). The experiment surface.
+
+    The local mouth model (`MVA_LLM_*`) classifies each committed turn and
+    keeps acks, turn-taking and barge-in. A class routed to `burrow` gets the
+    spoken `ack_text` at once, then Burrow's answer spoken clause by clause
+    as it streams. If no answer text arrives within `answer_timeout_s`, the
+    mouth speaks `no_answer_text` and nothing else: it never makes one up.
+    """
+
+    routes: dict = field(default_factory=lambda: dict(DEFAULT_ROUTING))
+    ack_text: str = "One moment."
+    no_answer_text: str = "Sorry, I couldn't get an answer to that just now."
+    answer_timeout_s: float = 20.0
+    classifier_timeout_s: float = 1.5
+    poll_wait_ms: int = 1500
+    burrow_agent_id: str | None = None
+
+    def variant_for(self, turn_class: str) -> str:
+        return self.routes.get(turn_class, DEFAULT_ROUTING.get(turn_class, "local"))
+
+    @classmethod
+    def from_env(cls) -> RoutingConfig:
+        return cls(
+            routes=parse_routing(os.environ.get("MVA_ROUTING")),
+            ack_text=_env_str("MVA_ROUTED_ACK_TEXT", "One moment."),
+            no_answer_text=_env_str(
+                "MVA_ROUTED_NO_ANSWER_TEXT",
+                "Sorry, I couldn't get an answer to that just now.",
+            ),
+            answer_timeout_s=_env_float("MVA_ROUTED_ANSWER_TIMEOUT_S", 20.0),
+            classifier_timeout_s=_env_float("MVA_CLASSIFIER_TIMEOUT_S", 1.5),
+            poll_wait_ms=_env_int("MVA_ROUTED_POLL_WAIT_MS", 1500),
+            burrow_agent_id=_env_optional_str("MVA_BURROW_AGENT_ID"),
+        )
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     """Top-level config assembled from the environment. See README.md."""
@@ -342,6 +437,7 @@ class AgentConfig:
     agent_name: str
     instructions: str
     worker_agent_name: str = field(default="")
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
 
     @classmethod
     def from_env(cls) -> AgentConfig:
@@ -485,4 +581,5 @@ class AgentConfig:
                 "fail, is the complete action.",
             ),
             worker_agent_name=_env_str("MVA_WORKER_AGENT_NAME", "meeting-voice-agent"),
+            routing=RoutingConfig.from_env(),
         )

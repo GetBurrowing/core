@@ -50,6 +50,7 @@ ERROR_CODES = (
     "embeddings_endpoint_required",
     "external_oidc_incomplete",
     "backup_incomplete",
+    "backup_required_hosted",
     "duplicate_endpoint_name",
 )
 
@@ -69,6 +70,10 @@ MAC_ERROR_CODES = (
 # The [agents] table is absent from every manifest written before task
 # 01a10322; absent means no native agents at all.
 AGENTS_ABSENT_PROFILE = "off"
+
+# A hosted install with no [backup] target gets this one.
+HOSTED_BACKUP_TARGET = "local-path"
+HOSTED_BACKUP_PATH = "/var/backups/burrow"
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 # A Docker Hub namespace (user or organisation): lowercase alphanumerics,
@@ -414,9 +419,24 @@ def _rules(m, bad, errors, present=frozenset()):
     not_applicable(
         "backup",
         "target",
-        [k for k in SCHEMA["backup"] if k != "target" and k not in allowed],
+        [
+            k
+            for k in SCHEMA["backup"]
+            if k not in ("target", "keep", "hosted_opt_out") and k not in allowed
+        ],
         f'not used with target = "{target}"',
     )
+    if m["install"]["hosted"] is True and target == "none" and backup["hosted_opt_out"] is not True:
+        add(
+            "backup_required_hosted",
+            "backup.target",
+            "a hosted install needs a backup target; set one, or set backup.hosted_opt_out = true "
+            "to run without backups on purpose",
+        )
+    if backup["hosted_opt_out"] is True and target != "none":
+        add("invalid_value", "backup.hosted_opt_out", 'contradicts target = "' + target + '"')
+    if type(backup["keep"]) is int and backup["keep"] < 1 and not _is_bad("backup.keep", bad):
+        add("invalid_value", "backup.keep", "must be at least 1")
     if target == "local-path" and backup["path"] is not None and not backup["path"].startswith("/"):
         add("invalid_value", "backup.path", "must be an absolute path")
     if target == "s3-compatible":
@@ -661,5 +681,10 @@ def validate(raw):
     normalized = normalize(clean)
     if "agents" not in clean:
         normalized["agents"]["profile"] = AGENTS_ABSENT_PROFILE
+    if normalized["install"]["hosted"] is True and "backup.target" not in _present(clean):
+        # A hosted install defaults to a real backup target (stage 5).
+        normalized["backup"]["target"] = HOSTED_BACKUP_TARGET
+        if "backup.path" not in _present(clean):
+            normalized["backup"]["path"] = HOSTED_BACKUP_PATH
     _rules(normalized, bad, errors, _present(clean))
     return errors, (None if errors else normalized)

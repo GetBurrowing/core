@@ -23,6 +23,9 @@ dev = [
 # room, plays one short spoken question, and reports first-audio latency.
 # See README.md's "Latency harness" section for usage.
 meeting-voice-latency-harness = "meeting_voice_agent.latency_harness_live:main"
+# Task 01a17b10 stage 4: mouth candidates (ack latency, turn-class correctness)
+# and time-to-first-substantive-word before/after routing. README "Routing".
+meeting-voice-routing-harness = "meeting_voice_agent.routing_harness:main"
 
 [build-system]
 requires = ["setuptools>=68"]

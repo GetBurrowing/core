@@ -158,7 +158,14 @@ defmodule Platform.Federation.PlayToolsTest do
     end
   end
 
-  defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
+  # The `admin` and `voice_ask` bundles (task 01a17b10 stages 3 and 4) are
+  # additive to main's list and are set aside here; the core tests assert
+  # them by name.
+  defp catalogue_names do
+    ToolSurface.tool_definitions()
+    |> Enum.reject(&(&1.bundle in ["admin", "voice_ask"]))
+    |> Enum.map(& &1.name)
+  end
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
     test "tool_definitions/0 names equal main's 137, in order" do

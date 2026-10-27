@@ -95,6 +95,12 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   skills, handles no attachments, sends no mail, and its presence in a room
   is a raw LiveKit participant driven by the stage-1 process rather than an
   MCP `meetings` bundle tool call.
+
+  Task 01a17b10 stage 4 ADDED `voice_ask` (`voice_ask_agent`,
+  `voice_ask_poll`, see `Platform.Federation.VoiceAskTools`): the persona asks
+  the install's Burrow agent a question in the meeting chat and reads the
+  streamed answer. It is a bundle of its own, not `meetings`, precisely so
+  this grant does not carry `meeting_create` with it.
   """
 
   use Mix.Task
@@ -124,7 +130,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   # side's default ever changes, they must change together.
   @livekit_agent_name "meeting-voice-agent"
 
-  @tool_profile ~w(messaging context_read)
+  @tool_profile ~w(messaging context_read voice_ask)
 
   # Informational only (moduledoc note in Platform.Agents.Voice) — actual
   # synthesis happens in services/meeting-voice-agent's TTS client, pointed

@@ -62,6 +62,11 @@ MEDIA_REACH = ("lan", "tailnet", "public")
 # this table existed renders byte-unchanged; a table that omits `profile` gets
 # "full_machine", the profile for a VM we provision.
 AGENT_PROFILES = ("full_machine", "contained", "off")
+# How native agents log in to Claude (core task 01a17b10): "api_key" (the
+# shipped default) or "operator" (no API key; a human attaches to the agent's
+# pane and logs in to Claude Code there). Rendered into core's env as
+# NATIVE_AGENT_LOGIN.
+AGENT_LOGINS = ("api_key", "operator")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -74,6 +79,10 @@ SCHEMA = {
         "target": _enum(TARGETS, "single-host"),
         # Build-time modules (ADR 0055): selects the core image flavour.
         "modules": _set(registry.MODULES),
+        # An install we provision and run for a customer (core task 01a17b10
+        # stage 5). A hosted install must have a backup target: the validator
+        # refuses `[backup] target = "none"` unless `backup.hosted_opt_out`.
+        "hosted": _bool(False),
     },
     "domain": {
         "primary": _str(),
@@ -125,6 +134,10 @@ SCHEMA = {
         "region": _str(),
         "access_key_ref": _str(),
         "secret_key_ref": _str(),
+        # Nightly retention: the newest `keep` snapshots survive.
+        "keep": Field("int", default=14),
+        # hosted installs only: the explicit "no backups, on purpose".
+        "hosted_opt_out": _bool(False),
     },
     "images": {
         # Exactly ONE of the two, no default (a default would name one
@@ -164,6 +177,14 @@ SCHEMA = {
     # packaging. Core never branches on it; the agent host reports it.
     "agents": {
         "profile": _enum(AGENT_PROFILES, "full_machine"),
+        "login": _enum(AGENT_LOGINS, "api_key"),
+        # Full root (core task 01a17b10 stage 3): false unless the install
+        # explicitly enables it. contained: the container runtime socket is
+        # mounted into the agent-host container (exactly one mount).
+        # full_machine: the host is already root, so no mount; the host just
+        # advertises full_root in its hello. Gates the admin_restart,
+        # admin_deploy and admin_rollback tools.
+        "full_root": _bool(False),
     },
 }
 

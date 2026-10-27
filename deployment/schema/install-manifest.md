@@ -35,6 +35,7 @@ validation instead of silently keeping its default.
 | `name` | string | required | `[a-z][a-z0-9-]{0,62}`. Names the install; becomes `DEPLOY_TARGET`. |
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
 | `target` | `single-host` \| `mac` | `single-host` | Which renderer the manifest is for (task 01a0d6ab). The validator applies that target's rules; `render --target`, if given, must match (`target_mismatch`). |
+| `hosted` | bool | `false` | An install we provision. Requires a backup target; see `[backup]`. |
 | `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `<registry>/core:core`, `["play"]` runs `<registry>/core:play` (legacy `image_namespace`: `suite-core:core` / `suite-core:play`). A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`
@@ -127,6 +128,12 @@ External mode needs all three of `issuer`, `client_id` and `client_secret_ref`. 
 | `path` | string | none | Absolute path. Required for `local-path`. |
 | `bucket`, `endpoint`, `access_key_ref`, `secret_key_ref` | string | none | Required for `s3-compatible`. `endpoint` is an http(s) URL. |
 | `region` | string | none | Optional, `s3-compatible` only. |
+| `keep` | int | `14` | Retention: the newest `keep` nightly snapshots survive. |
+| `hosted_opt_out` | bool | `false` | Hosted installs only: run without backups on purpose. Contradicts any target but `none`. |
+
+A target other than `none` makes the single-host renderer emit a nightly systemd timer (`burrow-backup.timer`) that runs `bin/burrow-backup`: a `pg_dump -Fc` of every database in `core-postgres`, a tar snapshot of each data volume (`core-data`, and `agent-homes` or the host `/home` when native agents run), and retention. `bin/burrow-restore-drill <backup dir>` restores the newest snapshot into a throwaway postgres and a temp dir and prints `restored <db> <rows>`. `s3-compatible` credentials are secret refs read from `customer-secrets.env`; no rendered file other than that one holds a value. The job writes `backup-status.json` (last success time, size) into the `core-data` volume for `admin_health`.
+
+`install.hosted = true` marks an install we provision. With no `[backup] target` it defaults to `local-path` at `/var/backups/burrow`, and `target = "none"` is `backup_required_hosted` unless `hosted_opt_out = true`.
 
 A missing required field gives one `backup_incomplete` error. A field the target does not use gives `field_not_applicable`.
 
@@ -183,6 +190,8 @@ agent host reports.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `profile` | `full_machine` \| `contained` \| `off` | `full_machine` when the table is present, `off` when it is absent | A manifest without `[agents]` renders exactly as it did before the table existed. On `target = "mac"` any profile other than `off` is `field_not_applicable`. |
+| `login` | `api_key` \| `operator` | `api_key` | How native agents log in to Claude (core task 01a17b10). Rendered into core-platform's env as `NATIVE_AGENT_LOGIN` whenever the profile is not `off`. `operator`: core sends no API key and a person attaches to the agent's pane to log in to Claude Code there (services/agent-host/README.md, "Operator login"). |
+| `full_root` | bool | `false` | Lets the `admin_restart`, `admin_deploy` and `admin_rollback` tools act (core task 01a17b10). Off: nothing is mounted and those tools return `requires_full_root` naming `agents.full_root`. On, `contained`: exactly one mount, the container runtime socket, into the agent-host container, plus `AGENT_HOST_FULL_ROOT=true`. On, `full_machine`: no mount (the host is already root); the host env file gets `AGENT_HOST_FULL_ROOT=true`. The host advertises `full_root` in its hello. Ignored when `profile = "off"`. Note: `admin_rpc` evaluates code in the running core release and is NOT gated by this key. |
 
 - **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
   service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,
@@ -241,6 +250,7 @@ A valid manifest prints `ok` and exits `0`.
 | `embeddings_endpoint_required` | `embeddings.mode = "endpoint"` without `base_url` |
 | `external_oidc_incomplete` | `auth.mode = "external-oidc"` missing issuer, client_id or client_secret_ref |
 | `backup_incomplete` | the backup target is missing a field it requires |
+| `backup_required_hosted` | `install.hosted` with `backup.target = "none"` and no `hosted_opt_out` |
 | `duplicate_endpoint_name` | two `[[models.endpoints]]` entries share a `name` |
 | `mac_voice_unsupported` | `target = "mac"` with `services.voice = true` |
 | `mac_local_embeddings_unsupported` | `target = "mac"` with `services.embeddings = true`, or an explicit `embeddings.mode = "local"` |

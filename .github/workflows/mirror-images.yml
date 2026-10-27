@@ -75,5 +75,6 @@ jobs:
           docker.io/library/eclipse-temurin:21-jdk@sha256:23cc5734ff46e776f51ce66eb9ee08444fd47caabec0a95b7eb6e94be2d3696d ghcr.io/getburrowing/eclipse-temurin:21-jdk
           docker.io/oven/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d ghcr.io/getburrowing/bun:1
           docker.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea ghcr.io/getburrowing/buildkit:buildx-stable-1
+          docker.io/amazon/aws-cli:2.17.62@sha256:183d4bb76169d35c12ba99e3384b605fee9a72fcb7ff1eeaa857fc27aa8fc713 ghcr.io/getburrowing/aws-cli:2.17.62
           MIRRORS
           exit "$fail"

@@ -231,6 +231,8 @@ config :platform, :start_canvas_search_backfill, false
 config :platform, :start_burrow_docs_seed, false
 # Task 01a10322 stage 6: tests call Platform.Chat.DefaultSpace.ensure/0 directly.
 config :platform, :start_default_space_seed, false
+# Task 01a17b10 stage 3: tests call Platform.Agents.Burrow.ensure/1 directly.
+config :platform, :start_burrow_seed, false
 
 # ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.

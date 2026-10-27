@@ -150,7 +150,8 @@ def _compose_service(plan, svc):
         out["environment"] = plain
     volumes = [f"{name}:{path}" for name, path in sorted(svc.volumes.items())]
     volumes += [
-        f"./{host}:{path}{':ro' if ro else ''}" for host, path, ro in sorted(svc.host_mounts)
+        f"{host if host.startswith('/') else './' + host}:{path}{':ro' if ro else ''}"
+        for host, path, ro in sorted(svc.host_mounts)
     ]
     if svc.container == "caddy":
         volumes += _caddy_mounts(plan)
@@ -301,6 +302,109 @@ mv "$out.tmp" "$out"
 """
 
 
+BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backup")
+BACKUP_UNIT_NAME = "burrow-backup.service"
+BACKUP_TIMER_NAME = "burrow-backup.timer"
+# Pinned: the s3-compatible target uploads with this CLI image. A digest-pinned
+# mirror of the upstream index (see .github/workflows/mirror-images.yml), never
+# Docker Hub directly.
+AWS_CLI_IMAGE = (
+    "ghcr.io/getburrowing/aws-cli:2.17.62"
+    "@sha256:183d4bb76169d35c12ba99e3384b605fee9a72fcb7ff1eeaa857fc27aa8fc713"
+)
+# Data volumes a backup snapshots when the install runs them.
+BACKUP_VOLUMES = ("core-data", "agent-homes")
+
+
+def _read_backup(name):
+    with open(os.path.join(BACKUP_DIR, name), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def backup_conf(plan):
+    """``backup.conf``: KEY=value, names and refs only, never a secret value."""
+    b = plan.backup
+    svc_volumes = {v for svc in plan.services.values() for v in svc.volumes}
+    volumes = [f"{plan.name}_{v}" for v in BACKUP_VOLUMES if v in svc_volumes]
+    lines = [
+        f"# {HEADER.format(name=plan.name)}",
+        "# Read by bin/burrow-backup and bin/burrow-restore-drill. Secret REFS only.",
+        f"TARGET={b['target']}",
+        f"KEEP={b['keep']}",
+        "PG_CONTAINER=core-postgres",
+        f"PG_USER={registry.POSTGRES_USER}",
+        f"HELPER_IMAGE={plan.services['core-postgres'].image}",
+        f'VOLUMES="{" ".join(volumes)}"',
+        f'HOST_DIRS="{"/home" if plan.agents == "full_machine" else ""}"',
+        f"STATUS_VOLUME={plan.name}_core-data",
+    ]
+    if b["target"] == "local-path":
+        lines.append(f"DEST_PATH={b['path']}")
+    else:
+        lines += [
+            f"BUCKET={b['bucket']}",
+            f"ENDPOINT={b['endpoint']}",
+            f"REGION={b['region'] or ''}",
+            f"ACCESS_KEY_REF={b['access_key_ref']}",
+            f"SECRET_KEY_REF={b['secret_key_ref']}",
+            f"AWS_CLI_IMAGE={AWS_CLI_IMAGE}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def backup_service_unit(plan):
+    lines = [
+        f"# {HEADER.format(name=plan.name)}",
+        "[Unit]",
+        f"Description=Burrow backup ({plan.name})",
+        "Requires=docker.service",
+        f"After=docker.service {STACK_UNIT_NAME}",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        f"WorkingDirectory={INSTALL_ROOT}",
+        f"Environment=BURROW_BACKUP_CONF={INSTALL_ROOT}/backup.conf",
+    ]
+    if plan.backup["target"] == "s3-compatible":
+        # The refs' values, read by this unit only (mode 0600 root).
+        lines.append(f"EnvironmentFile={INSTALL_ROOT}/customer-secrets.env")
+    lines.append(f"ExecStart={INSTALL_ROOT}/bin/burrow-backup")
+    return "\n".join(lines) + "\n"
+
+
+def backup_timer_unit(plan):
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                f"Description=Nightly Burrow backup ({plan.name})",
+                "",
+                "[Timer]",
+                "OnCalendar=*-*-* 03:15:00",
+                "RandomizedDelaySec=15m",
+                "Persistent=true",
+                f"Unit={BACKUP_UNIT_NAME}",
+                "",
+                "[Install]",
+                "WantedBy=timers.target",
+            ]
+        )
+        + "\n"
+    )
+
+
+def backup_files(plan):
+    """Install files (relative to the install root) of the backup job, or {}."""
+    if plan.backup is None:
+        return {}
+    return {
+        "backup.conf": (backup_conf(plan), FILE_MODE),
+        "bin/burrow-backup": (_read_backup("burrow-backup.sh"), EXEC_MODE),
+        "bin/burrow-restore-drill": (_read_backup("burrow-restore-drill.sh"), EXEC_MODE),
+    }
+
+
 def stack_unit(plan):
     lines = [
         f"# {HEADER.format(name=plan.name)}",
@@ -358,6 +462,9 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
     entries = dict(install_files)
     entries[f"/etc/systemd/system/{STACK_UNIT_NAME}"] = (stack_unit(plan), FILE_MODE)
     entries["bin/burrow-migrate"] = (migrate_script(), EXEC_MODE)
+    if plan.backup is not None:
+        entries[f"/etc/systemd/system/{BACKUP_UNIT_NAME}"] = (backup_service_unit(plan), FILE_MODE)
+        entries[f"/etc/systemd/system/{BACKUP_TIMER_NAME}"] = (backup_timer_unit(plan), FILE_MODE)
     if plan.tls == "internal":
         entries["bin/burrow-root-ca"] = (root_ca_script(plan), EXEC_MODE)
         entries["bin/burrow-ca-bundle"] = (ca_bundle_script(plan), EXEC_MODE)
@@ -392,6 +499,8 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
     if plan.agents == "full_machine":
         runcmd.append(["systemctl", "enable", *agents.FULL_MACHINE_UNITS])
         packages += agents.FULL_MACHINE_PACKAGES
+    if plan.backup is not None:
+        runcmd.append(["systemctl", "enable", "--now", BACKUP_TIMER_NAME])
     runcmd.append(["systemctl", "start", "--no-block", STACK_UNIT_NAME])
     doc = {
         "package_update": True,
@@ -490,6 +599,7 @@ class SingleHost:
             # Declared endpoints only. Nothing in core reads this yet; first-run
             # bootstrap (ADR 0053 follow-up 6) registers them.
             install["models.json"] = (models_json(plan), FILE_MODE)
+        install.update(backup_files(plan))
         files = dict(install)
         host_env = None
         if plan.agents == "full_machine":
