@@ -7012,6 +7012,10 @@ defmodule Platform.Chat do
   defp attention_side_effect(message, recipient_ids, operation, fun) do
     fun.()
   rescue
+    # Keep supervised sandbox ownership handling explicit for the repo audit.
+    error in DBConnection.OwnershipError ->
+      log_attention_failure(message, recipient_ids, operation, :error, error, __STACKTRACE__)
+
     error ->
       log_attention_failure(message, recipient_ids, operation, :error, error, __STACKTRACE__)
   catch
