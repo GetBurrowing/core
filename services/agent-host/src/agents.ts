@@ -3,10 +3,12 @@
  *
  * On every start, in this order (files.ts writes step 5):
  *   1. the agent's OS user (users.ts), idempotently;
- *   2. AS THAT UID: suite-cli's connection record for the work dir and its
+ *   2. AS THAT UID: burrow-cli's connection record for the work dir and its
  *      credentials file (0600) carrying the runtime token core minted for
- *      this start — suite-cli 0.7.1+'s per-folder format
- *      (`~/.config/suite/agents/<key>.json` + `<key>.credentials.json`);
+ *      this start, in burrow-cli's per-folder format
+ *      (`~/.config/burrow/agents/<key>.json` + `<key>.credentials.json`), and
+ *      the token refreshed in the burrow MCP entries `~/.claude.json` already
+ *      holds for the work dir (see {@link writeConnection});
  *   3. the agent's env file, /etc/burrow-agents/<id>.env, 0600, owned by the
  *      agent, holding only that agent's values;
  *   4. the unit drop-in;
@@ -175,23 +177,164 @@ export async function installUnits(deps: AgentsDeps, agentId: string): Promise<v
   }
 }
 
+/**
+ * Where burrow-cli (0.9.0+) reads an agent folder's connection:
+ * `<config>/burrow/agents`. The pre-0.9.0 `<config>/suite/agents` is read by
+ * burrow-cli only until its one-shot migration has run, so a record written
+ * there afterwards is never read, and the token core rotated on every start
+ * after the first never reached the agent. Nothing here writes the old dir.
+ */
+export function burrowAgentsDir(user: Pick<AgentUser, "home">): string {
+  return `${user.home}/.config/burrow/agents`;
+}
+
+/** burrow-cli's MCP server ids (init.ts CHANNEL_SERVER, TOOLS_SERVER), registered at local scope. */
+export const CHANNEL_SERVER = "burrow-channel";
+export const TOOLS_SERVER = "burrow";
+
+/** Record fields burrow-cli sets itself and a start keeps (agent_connections.ts AgentRecord). */
+const KEPT_RECORD_FIELDS = ["configAccess", "remoteTerminal"] as const;
+
+/**
+ * The record burrow-cli reads (agent_connections.ts serializeAgentRecord):
+ * `{dir, burrowUrl, runtimeId, headerNames}`, keeping only the fields
+ * burrow-cli itself sets on the folder. Never `suiteUrl` (a record holding
+ * both is refused by name) and never `tokenEnv`/`tokenRef`/`keychainService`,
+ * which would make burrow-cli read the token from somewhere other than the
+ * credentials file written beside it.
+ */
+export function renderAgentRecord(existing: string | null, dir: string, burrowUrl: string, runtimeId: string): string {
+  const out: Record<string, unknown> = { dir, burrowUrl, runtimeId, headerNames: [] };
+  const prior = parseObject(existing);
+  if (prior !== null && prior.dir === dir) {
+    for (const f of KEPT_RECORD_FIELDS) if (typeof prior[f] === "string" && prior[f] !== "") out[f] = prior[f];
+  }
+  return `${JSON.stringify(out, null, 2)}\n`;
+}
+
+function parseObject(text: string | null): Record<string, unknown> | null {
+  if (text === null) return null;
+  try {
+    const v = JSON.parse(text) as unknown;
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `sh -c READ_HOME_FILE sh PATH`: the file's bytes; exit 4 when absent, 3 when a symlink or not a plain file. */
+const READ_HOME_FILE =
+  'set -eu; if [ -L "$1" ]; then echo "is a symlink" >&2; exit 3; fi; [ -e "$1" ] || exit 4; [ -f "$1" ] || { echo "not a file" >&2; exit 3; }; cat -- "$1"';
+
+/** A file in the agent's home, read AS THE AGENT. Null when absent; throws when it cannot be read. */
+export async function readAsUser(runner: Runner, user: Pick<AgentUser, "name">, path: string): Promise<string | null> {
+  const r = await runner.run(["runuser", "-u", user.name, "--", "/bin/sh", "-c", READ_HOME_FILE, "sh", path]);
+  if (r.exitCode === 0) return r.stdout;
+  if (r.exitCode === 4) return null;
+  throw new Error(`reading ${path} as ${user.name} failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
+}
+
+const ENV_REFERENCE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+
+/** True when `key` is `work` or one of its ancestors: the project keys Claude can file a folder's local entries under. */
+function coversWork(key: string, work: string): boolean {
+  if (key === work) return true;
+  const base = key.endsWith("/") ? key : `${key}/`;
+  return work.startsWith(base);
+}
+
+/**
+ * `~/.claude.json` with the runtime token in burrow-cli's two local-scope
+ * entries for `work` set to `token`, or null when nothing changes (or the
+ * file is not JSON). Touches ONLY `burrow-channel`'s `*_TOKEN` env values and
+ * `burrow`'s `Authorization` header, under project keys covering `work`; an
+ * env reference (`${VAR}`) is left as it is. An entry that is absent stays
+ * absent: burrow-cli adds it, with the token from the credentials file.
+ */
+export function refreshedClaudeJson(text: string, work: string, token: string): string | null {
+  const raw = parseObject(text);
+  if (raw === null) return null;
+  const projects = raw.projects;
+  if (typeof projects !== "object" || projects === null || Array.isArray(projects)) return null;
+  let changed = false;
+  for (const [key, project] of Object.entries(projects as Record<string, unknown>)) {
+    if (!coversWork(key, work)) continue;
+    const servers = (project as { mcpServers?: unknown } | null)?.mcpServers;
+    if (typeof servers !== "object" || servers === null) continue;
+    const channel = (servers as Record<string, unknown>)[CHANNEL_SERVER] as { env?: Record<string, unknown> } | undefined;
+    if (channel?.env !== undefined && typeof channel.env === "object" && channel.env !== null) {
+      for (const name of ["BURROW_TOKEN", "SUITE_TOKEN"]) {
+        const v = channel.env[name];
+        if (typeof v === "string" && !ENV_REFERENCE.test(v) && v !== token) {
+          channel.env[name] = token;
+          changed = true;
+        }
+      }
+    }
+    const tools = (servers as Record<string, unknown>)[TOOLS_SERVER] as { headers?: Record<string, unknown> } | undefined;
+    if (tools?.headers !== undefined && typeof tools.headers === "object" && tools.headers !== null) {
+      const auth = tools.headers.Authorization;
+      const want = `Bearer ${token}`;
+      if (typeof auth === "string" && auth.startsWith("Bearer ") && !ENV_REFERENCE.test(auth.slice(7)) && auth !== want) {
+        tools.headers.Authorization = want;
+        changed = true;
+      }
+    }
+  }
+  return changed ? `${JSON.stringify(raw, null, 2)}\n` : null;
+}
+
+/**
+ * Step 2. The record and credentials go to burrow-cli's agents dir; then the
+ * token in the burrow MCP entries `~/.claude.json` already holds is set to
+ * the new one, so an entry carrying a rotated-out token cannot outlive the
+ * start. Everything runs as the agent; the token travels on stdin only.
+ */
+export async function writeConnection(deps: Pick<AgentsDeps, "runner" | "log">, user: AgentUser, cmd: Pick<StartCommand, "agent_id" | "runtime_id" | "runtime_token" | "core_url">): Promise<void> {
+  const dir = burrowAgentsDir(user);
+  const key = connectionKey(user.work);
+  const recordPath = `${dir}/${key}.json`;
+  let existing: string | null = null;
+  try {
+    existing = await readAsUser(deps.runner, user, recordPath);
+  } catch (e) {
+    deps.log(`agent ${cmd.agent_id}: existing connection record not read (${(e as Error).message}); writing a fresh one`);
+  }
+  await writeAsUser(deps.runner, user, recordPath, renderAgentRecord(existing, user.work, cmd.core_url, cmd.runtime_id), "0600");
+  await writeAsUser(
+    deps.runner,
+    user,
+    `${dir}/${key}.credentials.json`,
+    `${JSON.stringify({ token: cmd.runtime_token, headers: {} }, null, 2)}\n`,
+    "0600",
+  );
+  await refreshMcpEntries(deps, user, cmd.agent_id, cmd.runtime_token);
+}
+
+/** The {@link refreshedClaudeJson} edit, read and written as the agent (0600, as Claude Code keeps it). */
+export async function refreshMcpEntries(deps: Pick<AgentsDeps, "runner" | "log">, user: AgentUser, agentId: string, token: string): Promise<void> {
+  const path = `${user.home}/.claude.json`;
+  let text: string | null;
+  try {
+    text = await readAsUser(deps.runner, user, path);
+  } catch (e) {
+    deps.log(`agent ${agentId}: ${path} not read (${(e as Error).message}); its MCP entries were not refreshed`);
+    return;
+  }
+  if (text === null) return;
+  const next = refreshedClaudeJson(text, user.work, token);
+  if (next === null) return;
+  await writeAsUser(deps.runner, user, path, next, "0600");
+  deps.log(`agent ${agentId}: refreshed the runtime token in its burrow MCP entries`);
+}
+
 /** Stage everything an agent needs, as described above. Does not start the unit. */
 export async function prepareAgent(deps: AgentsDeps, cmd: StartCommand): Promise<AgentUser> {
   deps.secrets.add(cmd.runtime_token);
   for (const v of Object.values(cmd.env)) deps.secrets.add(v);
 
   const user = await ensureAgentUser(deps.runner, cmd.agent_id);
-  const key = connectionKey(user.work);
-  const agentsDir = `${user.home}/.config/suite/agents`;
-  const record = { dir: user.work, suiteUrl: cmd.core_url, runtimeId: cmd.runtime_id, headerNames: [] as string[] };
-  await writeAsUser(deps.runner, user, `${agentsDir}/${key}.json`, `${JSON.stringify(record, null, 2)}\n`, "0600");
-  await writeAsUser(
-    deps.runner,
-    user,
-    `${agentsDir}/${key}.credentials.json`,
-    `${JSON.stringify({ token: cmd.runtime_token, headers: {} }, null, 2)}\n`,
-    "0600",
-  );
+  await writeConnection(deps, user, cmd);
   writeEnvFile(user, cmd.agent_id, renderEnvFile(cmd.agent_id, cmd.env));
   await installUnits(deps, cmd.agent_id);
   return user;
