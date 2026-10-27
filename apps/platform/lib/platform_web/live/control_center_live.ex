@@ -994,7 +994,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   <.link
                     id="open-agent-config"
                     navigate={~p"/control/#{@selected_agent.slug}/config"}
-                    class="btn btn-sm btn-ghost border border-edge"
+                    class="btn btn-sm btn-ghost border border-subtle"
                   >
                     Configuration
                   </.link>

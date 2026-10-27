@@ -913,7 +913,7 @@ defmodule PlatformWeb.AgentConfigLive do
             phx-value-mode="edit"
             aria-pressed={to_string(@ed.mode == :edit)}
             class={[
-              "btn btn-xs join-item border border-edge",
+              "btn btn-xs join-item border border-subtle",
               if(@ed.mode == :edit, do: "bg-base-300", else: "btn-ghost")
             ]}
           >
@@ -926,7 +926,7 @@ defmodule PlatformWeb.AgentConfigLive do
             phx-value-mode="preview"
             aria-pressed={to_string(@ed.mode == :preview)}
             class={[
-              "btn btn-xs join-item border border-edge",
+              "btn btn-xs join-item border border-subtle",
               if(@ed.mode == :preview, do: "bg-base-300", else: "btn-ghost")
             ]}
           >
@@ -944,7 +944,7 @@ defmodule PlatformWeb.AgentConfigLive do
           id="config-compare"
           type="button"
           phx-click="conflict_compare"
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           Compare
         </button>
@@ -954,7 +954,7 @@ defmodule PlatformWeb.AgentConfigLive do
           phx-hook="CopyToClipboard"
           data-clipboard-text={@ed.draft}
           data-copy-label="Copy my version"
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           Copy my version
         </button>
@@ -968,7 +968,7 @@ defmodule PlatformWeb.AgentConfigLive do
               id="config-take-theirs"
               type="button"
               phx-click="compare_take_theirs"
-              class="btn btn-xs btn-ghost border border-edge"
+              class="btn btn-xs btn-ghost border border-subtle"
             >
               Edit on top of this
             </button>
@@ -1016,7 +1016,7 @@ defmodule PlatformWeb.AgentConfigLive do
           name={@form[:content].name}
           spellcheck="false"
           class={[
-            "min-h-[50vh] w-full resize-y rounded-lg border border-edge bg-base-100 p-3 font-mono text-[13px] leading-5 text-base-content",
+            "min-h-[50vh] w-full resize-y rounded-lg border border-subtle bg-base-100 p-3 font-mono text-[13px] leading-5 text-base-content",
             (@markdown? and @ed.mode == :preview) && "hidden"
           ]}
         >{Phoenix.HTML.Form.normalize_value("textarea", @form[:content].value)}</textarea>
@@ -1045,7 +1045,7 @@ defmodule PlatformWeb.AgentConfigLive do
             id="config-discard"
             type="button"
             phx-click="file_discard"
-            class="btn btn-sm btn-ghost border border-edge"
+            class="btn btn-sm btn-ghost border border-subtle"
           >
             Discard
           </button>
@@ -1056,7 +1056,7 @@ defmodule PlatformWeb.AgentConfigLive do
             data-primary={to_string(@dirty? and is_nil(@ed.error_line))}
             class={[
               "btn btn-sm",
-              if(@dirty?, do: "btn-primary", else: "btn-ghost border border-edge")
+              if(@dirty?, do: "btn-primary", else: "btn-ghost border border-subtle")
             ]}
           >
             Save
@@ -1086,7 +1086,7 @@ defmodule PlatformWeb.AgentConfigLive do
           id="entry-new-toggle"
           type="button"
           phx-click="toggle_new"
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           <.icon name="hero-plus" class="size-4" /> New
         </button>
@@ -1100,7 +1100,7 @@ defmodule PlatformWeb.AgentConfigLive do
         class="flex flex-wrap items-end gap-2"
       >
         <.input field={@entry_form[:name]} label="Name" placeholder="my-skill" autocomplete="off" />
-        <button type="submit" class="btn btn-sm btn-ghost border border-edge">Create</button>
+        <button type="submit" class="btn btn-sm btn-ghost border border-subtle">Create</button>
         <span class="w-full font-mono text-xs text-subtle">{@path_hint}&lt;name&gt;</span>
       </.form>
 
@@ -1149,7 +1149,7 @@ defmodule PlatformWeb.AgentConfigLive do
           id="entry-delete-cancel"
           type="button"
           phx-click="entry_delete_cancel"
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           Cancel
         </button>
@@ -1190,7 +1190,7 @@ defmodule PlatformWeb.AgentConfigLive do
           <span class="font-mono text-xs text-subtle">{key}</span>
         </div>
         <div class="flex justify-end">
-          <button id="settings-save" type="submit" class="btn btn-sm btn-ghost border border-edge">
+          <button id="settings-save" type="submit" class="btn btn-sm btn-ghost border border-subtle">
             Save
           </button>
         </div>
@@ -1231,7 +1231,7 @@ defmodule PlatformWeb.AgentConfigLive do
           id="mcp-new-toggle"
           type="button"
           phx-click="toggle_new"
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           <.icon name="hero-plus" class="size-4" /> New
         </button>
@@ -1249,7 +1249,7 @@ defmodule PlatformWeb.AgentConfigLive do
         <.input field={@form[:args]} label="Arguments" autocomplete="off" />
         <.input field={@form[:url]} label="Or a URL" autocomplete="off" />
         <div class="flex justify-end md:col-span-2">
-          <button type="submit" class="btn btn-sm btn-ghost border border-edge">Add</button>
+          <button type="submit" class="btn btn-sm btn-ghost border border-subtle">Add</button>
         </div>
       </.form>
 
@@ -1305,9 +1305,9 @@ defmodule PlatformWeb.AgentConfigLive do
         autocomplete="off"
         placeholder="New value"
         aria-label={"Replace #{@name}"}
-        class="input input-sm ml-auto w-44 border-edge bg-base-100"
+        class="input input-sm ml-auto w-44 border-subtle bg-base-100"
       />
-      <button type="submit" class="btn btn-sm btn-ghost border border-edge">Replace</button>
+      <button type="submit" class="btn btn-sm btn-ghost border border-subtle">Replace</button>
     </form>
     """
   end

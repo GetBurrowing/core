@@ -90,7 +90,7 @@ defmodule PlatformWeb.AgentConfig.SessionStrip do
             data-primary={to_string(@primary?)}
             class={[
               "btn btn-sm",
-              if(@primary?, do: "btn-primary", else: "btn-ghost border border-edge")
+              if(@primary?, do: "btn-primary", else: "btn-ghost border border-subtle")
             ]}
           >
             Restart session
@@ -126,7 +126,7 @@ defmodule PlatformWeb.AgentConfig.SessionStrip do
               id={"#{@id}-confirm-cancel"}
               type="button"
               phx-click="session_restart_cancel"
-              class="btn btn-sm btn-ghost border border-edge"
+              class="btn btn-sm btn-ghost border border-subtle"
             >
               Cancel
             </button>

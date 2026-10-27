@@ -44,7 +44,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
           :if={@can_manage?}
           id="native-files-configure"
           navigate={~p"/control/#{@agent.slug}/config"}
-          class="btn btn-sm btn-ghost border border-edge"
+          class="btn btn-sm btn-ghost border border-subtle"
         >
           Edit in Configuration
         </.link>
