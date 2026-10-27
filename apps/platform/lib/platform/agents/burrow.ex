@@ -95,6 +95,8 @@ defmodule Platform.Agents.Burrow do
             _ -> :ok
           end
         rescue
+          # A test's sandbox owner can be gone by the time this runs.
+          DBConnection.OwnershipError -> :ok
           e -> Logger.warning("[Burrow] ensure crashed: #{Exception.message(e)}")
         end
       end)
