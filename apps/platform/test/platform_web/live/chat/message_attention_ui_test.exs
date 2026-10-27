@@ -537,7 +537,13 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
             })
 
             assert_receive {:message_attention_changed, _}
-            assert render(viewer) =~ "asked @#{ctx.agent_p.display_name} to look"
+
+            assert texts(
+                     viewer,
+                     ~s(#messages-#{ctx.delivery_message.id} [data-role="message-attention-chip"])
+                   ) ==
+                     ["@#{ctx.agent_p.display_name}", "@#{ctx.bob_p.display_name}"]
+
             assert Repo.exists?(from(i in Item, where: i.user_id == ^ctx.bob.id))
             :ok = :sys.terminate(router, :normal)
             assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :normal}, 2_000
