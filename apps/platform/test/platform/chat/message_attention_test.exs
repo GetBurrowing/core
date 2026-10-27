@@ -268,7 +268,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       assert log =~ "add_message_attention routing worker failed"
       assert log =~ "message=#{message.id} space=#{space.id} recipients=#{zip.id}"
       assert log =~ "phase=failure"
-      assert log =~ "kind=exit category=:exit"
+      assert log =~ "kind=exit category=:exit cause=normal"
       assert log =~ "phase=handoff message=#{message.id}"
       assert log =~ "outcome=accepted"
       refute log =~ "router exit"

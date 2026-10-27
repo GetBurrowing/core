@@ -7027,11 +7027,17 @@ defmodule Platform.Chat do
     Logger.error(
       "[Chat] add_message_attention #{operation} failed phase=failure " <>
         "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(recipient_ids, ",")}: " <>
-        "kind=#{kind} category=#{category}"
+        "kind=#{kind} category=#{category} cause=#{attention_failure_cause(kind, reason)}"
     )
 
     :ok
   end
+
+  defp attention_failure_cause(:exit, {cause, {GenServer, :call, _request}})
+       when cause in [:timeout, :noproc, :normal, :shutdown],
+       do: cause
+
+  defp attention_failure_cause(_kind, _reason), do: :unspecified
 
   @doc """
   The agent attention state of a space, for the Agents sheet:
