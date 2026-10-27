@@ -232,6 +232,49 @@ defmodule Platform.Meetings.CompletionTest do
            ) == 1
   end
 
+  test "concurrent triage submissions and a missing officer recover without another task", ctx do
+    {meeting, run, seg} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    :ok = Roles.unassign_role("triage_officer")
+    assert {:ok, %{status: "triage_pending"}} = Completion.scribe_complete(ctx.scribe.id, args)
+    assert run!(meeting).last_error =~ "role_unassigned"
+    {:ok, _} = Roles.assign_role("triage_officer", ctx.triage.id)
+    assert {:ok, %{status: "triage_dispatched"}} = Completion.resume(meeting.id)
+
+    item = %{
+      "item_id" => "repair-completion",
+      "title" => "Repair the completion callback",
+      "description" => "Repair the callback agreed in the cited segment.",
+      "source_segment_ids" => [seg["id"]]
+    }
+
+    args = Map.put(args, "action_items", [item])
+
+    results =
+      for _ <- 1..2 do
+        Elixir.Task.async(fn -> Completion.triage_file(ctx.triage.id, args) end)
+      end
+      |> Enum.map(&Elixir.Task.await(&1, 10_000))
+
+    assert [{:ok, %{task_ids: [id]}}, {:ok, %{task_ids: [id]}}] = results
+
+    assert Repo.aggregate(
+             from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id),
+             :count
+           ) == 1
+  end
+
+  test "resuming a meeting clears the old capture fence", ctx do
+    {meeting, run, _} = ready!(ctx.meeting)
+    assert run.capture_finished_at
+    {:ok, resumed} = Meetings.resume_meeting(meeting)
+    assert run!(meeting).capture_finished_at == nil
+    {:ok, _} = Meetings.end_meeting(resumed)
+    assert run!(meeting).status == "waiting"
+    assert run!(meeting).id == run.id
+  end
+
   test "wrong role, live state and foreign canvas cannot file", ctx do
     {meeting, run, _} = ready!(ctx.meeting)
     canvas = canvas!(meeting.chat_space_id, ctx.scribe)
@@ -256,6 +299,36 @@ defmodule Platform.Meetings.CompletionTest do
     meeting |> Ecto.Changeset.change(status: "live") |> Repo.update!()
     assert {:error, :meeting_not_finalized} = Completion.scribe_complete(ctx.scribe.id, args)
     assert run!(meeting).item_results == %{}
+  end
+
+  test "authenticated tool dispatch rejects a foreign tenant and accepts the same finalized run",
+       ctx do
+    {meeting, run, _} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    foreign_org = Platform.TenancyFixtures.tenant_org_id("completion-foreign")
+
+    scope = %Platform.Access.Scope{
+      actor: %{id: Ecto.UUID.generate(), org_memberships: []},
+      permissions: %{"orgs.read" => [foreign_org], "meetings.join" => :all}
+    }
+
+    assert {:error, %{code: :unauthorized}} =
+             Platform.Federation.ToolArguments.dispatch(
+               "meeting_scribe_complete",
+               args,
+               %{agent_id: ctx.scribe.id, access_scope: scope}
+             )
+
+    assert run!(meeting).canvas_id == nil
+    scope = %Platform.Access.Scope{actor: :system, permissions: %{"meetings.join" => :all}}
+
+    assert {:ok, %{status: "triage_dispatched"}} =
+             Platform.Federation.ToolArguments.dispatch(
+               "meeting_scribe_complete",
+               args,
+               %{agent_id: ctx.scribe.id, access_scope: scope}
+             )
   end
 
   test "duplicate and conflict decisions file nothing and ungrounded work is rejected", ctx do

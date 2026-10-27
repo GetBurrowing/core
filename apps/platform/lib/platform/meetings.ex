@@ -1111,6 +1111,7 @@ defmodule Platform.Meetings do
           {:meeting_resumed, updated}
         )
 
+        Platform.Meetings.Completion.reopened(updated.id)
         ok
 
       error ->

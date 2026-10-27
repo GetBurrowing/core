@@ -242,9 +242,25 @@ defmodule Platform.Skills do
 
     ## 1. Signal shape
 
+    Call `meeting_triage_file` with `meeting_id`, `run_id`, `transcript_id`,
+    `canvas_id`, `snapshot_hash` copied from the completion dispatch, plus
+    `action_items`. Read `completion_transcript` (the full ordered segments
+    across `source_transcript_ids`), not a summary or latest chunk alone.
+    Each filed item requires `item_id` equal to the canonical checklist_item
+    node id, normalized imperative `title`, grounded `description`, and
+    nonempty `source_segment_ids` drawn from that snapshot. Never use raw
+    utterances as titles. Questions and canvas edits remain canvas-only.
+    Synthesis duplicate/conflict/exclude decisions use the same item_id with
+    `decision`; these create no tasks. Never call task_create independently.
+    The tool invokes the internal Triage function with its dedup and caps.
+    Reuse the same run, snapshot_hash and canonical item ids on retry,
+    including after a filed task is done. Report callback failures and wait
+    for a refreshed dispatch if the snapshot changed.
+
     The `meeting_triage_dispatch` attention signal (broadcast by
-    `Platform.Federation.dispatch_triage_attention/2`) carries four ids in
-    its payload:
+    `Platform.Federation.dispatch_triage_attention/2`) carries the canonical
+    meeting_id, run_id, transcript_id, canvas_id and snapshot_hash, plus full
+    completion_transcript and source_transcript_ids. It also carries:
 
     - `space_id` — the chat space the meeting lives in.
     - `room_id` — the meeting room the transcript belongs to.
@@ -261,8 +277,8 @@ defmodule Platform.Skills do
     Each `checklist_item` carries two fields you read:
 
     - `checklist_item.label` — the human-readable action string. This
-      becomes the filed task's title verbatim (Triage may normalise
-      trailing punctuation but does not rewrite the label).
+      is candidate evidence. Normalize it to an imperative task title and
+      a grounded description before submitting it through meeting_triage_file.
     - `checklist_item.note` — a JSON blob with keys:
       - `owner` — string, e.g. `"@dev"` or `"@nobody_matches"`. May be `nil`.
       - `project_hint` — string, e.g. `"Widgets Platform"`. May be `nil`.
@@ -331,25 +347,14 @@ defmodule Platform.Skills do
 
     ### Idempotency contract
 
-    Do NOT dedup yourself. `Platform.Meetings.Triage.file_tasks_from_canvas/2`
-    calls `Platform.Tasks.similar_open_titles/3` internally (from stack
-    member E) and returns a per-item verdict:
-
-    - `{:filed, task_id}` — new task inserted; put in the summary row as
-      `status: filed`.
-    - `{:skipped_dupe, existing_task_id}` — an open task with a
-      near-identical title already exists; put in the summary row as
-      `status: skipped_dupe` and reflect the pre-existing `task_id`,
-      NOT a new one.
-    - `{:fallback_project, task_id}` — filed against the fallback
-      project (see section 3); put in the summary row as
-      `status: fallback_project`.
-
-    Re-broadcasting the same `meeting_triage_dispatch` on the same
-    canvas must produce zero new tasks — every checklist_item's dedup
-    hit produces `skipped_dupe` on the second pass. Reflect that in the
-    summary card so an operator viewing the canvas after two passes can
-    see the second pass filed nothing.
+    Server-side Triage owns title dedup; the persisted completion run owns
+    stable run/item replay, including done tasks. The meeting_triage_file
+    response contains meeting_id, run_id, status, canvas_id and task_ids.
+    Report success only when status is filed; delivery alone is not filing.
+    The response is cumulative for this run, so a replay returning the same
+    task_ids does not mean new tasks were created. Record duplicate/conflict
+    decisions as exclusions, without inventing task ids or per-item verdicts
+    absent from the tool response. Reuse canonical item ids on every retry.
     """
   end
 

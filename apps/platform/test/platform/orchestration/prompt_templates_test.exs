@@ -1128,7 +1128,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       # Stack member E's filing surface — the template must direct the
       # runtime here rather than reimplementing the filing/dedup loop.
-      assert content =~ "Triage.file_tasks_from_canvas",
+      assert content =~ "meeting_triage_file",
              "triage_dispatch must hand items to E's file_tasks_from_canvas/2 surface"
 
       # The skill slug the runtime pulls for parse/matching conventions.
@@ -1149,7 +1149,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       # E's dedup surface — the runtime must NOT re-implement dedup;
       # the template's idempotency clause explicitly says so.
-      assert content =~ "similar_open_titles",
+      assert content =~ "canonical checklist item ids",
              "triage_dispatch must delegate dedup to Tasks.similar_open_titles/3 (E's surface)"
     end
 
@@ -1164,7 +1164,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       # Completion-side telemetry ref — the `tasks_created_from_meeting`
       # event with measurements %{filed_count, skipped_count, fallback_project_count}.
-      assert content =~ "tasks_created_from_meeting",
+      assert content =~ "Server-side Triage emits filing telemetry",
              "triage_dispatch must reference the tasks_created_from_meeting completion telemetry event"
     end
 
@@ -4391,14 +4391,14 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "#{@scribe_slug} Card 3 JSON example keys #{inspect(parsed_keys)} must match #{inspect(expected_keys)}"
     end
 
-    test "content names the dispatch_triage_attention post-canvas hook" do
+    test "content names the authenticated scribe completion tool" do
       # The canvas alone is not the whole product — the triage hand-off is
       # what turns action items into tasks. If a future edit strips this
       # instruction, action items sit stranded on the canvas.
       content = PromptTemplates.default_content_for_slug(@scribe_slug)
 
-      assert content =~ "dispatch_triage_attention",
-             "#{@scribe_slug} must instruct the scribe to call dispatch_triage_attention/2 after canvas_create"
+      assert content =~ "meeting_scribe_complete",
+             "#{@scribe_slug} must instruct the scribe to call meeting_scribe_complete after canvas_create"
     end
 
     test "render_template fully interpolates every declared placeholder with sample assigns" do

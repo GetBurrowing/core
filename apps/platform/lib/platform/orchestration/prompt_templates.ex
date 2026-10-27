@@ -1880,7 +1880,7 @@ defmodule Platform.Orchestration.PromptTemplates do
             "Instructs the scribe to produce a 5-card meeting summary canvas " <>
             "(Summary / Decisions / Action items / Open questions / Provenance) in " <>
             "the meeting's chat space and hand structured action items off to the " <>
-            "triage agent via `dispatch_triage_attention/2`. Codifies the Globex scribe " <>
+            "triage agent via `meeting_scribe_complete`. Codifies the Globex scribe " <>
             "canvas structure proven on the 2026-07-13 meeting.",
         variables: [
           "space_id",
@@ -1892,7 +1892,6 @@ defmodule Platform.Orchestration.PromptTemplates do
           "skills_reference"
         ],
         content: """
-        #{task_ack_preamble}
         {{federation_preamble}}
 
         Meeting `{{meeting_name}}` just ended — produce the 5-card scribe completion canvas.
@@ -1904,9 +1903,11 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `transcript_id={{transcript_id}}` — durable transcript reference for `memory_search` filters.
         - `execution_space_id={{execution_space_id}}` — your working space for evidence + status updates.
 
-        Fetch meeting + transcript context via `space_get_context` on `{{space_id}}` and direct
-        Meetings context reads keyed by `{{transcript_id}}`. Filter `memory_search` calls with
-        `transcript_id={{transcript_id}}` so other meetings' content does not leak into your canvas.
+        Read `meeting_id`, `run_id`, `snapshot_hash`, `completion_transcript` and
+        `source_transcript_ids` from the attention signal. `completion_transcript` is the full
+        ordered segment snapshot across the meeting's recordings. Use it, not the latest chunk
+        or summary alone. Preserve these canonical identities unchanged in the callback.
+        Use `space_get_context` for supporting context only. No task or stage ack is needed.
 
         ## Deliverable — ONE canvas in `space_id={{space_id}}` with five cards
 
@@ -1937,7 +1938,11 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ### Card 3 — Action items
 
-        Use a `checklist` node whose children are `checklist_item` nodes. For each action item:
+        Use an `actions` checklist whose children are `checklist_item` nodes. Give every item a
+        stable node `id`; triage uses that exact id as `item_id` across retries. Include grounded
+        descriptions and `source_segment_ids` from `completion_transcript` in the note. Separate
+        questions and canvas edits from concrete follow-up work; do not turn transcript comments
+        into tasks. For each action item:
 
         - `label` — human-readable: `<owner>: <action verb + object> <due-hint>`
           Example: `"Alex: draft the Globex Q3 pricing memo by Friday"`.
@@ -1988,18 +1993,13 @@ defmodule Platform.Orchestration.PromptTemplates do
           each. Empty list explicitly rendered as "- none" if you applied none.
         - `scribe_run_at`: current UTC timestamp.
 
-        ## After canvas_create — dispatch the triage agent
+        ## After canvas_create — complete the scribe run
 
-        Once `canvas_create` returns a `canvas_id`, IMMEDIATELY call
-        `Platform.Federation.dispatch_triage_attention/2` (added by stack member C — this template
-        only references it; do not try to import or verify existence at plan time) with:
-
-        - the new `canvas_id`, so the triage agent can walk Card 3's `checklist_item.note` payloads.
-        - the source signal metadata: `%{transcript_id: "{{transcript_id}}", room_id: "{{room_id}}",
-          space_id: "{{space_id}}", meeting_name: "{{meeting_name}}"}`.
-
-        The triage agent picks up the action items and creates real tasks. Without this dispatch the
-        action items sit stranded on the canvas.
+        Call the MCP tool `meeting_scribe_complete` with `meeting_id`, `run_id`, `transcript_id`,
+        `snapshot_hash` copied unchanged from the signal and `canvas_id` returned by canvas_create.
+        This authenticated callback invokes the server's triage dispatch. Do not call internal
+        Elixir functions or file tasks yourself. A callback error means the handoff is incomplete;
+        report it and retry the same run rather than creating another canvas or filing independently.
 
         ## Guardrails
 
@@ -2022,7 +2022,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent to the triage-officer runtime when a scribe-completion canvas is " <>
             "posted for a meeting. Consumes the checklist_item `actions` section, " <>
-            "files tasks via `Platform.Meetings.Triage.file_tasks_from_canvas/2`, and " <>
+            "files tasks via `meeting_triage_file`, and " <>
             "appends a summary card to the source canvas.",
         variables: [
           "federation_preamble",
@@ -2058,20 +2058,31 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         4. **Resolve the target project.** Call `project_list` to get every project the actor can see. Score each project's name against the parsed `project_hint` using `String.jaro_distance/2`. Accept the highest-scoring match if its score is `>= 0.85`; otherwise fall back to the project that owns the source canvas's space (via `space_id → project_id` lookup). Record which branch you took so the summary card can distinguish `filed` from `fallback_project`.
 
-        5. **Hand parsed items to Triage.** Call `Platform.Meetings.Triage.file_tasks_from_canvas/2` with the source canvas and the parsed checklist items (stack member E's surface). Do NOT reimplement the filing loop yourself. Do NOT reimplement the dedup check yourself — Triage.file_tasks_from_canvas/2 calls `Platform.Tasks.similar_open_titles/3` internally and returns a per-item verdict (`{:filed, task_id}` | `{:skipped_dupe, existing_task_id}` | `{:fallback_project, task_id}`) that you reflect in the summary card.
+        5. **File through the authenticated completion tool.** Read `meeting_id`, `run_id`,
+           `snapshot_hash`, `completion_transcript` and `source_transcript_ids` from the signal.
+           Review the full ordered segments, including late final segments. For each real follow-up,
+           submit `item_id` equal to its canonical checklist_item node id, a normalized imperative
+           `title`, grounded `description`, and nonempty `source_segment_ids` from that snapshot.
+           Call `meeting_triage_file` with `meeting_id`, `run_id`, `transcript_id`, `canvas_id`,
+           `snapshot_hash` and `action_items`. Questions and canvas edits stay on their canvases.
+           Submit synthesis duplicate/conflict/exclude decisions with the same item_id and
+           `decision`; these create no task. Do not call task_create or internal Elixir functions.
 
-        6. **Append a summary card to the source canvas.** After `file_tasks_from_canvas/2` returns, patch the source canvas by appending a new `card` node containing a `table` with one row per checklist_item. Columns: `title` (from the checklist_item label), `task_id` (the id returned by Triage, or `-` for skipped items with no filed task), and `status` (one of `filed`, `skipped_dupe`, `fallback_project`). Use `canvas_patch` with the `append_child` operation against the canvas root; do NOT rewrite the whole document.
+        6. **Append a summary card to the source canvas.** After `meeting_triage_file` returns,
+           append its persisted status and cumulative task_ids to the source canvas. Report excluded
+           duplicate/conflict items without invented task ids. The return is a run-level ledger,
+           not per-item verdicts; do not infer newly created tasks from a replay's task_ids.
+           Use canvas_patch append_child; preserve the existing document.
 
         ## Idempotency
 
-        Do NOT check for pre-existing tasks yourself — `Platform.Meetings.Triage.file_tasks_from_canvas/2` calls `Platform.Tasks.similar_open_titles/3` internally (added by stack member E). Trust its verdict and reflect skipped items in the summary card with `status: skipped_dupe` and the pre-existing `task_id` in the row rather than a freshly-filed one. Re-broadcasting the same `meeting_triage_dispatch` on the same canvas must produce zero new tasks.
-
-        ## Telemetry
-
-        Emit two events during this dispatch so `Platform.Meetings.TelemetryHandler` (added by stack member E) can observe the pass. Do NOT attach a handler yourself — E's handler is already wired.
-
-        - On dispatch entry, after step 2 counts the checklist items, emit `[:platform, :meetings, :triage_dispatch]` with measurements `%{items: N}` (where `N` is the count of `checklist_item` children under the `actions` section) and metadata `%{canvas_id: {{canvas_id}}, transcript_id: {{transcript_id}}}`.
-        - After `Platform.Meetings.Triage.file_tasks_from_canvas/2` returns, emit `[:platform, :meetings, :tasks_created_from_meeting]` with measurements `%{filed_count: F, skipped_count: S, fallback_project_count: P}` computed from the per-item verdicts, and metadata `%{canvas_id: {{canvas_id}}, transcript_id: {{transcript_id}}}`.
+        The server owns filing, deduplication, caps and audit provenance. Reuse the same run,
+        snapshot_hash and canonical checklist item ids on retry, including when an earlier task
+        is done. Never mint another item id from its title. The synthesis pass supplies duplicate
+        and conflict decisions through this same boundary and never files independently.
+        Delivery is not successful filing: inspect the returned persisted status and task_ids.
+        If the snapshot is stale, wait for the refreshed completion dispatch; do not bypass it.
+        Server-side Triage emits filing telemetry; the remote runtime does not invoke telemetry.
 
         ## Failure surfacing
 

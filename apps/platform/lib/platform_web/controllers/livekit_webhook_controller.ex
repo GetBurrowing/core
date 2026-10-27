@@ -117,8 +117,11 @@ defmodule PlatformWeb.LivekitWebhookController do
     room_row = lookup_room(params)
 
     case room_row do
-      %Meetings.Room{status: "active"} = active_room -> Meetings.finish_room(active_room)
-      _ -> :ok
+      %Meetings.Room{status: status} = active_room when status in ["active", "recording"] ->
+        Meetings.finish_room(active_room)
+
+      _ ->
+        :ok
     end
 
     # End-meeting symmetry: `Meetings.start_meeting/1` drives a meeting

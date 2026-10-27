@@ -22,6 +22,8 @@ defmodule Platform.Meetings.Completion do
     end
   end
 
+  def transcript_changed(%Transcript{space_id: nil}), do: :ok
+
   def transcript_changed(%Transcript{space_id: space_id}) do
     case Repo.one(
            from(m in Meeting,
@@ -66,6 +68,20 @@ defmodule Platform.Meetings.Completion do
 
         resume(meeting.id)
     end
+  end
+
+  def reopened(meeting_id) do
+    Repo.update_all(from(r in CompletionRun, where: r.meeting_id == ^meeting_id),
+      set: [
+        capture_finished_at: nil,
+        dispatched_at: nil,
+        status: "waiting",
+        canvas_id: nil,
+        snapshot_hash: nil
+      ]
+    )
+
+    :ok
   end
 
   def sweep do
@@ -170,7 +186,10 @@ defmodule Platform.Meetings.Completion do
          %Canvas{deleted_at: nil} = canvas <- Repo.get(Canvas, params["canvas_id"]),
          true <- canvas.space_id == meeting.chat_space_id || {:error, :foreign_canvas} do
       locked(meeting.id, fn run ->
-        with true <- not is_nil(run.capture_finished_at) || {:error, :capture_active},
+        current = Repo.one!(from(m in Meeting, where: m.id == ^meeting.id, lock: "FOR UPDATE"))
+
+        with true <- current.status == "ended" || {:error, :meeting_not_finalized},
+             true <- not is_nil(run.capture_finished_at) || {:error, :capture_active},
              true <-
                (run.id == params["run_id"] and run.transcript_id == params["transcript_id"] and
                   run.snapshot_hash == params["snapshot_hash"]) || {:error, :run_mismatch},
