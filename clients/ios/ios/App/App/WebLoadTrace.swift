@@ -85,7 +85,8 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         finishOne()
         WebLoadLog.logger.notice(
-            "didFailProvisional url=\(WebLoadLog.describe(webView.url), privacy: .public) \(WebLoadLog.describe(error), privacy: .public) inFlight=\(self.inFlight)")
+            "didFailProvisional url=\(WebLoadLog.describe(webView.url), privacy: .public) \(WebLoadLog.describe(error), privacy: .public) inFlight=\(self.inFlight)"
+        )
         target?.webView?(webView, didFailProvisionalNavigation: navigation, withError: error)
     }
 
