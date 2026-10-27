@@ -81,6 +81,7 @@ defmodule Platform.Social.Clip do
     field(:review_note, :string)
     belongs_to(:reviewed_by_user, Platform.Accounts.User)
     field(:reviewed_at, :utc_datetime_usec)
+    belongs_to(:reviewed_render, Platform.Social.ClipRender)
     belongs_to(:submitted_by_agent, Platform.Agents.Agent)
     field(:rev, :integer, default: 1)
     field(:look, :map, default: %{})
@@ -208,7 +209,8 @@ defmodule Platform.Social.Clip do
       review_status: "pending",
       review_note: nil,
       reviewed_by_user_id: nil,
-      reviewed_at: nil
+      reviewed_at: nil,
+      reviewed_render_id: nil
     })
     |> review_validations()
   end

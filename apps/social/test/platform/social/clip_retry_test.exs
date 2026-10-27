@@ -41,7 +41,7 @@ defmodule Platform.Social.ClipRetryTest do
         w.org_id,
         clip.id,
         w.approver.id,
-        %{"account_ids" => [w.tiktok.id, w.x.id]},
+        %{"render_id" => render_id!(clip), "account_ids" => [w.tiktok.id, w.x.id]},
         now: t0,
         publish_server: pid
       )

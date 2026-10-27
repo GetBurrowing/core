@@ -70,9 +70,37 @@ defmodule Platform.Social.ClipMediaTest do
     assert :ok = MediaRules.check("tiktok", world.tiktok, [item(file, meta)])
   end
 
+  test "historical file metadata stays bound to its snapshot after a newer render", world do
+    old = rendered!(world)
+    file = stored_file!(world.project, "new bytes", "new.mp4", "video/mp4")
+
+    {:ok, current} =
+      Repo.transaction(fn ->
+        Platform.Social.ClipVersions.append!(
+          old.id,
+          file,
+          %{duration_s: 17.0, width: 720, height: 1280},
+          %{headline: "Alternate", caption: "New caption", completion_key: "media-v2"}
+        )
+      end)
+
+    Repo.update!(Ecto.Changeset.change(current, duration_s: 99.0))
+
+    assert ClipMedia.meta_for(world.profile.id, [old.render_file_id, file.id]) == %{
+             old.render_file_id => %{"duration_s" => 10.0, "width" => 1080, "height" => 1920},
+             file.id => %{"duration_s" => 17.0, "width" => 720, "height" => 1280}
+           }
+
+    other = render_world!()
+    assert ClipMedia.meta_for(other.profile.id, [old.render_file_id]) == %{}
+  end
+
   test "a 150s clip is refused for X by MediaRules from media_meta", world do
     clip = rendered!(world)
-    Repo.update_all(Ecto.Query.where(Clip, [c], c.id == ^clip.id), set: [duration_s: 150.0])
+
+    Repo.update_all(Ecto.Query.where(Platform.Social.ClipRender, [r], r.clip_id == ^clip.id),
+      set: [duration_s: 150.0]
+    )
 
     {:ok, post} =
       Social.create_post(world.org_id, world.x, %{

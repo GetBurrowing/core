@@ -109,7 +109,11 @@ defmodule Platform.Social.ClipLibraryTest do
     do: {1, _} = Repo.update_all(from(p in Post, where: p.id == ^post.id), set: fields)
 
   defp approve(w, clip, account_ids, server) do
-    Social.approve_clip(w.org_id, clip.id, w.approver.id, %{"account_ids" => account_ids},
+    Social.approve_clip(
+      w.org_id,
+      clip.id,
+      w.approver.id,
+      %{"render_id" => render_id!(clip), "account_ids" => account_ids},
       publish_server: server
     )
   end

@@ -126,7 +126,7 @@ defmodule Platform.Social.ClipStatusTest do
           w.org_id,
           clip.id,
           w.approver.id,
-          %{"account_ids" => [ig.id, w.tiktok.id]},
+          %{"render_id" => render_id!(clip), "account_ids" => [ig.id, w.tiktok.id]},
           now: t0,
           publish_server: pid
         )

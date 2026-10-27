@@ -82,6 +82,24 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
 
   defp state(clip), do: clip |> Repo.reload!() |> ClipLibrary.clip_state()
 
+  test "approval controls carry the displayed render and forged missing/foreign versions write nothing",
+       %{conn: conn, w: w} do
+    [first, second | _] = three!(w)
+    child = open(conn, w.approver)
+    selected_id = render_id!(first)
+    assert has_element?(child, "[data-role='clip-approve'][phx-value-render_id='#{selected_id}']")
+
+    assert has_element?(
+             child,
+             "[data-role='clips-pbar-approve'][phx-value-render_id='#{selected_id}']"
+           )
+
+    bay(child) |> render_click("approve", %{"id" => first.id})
+    bay(child) |> render_click("approve", %{"id" => first.id, "render_id" => render_id!(second)})
+    assert posts(first) == []
+    assert Repo.reload!(first).review_status == "pending"
+  end
+
   test "approve with two platforms advances and the count drops", %{conn: conn, w: w} do
     [first, second, _] = three!(w)
     child = open(conn, w.approver)
@@ -108,7 +126,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     only = clip!(w, "Only one")
     child = open(conn, w.approver)
 
-    bay(child) |> render_click("approve", %{"id" => only.id})
+    bay(child) |> render_click("approve", %{"id" => only.id, "render_id" => render_id!(only)})
 
     assert has_element?(child, "[data-role='clips-empty']", "All caught up")
     assert has_element?(child, "[data-role='clips-count'] b", "0 to review")
@@ -237,7 +255,10 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     member = member!(user!(), w.org_id)
     child = open(conn, member)
 
-    render_click(with_target(child, "#social-clips-review"), "approve", %{"id" => clip.id})
+    render_click(with_target(child, "#social-clips-review"), "approve", %{
+      "id" => clip.id,
+      "render_id" => render_id!(clip)
+    })
 
     render_click(with_target(child, "#social-clips-review"), "reject", %{
       "id" => clip.id,
@@ -271,7 +292,11 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     child = open(conn, w.approver)
 
     bay(child)
-    |> render_click("approve", %{"id" => foreign.id, "account_ids" => [foreign_ig.id]})
+    |> render_click("approve", %{
+      "id" => foreign.id,
+      "render_id" => render_id!(foreign),
+      "account_ids" => [foreign_ig.id]
+    })
 
     assert posts(foreign) == []
     assert %Clip{review_status: "pending"} = Repo.reload!(foreign)
@@ -289,7 +314,11 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     child = open(conn, w.approver)
 
     bay(child)
-    |> render_click("approve", %{"id" => first.id, "account_ids" => [foreign_ig.id]})
+    |> render_click("approve", %{
+      "id" => first.id,
+      "render_id" => render_id!(first),
+      "account_ids" => [foreign_ig.id]
+    })
 
     account_ids = first |> posts() |> Enum.map(& &1.account_id) |> Enum.sort()
     assert account_ids == Enum.sort([w.ig.id, w.yt.id])
@@ -306,7 +335,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
       |> Ecto.Changeset.change(approver_user_ids: [])
       |> Repo.update()
 
-    bay(child) |> render_click("approve", %{"id" => first.id})
+    bay(child) |> render_click("approve", %{"id" => first.id, "render_id" => render_id!(first)})
 
     assert posts(first) == []
     assert %Clip{review_status: "pending"} = Repo.reload!(first)
@@ -371,6 +400,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     # Selected: the next one is selected, with no toast.
     {:ok, _} =
       ClipDecisions.approve_clip(w.org_id, first.id, w.approver.id, %{
+        "render_id" => render_id!(first),
         "account_ids" => [w.ig.id]
       })
 

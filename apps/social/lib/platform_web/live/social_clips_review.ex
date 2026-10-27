@@ -220,7 +220,7 @@ defmodule PlatformWeb.SocialClipsReview do
   # approver check → fetch_clip → the clip's ticked platforms resolved to
   # this profile's live accounts (params never name an account) →
   # ClipDecisions.approve_clip/5. An empty selection writes nothing.
-  def handle_event("approve", %{"id" => id}, socket) do
+  def handle_event("approve", %{"id" => id, "render_id" => render_id}, socket) do
     socket = authorize(socket)
 
     with true <- socket.assigns.can_decide?,
@@ -229,7 +229,8 @@ defmodule PlatformWeb.SocialClipsReview do
          [_ | _] = accounts <- ticked_accounts(profile, clip),
          {:ok, %{clip: decided, posts: posts}} <-
            ClipDecisions.approve_clip(profile.org_id, clip.id, user_id, %{
-             "account_ids" => Enum.map(accounts, & &1.id)
+             "account_ids" => Enum.map(accounts, & &1.id),
+             "render_id" => render_id
            }) do
       platforms = accounts |> Enum.map(& &1.platform) |> Enum.uniq()
       until = posts |> Enum.map(& &1.publish_after) |> Enum.reject(&is_nil/1) |> deadline()
@@ -240,6 +241,7 @@ defmodule PlatformWeb.SocialClipsReview do
        |> put_toast(%{
          kind: :approved,
          clip_id: decided.id,
+         render_id: decided.reviewed_render_id,
          lead: "Approved",
          text:
            "publishing to #{platforms |> Enum.map(&Approvals.platform_label/1) |> join_and()}",
@@ -290,12 +292,14 @@ defmodule PlatformWeb.SocialClipsReview do
 
   # approver check → ClipDecisions.undo_clip_decision/4. A closed window (or
   # any refusal) just closes the toast; nothing else changes.
-  def handle_event("undo", %{"id" => id}, socket) do
+  def handle_event("undo", %{"id" => id} = params, socket) do
     socket = authorize(socket)
     %{profile: profile, user_id: user_id} = socket.assigns
 
     if socket.assigns.can_decide? do
-      case ClipDecisions.undo_clip_decision(profile.org_id, id, user_id) do
+      opts = if params["render_id"], do: [render_id: params["render_id"]], else: []
+
+      case ClipDecisions.undo_clip_decision(profile.org_id, id, user_id, opts) do
         {:ok, %Clip{} = clip} ->
           socket =
             socket
@@ -498,6 +502,19 @@ defmodule PlatformWeb.SocialClipsReview do
     |> push_event("clips:url", url_params(socket.assigns.view, clip))
   end
 
+  defp render_id(clip) do
+    import Ecto.Query
+
+    Platform.Repo.one(
+      from(r in Platform.Social.ClipRender,
+        where: r.clip_id == ^clip.id and r.rev == ^clip.rev,
+        order_by: [desc: r.rev],
+        limit: 1,
+        select: r.id
+      )
+    )
+  end
+
   defp reviewable?(%Clip{review_status: "pending", render_file_id: id}) when not is_nil(id),
     do: true
 
@@ -678,6 +695,7 @@ defmodule PlatformWeb.SocialClipsReview do
         class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
         disabled={@ticked == []}
         phx-click="approve"
+        phx-value-render_id={render_id(@clip)}
         phx-value-id={@clip.id}
         phx-target={@myself}
         data-role="clips-pbar-approve"
@@ -734,6 +752,7 @@ defmodule PlatformWeb.SocialClipsReview do
         type="button"
         class="btn btn-sm shrink-0 gap-2 rounded-full border-0 bg-base-300 font-semibold text-primary"
         phx-click="undo"
+        phx-value-render_id={Map.get(@toast, :render_id)}
         phx-value-id={@toast.clip_id}
         phx-target={@myself}
         data-role="clip-toast-undo"
@@ -1311,6 +1330,7 @@ defmodule PlatformWeb.SocialClipsReview do
             class="btn btn-primary flex-1 rounded-full"
             disabled={@ticked == []}
             phx-click="approve"
+            phx-value-render_id={render_id(@clip)}
             phx-value-id={@clip.id}
             phx-target={@myself}
             data-role="clip-approve"

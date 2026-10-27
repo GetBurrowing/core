@@ -43,8 +43,8 @@ defmodule Platform.Social.ClipDecisions do
   alias Platform.Social.{
     Account,
     Clip,
-    ClipMedia,
     ClipPublish,
+    ClipVersions,
     Ideas,
     Links,
     Post,
@@ -57,6 +57,7 @@ defmodule Platform.Social.ClipDecisions do
 
   @type refusal ::
           :not_found
+          | :render_not_found
           | :not_pending
           | :not_decided
           | :no_platforms
@@ -75,7 +76,8 @@ defmodule Platform.Social.ClipDecisions do
   @doc """
   Approves a rendered, pending clip as `user_id` and queues it to publish
   on `attrs["account_ids"]` after the undo window. `attrs` may carry the
-  human's `"title"` and `"caption"` edits.
+  human's `"title"` and `"caption"` edits. `attrs["render_id"]` is required
+  and binds every post to that playable version; it never defaults to latest.
 
   Refusals, in order, each writing nothing: `:not_found` (missing or another
   org's clip), `:not_pending` (not rendered, or not review pending), the
@@ -103,8 +105,11 @@ defmodule Platform.Social.ClipDecisions do
       Repo.transaction(fn ->
         with {:ok, clip} <- lock_clip(clip),
              :ok <- pending(clip),
-             {:ok, clip} <- review(clip, user_id, attrs, now),
-             {:ok, posts} <- write_posts(org_id, profile, clip, accounts, user_id, publish_after) do
+             {:ok, render} <- selected_render(org_id, profile, clip, attrs["render_id"]),
+             {:ok, clip} <- review(clip, render, user_id, attrs, now),
+             version_clip = version_clip(clip, render, attrs),
+             {:ok, posts} <-
+               write_posts(org_id, profile, version_clip, accounts, user_id, publish_after) do
           %{clip: clip, posts: posts}
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -122,10 +127,38 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
-  defp review(clip, user_id, attrs, now) do
+  # Resolve again under the promotion lock: an event carries the version the
+  # human actually saw, even if another render completed before the click.
+  defp selected_render(org_id, profile, clip, render_id) do
+    with {:ok, render} <- ClipVersions.get(org_id, profile.id, clip.id, render_id),
+         file_id when is_binary(file_id) <- render.file_id,
+         %Platform.Files.File{} <- Platform.Files.get_file(file_id) do
+      {:ok, render}
+    else
+      _ -> {:error, :render_not_found}
+    end
+  end
+
+  defp version_clip(clip, render, attrs) do
+    %{
+      clip
+      | render_file_id: render.file_id,
+        title: Map.get(attrs, "title", render.headline),
+        caption: Map.get(attrs, "caption", render.caption),
+        start_s: render.actual_start_s,
+        end_s: render.actual_end_s,
+        duration_s: render.duration_s,
+        width: render.width,
+        height: render.height,
+        byte_size: render.byte_size
+    }
+  end
+
+  defp review(clip, render, user_id, attrs, now) do
     clip
     |> Clip.human_edit_changeset(Map.take(attrs, ["title", "caption"]))
     |> Clip.review_changeset({:approve, user_id}, now)
+    |> Changeset.put_change(:reviewed_render_id, render.id)
     |> Repo.update()
   end
 
@@ -157,6 +190,7 @@ defmodule Platform.Social.ClipDecisions do
     %Post{
       account_id: account.id,
       clip_id: clip.id,
+      clip_render_id: clip.reviewed_render_id,
       idea_id: idea.id,
       publish_after: publish_after
     }
@@ -167,7 +201,13 @@ defmodule Platform.Social.ClipDecisions do
       media_file_ids: List.wrap(clip.render_file_id),
       generated_by_agent_id: clip.submitted_by_agent_id
     })
-    |> ClipMedia.put_media_meta(profile.id)
+    |> Changeset.put_change(:media_meta, %{
+      clip.render_file_id => %{
+        "duration_s" => clip.duration_s,
+        "width" => clip.width,
+        "height" => clip.height
+      }
+    })
     |> Repo.insert()
   end
 
@@ -228,6 +268,11 @@ defmodule Platform.Social.ClipDecisions do
     * rejected: only before `reviewed_at` + the window, else
       `:window_closed`.
 
+  Pass `render_id: id` to undo exactly that approval after a later render
+  clears the clip's review fields. Ownership and the deadline come from its
+  posts. A newer render or approval is preserved. Without the option, undo
+  targets the current review decision (including a rejection).
+
   An undo racing `ClipPublish`'s claim publishes at most once: the claim
   nils `publish_after` under the same row, so whichever commits first wins.
   """
@@ -241,9 +286,7 @@ defmodule Platform.Social.ClipDecisions do
          :ok <- Social.approver_check(org_id, profile, user_id) do
       Repo.transaction(fn ->
         with {:ok, clip} <- lock_clip(clip),
-             :ok <- reviewer(clip, user_id),
-             :ok <- take_back(clip, now),
-             {:ok, clip} <- clip |> Clip.review_changeset(:reset_pending) |> Repo.update() do
+             {:ok, clip} <- undo_selected(clip, user_id, now, opts) do
           clip
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -253,15 +296,56 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
+  # The toast retains the approved identity even if a render has reset the
+  # clip's review fields. Ownership and the window come from those posts.
+  defp undo_selected(clip, user_id, now, opts) do
+    case Keyword.fetch(opts, :render_id) do
+      {:ok, id} ->
+        with {:ok, id} <- Ecto.UUID.cast(id) do
+          posts = posts_for_version(clip.id, id)
+
+          cond do
+            posts == [] ->
+              {:error, :not_decided}
+
+            Enum.any?(posts, &(&1.approved_by_user_id != user_id)) ->
+              {:error, :not_reviewer}
+
+            not Enum.all?(posts, &undoable?(&1, now)) ->
+              {:error, :window_closed}
+
+            true ->
+              Enum.each(posts, &Repo.delete!/1)
+              if clip.reviewed_render_id == id, do: reset_review(clip), else: {:ok, clip}
+          end
+        else
+          _ -> {:error, :render_not_found}
+        end
+
+      :error ->
+        with :ok <- reviewer(clip, user_id), :ok <- take_back(clip, now), do: reset_review(clip)
+    end
+  end
+
+  defp reset_review(clip), do: clip |> Clip.review_changeset(:reset_pending) |> Repo.update()
+
+  defp posts_for_version(clip_id, render_id) do
+    query = from(p in Post, where: p.clip_id == ^clip_id, order_by: p.id, lock: "FOR UPDATE")
+    query = if render_id, do: from(p in query, where: p.clip_render_id == ^render_id), else: query
+    Repo.all(query)
+  end
+
   defp reviewer(%Clip{review_status: status}, _user_id) when status not in ~w(approved rejected),
     do: {:error, :not_decided}
 
   defp reviewer(%Clip{reviewed_by_user_id: user_id}, user_id), do: :ok
   defp reviewer(%Clip{}, _user_id), do: {:error, :not_reviewer}
 
-  defp take_back(%Clip{review_status: "approved", id: clip_id}, now) do
-    posts =
-      Repo.all(from(p in Post, where: p.clip_id == ^clip_id, order_by: p.id, lock: "FOR UPDATE"))
+  defp take_back(
+         %Clip{review_status: "approved", id: clip_id, reviewed_render_id: render_id},
+         now
+       ) do
+    posts = posts_for_version(clip_id, render_id)
 
     if posts != [] and Enum.all?(posts, &undoable?(&1, now)) do
       Enum.each(posts, &Repo.delete!/1)

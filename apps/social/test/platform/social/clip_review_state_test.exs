@@ -37,6 +37,12 @@ defmodule Platform.Social.ClipReviewStateTest do
     |> Repo.insert!()
   end
 
+  test "pending reset clears selected render identity" do
+    id = Ecto.UUID.generate()
+    cs = Clip.review_changeset(%Clip{reviewed_render_id: id}, :reset_pending)
+    assert Ecto.Changeset.get_field(cs, :reviewed_render_id) == nil
+  end
+
   describe "Clip.changeset" do
     test "Clip.changeset ignores review fields" do
       attrs = Map.merge(@review_attrs, %{"source_url" => "https://www.youtube.com/watch?v=abc"})

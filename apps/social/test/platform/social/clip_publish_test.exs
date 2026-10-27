@@ -46,7 +46,7 @@ defmodule Platform.Social.ClipPublishTest do
         ctx.w.org_id,
         ctx.clip.id,
         ctx.w.approver.id,
-        %{"account_ids" => [ctx.w.tiktok.id, ctx.w.x.id]},
+        %{"render_id" => render_id!(ctx.clip), "account_ids" => [ctx.w.tiktok.id, ctx.w.x.id]},
         now: now,
         publish_server: parked
       )
