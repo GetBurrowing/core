@@ -180,25 +180,28 @@ glyph >= 3. Everything goes to `contrast.json` in the artifact's `shots/`.
 iOS 26 glass draws its own vibrant ink for unselected items when the tint
 has alpha. Those cells are then measured with the ink the system drew; with
 the opaque base-content ink, drawn and sent agree. Results on the CI iPhone
-(iOS 27), after the substitution:
+(iOS 27), after the substitution (run 40434027232; the iPad leg agrees to
+within 0.2):
 
-- light over white: selected 5.82 label / 5.30 glyph, unselected 17.9 / 16.7. Passes.
-- dark over black: selected 6.34 / 4.79, unselected 11.3 / 7.58. Passes.
-- light over black: selected 1.26 / 1.26. FAILS. Unselected 5.25 / 5.55.
-- dark over white: selected 1.16 / 1.17, unselected 1.69 / 1.72. FAILS.
+- light over white: selected 5.89 label / 6.17 glyph, unselected 18.3 / 19.4. Passes.
+- dark over black: selected 6.73 / 6.90, unselected 12.0 / 13.3. Passes.
+- light over black: selected 1.25 / 1.23. FAILS. Unselected 5.10 / 5.39.
+- dark over white: selected 1.16 / 1.16, unselected 1.67 / 1.71. FAILS.
 
 The failing cells are glass, not ink. Over the opposite extreme the glass
-shifts toward the backdrop: light glass over black reads #6f6f6f to #8d8d8d,
-and dark glass over white reads #b1b1b1 to #b9b9b9. Meanwhile the bar's
+shifts toward the backdrop: light glass over black reads #636363 under the
+lens and #858585 elsewhere, and dark glass over white reads #8f8f8f and
+#b9b9b9. Meanwhile the bar's
 inks stay pinned to the web's scheme (`overrideUserInterfaceStyle`). No
 orange reaches 4.5:1 on that mid grey, so these cells are open, and the
 thresholds were not lowered.
 
 Reduce Transparency is measured, not computed: the test switches it on in
-Settings, and the fill reads the same over both backdrops. All four
-combinations pass. Light: selected 6.20 / 6.58 over white and 6.12 / 6.17
-over black, unselected 17.8 or better. Dark: selected 6.41 / 6.41 and
-7.29 / 6.59, unselected 14.0 or better. `contrast.json` also keeps the values
+Settings, and the fill reads the same over both backdrops (#ffffff and
+#fafafa light, #141414 dark). All four combinations pass. Light: selected
+6.20 / 6.58 over white and 6.12 / 6.17 over black, unselected 17.8 or
+better. Dark: selected 6.41 / 6.41 over white and 7.29 / 7.35 over black,
+unselected 14.0 or better. `contrast.json` also keeps the values
 computed against `UITabBarAppearance`'s opaque fill (light 7.71 selected,
 21 unselected; dark 7.51 and 18.3) for comparison.
 
