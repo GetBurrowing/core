@@ -142,6 +142,7 @@ defmodule Platform.Canvas.ScriptEngine.JS do
           host: host,
           limits: limits,
           wall_ms: Limits.wall_ms(limits, nil),
+          deadline_ms: Map.get(bindings, :script_deadline_ms),
           on_store: &Slots.attach_store(@pool, slot, &1),
           permit_key: {:canvas, Map.fetch!(bindings, :canvas_id)}
         )

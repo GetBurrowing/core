@@ -26,29 +26,25 @@ defmodule Platform.CodeMode.Runtime do
 
   ## Time
 
-  `cm_run` is called with a native timeout: at the deadline Wasmex sets the
-  Store's interrupt flag and wasmtime's epoch check (a 10 ms ticker) traps
-  the guest at its next check, then sends NO reply. So a timed-out run is
-  detected here by the reply not arriving, after a short grace. The wasm
-  call itself has then been interrupted, or is about to be once a host call
-  in flight returns; it is not left spinning. `Platform.CodeMode.Slots`
-  still waits for the Store to go idle before freeing the run's slot.
+  `cm_run` receives the time remaining until the run's absolute deadline.
+  Encoding, compilation, permit queueing and native setup spend that same
+  budget. Canvas callers supply the deadline taken at ScriptEngine.run entry.
+  The permit gate prepares the shared artifact during startup, before it
+  admits calls, so ordinary requests use the cached compilation.
 
-  That interrupt depends on the epoch ticker getting a tokio worker, so
-  every run's native work (Store, instance, setup and `cm_run`) holds one of
-  the node's `Platform.CodeMode.Permits`: at most one fewer guest than
-  wasmex has tokio workers runs at once, node-wide, whichever pool started
-  it, and no one `:permit_key` holds all of them. The wall clock starts
-  when the run asks for its permit (after the node's one-time module
-  compile) and the wait for a permit is charged to it: `cm_run` gets `wall_ms` minus that wait, and a
-  run still waiting at its deadline returns `timeout` without running.
-  Setup calls keep their own 5 s bound and are not charged. The permit is
-  returned once the Store is idle.
+  Wasmex interrupts through its epoch ticker but sends no timeout reply.
+  At the deadline we queue a Store idle probe and return timeout as soon as
+  it answers, retaining 500 ms as an outer cap rather than a blind wait.
+  The cap includes scheduling and interruption latency; a host callback
+  already executing in this process must return before it can be enforced.
+  Slots and permits are released only after the Store is idle, even when
+  the caller reaches that cap first.
 
-  Host callbacks arrive as `{:invoke_callback, ...}` messages to the process
-  that instantiated the module, which is the process calling `run/3`. This
-  module services them itself (as `Wasmex`'s own GenServer does), so tool
-  calls run in the caller's process.
+  Native work holds one of the node's Platform.CodeMode.Permits, reserving
+  a tokio worker for the epoch ticker. One key cannot take every permit.
+
+  Host callbacks execute in the process calling run/3, which services the
+  same invoke_callback messages as Wasmex's GenServer.
   """
 
   require Logger
@@ -104,6 +100,7 @@ defmodule Platform.CodeMode.Runtime do
     * `:wall_ms` — the wall budget, default `limits.wall_ms`.
     * `:on_store` — called with the Store before it runs anything, so a
       caller can track it (`Platform.CodeMode.Slots`).
+    * `:deadline_ms` — an optional earlier monotonic deadline from the caller.
     * `:permit_key` — the key the run's native permit is capped under
       (`Platform.CodeMode.Permits`): one key may hold at most one fewer
       permit than the node has. Default nil, no per-key cap.
@@ -114,8 +111,10 @@ defmodule Platform.CodeMode.Runtime do
   """
   @spec run(String.t(), term(), keyword()) :: outcome()
   def run(script, inputs, opts \\ []) when is_binary(script) do
+    started_at = System.monotonic_time(:millisecond)
     limits = Keyword.get_lazy(opts, :limits, &Limits.get/0)
     wall_ms = Keyword.get(opts, :wall_ms, Limits.wall_ms(limits, nil))
+    deadline = min(Keyword.get(opts, :deadline_ms) || started_at + wall_ms, started_at + wall_ms)
     host = Keyword.get(opts, :host, &refuse_all/2)
     on_store = Keyword.get(opts, :on_store, fn _store -> :ok end)
 
@@ -129,6 +128,7 @@ defmodule Platform.CodeMode.Runtime do
         module: module,
         limits: limits,
         wall_ms: wall_ms,
+        deadline_ms: deadline,
         host: host,
         on_store: on_store,
         permit_key: Keyword.get(opts, :permit_key)
@@ -147,28 +147,19 @@ defmodule Platform.CodeMode.Runtime do
   # a node-wide permit (`Platform.CodeMode.Permits`). The wait for one is
   # charged to the run's wall budget; a run that cannot get one before its
   # deadline times out like any other.
-  # The clock starts at the permit request, after the node's one-time
-  # module compile, so only the queueing is charged.
+  # The same absolute deadline includes encoding, compilation, queueing
+  # and native setup; canvas callers supply their earlier entry deadline.
   defp execute(script, inputs_json, config, ctx) do
-    started_at = System.monotonic_time(:millisecond)
-
-    case Permits.acquire(ctx.permit_key, started_at + ctx.wall_ms) do
+    case Permits.acquire(ctx.permit_key, ctx.deadline_ms) do
       {:ok, permit} ->
-        waited = max(System.monotonic_time(:millisecond) - started_at, 0)
-        execute_with_permit(script, inputs_json, config, ctx, permit, ctx.wall_ms - waited)
+        execute_with_permit(script, inputs_json, config, ctx, permit)
 
       {:error, :timeout} ->
         timeout(ctx.wall_ms)
     end
   end
 
-  defp execute_with_permit(_script, _inputs_json, _config, ctx, permit, run_ms)
-       when run_ms <= 0 do
-    Permits.release(permit)
-    timeout(ctx.wall_ms)
-  end
-
-  defp execute_with_permit(script, inputs_json, config, ctx, permit, run_ms) do
+  defp execute_with_permit(script, inputs_json, config, ctx, permit) do
     on_store = fn store ->
       Permits.attach_store(permit, store)
       ctx.on_store.(store)
@@ -176,7 +167,11 @@ defmodule Platform.CodeMode.Runtime do
 
     outcome =
       try do
-        execute_native(script, inputs_json, config, %{ctx | on_store: on_store}, run_ms)
+        with {:ok, _remaining} <- remaining_budget(ctx.deadline_ms) do
+          execute_native(script, inputs_json, config, %{ctx | on_store: on_store})
+        else
+          {:error, :timeout} -> timeout(ctx.wall_ms)
+        end
       catch
         kind, reason ->
           Permits.release_when_idle(permit)
@@ -191,7 +186,7 @@ defmodule Platform.CodeMode.Runtime do
     outcome
   end
 
-  defp execute_native(script, inputs_json, config, ctx, run_ms) do
+  defp execute_native(script, inputs_json, config, ctx) do
     {:ok, store} =
       Wasmex.Store.new_wasi(
         %WasiOptions{args: [], env: %{}, preopen: []},
@@ -206,10 +201,12 @@ defmodule Platform.CodeMode.Runtime do
     {:ok, instance} = Wasmex.Instance.new(store, ctx.module, imports, [])
     {:ok, memory} = Wasmex.Instance.memory(store, instance)
 
-    with {:ok, _} <- call(store, instance, imports, "_initialize", [], @setup_timeout_ms),
-         {:ok, script_ptr} <- put(store, instance, imports, memory, script),
-         {:ok, inputs_ptr} <- put(store, instance, imports, memory, inputs_json),
-         {:ok, config_ptr} <- put(store, instance, imports, memory, config),
+    with {:ok, _} <-
+           call(store, instance, imports, "_initialize", [], @setup_timeout_ms, ctx.deadline_ms),
+         {:ok, script_ptr} <- put(store, instance, imports, memory, script, ctx.deadline_ms),
+         {:ok, inputs_ptr} <- put(store, instance, imports, memory, inputs_json, ctx.deadline_ms),
+         {:ok, config_ptr} <- put(store, instance, imports, memory, config, ctx.deadline_ms),
+         {:ok, run_ms} <- remaining_budget(ctx.deadline_ms),
          :ok <- Wasmex.StoreOrCaller.set_fuel(store, Limits.fuel(ctx.limits, run_ms)) do
       params = [
         script_ptr,
@@ -220,7 +217,7 @@ defmodule Platform.CodeMode.Runtime do
         byte_size(config)
       ]
 
-      case call(store, instance, imports, "cm_run", params, run_ms) do
+      case call(store, instance, imports, "cm_run", params, run_ms, ctx.deadline_ms) do
         {:ok, [result_ptr]} -> read_result(store, memory, result_ptr, ctx.limits)
         {:error, :timeout} -> timeout(ctx.wall_ms)
         {:error, reason} -> trapped(store, memory, reason, ctx.limits)
@@ -233,9 +230,17 @@ defmodule Platform.CodeMode.Runtime do
 
   # Allocate len+1 bytes in the guest and write `bytes` NUL-terminated
   # (QuickJS's parser and JSON reader require it).
-  defp put(store, instance, imports, memory, bytes) do
+  defp put(store, instance, imports, memory, bytes, deadline) do
     with {:ok, [ptr]} when ptr > 0 <-
-           call(store, instance, imports, "cm_alloc", [byte_size(bytes) + 1], @setup_timeout_ms),
+           call(
+             store,
+             instance,
+             imports,
+             "cm_alloc",
+             [byte_size(bytes) + 1],
+             @setup_timeout_ms,
+             deadline
+           ),
          :ok <- Wasmex.Memory.write_binary(store, memory, ptr, bytes <> <<0>>) do
       {:ok, ptr}
     else
@@ -244,9 +249,22 @@ defmodule Platform.CodeMode.Runtime do
     end
   end
 
-  defp call(store, instance, imports, name, params, timeout_ms) do
+  defp remaining_budget(deadline) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 -> {:ok, remaining}
+      _ -> {:error, :timeout}
+    end
+  end
+
+  defp call(store, instance, imports, name, params, timeout_ms, wall_deadline) do
+    with {:ok, remaining} <- remaining_budget(wall_deadline) do
+      call_before_deadline(store, instance, imports, name, params, min(timeout_ms, remaining))
+    end
+  end
+
+  defp call_before_deadline(store, instance, imports, name, params, timeout_ms) do
     ref = make_ref()
-    deadline = System.monotonic_time(:millisecond) + timeout_ms + @timeout_grace_ms
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     :ok =
       Wasmex.Instance.call_exported_function(
@@ -258,7 +276,43 @@ defmodule Platform.CodeMode.Runtime do
         timeout_ms
       )
 
-    await(ref, deadline, imports)
+    case await(ref, deadline, imports) do
+      {:error, :timeout} -> await_idle(store, ref, deadline + @timeout_grace_ms, imports)
+      result -> result
+    end
+  end
+
+  # Wasmex drops its reply on native timeout. Queue a cheap operation on
+  # that same Store so an interrupted guest need not cost the full grace.
+  # The alias discards a late probe response after the outer cap expires.
+  defp await_idle(store, ref, deadline, imports) do
+    probe = Process.alias()
+    {:ok, worker} = start_idle_probe(store, probe, {probe, :idle})
+
+    try do
+      await_idle_reply(ref, probe, deadline, imports)
+    after
+      Process.unalias(probe)
+      Process.exit(worker, :kill)
+    end
+  end
+
+  defp await_idle_reply(ref, probe, deadline, imports) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^probe, :idle} ->
+        {:error, :timeout}
+
+      {^ref, _result} ->
+        {:error, :timeout}
+
+      {:invoke_callback, namespace, name, context, params, token} ->
+        invoke_callback(imports, namespace, name, context, params, token)
+        await_idle_reply(ref, probe, deadline, imports)
+    after
+      remaining -> {:error, :timeout}
+    end
   end
 
   defp await(ref, deadline, imports) do
@@ -333,15 +387,17 @@ defmodule Platform.CodeMode.Runtime do
   flight on it has returned. The one idle probe `Platform.CodeMode.Slots`
   and `Platform.CodeMode.Permits` both drain with.
   """
-  @spec notify_when_idle(Wasmex.StoreOrCaller.t(), pid(), term()) :: :ok
+  @spec notify_when_idle(Wasmex.StoreOrCaller.t(), pid() | reference(), term()) :: :ok
   def notify_when_idle(store, pid, message) do
-    {:ok, _} =
-      Task.start(fn ->
-        _ = Wasmex.StoreOrCaller.get_fuel(store)
-        send(pid, message)
-      end)
-
+    {:ok, _} = start_idle_probe(store, pid, message)
     :ok
+  end
+
+  defp start_idle_probe(store, pid, message) do
+    Task.start(fn ->
+      _ = Wasmex.StoreOrCaller.get_fuel(store)
+      send(pid, message)
+    end)
   end
 
   @doc false

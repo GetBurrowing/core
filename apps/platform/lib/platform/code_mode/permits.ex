@@ -132,6 +132,9 @@ defmodule Platform.CodeMode.Permits do
 
   @impl true
   def init(opts) do
+    # Prepare the shared artifact before admitting calls. Compilation can
+    # take longer than a short request's entire wall budget under load.
+    {:ok, _} = Runtime.compiled()
     size = Keyword.get_lazy(opts, :size, &configured_size/0)
     per_key = Keyword.get(opts, :per_key, max(1, size - 1))
     {:ok, %{size: size, per_key: per_key, held: %{}, waiting: :queue.new()}}
