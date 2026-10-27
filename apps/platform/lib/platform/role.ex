@@ -190,6 +190,7 @@ defmodule Platform.Role do
     # Web-only: see @web_only. Joins the full peer so PubSub spans both.
     Platform.Role.PeerLink,
     Platform.Agents.Registry,
+    Platform.Terminal.Registry,
     Platform.Execution.Registry,
     Platform.Orchestration.Registry,
     Platform.Chat.Registry,

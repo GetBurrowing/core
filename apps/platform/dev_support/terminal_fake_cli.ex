@@ -66,7 +66,7 @@ defmodule PlatformWeb.TerminalFakeCli do
   @doc "`{:ok, counter, plaintext}` or `:error`."
   def open(key, direction, <<counter::64, rest::binary>>) when byte_size(rest) >= 16 do
     ct_size = byte_size(rest) - 16
-    <<ct::binary-size(ct_size), tag::binary-size(16)>> = rest
+    <<ct::binary-size(^ct_size), tag::binary-size(16)>> = rest
     nonce = <<direction::32, counter::64>>
 
     case :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce, ct, <<>>, tag, false) do
