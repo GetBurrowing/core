@@ -137,8 +137,14 @@ defmodule Platform.CiFirstRunGreenTest do
              "`first-run-green` no longer `needs: test`, so `needs.test.outputs` is " <>
                "empty and the job cannot read whether the retry fired."
 
-      assert job =~ ~r/^    runs-on: \[self-hosted, linux, x64\]\s*$/m,
-             "`first-run-green` is no longer on the same runner class as Test."
+      assert job =~ ~r/^    runs-on: ubuntu-latest\s*$/m,
+             "`first-run-green` is no longer on the same runner class as Test " <>
+               "(GitHub-hosted `ubuntu-latest`)."
+
+      refute code_only(job) =~ ~r/^    if:/m,
+             "`first-run-green` has a job-level `if:`. A skipped job never reports, " <>
+               "so the required check would sit pending (or be satisfied by a skip) " <>
+               "on whatever runs the condition excludes."
     end
 
     test "reads the retry outcome from the job output and exits 1 on it", %{job: job} do

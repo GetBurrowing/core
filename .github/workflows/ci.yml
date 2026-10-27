@@ -37,32 +37,20 @@ on:
 jobs:
   test:
     name: Test
-    # FORK SAFETY: a pull_request from a fork never reaches a self-hosted
-    # runner (it would run untrusted code on our host). Same-repo PRs and
-    # every push run exactly as before; fork PRs get `Fork PR (no self-hosted
-    # run)` and `Installer (validate + render, fork PR)` instead.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
-    # WORKSPACE OWNERSHIP ON A SELF-HOSTED RUNNER
-    #
+    # GITHUB-HOSTED RUNNERS ONLY. Every job in this workflow runs on a
+    # GitHub-hosted runner (Platform.CiNoSelfHostedRunnersTest), so every job,
+    # fork pull requests included, runs on a fresh VM that shares nothing with
+    # any other job: no workspace, no Docker config, no caches outside
+    # actions/cache, and no host Postgres.
+    runs-on: ubuntu-latest
     # This container runs as root, which it must — `Install system packages`
     # below calls apt-get, and a non-root container fails there with
-    # "List directory /var/lib/apt/lists/partial is missing".
+    # "List directory /var/lib/apt/lists/partial is missing". On a fresh VM
+    # the root-owned files it leaves in the workspace are discarded with it.
     #
-    # But on a self-hosted runner every job shares one `_work` checkout, so a
-    # root container leaves root-owned files the NEXT job — running on the
-    # host as uid 1000 — cannot delete. `actions/checkout` then dies at its
-    # "Deleting the contents of" step with `EACCES: unlink`, seconds in and
-    # before any step of the job it belongs to. That is what broke
-    # `Build and push image` on the first push to main after #879.
-    #
-    # Pinning the container to `--user 1000:1000` fixes the ownership and
-    # breaks apt. `Hand the workspace back` at the end of this job does
-    # neither: stay root, and chown on the way out (and delete dependency
-    # `_build` dirs, whose SELinux labels chown cannot fix; see that step).
-    #
-    # None of this is visible on GitHub-hosted runners, where every job gets a
-    # fresh machine and nothing is shared.
+    # The job talks to Postgres as the service's network alias (`PGHOST:
+    # postgres`), which resolves on the per-job container network Actions
+    # creates for a container job.
     container:
       image: elixir:1.20.4-otp-28-slim
     services:
@@ -109,9 +97,7 @@ jobs:
         #
         #   Bind for 0.0.0.0:5432 failed: port is already allocated
         #
-        # before a single step of it runs. That was invisible while the org
-        # had one self-hosted runner and could only ever run one job at a
-        # time; it surfaced the moment a second and third were registered.
+        # before a single step of it runs.
     env:
       MIX_ENV: test
       PGHOST: postgres
@@ -204,6 +190,17 @@ jobs:
           path: apps/platform/deps
           key: deps-${{ hashFiles('apps/platform/mix.lock') }}
           restore-keys: deps-
+
+      # Compiled deps for both envs the job compiles in (dev and test). The
+      # app itself is always recompiled (`mix compile --force` below), so only
+      # the deps' build output is reused. Keyed on the container image too:
+      # a beam built by another OTP is not loadable.
+      - name: Cache _build
+        uses: actions/cache@v5
+        with:
+          path: apps/platform/_build
+          key: build-elixir-1.20.4-otp-28-${{ hashFiles('apps/platform/mix.lock') }}
+          restore-keys: build-elixir-1.20.4-otp-28-
 
       # The precompiled NIFs (wasmex, vix, lazy_html) come from GitHub
       # release URLs, which OTP 28's httpc can no longer download
@@ -530,24 +527,6 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: .github/scripts/host-pressure.sh "after mix test" || true
 
-      # Runs even when the suite fails: an aborted job leaves the same
-      # root-owned files as a passing one, and the next job is equally unable
-      # to remove them. Guarding on success would mean a single red run
-      # poisons the workspace until someone clears it by hand from a root
-      # container — which is the state this repo was actually in.
-      #
-      # Ownership is not the only thing a root container leaves behind. The
-      # runner host runs SELinux enforcing, and rebar3 builds its plugins for erlexec
-      # (pulled in by `imp`, #1151) under `deps/erlexec/_build/`. Those files
-      # carry this container's private MCS categories
-      # (`container_file_t:s0:c260,c533`, measured on a self-hosted runner), while
-      # the rest of the workspace is plain `s0`. `installer` runs
-      # actions/checkout inside ITS OWN container, whose categories differ,
-      # so the scandir fails with `EACCES` even though the files are owned by
-      # 1000 and mode 755. chown does not change a label. Deleting the
-      # directories from here, while still in the container that labelled
-      # them, is what works. checkout would wipe them on the next job anyway,
-      # so no cache is lost.
       # On failure AND on retry-green: a retry-green Test job concludes `success`
       # (run 39347244298 did; only `first-run-green` went red), so `failure()`
       # alone would skip exactly the runs this log exists for.
@@ -572,12 +551,6 @@ jobs:
           path: postgres-${{ github.job }}.log
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Hand the workspace back to the runner
-        if: always()
-        run: |
-          rm -rf "$GITHUB_WORKSPACE"/apps/platform/deps/*/_build || true
-          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
 
   # Task 01a08d81. Branch protection can only require a NAMED check, and it is
   # satisfied by that job's conclusion. `Test` concludes `success` for both a
@@ -611,10 +584,7 @@ jobs:
   first-run-green:
     name: first-run-green
     needs: test
-    # FORK SAFETY: the `test` job's condition, by De Morgan, because this
-    # job's code may not contain `||` (Platform.CiFirstRunGreenTest).
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Fail iff the Test job's serial retry fired on this run
@@ -653,11 +623,8 @@ jobs:
   # Both `Test` and `Test (with Play)` are meant to be required checks.
   test-with-play:
     name: Test (with Play)
-    # FORK SAFETY: see the `test` job.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
-    # Root container for apt, and the workspace handed back at the end: the
-    # same WORKSPACE OWNERSHIP reasoning as `test` above.
+    runs-on: ubuntu-latest
+    # Root container for apt, as in `test` above.
     container:
       image: elixir:1.20.4-otp-28-slim
     services:
@@ -888,12 +855,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Hand the workspace back to the runner (with Play)
-        if: always()
-        run: |
-          rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
-          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
-
   # The WITH-Social build (task 01a140a8, stack social-tab): the same module
   # proof `Test (with Play)` runs for Play, for apps/social. The module compiles
   # against core with --warnings-as-errors in dev and test, is formatted, and
@@ -903,9 +864,7 @@ jobs:
   # `Test (with Play)`, whose host config registers both modules.
   test-with-social:
     name: Test (with Social)
-    # FORK SAFETY: see the `test` job.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     container:
       image: elixir:1.20.4-otp-28-slim
     services:
@@ -1069,19 +1028,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Hand the workspace back to the runner (with Social)
-        if: always()
-        run: |
-          rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
-          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
-
   # MULTI-ARCH IMAGE (task 01a0d6ab). One leg per architecture, each built
   # NATIVELY on a runner of that architecture, never under QEMU: the release
   # compiles every dep under MIX_ENV=prod, copies ERTS out of the build image,
   # `mix assets.deploy` downloads per-arch tailwind/esbuild binaries, and vix
   # fetches a precompiled NIF (plus libvips) for the BUILD host's arch. So an
-  # arm64 image has to be built on arm64. GitHub-hosted `ubuntu-24.04-arm`
-  # was measured picking up jobs in this private repo on 2026-09-25.
+  # arm64 image has to be built on arm64: GitHub-hosted `ubuntu-24.04-arm`
+  # (free on public repositories), and amd64 on `ubuntu-latest`.
   #
   # Each leg pushes an untagged image BY DIGEST and uploads that digest as an
   # artifact; `publish-manifest` below stitches the two into one manifest list
@@ -1098,11 +1051,11 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: '["self-hosted", "linux", "x64"]'
+            runner: ubuntu-latest
           - arch: arm64
             platform: linux/arm64
-            runner: '"ubuntu-24.04-arm"'
-    runs-on: ${{ fromJSON(matrix.runner) }}
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -1110,25 +1063,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Per-job Docker config: the self-hosted runners on one host share
-      # ~/.docker/config.json, and a login left behind by a job that dies
-      # before its logout step is sent with every later container pull
-      # (Docker Hub 'too many failed login attempts', 2026-10-16).
-      - name: Isolate Docker credentials to this job
-        run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
-      # the job still pulls from Docker Hub (setup-buildx-action's
-      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
-      # anonymous pull from these runners' shared egress IP is rate-limited
-      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
-      # to docker.io.
-      - uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # No Docker Hub login: the shared-egress rate limit it worked around
+      # belonged to the self-hosted runners, and this repository has no
+      # Docker Hub secrets (the login failed with "Username and password
+      # required"). Base images are pulled anonymously; nothing is pushed to
+      # docker.io (task 01a14afe).
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1213,7 +1152,7 @@ jobs:
     name: Publish multi-arch manifest
     if: github.event_name == 'push'
     needs: build-and-push
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -1235,25 +1174,11 @@ jobs:
           pattern: suite-core-digest-*
           merge-multiple: true
 
-      # Per-job Docker config: the self-hosted runners on one host share
-      # ~/.docker/config.json, and a login left behind by a job that dies
-      # before its logout step is sent with every later container pull
-      # (Docker Hub 'too many failed login attempts', 2026-10-16).
-      - name: Isolate Docker credentials to this job
-        run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
-      # the job still pulls from Docker Hub (setup-buildx-action's
-      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
-      # anonymous pull from these runners' shared egress IP is rate-limited
-      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
-      # to docker.io.
-      - uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # No Docker Hub login: the shared-egress rate limit it worked around
+      # belonged to the self-hosted runners, and this repository has no
+      # Docker Hub secrets (the login failed with "Username and password
+      # required"). Base images are pulled anonymously; nothing is pushed to
+      # docker.io (task 01a14afe).
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1323,7 +1248,7 @@ jobs:
     name: Build and push image (play)
     if: github.event_name == 'push'
     needs: publish-manifest
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -1340,25 +1265,11 @@ jobs:
           BRANCH_TAG="${BRANCH_TAG//\//-}"
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
-      # Per-job Docker config: the self-hosted runners on one host share
-      # ~/.docker/config.json, and a login left behind by a job that dies
-      # before its logout step is sent with every later container pull
-      # (Docker Hub 'too many failed login attempts', 2026-10-16).
-      - name: Isolate Docker credentials to this job
-        run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
-      # the job still pulls from Docker Hub (setup-buildx-action's
-      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
-      # anonymous pull from these runners' shared egress IP is rate-limited
-      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
-      # to docker.io.
-      - uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # No Docker Hub login: the shared-egress rate limit it worked around
+      # belonged to the self-hosted runners, and this repository has no
+      # Docker Hub secrets (the login failed with "Username and password
+      # required"). Base images are pulled anonymously; nothing is pushed to
+      # docker.io (task 01a14afe).
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1431,7 +1342,7 @@ jobs:
     # same image at first boot (deployment/installer/burrow_install/agents.py).
     name: Build and push agent-host image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -1463,26 +1374,11 @@ jobs:
           docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
             'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
 
-      # Per-job Docker config: the self-hosted runners on one host share
-      # ~/.docker/config.json, and a login left behind by a job that dies
-      # before its logout step is sent with every later container pull
-      # (Docker Hub 'too many failed login attempts', 2026-10-16).
-      - name: Isolate Docker credentials to this job
-        run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
-      # the job still pulls from Docker Hub (setup-buildx-action's
-      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
-      # anonymous pull from these runners' shared egress IP is rate-limited
-      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
-      # to docker.io.
-      - uses: docker/login-action@v4
-        if: steps.changed.outputs.agent_host == 'true'
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # No Docker Hub login: the shared-egress rate limit it worked around
+      # belonged to the self-hosted runners, and this repository has no
+      # Docker Hub secrets (the login failed with "Username and password
+      # required"). Base images are pulled anonymously; nothing is pushed to
+      # docker.io (task 01a14afe).
       - uses: docker/login-action@v4
         if: steps.changed.outputs.agent_host == 'true'
         with:
@@ -1512,73 +1408,16 @@ jobs:
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
   # only, so the stock image needs no apt or pip step.
   #
-  # `--user 1000:1000` is safe here, unlike in `test`, precisely because
-  # nothing is installed; and it is required on this self-hosted runner, where
-  # a root container leaves root-owned files in the shared `_work` checkout
-  # (see the WORKSPACE OWNERSHIP note on `test` above).
-  #
   # The image has no git, so actions/checkout falls back to a REST download
   # with no .git directory; the renderer's git-worktree refusal test builds its
   # own .git fixtures and does not depend on the checkout being a repository.
   installer:
     name: Installer (validate + render)
-    # FORK SAFETY: see the `test` job; `installer-fork` runs this for forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
-    container:
-      image: python:3.12-slim
-      options: --user 1000:1000
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Run installer unit tests
-        env:
-          PYTHONPATH: deployment/installer
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest discover -s deployment/installer/tests -v
-
-  # FORK PULL REQUESTS. The jobs above run on self-hosted runners, so they are
-  # skipped for a pull_request whose head is in a fork: that would run code
-  # from outside the org on our hosts. These two run on GitHub-hosted runners
-  # instead, and only for fork PRs (the opposite condition).
-  #
-  # The installer suite needs nothing but Python, so it runs for real. The
-  # Elixir suite does not run here: `Test` is a self-hosted job with a
-  # Postgres service, a test-count floor and host-specific workspace handling,
-  # and a hosted copy of it would drift from the original. So a fork PR's
-  # Elixir tests run once a maintainer pushes the branch to this repository
-  # (a same-repo branch runs the full `Test` job); this job says so on the PR.
-  fork-pr-notice:
-    name: Fork PR (no self-hosted run)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Explain what did and did not run
-        env:
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          echo "::notice::This pull request comes from a fork ($HEAD_REPO). The self-hosted jobs (Test, first-run-green, Test (with Play), Test (with Social), Installer) do not run on fork PRs. The installer suite runs on a GitHub-hosted runner below. A maintainer runs the full Elixir suite by pushing this branch to the repository."
-          {
-            echo "### Fork pull request"
-            echo
-            echo "The self-hosted jobs were skipped because the head branch is in \`$HEAD_REPO\`."
-            echo "A maintainer runs the full suite by pushing this branch to the repository."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  installer-fork:
-    name: Installer (validate + render, fork PR)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
     container:
       image: python:3.12-slim
     steps:
       - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
 
       - name: Run installer unit tests
         env:
