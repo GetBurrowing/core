@@ -213,3 +213,159 @@ e2e/scripts/measure-tab-switch.sh --base-url http://localhost:<port> --login-as 
   --node <node>@127.0.0.1 --cookie-file <cookie-file> --out <results.json> [--tabs tasks] \
   [--viewport 390x844] [--tasks-scenario S2]
 ```
+
+## Stage 2: permessage-deflate on `/live` (task 01a17b00)
+
+**Change.** `compress: true` in the `/live` socket's `websocket:` opts in
+`apps/platform/lib/platform_web/endpoint.ex`. `/runtime/ws` and `/agent-host`
+are unchanged: there is no measurement of them in this task, so no reason to.
+
+### The compress path in deps (read, not assumed)
+
+- `deps/phoenix/lib/phoenix/transports/websocket.ex:33` defaults
+  `compress: false`. That is why Chrome's offer was declined in stage 1.
+- `deps/phoenix/lib/phoenix/transports/websocket.ex:79` passes the socket's
+  websocket opts to `WebSockAdapter.upgrade(handler, arg, opts)`.
+- `deps/websock_adapter/lib/websock_adapter.ex:84` (cowboy clause) shows
+  `compress` is forwarded; the Bandit clause hands the opts through untouched.
+- `deps/bandit/lib/bandit/pipeline.ex:155` calls
+  `Bandit.WebSocket.Handshake.handshake/3` with those per-upgrade opts.
+- `deps/bandit/lib/bandit/websocket/handshake.ex:21-23` negotiates only when
+  `Keyword.get(opts, :compress) && Keyword.get(websocket_opts, :compress, true)`.
+  The second term is Bandit's global `websocket_options: [compress: ...]`, which
+  defaults to true and which this repo does not set (grep of `config/` and
+  `lib/` finds no `websocket_options`).
+- `deps/bandit/lib/bandit/websocket/permessage_deflate.ex:24-30`
+  (`negotiate/2`) builds the echoed `permessage-deflate` params;
+  `deps/bandit/lib/bandit/websocket/connection.ex:270` deflates outgoing
+  messages. Bandit is 1.10.3 (`deps/bandit/mix.exs:7`).
+
+### Handshake evidence
+
+- **Chrome offers** `permessage-deflate; client_max_window_bits` on every
+  `/live` upgrade. Stage 1 recorded `deflate_offered: true` on every
+  connection through the byte proxy, so I did not repeat the CDP
+  `webSocketWillSendHandshakeRequest` capture; the proxy sees the raw request
+  header, which is stronger evidence than CDP's parsed view.
+- **Server echo, compress on** (dev server, raw HTTP/1.1 upgrade offering
+  `Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits`):
+  `HTTP/1.1 101` with `sec-websocket-extensions: permessage-deflate;client_max_window_bits=15`.
+  The proxy logged `deflate_accepted: true` on the 101 of every Chrome
+  connection in the compress-on run, and `false` on every one in the off run
+  (`docs/perf/tab-switch-compress.data.json`).
+- **Server echo, compress off** (same request, line removed): `HTTP/1.1 101`
+  with no extension header.
+
+### Tests
+
+`apps/platform/test/platform_web/live_socket_compress_test.exs`:
+
+1. unit: `PlatformWeb.Endpoint.__sockets__()` has `/live` and its `websocket`
+   opts carry `compress: true`;
+2. integration (feasible in ExUnit): Bandit started under `start_supervised!`
+   on port 0 with `PlatformWeb.Endpoint` as the plug, a raw `:gen_tcp` upgrade
+   to `/live/websocket`. With the extension offered the 101 must echo
+   `permessage-deflate`; without an offer the 101 must carry no extension header.
+
+Mutation proof. With `compress: true` deleted from the `/live` socket, both
+the unit test and the offer-echo test go red (the no-offer test stays green,
+as it should; it guards against forcing compression on):
+
+```
+  1) test the /live socket carries compress: true in its websocket opts (PlatformWeb.LiveSocketCompressTest)
+     code:  assert Keyword.get(Keyword.fetch!(opts, :websocket), :compress) == true
+     left:  nil
+     right: true
+  2) test handshake against a real Bandit listener echoes permessage-deflate when the client offers it (PlatformWeb.LiveSocketCompressTest)
+     101 carried no Sec-WebSocket-Extensions header (compression declined)
+     code: assert extension, "101 carried no Sec-WebSocket-Extensions header (compression declined)"
+3 tests, 2 failures
+```
+
+Restored, `3 tests, 0 failures`. The change was restored before the commit.
+
+### Re-measurement (local seeded, same fixture, same machine, same harness, N = 10)
+
+Both columns were run back to back in one session on the same dev DB, one
+server per setting (the "off" server had `compress: true` removed from the
+working tree and was reverted afterwards). The stage 1 table above is a third,
+older off sample. Tap and mount cells are median / p90. Wire is the
+server-to-client TCP payload on `/live` from tap to ready, through the byte
+proxy, as KiB.
+
+| tab | raw join KiB | wire off KiB | wire on KiB | on / off | tap-to-interactive off ms | tap-to-interactive on ms | ready off ms | ready on ms | mount off ms | mount on ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chat | 313.4 | 342.4 | 34.1 | 0.100 | 254 / 273 | 230 / 248 | 194 / 216 | 158 / 173 | 36 / 45 | 24 / 29 |
+| voice | 65.3 | 76.5 | 11.5 | 0.151 | 54 / 82 | 56 / 64 | 44 / 70 | 50 / 53 | 16 / 26 | 19 / 20 |
+| tasks (S1) | 190.5 | 203.0 | 24.9 | 0.123 | 116 / 133 | 115 / 132 | 93 / 107 | 87 / 92 | 15 / 28 | 15 / 20 |
+| meetings | 71.2 | 84.0 | 12.3 | 0.146 | 61 / 78 | 60 / 62 | 55 / 68 | 55 / 58 | 15 / 23 | 15 / 16 |
+| inbox | 57.5 | 68.7 | 10.4 | 0.152 | 51 / 61 | 53 / 59 | 48 / 53 | 50 / 53 | 15 / 19 | 16 / 19 |
+| files | 78.3 | 89.5 | 12.1 | 0.135 | 73 / 104 | 60 / 72 | 66 / 97 | 53 / 57 | 25 / 39 | 16 / 17 |
+| canvases | 79.2 | 90.3 | 12.2 | 0.135 | 105 / 140 | 58 / 63 | 98 / 132 | 51 / 54 | 39 / 58 | 15 / 18 |
+| skills | 51.6 | 59.1 | 9.4 | 0.160 | 81 / 118 | 53 / 58 | 66 / 110 | 47 / 55 | 37 / 64 | 17 / 19 |
+| org_memory | 65.1 | 76.7 | 11.5 | 0.149 | 58 / 69 | 53 / 62 | 52 / 67 | 46 / 55 | 15 / 16 | 17 / 20 |
+| control | 60.4 | 71.6 | 11.4 | 0.159 | 71 / 76 | 66 / 143 | 66 / 70 | 56 / 138 | 20 / 20 | 22 / 80 |
+| experiments | 56.4 | 67.6 | 10.5 | 0.156 | 58 / 71 | 56 / 58 | 53 / 68 | 48 / 53 | 15 / 17 | 17 / 20 |
+| changelog | 51.2 | 62.3 | 9.2 | 0.148 | 47 / 56 | 55 / 84 | 43 / 49 | 52 / 73 | 14 / 16 | 15 / 31 |
+| settings | 61.1 | 75.0 | 10.7 | 0.143 | 66 / 71 | 58 / 65 | 57 / 66 | 49 / 55 | 14 / 15 | 14 / 15 |
+
+Reading it:
+
+- **Wire bytes: measured, large.** Every tab sends 0.10 to 0.16 of the bytes
+  it sent uncompressed. Chat's tap window falls from 342 to 34 KiB and tasks
+  (S1) from 203 to 25 KiB. The stage 1 deflate estimate (chat 34.8, tasks 25.6
+  KiB) landed within 2 percent of the measured on-the-wire figure (34.1, 24.9).
+  The ratio is stable: on-the-wire bytes varied by under 10 bytes across taps.
+- **Latency on loopback: INCONCLUSIVE.** Loopback transfer time is near zero,
+  so removing bytes cannot show up much here, and the off run is noisy: the
+  same view's server mount ranges 14 to 39 ms between tabs that do the same
+  work (files, canvases, skills in the off run ran 25 to 37 ms against 15 to 17
+  ms for the on run), and the machine's load average moved between 4 and 18
+  during this stage. Chat's tap-to-interactive is 24 ms lower with
+  compression (254 vs 230 median, 273 vs 248 p90), but stage 1's uncompressed
+  figure was 233, so the off-vs-on gap sits inside the spread between two off
+  samples. The data does not distinguish "compression speeds the tap up"
+  from "no effect locally". The case for latency rests on a real network
+  (bytes over a slow link), which this rig does not have.
+  Two on-run cells (control p90 143, changelog p90 84) are single outliers
+  from load, not compression effects: their medians match the off run.
+- **Tasks S2 and phone viewports were not re-run.** S2 needs the fixture
+  re-seeded with `--no-project-pref`; the `--tasks-scenario S2` flag alone
+  re-ran the S1 board (join reply 195,065 B), so no S2 number is claimed.
+  An earlier full on-run in this session, taken while the box was at load 17,
+  failed from the second tab on (no 101 through the proxy, same symptom as the
+  stage 1 phone S1 runs) and was discarded as a rig fault; it is run 0 of
+  `on.json` in the raw data and is not used. The same server answered a clean
+  re-run once the load fell. That the symptom also appeared with compression
+  off in stage 1 says it is the rig under load, not deflate.
+
+### Server cost of deflate
+
+Measured on the dev node by tracing `Bandit.WebSocket.PerMessageDeflate.deflate/2`
+(call and return, timestamped) while the harness ran 10 taps. The tracer itself
+adds overhead, so these are upper bounds.
+
+| payload | bytes in | deflate time per message |
+|---|---|---|
+| chat join reply | 320,900 | about 4.6 ms (21 to 23 samples per size, range 4.3 to 5.0, one 7.9 outlier) |
+| tasks (S1) join reply | 195,065 | about 3.5 ms |
+| a 59 KiB reply (inbox, voice) | 58,910 | about 1.1 ms |
+
+LiveView mount (the view's own work, `[:phoenix, :live_view, :mount, :stop]`)
+is unchanged: it is not part of the deflate call and is on the table above.
+Deflate runs in the socket process after the reply is built and costs 1 to 5 ms
+of that process's time per full-page reply; it is paid once per navigation, and
+the small diffs that follow cost under 100 microseconds each. No memory
+measurement was taken for the per-connection deflate context.
+
+### Exp
+
+| | after compression |
+|---|---|
+| exp wire bytes per tab | **pending deploy** |
+| exp tap-to-interactive | **pending deploy** |
+
+Exp numbers exist only once this is merged and deployed and an account Ryan
+provided is available. The estimated-deflate column in the stage 1 table stands
+as the forecast. Nothing here used a borrowed credential, wrote to prod, or ran
+on hive.
