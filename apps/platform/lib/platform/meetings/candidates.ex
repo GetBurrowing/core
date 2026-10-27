@@ -540,14 +540,8 @@ defmodule Platform.Meetings.Candidates do
   # arrival, not enqueue.
   @reconcile_drop ~w(transcript_chunk_ids threading_events last_utterance_at heard_at)a
 
-  # Classification is the moment a card's audience becomes known, so it
-  # is the moment a card with no audience loses its countdown. The
-  # skeleton was armed at arrival, on the correct assumption that most
-  # things said in a meeting are worth a card; this is where that
-  # assumption is checked against the model's answer.
-  #
-  # `nil` is written, not omitted: `reconcile/2` UPDATES a row that is
-  # already armed, so leaving the key out leaves the deadline standing.
+  # Classification may change a skeleton's rail. Task outcomes always lose
+  # any historical deadline; unroutable artifacts also stop counting down.
   defp put_disarm_if_unroutable(attrs) do
     if (attr(attrs, :outcome_kind) || :task) in [:task, "task"] or
          not routable_attrs?(attrs),
@@ -1527,7 +1521,8 @@ defmodule Platform.Meetings.Candidates do
   def correct(_candidate_or_id, _kind, _opts), do: {:error, :unknown_correction}
 
   @doc """
-  Give an armed card its full countdown back (task 01a0740e stage 1).
+  Give an armed artifact card its full countdown back. Task candidates
+  return `{:error, :not_armed}`, including historical armed rows.
 
   Sets `acts_at` to `Countdown.acts_at(now)` — the whole 30 seconds, not
   the remainder. `correct/3` calls this after a successful `:reassign`
@@ -1955,47 +1950,9 @@ defmodule Platform.Meetings.Candidates do
   end
 
   @doc """
-  Does a card carrying these attrs have an audience, and therefore a
-  reason to count down?
-
-  Public so the two writers of a candidate's classification —
-  `create/1`'s arming and `reconcile/2`'s disarm — cannot answer it
-  differently, and so a test can ask it without a database.
-
-  Three answers, and the middle one is the whole point:
-
-    * **no classification yet** — TRUE. A skeleton written by
-      `record_heard/1` has not been to the model, and its countdown is
-      anchored to the moment somebody spoke (task 01a04a7f). It is not
-      left un-armed on the chance it turns out to be small talk;
-      `reconcile/2` disarms it a second or two later if it does. Every
-      other outcome — a model error, a dedupe, an unqueued chunk —
-      closes the skeleton through `close_skeleton/4`, so an
-      un-reconciled card is not left counting down either.
-    * **a classification that reaches nobody** — FALSE. `off_topic` is
-      the standing case: no responsibility row, `target_role` the string
-      `"null"`, and `IntentDispatcher` lands it `:dispatch_failed`.
-    * **a classification that reaches somebody** — TRUE, whether that is
-      a responsibility or a role's runtime.
-
-  ## Why this is not the dispatcher's job
-
-  It was, in effect, and that was the defect. Nothing about being
-  `off_topic` prevented arming: the row was armed at MIRROR TIME, before
-  any dispatch decision for it existed, and the only thing that stopped
-  it graduating was the dispatcher reaching it first and closing it —
-  usually a second or two later. That is a race, not a rule. It loses
-  whenever the row ahead of it holds the meeting's serial cursor longer
-  than the remaining countdown, which `dispatch_to_responsibility/5`
-  does across its handler's model round-trip under a 90-second ack
-  window. One routable utterance and one piece of small talk behind it
-  is an ordinary meeting, and it was enough (task 01a06575).
-
-  Note what is NOT asked here. Whether the target role has an assignee,
-  whether that agent has a runtime, whether the broadcast lands: those
-  are dispatch outcomes, and a real ask whose agent is offline is still
-  real work whose card should count down. The question is only whether
-  the classification names an audience at all.
+  Does this classification name a reachable audience? Unclassified evidence
+  is provisionally routable; off-topic and otherwise unroutable intents are
+  not. Routability alone never arms a task candidate.
   """
   @spec routable_attrs?(map()) :: boolean()
   def routable_attrs?(attrs) when is_map(attrs) do
