@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -142,6 +143,8 @@ class TtfswRow:
     answer: str
     correct: bool
     timed_out: bool = False
+    first_clause_ms: float | None = None
+    tts_first_audio_ms: float | None = None
 
 
 @dataclass
@@ -197,8 +200,16 @@ def summarize_ttfsw(label: str, rows: list[TtfswRow]) -> Summary:
             "timed_out": sum(1 for r in rows if r.timed_out),
             "answered_by": sorted({r.answered_by or "local" for r in rows}),
             "mean_ms": statistics.mean(values) if values else None,
+            "first_clause_p50_ms": _p(rows, "first_clause_ms", 0.5),
+            "first_clause_p90_ms": _p(rows, "first_clause_ms", 0.9),
+            "tts_p50_ms": _p(rows, "tts_first_audio_ms", 0.5),
         },
     )
+
+
+def _p(rows, attr: str, fraction: float) -> float | None:
+    values = [getattr(r, attr) for r in rows if getattr(r, attr) is not None]
+    return percentile(values, fraction) if values else None
 
 
 def _ms(value: float | None) -> str:
@@ -251,16 +262,19 @@ class MouthStream:
             extra_body=self._config.extra_body or None,
         )
         text = ""
-        async for chunk in response:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            if self.first_token_at is None:
-                self.first_token_at = time.monotonic()
-            text += delta
-            yield text
+        try:
+            async for chunk in response:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content or ""
+                if not delta:
+                    continue
+                if self.first_token_at is None:
+                    self.first_token_at = time.monotonic()
+                text += delta
+                yield text
+        finally:
+            await response.close()
 
 
 class ClaudeCliStream:
@@ -283,6 +297,7 @@ class ClaudeCliStream:
             "--include-partial-messages",
             "--tools",
             "",
+            "--strict-mcp-config",
         ]
         if self._model:
             args += ["--model", self._model]
@@ -417,8 +432,9 @@ async def run_mouth(llm_config: LlmConfig, utterances: list[Utterance]) -> list[
         if u.expected_class != "substantive":
             mouth = MouthStream(llm_config, max_tokens=24)
             started = time.monotonic()
-            async for _ in mouth.stream(u.text):
-                break
+            async with contextlib.aclosing(mouth.stream(u.text)) as stream:
+                async for _ in stream:
+                    break
             if mouth.first_token_at is not None:
                 row.reply_first_token_ms = (mouth.first_token_at - started) * 1000
         rows.append(row)
@@ -449,7 +465,7 @@ async def run_ttfsw(
             source = MouthStream(llm_config)
             ack_task = None
         record = routing.RoutedAnswer(u.text, classification.turn_class, variant)
-        ttfsw = None
+        ttfsw = first_clause_ms = tts_ms = None
         async for clause, from_answer in routing.routed_clauses(
             source,
             u.text,
@@ -459,7 +475,9 @@ async def run_ttfsw(
             record=record,
         ):
             if ttfsw is None and from_answer:
-                ttfsw = (time.monotonic() - started) * 1000 + await tts.first_audio_ms(clause)
+                first_clause_ms = (time.monotonic() - started) * 1000
+                tts_ms = await tts.first_audio_ms(clause)
+                ttfsw = first_clause_ms + tts_ms
         if ack_task is not None:
             ack_ms = (classification.latency_ms) + await ack_task
         answer = record.text
@@ -475,6 +493,8 @@ async def run_ttfsw(
                 answer=answer,
                 correct=is_correct(answer, u.answer_keys),
                 timed_out=record.timed_out,
+                first_clause_ms=first_clause_ms,
+                tts_first_audio_ms=tts_ms,
             )
         )
     return rows

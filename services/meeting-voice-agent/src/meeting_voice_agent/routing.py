@@ -116,6 +116,11 @@ def classify_heuristic(text: str) -> str:
     return "substantive"
 
 
+def _guarded_substantive(text: str) -> bool:
+    words = re.findall(r"[a-z']+", (text or "").lower())
+    return len(words) >= SUBSTANTIVE_GUARD_WORDS and classify_heuristic(text) == "substantive"
+
+
 CLASSIFIER_PROMPT = (
     "You sort one utterance spoken to a voice assistant in a meeting. Reply with "
     "exactly one word: ack, turn_taking, or substantive.\n"
@@ -124,8 +129,17 @@ CLASSIFIER_PROMPT = (
     "turn_taking: about the conversation itself: can you hear me, hold on, wait, "
     "go ahead, stop, say that again, are you there.\n"
     "substantive: any question or request that needs real information, a fact, "
-    "a calculation, an explanation or an action."
+    "a calculation, an explanation or an action. Any question that asks what, "
+    "when, who, how many or why is substantive, however short.\n"
+    "Examples: 'cheers' -> ack. 'right, makes sense' -> ack. 'wait a moment' -> "
+    "turn_taking. 'are you still there?' -> turn_taking. 'what did we decide on "
+    "pricing?' -> substantive. 'how long is a marathon?' -> substantive."
 )
+
+#: An utterance this long that the rules call substantive stays substantive
+#: whatever the model says: sending an ack to Burrow costs one ask, but
+#: keeping a real question local lets the mouth answer what it does not know.
+SUBSTANTIVE_GUARD_WORDS = 5
 
 
 def parse_label(raw: str | None) -> str | None:
@@ -178,7 +192,10 @@ class LocalClassifier:
                 )
                 label = parse_label(raw)
                 if label in ROUTING_CLASSES:
-                    return Classification(label, "model", (time.monotonic() - started) * 1000)
+                    source = "model"
+                    if label != "substantive" and _guarded_substantive(text):
+                        label, source = "substantive", "model+guard"
+                    return Classification(label, source, (time.monotonic() - started) * 1000)
                 logger.info("classifier reply %r named no class; using heuristic", raw)
             except asyncio.CancelledError:
                 raise

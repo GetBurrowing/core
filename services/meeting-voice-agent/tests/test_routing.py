@@ -405,3 +405,14 @@ def test_build_voice_router_is_off_when_everything_is_local(monkeypatch):
     assert build_voice_router(AgentConfig.from_env(), object(), space_id="s") is None
     monkeypatch.delenv("MVA_ROUTING")
     assert build_voice_router(AgentConfig.from_env(), object(), space_id="s") is not None
+
+
+def test_a_long_question_the_model_calls_an_ack_still_goes_to_burrow():
+    async def complete(system, user):
+        return "ack"
+
+    classifier = routing.LocalClassifier(complete)
+    long_q = run(classifier.classify("How many letter r's are in the word strawberry?"))
+    assert (long_q.turn_class, long_q.source) == ("substantive", "model+guard")
+    short = run(classifier.classify("okay got it"))
+    assert (short.turn_class, short.source) == ("ack", "model")
