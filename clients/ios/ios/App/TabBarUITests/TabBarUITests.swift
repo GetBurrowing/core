@@ -30,11 +30,21 @@ final class TabBarUITests: XCTestCase {
         // does not help, so relaunch on a missing fixture and only fail when
         // every attempt shows nothing.
         var shown = false
+        var attempts = 0
         for _ in 0 ..< 4 where !shown {
+            attempts += 1
             app.launch()
             shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: 30)
             if !shown { app.terminate() }
         }
+        // One greppable line per test (task 01a17d1f): how many launches the
+        // fixture needed.
+        let line = "fixture-launch: test=\(name) attempts=\(attempts) relaunches=\(attempts - 1)"
+        print(line)
+        let attachment = XCTAttachment(string: line)
+        attachment.name = "fixture-launch"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTAssertTrue(shown, "the tab bar fixture never rendered in 4 launches")
         XCTAssertTrue(app.webViews.staticTexts["plugin: tabBarState present"].waitForExistence(timeout: 10))
         return app

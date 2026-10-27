@@ -122,6 +122,14 @@ jobs:
             -skip-testing:AppTests/PushRelayTests/testOneKeyPerHostInTheSharedKeychainAndSignOutDeletesIt \
             2>&1 | tee "$OUT/app-tests.log" | grep -E '^(Test Suite|Test Case .*(failed|skipped)|.*error:|\*\* )|Assertion|Fatal'
 
+      # The shell's web-load trace (WebLoadTrace.swift): scheme and path only.
+      - name: Web load trace
+        if: always()
+        run: |
+          xcrun simctl spawn "$UDID" log show --style compact --info \
+            --predicate 'subsystem == "burrow.webload"' > "$OUT/webload.log" 2>&1 || true
+          wc -l "$OUT/webload.log"
+
       - name: Summaries
         if: always()
         run: |

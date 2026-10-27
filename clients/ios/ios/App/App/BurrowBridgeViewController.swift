@@ -33,6 +33,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var loadingObservation: NSKeyValueObservation?
     private var webStatusBarStyle: UIStatusBarStyle?
     private var didStart = false
+    private var navTrace: WebLoadTracingDelegate?
     private var pickerHost: UIViewController?
     private let launcher = InstallLauncher()
     private let switchBanner = SwitchBannerPresenter()
@@ -77,6 +78,13 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         #endif
     }
 
+    /// Every shell-issued load goes through here so webload.log records it,
+    /// and whether a navigation was already in flight.
+    private func loadTraced(_ request: URLRequest, reason: String) {
+        navTrace?.noteShellLoad(reason, url: request.url, webView: webView)
+        webView?.load(request)
+    }
+
     // MARK: Capacitor hooks
 
     override func capacitorDidLoad() {
@@ -101,6 +109,13 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         webView.scrollView.backgroundColor = BurrowColor.surface.uiColor
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = true
+        // Trace every navigation event; Capacitor's handler still gets each call.
+        if !(webView.navigationDelegate is WebLoadTracingDelegate) {
+            let trace = WebLoadTracingDelegate(target: webView.navigationDelegate)
+            navTrace = trace
+            webView.navigationDelegate = trace
+            WebLoadLog.logger.notice("trace-installed isLoading=\(webView.isLoading) current=\(WebLoadLog.describe(webView.url), privacy: .public)")
+        }
 
         cover.backgroundColor = BurrowColor.surface.uiColor
         cover.frame = webView.bounds
@@ -181,6 +196,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         super.viewDidAppear(animated)
         guard !didStart else { return }
         didStart = true
+        WebLoadLog.logger.notice("viewDidAppear isLoading=\(self.webView?.isLoading ?? false) current=\(WebLoadLog.describe(self.webView?.url), privacy: .public)")
         #if DEBUG
             DebugVoIPSeam.applyLaunchArgument()
             if startMeetingProbe() { return }
@@ -188,7 +204,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         #endif
 
         if let host = loginProbeHost {
-            webView?.load(URLRequest(url: URL(string: "https://\(host)/auth/login")!))
+            loadTraced(URLRequest(url: URL(string: "https://\(host)/auth/login")!), reason: "login-probe")
             return
         }
         if let link = pendingDeepLink ?? IntentNavigator.takePending() {
@@ -242,7 +258,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private func openCallPage(host: String, path: String) {
         guard let url = URL(string: "https://\(host)\(path)") else { return }
         if currentInstall?.host.lowercased() == host.lowercased() {
-            webView?.load(URLRequest(url: url))
+            loadTraced(URLRequest(url: url), reason: "call-page")
         } else if let install = store.add(host: host) {
             open(install, at: url)
         }
@@ -445,7 +461,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             guard let base = bridge?.config.serverURL else { return true }
             view.layoutIfNeeded()
             addTabBarScript(host: base.host ?? "localhost")
-            webView?.load(URLRequest(url: base.appendingPathComponent("tabbar-fixture.html")))
+            loadTraced(URLRequest(url: base.appendingPathComponent("tabbar-fixture.html")), reason: "tabbar-fixture")
             return true
         }
 
@@ -491,7 +507,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             DispatchQueue.main.async {
                 guard let self, self.currentInstall?.host == install.host else { return }
                 switch step {
-                case .load(let target): self.webView?.load(URLRequest(url: target))
+                case .load(let target): self.loadTraced(URLRequest(url: target), reason: "install-launch")
                 case .signIn: self.signIn(to: install, then: url)
                 }
             }
@@ -515,7 +531,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             DispatchQueue.main.async {
                 guard let self, self.signingOutHost == install.host else { return }
                 WidgetCountsRefresher.refresh(host: install.host)
-                self.webView?.load(URLRequest(url: install.baseURL.appendingPathComponent("auth/logout")))
+                self.loadTraced(URLRequest(url: install.baseURL.appendingPathComponent("auth/logout")), reason: "sign-out")
             }
         }
     }
@@ -544,7 +560,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             self.auth = nil
             switch result {
             case .success(let handoff):
-                self.webView?.load(URLRequest(url: handoff))
+                self.loadTraced(URLRequest(url: handoff), reason: "sign-in-handoff")
                 // A fresh bearer: tell this install where to ring.
                 VoIPRegistrar.shared.registerWithSignedInInstalls()
             case .failure:
