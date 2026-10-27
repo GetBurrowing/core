@@ -2900,6 +2900,2683 @@
         }
       ],
       "finished_at": "2026-10-27T02:03:45.066Z"
+    },
+    {
+      "label": "local seeded",
+      "started_at": "2026-10-27T02:03:54.146Z",
+      "base": "local dev server via byte-counting proxy",
+      "viewport": "1280x800",
+      "taps_per_tab": 10,
+      "tasks_scenario": null,
+      "server_log_level": "info",
+      "machine": {
+        "platform": "Darwin 25.3.0 arm64",
+        "cpu": "Apple M4",
+        "cores": 10,
+        "mem_gb": 16
+      },
+      "chrome": "Chrome/156.0.8078.48",
+      "node_destinations": {
+        "destinations": [
+          {
+            "path": "/chat",
+            "key": "chat"
+          },
+          {
+            "path": "/voice",
+            "key": "voice"
+          },
+          {
+            "path": "/tasks",
+            "key": "tasks"
+          },
+          {
+            "path": "/inbox",
+            "key": "inbox"
+          },
+          {
+            "path": "/control",
+            "key": "agents"
+          },
+          {
+            "path": "/skills",
+            "key": "skills"
+          },
+          {
+            "path": "/files",
+            "key": "files"
+          },
+          {
+            "path": "/files?tab=browse&type=canvas",
+            "key": "canvases"
+          },
+          {
+            "path": "/org_memory",
+            "key": "context"
+          },
+          {
+            "path": "/control/experiments",
+            "key": "experiments"
+          },
+          {
+            "path": "/meetings",
+            "key": "meetings"
+          },
+          {
+            "path": "/changelog",
+            "key": "changelog"
+          }
+        ],
+        "email_enabled": false,
+        "games_enabled": false
+      },
+      "tabs": [
+        {
+          "summary": {
+            "key": "inbox",
+            "href": "/inbox",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 60.599999994039536,
+              "p90": 64.39999997615814
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 54.30000004172325,
+              "p90": 61.39999997615814
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 58907,
+              "p90": 58909
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 10521,
+              "p90": 10521
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 70307,
+              "p90": 70317
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11330.5,
+              "p90": 11332
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 70327,
+              "p90": 70337
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.InboxLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 16.1405,
+                "p90": 16.978
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 4.397,
+                "p90": 4.678
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 90,
+                "p90": 90
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "inbox",
+            "href": "/inbox",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/inbox",
+                "tap_ms": 51.80000001192093,
+                "ready_ms": 48.40000003576279,
+                "loading_stop_ms": 38.10000002384186,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70304,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70304
+                },
+                "window_deflate_estimate_bytes": 11328,
+                "join_reply_deflate_estimate_bytes": 10520,
+                "wire_down_bytes": 70324,
+                "wire_up_bytes": 1657
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 58.19999998807907,
+                "ready_ms": 51.90000003576279,
+                "loading_stop_ms": 44.60000002384186,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11327,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 55.90000003576279,
+                "ready_ms": 50,
+                "loading_stop_ms": 43.30000001192093,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11331,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 52.90000003576279,
+                "ready_ms": 50.60000002384186,
+                "loading_stop_ms": 39.5,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11330,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 59.69999998807907,
+                "ready_ms": 52.69999998807907,
+                "loading_stop_ms": 45.90000003576279,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11328,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 59.40000003576279,
+                "ready_ms": 53.40000003576279,
+                "loading_stop_ms": 46.5,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11331,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 64.39999997615814,
+                "ready_ms": 58.5,
+                "loading_stop_ms": 51.59999996423721,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58907,
+                "topic_other_raw_bytes": 11269,
+                "window_raw_recv_bytes": 70307,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70307
+                },
+                "window_deflate_estimate_bytes": 11332,
+                "join_reply_deflate_estimate_bytes": 10520,
+                "wire_down_bytes": 70327,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 64.39999997615814,
+                "ready_ms": 61.39999997615814,
+                "loading_stop_ms": 50.10000002384186,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58909,
+                "topic_other_raw_bytes": 11273,
+                "window_raw_recv_bytes": 70314,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70314
+                },
+                "window_deflate_estimate_bytes": 11332,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70334,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 62.5,
+                "ready_ms": 56.59999996423721,
+                "loading_stop_ms": 49.5,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58909,
+                "topic_other_raw_bytes": 11273,
+                "window_raw_recv_bytes": 70317,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70317
+                },
+                "window_deflate_estimate_bytes": 11329,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70337,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 61.5,
+                "ready_ms": 55.200000047683716,
+                "loading_stop_ms": 48.200000047683716,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58909,
+                "topic_other_raw_bytes": 11273,
+                "window_raw_recv_bytes": 70317,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70317
+                },
+                "window_deflate_estimate_bytes": 11334,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70337,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/inbox",
+                "tap_ms": 66,
+                "ready_ms": 62.80000001192093,
+                "loading_stop_ms": 52.30000001192093,
+                "join_topic": "lv:phx-GOJAmttAuR6CUinh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 58909,
+                "topic_other_raw_bytes": 11273,
+                "window_raw_recv_bytes": 70317,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAmttAuR6CUinh": 70317
+                },
+                "window_deflate_estimate_bytes": 11330,
+                "join_reply_deflate_estimate_bytes": 10521,
+                "wire_down_bytes": 70337,
+                "wire_up_bytes": 1664
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.5313.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 11.793,
+                "t0_us": -576459815391141,
+                "handle_params_ms": [
+                  3.337
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 16.195,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.54
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 9.016
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 2.639
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5333.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.404,
+                "t0_us": -576459814637536,
+                "handle_params_ms": [
+                  3.746
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 17.793,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.059
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.669
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.065
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5353.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.861,
+                "t0_us": -576459813836787,
+                "handle_params_ms": [
+                  4.678
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 23.681,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.21
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 14.305
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 4.166
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5373.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.356,
+                "t0_us": -576459813078520,
+                "handle_params_ms": [
+                  2.908
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 18.212,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 3.87
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 11.965
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 2.377
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5393.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.476,
+                "t0_us": -576459812307594,
+                "handle_params_ms": [
+                  4.449
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 21.25,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.379
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.048
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.823
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5413.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.817,
+                "t0_us": -576459811538902,
+                "handle_params_ms": [
+                  4.216
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 22.74,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.679
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.422
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.639
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5433.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.978,
+                "t0_us": -576459810734887,
+                "handle_params_ms": [
+                  4.345
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 21.262,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.029
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.545
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.688
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5453.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.91,
+                "t0_us": -576459809947545,
+                "handle_params_ms": [
+                  4.476
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 21.14,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.159
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.08
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.901
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5473.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.772,
+                "t0_us": -576459809171586,
+                "handle_params_ms": [
+                  4.747
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 22.584,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.565
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.893
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 4.126
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5493.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.616,
+                "t0_us": -576459808367080,
+                "handle_params_ms": [
+                  4.162
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 20.997,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.341
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.058
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.598
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5513.0>",
+                "view": "PlatformWeb.InboxLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.371,
+                "t0_us": -576459807581859,
+                "handle_params_ms": [
+                  4.542
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 22.512,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.853
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.723
+                  },
+                  "handle_params": {
+                    "count": 15,
+                    "ms": 3.936
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "files",
+            "href": "/files",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 71.05000001192093,
+              "p90": 79.69999998807907
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 64.2999999821186,
+              "p90": 72.09999996423721
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 80227,
+              "p90": 80229
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12435.5,
+              "p90": 12438
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 91586,
+              "p90": 91596
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 13219.5,
+              "p90": 13222
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 91612,
+              "p90": 91622
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.FilesLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 20.776,
+                "p90": 23.996
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 4.0665,
+                "p90": 4.906
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 90,
+                "p90": 90
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "files",
+            "href": "/files",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/files",
+                "tap_ms": 69.60000002384186,
+                "ready_ms": 61,
+                "loading_stop_ms": 49.80000001192093,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91583,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91583
+                },
+                "window_deflate_estimate_bytes": 13221,
+                "join_reply_deflate_estimate_bytes": 12436,
+                "wire_down_bytes": 91609,
+                "wire_up_bytes": 1657
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 79.69999998807907,
+                "ready_ms": 72.09999996423721,
+                "loading_stop_ms": 63,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13220,
+                "join_reply_deflate_estimate_bytes": 12438,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 66.60000002384186,
+                "ready_ms": 63.5,
+                "loading_stop_ms": 49.80000001192093,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13221,
+                "join_reply_deflate_estimate_bytes": 12437,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 74.69999998807907,
+                "ready_ms": 65.5,
+                "loading_stop_ms": 55.30000001192093,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13219,
+                "join_reply_deflate_estimate_bytes": 12437,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 67.40000003576279,
+                "ready_ms": 59,
+                "loading_stop_ms": 49,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13219,
+                "join_reply_deflate_estimate_bytes": 12435,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 70.89999997615814,
+                "ready_ms": 67.19999998807907,
+                "loading_stop_ms": 53.60000002384186,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13218,
+                "join_reply_deflate_estimate_bytes": 12435,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 82.39999997615814,
+                "ready_ms": 79.19999998807907,
+                "loading_stop_ms": 57.5,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80227,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 91586,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91586
+                },
+                "window_deflate_estimate_bytes": 13219,
+                "join_reply_deflate_estimate_bytes": 12435,
+                "wire_down_bytes": 91612,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 72.09999996423721,
+                "ready_ms": 64.89999997615814,
+                "loading_stop_ms": 55.39999997615814,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80229,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 91593,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91593
+                },
+                "window_deflate_estimate_bytes": 13222,
+                "join_reply_deflate_estimate_bytes": 12436,
+                "wire_down_bytes": 91619,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 71,
+                "ready_ms": 63.09999996423721,
+                "loading_stop_ms": 53.5,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80229,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 91596,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91596
+                },
+                "window_deflate_estimate_bytes": 13218,
+                "join_reply_deflate_estimate_bytes": 12435,
+                "wire_down_bytes": 91622,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 71.10000002384186,
+                "ready_ms": 63.69999998807907,
+                "loading_stop_ms": 54.60000002384186,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80229,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 91596,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91596
+                },
+                "window_deflate_estimate_bytes": 13221,
+                "join_reply_deflate_estimate_bytes": 12435,
+                "wire_down_bytes": 91622,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/files",
+                "tap_ms": 66.29999995231628,
+                "ready_ms": 63,
+                "loading_stop_ms": 45.09999996423721,
+                "join_topic": "lv:phx-GOJAnSgsKdWCUmsh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 80229,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 91596,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAnSgsKdWCUmsh": 91596
+                },
+                "window_deflate_estimate_bytes": 13223,
+                "join_reply_deflate_estimate_bytes": 12438,
+                "wire_down_bytes": 91622,
+                "wire_up_bytes": 1664
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.5596.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.634,
+                "t0_us": -576459805464402,
+                "handle_params_ms": [
+                  4.663
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 27.154,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.054
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 17.766
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 4.334
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5616.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 23.996,
+                "t0_us": -576459804681752,
+                "handle_params_ms": [
+                  6.748
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 31.058,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.827
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 19.794
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 6.437
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5636.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.002,
+                "t0_us": -576459803887531,
+                "handle_params_ms": [
+                  4.645
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 26.744,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.795
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.525
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 4.424
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5656.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 25.666,
+                "t0_us": -576459803092554,
+                "handle_params_ms": [
+                  3.067
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 36.994,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 12.178
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 22.09
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 2.726
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5676.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.144,
+                "t0_us": -576459802311479,
+                "handle_params_ms": [
+                  3.361
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 25.442,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.566
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 17.876
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 3
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5696.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 23.976,
+                "t0_us": -576459801543708,
+                "handle_params_ms": [
+                  4.752
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 31.083,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.129
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 20.45
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 4.504
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5716.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.59,
+                "t0_us": -576459800735893,
+                "handle_params_ms": [
+                  3.88
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 27.387,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.144
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 18.691
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 3.552
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5736.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.171,
+                "t0_us": -576459799934720,
+                "handle_params_ms": [
+                  4.906
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 25.64,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.556
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 15.508
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 4.576
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5756.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.408,
+                "t0_us": -576459799151198,
+                "handle_params_ms": [
+                  3.052
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 24.314,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.775
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.79
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 2.749
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5776.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.27,
+                "t0_us": -576459798368045,
+                "handle_params_ms": [
+                  3.924
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 24.777,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.77
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 15.429
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 3.578
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5796.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.312,
+                "t0_us": -576459797595629,
+                "handle_params_ms": [
+                  4.209
+                ],
+                "arrival_queries": 90,
+                "arrival_query_ms": 25.672,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.435
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.29
+                  },
+                  "handle_params": {
+                    "count": 7,
+                    "ms": 3.947
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "canvases",
+            "href": "/files?tab=browse&type=canvas",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 73.69999998807907,
+              "p90": 77.80000001192093
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 66.4500000178814,
+              "p90": 70
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 81118,
+              "p90": 81120
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12597,
+              "p90": 12599
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 92477,
+              "p90": 92487
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 13379,
+              "p90": 13381
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 92503,
+              "p90": 92513
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.FilesLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 20.258499999999998,
+                "p90": 21.23
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 3.5460000000000003,
+                "p90": 3.866
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 89,
+                "p90": 89
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "canvases",
+            "href": "/files?tab=browse&type=canvas",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 67.80000001192093,
+                "ready_ms": 55.80000001192093,
+                "loading_stop_ms": 45.90000003576279,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92474,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92474
+                },
+                "window_deflate_estimate_bytes": 13377,
+                "join_reply_deflate_estimate_bytes": 12595,
+                "wire_down_bytes": 92500,
+                "wire_up_bytes": 1680
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 68.90000003576279,
+                "ready_ms": 65.90000003576279,
+                "loading_stop_ms": 51.69999998807907,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13376,
+                "join_reply_deflate_estimate_bytes": 12597,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 71.89999997615814,
+                "ready_ms": 64.09999996423721,
+                "loading_stop_ms": 54.89999997615814,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13379,
+                "join_reply_deflate_estimate_bytes": 12597,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 77.80000001192093,
+                "ready_ms": 70.20000004768372,
+                "loading_stop_ms": 60.30000001192093,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13377,
+                "join_reply_deflate_estimate_bytes": 12596,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 71,
+                "ready_ms": 63.60000002384186,
+                "loading_stop_ms": 54.90000003576279,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13380,
+                "join_reply_deflate_estimate_bytes": 12599,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 65.19999998807907,
+                "ready_ms": 58,
+                "loading_stop_ms": 49.40000003576279,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13380,
+                "join_reply_deflate_estimate_bytes": 12600,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 77.5,
+                "ready_ms": 70,
+                "loading_stop_ms": 60.89999997615814,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81118,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 92477,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92477
+                },
+                "window_deflate_estimate_bytes": 13376,
+                "join_reply_deflate_estimate_bytes": 12595,
+                "wire_down_bytes": 92503,
+                "wire_up_bytes": 1681
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 74.89999997615814,
+                "ready_ms": 67.29999995231628,
+                "loading_stop_ms": 57.39999997615814,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81120,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 92484,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92484
+                },
+                "window_deflate_estimate_bytes": 13382,
+                "join_reply_deflate_estimate_bytes": 12599,
+                "wire_down_bytes": 92510,
+                "wire_up_bytes": 1686
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 73,
+                "ready_ms": 69.30000001192093,
+                "loading_stop_ms": 55.60000002384186,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81120,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 92487,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92487
+                },
+                "window_deflate_estimate_bytes": 13377,
+                "join_reply_deflate_estimate_bytes": 12596,
+                "wire_down_bytes": 92513,
+                "wire_up_bytes": 1687
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 78.40000003576279,
+                "ready_ms": 61.5,
+                "loading_stop_ms": 52.5,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81120,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 92487,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92487
+                },
+                "window_deflate_estimate_bytes": 13381,
+                "join_reply_deflate_estimate_bytes": 12596,
+                "wire_down_bytes": 92513,
+                "wire_up_bytes": 1687
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/files?tab=browse&type=canvas",
+                "tap_ms": 74.39999997615814,
+                "ready_ms": 67,
+                "loading_stop_ms": 57.299999952316284,
+                "join_topic": "lv:phx-GOJAn3yfNBqCUtnh",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 81120,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 92487,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAn3yfNBqCUtnh": 92487
+                },
+                "window_deflate_estimate_bytes": 13379,
+                "join_reply_deflate_estimate_bytes": 12597,
+                "wire_down_bytes": 92513,
+                "wire_up_bytes": 1687
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.5879.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.498,
+                "t0_us": -576459795542291,
+                "handle_params_ms": [
+                  3.657
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 23.921,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.847
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 15.624
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.45
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5899.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.998,
+                "t0_us": -576459794775416,
+                "handle_params_ms": [
+                  3.941
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 25.201,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.243
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.271
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.687
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5919.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.679,
+                "t0_us": -576459793987493,
+                "handle_params_ms": [
+                  3.825
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 25.167,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.582
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.025
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.56
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5939.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 23.397,
+                "t0_us": -576459793186578,
+                "handle_params_ms": [
+                  3.366
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 28.706,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.888
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 19.678
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.14
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5959.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.092,
+                "t0_us": -576459792423434,
+                "handle_params_ms": [
+                  2.611
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 24.921,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.891
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 17.7
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 2.33
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5980.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.165,
+                "t0_us": -576459791638612,
+                "handle_params_ms": [
+                  3.555
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 24.418,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.414
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 15.677
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.327
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6000.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.352,
+                "t0_us": -576459790844974,
+                "handle_params_ms": [
+                  2.696
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 21.623,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.91
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 14.299
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 2.414
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6022.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.81,
+                "t0_us": -576459790066532,
+                "handle_params_ms": [
+                  3.866
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 25.845,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.275
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.945
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.625
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6042.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.23,
+                "t0_us": -576459789272701,
+                "handle_params_ms": [
+                  3.537
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 26.858,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.085
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 17.465
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.308
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6062.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.726,
+                "t0_us": -576459788493223,
+                "handle_params_ms": [
+                  3.497
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 24.166,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.742
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 15.184
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.24
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6082.0>",
+                "view": "PlatformWeb.FilesLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.519,
+                "t0_us": -576459787703841,
+                "handle_params_ms": [
+                  3.861
+                ],
+                "arrival_queries": 89,
+                "arrival_query_ms": 26.037,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.706
+                  },
+                  "mount": {
+                    "count": 55,
+                    "ms": 16.728
+                  },
+                  "handle_params": {
+                    "count": 6,
+                    "ms": 3.603
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "skills",
+            "href": "/skills",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 55.75000002980232,
+              "p90": 63.700000047683716
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 49.85000002384186,
+              "p90": 56.90000003576279
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 52858,
+              "p90": 52860
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 9531,
+              "p90": 9531
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 64217,
+              "p90": 64227
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 10306.5,
+              "p90": 10308
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 64237,
+              "p90": 64247
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.SkillsLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 16.959000000000003,
+                "p90": 18.151
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 0.0335,
+                "p90": 0.036
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 75,
+                "p90": 75
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "skills",
+            "href": "/skills",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/skills",
+                "tap_ms": 47.09999996423721,
+                "ready_ms": 41.39999997615814,
+                "loading_stop_ms": 34.80000001192093,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64214,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64214
+                },
+                "window_deflate_estimate_bytes": 10304,
+                "join_reply_deflate_estimate_bytes": 9530,
+                "wire_down_bytes": 64234,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 68.30000001192093,
+                "ready_ms": 65.80000001192093,
+                "loading_stop_ms": 44.700000047683716,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10304,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 55.60000002384186,
+                "ready_ms": 50.19999998807907,
+                "loading_stop_ms": 43.60000002384186,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10305,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 55.19999998807907,
+                "ready_ms": 49.39999997615814,
+                "loading_stop_ms": 42.09999996423721,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10305,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 55.90000003576279,
+                "ready_ms": 50.10000002384186,
+                "loading_stop_ms": 43,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10308,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 43.30000001192093,
+                "ready_ms": 37.5,
+                "loading_stop_ms": 31,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10307,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 50.700000047683716,
+                "ready_ms": 48.40000003576279,
+                "loading_stop_ms": 31.400000035762787,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52858,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 64217,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64217
+                },
+                "window_deflate_estimate_bytes": 10308,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64237,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 53.39999997615814,
+                "ready_ms": 51.09999996423721,
+                "loading_stop_ms": 36,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52860,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 64224,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64224
+                },
+                "window_deflate_estimate_bytes": 10307,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64244,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 60,
+                "ready_ms": 49.60000002384186,
+                "loading_stop_ms": 30.900000035762787,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52860,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 64227,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64227
+                },
+                "window_deflate_estimate_bytes": 10306,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64247,
+                "wire_up_bytes": 1665
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 59.5,
+                "ready_ms": 56.90000003576279,
+                "loading_stop_ms": 30.900000035762787,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52860,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 64227,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64227
+                },
+                "window_deflate_estimate_bytes": 10310,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64247,
+                "wire_up_bytes": 1665
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/skills",
+                "tap_ms": 63.700000047683716,
+                "ready_ms": 48.200000047683716,
+                "loading_stop_ms": 41.30000001192093,
+                "join_topic": "lv:phx-GOJAocc48AiCUjuE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52860,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 64227,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAocc48AiCUjuE": 64227
+                },
+                "window_deflate_estimate_bytes": 10306,
+                "join_reply_deflate_estimate_bytes": 9531,
+                "wire_down_bytes": 64247,
+                "wire_up_bytes": 1665
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.6165.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.678,
+                "t0_us": -576459785698915,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.291,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.51
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.781
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6185.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.151,
+                "t0_us": -576459784936467,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.582,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.285
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.297
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6205.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.689,
+                "t0_us": -576459784154244,
+                "handle_params_ms": [
+                  0.034
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.344,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.484
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.86
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6225.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.856,
+                "t0_us": -576459783356086,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.356,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.296
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.06
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6245.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.156,
+                "t0_us": -576459782588948,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 17.899,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.609
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.29
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6265.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.635,
+                "t0_us": -576459781845096,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 15.473,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.678
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.795
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6285.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.302,
+                "t0_us": -576459781094742,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.246,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.944
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 11.302
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6305.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.506,
+                "t0_us": -576459780346259,
+                "handle_params_ms": [
+                  0.036
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.295,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.82
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.475
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6325.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.486,
+                "t0_us": -576459779564932,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 16.302,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.686
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.616
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6345.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.594,
+                "t0_us": -576459778751460,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 16.971,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.199
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.772
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6365.0>",
+                "view": "PlatformWeb.SkillsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.062,
+                "t0_us": -576459777990161,
+                "handle_params_ms": [
+                  0.038
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 17.959,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.795
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.164
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        }
+      ],
+      "errors": [],
+      "sidebar_hrefs": [
+        "/chat",
+        "/voice",
+        "/tasks",
+        "/meetings",
+        "/inbox",
+        "/files",
+        "/files?tab=browse&type=canvas",
+        "/skills",
+        "/org_memory",
+        "/control",
+        "/control/experiments",
+        "/changelog",
+        "/settings"
+      ],
+      "websocket_connections": [
+        {
+          "id": 5,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 9,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 11,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 13,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 15,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 17,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        }
+      ],
+      "finished_at": "2026-10-27T02:04:34.855Z"
     }
   ]
 }
