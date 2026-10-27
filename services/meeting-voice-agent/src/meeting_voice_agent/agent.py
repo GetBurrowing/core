@@ -144,7 +144,7 @@ def build_voice_router(
     (falling back to rules if that host is down); a `burrow` class is asked
     through Core's `voice_ask_agent` on the same MCP toolset.
     """
-    if "burrow" not in config.routing.routes.values():
+    if toolset is None or "burrow" not in config.routing.routes.values():
         return None
     call_tool = routing.mcp_tool_caller(toolset)
     classifier = routing.LocalClassifier.from_llm_config(
@@ -239,7 +239,7 @@ async def entrypoint(ctx: JobContext) -> None:
     tools = build_tool_surface(config, ctx.room.name, space_id=space_id)
     router = build_voice_router(
         config,
-        tools[0],
+        tools[0] if tools else None,
         space_id=space_id or mcp_tools.space_id_from_room_name(ctx.room.name),
         meeting_id=job_metadata.get("meeting_id"),
         on_answer=publish_routing_provenance(ctx.room),
