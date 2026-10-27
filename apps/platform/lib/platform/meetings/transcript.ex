@@ -72,6 +72,9 @@ defmodule Platform.Meetings.Transcript do
     transcript
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> validate_change(:space_id, fn :space_id, id ->
+      if Platform.UUID.valid?(id), do: [], else: [space_id: "is invalid"]
+    end)
     |> foreign_key_constraint(:meeting_id)
     |> validate_inclusion(:status, @statuses)
     # Surfaces the DB-level invariant as `{:error, changeset}` instead of a

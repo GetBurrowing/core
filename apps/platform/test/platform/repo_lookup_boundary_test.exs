@@ -476,6 +476,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "callback checks all four caller-supplied UUID identities before any lookup; snapshot_hash is compared against persisted state separately."},
     {"platform/federation/tool_surface.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
      "meeting_completion_access resolves a validated meeting first and reads its project_id FK before tenant scope authorization."},
+    {"platform/meetings/transcript.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "Transcript.changeset validates the optional caller space_id before Repo dumps that binary_id FK, so malformed create attrs return changeset errors rather than Ecto.ChangeError."},
     {"platform/meetings/agent_activity.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a04a98 stage 1 — `agent_id_for_chat_participant/1`. The id is the `participant_id` field of an `{:agent_typing, %{…}}` PubSub payload, i.e. it arrives as a message rather than out of a query, and the lookup runs inside `PlatformWeb.MeetingLive.handle_info/2` — an `Ecto.Query.CastError` there kills the LiveView for every viewer of the meeting, not just the malformed event. The function's contract is already `binary() | nil` (`nil` = \"that participant does not seat an agent\"), so a malformed id folds into the existing miss"},
     {"platform/meetings/agent_activity.ex", :get, "Participant", 1, :safe_internal,
