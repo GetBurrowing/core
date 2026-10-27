@@ -287,7 +287,7 @@ defmodule PlatformWeb.TerminalLive do
           phx-click="set_mode"
           phx-value-mode="ro"
           aria-pressed={to_string(@mode == "ro")}
-          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100 aria-pressed:font-semibold aria-pressed:ring-1 aria-pressed:ring-inset aria-pressed:ring-base-content"
+          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring aria-pressed:bg-base-100 aria-pressed:font-semibold aria-pressed:ring-1 aria-pressed:ring-inset aria-pressed:ring-base-content"
         >
           View only
         </button>
@@ -297,7 +297,7 @@ defmodule PlatformWeb.TerminalLive do
           phx-click="set_mode"
           phx-value-mode="rw"
           aria-pressed={to_string(@mode == "rw")}
-          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100 aria-pressed:font-semibold aria-pressed:ring-1 aria-pressed:ring-inset aria-pressed:ring-base-content"
+          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring aria-pressed:bg-base-100 aria-pressed:font-semibold aria-pressed:ring-1 aria-pressed:ring-inset aria-pressed:ring-base-content"
         >
           Can type
         </button>
