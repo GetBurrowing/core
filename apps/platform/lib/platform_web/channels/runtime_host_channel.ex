@@ -13,6 +13,7 @@ defmodule PlatformWeb.RuntimeHostChannel do
 
     * ONE host connection per agent folder, joined on `runtime_host:<id>`.
       Structured ops only: `file.list`, `file.read`, `file.write`,
+      `file.delete` (only to a host whose hello capabilities name it),
       `secret.set` and `session.*`.
     * TERMINAL BYTES NEVER RIDE THIS TOPIC. The remote terminal has its own
       topic, `terminal:<runtime_id>` (`PlatformWeb.TerminalCliChannel`), with

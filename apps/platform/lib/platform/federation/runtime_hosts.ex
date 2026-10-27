@@ -11,7 +11,7 @@ defmodule Platform.Federation.RuntimeHosts do
   """
 
   @registry Platform.Federation.RuntimeHostRegistry
-  @ops ~w(file.list file.read file.write secret.set session.restart session.tools)
+  @ops ~w(file.list file.read file.write file.delete secret.set session.restart session.tools)
   @default_timeout 5_000
 
   @doc "Events core may send a host."

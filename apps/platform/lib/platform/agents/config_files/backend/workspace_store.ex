@@ -59,6 +59,11 @@ defmodule Platform.Agents.ConfigFiles.Backend.WorkspaceStore do
     end
   end
 
+  # The agent host never removes a file from disk that is no longer stored,
+  # so deleting the stored copy would leave the agent reading it: refused.
+  @impl true
+  def delete(_ctx, _path, _expected), do: {:error, :unsupported}
+
   # ── preconditions ──────────────────────────────────────────────────
 
   defp check_precondition(ctx, path, current, expected) do

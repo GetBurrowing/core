@@ -11,6 +11,8 @@ defmodule Platform.Agents.ConfigFiles do
                                                   {:ok, sha256} | {:conflict, current_sha256} | {:error, reason}
       set_secret(actor, agent, path, pointer, value)
                                                   {:ok, sha256} | {:conflict, sha256} | {:error, reason}
+      delete(actor, agent, path, expected_sha256) {:ok, nil} | {:conflict, sha} | {:error, reason}  (stage 5)
+      describe(actor, agent)                      {:ok, %{harness, adapter, ...}} | {:error, reason} (stage 5)
       restart(actor, agent)                       {:ok, diff} | {:error, reason}   (stage 4)
       pending_changes(agent)                      [path]
       running_task(agent)                         %{id, title} | nil
@@ -98,6 +100,83 @@ defmodule Platform.Agents.ConfigFiles do
   def set_secret(actor, agent, path, pointer, value) when is_binary(value) do
     attempt(actor, agent, "config.secret_set", path, nil, fn ctx ->
       backend(ctx).set_secret(ctx, path, pointer, value)
+    end)
+  end
+
+  @doc """
+  Delete one skill, subagent or command file (stage 5). Only an entry path the
+  adapter knows (`.claude/skills/<name>/SKILL.md`, `.claude/agents/<name>.md`,
+  ...) can be deleted, with the hash the editor loaded; a mismatch is a
+  conflict. Audited as `config.delete`.
+
+  Federated only, and only when the host's hello advertises `file.delete`
+  (`describe/2` says `delete?`). A native agent's host re-writes the stored
+  files on every start but never removes one from disk, so a delete there
+  could not be honest: `{:error, :unsupported}`.
+  """
+  @spec delete(term(), Agent.t(), String.t(), String.t() | nil) :: result()
+  def delete(actor, agent, path, expected_sha256) do
+    attempt(actor, agent, "config.delete", path, expected_sha256, fn ctx ->
+      cond do
+        not entry_path?(ctx.adapter, path) -> {:error, :not_deletable}
+        not delete_supported?(ctx) -> {:error, :unsupported}
+        true -> backend(ctx).delete(ctx, path, expected_sha256)
+      end
+    end)
+  end
+
+  @doc """
+  What the configuration screen may offer for `agent`, behind the same gate
+  as every read and write (`Access.authorize/2`):
+
+      %{harness, adapter, concepts, backend, restart?, resumes?, delete?}
+
+  `restart?` is false where no restart path exists (a native agent whose
+  harness the agent host does not run, a host that did not advertise
+  `session`). `resumes?` is whether a restart continues the conversation.
+  """
+  @spec describe(term(), Agent.t()) :: {:ok, map()} | {:error, term()}
+  def describe(actor, agent) do
+    with {:ok, ctx} <- Access.authorize(actor, agent) do
+      {:ok,
+       %{
+         harness: ctx.adapter.harness(),
+         adapter: ctx.adapter,
+         concepts: ctx.adapter.concepts(),
+         backend: ctx.backend,
+         restart?: restart_supported?(ctx),
+         resumes?: resumes?(ctx),
+         delete?: delete_supported?(ctx)
+       }}
+    end
+  end
+
+  defp host_hello(%{backend: :host, runtime: runtime}) do
+    case RuntimeHosts.lookup(runtime.runtime_id) do
+      %{hello: hello} -> hello
+      nil -> %{}
+    end
+  end
+
+  defp host_hello(_), do: %{}
+
+  defp restart_supported?(%{backend: :workspace_store, runtime: runtime}),
+    do: runtime.harness == "claude_code"
+
+  defp restart_supported?(ctx), do: "session" in List.wrap(host_hello(ctx)[:capabilities])
+
+  defp resumes?(%{backend: :workspace_store} = ctx), do: ctx.adapter.restart_resumes?()
+  defp resumes?(ctx), do: host_hello(ctx)[:resumes] == true and ctx.adapter.restart_resumes?()
+
+  defp delete_supported?(%{backend: :host} = ctx),
+    do: "file.delete" in List.wrap(host_hello(ctx)[:capabilities])
+
+  defp delete_supported?(_), do: false
+
+  defp entry_path?(adapter, path) do
+    Enum.any?(adapter.known_paths(), fn {glob, tag} ->
+      tag == :plain and String.contains?(glob, "*") and
+        Platform.Agents.Harness.glob_match?(glob, path)
     end)
   end
 
@@ -299,7 +378,7 @@ defmodule Platform.Agents.ConfigFiles do
     from(e in Platform.Audit.Event,
       where:
         e.resource_type == "agent" and e.resource_id == ^agent_id and
-          e.event_type in ["config.write", "config.secret_set"] and
+          e.event_type in ["config.write", "config.secret_set", "config.delete"] and
           fragment("?->>'result' = 'ok'", e.metadata) and
           fragment(
             "? > coalesce((SELECT max(r.inserted_at) FROM audit_events r WHERE r.resource_type = 'agent' AND r.resource_id = ? AND r.event_type = 'config.restart' AND r.metadata->>'result' = 'ok'), '-infinity')",

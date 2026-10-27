@@ -61,6 +61,19 @@ defmodule Platform.Agents.ConfigFiles.Backend.Host do
     end
   end
 
+  # `file.delete` is sent only to a host whose hello advertised it
+  # (`ConfigFiles.describe/2`); the host applies the same hash precondition
+  # as a write.
+  @impl true
+  def delete(ctx, path, expected) do
+    case ask(ctx, "file.delete", %{"path" => path, "expected_sha256" => expected}) do
+      {:ok, %{"status" => "ok"}} -> {:ok, nil}
+      {:ok, %{"status" => "conflict"} = r} -> {:conflict, r["current_sha256"]}
+      {:ok, _} -> {:error, {:host_error, "malformed reply"}}
+      error -> error
+    end
+  end
+
   # Every request names the actor's ROLE (never an id): the CLI checks it
   # against the opt-in chosen on the machine (`owner_only` refuses an admin).
   defp ask(ctx, event, payload) do

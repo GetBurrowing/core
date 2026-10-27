@@ -8,7 +8,6 @@ defmodule PlatformWeb.ControlCenter.WorkspaceEvents do
 
   alias Platform.Agents.{Agent, AgentServer, MemoryContext, NativeAgents}
   alias PlatformWeb.ControlCenter.AgentData
-  alias PlatformWeb.ControlCenter.NativeFileEvents
 
   def handle("select_workspace_file", %{"file_key" => file_key}, socket) do
     {:noreply,
@@ -35,26 +34,22 @@ defmodule PlatformWeb.ControlCenter.WorkspaceEvents do
        AgentData.build_workspace_form(workspace_files, nil, %{
          "file_key" => AgentData.next_workspace_file_key(workspace_files)
        })
-     )
-     |> NativeFileEvents.reset()}
+     )}
   end
 
   def handle("new_workspace_file", _params, socket), do: {:noreply, socket}
 
-  # A native agent's files are root-equivalent to edit (stage 5 of task
-  # 01a10322), so this older event is not a way around NativeAgents.save_file/5:
-  # for a native agent it is the native save, with its can_manage? check.
+  # A native agent's files are root-equivalent to edit, and since task
+  # 01a17b1c stage 5 the configuration screen (`ConfigFiles`) is their only
+  # write path. This older event writes nothing for a native agent.
   def handle(
         "save_workspace_file",
         %{"workspace_file" => params},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
     if NativeAgents.managed?(agent) do
-      NativeFileEvents.handle(
-        "native_file_save",
-        %{"native_file" => params, "intent" => "save"},
-        socket
-      )
+      {:noreply,
+       put_flash(socket, :error, "Edit this agent's files on its Configuration screen.")}
     else
       save_builtin(agent, params, socket)
     end

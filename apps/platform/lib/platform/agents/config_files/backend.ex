@@ -9,6 +9,7 @@ defmodule Platform.Agents.ConfigFiles.Backend do
       is applied by the caller)
     * `write/4` -> `{:ok, sha256} | {:conflict, current_sha256 | nil} | {:error, reason}`
     * `set_secret/4` -> `{:ok, sha256} | {:conflict, sha256} | {:error, reason}`
+    * `delete/3` -> `{:ok, nil} | {:conflict, current_sha256} | {:error, reason}`
   """
 
   alias Platform.Agents.ConfigFiles.Access
@@ -20,4 +21,6 @@ defmodule Platform.Agents.ConfigFiles.Backend do
               {:ok, String.t()} | {:conflict, String.t() | nil} | {:error, term()}
   @callback set_secret(Access.ctx(), String.t(), String.t(), String.t()) ::
               {:ok, String.t()} | {:conflict, String.t() | nil} | {:error, term()}
+  @callback delete(Access.ctx(), String.t(), String.t() | nil) ::
+              {:ok, nil} | {:conflict, String.t() | nil} | {:error, term()}
 end
