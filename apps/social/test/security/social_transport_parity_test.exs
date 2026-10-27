@@ -83,6 +83,14 @@ defmodule Platform.Social.TransportParityTest do
       assert http[name]["description"] =~ @sentence
       ws_tool = Enum.find(capabilities.tools, &(&1.name == name))
       assert ws_tool.description =~ @sentence
+
+      if name == "social_clip_list" do
+        for description <- [http[name]["description"], ws_tool.description] do
+          assert description =~ "stable version id"
+          assert description =~ "actual_start_s"
+          assert description =~ "historical_unknown"
+        end
+      end
     end
   end
 

@@ -147,6 +147,9 @@ defmodule Platform.Social.ClipToolsTest do
       assert {row.width, row.height} == {1080, 1920}
       assert row.duration_s == rendered.duration_s
       assert Map.has_key?(row, :error)
+      assert [%{id: version_id, rev: 1, file_id: file_id}] = row.versions
+      assert is_binary(version_id)
+      assert file_id == rendered.render_file_id
     end
 
     test "another org's profile is not_found", w do

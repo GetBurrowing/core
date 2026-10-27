@@ -581,7 +581,19 @@ defmodule Platform.Social.Tools do
         |> Social.list_clips(profile_id: profile.id, status: blank_to_nil(args["status"]))
         |> Enum.filter(&(review_status == nil or &1.review_status == review_status))
 
-      page = clips |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&clip_json/1)
+      page =
+        clips
+        |> Enum.drop(offset)
+        |> Enum.take(limit)
+        |> Enum.map(fn clip ->
+          {:ok, versions} = Platform.Social.ClipVersions.recent(scope, profile.id, clip.id)
+
+          Map.put(
+            clip_json(clip),
+            :versions,
+            Enum.map(versions, &Platform.Social.ClipVersions.metadata/1)
+          )
+        end)
 
       {:ok,
        ResultBound.paged(:clips, page, length(clips), offset, %{limit: limit, offset: offset})}

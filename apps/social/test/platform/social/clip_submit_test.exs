@@ -85,6 +85,15 @@ defmodule Platform.Social.ClipSubmitTest do
 
     assert file_id == w.rendered.id
     assert by == w.agent.id
+    [version] = renders(clip.id)
+    assert version.headline == "Who makes Total War?"
+    assert version.caption == nil
+    assert version.duration_s == 31.5
+    assert version.byte_size == w.rendered.byte_size
+    assert version.actual_start_s == nil
+    assert version.requested_start_s == nil
+    assert version.snapshot_status == "recorded"
+    assert version.provenance == %{"kind" => "external_submit"}
 
     assert json.review_status == "pending"
     assert json.origin == "external"

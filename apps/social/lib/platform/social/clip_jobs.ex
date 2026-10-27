@@ -51,11 +51,11 @@ defmodule Platform.Social.ClipJobs do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{AgentDrafts, Clip, ClipJob, ClipLook, ClipRender, Profile}
+  alias Platform.Social.{AgentDrafts, Clip, ClipJob, ClipLook, ClipVersions, Profile}
 
   @base_profile "how-to-computer"
   @result_keys ~w(file_id title caption speaker episode_code platforms duration_s width height
-                  source_label)
+                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id)
   @meta_keys ~w(title caption speaker episode_code)
 
   @type error :: {:error, atom() | tuple() | Ecto.Changeset.t()}
@@ -433,7 +433,6 @@ defmodule Platform.Social.ClipJobs do
 
     payload = job.payload || %{}
     look = payload["look"] || clip.look
-    rev = if kind == "rerender", do: clip.rev + 1, else: clip.rev
     meta = AgentDrafts.clip_file_meta(file, result)
 
     render_attrs =
@@ -453,7 +452,6 @@ defmodule Platform.Social.ClipJobs do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
       |> Map.merge(%{
-        rev: rev,
         look: look,
         trim_in_s: payload["in_s"],
         trim_out_s: payload["out_s"],
@@ -463,28 +461,26 @@ defmodule Platform.Social.ClipJobs do
         if kind == "new_clip", do: Map.put(c, :submitted_by_agent_id, agent_id), else: c
       end)
 
-    clip =
-      clip
-      |> Clip.render_changeset(render_attrs)
-      |> Changeset.change(changes)
-      |> Changeset.validate_length(:title, max: 200)
-      |> Changeset.validate_length(:episode_code, max: 32)
-      |> Clip.review_changeset(:reset_pending)
-      |> insert_or_rollback(:update)
+    attrs =
+      render_attrs
+      |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
+      |> Map.merge(changes)
 
-    %ClipRender{}
-    |> ClipRender.changeset(%{
-      clip_id: clip.id,
-      rev: rev,
-      file_id: file.id,
-      look: look,
-      trim_in_s: payload["in_s"],
-      trim_out_s: payload["out_s"],
-      submitted_by_agent_id: agent_id
+    ClipVersions.append!(clip.id, file, attrs, %{
+      requested_start_s: payload["in_s"],
+      requested_end_s: payload["out_s"],
+      actual_start_s: result["actual_in_s"],
+      actual_end_s: result["actual_out_s"],
+      headline: result["title"],
+      caption: result["caption"],
+      caption_fixes: result["caption_fixes"] || payload["caption_fixes"],
+      candidate_id: result["candidate_id"] || payload["candidate_id"],
+      alternate_id: result["alternate_id"] || payload["alternate_id"],
+      submitted_by_agent_id: agent_id,
+      source: payload["episode"],
+      provenance: %{"kind" => "clip_job", "job_id" => job.id, "job_kind" => kind},
+      completion_key: "clip_job:" <> job.id
     })
-    |> insert_or_rollback()
-
-    clip
   end
 
   defp check_platforms(%{"platforms" => nil}, _profile), do: {:ok, nil}
