@@ -19,7 +19,7 @@ final class TabBarUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ appearance: String, extra: [String] = []) -> XCUIApplication {
+    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 4, shownTimeout: TimeInterval = 30) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
         // The shell loads the bundled fixture once, from viewDidAppear. On a
@@ -31,10 +31,10 @@ final class TabBarUITests: XCTestCase {
         // every attempt shows nothing.
         var shown = false
         var attempts = 0
-        for _ in 0 ..< 4 where !shown {
+        for _ in 0 ..< maxAttempts where !shown {
             attempts += 1
             app.launch()
-            shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: 30)
+            shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: shownTimeout)
             if !shown { app.terminate() }
         }
         // One greppable line per test (task 01a17d1f): how many launches the
@@ -45,7 +45,7 @@ final class TabBarUITests: XCTestCase {
         attachment.name = "fixture-launch"
         attachment.lifetime = .keepAlways
         add(attachment)
-        XCTAssertTrue(shown, "the tab bar fixture never rendered in 4 launches")
+        XCTAssertTrue(shown, "the tab bar fixture never rendered in \(maxAttempts) launches")
         XCTAssertTrue(app.webViews.staticTexts["plugin: tabBarState present"].waitForExistence(timeout: 10))
         return app
     }
@@ -294,6 +294,23 @@ final class TabBarUITests: XCTestCase {
             XCTAssertLessThan(width, 1024, viewport.label)
         }
         shot("stage4-viewport")
+        app.terminate()
+    }
+
+    /// Task 01a17d1f stage 2: the app recovers a failed first load itself. One
+    /// launch, no relaunch, the fixture within 20 s; the page says it came from
+    /// a re-issue (`recovery: 1`), which a launch that never failed cannot show.
+    func testInjectedProvisionalFailureRecovers() {
+        let app = launch("light", extra: ["-BurrowInjectNavigationFailure", "provisional"], maxAttempts: 1, shownTimeout: 20)
+        XCTAssertTrue(app.webViews.staticTexts["recovery: 1"].waitForExistence(timeout: 10))
+        app.terminate()
+    }
+
+    /// The simulated content-process termination after the first commit: the
+    /// shell re-issues the fixture load (a bare reload would not have to).
+    func testInjectedTerminationReloads() {
+        let app = launch("light", extra: ["-BurrowInjectNavigationFailure", "terminate"], maxAttempts: 1, shownTimeout: 20)
+        XCTAssertTrue(app.webViews.staticTexts["recovery: 1"].waitForExistence(timeout: 20))
         app.terminate()
     }
 

@@ -166,6 +166,18 @@
           document.getElementById("events").appendChild(item);
         });
 
+        // DEBUG: the shell re-issued a failed load and this page is the result
+        // (task 01a17d1f stage 2). Absent on a normal launch.
+        window.burrowFixtureRecovered = function (count) {
+          var line = document.getElementById("recovery");
+          if (!line) {
+            line = document.createElement("p");
+            line.id = "recovery";
+            document.body.appendChild(line);
+          }
+          line.textContent = "recovery: " + count;
+        };
+
         // DEBUG probe from BurrowBridgeViewController.reportTabBarFixture.
         window.burrowFixtureNative = function (report) {
           docLine();

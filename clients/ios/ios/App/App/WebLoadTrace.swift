@@ -32,9 +32,20 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     private weak var target: WKNavigationDelegate?
     /// Navigations started (provisional) and not yet finished or failed.
     private(set) var inFlight = 0
+    let recovery: WebLoadRecovery
 
-    init(target: WKNavigationDelegate?) {
+    #if DEBUG
+        /// `-BurrowInjectNavigationFailure provisional|terminate`: one injected
+        /// failure of the first fixture load, for the recovery UI tests.
+        private let injection = UserDefaults.standard.string(forKey: "BurrowInjectNavigationFailure")
+        private var injected = false
+
+        private func isFixture(_ url: URL?) -> Bool { url?.path.hasSuffix("/tabbar-fixture.html") ?? false }
+    #endif
+
+    init(target: WKNavigationDelegate?, recovery: WebLoadRecovery) {
         self.target = target
+        self.recovery = recovery
         super.init()
     }
 
@@ -56,6 +67,10 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         )
     }
 
+    private static func failingURL(_ error: Error, _ webView: WKWebView) -> URL? {
+        (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? webView.url
+    }
+
     private func finishOne() { inFlight = max(0, inFlight - 1) }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -64,14 +79,76 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         target?.webView?(webView, didStartProvisionalNavigation: navigation)
     }
 
+    /// Capacitor's handler decides every navigation; this only lets the DEBUG
+    /// seam cancel the first fixture navigation, so WebKit reports a real
+    /// provisional failure. Both policy entry points are covered because
+    /// WebKit calls the `preferences:` one when a delegate answers it.
+    func webView(
+        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        #if DEBUG
+            if shouldInjectCancel(navigationAction) {
+                decisionHandler(.cancel)
+                return
+            }
+        #endif
+        if let target, target.responds(to: Selector(("webView:decidePolicyFor:decisionHandler:"))) {
+            target.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences,
+        decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        #if DEBUG
+            if shouldInjectCancel(navigationAction) {
+                decisionHandler(.cancel, preferences)
+                return
+            }
+        #endif
+        if let target, target.responds(to: Selector(("webView:decidePolicyFor:preferences:decisionHandler:"))) {
+            target.webView?(webView, decidePolicyFor: navigationAction, preferences: preferences, decisionHandler: decisionHandler)
+        } else {
+            self.webView(webView, decidePolicyFor: navigationAction) { decisionHandler($0, preferences) }
+        }
+    }
+
+    #if DEBUG
+        private func shouldInjectCancel(_ action: WKNavigationAction) -> Bool {
+            guard injection == "provisional", !injected, action.targetFrame?.isMainFrame ?? true, isFixture(action.request.url) else { return false }
+            injected = true
+            WebLoadLog.logger.notice(
+                "injected provisional failure (cancelled in decidePolicyFor) url=\(WebLoadLog.describe(action.request.url), privacy: .public)")
+            return true
+        }
+    #endif
+
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         WebLoadLog.logger.notice("didCommit url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
+        recovery.didCommit(url: webView.url)
+        #if DEBUG
+            if injection == "terminate", !injected, isFixture(webView.url) {
+                injected = true
+                // SIMULATED: a real WebContent termination cannot be provoked
+                // from here. This drives the same recovery path the real
+                // callback does, without Capacitor's own reload().
+                DispatchQueue.main.async { [weak self] in
+                    WebLoadLog.logger.notice("webContentProcessDidTerminate (simulated, injected)")
+                    self?.recovery.terminated()
+                }
+            }
+        #endif
         target?.webView?(webView, didCommit: navigation)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         finishOne()
         WebLoadLog.logger.notice("didFinish url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
+        recovery.didFinish()
         target?.webView?(webView, didFinish: navigation)
     }
 
@@ -79,6 +156,7 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         finishOne()
         WebLoadLog.logger.notice(
             "didFail url=\(WebLoadLog.describe(webView.url), privacy: .public) \(WebLoadLog.describe(error), privacy: .public) inFlight=\(self.inFlight)")
+        recovery.failed(url: Self.failingURL(error, webView), domain: (error as NSError).domain, code: (error as NSError).code)
         target?.webView?(webView, didFail: navigation, withError: error)
     }
 
@@ -87,12 +165,14 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         WebLoadLog.logger.notice(
             "didFailProvisional url=\(WebLoadLog.describe(webView.url), privacy: .public) \(WebLoadLog.describe(error), privacy: .public) inFlight=\(self.inFlight)"
         )
+        recovery.failed(url: Self.failingURL(error, webView), domain: (error as NSError).domain, code: (error as NSError).code)
         target?.webView?(webView, didFailProvisionalNavigation: navigation, withError: error)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         WebLoadLog.logger.notice(
             "webContentProcessDidTerminate url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight) committed=\(webView.url != nil)")
+        recovery.terminated()
         target?.webViewWebContentProcessDidTerminate?(webView)
     }
 }

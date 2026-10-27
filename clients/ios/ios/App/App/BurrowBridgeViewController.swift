@@ -34,6 +34,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var webStatusBarStyle: UIStatusBarStyle?
     private var didStart = false
     private var navTrace: WebLoadTracingDelegate?
+    private var webRecovery: WebLoadRecovery?
     private var pickerHost: UIViewController?
     private let launcher = InstallLauncher()
     private let switchBanner = SwitchBannerPresenter()
@@ -82,6 +83,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// and whether a navigation was already in flight.
     private func loadTraced(_ request: URLRequest, reason: String) {
         navTrace?.noteShellLoad(reason, url: request.url, webView: webView)
+        webRecovery?.shellLoad(request)
         webView?.load(request)
     }
 
@@ -111,7 +113,17 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         webView.allowsBackForwardNavigationGestures = true
         // Trace every navigation event; Capacitor's handler still gets each call.
         if !(webView.navigationDelegate is WebLoadTracingDelegate) {
-            let trace = WebLoadTracingDelegate(target: webView.navigationDelegate)
+            let recovery = WebLoadRecovery(load: { [weak self] request in
+                self?.navTrace?.noteShellLoad("recovery", url: request.url, webView: self?.webView)
+                self?.webView?.load(request)
+            })
+            #if DEBUG
+                recovery.onRecoveredPage = { [weak self] count in
+                    self?.webView?.evaluateJavaScript("window.burrowFixtureRecovered && window.burrowFixtureRecovered(\(count))")
+                }
+            #endif
+            webRecovery = recovery
+            let trace = WebLoadTracingDelegate(target: webView.navigationDelegate, recovery: recovery)
             navTrace = trace
             webView.navigationDelegate = trace
             WebLoadLog.logger.notice("trace-installed isLoading=\(webView.isLoading) current=\(WebLoadLog.describe(webView.url), privacy: .public)")
