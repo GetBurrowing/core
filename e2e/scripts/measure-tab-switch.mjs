@@ -25,7 +25,19 @@
 //              takeover over the window's frames only).
 //   server     local only: the dev-only probe (tab_switch_probe.exs) loaded
 //              into the dev node over distribution: mount/handle_params ms,
-//              Repo query count, refresh_board and count_by_scope calls.
+//              Repo query count, refresh_board and count_by_scope calls,
+//              and chat's enter_space segment spans (us + queries each).
+//   first-frame wire bytes (task 01a17bf4)
+//              local only: the bytes the link carried for the join reply
+//              message ALONE (frame headers + compressed payload), found by
+//              decompressing the proxy's server->client messages and matching
+//              the reply text CDP reported. Separate from the window total.
+//
+// --visible-rows 1280x800,390x844 (task 01a17bf4) also opens the busy
+// channel at each viewport and counts `#message-list` stream rows that
+// intersect the scroll container's visible box, then records the
+// first-frame message count N those counts imply (ceil(max) + 3, 10..25).
+// --tabs none skips the tab loop (visible rows only).
 //
 // Usage: see measure-tab-switch.sh (the runner). Direct:
 //   node e2e/scripts/measure-tab-switch.mjs --base-url http://localhost:4073 \
@@ -51,6 +63,8 @@ import {
   PROFILES,
   cdpConditions,
   traceBreakdown,
+  countVisibleRows,
+  pickInitialMessageCount,
 } from "./tab-switch-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -93,6 +107,7 @@ function parseArgs(argv) {
       // WebSocket frames; --throttle-check reports whether it did.
       case "--throttle": a.throttle = v(); break;
       case "--trace": a.trace = true; break;
+      case "--visible-rows": a.visibleRows = v().split(",").filter(Boolean); break;
       case "--server-log-level": a.serverLogLevel = v(); break;
       case "--headed": a.headed = true; break;
       default: throw new Error(`unknown argument ${k}`);
@@ -146,6 +161,14 @@ const probeReset = (args) =>
   );
 const probeDump = async (args) => {
   const s = await rpc(args, "TabSwitchProbe.dump()");
+  return s ? JSON.parse(s) : null;
+};
+// The chat first-frame knobs as the running node reads them right now.
+const nodeChatConfig = async (args) => {
+  const s = await rpc(
+    args,
+    `Jason.encode!(%{initial_message_count: PlatformWeb.ChatLive.FirstFrame.initial_message_count(), deferred_side_state: PlatformWeb.ChatLive.FirstFrame.deferred_side_state()})`,
+  ).catch(() => null);
   return s ? JSON.parse(s) : null;
 };
 const nodeDestinations = async (args) => {
@@ -348,6 +371,9 @@ async function measureTab(ctx, args, tab, frames, proxy) {
     const rawRecvAll = recvInWindow.reduce((s, f) => s + byteLength(f.data), 0);
     const est = (await deflateEstimate(recvInWindow.map((f) => f.data))).reduce((s, n) => s + n, 0);
     const replyEst = jr?.replyData ? (await deflateEstimate([jr.replyData]))[0] : null;
+    // The join reply's own bytes on the link (task 01a17bf4). The reply was
+    // delivered before ready, so the window is the tap window.
+    const firstFrameWire = proxy && jr?.replyData ? await proxy.wireBytesFor(jr.replyData, nodeT0, nodeT1) : null;
 
     const tap = {
       i,
@@ -365,6 +391,7 @@ async function measureTab(ctx, args, tab, frames, proxy) {
       window_raw_recv_by_socket_topic: byTopic,
       window_deflate_estimate_bytes: est,
       join_reply_deflate_estimate_bytes: replyEst,
+      first_frame_wire_bytes: firstFrameWire,
       wire_down_bytes: proxy ? proxy.sum(nodeT0, nodeT1, "down") : null,
       wire_up_bytes: proxy ? proxy.sum(nodeT0, nodeT1, "up") : null,
       client: perfDelta(pm0, pm1),
@@ -395,6 +422,85 @@ async function measureTab(ctx, args, tab, frames, proxy) {
 
 // ── run ───────────────────────────────────────────────────────────────────
 
+// Per enter_space segment: median/p90 of its us and queries over the
+// measured mounts (a segment that ran twice in one mount is summed), plus the
+// segments ranked by median us. Empty for views that emit no segments.
+function summarizeSegments(mounts) {
+  const per = new Map();
+  for (const m of mounts) {
+    const seen = new Map();
+    for (const s of m.enter_space_segments || []) {
+      const cur = seen.get(s.segment) || { us: 0, queries: 0 };
+      seen.set(s.segment, { us: cur.us + s.us, queries: cur.queries + s.queries });
+    }
+    for (const [k, v] of seen) {
+      if (!per.has(k)) per.set(k, { us: [], queries: [] });
+      per.get(k).us.push(v.us);
+      per.get(k).queries.push(v.queries);
+    }
+  }
+  if (per.size === 0) return null;
+  const segments = Object.fromEntries([...per].map(([k, v]) => [k, { us: summarize(v.us), queries: summarize(v.queries) }]));
+  const ranked = Object.entries(segments)
+    .sort((a, b) => b[1].us.median - a[1].us.median)
+    .map(([k, v]) => ({ segment: k, median_us: v.us.median, p90_us: v.us.p90, median_queries: v.queries.median }));
+  const total = summarize(mounts.map((m) => (m.enter_space_segments || []).reduce((a, s) => a + s.us, 0)));
+  return { segments, ranked, total_us: total };
+}
+
+// Open the busy channel at each viewport and count the message stream rows
+// that intersect the scroll container's visible box once the view has
+// connected and settled at the bottom.
+async function measureVisibleRows(session, args, baseUrl, viewports) {
+  const out = [];
+  for (const vp of viewports) {
+    const [w, h] = vp.split("x").map(Number);
+    const context = await session.browser.newContext({ viewport: { width: w, height: h }, ...(args.authState ? { storageState: args.authState } : {}) });
+    const page = await context.newPage();
+    try {
+      if (args.loginAs) await page.goto(`${baseUrl}/dev/login?as=${encodeURIComponent(args.loginAs)}`);
+      await page.goto(`${baseUrl}/chat/${args.busySlug}`);
+      await waitConnected(page);
+      await page.waitForSelector("#message-list > [id]", { timeout: 20_000 });
+      await page.waitForTimeout(1500);
+      const m = await page.evaluate(() => {
+        const list = document.querySelector("#message-list");
+        let c = list.parentElement;
+        while (c && c !== document.body) {
+          const oy = getComputedStyle(c).overflowY;
+          if ((oy === "auto" || oy === "scroll") && c.scrollHeight > c.clientHeight) break;
+          c = c.parentElement;
+        }
+        const cr = (c || document.documentElement).getBoundingClientRect();
+        const top = Math.max(cr.top, 0);
+        const bottom = Math.min(cr.bottom, window.innerHeight);
+        const rows = [...list.children].filter((el) => el.id).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom };
+        });
+        return {
+          rows,
+          view: { top, bottom },
+          container: c ? c.id || c.className.toString().slice(0, 80) : "document",
+          distance_from_bottom: c ? c.scrollHeight - c.scrollTop - c.clientHeight : null,
+        };
+      });
+      out.push({
+        viewport: vp,
+        visible_rows: countVisibleRows(m.rows, m.view),
+        rows_in_dom: m.rows.length,
+        view_height_px: m.view.bottom - m.view.top,
+        container: m.container,
+        distance_from_bottom_px: m.distance_from_bottom,
+      });
+      process.stderr.write(`  visible rows at ${vp}: ${out.at(-1).visible_rows} of ${m.rows.length}\n`);
+    } finally {
+      await context.close();
+    }
+  }
+  return out;
+}
+
 function summarizeTab(t) {
   const measured = t.taps.filter((x) => !x.warmup);
   const pick = (k) => summarize(measured.map((x) => x[k]));
@@ -412,6 +518,7 @@ function summarizeTab(t) {
     ready_ms: pick("ready_ms"),
     join_reply_raw_bytes: pick("join_reply_raw_bytes"),
     join_reply_deflate_estimate_bytes: pick("join_reply_deflate_estimate_bytes"),
+    first_frame_wire_bytes: pick("first_frame_wire_bytes"),
     window_raw_recv_bytes: pick("window_raw_recv_bytes"),
     window_deflate_estimate_bytes: pick("window_deflate_estimate_bytes"),
     wire_down_bytes: pick("wire_down_bytes"),
@@ -432,6 +539,7 @@ function summarizeTab(t) {
       count_by_scope: summarize(ms.map((m) => m.count_by_scope)),
       list_all_tasks_first: ms.map((m) => (m.list_all_tasks || [])[0] || null),
       handle_params_calls: summarize(ms.map((m) => (m.handle_params_ms || []).length)),
+      enter_space: summarizeSegments(ms),
     };
   } else {
     s.server = t.server ? { error: t.server.error || "unavailable" } : "unavailable";
@@ -505,6 +613,7 @@ async function main() {
     machine: { platform: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0]?.model, cores: os.cpus().length, mem_gb: Math.round(os.totalmem() / 2 ** 30) },
     chrome: session.version,
     node_destinations: await nodeDestinations(runArgs),
+    chat_config: await nodeChatConfig(runArgs),
     tabs: [],
     errors: [],
   };
@@ -517,6 +626,20 @@ async function main() {
   run.sidebar_hrefs = hrefs;
   let tabs = hrefs.map((href) => ({ key: tabKeyFor(href), href }));
   if (args.tabs) tabs = tabs.filter((t) => args.tabs.includes(t.key));
+
+  if (args.visibleRows) {
+    try {
+      run.visible_rows = await measureVisibleRows(session, runArgs, baseUrl, args.visibleRows);
+      const counts = run.visible_rows.map((r) => r.visible_rows);
+      run.initial_message_count_pick = {
+        rule: "ceil(max visible rows across viewports) + 3, clamped to 10..25",
+        visible_rows: Object.fromEntries(run.visible_rows.map((r) => [r.viewport, r.visible_rows])),
+        n: pickInitialMessageCount(counts),
+      };
+    } catch (e) {
+      run.errors.push({ tab: "visible_rows", error: e.message });
+    }
+  }
 
   for (const tab of tabs) {
     if (Date.now() - started > args.runTimeoutMs) {
@@ -534,6 +657,7 @@ async function main() {
       session = await openSession(runArgs, baseUrl);
     }
     session.frames.length = 0;
+    if (proxy) proxy.messages.length = 0;
     result.runs = result.runs.filter((r) => r !== run);
     result.runs.push(run);
     writeFileSync(args.out, JSON.stringify(result, null, 2));
@@ -551,9 +675,11 @@ async function main() {
     const s = t.summary;
     const f = (x) => (x?.median == null ? "-" : `${Math.round(x.median)}/${Math.round(x.p90)}`);
     process.stdout.write(
-      `${s.key.padEnd(12)} tap ${f(s.tap_ms).padEnd(10)} reply ${f(s.join_reply_raw_bytes).padEnd(14)} wire ${f(s.wire_down_bytes).padEnd(14)} mount ${f(s.server?.mount_ms)}\n`,
+      `${s.key.padEnd(12)} tap ${f(s.tap_ms).padEnd(10)} reply ${f(s.join_reply_raw_bytes).padEnd(14)} first-frame wire ${f(s.first_frame_wire_bytes).padEnd(12)} wire ${f(s.wire_down_bytes).padEnd(14)} mount ${f(s.server?.mount_ms)}\n`,
     );
+    for (const r of s.server?.enter_space?.ranked || []) process.stdout.write(`    ${r.segment.padEnd(24)} ${Math.round(r.median_us)} us, ${r.median_queries} q\n`);
   }
+  if (run.initial_message_count_pick) process.stdout.write(`N pick: ${JSON.stringify(run.initial_message_count_pick)}\n`);
   for (const e of run.errors) process.stdout.write(`ERROR ${e.tab}: ${e.error}\n`);
 }
 

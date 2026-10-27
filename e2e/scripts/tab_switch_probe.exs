@@ -14,6 +14,10 @@
 #     components), from [:platform, :repo, :query]
 #     emitted in that process;
 #   * [:platform_web, :tasks, :refresh_board, :stop] count;
+#   * chat space-entry segments (task 01a17bf4):
+#     [:platform_web, :chat, :enter_space, <segment>, :start|:stop], per
+#     segment its duration (us) and the Repo queries emitted inside it, in
+#     the order they ran (PlatformWeb.ChatLive.FirstFrame emits them);
 #   * calls to Platform.Tasks.count_by_scope/1 and the project/epic opts of
 #     each Platform.Tasks.list_all_tasks/1 call (erlang call tracing).
 #
@@ -27,7 +31,19 @@ defmodule TabSwitchProbe do
   @holder :tab_switch_probe_holder
   @handler "tab-switch-probe"
 
-  @events [
+  # The chat enter_space segments PlatformWeb.ChatLive.FirstFrame spans. An
+  # unknown name here is harmless (never emitted); a name missing here is
+  # simply not recorded, and the dump lists what it did see.
+  @chat_segments ~w(participants rail_channels list_spaces rail_archived_channels
+    restricted_channel_ids rail_dm_conversations presence message_window
+    space_sheet pins canvases agents_sheet channel_sections sidebar_sections
+    chat_list_data)a
+
+  @segment_events for s <- @chat_segments,
+                      kind <- [:start, :stop],
+                      do: [:platform_web, :chat, :enter_space, s, kind]
+
+  @events @segment_events ++ [
     [:phoenix, :live_view, :mount, :start],
     [:phoenix, :live_view, :mount, :stop],
     [:phoenix, :live_view, :handle_params, :start],
@@ -160,7 +176,31 @@ defmodule TabSwitchProbe do
     Process.put(:tab_switch_probe_phase, :event)
   end
 
+  defp do_handle([:platform_web, :chat, :enter_space, segment, :start], _m, _meta) do
+    Process.put(:tab_switch_probe_segments, [
+      {segment, 0} | Process.get(:tab_switch_probe_segments, [])
+    ])
+  end
+
+  defp do_handle([:platform_web, :chat, :enter_space, segment, :stop], m, _meta) do
+    case Process.get(:tab_switch_probe_segments, []) do
+      [{^segment, queries} | rest] ->
+        Process.put(:tab_switch_probe_segments, rest)
+        us = System.convert_time_unit(m.duration, :native, :microsecond)
+        :ets.insert(@table, {self(), :segment, now(), segment, us, queries})
+
+      _ ->
+        :ok
+    end
+  end
+
   defp do_handle([:platform, :repo, :query], m, _meta) do
+    # Charge the query to the innermost open enter_space segment.
+    case Process.get(:tab_switch_probe_segments) do
+      [{segment, q} | rest] -> Process.put(:tab_switch_probe_segments, [{segment, q + 1} | rest])
+      _ -> :ok
+    end
+
     case Process.get(:tab_switch_probe_phase) do
       nil ->
         :ok
@@ -226,6 +266,13 @@ defmodule TabSwitchProbe do
           arrival_query_ms: Enum.sum(Enum.map(arrival, &elem(&1, 1))) / 1000,
           queries_by_phase: q_by_phase,
           refresh_board: Enum.count(rs, &match?({_, :refresh_board, _, _}, &1)),
+          enter_space_segments:
+            rs
+            |> Enum.filter(&match?({_, :segment, _, _, _, _}, &1))
+            |> Enum.sort_by(&elem(&1, 2))
+            |> Enum.map(fn {_, :segment, _, seg, us, q} ->
+              %{segment: seg, us: us, queries: q}
+            end),
           refresh_board_ms: for({_, :refresh_board, _, d} <- rs, do: d),
           count_by_scope: Enum.count(rs, &match?({_, :count_by_scope, _}, &1)),
           list_all_tasks:

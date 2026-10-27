@@ -205,6 +205,33 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
   const upLink = shape ? makeLink({ bps: shape.upBps, owdMs: shape.rttMs / 2 }) : null;
   const conns = new Map();
   let nextId = 1;
+  // Server -> client WebSocket MESSAGES on the /live connections, with their
+  // wire size and delivery time, decompressed so a frame CDP reports (as
+  // text) can be matched to the bytes the link carried for it.
+  const messages = [];
+  let decoding = Promise.resolve();
+
+  const readDown = (info, chunk, t) => {
+    if (!info.reader) {
+      // Skip the HTTP 101 response head; frames start after it.
+      info.head = info.head ? Buffer.concat([info.head, chunk]) : Buffer.from(chunk);
+      const end = info.head.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      const rest = info.head.subarray(end + 4);
+      info.head = null;
+      info.reader = new WsMessageReader();
+      info.inflater = info.deflateAccepted ? createInflater() : null;
+      chunk = rest;
+      if (chunk.length === 0) return;
+    }
+    for (const m of info.reader.push(chunk)) {
+      if (m.opcode !== 1 && m.opcode !== 2) continue;
+      const rec = { conn: info.id, t, wireBytes: m.wireBytes, rsv1: m.rsv1, text: null };
+      messages.push(rec);
+      const decode = m.rsv1 && info.inflater ? info.inflater.inflate(m.payload) : Promise.resolve(m.payload);
+      decoding = decoding.then(() => decode.then((b) => (rec.text = b.toString("utf8"))).catch(() => (rec.text = null)));
+    }
+  };
 
   const server = net.createServer((client) => {
     const id = nextId++;
@@ -241,11 +268,15 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
       // sum is what the browser had received by then.
       if (downLink && info.ws) {
         downLink.send(chunk.length, () => {
-          log.push({ conn: id, dir: "down", bytes: chunk.length, t: performance.now() });
+          const t = performance.now();
+          log.push({ conn: id, dir: "down", bytes: chunk.length, t });
+          readDown(info, chunk, t);
           if (!client.destroyed) client.write(chunk);
         });
       } else {
-        log.push({ conn: id, dir: "down", bytes: chunk.length, t: performance.now() });
+        const t = performance.now();
+        log.push({ conn: id, dir: "down", bytes: chunk.length, t });
+        if (info.ws) readDown(info, chunk, t);
         client.write(chunk);
       }
     });
@@ -266,6 +297,14 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
         port: server.address().port,
         log,
         conns,
+        messages,
+        /** Resolves once every message seen so far is decompressed. */
+        settled: () => decoding,
+        /** Wire bytes of the server message whose text is `text`, delivered in [t0, t1]. */
+        async wireBytesFor(text, t0 = -Infinity, t1 = Infinity) {
+          await decoding;
+          return wireBytesForText(messages, text, t0, t1);
+        },
         /** Sum bytes in [t0, t1] for direction, websocket connections only by default. */
         sum(t0, t1, dir = "down", wsOnly = true) {
           return sumWindow(log, conns, t0, t1, dir, wsOnly);
@@ -323,6 +362,150 @@ export function traceBreakdown(events) {
   }
   const keep = ["RunTask", "EventDispatch", "FunctionCall", "EvaluateScript", "v8.compile", "TimerFire", "FireAnimationFrame", "UpdateLayoutTree", "Layout", "PrePaint", "Paint", "Layerize", "Commit", "ParseHTML", "MinorGC", "MajorGC"];
   return Object.fromEntries(keep.filter((k) => out[k] != null).map((k) => [k, out[k]]));
+}
+
+// ── WebSocket frames on the wire (first-frame bytes, task 01a17bf4) ────────
+
+/**
+ * Incremental RFC 6455 frame reader for one direction of one connection.
+ * push(chunk) returns every MESSAGE completed by that chunk:
+ * `{opcode, rsv1, wireBytes, payload}` where wireBytes is the frame headers
+ * plus payloads of every frame of the message (what the link carried) and
+ * payload is the concatenated (still compressed when rsv1) payload. Control
+ * frames (ping/pong/close) are returned as their own messages. Masked frames
+ * (client -> server) are unmasked.
+ */
+export class WsMessageReader {
+  constructor() {
+    this.buf = Buffer.alloc(0);
+    this.partial = null;
+  }
+
+  push(chunk) {
+    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : Buffer.from(chunk);
+    const out = [];
+    for (;;) {
+      const f = readFrame(this.buf);
+      if (!f) break;
+      this.buf = this.buf.subarray(f.total);
+      const control = f.opcode >= 8;
+      if (control) {
+        out.push({ opcode: f.opcode, rsv1: false, wireBytes: f.total, payload: f.payload });
+        continue;
+      }
+      if (f.opcode !== 0 || !this.partial) {
+        this.partial = { opcode: f.opcode, rsv1: f.rsv1, wireBytes: 0, parts: [] };
+      }
+      this.partial.wireBytes += f.total;
+      this.partial.parts.push(f.payload);
+      if (f.fin) {
+        const m = this.partial;
+        this.partial = null;
+        out.push({ opcode: m.opcode, rsv1: m.rsv1, wireBytes: m.wireBytes, payload: Buffer.concat(m.parts) });
+      }
+    }
+    return out;
+  }
+}
+
+function readFrame(buf) {
+  if (buf.length < 2) return null;
+  const b0 = buf[0];
+  const b1 = buf[1];
+  let len = b1 & 0x7f;
+  let off = 2;
+  if (len === 126) {
+    if (buf.length < 4) return null;
+    len = buf.readUInt16BE(2);
+    off = 4;
+  } else if (len === 127) {
+    if (buf.length < 10) return null;
+    len = Number(buf.readBigUInt64BE(2));
+    off = 10;
+  }
+  const masked = (b1 & 0x80) !== 0;
+  const maskAt = off;
+  if (masked) off += 4;
+  if (buf.length < off + len) return null;
+  let payload = buf.subarray(off, off + len);
+  if (masked) {
+    const key = buf.subarray(maskAt, maskAt + 4);
+    payload = Buffer.from(payload);
+    for (let i = 0; i < payload.length; i++) payload[i] ^= key[i % 4];
+  }
+  return { fin: (b0 & 0x80) !== 0, rsv1: (b0 & 0x40) !== 0, opcode: b0 & 0x0f, payload, total: off + len };
+}
+
+/**
+ * permessage-deflate inflater for one direction of one connection. One raw
+ * inflate stream for the whole connection, so it reads both context takeover
+ * and no-context-takeover senders. Calls are serialized; each resolves to the
+ * message's decompressed bytes.
+ */
+export function createInflater() {
+  const inflater = zlib.createInflateRaw({ windowBits: 15 });
+  let chunks = [];
+  inflater.on("data", (c) => chunks.push(c));
+  let chain = Promise.resolve();
+  return {
+    inflate(payload) {
+      const p = chain.then(
+        () =>
+          new Promise((resolve, reject) => {
+            chunks = [];
+            inflater.write(Buffer.concat([payload, Buffer.from([0x00, 0x00, 0xff, 0xff])]));
+            inflater.flush(zlib.constants.Z_SYNC_FLUSH, (err) => (err ? reject(err) : resolve(Buffer.concat(chunks))));
+          }),
+      );
+      chain = p.catch(() => {});
+      return p;
+    },
+    close: () => inflater.close(),
+  };
+}
+
+/**
+ * Wire bytes of the server message whose decompressed text is exactly
+ * `text`, among `messages` (`{text, wireBytes, t}`) delivered in [t0, t1].
+ * The LAST match wins (a retransmitted identical frame is not expected, but
+ * the newest one is the one this tap received). Null when none matches.
+ */
+export function wireBytesForText(messages, text, t0 = -Infinity, t1 = Infinity) {
+  if (typeof text !== "string") return null;
+  let hit = null;
+  for (const m of messages) if (m.t >= t0 && m.t <= t1 && m.text === text) hit = m;
+  return hit ? hit.wireBytes : null;
+}
+
+// ── first-frame sizing (task 01a17bf4) ────────────────────────────────────
+
+/**
+ * Number of rows whose box intersects the scroll container's visible box
+ * (a positive-area overlap; a row merely touching an edge does not count,
+ * and zero-height rows never count). Rects are `{top, bottom}` in the same
+ * coordinate space.
+ */
+export function countVisibleRows(rowRects, viewRect) {
+  const top = Math.max(viewRect.top, 0);
+  const bottom = viewRect.bottom;
+  let n = 0;
+  for (const r of rowRects) {
+    if (!(r.bottom > r.top)) continue;
+    if (r.top < bottom && r.bottom > top) n++;
+  }
+  return n;
+}
+
+/**
+ * The first-frame message count: ceil(max visible rows across viewports)
+ * plus a buffer, clamped to [min, max]. Throws on no usable counts, so a
+ * failed measurement cannot quietly become the floor.
+ */
+export function pickInitialMessageCount(visibleCounts, { buffer = 3, min = 10, max = 25 } = {}) {
+  const xs = visibleCounts.filter((v) => typeof v === "number" && Number.isFinite(v) && v >= 0);
+  if (xs.length === 0) throw new Error("no visible-row counts to pick N from");
+  const raw = Math.ceil(Math.max(...xs)) + buffer;
+  return Math.min(Math.max(raw, min), max);
 }
 
 // ── Chrome ────────────────────────────────────────────────────────────────
