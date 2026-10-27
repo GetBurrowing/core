@@ -404,7 +404,8 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
   # Runtime broadcasts, rather than a chip or an attention row, are the delivery oracle.
   describe "picker runtime delivery and isolation" do
     setup ctx do
-      alias Platform.Federation.{AgentRuntime, RuntimePresence}
+      alias Platform.Agents.AgentRuntime
+      alias Platform.Federation.RuntimePresence
       presence = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
       Sandbox.allow(Repo, self(), presence)
       n = System.unique_integer([:positive])
