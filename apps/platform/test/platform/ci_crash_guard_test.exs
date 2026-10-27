@@ -239,12 +239,19 @@ defmodule Platform.CiCrashGuardTest do
                "pass printed no summary line. That is the exact signature of PR #997 " <>
                "attempt 1 (crash, zero summary lines)."
 
-      assert code =~ ~r/\[ "\$count" -lt "\$MIN_TEST_COUNT" \]/,
+      # Sharded (Platform.CiTestShardsTest): each shard's pass is floored by
+      # MIN_SHARD_TEST_COUNT here, and `Test` floors the SUM by MIN_TEST_COUNT.
+      assert code =~ ~r/\[ "\$count" -lt "\$MIN_SHARD_TEST_COUNT" \]/,
              "the `Run tests` step no longer compares the parsed count to " <>
-               "$MIN_TEST_COUNT. The env value would then be decoration."
+               "$MIN_SHARD_TEST_COUNT. The env value would then be decoration."
 
-      assert code =~ ~r/::error::main mix test pass ran \$count tests, below MIN_TEST_COUNT=/,
+      assert code =~
+               ~r/::error::main mix test pass \(partition [^)]*\) ran \$count tests, below MIN_SHARD_TEST_COUNT=/,
              "the below-floor ::error:: naming the count and the floor is gone."
+
+      assert code =~ ~r/echo "\$count" > "\$shard_count_file"/,
+             "the `Run tests` step no longer records the floored count for `Test` " <>
+               "to sum against MIN_TEST_COUNT."
     end
 
     test "the floor is checked on the green path before retry_fired=false, and in the retry branch before the retry",

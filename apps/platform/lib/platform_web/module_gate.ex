@@ -20,6 +20,9 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.EmailLive => {:email, nil},
     PlatformWeb.SkillsLive => {:skills, nil},
     PlatformWeb.ControlCenterLive => {:agents, "agents.manage_own"},
+    # The remote terminal (task 01a17b17): the owner's own agent, so the same
+    # module and permission as the agent page that links to it.
+    PlatformWeb.TerminalLive => {:agents, "agents.manage_own"},
     PlatformWeb.ExtensionPageLive => {:extension, nil},
     PlatformWeb.UsageLive => {:admin, "agents.manage_own"},
     PlatformWeb.ExperimentsLive => {:experiments, nil},

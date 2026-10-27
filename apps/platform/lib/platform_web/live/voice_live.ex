@@ -26,7 +26,7 @@ defmodule PlatformWeb.VoiceLive do
       (the bubble's meta gains " · posted to {ctx}"); with no context nothing
       is posted. `who: "agent"` is inserted and never posted.
     * `voice_mic_blocked`: the browser refused the microphone. The line reads
-      "Microphone is blocked. Allow it in your browser settings." with "Type
+      "Microphone is blocked. Allow it in your browser or app settings." with "Type
       instead", whose input submits through the same path as `who: "me"`.
     * A context change calls `VoiceSession.set_context/2`; a partner change
       releases the floor if a turn is live and disconnects the old session

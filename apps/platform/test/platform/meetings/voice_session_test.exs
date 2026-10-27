@@ -252,6 +252,24 @@ defmodule Platform.Meetings.VoiceSessionTest do
       refute Meetings.voice_1to1_room?(Meetings.get_room_by_name(session.room_name))
     end
 
+    # A hung-up call leaves the room "active" until LiveKit's room_finished
+    # arrives, with no human in it. A Voice tab session started in that gap
+    # was not stamped, so its room_finished summarized the voice conversation
+    # as a meeting.
+    test "stamps a room left active by a call nobody is in any more" do
+      user = user!()
+      agent = voice_agent!()
+      {:ok, dm} = Chat.find_or_create_dm(user.id, "agent", agent.id)
+      assert {:ok, %{room: room}} = Meetings.join_for_user(dm.id, user.id, user.name)
+      assert room.status == "active"
+      assert :ok = Meetings.leave_for_user(dm.id, user.id)
+
+      assert {:ok, session} = VoiceSession.start(user, agent, nil)
+      room = Meetings.get_room_by_name(session.room_name)
+      assert room.status == "active"
+      assert Meetings.voice_1to1_room?(room)
+    end
+
     test "returns :voice_runtime_offline for an agent with no voice runtime online" do
       user = user!()
       agent = offline_agent!()

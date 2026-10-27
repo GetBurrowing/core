@@ -384,6 +384,28 @@ config :esbuild,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# Fourth entry point: the remote terminal (task 01a17b17 stage 3). xterm.js and
+# its fit addon, plus the WebCrypto session, built SEPARATELY from js/app.js and
+# fetched on demand by js/lib/load_terminal.js when the terminal page mounts.
+#
+# Same reasoning as `excalidraw` and `emoji` above: the `platform` profile runs
+# without --splitting, so a dynamic import() from a hook would be INLINED into
+# app.js, which loads on every page. test/no_xterm_in_app_bundle_test.mjs asserts
+# on the built bytes. xterm's stylesheet is imported by the island and esbuild
+# emits it as terminal_island.css next to the bundle.
+config :esbuild,
+  terminal: [
+    args: ~w(
+      js/terminal_island.js
+      --bundle
+      --target=es2022
+      --outdir=../priv/static/assets/js
+      --legal-comments=linked
+    ),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
+  ]
+
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "4.1.12",

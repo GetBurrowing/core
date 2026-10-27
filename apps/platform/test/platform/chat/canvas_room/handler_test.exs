@@ -115,6 +115,29 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
     result
   end
 
+  # Bounded poll on the canvas pool: returns once `canvas_id` holds `n`
+  # slots, flunks at `deadline_ms`.
+  defp await_slots_held(canvas_id, n, deadline_ms) do
+    until = System.monotonic_time(:millisecond) + deadline_ms
+    poll_slots_held(canvas_id, n, until)
+  end
+
+  defp poll_slots_held(canvas_id, n, until) do
+    held = Platform.CodeMode.Slots.held(Platform.Canvas.ScriptEngine.Slots)
+
+    cond do
+      Map.get(held.by_runtime, canvas_id, 0) == n ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= until ->
+        flunk("canvas #{canvas_id} never held #{n} slot(s); pool: #{inspect(held)}")
+
+      true ->
+        Process.sleep(5)
+        poll_slots_held(canvas_id, n, until)
+    end
+  end
+
   defp call(ctx, actor, name, args \\ %{}),
     do: ctx |> call_async(actor, name, args) |> await_result()
 
@@ -249,8 +272,19 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
 
       bind!(ctx, "vote", @vote)
 
+      # The wasm module is compiled once per node, lazily, into a
+      # persistent_term. When this test is the VM's first code-mode run (a
+      # shard, or a retry of this test alone), spin and vote each find the
+      # cache empty and each run a full cranelift compile; on a 2-vCPU hosted
+      # runner with spin's busy loop on one core, vote's compile alone ate the
+      # 600 ms below (hosted run 40431360559, first pass and retry). The claim
+      # here is concurrency, not cold start, so compile before the clock.
+      assert {:ok, _} = Platform.CodeMode.Runtime.compiled()
+
       spin = call_async(ctx, ctx.a, "spin")
-      Process.sleep(100)
+      # Spin is in flight once it holds its canvas slot (held until its run
+      # returns), rather than after a guessed sleep.
+      await_slots_held(ctx.canvas.id, 1, 600)
       started = System.monotonic_time(:millisecond)
       vote = call_async(ctx, ctx.b, "vote", %{"option" => "a"})
 

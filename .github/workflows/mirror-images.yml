@@ -1,0 +1,79 @@
+name: Mirror base images
+
+# Copies every third-party image CI and the Dockerfiles pull from Docker Hub
+# to ghcr.io/getburrowing/<name>:<tag>, BYTE-FOR-BYTE: the multi-arch index is
+# copied unchanged, so the mirror has the same digest as the upstream index.
+# ci.yml and the Dockerfiles reference the mirrors as `<mirror>:<tag>@<digest>`
+# with the digests below, so they stay correct for as long as this list does.
+#
+# ORDER ON A NEW REPOSITORY: merge this workflow, let it run once (it runs on
+# the push that adds or edits it, or by hand from the Actions tab), and only
+# then merge the change that points ci.yml and the Dockerfiles at the mirrors.
+#
+# The weekly run re-copies the same pinned digests (it repairs a deleted or
+# missing mirror; it never moves one) and warns when an upstream tag has moved
+# on. Bumping an image is an edit to the list below AND to its references;
+# the Docker Hub guard in apps/platform/test fails if the two disagree.
+#
+# New GHCR packages are PRIVATE. Anonymous pulls (fork-PR jobs, local builds)
+# need each package set to public in its package settings; the API cannot do it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mirror-images.yml
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror base images to GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy pinned indexes and verify digests
+        run: |
+          set -euo pipefail
+          fail=0
+          while read -r src dst; do
+            [ -z "$src" ] && continue
+            want="${src##*@}"
+            upstream="${src%@*}"
+            echo "::group::${dst} <- ${src}"
+            docker buildx imagetools create -t "$dst" "$src"
+            got="$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [ "$got" != "$want" ]; then
+              echo "::error::${dst} has digest ${got}, expected ${want}. References to ${dst}@${want} would not resolve."
+              fail=1
+            fi
+            latest="$(docker buildx imagetools inspect "$upstream" --format '{{json .Manifest}}' | jq -r .digest)"
+            if [ "$latest" != "$want" ]; then
+              echo "::warning::${upstream} now points at ${latest}; the mirror stays pinned to ${want}. Bump it here and in its references to take the update."
+            fi
+            echo "::endgroup::"
+          done <<'MIRRORS'
+          docker.io/library/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244 ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim
+          docker.io/library/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab ghcr.io/getburrowing/postgres:16-alpine
+          docker.io/library/python:3.12-slim@sha256:5b8b1421ccb6a525860a77863c049eab5847076cda34e030c75a80c58faf3f3c ghcr.io/getburrowing/python:3.12-slim
+          docker.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 ghcr.io/getburrowing/debian:bookworm-slim
+          docker.io/library/node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d ghcr.io/getburrowing/node:22-bookworm-slim
+          docker.io/library/eclipse-temurin:21-jdk@sha256:23cc5734ff46e776f51ce66eb9ee08444fd47caabec0a95b7eb6e94be2d3696d ghcr.io/getburrowing/eclipse-temurin:21-jdk
+          docker.io/oven/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d ghcr.io/getburrowing/bun:1
+          docker.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea ghcr.io/getburrowing/buildkit:buildx-stable-1
+          MIRRORS
+          exit "$fail"

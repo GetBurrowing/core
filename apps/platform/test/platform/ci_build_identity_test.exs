@@ -34,7 +34,8 @@ defmodule Platform.CiBuildIdentityTest do
   own raw literal, so a missing tag fails and so does a stray extra one (a
   membership check alone would pass a widened list). Separately, no tag,
   `-t` argument or `outputs:` name anywhere in the workflow may name
-  `docker.io`: the `registry: docker.io` logins that remain are pull auth.
+  `docker.io`. Nothing is pulled from Docker Hub either: `Platform.CiNoDockerHubTest`
+  pins that every pulled image is a ghcr.io/getburrowing mirror.
   """
 
   use ExUnit.Case, async: true
@@ -323,9 +324,8 @@ defmodule Platform.CiBuildIdentityTest do
 
   # Task 01a14afe: Docker Hub is no longer a publish target. No image ref the
   # workflow PUBLISHES (a `-t` argument, a `tags:` list entry or an
-  # `outputs:` name) may name docker.io. What docker.io text remains is pull
-  # auth (`registry: docker.io` logins) and pulled images (`docker run
-  # docker.io/oven/bun:1`), neither of which publishes anything.
+  # `outputs:` name) may name docker.io. Pulls are covered separately by
+  # `Platform.CiNoDockerHubTest`.
   describe "no Docker Hub publish refs" do
     test "no -t, tags: entry or outputs: name in ci.yml names docker.io" do
       refs = published_refs(File.read!(@ci_workflow))

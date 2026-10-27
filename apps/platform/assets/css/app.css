@@ -9328,3 +9328,16 @@ body.screen-share-fullscreen-active {
     border-color: var(--color-base-content);
   }
 }
+
+/* Remote terminal surface (task 01a17b17 stage 3). DELIBERATE EXCEPTION to the
+   theme-following rule: the terminal ground is the dark theme's base-100, base-
+   content text, in BOTH themes. Claude Code's dim and yellow output disappears
+   on a white ground. The same values go to xterm's theme object
+   (js/terminal/palette.js); keep the three in step. */
+.terminal-ground {
+  background-color: #191b20;
+  color: #eeeff1;
+}
+#terminal-host[data-dimmed="true"] .xterm-screen {
+  opacity: 0.5;
+}

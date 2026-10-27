@@ -117,13 +117,23 @@ defmodule Platform.CiFirstRunGreenTest do
     end
 
     test "the Test job exposes retry_fired as a job output" do
-      source = File.read!(@ci_workflow)
+      # Sharded: each `test-shard` leg records `steps.run-tests.outputs.retry_fired`
+      # (Platform.CiTestShardsTest pins that and the OR across shards), and the
+      # aggregating `test` job (named `Test`) exposes the result.
+      lines = @ci_workflow |> File.read!() |> String.split("\n")
+      test_job = job_body(lines, "test")
+      shard_job = job_body(lines, "test-shard")
 
-      assert source =~
-               ~r/^    outputs:\n      retry_fired: \$\{\{ steps\.run-tests\.outputs\.retry_fired \}\}\s*$/m,
+      assert test_job =~
+               ~r/^    outputs:\n      retry_fired: \$\{\{ steps\.aggregate\.outputs\.retry_fired \}\}\s*$/m,
              "the `test` job in ci.yml no longer has `outputs: retry_fired: " <>
-               "${{ steps.run-tests.outputs.retry_fired }}`. Without it the step " <>
-               "output never crosses the job boundary and `first-run-green` cannot read it."
+               "${{ steps.aggregate.outputs.retry_fired }}`. Without it the outcome " <>
+               "never crosses the job boundary and `first-run-green` cannot read it."
+
+      assert code_only(shard_job) =~
+               ~r/RETRY_FIRED: \$\{\{ steps\.run-tests\.outputs\.retry_fired \}\}/,
+             "`test-shard` no longer records `steps.run-tests.outputs.retry_fired`, " <>
+               "so a retry in a shard never reaches `Test` or `first-run-green`."
     end
   end
 
@@ -137,8 +147,14 @@ defmodule Platform.CiFirstRunGreenTest do
              "`first-run-green` no longer `needs: test`, so `needs.test.outputs` is " <>
                "empty and the job cannot read whether the retry fired."
 
-      assert job =~ ~r/^    runs-on: \[self-hosted, linux, x64\]\s*$/m,
-             "`first-run-green` is no longer on the same runner class as Test."
+      assert job =~ ~r/^    runs-on: ubuntu-latest\s*$/m,
+             "`first-run-green` is no longer on the same runner class as Test " <>
+               "(GitHub-hosted `ubuntu-latest`)."
+
+      refute code_only(job) =~ ~r/^    if:/m,
+             "`first-run-green` has a job-level `if:`. A skipped job never reports, " <>
+               "so the required check would sit pending (or be satisfied by a skip) " <>
+               "on whatever runs the condition excludes."
     end
 
     test "reads the retry outcome from the job output and exits 1 on it", %{job: job} do

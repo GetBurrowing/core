@@ -27,8 +27,10 @@ defmodule Platform.Meetings.VoiceSession do
 
     * `start/3` stamps the mode right after `ensure_room/1` (before the token
       and the dispatch, so it lands before LiveKit's `room_started`), UNLESS
-      the room's status is `"active"`. Only a human call join sets that
-      status, never a voice session, so a live call is never relabelled.
+      the room's status is `"active"` with a human still in it. Only a human
+      call join sets that status, never a voice session, so a live call is
+      never relabelled; an "active" room whose callers have all left (the
+      status stays until `room_finished`) is stamped.
     * `Meetings.join_for_user/3`, the one human call join path, always
       clears the mode: the call wins and is summarized.
     * `room_finished` clears the mode after handling.
@@ -213,8 +215,14 @@ defmodule Platform.Meetings.VoiceSession do
 
   defp visible_agents(user), do: Chat.dm_agent_candidates(user, "")
 
-  # A live call ("active") owns the room; see the moduledoc's shared-room rule.
-  defp stamp_session_mode(%Room{status: "active"} = room), do: {:ok, room}
+  # A live call owns the room; see the moduledoc's shared-room rule. "Live"
+  # means an "active" room with a human still in it: a hung-up call leaves the
+  # room "active" until LiveKit's `room_finished`, and a session started in
+  # that gap is a Voice tab session, not the call.
+  defp stamp_session_mode(%Room{status: "active"} = room) do
+    if human_in_room?(room), do: {:ok, room}, else: Meetings.set_session_mode(room, @mode)
+  end
+
   defp stamp_session_mode(%Room{} = room), do: Meetings.set_session_mode(room, @mode)
 
   defp floor_key(space_id), do: "voice:" <> space_id
@@ -237,6 +245,12 @@ defmodule Platform.Meetings.VoiceSession do
         {:error, _} = error -> error
       end
     end
+  end
+
+  defp human_in_room?(room) do
+    room.id
+    |> Meetings.active_participants()
+    |> Enum.any?(&is_binary(&1.user_id))
   end
 
   defp agent_live_in_room?(room, agent) do

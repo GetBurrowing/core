@@ -184,7 +184,10 @@ defmodule Platform.MixProject do
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # `dev_support/` holds the dev/test-only terminal harness (task 01a17b17):
+  # mix tasks and a fake CLI. It is never compiled into a prod release.
+  defp elixirc_paths(:test), do: ["lib", "test/support", "dev_support"]
+  defp elixirc_paths(:dev), do: ["lib", "dev_support"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Specifies your project dependencies.
@@ -329,6 +332,7 @@ defmodule Platform.MixProject do
         "esbuild platform",
         "esbuild excalidraw",
         "esbuild emoji",
+        "esbuild terminal",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
       "assets.deploy": [
@@ -336,6 +340,7 @@ defmodule Platform.MixProject do
         "esbuild platform --minify",
         "esbuild excalidraw --minify",
         "esbuild emoji --minify",
+        "esbuild terminal --minify",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"
       ],
