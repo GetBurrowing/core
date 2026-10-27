@@ -93,7 +93,7 @@ defmodule PlatformWeb.MeetingLiveMobileSheetsTest do
             transcript_chunk_id: Ecto.UUID.generate(),
             transcript_chunk_ids: [Ecto.UUID.generate()],
             state: :heard,
-            outcome_kind: :task,
+            outcome_kind: :artifact,
             acts_at: DateTime.add(DateTime.utc_now(), seconds, :second)
           },
           attrs
@@ -259,7 +259,7 @@ defmodule PlatformWeb.MeetingLiveMobileSheetsTest do
       html = report_viewport(view, true)
 
       [label] = attr(html, @handle_row, "aria-label")
-      assert [_, n] = Regex.run(~r/^(\d+) seconds until a task is created$/, label)
+      assert [_, n] = Regex.run(~r/^(\d+) seconds until a canvas is created$/, label)
       assert String.to_integer(n) in 17..20
 
       # The name is what the hook refreshes every second, from THIS
