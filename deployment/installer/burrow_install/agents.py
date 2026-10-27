@@ -170,6 +170,7 @@ def host_env(plan, token):
         f"AGENT_HOST_TOKEN={token}\n"
         f"BURROW_CORE_URL=https://{plan.primary}\n"
         f"SUITE_CORE_URL=https://{plan.primary}\n"
+        + ("AGENT_HOST_FULL_ROOT=true\n" if plan.full_root else "")
     )
 
 

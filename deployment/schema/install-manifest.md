@@ -184,6 +184,7 @@ agent host reports.
 |---|---|---|---|
 | `profile` | `full_machine` \| `contained` \| `off` | `full_machine` when the table is present, `off` when it is absent | A manifest without `[agents]` renders exactly as it did before the table existed. On `target = "mac"` any profile other than `off` is `field_not_applicable`. |
 | `login` | `api_key` \| `operator` | `api_key` | How native agents log in to Claude (core task 01a17b10). Rendered into core-platform's env as `NATIVE_AGENT_LOGIN` whenever the profile is not `off`. `operator`: core sends no API key and a person attaches to the agent's pane to log in to Claude Code there (services/agent-host/README.md, "Operator login"). |
+| `full_root` | bool | `false` | Lets the `admin_restart`, `admin_deploy` and `admin_rollback` tools act (core task 01a17b10). Off: nothing is mounted and those tools return `requires_full_root` naming `agents.full_root`. On, `contained`: exactly one mount, the container runtime socket, into the agent-host container, plus `AGENT_HOST_FULL_ROOT=true`. On, `full_machine`: no mount (the host is already root); the host env file gets `AGENT_HOST_FULL_ROOT=true`. The host advertises `full_root` in its hello. Ignored when `profile = "off"`. Note: `admin_rpc` evaluates code in the running core release and is NOT gated by this key. |
 
 - **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
   service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,

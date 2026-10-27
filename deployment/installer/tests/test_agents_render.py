@@ -462,6 +462,56 @@ class LoginModeTest(unittest.TestCase):
         self.assertNotIn("NATIVE_AGENT_LOGIN", self.core_env({"profile": "off"}))
 
 
+class FullRootTest(unittest.TestCase):
+    """[agents] full_root (core task 01a17b10 stage 3): off unless enabled; on
+    mounts exactly one runtime socket into the contained agent-host container."""
+
+    SOCKET = "/var/run/docker.sock"
+
+    def render(self, table):
+        errors, m = validate(with_agents(EXAMPLE, table))
+        self.assertEqual(errors, [])
+        rendered = build(m)
+        return rendered, compose_services(rendered.files["compose.yaml"][0])
+
+    def test_the_manifest_default_is_off(self):
+        for table in ({}, {"profile": "contained"}, {"profile": "full_machine"}):
+            with self.subTest(table=table):
+                errors, m = validate(with_agents(EXAMPLE, table))
+                self.assertEqual(errors, [])
+                self.assertIs(m["agents"]["full_root"], False)
+
+    def test_default_contained_render_mounts_no_socket(self):
+        rendered, services = self.render({"profile": "contained"})
+        compose = rendered.files["compose.yaml"][0]
+        self.assertNotIn("docker.sock", compose)
+        self.assertNotIn("AGENT_HOST_FULL_ROOT", compose)
+        self.assertIn("agent-host", services)
+
+    def test_full_root_contained_mounts_exactly_one_socket(self):
+        rendered, services = self.render({"profile": "contained", "full_root": True})
+        compose = rendered.files["compose.yaml"][0]
+        self.assertEqual(compose.count(self.SOCKET), 2, "one mount line: host and container path")
+        self.assertEqual(services["agent-host"].count(f"{self.SOCKET}:{self.SOCKET}"), 1)
+        self.assertIn('AGENT_HOST_FULL_ROOT: "true"', services["agent-host"])
+        for name, block in services.items():
+            if name != "agent-host":
+                self.assertNotIn("docker.sock", block, name)
+
+    def test_full_machine_mounts_nothing_but_advertises(self):
+        rendered, _ = self.render({"profile": "full_machine"})
+        user_data = rendered.files["user-data"][0]
+        self.assertNotIn("docker.sock", rendered.files["compose.yaml"][0])
+        self.assertNotIn("AGENT_HOST_FULL_ROOT", user_data)
+        rendered, _ = self.render({"profile": "full_machine", "full_root": True})
+        self.assertNotIn("docker.sock", rendered.files["compose.yaml"][0])
+        self.assertIn("AGENT_HOST_FULL_ROOT=true", rendered.files["user-data"][0])
+
+    def test_off_profile_ignores_full_root(self):
+        rendered, _ = self.render({"profile": "off", "full_root": True})
+        self.assertNotIn("docker.sock", rendered.files["compose.yaml"][0])
+
+
 class PackagingTest(unittest.TestCase):
     """The installer's copies are the files the agent-host image ships."""
 

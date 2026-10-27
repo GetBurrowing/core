@@ -490,6 +490,7 @@ class Ctx:
         self.tls_internal = not self.mac and domain["tls"] == "internal"
         self.bundled_auth = manifest["auth"]["mode"] == "bundled-pocket-id"
         self.agents = manifest["agents"]["profile"]
+        self.full_root = self.agents != "off" and manifest["agents"].get("full_root") is True
         self.enabled = set(enabled_containers(manifest))
 
 
@@ -635,13 +636,25 @@ AGENTS_NETWORK = "agents"
 AGENT_HOST_CORE_URL = "http://core-platform:4000"
 
 
+# The one container-runtime socket full_root mounts into the agent-host
+# container (core task 01a17b10 stage 3). Nothing is mounted without it.
+RUNTIME_SOCKET = "/var/run/docker.sock"
+
+
 def _agent_host_env(ctx):
-    return {
+    env = {
         "BURROW_CORE_URL": AGENT_HOST_CORE_URL,
         "SUITE_CORE_URL": AGENT_HOST_CORE_URL,
         "AGENT_HOST_PROFILE": "contained",
         "AGENT_HOST_TOKEN": "{secret:AGENT_HOST_TOKEN}",
     }
+    if ctx.full_root:
+        env["AGENT_HOST_FULL_ROOT"] = "true"
+    return env
+
+
+def _agent_host_mounts(ctx):
+    return [(RUNTIME_SOCKET, RUNTIME_SOCKET, False)] if ctx.full_root else []
 
 
 def _core_mounts(ctx):
@@ -1154,6 +1167,7 @@ SERVICES = {
             lambda ctx: agent_host_image(ctx.m),
             private_image=True,
             env=_agent_host_env,
+            host_mounts=_agent_host_mounts,
             # Persistent homes; users are re-created over them on image update.
             volumes={"agent-homes": "/home"},
             networks=lambda ctx: (AGENTS_NETWORK,),

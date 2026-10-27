@@ -170,6 +170,13 @@ SCHEMA = {
     "agents": {
         "profile": _enum(AGENT_PROFILES, "full_machine"),
         "login": _enum(AGENT_LOGINS, "api_key"),
+        # Full root (core task 01a17b10 stage 3): false unless the install
+        # explicitly enables it. contained: the container runtime socket is
+        # mounted into the agent-host container (exactly one mount).
+        # full_machine: the host is already root, so no mount; the host just
+        # advertises full_root in its hello. Gates the admin_restart,
+        # admin_deploy and admin_rollback tools.
+        "full_root": _bool(False),
     },
 }
 

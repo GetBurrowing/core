@@ -150,7 +150,8 @@ def _compose_service(plan, svc):
         out["environment"] = plain
     volumes = [f"{name}:{path}" for name, path in sorted(svc.volumes.items())]
     volumes += [
-        f"./{host}:{path}{':ro' if ro else ''}" for host, path, ro in sorted(svc.host_mounts)
+        f"{host if host.startswith('/') else './' + host}:{path}{':ro' if ro else ''}"
+        for host, path, ro in sorted(svc.host_mounts)
     ]
     if svc.container == "caddy":
         volumes += _caddy_mounts(plan)
