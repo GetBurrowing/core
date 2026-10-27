@@ -119,3 +119,83 @@ then `git apply`. Run the included `tests/test_headline_contract.py` plus upstre
 review/hooks tests and lint. The patch's digest and actual test counts are
 recorded in the stage evidence. A failed patch application means upstream drift:
 stop and rederive against that revision rather than modifying internal state.
+
+## Canonical runner integration (stage 2)
+
+The centrally registered `burrow-clip-runner` skill now carries helper **0.4.0**
+and six fixture/test blocks. The helper digest and installed-tool prerequisite
+are pinned in [artifact.json](artifact.json). Core contains no second job runner.
+
+- `new_clip` automatically prepares a generated headline using consumer `episode`.
+- `payload.fix.operation = "regenerate_headline"` uses the same generation boundary.
+- Human edits use `payload.headline = {"consumer":"edit", "requested_headline":"<user text>"}`;
+  these bypass generation. Any `export_text` request fails closed.
+- The agent loop provides private `context.headline_voice = {revision, direction}`.
+  No missing-voice fallback or invented ratification exists.
+- Edit/regenerate require an explicit `payload.base_render_id` equal to the
+  selected immutable `context.base_render_id`. Source id comes from the immutable
+  payload `source_id`, episode file id, or a SHA256 of its source URL. The existing
+  ClipJobs clip lock, immutable snapshots, and idempotent completion remain the
+  authority; sibling version/episode/UI integrations must populate those inputs.
+  This stage does not replace their in-flight ClipJobs implementations or add a
+  migration alongside their reserved timestamps.
+
+The helper creates a 0600 local request, applies actual snapped bounds, refreshes
+base hashes, prepares the headline, applies review, verifies the safe receipt and
+actual overlay, and calls `finalize --regenerate`. It uses a derived user profile
+for consistent packaging hashes; enabled caption styles are preserved and `none`
+is enabled as phrase-pop. Temporary profiles/requests are removed on all paths.
+Completion requires the selected new output's timestamp to follow finalize; it
+cannot upload a stale or unrelated MP4. Receipts stay in local state.json and do
+not add unsupported fields to Burrow's completion schema. Generated text is never
+exported through MCP. The local render approval is not Burrow post approval,
+scheduling or publishing permission.
+
+### Reproduce the real renderer proof
+
+Install the pinned upstream patch into an isolated clip environment, and extract
+`clip_runner.py` from the canonical skill with the pinned digest. Run with that
+environment's Python (which imports the compatible installed `clip_agent`):
+
+```bash
+python docs/integrations/clip-headlines/verify_real_renderer.py \
+  --helper /private/path/clip_runner.py \
+  --clip /private/path/to/installed/clip \
+  --output /private/fixture-evidence
+```
+
+The harness seeds only a five-second source, cached transcript, candidate and
+user profile. It then uses real CLI review/application/finalize and the canonical
+helper's render boundary, with real FFmpeg. It does not mock rendering, use a
+live model, claim a Burrow job, or upload a production file. Before and after
+frames were viewed: the top line changes from “We shipped the app” to
+“The team celebrated”, and the lower caption region stays pixel-identical.
+The video hashes are in artifact.json; frame evidence is below.
+
+![Before: We shipped the app](evidence/before.png)
+![After: The team celebrated](evidence/after.png)
+
+Both mutation probes were killed and restored green: deleting the helper's
+`requested_headline` forwarding fails the unchanged independent text assertion;
+deleting the tool's `headline` review field fails the unchanged
+`entry["headline"] == "The team celebrated"` assertion. Generated-new-pick and
+human-edit runner tests separately inspect the exact applied review.toml field.
+Live generation availability and a production worker run remain runtime
+prerequisites, not results inferred from these fixtures.
+
+### Validation and limits
+
+Canonical helper fixtures: **83 passed**. Upstream contract/review/hooks:
+**125 passed**. This runtime's private OTP 28.1 / Elixir 1.20.4 / PostgreSQL 16.15
+Social suite: **1,273 passed**, source SHA `61690d6d40b75c65d0038deb844c57defe1b35c0`;
+this stage changes no Elixir source. Configured upstream Ruff, helper/harness
+syntax/import lint and whitespace checks pass.
+
+The full upstream run is **not green**: 3,404 passed, 23 skipped and the same two
+failures reproduced on unmodified upstream in stage 1:
+`test_hook_title_png_in_top_band_and_safe_area` (one-pixel baseline geometry) and
+`test_eof_at_the_name_prompt_stops_with_a_message` (120-second PTY EOF timeout).
+Neither was suppressed or counted as a pass. Final helper and video digests,
+commands, mutation dispositions and fixture limits are pinned in artifact.json.
+The real fixture also seeds a saved `caption_style = "none"`; explicit enabled
+finalize captions must override it for the changed burn to appear.
