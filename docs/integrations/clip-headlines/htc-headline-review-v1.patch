@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/clip-agent/src/clip_agent/headline.py
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,194 @@
 +"""Versioned local headline boundary for automated picks and review regeneration.
 +
 +Generation belongs to hooks.generate_variants; this module never calls a model
@@ -9,10 +9,16 @@
 +from __future__ import annotations
 +
 +import math
++import re
 +from dataclasses import dataclass
 +from pathlib import Path
 +
 +CONTRACT_VERSION = 1
++_SAFE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
++
++
++def _safe_id(value) -> bool:
++    return isinstance(value, str) and _SAFE_ID.fullmatch(value) is not None
 +
 +
 +class HeadlineError(ValueError):
@@ -37,7 +43,7 @@
 +
 +    @classmethod
 +    def parse(cls, data: dict, *, privacy: str, capabilities: dict) -> HeadlineRequest:
-+        if capabilities.get("headline_review") != CONTRACT_VERSION:
++        if not isinstance(capabilities, dict) or capabilities.get("headline_review") != CONTRACT_VERSION:
 +            raise HeadlineError("HEADLINE_CLI_UNSUPPORTED")
 +        if not isinstance(data, dict) or data.get("version") != CONTRACT_VERSION:
 +            raise HeadlineError("HEADLINE_REQUEST_UNSUPPORTED")
@@ -52,10 +58,11 @@
 +            for k in ("revision", "direction")
 +        ):
 +            raise HeadlineError("HEADLINE_VOICE_MISSING")
++        if not _safe_id(voice["revision"]):
++            raise HeadlineError("HEADLINE_REQUEST_UNSUPPORTED")
 +        source = data.get("source")
-+        if not isinstance(source, dict) or not all(
-+            isinstance(data.get(k), str) and data[k].strip() for k in ("candidate_id",)
-+        ) or not isinstance(source.get("id"), str) or not source["id"].strip():
++        if (not isinstance(source, dict) or not _safe_id(data.get("candidate_id"))
++                or not _safe_id(source.get("id"))):
 +            raise HeadlineError("HEADLINE_SOURCE_MISSING")
 +        start, end = source.get("start"), source.get("end")
 +        if not all(type(n) in (int, float) and math.isfinite(n) for n in (start, end)):
@@ -63,7 +70,7 @@
 +        if not 0 <= start < end:
 +            raise HeadlineError("HEADLINE_SPAN_INVALID")
 +        base = data.get("base_render_id")
-+        if consumer != "episode" and (not isinstance(base, str) or not base.strip()):
++        if (consumer != "episode" and not _safe_id(base)) or (base is not None and not _safe_id(base)):
 +            raise HeadlineError("HEADLINE_BASE_MISSING")
 +        title = data.get("requested_headline")
 +        if consumer == "edit":
@@ -104,8 +111,6 @@
 +    state is written; only review.toml is prepared. Prior unapplied edits fail
 +    closed through write_review_file instead of being overwritten.
 +    """
-+    import re
-+
 +    from . import hooks, review
 +    from .learn import db
 +    from .manifest import atomic_write_text
@@ -314,7 +319,7 @@
  @hooks.command("generate")
 --- /dev/null
 +++ b/clip-agent/tests/test_headline_contract.py
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,207 @@
 +import json
 +import tomllib
 +
@@ -354,6 +359,9 @@
 +    ({"version": 2}, "HEADLINE_REQUEST_UNSUPPORTED"),
 +    ({"export_text": True}, "HEADLINE_PRIVACY_EXPORT_REFUSED"),
 +    ({"consumer": "regenerate", "base_render_id": None}, "HEADLINE_BASE_MISSING"),
++    ({"source": {"id": "private transcript sentence", "start": 0, "end": 20}}, "HEADLINE_SOURCE_MISSING"),
++    ({"voice": {"revision": "private transcript sentence", "direction": "comedy"}}, "HEADLINE_REQUEST_UNSUPPORTED"),
++    ({"base_render_id": {"text": "private"}}, "HEADLINE_BASE_MISSING"),
 +])
 +def test_failures_are_content_free(change, code):
 +    with pytest.raises(headline.HeadlineError, match=code):

@@ -3,7 +3,7 @@
   "upstream_repository": "JackEFoster/htc-clip-tool",
   "upstream_commit": "58960577337d5682761e1538ff4365d4ba0b4e18",
   "patch_file": "htc-headline-review-v1.patch",
-  "patch_sha256": "886b6ff241490dba84816e97146121bf26b656dd843c50bcc4b1b40e41c8afed",
+  "patch_sha256": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
   "required_capability": {
     "headline_review": 1
   },
