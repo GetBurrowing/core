@@ -117,13 +117,23 @@ defmodule Platform.CiFirstRunGreenTest do
     end
 
     test "the Test job exposes retry_fired as a job output" do
-      source = File.read!(@ci_workflow)
+      # Sharded: each `test-shard` leg records `steps.run-tests.outputs.retry_fired`
+      # (Platform.CiTestShardsTest pins that and the OR across shards), and the
+      # aggregating `test` job (named `Test`) exposes the result.
+      lines = @ci_workflow |> File.read!() |> String.split("\n")
+      test_job = job_body(lines, "test")
+      shard_job = job_body(lines, "test-shard")
 
-      assert source =~
-               ~r/^    outputs:\n      retry_fired: \$\{\{ steps\.run-tests\.outputs\.retry_fired \}\}\s*$/m,
+      assert test_job =~
+               ~r/^    outputs:\n      retry_fired: \$\{\{ steps\.aggregate\.outputs\.retry_fired \}\}\s*$/m,
              "the `test` job in ci.yml no longer has `outputs: retry_fired: " <>
-               "${{ steps.run-tests.outputs.retry_fired }}`. Without it the step " <>
-               "output never crosses the job boundary and `first-run-green` cannot read it."
+               "${{ steps.aggregate.outputs.retry_fired }}`. Without it the outcome " <>
+               "never crosses the job boundary and `first-run-green` cannot read it."
+
+      assert code_only(shard_job) =~
+               ~r/RETRY_FIRED: \$\{\{ steps\.run-tests\.outputs\.retry_fired \}\}/,
+             "`test-shard` no longer records `steps.run-tests.outputs.retry_fired`, " <>
+               "so a retry in a shard never reaches `Test` or `first-run-green`."
     end
   end
 

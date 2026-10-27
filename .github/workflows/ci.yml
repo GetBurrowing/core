@@ -21,6 +21,13 @@ env:
   # raised to the measured total, because a floor AT the total would turn
   # every deleted or moved test into a red build.
   MIN_TEST_COUNT: 15000
+  # Sharding: the main pass runs as TEST_PARTITIONS `test-shard` legs
+  # (`mix test --partitions`). MIN_TEST_COUNT above is checked by `Test`
+  # against the SUM of the shards' counts. MIN_SHARD_TEST_COUNT is each
+  # shard's own crash detector: far below any one partition's share, far
+  # above a shard that died early. Platform.CiTestShardsTest pins both.
+  TEST_PARTITIONS: 6
+  MIN_SHARD_TEST_COUNT: 1000
   # The same crash detector for the `Test (with Play)` job's module suite
   # (apps/game_stream's own `mix test`): 196 tests at that tip.
   MIN_PLAY_TEST_COUNT: 150
@@ -35,8 +42,16 @@ on:
     branches: [main, "feat/**", "stack/**"]
 
 jobs:
-  test:
-    name: Test
+  # THE `Test` CHECK IS THREE JOBS (sharding). `test-checks` runs everything
+  # that runs once (static checks, JS suites, warnings-as-errors compile,
+  # formatting, the isolated-BEAM and same-BEAM steps); `test-shard` runs the
+  # main `mix test --include slow` pass split `--partitions $TEST_PARTITIONS`
+  # ways, one partition per matrix leg, each with its own Postgres service and
+  # database; and `test` (named `Test`, the required check) needs both, fails
+  # unless every one succeeded, sums the shard test counts against
+  # MIN_TEST_COUNT and ORs the shards' `retry_fired` into its own output.
+  test-checks:
+    name: Test (checks)
     # GITHUB-HOSTED RUNNERS ONLY. Every job in this workflow runs on a
     # GitHub-hosted runner (Platform.CiNoSelfHostedRunnersTest), so every job,
     # fork pull requests included, runs on a fresh VM that shares nothing with
@@ -103,12 +118,6 @@ jobs:
       PGHOST: postgres
       PGUSER: postgres
       PGPASSWORD: postgres
-    # Read by the `first-run-green` job below. Task 01a08d81: this job's
-    # CONCLUSION is `success` for both first-run-green and failed-then-
-    # retry-green, so branch protection requiring "Test" cannot tell them
-    # apart. The output is the per-run OUTCOME the retry path records.
-    outputs:
-      retry_fired: ${{ steps.run-tests.outputs.retry_fired }}
     defaults:
       run:
         working-directory: apps/platform
@@ -184,23 +193,31 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # The cache keys below name the toolchain the container actually has
+      # (Elixir and the full OTP version), so a bump of the image tag can
+      # never restore beams built by another OTP.
+      - name: Toolchain version (cache key)
+        id: toolchain
+        run: |
+          key=$(elixir -e 'IO.write("elixir-" <> System.version() <> "-otp-" <> String.trim(File.read!(Path.join([to_string(:code.root_dir()), "releases", System.otp_release(), "OTP_VERSION"]))))')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain cache key: $key"
+
       - name: Cache deps
         uses: actions/cache@v5
         with:
           path: apps/platform/deps
-          key: deps-${{ hashFiles('apps/platform/mix.lock') }}
-          restore-keys: deps-
+          key: deps-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/platform/mix.lock') }}
+          restore-keys: deps-${{ steps.toolchain.outputs.key }}-dev-test-
 
-      # Compiled deps for both envs the job compiles in (dev and test). The
-      # app itself is always recompiled (`mix compile --force` below), so only
-      # the deps' build output is reused. Keyed on the container image too:
-      # a beam built by another OTP is not loadable.
+      # Compiled deps (and the app, which `mix compile` / `mix test` rebuild
+      # where stale) for the MIX_ENVs this job compiles in.
       - name: Cache _build
         uses: actions/cache@v5
         with:
           path: apps/platform/_build
-          key: build-elixir-1.20.4-otp-28-${{ hashFiles('apps/platform/mix.lock') }}
-          restore-keys: build-elixir-1.20.4-otp-28-
+          key: build-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/platform/mix.lock') }}
+          restore-keys: build-${{ steps.toolchain.outputs.key }}-dev-test-
 
       # The precompiled NIFs (wasmex, vix, lazy_html) come from GitHub
       # release URLs, which OTP 28's httpc can no longer download
@@ -318,135 +335,6 @@ jobs:
           mix ecto.create
           mix ecto.migrate
 
-      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
-      # container sees the host's /proc), so a first-pass failure can be read
-      # against the runner host's load from this run alone. Never fails the job;
-      # the body is .github/scripts/host-pressure.sh.
-      - name: Host pressure (before mix test)
-        continue-on-error: true
-        working-directory: ${{ github.workspace }}
-        run: .github/scripts/host-pressure.sh "before mix test" || true
-
-      - name: Run tests
-        id: run-tests
-        run: |
-          # `--include slow` is load-bearing, not decoration: `Platform.SlowTests`
-          # excludes the `:slow` tag from the DEFAULT run, and this flag is the
-          # named thing that still runs those tests — including the 16s
-          # reproductions of the provider timeout bug from task 01a0826f.
-          # Removing it silently shrinks the suite. `Platform.SlowTestsTest`
-          # asserts this flag is still spelled here.
-          # Exit-status capture, and it is load-bearing: `mix test | tee log`
-          # reports TEE's status, not mix's, so a naive `|| retry` would never
-          # fire and every first-pass failure would look green. `set -o pipefail`
-          # inside an `if !` is what makes the pipeline report mix's status
-          # (the `if` context also suspends the default `bash -e` errexit, so a
-          # red first pass reaches the retry instead of aborting the step).
-          set -o pipefail
-          first_pass_log="${RUNNER_TEMP:-.}/mix-test-first-pass.log"
-
-          # Test-count floor on the main pass (task 01a08e20; the floor value
-          # and its rationale are at the workflow `env:` block). Reads the
-          # first pass's own ExUnit summary line and fails the step if there
-          # is none or the count is below MIN_TEST_COUNT. Scoped to
-          # $first_pass_log only, so the small partitions below
-          # (`--only isolated_beam`, the boot-telemetry pair) never trip it.
-          assert_test_count_floor() {
-            local summary count
-            # `|| true`: under pipefail a no-match grep would otherwise abort
-            # the `bash -e` step before the ::error:: below is printed.
-            #
-            # ExUnit 1.20 summary shapes: `Result: 16958 passed`, with failures
-            # `Result: 16950/16958 passed`, and with no tests at all
-            # `Result: 0 tests`. Each may carry a `(... doctests, ... tests)`
-            # breakdown and `, N skipped` / `, N excluded` after it, which the
-            # `-o` match leaves off. The LAST number in the match is the total
-            # (doctests included). Before 1.20 the line was `N tests, M failures`.
-            summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$first_pass_log" | tail -n1 || true)
-            # The bare `echo` first: a dead first pass leaves ExUnit's progress
-            # dots mid-line, and GitHub only reads `::error::` at column 0
-            # (measured on control run 34552027555: red step, no annotation).
-            if [ -z "$summary" ]; then
-              echo
-              echo "::error::main mix test pass printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
-              exit 1
-            fi
-            count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
-            if [ "$count" -lt "$MIN_TEST_COUNT" ]; then
-              echo
-              echo "::error::main mix test pass ran $count tests, below MIN_TEST_COUNT=$MIN_TEST_COUNT — the suite did not run to completion (raise the floor in ci.yml env: if the suite legitimately shrank)"
-              exit 1
-            fi
-            echo "main mix test pass ran $count tests (floor MIN_TEST_COUNT=$MIN_TEST_COUNT)"
-          }
-
-          # `retry_fired` is THIS run's outcome — did the serial retry fire —
-          # written to $GITHUB_OUTPUT so the `first-run-green` job can read it
-          # without grepping a log. It is written exactly once per exit path:
-          # `false` below the retry block on a green first pass, `true` inside
-          # the retry-green branch. A retry-red path exits 1 and writes nothing;
-          # the job is red, and `first-run-green` is skipped behind `needs`.
-          if ! mix test --include slow 2>&1 | tee "$first_pass_log"; then
-            # Harvest the failed test names from the FIRST pass's ExUnit failure
-            # blocks. Not the `--failed` manifest: that file
-            # (`_build/test/lib/platform/.mix/.mix_test_failures`) is an Erlang
-            # external-term-format binary, it is not shell-readable, and it
-            # carries module + test name + file but NO line number.
-            failed_tests=$(
-              awk '
-                /^[[:space:]]*[0-9]+\) (test|doctest) /{
-                  hdr=$0; sub(/^[[:space:]]*[0-9]+\) /,"",hdr); want=1; next
-                }
-                want && /\.exs:[0-9]+[[:space:]]*$/{
-                  loc=$0; sub(/^[[:space:]]*/,"",loc); sub(/[[:space:]]*$/,"",loc)
-                  print loc " — " hdr; want=0
-                }
-              ' "$first_pass_log" | sort -u
-            )
-            # Nameless-retry refusal (task 01a08e20). A first pass that exits
-            # non-zero WITHOUT any ExUnit failure block is a crash, not a flake:
-            # on PR #997 attempt 1 the BEAM aborted (`[asmjit] Assertion
-            # failed`, core dumped), the harvest above found nothing,
-            # `mix test --failed` ran an empty manifest, printed `There are no
-            # tests to run`, exited 0, and the job concluded success. There is
-            # nothing to retry, so refuse before the retry command runs and
-            # before `retry_fired` is written. This check MUST stay above the
-            # `mix test --failed` line below. It writes NOTHING to
-            # $GITHUB_OUTPUT: the retry never ran, so `retry_fired=true` would
-            # be false; `first-run-green`'s `*)` arm already handles the
-            # missing output. The bare `echo` first: the crash leaves ExUnit's
-            # progress dots mid-line and GitHub only reads `::error::` at
-            # column 0 (measured on control run 34552027555).
-            if [ -z "$failed_tests" ]; then
-              echo
-              echo "::error::initial mix test failed with no ExUnit failures harvested (crash, not flake)"
-              exit 1
-            fi
-            assert_test_count_floor
-
-            # Annotations are single-line; %0A is GitHub's newline escape.
-            echo "::warning::initial mix test failed; retrying failed tests serially. First pass failed these tests:%0A$(echo "$failed_tests" | sed 's/$/%0A/' | tr -d '\n')"
-
-            if mix test --failed --max-cases 1 --include slow; then
-              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                {
-                  echo "### Retry-greened tests"
-                  echo
-                  echo "These tests failed on the first \`mix test --include slow\` pass and passed on the serial retry. The build is green, but each one is a flake that would otherwise be invisible."
-                  echo
-                  echo "$failed_tests" | sed 's/^/- /'
-                } >> "$GITHUB_STEP_SUMMARY"
-              fi
-              echo "retry_fired=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            else
-              echo "::error::initial mix test failed and the serial retry did NOT fix it. See the failures above."
-              exit 1
-            fi
-          fi
-          assert_test_count_floor
-          echo "retry_fired=false" >> "$GITHUB_OUTPUT"
-
       # Task 01a08d5d (carved out of 01a08b49). QUEUED-BEYOND-DRAIN in
       # test/platform_web/conn_case_supervised_orphan_beyond_drain_test.exs
       # detaches the audit telemetry handler VM-WIDE on purpose — the guardian
@@ -517,6 +405,341 @@ jobs:
           pair="test/platform/audit/historian_latency_test.exs test/platform/accounts/external_admission_notifier_test.exs"
           mix test $pair --seed 0 || (echo "::warning::boot-telemetry pair failed; re-running the SAME two-file command" && mix test $pair --seed 0)
 
+      # pg_read_file is the only way to the log from here (see the
+      # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,
+      # so a reader without the artifact still gets the holder's pid.
+      - name: Collect the Postgres log
+        if: failure()
+        working-directory: ${{ github.workspace }}
+        run: |
+          log="postgres-${{ github.job }}.log"
+          psql -Atc "SELECT pg_read_file(pg_current_logfile())" > "$log" || echo "::warning::could not read the Postgres log"
+          waits=$(grep -c 'still waiting for' "$log" || true)
+          echo "Postgres log: $(wc -l < "$log") lines, $waits lock wait(s) over deadlock_timeout"
+          grep -A2 -E 'still waiting for|acquired .* after|deadlock detected' "$log" | head -n 300 || true
+
+      - name: Upload the Postgres log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: postgres-${{ github.job }}.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  test-shard:
+    name: Test (shard ${{ matrix.partition }})
+    runs-on: ubuntu-latest
+    # One leg per partition: `mix test --partitions $TEST_PARTITIONS` with
+    # MIX_TEST_PARTITION from the matrix. The list must be 1..TEST_PARTITIONS
+    # (Platform.CiTestShardsTest); `Test` refuses a run with any shard missing.
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6]
+    # Root container, as in `test-checks`.
+    container:
+      image: elixir:1.20.4-otp-28-slim
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # LOCK-WAIT LOGGING (the 15 s pool-timeout clusters, e.g. run
+          # 39347244298: three in 0.6 s, cause unknown). A service container
+          # takes no command, so the `-c` flags go through initdb: since
+          # Postgres 16, `initdb -c name=value` writes the setting into the
+          # generated postgresql.conf, and the image's entrypoint passes
+          # POSTGRES_INITDB_ARGS to initdb word-split.
+          #
+          #   log_lock_waits/deadlock_timeout: any wait over 1 s logs
+          #     "process A still waiting for <lock> ... after N ms" with
+          #     DETAIL "Process holding the lock: B. Wait queue: ...".
+          #   logging_collector + fixed file, no rotation: the log becomes a
+          #     file in the data directory that `pg_read_file` can return over
+          #     SQL. The job container has no docker/podman socket, so SQL is
+          #     the only route to it from a step. The cost: the runner's own
+          #     "Print service container logs" at job end now shows only the
+          #     startup lines; the full log is the `postgres-log-*` artifact.
+          #
+          # `Check Postgres lock-wait logging` below fails the job if any of
+          # these did not take effect.
+          POSTGRES_INITDB_ARGS: >-
+            -c log_lock_waits=on -c deadlock_timeout=1s
+            -c logging_collector=on -c log_filename=postgresql.log
+            -c log_rotation_age=0 -c log_rotation_size=0
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        # NO `ports:` MAPPING, DELIBERATELY.
+        #
+        # The job talks to this service by its network alias — `PGHOST:
+        # postgres` below — over the per-job container network Actions
+        # creates. It never needs a host port, and publishing one makes
+        # 5432 a machine-wide singleton: the SECOND concurrent job on the
+        # same runner host dies at "Initialize containers" with
+        #
+        #   Bind for 0.0.0.0:5432 failed: port is already allocated
+        #
+        # before a single step of it runs.
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MIX_TEST_PARTITION: ${{ matrix.partition }}
+      # Own database per partition (config/test.exs reads it). Each leg also
+      # has its own Postgres service, so this is belt and braces: two
+      # partitions can never share a database even on one server.
+      PLATFORM_TEST_DATABASE: platform_test_p${{ matrix.partition }}
+    defaults:
+      run:
+        working-directory: apps/platform
+
+    steps:
+      # BEFORE checkout, so actions/checkout finds git and makes a real
+      # repository. Without git it falls back to a REST download with no
+      # .git, and the install-identity guard
+      # (test/platform/regression/install_identity_guard_test.exs), which
+      # scans `git ls-files`, fails by design. The workspace does not exist
+      # yet, hence the working directory.
+      - name: Install system packages
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
+          update-ca-certificates
+
+      # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
+      # running server reports every setting the lock-wait log depends on.
+      - name: Check Postgres lock-wait logging
+        working-directory: /
+        run: |
+          got=$(psql -Atc "SELECT current_setting('log_lock_waits') || ' ' || current_setting('deadlock_timeout') || ' ' || current_setting('logging_collector') || ' ' || coalesce(pg_current_logfile(), '-')")
+          echo "log_lock_waits deadlock_timeout logging_collector logfile: $got"
+          if [ "$got" != "on 1s on log/postgresql.log" ]; then
+            echo "::error::Postgres service is not logging lock waits: got '$got', expected 'on 1s on log/postgresql.log'. See POSTGRES_INITDB_ARGS on this job's postgres service."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      # The cache keys below name the toolchain the container actually has
+      # (Elixir and the full OTP version), so a bump of the image tag can
+      # never restore beams built by another OTP.
+      - name: Toolchain version (cache key)
+        id: toolchain
+        run: |
+          key=$(elixir -e 'IO.write("elixir-" <> System.version() <> "-otp-" <> String.trim(File.read!(Path.join([to_string(:code.root_dir()), "releases", System.otp_release(), "OTP_VERSION"]))))')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain cache key: $key"
+
+      - name: Cache deps
+        uses: actions/cache@v5
+        with:
+          path: apps/platform/deps
+          key: deps-${{ steps.toolchain.outputs.key }}-test-${{ hashFiles('apps/platform/mix.lock') }}
+          restore-keys: deps-${{ steps.toolchain.outputs.key }}-test-
+
+      # Compiled deps (and the app, which `mix compile` / `mix test` rebuild
+      # where stale) for the MIX_ENVs this job compiles in.
+      - name: Cache _build
+        uses: actions/cache@v5
+        with:
+          path: apps/platform/_build
+          key: build-${{ steps.toolchain.outputs.key }}-test-${{ hashFiles('apps/platform/mix.lock') }}
+          restore-keys: build-${{ steps.toolchain.outputs.key }}-test-
+
+      # The precompiled NIFs (wasmex, vix, lazy_html) come from GitHub
+      # release URLs, which OTP 28's httpc can no longer download
+      # (header_too_long); the script fetches them with curl into the cache
+      # the deps compile reads first. See the script's header.
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+
+      # Node and the assets' node_modules, as in `test-checks`: the
+      # unsharded job had both in place before `mix test`, so a test that
+      # shells out to node or reads assets/node_modules sees the same tree.
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/assets/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: apps/platform/assets
+        run: npm ci
+
+      - name: Set up database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (before mix test)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "before mix test" || true
+
+      - name: Run tests
+        id: run-tests
+        run: |
+          # `--include slow` is load-bearing, not decoration: `Platform.SlowTests`
+          # excludes the `:slow` tag from the DEFAULT run, and this flag is the
+          # named thing that still runs those tests — including the 16s
+          # reproductions of the provider timeout bug from task 01a0826f.
+          # Removing it silently shrinks the suite. `Platform.SlowTestsTest`
+          # asserts this flag is still spelled here.
+          # Exit-status capture, and it is load-bearing: `mix test | tee log`
+          # reports TEE's status, not mix's, so a naive `|| retry` would never
+          # fire and every first-pass failure would look green. `set -o pipefail`
+          # inside an `if !` is what makes the pipeline report mix's status
+          # (the `if` context also suspends the default `bash -e` errexit, so a
+          # red first pass reaches the retry instead of aborting the step).
+          set -o pipefail
+          first_pass_log="${RUNNER_TEMP:-.}/mix-test-first-pass.log"
+          shard_count_file="${RUNNER_TEMP:-.}/shard-test-count"
+
+          # Test-count floor on this shard's main pass (task 01a08e20; the
+          # floor values and their rationale are at the workflow `env:`
+          # block). Reads the pass's own ExUnit summary line and fails the
+          # step if there is none or the count is below MIN_SHARD_TEST_COUNT.
+          # The count is also written to $shard_count_file, which `Test` sums
+          # across shards against MIN_TEST_COUNT. Scoped to $first_pass_log
+          # only, so the serial retry never trips it.
+          assert_test_count_floor() {
+            local summary count
+            # `|| true`: under pipefail a no-match grep would otherwise abort
+            # the `bash -e` step before the ::error:: below is printed.
+            #
+            # ExUnit 1.20 summary shapes: `Result: 16958 passed`, with failures
+            # `Result: 16950/16958 passed`, and with no tests at all
+            # `Result: 0 tests`. Each may carry a `(... doctests, ... tests)`
+            # breakdown and `, N skipped` / `, N excluded` after it, which the
+            # `-o` match leaves off. The LAST number in the match is the total
+            # (doctests included). Before 1.20 the line was `N tests, M failures`.
+            summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$first_pass_log" | tail -n1 || true)
+            # The bare `echo` first: a dead first pass leaves ExUnit's progress
+            # dots mid-line, and GitHub only reads `::error::` at column 0
+            # (measured on control run 34552027555: red step, no annotation).
+            if [ -z "$summary" ]; then
+              echo
+              echo "::error::main mix test pass printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
+              exit 1
+            fi
+            count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
+            if [ "$count" -lt "$MIN_SHARD_TEST_COUNT" ]; then
+              echo
+              echo "::error::main mix test pass (partition $MIX_TEST_PARTITION/$TEST_PARTITIONS) ran $count tests, below MIN_SHARD_TEST_COUNT=$MIN_SHARD_TEST_COUNT — the shard did not run to completion"
+              exit 1
+            fi
+            echo "$count" > "$shard_count_file"
+            echo "main mix test pass (partition $MIX_TEST_PARTITION/$TEST_PARTITIONS) ran $count tests (floor MIN_SHARD_TEST_COUNT=$MIN_SHARD_TEST_COUNT)"
+          }
+
+          # `retry_fired` is THIS run's outcome — did the serial retry fire —
+          # written to $GITHUB_OUTPUT so the `first-run-green` job can read it
+          # without grepping a log (through `Record the shard outcome` and the
+          # `Test` job, which ORs it across shards). It is written exactly once per exit path:
+          # `false` below the retry block on a green first pass, `true` inside
+          # the retry-green branch. A retry-red path exits 1 and writes nothing;
+          # the job is red, and `first-run-green` is skipped behind `needs`.
+          if ! mix test --include slow --partitions "$TEST_PARTITIONS" 2>&1 | tee "$first_pass_log"; then
+            # Harvest the failed test names from the FIRST pass's ExUnit failure
+            # blocks. Not the `--failed` manifest: that file
+            # (`_build/test/lib/platform/.mix/.mix_test_failures`) is an Erlang
+            # external-term-format binary, it is not shell-readable, and it
+            # carries module + test name + file but NO line number.
+            failed_tests=$(
+              awk '
+                /^[[:space:]]*[0-9]+\) (test|doctest) /{
+                  hdr=$0; sub(/^[[:space:]]*[0-9]+\) /,"",hdr); want=1; next
+                }
+                want && /\.exs:[0-9]+[[:space:]]*$/{
+                  loc=$0; sub(/^[[:space:]]*/,"",loc); sub(/[[:space:]]*$/,"",loc)
+                  print loc " — " hdr; want=0
+                }
+              ' "$first_pass_log" | sort -u
+            )
+            # Nameless-retry refusal (task 01a08e20). A first pass that exits
+            # non-zero WITHOUT any ExUnit failure block is a crash, not a flake:
+            # on PR #997 attempt 1 the BEAM aborted (`[asmjit] Assertion
+            # failed`, core dumped), the harvest above found nothing,
+            # `mix test --failed` ran an empty manifest, printed `There are no
+            # tests to run`, exited 0, and the job concluded success. There is
+            # nothing to retry, so refuse before the retry command runs and
+            # before `retry_fired` is written. This check MUST stay above the
+            # `mix test --failed` line below. It writes NOTHING to
+            # $GITHUB_OUTPUT: the retry never ran, so `retry_fired=true` would
+            # be false; `first-run-green`'s `*)` arm already handles the
+            # missing output. The bare `echo` first: the crash leaves ExUnit's
+            # progress dots mid-line and GitHub only reads `::error::` at
+            # column 0 (measured on control run 34552027555).
+            if [ -z "$failed_tests" ]; then
+              echo
+              echo "::error::initial mix test failed with no ExUnit failures harvested (crash, not flake)"
+              exit 1
+            fi
+            assert_test_count_floor
+
+            # Annotations are single-line; %0A is GitHub's newline escape.
+            echo "::warning::initial mix test failed; retrying failed tests serially. First pass failed these tests:%0A$(echo "$failed_tests" | sed 's/$/%0A/' | tr -d '\n')"
+
+            if mix test --failed --max-cases 1 --include slow; then
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  echo "### Retry-greened tests"
+                  echo
+                  echo "These tests failed on the first \`mix test --include slow\` pass and passed on the serial retry. The build is green, but each one is a flake that would otherwise be invisible."
+                  echo
+                  echo "$failed_tests" | sed 's/^/- /'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              echo "retry_fired=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              echo "::error::initial mix test failed and the serial retry did NOT fix it. See the failures above."
+              exit 1
+            fi
+          fi
+          assert_test_count_floor
+          echo "retry_fired=false" >> "$GITHUB_OUTPUT"
+
+
+      # This shard's outcome, for `Test`: `retry_fired` from `Run tests`, and
+      # the main pass's test count. Only reached when `Run tests` succeeded.
+      - name: Record the shard outcome
+        working-directory: ${{ github.workspace }}
+        env:
+          RETRY_FIRED: ${{ steps.run-tests.outputs.retry_fired }}
+        run: |
+          mkdir -p shard-outcome
+          count=$(cat "${RUNNER_TEMP:-.}/shard-test-count")
+          printf 'retry_fired=%s\ntest_count=%s\n' "$RETRY_FIRED" "$count" > "shard-outcome/partition-$MIX_TEST_PARTITION"
+          cat "shard-outcome/partition-$MIX_TEST_PARTITION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-shard-outcome-${{ matrix.partition }}
+          path: shard-outcome/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
       # Task 01a15cfd: the runner host's load and PSI around mix test (the job
       # container sees the host's /proc), so a first-pass failure can be read
       # against the runner host's load from this run alone. Never fails the job;
@@ -547,10 +770,82 @@ jobs:
         if: failure() || steps.run-tests.outputs.retry_fired == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          name: postgres-log-${{ github.job }}-${{ matrix.partition }}-attempt-${{ github.run_attempt }}
           path: postgres-${{ github.job }}.log
           if-no-files-found: warn
           retention-days: 14
+
+  test:
+    name: Test
+    needs: [test-checks, test-shard]
+    # always(): a job skipped because a need failed reports `skipped`, which
+    # branch protection treats as passing. Running anyway and failing is what
+    # keeps `Test` red when any shard or the checks are red.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    # Read by the `first-run-green` job below. Task 01a08d81: a shard's
+    # CONCLUSION is `success` for both first-run-green and failed-then-
+    # retry-green, so branch protection requiring "Test" cannot tell them
+    # apart. The output is the per-run OUTCOME: `true` if the serial retry
+    # fired in ANY shard.
+    outputs:
+      retry_fired: ${{ steps.aggregate.outputs.retry_fired }}
+    steps:
+      - name: Download the shard outcomes
+        if: needs.test-shard.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          path: shard-outcome
+          pattern: test-shard-outcome-*
+          merge-multiple: true
+
+      - name: Every shard green, test count over the floor, retry fired anywhere
+        id: aggregate
+        env:
+          CHECKS_RESULT: ${{ needs.test-checks.result }}
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          if [ "$CHECKS_RESULT" != success ]; then
+            echo "::error::Test (checks) concluded '$CHECKS_RESULT'."
+            exit 1
+          fi
+          if [ "$SHARDS_RESULT" != success ]; then
+            echo "::error::at least one Test (shard N) job concluded '$SHARDS_RESULT'; see the shard jobs."
+            exit 1
+          fi
+          total=0
+          fired=false
+          for p in $(seq 1 "$TEST_PARTITIONS"); do
+            f="shard-outcome/partition-$p"
+            if [ ! -f "$f" ]; then
+              echo "::error::no outcome for partition $p of $TEST_PARTITIONS; every partition must run."
+              exit 1
+            fi
+            retry=$(sed -n 's/^retry_fired=//p' "$f")
+            count=$(sed -n 's/^test_count=//p' "$f")
+            echo "partition $p: retry_fired=$retry test_count=$count"
+            case "$retry" in
+              true) fired=true ;;
+              false) ;;
+              *)
+                echo "::error::partition $p recorded retry_fired='$retry', expected 'true' or 'false'."
+                exit 1
+                ;;
+            esac
+            case "$count" in
+              ''|*[!0-9]*)
+                echo "::error::partition $p recorded test_count='$count', not a number."
+                exit 1
+                ;;
+            esac
+            total=$((total + count))
+          done
+          if [ "$total" -lt "$MIN_TEST_COUNT" ]; then
+            echo "::error::the shards' main mix test passes ran $total tests in total, below MIN_TEST_COUNT=$MIN_TEST_COUNT — the suite did not run to completion (raise the floor in ci.yml env: if the suite legitimately shrank)"
+            exit 1
+          fi
+          echo "the shards' main mix test passes ran $total tests in total (floor MIN_TEST_COUNT=$MIN_TEST_COUNT)"
+          echo "retry_fired=$fired" >> "$GITHUB_OUTPUT"
 
   # Task 01a08d81. Branch protection can only require a NAMED check, and it is
   # satisfied by that job's conclusion. `Test` concludes `success` for both a
@@ -679,6 +974,14 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # Toolchain in the cache keys, as in `test-checks`.
+      - name: Toolchain version (cache key) (with Play)
+        id: toolchain
+        run: |
+          key=$(elixir -e 'IO.write("elixir-" <> System.version() <> "-otp-" <> String.trim(File.read!(Path.join([to_string(:code.root_dir()), "releases", System.otp_release(), "OTP_VERSION"]))))')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain cache key: $key"
+
       # One cache per project: Mix ignores a path dependency's lockfile, so
       # each project resolves (and stores) its own deps.
       - name: Cache module deps
@@ -689,8 +992,21 @@ jobs:
             apps/social/deps
             apps/burrow_release/deps
             apps/platform/deps
-          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/social/mix.lock', 'apps/burrow_release/mix.lock', 'apps/platform/mix.lock') }}
-          restore-keys: deps-with-play-
+          key: deps-with-play-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/game_stream/mix.lock', 'apps/social/mix.lock', 'apps/burrow_release/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-play-${{ steps.toolchain.outputs.key }}-dev-test-
+
+      # Compiled deps for every project this job compiles (dev and test).
+      # Compiling is most of this job's time; the module suite itself is
+      # well under a minute.
+      - name: Cache module _build
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/game_stream/_build
+            apps/burrow_release/_build
+            apps/platform/_build
+          key: build-with-play-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/game_stream/mix.lock', 'apps/social/mix.lock', 'apps/burrow_release/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: build-with-play-${{ steps.toolchain.outputs.key }}-dev-test-
 
       # Once per env: core is a path dependency compiled in the module's env
       # (`env: Mix.env()`), so `deps.get` fetches only the deps core needs IN
@@ -918,14 +1234,30 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
 
+      # Toolchain in the cache keys, as in `test-checks`.
+      - name: Toolchain version (cache key) (with Social)
+        id: toolchain
+        run: |
+          key=$(elixir -e 'IO.write("elixir-" <> System.version() <> "-otp-" <> String.trim(File.read!(Path.join([to_string(:code.root_dir()), "releases", System.otp_release(), "OTP_VERSION"]))))')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain cache key: $key"
+
       - name: Cache module deps (with Social)
         uses: actions/cache@v5
         with:
           path: |
             apps/social/deps
             apps/platform/deps
-          key: deps-with-social-${{ hashFiles('apps/social/mix.lock', 'apps/platform/mix.lock') }}
-          restore-keys: deps-with-social-
+          key: deps-with-social-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/social/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-social-${{ steps.toolchain.outputs.key }}-dev-test-
+
+      # Compiled deps (dev and test), as in `Test (with Play)`.
+      - name: Cache module _build (with Social)
+        uses: actions/cache@v5
+        with:
+          path: apps/social/_build
+          key: build-with-social-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/social/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: build-with-social-${{ steps.toolchain.outputs.key }}-dev-test-
 
       # Once per env, for the reason given on `Test (with Play)`.
       - name: Install module dependencies (with Social)
