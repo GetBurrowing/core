@@ -24,6 +24,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
+  import Platform.CanvasPoolHelpers
   import Platform.CodeModeFixtures, only: [insert_agent!: 0, insert_runtime!: 2, bundles: 1]
 
   import Platform.ExternalUserFixtures,
@@ -233,30 +234,6 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
   end
 
   defp canvas_held(canvas_id), do: Slots.held(@pool).by_runtime[canvas_id]
-
-  defp await_canvas_pool_empty!(timeout \\ 30_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    await_canvas_pool_empty_until(deadline, timeout)
-  end
-
-  defp await_canvas_pool_empty_until(deadline, timeout) do
-    held = Slots.held(@pool)
-
-    cond do
-      held.total == 0 ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk(
-          "the canvas pool still held #{held.total} slot(s) after #{timeout} ms: " <>
-            inspect(held.by_runtime)
-        )
-
-      true ->
-        Process.sleep(10)
-        await_canvas_pool_empty_until(deadline, timeout)
-    end
-  end
 
   # For the looping attacks: leave the pool empty for whatever runs next.
   defp drain_canvas_pool_on_exit(_ctx) do
