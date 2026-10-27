@@ -208,6 +208,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # the result of a restart/deploy/rollback, never a value or a token. Only
     # a caller of `host_call/3` knows the ref.
     {"agent_host:reply:<id>", :resource},
+    # Task 01a17b17 stage 2. One remote-terminal session: sealed frames and
+    # control events between the owner's view channel and the agent's CLI
+    # channel. The id is random and only those two channel processes hold it.
+    # Core never decrypts and never stores what passes.
+    {"terminal_session:<id>", :resource},
     # Task 01a1694a stage 3. Keyed by a `meeting_briefings` id; the reachable
     # set is that briefing's attendees. Payload is
     # `{:meeting_briefing_changed, briefing_id}`, the id only, and a

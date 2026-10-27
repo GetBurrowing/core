@@ -60,6 +60,13 @@ defmodule PlatformWeb.ChatLive.MessageActionsRemovedTest do
     "reaction-add-btn"
   ]
 
+  # The tree is walked and read once per module: each of the ~36 tests
+  # re-reading all of lib and assets timed one out at 60 s inside File.read!
+  # in an unsharded hosted run (40425309132).
+  setup_all do
+    %{corpus: Enum.map(sources(), &{Path.relative_to(&1, @root), File.read!(&1)})}
+  end
+
   defp sources do
     for dir <- ["lib", "assets/js", "assets/css"],
         path <- Path.wildcard(Path.join([@root, dir, "**", "*.{ex,exs,heex,js,mjs,css}"])),
@@ -67,32 +74,34 @@ defmodule PlatformWeb.ChatLive.MessageActionsRemovedTest do
         do: path
   end
 
-  defp hits(needle) do
-    for path <- sources(),
-        {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+  defp hits(corpus, needle) do
+    # A whole-file match first; only a file that hits is split into lines.
+    for {rel, content} <- corpus,
+        String.contains?(content, needle),
+        {line, n} <- content |> String.split("\n") |> Enum.with_index(1),
         String.contains?(line, needle),
-        do: "#{Path.relative_to(path, @root)}:#{n}"
+        do: "#{rel}:#{n}"
   end
 
-  test "the scan covers the tree it claims to" do
-    paths = sources()
-    assert Enum.any?(paths, &String.ends_with?(&1, "lib/platform_web/components/chat_message.ex"))
-    assert Enum.any?(paths, &String.ends_with?(&1, "assets/js/hooks/message_gestures.js"))
-    assert Enum.any?(paths, &String.ends_with?(&1, "assets/css/app.css"))
+  test "the scan covers the tree it claims to", %{corpus: corpus} do
+    paths = Enum.map(corpus, &elem(&1, 0))
+    assert "lib/platform_web/components/chat_message.ex" in paths
+    assert "assets/js/hooks/message_gestures.js" in paths
+    assert "assets/css/app.css" in paths
   end
 
-  test "positive control: the pill that replaced them is found" do
-    assert hits("message-pill") != []
-    assert hits("MessageGestures") != []
-    assert hits("What this is answering") != []
-    assert hits("open_inline_thread") != []
-    assert hits("removesMost") != []
-    assert hits("version-history-sheet") != []
+  test "positive control: the pill that replaced them is found", %{corpus: corpus} do
+    assert hits(corpus, "message-pill") != []
+    assert hits(corpus, "MessageGestures") != []
+    assert hits(corpus, "What this is answering") != []
+    assert hits(corpus, "open_inline_thread") != []
+    assert hits(corpus, "removesMost") != []
+    assert hits(corpus, "version-history-sheet") != []
   end
 
   for needle <- @gone do
-    test "no source under lib, assets/js or assets/css names #{needle}" do
-      assert hits(unquote(needle)) == []
+    test "no source under lib, assets/js or assets/css names #{needle}", %{corpus: corpus} do
+      assert hits(corpus, unquote(needle)) == []
     end
   end
 end

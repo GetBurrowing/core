@@ -978,6 +978,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 show_add_space_modal={@show_add_space_modal}
                 available_spaces={@available_spaces}
                 available_meeting_spaces={@available_meeting_spaces}
+                current_user_id={@current_user_id}
                 managed?={not is_nil(@native_header)}
                 can_manage?={
                   Platform.Access.Agents.manage?(@access_scope, @selected_agent) and

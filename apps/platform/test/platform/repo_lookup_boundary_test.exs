@@ -883,6 +883,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "the plan_id guards moved here from tasks_live.ex with the plan-approval events (task 01a008f6 stage 4). Each uses Platform.UUID.cast/1 and passes the CAST OUTPUT to Repo.get(Plan, uuid); the classification is unchanged by the move — the ids still arrive as phx-value-plan-id LiveView params and are still cast before the lookup. Three sites rather than six because approve/reject/reject-with-feedback now share one fetch_plan/1. The fourth (task 01a11ec3 stage 4) is promotable_task/1: the detail_promote_from_quarantine phx-value-id is checked with Platform.UUID.valid?/1 before Tasks.get_task_record/1, so a malformed id is \"not found\" rather than a cast raise"},
     {"platform_web/live/tasks/task_detail_component.ex", :get, "Plan", 1, :safe_internal,
      "fetch_plan/1 receives the `{:ok, uuid}` output of the cast above, which is always a well-formed 36-character UUID by construction; the guard itself is Platform.UUID.cast/1, recorded on the `:platform_uuid_guard` key for this file"},
+    {"platform_web/live/terminal_live.ex", :get_by, "Agent", 1, :safe_internal,
+     "`runtime.id` off the `%AgentRuntime{}` the mount just loaded by its `runtime_id` string (a text column, so a malformed path segment is a miss, never a cast), and the lookup runs only when the viewer is the runtime's owner. The key is a struct primary key, not request input"},
 
     # ── Platform.UUID guards recorded by stage 4 (the ratchet) ─────────
     # Tracking the FIX, not just the defect: re-simplifying any guard below
