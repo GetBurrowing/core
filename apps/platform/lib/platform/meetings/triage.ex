@@ -19,24 +19,13 @@ defmodule Platform.Meetings.Triage do
   in place of `:description`), the stack rollup rewires — do not block on
   D landing first.
 
-  ## Reconcile, do not re-create (task 01a03fda)
+  ## Sole meeting filing boundary (task 01a17f00-832c)
 
-  Since `Platform.Meetings.CandidateSweeper` shipped, tasks are also
-  filed DURING the meeting, by `Platform.Meetings.Candidates.graduate/2`,
-  from the same utterances this pass later reads out of the transcript.
-  This module is therefore a **reconciliation pass over what the live
-  path already did**, not a second competing filer.
-
-  The reconciliation is by IDENTITY — an action item that names the
-  `candidate_id` it came from — and never by resemblance. The fuzzy
-  dedup gate below does not absorb the live path's tasks and cannot be
-  made to: `graduate/2` titles its task with the VERBATIM utterance
-  while an action item is a normalised imperative, and on merged code
-  three live cards plus four re-parsed action items produced seven
-  tasks with zero fuzzy skips.
-
-  See the `Identity reconciliation` section further down for what this
-  does NOT yet close — no producer emits `:candidate_id` today.
+  Live candidates retain evidence and dispositions, but do not file tasks.
+  The authenticated completion run calls this boundary only after capture
+  and transcription finish. Its persisted item ledger serializes retries,
+  including retries after an earlier task is done. Existing candidate
+  reconciliation still protects historical live-filed provenance during cleanup.
 
   ## Public surface
 

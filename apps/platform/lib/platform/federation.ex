@@ -599,31 +599,27 @@ defmodule Platform.Federation do
   envelope so the receiving agent can pattern-match `signal.reason` the same
   way it does for `"task_assigned"` / `"task_heartbeat"`.
 
-  Progressive-enhancement contract: this function always returns `:ok`. Every
-  failure path (agent not found, runtime not linked, broadcast error, endpoint
-  not ready) is swallowed and reported through
-  `[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]` telemetry
-  so the transcript-completion caller can invoke it inline without risking the
-  existing Summarizer path.
+  Dispatch failures return `{:error, reason}` and emit role-specific telemetry.
+  The persisted completion run retries these failures; delivery is not filing.
 
   The broadcast goes through `Platform.Federation.AttentionDispatch`, which
   first puts the target agent in a writable posture in `payload.space_id` —
   see that module on why the invite must commit before the signal leaves, and
   why a refused invite never blocks delivery.
   """
-  @spec dispatch_scribe_attention(binary(), map()) :: :ok
+  @spec dispatch_scribe_attention(binary(), map()) :: :ok | {:error, term()}
   def dispatch_scribe_attention(agent_id, payload)
       when is_binary(agent_id) and is_map(payload) do
     case Repo.get(Agent, agent_id) do
       nil ->
         emit_scribe_dispatch_fallback(agent_id, :agent_not_found)
-        :ok
+        {:error, :agent_not_found}
 
       %Agent{} = agent ->
         case get_runtime_for_agent(agent) do
           nil ->
             emit_scribe_dispatch_fallback(agent_id, :runtime_unresolvable)
-            :ok
+            {:error, :runtime_unresolvable}
 
           %AgentRuntime{runtime_id: runtime_id} ->
             broadcast_scribe_attention(agent_id, runtime_id, payload)
@@ -637,8 +633,7 @@ defmodule Platform.Federation do
   # is a clean `:no_space_named` skip inside the funnel, with the signal still
   # delivered.
   #
-  # The `:broadcast_failed` / `:endpoint_not_ready` split and the always-`:ok`
-  # return are unchanged; only the primitive underneath moved. This function
+  # Preserve distinct broadcast failure telemetry. This function
   # keeps its own telemetry name and log line rather than sharing the funnel's
   # so a scribe dispatch failure stays greppable on its own — see the moduledoc
   # on `dispatch_triage_attention/2` for why the three are parallel by design.
@@ -659,7 +654,7 @@ defmodule Platform.Federation do
 
       {:error, reason} ->
         emit_scribe_dispatch_fallback(agent_id, reason)
-        :ok
+        {:error, reason}
     end
   end
 
@@ -689,30 +684,26 @@ defmodule Platform.Federation do
   completion canvas, so the triage_officer agent can pick up the canvas and
   convert action items into tasks.
 
-  Progressive-enhancement contract: this function always returns `:ok`. Every
-  failure path (agent not found, runtime not linked, broadcast error, endpoint
-  not ready) is swallowed and reported through
-  `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
-  so the domain-hook caller can invoke it inline without risking the
-  canvas-create path.
+  Dispatch failures return `{:error, reason}` and emit role-specific telemetry.
+  The persisted completion run retries these failures; delivery is not filing.
 
   Broadcasts through `Platform.Federation.AttentionDispatch`, same as its two
   siblings, tagged `source: :meeting_triage` so an auto-invite into a meeting
   space is attributable to the triage dispatch rather than the scribe one.
   """
-  @spec dispatch_triage_attention(binary(), map()) :: :ok
+  @spec dispatch_triage_attention(binary(), map()) :: :ok | {:error, term()}
   def dispatch_triage_attention(agent_id, payload)
       when is_binary(agent_id) and is_map(payload) do
     case Repo.get(Agent, agent_id) do
       nil ->
         emit_triage_dispatch_fallback(agent_id, :agent_not_found)
-        :ok
+        {:error, :agent_not_found}
 
       %Agent{} = agent ->
         case get_runtime_for_agent(agent) do
           nil ->
             emit_triage_dispatch_fallback(agent_id, :runtime_unresolvable)
-            :ok
+            {:error, :runtime_unresolvable}
 
           %AgentRuntime{runtime_id: runtime_id} ->
             broadcast_triage_attention(agent_id, runtime_id, payload)
@@ -741,7 +732,7 @@ defmodule Platform.Federation do
 
       {:error, reason} ->
         emit_triage_dispatch_fallback(agent_id, reason)
-        :ok
+        {:error, reason}
     end
   end
 

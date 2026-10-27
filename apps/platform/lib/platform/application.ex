@@ -306,6 +306,7 @@ defmodule Platform.Application do
     |> maybe_add_lifecycle_step_registry(flag)
     |> maybe_add_summarizer_sweeper(flag)
     |> maybe_add_candidate_sweeper(flag)
+    |> maybe_add_meeting_completion_sweeper(flag)
     |> maybe_add_security_sweeper(flag)
     |> maybe_add_space_purger(flag)
     |> maybe_add_experiments_mail_subscriber(flag)
@@ -815,6 +816,14 @@ defmodule Platform.Application do
   # the per-meeting IntentQueue supervisor so the enqueue path has
   # somewhere to start a queue. Disabled in test env; tests start
   # their own instance per case for DataCase sandbox ownership.
+  defp maybe_add_meeting_completion_sweeper(children, flag) do
+    if flag.(:platform, :start_meeting_completion_sweeper, true) do
+      children ++ [Platform.Meetings.CompletionSweeper]
+    else
+      children
+    end
+  end
+
   defp maybe_add_meeting_intent_classifier(children, flag) do
     if flag.(:platform, :start_meeting_intent_classifier, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)

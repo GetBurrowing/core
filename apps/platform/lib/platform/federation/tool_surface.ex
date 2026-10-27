@@ -3267,6 +3267,8 @@ defmodule Platform.Federation.ToolSurface do
   # sibling stayed in `task`.
   defp meetings_tools do
     [
+      meeting_completion_tool("meeting_scribe_complete"),
+      meeting_completion_tool("meeting_triage_file"),
       %{
         name: "meeting_create",
         description:
@@ -3405,6 +3407,48 @@ defmodule Platform.Federation.ToolSurface do
           "IMMEDIATELY after spawning a subagent in response to a `meeting_intent_dispatch` attention signal — the meeting's whole queue is waiting behind this one intent. Then again when the work ends, or as soon as you decide the intent isn't yours (`rejected`) — an honest early `rejected` unblocks the meeting AND improves future targeting."
       }
     ]
+  end
+
+  defp meeting_completion_access(args, context) do
+    with %Platform.Access.Scope{} = scope <- prompt_update_scope(context),
+         {:ok, meeting_id} <- Ecto.UUID.cast(Map.get(args, "meeting_id")),
+         %Platform.Meetings.Meeting{} = meeting <- Meetings.get_meeting(meeting_id),
+         %Platform.Tasks.Project{} = project <- Repo.get(Platform.Tasks.Project, meeting.project_id),
+         :ok <- Platform.Access.check(scope, "meetings.join", project) do
+      :ok
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp meeting_completion_tool(name) do
+    filing? = name == "meeting_triage_file"
+
+    parameters =
+      Map.new(~w(meeting_id run_id transcript_id canvas_id), fn key ->
+        {String.to_atom(key), %{type: "string", required: true, description: "Canonical #{key} from the completion dispatch; identities must match the finalized run."}}
+      end)
+
+    parameters =
+      if filing? do
+        Map.put(parameters, :action_items, %{
+          type: "array",
+          required: true,
+          description: "Officer-reviewed items with stable item_id, normalized imperative title, grounded description and transcript segment citations. Exclude duplicates, conflicts and questions."
+        })
+      else
+        parameters
+      end
+
+    %{
+      name: name,
+      description: if(filing?, do: "File the triage officer's reviewed follow-up work through the meeting's single persisted completion run.", else: "Complete the assigned scribe's finalized full-transcript canvas and dispatch the triage officer."),
+      parameters: parameters,
+      returns_schema: ReturnSchemas.for_tool(name),
+      returns: "Canonical meeting_id, run_id and persisted completion status; filing includes task_ids, scribe completion includes canvas_id.",
+      limitations: "Authenticated assigned role only. The meeting must be ended and transcription finalized. Foreign tenant, transcript, run or canvas identities are refused. Replay uses the same run and stable item identities; it does not create another task.",
+      when_to_use: if(filing?, do: "On meeting_triage_dispatch after reviewing the full finalized transcript and scribe canvas.", else: "On meeting_scribe_completion after writing the canonical scribe canvas from the full finalized transcript.")
+    }
   end
 
   # Task 01a05b32 stage 2 — ONE copy of the planner-authored `stages`
@@ -5324,6 +5368,26 @@ defmodule Platform.Federation.ToolSurface do
   #     argument for pushed state is that the SERVER expires it; a
   #     cleanup path here would work only when the runtime dies politely,
   #     which is the case that does not need it.
+  def execute(name, args, context)
+      when name in ["meeting_scribe_complete", "meeting_triage_file"] do
+    with %Agent{id: agent_id} <- load_agent(context),
+         :ok <- meeting_completion_access(args, context) do
+      result =
+        case name do
+          "meeting_scribe_complete" -> Platform.Meetings.Completion.scribe_complete(agent_id, args)
+          "meeting_triage_file" -> Platform.Meetings.Completion.triage_file(agent_id, args)
+        end
+
+      case result do
+        {:ok, response} -> {:ok, response}
+        {:error, reason} ->
+          {:error, %{error: "#{name}: #{inspect(reason)}", code: reason, recoverable: false}}
+      end
+    else
+      _ -> {:error, %{error: "#{name}: no authenticated calling agent", code: :unauthorized, recoverable: false}}
+    end
+  end
+
   def execute("meeting_activity_push", args, context) do
     meeting_id = Map.get(args, "meeting_id")
 

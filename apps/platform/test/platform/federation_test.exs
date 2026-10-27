@@ -525,10 +525,10 @@ defmodule Platform.FederationTest do
       assert_received {:auto_invite, _, %{outcome: :space_not_found}}
     end
 
-    test "emits :agent_not_found telemetry and returns :ok when the agent id is unknown" do
+    test "emits :agent_not_found telemetry and returns an error when the agent id is unknown" do
       missing_id = Ecto.UUID.generate()
 
-      assert :ok =
+      assert {:error, :agent_not_found} =
                Federation.dispatch_scribe_attention(missing_id, %{
                  reason: "meeting_scribe_completion"
                })
@@ -553,7 +553,7 @@ defmodule Platform.FederationTest do
     test "emits :runtime_unresolvable telemetry when the agent has no linked runtime" do
       agent = create_agent()
 
-      assert :ok =
+      assert {:error, :runtime_unresolvable} =
                Federation.dispatch_scribe_attention(agent.id, %{
                  reason: "meeting_scribe_completion"
                })
@@ -677,10 +677,10 @@ defmodule Platform.FederationTest do
       assert_received {:auto_invite, _, %{outcome: :space_not_found}}
     end
 
-    test "emits :agent_not_found telemetry and returns :ok when the agent id is unknown" do
+    test "emits :agent_not_found telemetry and returns an error when the agent id is unknown" do
       missing_id = Ecto.UUID.generate()
 
-      assert :ok =
+      assert {:error, :agent_not_found} =
                Federation.dispatch_triage_attention(missing_id, %{
                  reason: "meeting_triage_dispatch"
                })
@@ -701,7 +701,7 @@ defmodule Platform.FederationTest do
     test "emits :runtime_unresolvable telemetry when the agent has no linked runtime" do
       agent = create_agent()
 
-      assert :ok =
+      assert {:error, :runtime_unresolvable} =
                Federation.dispatch_triage_attention(agent.id, %{
                  reason: "meeting_triage_dispatch"
                })

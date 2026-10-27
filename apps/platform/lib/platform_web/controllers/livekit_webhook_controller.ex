@@ -133,7 +133,7 @@ defmodule PlatformWeb.LivekitWebhookController do
       _ -> :ok
     end
 
-    cond do
+    result = cond do
       # A Voice tab 1:1 session is not a meeting (task 01a174e2): no summary,
       # no failure notice, no `:meeting_finished`. Checked BEFORE transcript
       # selection so nothing below can pick the voice row up.
@@ -146,6 +146,10 @@ defmodule PlatformWeb.LivekitWebhookController do
       true ->
         conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no room identifier"})
     end
+    if room_row && not Meetings.voice_1to1_room?(room_row) do
+      Platform.Meetings.Completion.capture_finished_for_space(room_row.space_id)
+    end
+    result
   end
 
   # Handle `transcription` events — append segments to the active transcript.

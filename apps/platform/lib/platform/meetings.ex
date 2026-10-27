@@ -1457,6 +1457,7 @@ defmodule Platform.Meetings do
         )
 
         deliver_meeting_briefing(updated)
+        Platform.Meetings.Completion.resume(updated.id)
         ok
 
       error ->
@@ -5713,6 +5714,7 @@ defmodule Platform.Meetings do
             # (`%{reason: :agent_speaker}`, see that module's moduledoc),
             # and this delivery is history, not classification.
             _ = deliver_transcript_segment(updated, segment)
+            Platform.Meetings.Completion.transcript_changed(updated)
 
           _error ->
             :ok
@@ -5880,7 +5882,7 @@ defmodule Platform.Meetings do
 
         case result do
           {:ok, updated} ->
-            maybe_dispatch_scribe_attention(updated)
+            Platform.Meetings.Completion.transcript_changed(updated)
             refresh_meeting_briefing(updated)
             {:ok, updated}
 
@@ -5904,26 +5906,6 @@ defmodule Platform.Meetings do
       :error
   end
 
-  # Opportunistic dispatch to the `meeting_scribe` role-assigned agent's linked
-  # runtime. Contract is best-effort: no role assignment = silent no-op; all
-  # dispatch failures are swallowed inside `Federation.dispatch_scribe_attention/2`
-  # via telemetry so `complete_transcript/2`'s callers (Summarizer, backfills,
-  # tests) never see a spurious error.
-  defp maybe_dispatch_scribe_attention(%Transcript{} = transcript) do
-    case Platform.Roles.agent_id_for_role("meeting_scribe") do
-      nil ->
-        :ok
-
-      agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_scribe_attention(agent_id, %{
-          space_id: transcript.space_id,
-          room_id: transcript.room_id,
-          transcript_id: transcript.id,
-          reason: "meeting_scribe_completion"
-        })
-    end
-  end
-
   @doc """
   Hook invoked by the scribe runtime handler after it creates a completion
   canvas for a meeting transcript. Resolves the `triage_officer` role and
@@ -5941,16 +5923,16 @@ defmodule Platform.Meetings do
   def on_scribe_canvas_created(%Transcript{} = transcript, %Platform.Chat.Canvas{} = canvas) do
     case safe_agent_id_for_role("triage_officer") do
       nil ->
-        :ok
+        {:error, :role_unassigned}
 
       agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_triage_attention(agent_id, %{
+        Platform.Federation.dispatch_triage_attention(agent_id, Map.merge(Platform.Meetings.Completion.dispatch_payload(transcript.id), %{
           reason: "meeting_triage_dispatch",
           space_id: transcript.space_id,
           room_id: transcript.room_id,
           transcript_id: transcript.id,
           canvas_id: canvas.id
-        })
+        }))
     end
   end
 
