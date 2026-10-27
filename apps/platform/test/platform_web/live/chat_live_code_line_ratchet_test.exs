@@ -667,7 +667,16 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # by this guard (2002 -> 2001). The dead `:reorder_announcement` assign
   # went; `recompute_pinned/1` became public (defp -> def, 0) for
   # `PlatformWeb.ChatLive.PinnedReorderHooks`, which holds every new handler.
-  @chat_live_code_line_count 2001
+  # Task 01a17bf4 stage 1 (chat first-frame spans): +9, measured by this
+  # guard (2001 -> 2010). Fifteen enter_space segments in `handle_params/3`
+  # now run inside `PlatformWeb.ChatLive.FirstFrame.span/2,3`, which holds all
+  # the telemetry code. Eleven wraps sit on the line they replaced (0); the
+  # four whose bodies were already multi-line (`list_spaces`,
+  # `restricted_channel_ids`, `channel_sections`, `sidebar_sections`) each
+  # gained an `fn ->` head and an `end` (+8); the `import` of `span/2,3` is +1.
+  # The wraps cannot move into the wrapped helpers: those helpers have other
+  # call sites, which would then emit enter_space spans they are not part of.
+  @chat_live_code_line_count 2010
 
   @doc """
   Count the CODE lines of a source file.

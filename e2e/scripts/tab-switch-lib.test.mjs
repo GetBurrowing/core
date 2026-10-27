@@ -18,6 +18,11 @@ import {
   cdpConditions,
   PROFILES,
   traceBreakdown,
+  WsMessageReader,
+  createInflater,
+  wireBytesForText,
+  countVisibleRows,
+  pickInitialMessageCount,
 } from "./tab-switch-lib.mjs";
 
 test("percentile is nearest-rank and ignores non-numbers", () => {
@@ -257,4 +262,161 @@ test("makeLink never reorders chunks queued within the same millisecond", async 
   });
   await done;
   assert.deepEqual(got, [...Array(200).keys()]);
+});
+
+// ── task 01a17bf4: first-frame wire bytes and first-frame sizing ──────────
+
+// An RFC 6455 frame as a server (unmasked) or client (masked) would send it.
+function wsFrame(payload, { opcode = 1, fin = true, rsv1 = false, mask = null } = {}) {
+  const body = Buffer.from(payload);
+  const len = body.length;
+  const head = [((fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | opcode) & 0xff];
+  const m = mask ? 0x80 : 0;
+  if (len < 126) head.push(m | len);
+  else if (len < 65536) head.push(m | 126, (len >> 8) & 0xff, len & 0xff);
+  else throw new Error("test helper: frame too long");
+  let data = body;
+  if (mask) {
+    data = Buffer.from(body);
+    for (let i = 0; i < data.length; i++) data[i] ^= mask[i % 4];
+    head.push(...mask);
+  }
+  return Buffer.concat([Buffer.from(head), data]);
+}
+
+// permessage-deflate sender with context takeover: one raw deflate stream,
+// each message sync-flushed and its 00 00 ff ff tail removed.
+async function deflateMessages(texts) {
+  const d = zlib.createDeflateRaw({ windowBits: 15 });
+  const out = [];
+  let cur = [];
+  d.on("data", (c) => cur.push(c));
+  for (const t of texts) {
+    cur = [];
+    d.write(Buffer.from(t, "utf8"));
+    await new Promise((r) => d.flush(zlib.constants.Z_SYNC_FLUSH, r));
+    const b = Buffer.concat(cur);
+    out.push(b.subarray(0, b.length - 4));
+  }
+  d.close();
+  return out;
+}
+
+test("WsMessageReader assembles frames split across chunks and reports wire bytes", () => {
+  const r = new WsMessageReader();
+  const small = wsFrame("hello");
+  const big = wsFrame("x".repeat(300)); // 126 extended length
+  const all = Buffer.concat([small, big]);
+  const got = [];
+  // Feed a byte at a time: no frame may complete early or be lost.
+  for (let i = 0; i < all.length; i++) got.push(...r.push(all.subarray(i, i + 1)));
+  assert.equal(got.length, 2);
+  assert.equal(got[0].payload.toString(), "hello");
+  assert.equal(got[0].wireBytes, 2 + 5);
+  assert.equal(got[1].payload.toString(), "x".repeat(300));
+  assert.equal(got[1].wireBytes, 4 + 300);
+});
+
+test("WsMessageReader joins a fragmented message around a control frame and unmasks", () => {
+  const r = new WsMessageReader();
+  const mask = [1, 2, 3, 4];
+  const parts = Buffer.concat([
+    wsFrame("abc", { fin: false, rsv1: true, mask }),
+    wsFrame("", { opcode: 9 }), // ping between fragments
+    wsFrame("def", { opcode: 0, mask }),
+  ]);
+  const got = r.push(parts);
+  assert.deepEqual(got.map((m) => m.opcode), [9, 1]);
+  const msg = got[1];
+  assert.equal(msg.payload.toString(), "abcdef");
+  assert.equal(msg.rsv1, true, "rsv1 comes from the first frame");
+  assert.equal(msg.wireBytes, 2 + 4 + 3 + (2 + 4 + 3));
+});
+
+test("createInflater reads a context-takeover stream message by message", async () => {
+  const texts = ['["4","5","lv:phx-a","phx_reply",{"status":"ok"}]', '["4","5","lv:phx-a","phx_reply",{"status":"ok"}]', "third"];
+  const deflated = await deflateMessages(texts);
+  // Context takeover: the repeat is a back-reference, much smaller.
+  assert.ok(deflated[1].length < deflated[0].length / 2);
+  const inf = createInflater();
+  const back = await Promise.all(deflated.map((d) => inf.inflate(d)));
+  assert.deepEqual(back.map((b) => b.toString()), texts);
+  inf.close();
+});
+
+test("wireBytesForText matches exact text inside the window, last match wins", () => {
+  const ms = [
+    { t: 1, text: "a", wireBytes: 10 },
+    { t: 2, text: "b", wireBytes: 20 },
+    { t: 3, text: "a", wireBytes: 30 },
+  ];
+  assert.equal(wireBytesForText(ms, "a"), 30);
+  assert.equal(wireBytesForText(ms, "a", 0, 2), 10);
+  assert.equal(wireBytesForText(ms, "c"), null);
+  assert.equal(wireBytesForText(ms, null), null);
+});
+
+test("a proxy reports the wire bytes of one compressed server message by its text", async () => {
+  const texts = ["first frame " + "y".repeat(500), '["4","5","lv:phx-a","phx_reply",{"status":"ok","response":{}}]'];
+  const deflated = await deflateMessages(texts);
+  const frames = deflated.map((d) => wsFrame(d, { rsv1: true }));
+  const upstream = net.createServer((s) =>
+    s.once("data", () => {
+      s.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
+      // Both frames in one TCP write, the second split mid-header next.
+      s.write(Buffer.concat([frames[0], frames[1].subarray(0, 1)]));
+      setTimeout(() => s.write(frames[1].subarray(1)), 20);
+    }),
+  );
+  await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+  const proxy = await startByteProxy({ listenPort: 0, targetPort: upstream.address().port });
+
+  const total = frames[0].length + frames[1].length;
+  await new Promise((resolve, reject) => {
+    const c = net.connect(proxy.port, "127.0.0.1", () =>
+      c.write("GET /live/websocket?vsn=2.0.0 HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n"),
+    );
+    let got = 0;
+    c.on("data", (d) => {
+      got += d.length;
+      if (got >= total + 90) {
+        c.end();
+        resolve();
+      }
+    });
+    setTimeout(() => (c.end(), resolve()), 1000);
+    c.on("error", reject);
+  });
+
+  assert.equal(await proxy.wireBytesFor(texts[1]), frames[1].length);
+  assert.equal(await proxy.wireBytesFor(texts[0]), frames[0].length);
+  assert.equal(await proxy.wireBytesFor("not sent"), null);
+  assert.ok(frames[1].length < Buffer.byteLength(texts[1]), "compressed on the wire");
+
+  await proxy.close();
+  await new Promise((r) => upstream.close(r));
+});
+
+test("countVisibleRows counts positive-area overlap only", () => {
+  const view = { top: 100, bottom: 500 };
+  const rows = [
+    { top: 0, bottom: 100 }, // touches the top edge: not visible
+    { top: 50, bottom: 120 }, // partly visible
+    { top: 200, bottom: 260 },
+    { top: 300, bottom: 300 }, // zero height
+    { top: 480, bottom: 560 }, // partly visible
+    { top: 500, bottom: 560 }, // touches the bottom edge
+  ];
+  assert.equal(countVisibleRows(rows, view), 3);
+  assert.equal(countVisibleRows([], view), 0);
+});
+
+test("pickInitialMessageCount is ceil(max) + 3, clamped to 10..25", () => {
+  assert.equal(pickInitialMessageCount([3, 6]), 10);
+  assert.equal(pickInitialMessageCount([9, 14.2]), 18);
+  assert.equal(pickInitialMessageCount([12, 7]), 15);
+  assert.equal(pickInitialMessageCount([40]), 25);
+  assert.equal(pickInitialMessageCount([null, 8]), 11);
+  assert.throws(() => pickInitialMessageCount([]), /no visible-row counts/);
+  assert.throws(() => pickInitialMessageCount([null, NaN]), /no visible-row counts/);
 });

@@ -104,6 +104,11 @@ const NEAR_BOTTOM_PX = 150;
 // constant serves both widths.
 const DEEP_HISTORY_PX = 1800;
 
+// A reader within this many px of the bottom when a prepend lands is AT the
+// bottom and stays there (task 01a17bf4 stage 2). Sub-pixel scroll rounding
+// only; anyone further up keeps their topmost visible row instead.
+const PIN_EPSILON_PX = 2;
+
 // ── The hysteresis margin ───────────────────────────────────────────────────
 //
 // READ THIS BEFORE COUNTING THRESHOLDS. There are still exactly TWO
@@ -389,6 +394,106 @@ const ScrollToBottom = {
   // visibility boundary.
   beforeUpdate() {
     this._preUpdateDistance = this.distanceFromBottom();
+    this._capturePrependAnchor();
+  },
+  // Every push this hook makes goes through `#message-list-push-proxy`
+  // (chat_live.html.heex), never `this.pushEvent` on #message-list itself
+  // (task 01a17bf4 stage 2). LiveView LOCKS the element a hook pushes from
+  // until the reply arrives, and a stream diff that reaches a locked
+  // element is patched into a clone and merged back afterwards, losing the
+  // stream's insert positions. Measured in Chrome on a 4G-shaped link: the
+  // first-frame backfill arrived while this hook's `jump_to_latest_distance`
+  // push was unacknowledged, and its 40 `at: 0` rows were APPENDED after the
+  // first frame. A JS `push` from the proxy puts the lock on the proxy.
+  // Without the proxy (a test fixture, an embed without it) the plain
+  // pushEvent still works.
+  _push(event, value) {
+    const proxy =
+      typeof document !== "undefined" && document.getElementById
+        ? document.getElementById("message-list-push-proxy")
+        : null;
+    if (proxy && this.liveSocket && typeof this.liveSocket.execJS === "function") {
+      this.liveSocket.execJS(proxy, JSON.stringify([["push", { event, value }]]), "hook");
+    } else {
+      this.pushEvent(event, value);
+    }
+  },
+  // ── A SERVER-initiated prepend keeps the reading position (task 01a17bf4)
+  //
+  // Chat's first frame carries only the newest few messages and the server
+  // prepends the rest of the window right after connect, with no client
+  // request. InfiniteScroll's anchor compensation only covers loads IT
+  // started (it captures geometry before its own pushEvent), so a prepend
+  // the server sends on its own grew the scroller ABOVE the reader with
+  // nothing putting them back: a reader who had scrolled up saw the page
+  // jump by the height of the batch, and one within NEAR_BOTTOM_PX was
+  // snapped to the bottom by the follow rule, which is for messages
+  // arriving at the BOTTOM.
+  //
+  // So: before every patch, remember the first row, the topmost VISIBLE row
+  // and where that one sits on screen. After the patch (and after grouping,
+  // which changes row heights), if rows now stand in front of the old first
+  // row, the patch was a prepend: a reader who was at the bottom is put back
+  // at the bottom, and anyone else is scrolled by exactly how far their
+  // topmost visible row moved, so it keeps its offset.
+  // The follow rule is skipped for that patch (see `scrollToBottom`): a
+  // prepend is not an arrival. A client-initiated load still runs
+  // InfiniteScroll's own compensation afterwards; it ASSIGNS the same
+  // absolute offset, so the two agree rather than add up.
+  _capturePrependAnchor() {
+    const first = this.el.firstElementChild;
+    if (!first || typeof first.getBoundingClientRect !== "function") {
+      this._prependAnchor = null;
+      return;
+    }
+    const top = this._topmostVisibleRow() || first;
+    this._prependAnchor = {
+      first,
+      node: top,
+      top: top.getBoundingClientRect().top,
+    };
+  },
+  // The first row whose box reaches below the scroller's top edge. Rows are
+  // stacked in DOM order, so this is a binary search: a few layout reads per
+  // patch, not one per row (the stream holds up to 300).
+  _topmostVisibleRow() {
+    const rows = this.el.children;
+    if (!rows || !rows.length || typeof this.scrollEl.getBoundingClientRect !== "function") {
+      return null;
+    }
+    const edge = this.scrollEl.getBoundingClientRect().top;
+    let lo = 0;
+    let hi = rows.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].getBoundingClientRect().bottom > edge) hi = mid;
+      else lo = mid + 1;
+    }
+    return rows[lo];
+  },
+  // Measured in Chrome, a backfill patch does more than insert rows above:
+  // the old first row loses its day separator (the boundary label moves to
+  // the new oldest row), and the thread-activity rows below the log can
+  // grow. So the anchor is the topmost VISIBLE row, not the old first row,
+  // and a reader who was at the bottom is put back at the bottom rather
+  // than at their old offset.
+  _compensatePrepend(preDistance) {
+    const anchor = this._prependAnchor;
+    this._prependAnchor = null;
+    if (!anchor) return false;
+    const first = this.el.firstElementChild;
+    if (!first || first === anchor.first) return false;
+    if (typeof this.el.contains !== "function" || !this.el.contains(anchor.first)) {
+      return false;
+    }
+    if (preDistance != null && preDistance <= PIN_EPSILON_PX) {
+      this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+      return true;
+    }
+    if (!this.el.contains(anchor.node)) return true;
+    const shift = anchor.node.getBoundingClientRect().top - anchor.top;
+    if (shift !== 0) this.scrollEl.scrollTop = this.scrollEl.scrollTop + shift;
+    return true;
   },
   _beginConversation(spaceId) {
     this._spaceId = spaceId;
@@ -896,6 +1001,11 @@ const ScrollToBottom = {
     // Disconnect observer to prevent infinite loop from our own DOM changes
     if (this._observer) this._observer.disconnect();
     this.applyGrouping();
+    // A prepend is compensated AFTER grouping, which changes row heights,
+    // and BEFORE the follow rule, which it then switches off for this patch
+    // (see `_capturePrependAnchor`). Only the first `_safeUpdate` of a patch
+    // finds an anchor; it is consumed here.
+    if (this._prependAnchor) this._prepended = this._compensatePrepend(preDistance);
     this.scrollToBottom(preDistance);
     // Reconnect after our changes are done
     if (this._observer) this._observeLog();
@@ -940,6 +1050,7 @@ const ScrollToBottom = {
     // fall back to measuring.
     queueMicrotask(() => {
       this._preUpdateDistance = null;
+      this._prepended = false;
     });
   },
   destroyed() {
@@ -1035,7 +1146,7 @@ const ScrollToBottom = {
     if (away === this._lastAway && deep === this._lastDeep) return;
     this._lastAway = away;
     this._lastDeep = deep;
-    this.pushEvent("jump_to_latest_distance", { away, deep });
+    this._push("jump_to_latest_distance", { away, deep });
     // KEEP-OR-DROP on `holdAnchorThroughReflow()`, REVISITED under task
     // 01a0419a v3. This SUPERSEDES the v2 stage 4 ruling that stood here.
     //
@@ -1110,6 +1221,9 @@ const ScrollToBottom = {
       this._armSettleTimer();
       return;
     }
+    // A prepend already put the reader back where they were; it is not an
+    // arrival, so the follow rule has nothing to do (task 01a17bf4).
+    if (this._prepended) return;
     // After initial load, only auto-scroll if the user is near the bottom —
     // where they were BEFORE this patch grew the scroller, not after. Falls
     // back to the live measurement only when there is no capture.

@@ -98,7 +98,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       stream_insert: 3,
       stream_insert: 4,
       consume_uploaded_entries: 3,
-      uploaded_entries: 2
+      uploaded_entries: 2,
+      connected?: 1,
+      start_async: 3
     ]
 
   alias Platform.Chat
@@ -108,6 +110,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.LinkCards
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListData
+  alias PlatformWeb.ChatLive.FirstFrame
   alias PlatformWeb.ChatLive.ReplyHooks
   alias PlatformWeb.ChatLive.ReplyQuoteHooks
   alias PlatformWeb.ChatLive.SearchHooks
@@ -171,9 +174,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:refused_summons, %{})
     |> assign(:mounted_inline_canvas_ids, MapSet.new())
     |> assign(:load_older_failed?, false)
+    |> assign(:history_backfill, nil)
     |> stream(:messages, [])
     |> attach_hook(:messages_events, :handle_event, &handle_event/3)
     |> attach_hook(:messages_info, :handle_info, &handle_info/2)
+    |> attach_hook(:messages_async, :handle_async, &handle_async/3)
   end
 
   @doc """
@@ -184,7 +189,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec enter_space(Phoenix.LiveView.Socket.t(), map(), map() | nil) ::
           Phoenix.LiveView.Socket.t()
   def enter_space(socket, space, participant) do
-    messages = load_channel_messages(space.id)
+    # A smaller first frame (task 01a17bf4 stage 2): the join reply carries
+    # only the newest `initial_message_count` messages (read at call time),
+    # and the connected mount backfills the rest of the `@message_limit`
+    # window right after it. See `start_history_backfill/3`.
+    first = min(FirstFrame.initial_message_count(), @message_limit)
+    messages = load_channel_messages(space.id, first)
 
     mark_read_at_channel_tip(participant, messages)
 
@@ -194,6 +204,112 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     socket
     |> ReplyHooks.clear_unless_space(space.id)
     |> assign_message_window(space, messages, false)
+    |> start_history_backfill(space.id, @message_limit - first)
+  end
+
+  # Fetch the `count` messages that complete the default window, after the
+  # join reply. Only on a connected socket (a dead render shows the first
+  # frame alone; its connected mount runs this) and only when there IS
+  # older history. While it is pending `:loading_older` is true and
+  # `:history_backfill` names the space and cursor it was started against,
+  # so `try_load_older_messages/2` (the top sentinel, visible when N rows do
+  # not fill a tall viewport) is a no-op instead of fetching the same batch
+  # twice. The result is applied in `handle_async/3` through
+  # `prepend_older_batch/3`, the SAME path infinite scroll uses, so day
+  # labels, cursors, attachments, previews and the stream cap stay one copy.
+  defp start_history_backfill(socket, space_id, count) when count > 0 do
+    cursor = socket.assigns.earliest_message_id
+
+    if connected?(socket) and cursor != nil and socket.assigns.has_more_older do
+      ref = make_ref()
+
+      socket
+      |> assign(:history_backfill, {space_id, cursor, ref})
+      |> assign(:loading_older, true)
+      |> start_async({:history_backfill, space_id}, fn ->
+        {ref, fetch_history_backfill(space_id, cursor, count)}
+      end)
+    else
+      socket
+    end
+  end
+
+  defp start_history_backfill(socket, _space_id, _count), do: socket
+
+  # Dev/test-only fault seam (compile-time gated: a prod build compiles the
+  # no-op clause only, so it has no fault path).
+  # `config :platform, :chat_async_fault_injection, true` lives in
+  # config/dev.exs and config/test.exs. A test or a dev node then lists
+  # faults in `Application.get_env(:platform, :chat_async_fault)`:
+  #   * `:history_backfill` raises inside the backfill task;
+  #   * `{:hold, :history_backfill, pid}` parks the task until `pid` sends it
+  #     `:release` (it first sends `{:chat_async_held, :history_backfill,
+  #     task_pid}`), so a test can act while the backfill is in flight.
+  @fault_injection Application.compile_env(:platform, :chat_async_fault_injection, false)
+
+  defp fetch_history_backfill(space_id, cursor, count) do
+    injected_fault(:history_backfill)
+    fetch_older_batch(space_id, cursor, count)
+  end
+
+  if @fault_injection do
+    defp injected_fault(segment) do
+      for fault <- Application.get_env(:platform, :chat_async_fault, []) do
+        case fault do
+          ^segment ->
+            raise "injected #{segment} fault"
+
+          {:hold, ^segment, pid} ->
+            send(pid, {:chat_async_held, segment, self()})
+
+            receive do
+              :release -> :ok
+            end
+
+          _ ->
+            :ok
+        end
+      end
+
+      :ok
+    end
+  else
+    defp injected_fault(_segment), do: :ok
+  end
+
+  defp handle_async({:history_backfill, space_id}, result, socket) do
+    {:halt, apply_history_backfill(socket, space_id, result)}
+  end
+
+  defp handle_async(_name, _result, socket), do: {:cont, socket}
+
+  # Applied only if the reader is still on the space AND the window is the
+  # one the backfill was started against (same cursor, same ref): a space
+  # switch or a history reset (jump, deep link, re-entry) since then makes
+  # the result stale, and it is dropped.
+  defp apply_history_backfill(socket, space_id, result) do
+    case {socket.assigns[:history_backfill], result} do
+      {{^space_id, cursor, ref}, {:ok, {ref, older}}} ->
+        if socket.assigns.earliest_message_id == cursor do
+          socket
+          |> assign(:history_backfill, nil)
+          |> prepend_older_batch(space_id, older)
+        else
+          assign(socket, :history_backfill, nil)
+        end
+
+      {{^space_id, _cursor, _ref}, {:exit, reason}} ->
+        # The view stays up; the top sentinel can fetch the history itself.
+        Logger.warning("chat history backfill failed: #{inspect(reason)}")
+
+        socket
+        |> assign(:history_backfill, nil)
+        |> assign(:loading_older, false)
+        |> assign(:has_more_older, true)
+
+      _stale ->
+        socket
+    end
   end
 
   @doc """
@@ -329,7 +445,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp assign_message_window(socket, space, messages, newest_evicted?) do
     enriched =
       messages
-      |> Enum.map(&enrich_versions_count/1)
+      |> enrich_versions_counts()
       |> enrich_messages_with_reactions(socket)
 
     {labelled, day_labels, last_day} = label_messages_for_initial_load(enriched)
@@ -379,6 +495,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:evicted_tail_message_ids, MapSet.new())
     |> assign(:mounted_inline_canvas_ids, MapSet.new())
     |> assign(:load_older_failed?, false)
+    # A new window: any backfill still in flight belongs to the old one.
+    |> assign(:history_backfill, nil)
     |> stream(:messages, labelled, reset: true)
     |> ThreadActivityHooks.load()
     |> restore_draft(space.id)
@@ -392,6 +510,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   """
   @spec try_load_older_messages(Phoenix.LiveView.Socket.t(), binary()) ::
           Phoenix.LiveView.Socket.t()
+  def try_load_older_messages(%{assigns: %{history_backfill: {_, _, _}}} = socket, _space_id) do
+    # The first-frame backfill is fetching exactly this batch; it lands via
+    # the same prepend path (task 01a17bf4 stage 2).
+    assign(socket, :loading_older, true)
+  end
+
   def try_load_older_messages(socket, space_id) when is_binary(space_id) do
     socket
     |> load_older_messages(space_id)
@@ -425,98 +549,106 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   so existing entries (which the live tail may have just refreshed) are
   preserved over the older-batch lookup.
   """
-  @spec load_older_messages(Phoenix.LiveView.Socket.t(), binary()) ::
+  @spec load_older_messages(Phoenix.LiveView.Socket.t(), binary(), pos_integer()) ::
           Phoenix.LiveView.Socket.t()
-  def load_older_messages(socket, space_id) when is_binary(space_id) do
+  def load_older_messages(socket, space_id, limit \\ @message_limit) when is_binary(space_id) do
     case socket.assigns[:earliest_message_id] do
       nil ->
         assign(socket, :loading_older, false)
 
       cursor ->
-        older =
-          space_id
-          |> Chat.list_messages(
-            limit: @message_limit,
-            before_id: cursor,
+        prepend_older_batch(socket, space_id, fetch_older_batch(space_id, cursor, limit))
+    end
+  end
+
+  # The `limit` top-level messages before `cursor`, oldest first. Pure data
+  # (no socket), so the first-frame backfill can run it in a task.
+  defp fetch_older_batch(space_id, cursor, limit) do
+    space_id
+    |> Chat.list_messages(limit: limit, before_id: cursor, top_level_only: true)
+    |> Enum.reverse()
+  end
+
+  # Prepend an already-fetched older batch (ASC) to the stream and extend
+  # every piece of window bookkeeping with it. The ONE copy of that
+  # bookkeeping: infinite scroll and the first-frame backfill both land here.
+  defp prepend_older_batch(socket, space_id, older) do
+    case older do
+      [] ->
+        socket
+        |> assign(:has_more_older, false)
+        |> assign(:loading_older, false)
+
+      older ->
+        enriched =
+          older
+          |> enrich_versions_counts()
+          |> enrich_messages_with_reactions(socket)
+
+        {labelled, new_day_labels, new_first_day} =
+          label_messages_for_older_batch(enriched, socket.assigns[:first_msg_day])
+
+        {labelled, socket} = ReplyQuoteHooks.annotate_window(socket, labelled, :prepend)
+
+        new_ids = Enum.map(labelled, & &1.id)
+
+        new_earliest_id = List.first(labelled).id
+
+        has_more_older =
+          Chat.has_more_messages_before?(space_id,
+            before_id: new_earliest_id,
             top_level_only: true
           )
-          |> Enum.reverse()
 
-        if older == [] do
-          socket
-          |> assign(:has_more_older, false)
+        attachments_delta = build_attachments_map(older, socket)
+
+        thread_previews_delta =
+          Chat.thread_previews_for_messages(new_ids)
+
+        :telemetry.execute(
+          [:platform, :chat, :older_messages_loaded],
+          %{count: length(older), system_time: System.system_time()},
+          %{space_id: space_id}
+        )
+
+        merged_attachments =
+          Map.merge(attachments_delta, socket.assigns.attachments_map || %{})
+
+        merged_thread_previews =
+          Map.merge(thread_previews_delta, socket.assigns.thread_previews || %{})
+
+        merged_day_labels =
+          Map.merge(socket.assigns[:msg_day_labels] || %{}, new_day_labels)
+
+        merged_rendered =
+          (socket.assigns[:rendered_message_ids] || MapSet.new())
+          |> MapSet.union(MapSet.new(new_ids))
+
+        # Prepend each labelled message to the stream. Consecutive
+        # `at: 0` inserts REVERSE the iteration order (each new item
+        # becomes the new index 0, shoving the previous one down), so
+        # iterate `labelled` from newest → oldest. That lands the
+        # oldest item at index 0 (top of stream) and the newest just
+        # above the existing top — giving ASC visual order within the
+        # batch.
+        socket =
+          Enum.reduce(Enum.reverse(labelled), socket, fn msg, acc ->
+            stream_insert(acc, :messages, msg, at: 0)
+          end)
+          |> assign(:attachments_map, merged_attachments)
+          |> assign(:thread_previews, merged_thread_previews)
+          |> assign(:msg_day_labels, merged_day_labels)
+          |> assign(:rendered_message_ids, merged_rendered)
+          |> assign(:earliest_message_id, new_earliest_id)
+          |> assign(:first_msg_day, new_first_day)
+          |> assign(:has_more_older, has_more_older)
           |> assign(:loading_older, false)
-        else
-          enriched =
-            older
-            |> Enum.map(&enrich_versions_count/1)
-            |> enrich_messages_with_reactions(socket)
 
-          {labelled, new_day_labels, new_first_day} =
-            label_messages_for_older_batch(enriched, socket.assigns[:first_msg_day])
-
-          {labelled, socket} = ReplyQuoteHooks.annotate_window(socket, labelled, :prepend)
-
-          new_ids = Enum.map(labelled, & &1.id)
-
-          new_earliest_id = List.first(labelled).id
-
-          has_more_older =
-            Chat.has_more_messages_before?(space_id,
-              before_id: new_earliest_id,
-              top_level_only: true
-            )
-
-          attachments_delta = build_attachments_map(older, socket)
-
-          thread_previews_delta =
-            Chat.thread_previews_for_messages(new_ids)
-
-          :telemetry.execute(
-            [:platform, :chat, :older_messages_loaded],
-            %{count: length(older), system_time: System.system_time()},
-            %{space_id: space_id}
-          )
-
-          merged_attachments =
-            Map.merge(attachments_delta, socket.assigns.attachments_map || %{})
-
-          merged_thread_previews =
-            Map.merge(thread_previews_delta, socket.assigns.thread_previews || %{})
-
-          merged_day_labels =
-            Map.merge(socket.assigns[:msg_day_labels] || %{}, new_day_labels)
-
-          merged_rendered =
-            (socket.assigns[:rendered_message_ids] || MapSet.new())
-            |> MapSet.union(MapSet.new(new_ids))
-
-          # Prepend each labelled message to the stream. Consecutive
-          # `at: 0` inserts REVERSE the iteration order (each new item
-          # becomes the new index 0, shoving the previous one down), so
-          # iterate `labelled` from newest → oldest. That lands the
-          # oldest item at index 0 (top of stream) and the newest just
-          # above the existing top — giving ASC visual order within the
-          # batch.
-          socket =
-            Enum.reduce(Enum.reverse(labelled), socket, fn msg, acc ->
-              stream_insert(acc, :messages, msg, at: 0)
-            end)
-            |> assign(:attachments_map, merged_attachments)
-            |> assign(:thread_previews, merged_thread_previews)
-            |> assign(:msg_day_labels, merged_day_labels)
-            |> assign(:rendered_message_ids, merged_rendered)
-            |> assign(:earliest_message_id, new_earliest_id)
-            |> assign(:first_msg_day, new_first_day)
-            |> assign(:has_more_older, has_more_older)
-            |> assign(:loading_older, false)
-
-          # Bounded-DOM cap (task 019e18fc Stage 2). If the prepend pushed
-          # us past @stream_size_limit, evict the newest-end (tail) ids
-          # to keep the DOM bounded. UUIDv7 ids sort lexicographically by
-          # time, so the LARGEST ids are the newest end.
-          prune_tail_if_over_limit(socket)
-        end
+        # Bounded-DOM cap (task 019e18fc Stage 2). If the prepend pushed
+        # us past @stream_size_limit, evict the newest-end (tail) ids
+        # to keep the DOM bounded. UUIDv7 ids sort lexicographically by
+        # time, so the LARGEST ids are the newest end.
+        prune_tail_if_over_limit(socket)
     end
   end
 
@@ -573,7 +705,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         else
           enriched =
             newer
-            |> Enum.map(&enrich_versions_count/1)
+            |> enrich_versions_counts()
             |> enrich_messages_with_reactions(socket)
 
           # Use the existing stream_insert_with_day_label helper for each
@@ -1493,9 +1625,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     assign_compose(socket, draft)
   end
 
-  defp load_channel_messages(space_id) do
+  defp load_channel_messages(space_id, limit) do
     space_id
-    |> Chat.list_messages(limit: @message_limit, top_level_only: true)
+    |> Chat.list_messages(limit: limit, top_level_only: true)
     |> Enum.reverse()
   end
 
@@ -1722,6 +1854,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp enrich_versions_count(msg), do: msg
+
+  # `enrich_versions_count/1` for a whole window in ONE query (task
+  # 01a17bf4 stage 2): one COUNT per message made the 50-message window
+  # cost 50 of its 62 queries.
+  defp enrich_versions_counts(messages) do
+    ids = for %Platform.Chat.Message{id: id} <- messages, do: id
+    counts = Platform.Chat.MessageVersions.count_versions_for(ids)
+
+    Enum.map(messages, fn
+      %Platform.Chat.Message{} = msg -> %{msg | versions_count: Map.get(counts, msg.id, 0)}
+      msg -> msg
+    end)
+  end
 
   defp enrich_with_reactions(msg, socket) do
     my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id

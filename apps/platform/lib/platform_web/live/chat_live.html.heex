@@ -755,3 +755,12 @@
   show_junk_batch_modal={@show_junk_batch_modal}
   junk_batch_target={@junk_batch_target}
 />
+
+<%!-- Push proxy for the ScrollToBottom hook on #message-list (task 01a17bf4
+     stage 2). A hook's own pushEvent LOCKS its element until the reply, and
+     a stream diff that lands on a locked #message-list is patched into a
+     clone and merged back later, which drops the stream's insert
+     positions: a prepend came out APPENDED after the first frame (measured
+     in Chrome). The hook pushes through this element instead, so the lock
+     falls here and #message-list is never locked. --%>
+<div id="message-list-push-proxy" class="hidden"></div>
