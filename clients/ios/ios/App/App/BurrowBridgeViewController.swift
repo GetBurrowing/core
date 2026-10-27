@@ -63,6 +63,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// Hosts that already have the document-start script.
     private var tabBarScriptHosts = Set<String>()
     private var pushedTabBarHeight: CGFloat?
+    private var backdropObservation: NSKeyValueObservation?
+    private var backdropSampling = false
 
     /// DEBUG only: `-BurrowLoginProbe <host>` loads that host's `/auth/login`
     /// with no navigation policy at all, to measure a plain in-WKWebView
@@ -298,9 +300,72 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentSentState = true
         tabBarState = tabBarState.applying(payload)
         tabBarHost?.render(tabBarState)
+        observeBackdrop()
+        for delay in [0.15, 0.7, 1.6] { scheduleBackdropSample(after: delay) }
         #if DEBUG
             reportTabBarFixture()
         #endif
+    }
+
+    // MARK: Backdrop (task 01a174e8 stage 3, option 1)
+
+    /// Re-samples the content under the bar while the page scrolls.
+    private func observeBackdrop() {
+        guard backdropObservation == nil, let scrollView = webView?.scrollView else { return }
+        backdropObservation = scrollView.observe(\.contentOffset, options: []) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.scheduleBackdropSample(after: 0.2) }
+        }
+    }
+
+    private func scheduleBackdropSample(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.sampleBackdrop() }
+    }
+
+    /// Snapshots the web content behind the bar and gives the bar the style
+    /// that matches it.
+    private func sampleBackdrop() {
+        guard let webView, let host = tabBarHost, !host.bar.isHidden else { return }
+        // Reduce Transparency draws the bar as a solid system fill: nothing
+        // behind it shows through, so the web's own scheme and inks stand.
+        if UIAccessibility.isReduceTransparencyEnabled {
+            host.applyBackdrop(nil)
+            return
+        }
+        guard !backdropSampling else { return }
+        let area = webView.convert(host.bar.bounds, from: host.bar).intersection(webView.bounds)
+        guard !area.isNull, area.width > 1, area.height > 1 else { return }
+        backdropSampling = true
+        // A snapshot that never calls back must not stop later samples.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.backdropSampling = false }
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = area
+        configuration.snapshotWidth = 64
+        webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.backdropSampling = false
+                guard let cgImage = image?.cgImage, let luminance = NativeTabBarBackdrop.luminance(of: cgImage) else {
+                    #if DEBUG
+                        NativeTabBarProbe.lastBackdrop = "snapshot-failed"
+                    #endif
+                    return
+                }
+                #if DEBUG
+                    NativeTabBarProbe.lastBackdrop = String(format: "%.3f", luminance)
+                #endif
+                #if DEBUG
+                    let before = self.tabBarHost?.bar.overrideUserInterfaceStyle
+                #endif
+                let current = (self.tabBarHost as? StandaloneTabBarHost)?.backdropStyle
+                self.tabBarHost?.applyBackdrop(NativeTabBarBackdrop.style(forLuminance: luminance, current: current))
+                #if DEBUG
+                    // Only the flat backdrop pages wait on the style; a report at
+                    // a random moment could catch a tap mid-flight on the others.
+                    let onBackdropPage = self.webView?.url?.query?.contains("backdrop=") == true
+                    if onBackdropPage, before != self.tabBarHost?.bar.overrideUserInterfaceStyle { self.reportTabBarFixture() }
+                #endif
+            }
+        }
     }
 
     /// A tap: `burrowNativeTab` with `{key, reselect}`. Tapping the selected

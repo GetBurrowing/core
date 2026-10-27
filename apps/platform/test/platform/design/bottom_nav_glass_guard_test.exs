@@ -140,6 +140,10 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {[], ".bottom-nav-tab:not(.bottom-nav-tab--active):active"},
     {[], ".bottom-nav-tab--active"},
     {[], ".bottom-nav-dot"},
+    # The native tab bar's ink probes (task 01a174e8 stage 1): token slots
+    # with the bar's own inks as fallbacks, read by the NativeTabBar hook.
+    {[], ~s(.bottom-nav [data-native-ink="unselected"])},
+    {[], ~s(.bottom-nav [data-native-ink="selected"])},
     {[], ".bottom-nav-icon"},
     {[], ".bottom-nav-label"},
     {[], ".bottom-nav-tab--active .bottom-nav-label"},

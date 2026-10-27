@@ -157,6 +157,60 @@ transparent scroll-edge look). That is still the stock material.
 `NativeTabBarTests` covers both branches. No pre-26 runtime has been
 screenshotted.
 
+**Inks and contrast: measured 2026-10-27, task 01a174e8 stage 3.** The
+web resolves the two tab inks from the token layer in `app.css`
+(`--native-tab-selected`, `--native-tab-unselected`) and sends them as
+`#rrggbbaa`; native paints them as `tintColor` and
+`unselectedItemTintColor` and never holds a colour of its own. The first
+measurement sent the web bar's own inks (`--color-primary`, and `--tab-ink`
+= base-content at 55%). The light selected label measured 4.22:1 on its lens
+over white, and the unselected ink failed over the opposite backdrop. Under
+the design direction's substitution rules the token layer then moved light
+selected to `--color-interactive` (dark keeps `--color-primary`) and
+unselected to opaque `--color-base-content`. The web bar itself is
+unchanged.
+
+`TabBarUITests.testContrastOverBackdrops` loads the fixture with
+`?backdrop=white` or `?backdrop=black` (a flat page behind the bar). It
+selects each tab with the More dot on, takes XCUIScreen shots, and for each
+item frame (`native-tab-<key>`) separates the ink pixels from the glass. It
+then composites the sent ink over every glass pixel around the label and
+the glyph, and asserts the 5th-percentile WCAG 2.x ratio: label >= 4.5,
+glyph >= 3. Everything goes to `contrast.json` in the artifact's `shots/`.
+iOS 26 glass draws its own vibrant ink for unselected items when the tint
+has alpha. Those cells are then measured with the ink the system drew; with
+the opaque base-content ink, drawn and sent agree. Results on the CI iPhone
+(iOS 27), after the substitution (run 40434027232; the iPad leg agrees to
+within 0.2):
+
+- light over white: selected 5.89 label / 6.17 glyph, unselected 18.3 / 19.4. Passes.
+- dark over black: selected 6.73 / 6.90, unselected 12.0 / 13.3. Passes.
+- light over black: selected 1.25 / 1.23. FAILS. Unselected 5.10 / 5.39.
+- dark over white: selected 1.16 / 1.16, unselected 1.67 / 1.71. FAILS.
+
+The failing cells are glass, not ink. Over the opposite extreme the glass
+shifts toward the backdrop: light glass over black reads #636363 under the
+lens and #858585 elsewhere, and dark glass over white reads #8f8f8f and
+#b9b9b9. Meanwhile the bar's
+inks stay pinned to the web's scheme (`overrideUserInterfaceStyle`). No
+orange reaches 4.5:1 on that mid grey, so these cells are open, and the
+thresholds were not lowered.
+
+Reduce Transparency is measured, not computed: the test switches it on in
+Settings, and the fill reads the same over both backdrops (#ffffff and
+#fafafa light, #141414 dark). All four combinations pass. Light: selected
+6.20 / 6.58 over white and 6.12 / 6.17 over black, unselected 17.8 or
+better. Dark: selected 6.41 / 6.41 over white and 7.29 / 7.35 over black,
+unselected 14.0 or better. `contrast.json` also keeps the values
+computed against `UITabBarAppearance`'s opaque fill (light 7.71 selected,
+21 unselected; dark 7.51 and 18.3) for comparison.
+
+At the largest text size (`-UIPreferredContentSizeCategoryName
+UICTContentSizeCategoryAccessibilityXXXL`, the category's raw value), the
+labels draw in Public Sans 13 (the cap) and the probe's `truncated=none`
+holds for all five. A device check of the bar in light and dark follows on
+TestFlight.
+
 **CI.** `.github/workflows/ios.yml` runs on GitHub's `xcode-27` macOS image
 for pushes to `main` and `task/**` that touch `clients/ios/**`. It runs
 `npm ci`, `npx cap sync ios` and `xcodegen generate`, then runs `xcodebuild
@@ -241,6 +295,8 @@ decided 2026-10-03, light step 2026-10-05), the same values Android uses.
 | `muted` | muted text | #635B53 | #A9ABB2 |
 | `border` | edge | #D9D3C9 | #383B42 |
 | `destructive` | error, unchanged | #F1383E | #F1383E |
+| tab bar selected ink (not an asset; sent by the web in `tabBarState.ink`) | `--native-tab-selected`: `--color-interactive` light, `--color-primary` dark | #8B3B04 | #F47721 |
+| tab bar unselected ink (same) | `--native-tab-unselected`: `--color-base-content`, opaque | #000000 | #EEEFF1 |
 
 Cyan still means live: the count slab and the approvals widget's header
 count fill with `info` only when `slabState` is `.live`. Approve is the only
