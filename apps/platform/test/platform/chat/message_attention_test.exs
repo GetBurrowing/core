@@ -729,7 +729,9 @@ defmodule Platform.Chat.MessageAttentionTest do
       log =
         ExUnit.CaptureLog.capture_log([level: :info], fn ->
           assert {:ok, %{added: [_]}} =
-                   add_attention_and_settle(actor(alice), space.id, message.id, [zip.participant_id])
+                   add_attention_and_settle(actor(alice), space.id, message.id, [
+                     zip.participant_id
+                   ])
         end)
 
       assert length(rows(message.id)) == 1
