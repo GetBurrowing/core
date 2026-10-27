@@ -14,6 +14,7 @@ defmodule PlatformWeb.AgentConfigLiveTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -507,12 +508,50 @@ defmodule PlatformWeb.AgentConfigLiveTest do
         render_submit(view, "secret_set", %{
           "path" => ".mcp.json",
           "pointer" => "mcpServers/fake-probe/env/FAKE_TOKEN",
-          "value" => fresh
+          "secret" => fresh
         })
 
       assert File.read!(Path.join(root, ".mcp.json")) =~ fresh
       refute html =~ fresh
       refute render(view) =~ fresh
+    end
+
+    test "a replaced secret never reaches the debug log (the field name is filtered)", %{
+      conn: conn,
+      owner: owner
+    } do
+      original_level = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: original_level) end)
+
+      mcp =
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "fake-probe" => %{"command" => "node", "env" => %{"FAKE_TOKEN" => "old"}}
+          }
+        })
+
+      %{agent: agent, root: root} =
+        federated!(owner, files: [{".mcp.json", mcp}, {"CLAUDE.md", "# x\n"}])
+
+      {:ok, view, _} = live(as(conn, owner), ~p"/control/#{agent.slug}/config")
+      view |> element("#section-mcp_servers") |> render_click()
+      sentinel = "SENTINEL-" <> probe()
+
+      log =
+        capture_log([level: :debug], fn ->
+          render_submit(view, "secret_set", %{
+            "path" => ".mcp.json",
+            "pointer" => "mcpServers/fake-probe/env/FAKE_TOKEN",
+            "secret" => sentinel
+          })
+        end)
+
+      # Positive control: the event's Parameters line is in the capture.
+      assert log =~ "HANDLE EVENT"
+      assert log =~ "mcpServers/fake-probe/env/FAKE_TOKEN"
+      refute log =~ sentinel
+      assert File.read!(Path.join(root, ".mcp.json")) =~ sentinel
     end
   end
 

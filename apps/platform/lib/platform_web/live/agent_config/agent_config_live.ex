@@ -591,7 +591,7 @@ defmodule PlatformWeb.AgentConfigLive do
 
   def handle_event(
         "secret_set",
-        %{"path" => path, "pointer" => pointer, "value" => value},
+        %{"path" => path, "pointer" => pointer, "secret" => value},
         socket
       ) do
     %{actor: actor, agent: agent} = socket.assigns
@@ -1282,7 +1282,8 @@ defmodule PlatformWeb.AgentConfigLive do
   attr :name, :string, required: true
   attr :nonce, :integer, required: true
 
-  # Write-only: the value field is always empty, there is no reveal and no copy.
+  # Write-only: the field is named "secret" so `:filter_parameters` keeps a typed
+  # value out of the debug "HANDLE EVENT" log. It is always empty, there is no reveal and no copy.
   defp secret_row(assigns) do
     assigns =
       assign(assigns, :dom, dom_safe("#{assigns.path}-#{assigns.pointer}-#{assigns.nonce}"))
@@ -1301,7 +1302,7 @@ defmodule PlatformWeb.AgentConfigLive do
       <input
         id={"secret-input-#{@dom}"}
         type="password"
-        name="value"
+        name="secret"
         autocomplete="off"
         placeholder="New value"
         aria-label={"Replace #{@name}"}

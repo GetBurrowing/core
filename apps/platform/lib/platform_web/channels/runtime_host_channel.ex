@@ -36,7 +36,7 @@ defmodule PlatformWeb.RuntimeHostChannel do
   alias Platform.Federation.RuntimeHosts
 
   @inbound ~w(reply pong)
-  @opt_ins ~w(off owner_only admins)
+  @opt_in_atoms %{"off" => :off, "owner_only" => :owner_only, "admins" => :admins}
   @max_str 64
 
   @doc "Inbound events this channel accepts."
@@ -103,8 +103,12 @@ defmodule PlatformWeb.RuntimeHostChannel do
     }
   end
 
-  defp opt_in(v) when v in @opt_ins, do: String.to_existing_atom(v)
-  defp opt_in(_), do: :off
+  # Explicit whitelist, not `String.to_existing_atom/1`: the atom may not exist
+  # yet (ConfigFiles.Access loads lazily in dev), and a wire string must never
+  # decide which atoms the VM knows. Anything unrecognised reads as `:off`.
+  @doc false
+  def opt_in(v) when is_binary(v), do: Map.get(@opt_in_atoms, v, :off)
+  def opt_in(_), do: :off
 
   defp str(v) when is_binary(v), do: String.slice(v, 0, @max_str)
   defp str(_), do: nil

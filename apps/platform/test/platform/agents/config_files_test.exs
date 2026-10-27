@@ -565,5 +565,26 @@ defmodule Platform.Agents.ConfigFilesTest do
              } =
                RuntimeHosts.lookup(runtime.runtime_id)
     end
+
+    test "opt_in/1 maps by whitelist: known strings to atoms, anything else to off, never raises" do
+      alias PlatformWeb.RuntimeHostChannel, as: C
+
+      assert C.opt_in("off") == :off
+      assert C.opt_in("owner_only") == :owner_only
+      assert C.opt_in("admins") == :admins
+
+      for junk <- [
+            "everyone",
+            "",
+            "OWNER_ONLY",
+            "zz_no_such_atom_01a17b1c",
+            nil,
+            7,
+            %{},
+            ["admins"]
+          ] do
+        assert C.opt_in(junk) == :off
+      end
+    end
   end
 end
