@@ -2,11 +2,14 @@ defmodule Mix.Tasks.Platform.TerminalFakeCli do
   @shortdoc "Dev/test only: a fake terminal CLI that echoes what the relay sends it"
 
   @moduledoc """
-  Connects to `ws://localhost:4000/runtime/ws` as a runtime, joins
-  `terminal:<id>` (or, with `--no-terminal`, only `runtime:<id>`, which
-  simulates the opt-in being off), runs the v1 handshake, writes
-  `fake-cli ready` when a session opens, echoes each received `in` frame as
-  `echo:<text>` and prints `in frames received: N` on every frame and on exit.
+  Connects to `ws://localhost:4000/runtime/ws` as a runtime and joins
+  `runtime:<id>` (what the agent's channel plugin does, so the runtime reads as
+  online) and `terminal:<id>` (what the CLI bridge does). With `--no-terminal`
+  it joins only `runtime:<id>`, which simulates the opt-in being off. It runs
+  the v1 handshake, writes
+  `fake-cli ready` when a session opens, echoes what it receives as
+  `echo:<text>`, one line at a time once Enter completes it (a browser sends one
+  frame per key, so typing `xyz` and Enter reads `echo:xyz`) and prints `in frames received: N` on every frame and on exit.
 
       mix platform.terminal_fake_cli --runtime-id ID --token T [--no-terminal]
         [--url ws://localhost:4000] [--seconds N]

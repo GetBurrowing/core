@@ -16,7 +16,7 @@ import "@xterm/xterm/css/xterm.css"
 import { Socket } from "phoenix"
 import { supportsX25519 } from "./terminal/crypto.js"
 import { THEME } from "./terminal/palette.js"
-import { TerminalSession } from "./terminal/session.js"
+import { TerminalSession, toArrayBuffer } from "./terminal/session.js"
 import { KEY_BYTES, applyCtrl } from "./terminal/keys.js"
 import { needsConfirm, confirmText } from "./terminal/paste.js"
 
@@ -44,7 +44,7 @@ function phoenixConnect(runtimeId, token) {
       }),
     push: (event, payload) =>
       new Promise((resolve, reject) => {
-        channel.push(event, payload).receive("ok", resolve).receive("error", reject).receive("timeout", reject)
+        channel.push(event, toArrayBuffer(payload)).receive("ok", resolve).receive("error", reject).receive("timeout", reject)
         // `in`, `hello`, `resize` and `detach` carry no reply; do not wait.
         if (event !== "mode") resolve()
       }),

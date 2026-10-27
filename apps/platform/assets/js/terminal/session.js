@@ -14,6 +14,15 @@
 
 import * as realCrypto from "./crypto.js"
 
+/**
+ * Phoenix's client sends a binary push only for an ArrayBuffer; a Uint8Array
+ * would be JSON-encoded as an object. Hand it an exact-size ArrayBuffer.
+ */
+export function toArrayBuffer(bytes) {
+  if (!(bytes instanceof Uint8Array)) return bytes
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
+
 // A push whose reply nobody awaits must not become an unhandled rejection.
 const fire = (p) => p?.catch?.(() => {})
 
@@ -97,7 +106,9 @@ export class TerminalSession {
       })
     })
     chan.on("out", (frame) => {
-      this.#inChain = this.#inChain.then(() => this.#onOut(chan, frame))
+      // Phoenix hands a binary push over as an ArrayBuffer.
+      const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame)
+      this.#inChain = this.#inChain.then(() => this.#onOut(chan, bytes))
     })
     chan.on("closed", () => this.#dropped(chan))
     chan.onClose(() => this.#dropped(chan))

@@ -91,14 +91,20 @@ defmodule PlatformWeb.TerminalFakeCli do
       recv_key: nil,
       next_out: 0,
       last_in: -1,
-      in_count: 0
+      in_count: 0,
+      line_mode: Keyword.get(opts, :line_mode, false),
+      line: ""
     }
   end
 
   def in_count(%{in_count: n}), do: n
 
   def handle_event(state, "open", %{"session_id" => sid}) when is_binary(sid) do
-    state = %{new(keypair: state.keypair, folder: state.folder) | session_id: sid}
+    state = %{
+      new(keypair: state.keypair, folder: state.folder, line_mode: state.line_mode)
+      | session_id: sid
+    }
+
     {state, [{:push, "hello", %{"pub" => Base.encode64(state.keypair.public)}}]}
   end
 
@@ -109,7 +115,7 @@ defmodule PlatformWeb.TerminalFakeCli do
         {send_key, recv_key} = derive_keys(:cli, state.keypair.private, peer, sid)
         state = %{state | send_key: send_key, recv_key: recv_key}
         {state, cwd} = seal_out(state, 1, Jason.encode!(%{cwd: state.folder}))
-        {state, ready} = seal_out(state, 0, "fake-cli ready")
+        {state, ready} = seal_out(state, 0, "fake-cli ready\r\n")
 
         {state,
          [
@@ -131,14 +137,34 @@ defmodule PlatformWeb.TerminalFakeCli do
 
     with {:ok, counter, <<0, text::binary>>} <- open(key, @dir_b2c, frame),
          true <- counter > state.last_in do
-      {state, echo} = seal_out(%{state | last_in: counter}, 0, "echo:" <> text)
-      {state, [counted, {:push_binary, "out", echo}]}
+      state = %{state | last_in: counter}
+      {state, replies} = echo(state, text)
+      {state, [counted | Enum.map(replies, &{:push_binary, "out", &1})]}
     else
       _ -> {state, [counted]}
     end
   end
 
   def handle_binary(state, _event, _frame), do: {state, []}
+
+  # Per frame by default: `echo:<text>`. In line mode (the mix task, where a
+  # person types one key per frame) a line is echoed once Enter completes it, so
+  # typing `xyz` and Enter reads `echo:xyz`.
+  defp echo(%{line_mode: false} = state, text), do: seal_out_each(state, ["echo:" <> text])
+
+  defp echo(%{line_mode: true} = state, text) do
+    parts = String.split(state.line <> text, ["\r\n", "\r", "\n"])
+    {done, [rest]} = Enum.split(parts, -1)
+    lines = for l <- done, l != "", do: "echo:" <> l <> "\r\n"
+    seal_out_each(%{state | line: rest}, lines)
+  end
+
+  defp seal_out_each(state, bodies) do
+    Enum.reduce(bodies, {state, []}, fn body, {st, acc} ->
+      {st, frame} = seal_out(st, 0, body)
+      {st, acc ++ [frame]}
+    end)
+  end
 
   defp seal_out(state, kind, body) do
     frame = seal(state.send_key, @dir_c2b, state.next_out, <<kind, body::binary>>)

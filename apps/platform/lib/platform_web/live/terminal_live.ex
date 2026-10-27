@@ -58,6 +58,7 @@ defmodule PlatformWeb.TerminalLive do
      |> assign(:agent_name, (agent && agent.name) || "Agent")
      |> assign(:agent_slug, agent && agent.slug)
      |> assign(:state, :connecting)
+     |> assign(:ever_connected?, false)
      |> assign(:reason, nil)
      |> assign(:mode, "ro")
      |> assign(:folder, nil)
@@ -83,8 +84,13 @@ defmodule PlatformWeb.TerminalLive do
       when state in @states do
     reason = if is_binary(params["reason"]), do: params["reason"], else: nil
 
+    new_state = String.to_existing_atom(state)
+
     {:noreply,
-     socket |> assign(:state, String.to_existing_atom(state)) |> assign(:reason, reason)}
+     socket
+     |> assign(:state, new_state)
+     |> assign(:reason, reason)
+     |> assign(:ever_connected?, socket.assigns.ever_connected? or new_state == :connected)}
   end
 
   def handle_event("terminal_cwd", %{"cwd" => cwd}, socket)
@@ -112,24 +118,40 @@ defmodule PlatformWeb.TerminalLive do
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
+  # A session that was live and then lost its machine keeps its output on screen,
+  # dimmed under the "Reconnecting" banner. The "isn't connected" panel is only
+  # for a terminal that never connected; it would otherwise hide what was there.
+  defp shown(%{state: :offline, ever_connected?: true}), do: :reconnecting
+  defp shown(%{state: state}), do: state
+
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :shown, shown(assigns))
+
     ~H"""
     <Layouts.app flash={@flash} embedded={true}>
-      <div id="terminal-screen" class="flex h-full min-h-0 flex-col bg-base-100 text-base-content">
+      <div
+        id="terminal-screen"
+        class="clears-tab-bar flex h-full min-h-0 flex-col bg-base-100 text-base-content"
+      >
         <header
           id="terminal-header"
           class="flex-none border-b border-edge bg-base-200 text-base-content"
         >
-          <div class="flex items-center gap-3 px-4 py-2">
-            <span id="terminal-title" class="min-w-0 truncate text-sm font-semibold">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
+            <span
+              id="terminal-title"
+              class="min-w-0 flex-1 truncate text-sm font-semibold lg:flex-none"
+            >
               {@agent_name} · terminal
             </span>
-            <.mode_switch :if={@offer?} mode={@mode} />
-            <div class="ml-auto flex items-center gap-3">
+            <div class="order-3 w-full lg:order-2 lg:w-auto">
+              <.mode_switch :if={@offer?} mode={@mode} />
+            </div>
+            <div class="order-2 flex items-center gap-3 lg:order-3 lg:ml-auto">
               <span id="terminal-conn" class="flex items-center gap-1.5 text-xs text-muted">
                 <span class="inline-block h-2 w-2 rounded-full bg-base-content" aria-hidden="true" />
-                {conn_text(@state)}
+                {conn_text(@shown)}
               </span>
               <button
                 id="terminal-detach"
@@ -148,7 +170,7 @@ defmodule PlatformWeb.TerminalLive do
         </header>
 
         <p
-          :if={@first_use? and @state not in [:refused, :unsupported]}
+          :if={@first_use? and @shown not in [:refused, :unsupported]}
           id="terminal-first-use"
           class="flex-none border-b border-edge bg-base-200 px-4 py-2 text-xs text-muted"
         >
@@ -156,7 +178,7 @@ defmodule PlatformWeb.TerminalLive do
         </p>
 
         <p
-          :if={@state == :reconnecting}
+          :if={@shown == :reconnecting}
           id="terminal-banner"
           role="status"
           class="flex-none border-b border-edge bg-base-200 px-4 py-2 text-xs text-base-content"
@@ -173,15 +195,15 @@ defmodule PlatformWeb.TerminalLive do
           <div
             id="terminal-host"
             phx-update="ignore"
-            data-dimmed={to_string(@state == :reconnecting)}
+            data-dimmed={to_string(@shown == :reconnecting)}
             class={[
               "terminal-ground min-h-0 flex-1 overflow-hidden px-2 py-1",
-              @state in [:refused, :unsupported, :offline] && "hidden"
+              @shown in [:refused, :unsupported, :offline] && "hidden"
             ]}
           />
 
           <div
-            :if={@state == :connecting}
+            :if={@shown == :connecting}
             id="terminal-connecting"
             class="terminal-ground pointer-events-none absolute inset-0 grid place-items-center text-sm"
           >
@@ -189,7 +211,7 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@state == :offline}
+            :if={@shown == :offline}
             id="terminal-offline"
             class="flex-1 p-6 text-sm text-base-content"
           >
@@ -197,7 +219,7 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@state == :refused and @reason == "flag_off"}
+            :if={@shown == :refused and @reason == "flag_off"}
             id="terminal-flag-off"
             class="flex-1 p-6 text-sm text-base-content"
           >
@@ -217,7 +239,7 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@state == :refused and @reason != "flag_off"}
+            :if={@shown == :refused and @reason != "flag_off"}
             id="terminal-refused"
             class="flex-1 p-6 text-sm text-base-content"
           >
@@ -225,7 +247,7 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@state == :unsupported}
+            :if={@shown == :unsupported}
             id="terminal-unsupported"
             class="flex-1 p-6 text-sm text-base-content"
           >
@@ -265,7 +287,7 @@ defmodule PlatformWeb.TerminalLive do
           phx-click="set_mode"
           phx-value-mode="ro"
           aria-pressed={to_string(@mode == "ro")}
-          class="rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100"
+          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100"
         >
           View only
         </button>
@@ -275,7 +297,7 @@ defmodule PlatformWeb.TerminalLive do
           phx-click="set_mode"
           phx-value-mode="rw"
           aria-pressed={to_string(@mode == "rw")}
-          class="rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100"
+          class="whitespace-nowrap rounded-md px-3 py-1 text-xs text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary aria-pressed:bg-base-100"
         >
           Can type
         </button>

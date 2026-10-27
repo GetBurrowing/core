@@ -14,7 +14,7 @@ import {
   generateKeyPair,
   toB64,
 } from "../../js/terminal/crypto.js"
-import { TerminalSession } from "../../js/terminal/session.js"
+import { TerminalSession, toArrayBuffer } from "../../js/terminal/session.js"
 
 const JS = resolve(dirname(fileURLToPath(import.meta.url)), "../../js")
 const tick = () => new Promise((r) => setTimeout(r, 0))
@@ -82,7 +82,8 @@ class FakeCli {
   }
   async out_(kind, text) {
     const frame = await this.out.seal(kind, new TextEncoder().encode(text))
-    this.handlers.out(frame)
+    // Phoenix delivers a binary push as an ArrayBuffer, not a Uint8Array.
+    this.handlers.out(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength))
   }
 }
 
@@ -171,6 +172,18 @@ describe("handshake, output and mode", () => {
     let text = ""
     for (const f of cli.inFrames) text += Buffer.from((await cli.inRecv.open(f)).body).toString()
     expect(text).toBe("abcdefgh")
+  })
+})
+
+describe("binary pushes", () => {
+  it("hands Phoenix an exact-size ArrayBuffer, since a Uint8Array would be sent as JSON", () => {
+    const backing = new Uint8Array([9, 9, 1, 2, 3, 9])
+    const view = backing.subarray(2, 5)
+    const out = toArrayBuffer(view)
+    expect(out).toBeInstanceOf(ArrayBuffer)
+    expect([...new Uint8Array(out)]).toEqual([1, 2, 3])
+    const json = { mode: "rw" }
+    expect(toArrayBuffer(json)).toBe(json)
   })
 })
 

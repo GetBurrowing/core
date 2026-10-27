@@ -11,10 +11,14 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
     WebSockex.start(url, __MODULE__, %{
       runtime_id: runtime_id,
       terminal?: terminal?,
-      topic: if(terminal?, do: "terminal:" <> runtime_id, else: "runtime:" <> runtime_id),
-      join_ref: "1",
-      ref: 1,
-      cli: TerminalFakeCli.new()
+      # The channel plugin holds `runtime:<id>` (presence); the CLI bridge holds
+      # `terminal:<id>`. A fake that stood in for the bridge alone would read as
+      # offline, so it joins both and `--no-terminal` drops only the second.
+      topic: "terminal:" <> runtime_id,
+      runtime_topic: "runtime:" <> runtime_id,
+      join_ref: "2",
+      ref: 3,
+      cli: TerminalFakeCli.new(line_mode: true)
     })
   end
 
@@ -26,9 +30,13 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
 
   @impl true
   def handle_info(:join, state) do
-    msg = Jason.encode!(["1", "1", state.topic, "phx_join", %{}])
     Process.send_after(self(), :heartbeat, 25_000)
-    {:reply, {:text, msg}, %{state | ref: 2}}
+
+    if state.terminal? do
+      send(self(), {:queued, {:text, Jason.encode!(["2", "2", state.topic, "phx_join", %{}])}})
+    end
+
+    {:reply, {:text, Jason.encode!(["1", "1", state.runtime_topic, "phx_join", %{}])}, state}
   end
 
   def handle_info(:heartbeat, state) do
@@ -47,18 +55,15 @@ defmodule PlatformWeb.TerminalFakeCli.Client do
   @impl true
   def handle_frame({:text, text}, state) do
     case Jason.decode(text) do
-      {:ok, [_jr, _r, _topic, "phx_reply", %{"status" => "ok"}]} ->
-        if state.terminal?,
-          do: IO.puts("joined #{state.topic}"),
-          else: IO.puts("joined #{state.topic} (no terminal)")
-
+      {:ok, [_jr, _r, topic, "phx_reply", %{"status" => "ok"}]} ->
+        IO.puts("joined #{topic}")
         {:ok, state}
 
-      {:ok, [_jr, _r, _topic, "phx_reply", %{"status" => "error"} = reply]} ->
-        IO.puts("join refused: #{inspect(reply["response"])}")
+      {:ok, [_jr, _r, topic, "phx_reply", %{"status" => "error"} = reply]} ->
+        IO.puts("join refused on #{topic}: #{inspect(reply["response"])}")
         {:close, state}
 
-      {:ok, [_jr, _r, _topic, event, payload]} when is_map(payload) and state.terminal? ->
+      {:ok, [_jr, _r, topic, event, payload]} when is_map(payload) and topic == state.topic ->
         run_actions(state, TerminalFakeCli.handle_event(state.cli, event, payload))
 
       _ ->

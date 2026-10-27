@@ -238,6 +238,21 @@ defmodule PlatformWeb.TerminalLiveTest do
       assert has_element?(view, ~s(#terminal-host[data-dimmed="true"]))
     end
 
+    test "a session that was live keeps its output on screen when the machine goes away", %{
+      conn: conn,
+      owner: owner,
+      runtime: runtime
+    } do
+      {:ok, view, _} = live(as_user(conn, owner), ~p"/terminal/#{runtime.runtime_id}")
+      render_hook(view, "terminal_state", %{"state" => "connected"})
+      render_hook(view, "terminal_state", %{"state" => "offline", "reason" => "offline"})
+
+      refute has_element?(view, "#terminal-offline")
+      assert has_element?(view, "#terminal-banner", "Reconnecting")
+      assert has_element?(view, ~s(#terminal-host[data-dimmed="true"]))
+      refute has_element?(view, "#terminal-host.hidden")
+    end
+
     test "a non-owner gets a refusal and no mode switch, and no agent name", %{
       conn: conn,
       other: other,

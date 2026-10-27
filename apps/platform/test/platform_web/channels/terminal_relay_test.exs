@@ -115,7 +115,7 @@ defmodule PlatformWeb.TerminalRelayTest do
     # first `out` is the kind-1 cwd record, then the ready banner
     {:ok, 0, <<1, cwd_json::binary>>} = Fake.open(recv_key, 1, bin!(assert_view_push("out")))
     assert %{"cwd" => _} = Jason.decode!(cwd_json)
-    {:ok, 1, <<0, "fake-cli ready">>} = Fake.open(recv_key, 1, bin!(assert_view_push("out")))
+    {:ok, 1, <<0, "fake-cli ready\r\n">>} = Fake.open(recv_key, 1, bin!(assert_view_push("out")))
 
     %{fake: fake, send_key: send_key, recv_key: recv_key, counter: 0, sid: sid}
   end
