@@ -5577,6 +5577,3250 @@
         }
       ],
       "finished_at": "2026-10-27T02:04:34.855Z"
+    },
+    {
+      "label": "local seeded",
+      "started_at": "2026-10-27T02:04:49.157Z",
+      "base": "local dev server via byte-counting proxy",
+      "viewport": "1280x800",
+      "taps_per_tab": 10,
+      "tasks_scenario": null,
+      "server_log_level": "info",
+      "machine": {
+        "platform": "Darwin 25.3.0 arm64",
+        "cpu": "Apple M4",
+        "cores": 10,
+        "mem_gb": 16
+      },
+      "chrome": "Chrome/156.0.8078.48",
+      "node_destinations": {
+        "destinations": [
+          {
+            "path": "/chat",
+            "key": "chat"
+          },
+          {
+            "path": "/voice",
+            "key": "voice"
+          },
+          {
+            "path": "/tasks",
+            "key": "tasks"
+          },
+          {
+            "path": "/inbox",
+            "key": "inbox"
+          },
+          {
+            "path": "/control",
+            "key": "agents"
+          },
+          {
+            "path": "/skills",
+            "key": "skills"
+          },
+          {
+            "path": "/files",
+            "key": "files"
+          },
+          {
+            "path": "/files?tab=browse&type=canvas",
+            "key": "canvases"
+          },
+          {
+            "path": "/org_memory",
+            "key": "context"
+          },
+          {
+            "path": "/control/experiments",
+            "key": "experiments"
+          },
+          {
+            "path": "/meetings",
+            "key": "meetings"
+          },
+          {
+            "path": "/changelog",
+            "key": "changelog"
+          }
+        ],
+        "email_enabled": false,
+        "games_enabled": false
+      },
+      "tabs": [
+        {
+          "summary": {
+            "key": "org_memory",
+            "href": "/org_memory",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 55.75,
+              "p90": 58
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 46.5,
+              "p90": 53.69999998807907
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 66628,
+              "p90": 66630
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11545,
+              "p90": 11545
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 78524,
+              "p90": 78534
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12403.5,
+              "p90": 12406
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 78550,
+              "p90": 78560
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.OrgMemoryLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 17.0865,
+                "p90": 18.504
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 0.034,
+                "p90": 0.04
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 76,
+                "p90": 76
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "org_memory",
+            "href": "/org_memory",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/org_memory",
+                "tap_ms": 87.60000002384186,
+                "ready_ms": 74.39999997615814,
+                "loading_stop_ms": 65.19999998807907,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 3895,
+                "window_raw_recv_bytes": 70651,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 70651
+                },
+                "window_deflate_estimate_bytes": 12245,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 78547,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 76.10000002384186,
+                "ready_ms": 65.60000002384186,
+                "loading_stop_ms": 56.10000002384186,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 3895,
+                "window_raw_recv_bytes": 70654,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 70654
+                },
+                "window_deflate_estimate_bytes": 12242,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 56.10000002384186,
+                "ready_ms": 43.80000001192093,
+                "loading_stop_ms": 35.80000001192093,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 11765,
+                "window_raw_recv_bytes": 78524,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78524
+                },
+                "window_deflate_estimate_bytes": 12404,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 50.5,
+                "ready_ms": 43.69999998807907,
+                "loading_stop_ms": 36.09999996423721,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 11765,
+                "window_raw_recv_bytes": 78524,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78524
+                },
+                "window_deflate_estimate_bytes": 12403,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 55.39999997615814,
+                "ready_ms": 48.39999997615814,
+                "loading_stop_ms": 40.19999998807907,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 11765,
+                "window_raw_recv_bytes": 78524,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78524
+                },
+                "window_deflate_estimate_bytes": 12403,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 58,
+                "ready_ms": 50.59999996423721,
+                "loading_stop_ms": 42.59999996423721,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 11765,
+                "window_raw_recv_bytes": 78524,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78524
+                },
+                "window_deflate_estimate_bytes": 12403,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 53.40000003576279,
+                "ready_ms": 46.5,
+                "loading_stop_ms": 39,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66628,
+                "topic_other_raw_bytes": 11765,
+                "window_raw_recv_bytes": 78524,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78524
+                },
+                "window_deflate_estimate_bytes": 12405,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78550,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 56.80000001192093,
+                "ready_ms": 53.69999998807907,
+                "loading_stop_ms": 40.5,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66630,
+                "topic_other_raw_bytes": 11769,
+                "window_raw_recv_bytes": 78531,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78531
+                },
+                "window_deflate_estimate_bytes": 12406,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78557,
+                "wire_up_bytes": 1668
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 58,
+                "ready_ms": 43.69999998807907,
+                "loading_stop_ms": 36.10000002384186,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66630,
+                "topic_other_raw_bytes": 11769,
+                "window_raw_recv_bytes": 78534,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78534
+                },
+                "window_deflate_estimate_bytes": 12403,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78560,
+                "wire_up_bytes": 1669
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 52.90000003576279,
+                "ready_ms": 45.40000003576279,
+                "loading_stop_ms": 37.40000003576279,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66630,
+                "topic_other_raw_bytes": 11769,
+                "window_raw_recv_bytes": 78534,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78534
+                },
+                "window_deflate_estimate_bytes": 12405,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78560,
+                "wire_up_bytes": 1669
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/org_memory",
+                "tap_ms": 53.89999997615814,
+                "ready_ms": 46.5,
+                "loading_stop_ms": 38.89999997615814,
+                "join_topic": "lv:phx-GOJAp-_FFjM5J2SE",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66630,
+                "topic_other_raw_bytes": 11769,
+                "window_raw_recv_bytes": 78534,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAp-_FFjM5J2SE": 78534
+                },
+                "window_deflate_estimate_bytes": 12408,
+                "join_reply_deflate_estimate_bytes": 11545,
+                "wire_down_bytes": 78560,
+                "wire_up_bytes": 1669
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.6567.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 33.914,
+                "t0_us": -576459758443674,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 50.638,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 22.725
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 27.913
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6587.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 27.951,
+                "t0_us": -576459757597124,
+                "handle_params_ms": [
+                  0.056
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 39.878,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 17.543
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 22.335
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6607.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 13.093,
+                "t0_us": -576459756750622,
+                "handle_params_ms": [
+                  0.04
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 15.192,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.171
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 10.021
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6627.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.801,
+                "t0_us": -576459755998523,
+                "handle_params_ms": [
+                  0.032
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 19.032,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.18
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 13.852
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6647.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.803,
+                "t0_us": -576459755227712,
+                "handle_params_ms": [
+                  0.038
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 19.152,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.31
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 13.842
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6667.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.37,
+                "t0_us": -576459754464714,
+                "handle_params_ms": [
+                  0.039
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 19.02,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.991
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 14.029
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6687.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.976,
+                "t0_us": -576459753713696,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 20.819,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.874
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 14.945
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6707.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 13.078,
+                "t0_us": -576459752927907,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 14.188,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.285
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 9.903
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6727.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.865,
+                "t0_us": -576459752203709,
+                "handle_params_ms": [
+                  0.029
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 19.89,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 7.062
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 12.828
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6747.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.504,
+                "t0_us": -576459751439102,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 21.585,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.248
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 15.337
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6767.0>",
+                "view": "PlatformWeb.OrgMemoryLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.401,
+                "t0_us": -576459750696464,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 76,
+                "arrival_query_ms": 21.053,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.533
+                  },
+                  "mount": {
+                    "count": 48,
+                    "ms": 14.52
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "control",
+            "href": "/control",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 73.15000000596046,
+              "p90": 80.10000002384186
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 67.7000000178814,
+              "p90": 72.19999998807907
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 61842,
+              "p90": 61844
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11544,
+              "p90": 11544
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 73261,
+              "p90": 73271
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12324,
+              "p90": 12325
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 73281,
+              "p90": 73291
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.ControlCenterLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 21.990000000000002,
+                "p90": 24.316
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 5.537,
+                "p90": 6.487
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 130,
+                "p90": 130
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "control",
+            "href": "/control",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/control",
+                "tap_ms": 72.79999995231628,
+                "ready_ms": 60.5,
+                "loading_stop_ms": 47.799999952316284,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73258,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73258
+                },
+                "window_deflate_estimate_bytes": 12321,
+                "join_reply_deflate_estimate_bytes": 11543,
+                "wire_down_bytes": 73278,
+                "wire_up_bytes": 1659
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 72.80000001192093,
+                "ready_ms": 69.30000001192093,
+                "loading_stop_ms": 55.19999998807907,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12321,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 80.10000002384186,
+                "ready_ms": 72.19999998807907,
+                "loading_stop_ms": 62.60000002384186,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12324,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 79.39999997615814,
+                "ready_ms": 69.59999996423721,
+                "loading_stop_ms": 59.69999998807907,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12321,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 68.10000002384186,
+                "ready_ms": 64.70000004768372,
+                "loading_stop_ms": 46.40000003576279,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12324,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 73.5,
+                "ready_ms": 65.20000004768372,
+                "loading_stop_ms": 55.60000002384186,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12324,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 72.59999996423721,
+                "ready_ms": 68.30000001192093,
+                "loading_stop_ms": 54.5,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61842,
+                "topic_other_raw_bytes": 11288,
+                "window_raw_recv_bytes": 73261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73261
+                },
+                "window_deflate_estimate_bytes": 12323,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73281,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 74.90000003576279,
+                "ready_ms": 66.80000001192093,
+                "loading_stop_ms": 57.10000002384186,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61844,
+                "topic_other_raw_bytes": 11292,
+                "window_raw_recv_bytes": 73268,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73268
+                },
+                "window_deflate_estimate_bytes": 12325,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73288,
+                "wire_up_bytes": 1665
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 72.60000002384186,
+                "ready_ms": 64.5,
+                "loading_stop_ms": 55,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61844,
+                "topic_other_raw_bytes": 11292,
+                "window_raw_recv_bytes": 73271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73271
+                },
+                "window_deflate_estimate_bytes": 12322,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73291,
+                "wire_up_bytes": 1666
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 70.40000003576279,
+                "ready_ms": 67.10000002384186,
+                "loading_stop_ms": 52.40000003576279,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61844,
+                "topic_other_raw_bytes": 11292,
+                "window_raw_recv_bytes": 73271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73271
+                },
+                "window_deflate_estimate_bytes": 12325,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73291,
+                "wire_up_bytes": 1666
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/control",
+                "tap_ms": 83.19999998807907,
+                "ready_ms": 75.30000001192093,
+                "loading_stop_ms": 65.69999998807907,
+                "join_topic": "lv:phx-GOJAqmYKRqM5J-IC",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 61844,
+                "topic_other_raw_bytes": 11292,
+                "window_raw_recv_bytes": 73271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAqmYKRqM5J-IC": 73271
+                },
+                "window_deflate_estimate_bytes": 12324,
+                "join_reply_deflate_estimate_bytes": 11544,
+                "wire_down_bytes": 73291,
+                "wire_up_bytes": 1666
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.6850.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.575,
+                "t0_us": -576459748683892,
+                "handle_params_ms": [
+                  6.195
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 26.949,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 3.802
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 18.312
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 4.835
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6871.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 23.457,
+                "t0_us": -576459747895696,
+                "handle_params_ms": [
+                  6.487
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 28.05,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.302
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 18.699
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 5.049
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6892.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.425,
+                "t0_us": -576459747103895,
+                "handle_params_ms": [
+                  7.057
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 26.701,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.082
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 17.184
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 5.435
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6913.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.8,
+                "t0_us": -576459746296611,
+                "handle_params_ms": [
+                  4.999
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 21.916,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.011
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 14.386
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 3.519
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6934.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.968,
+                "t0_us": -576459745510284,
+                "handle_params_ms": [
+                  4.446
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 23.484,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.052
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 16.291
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 3.141
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6955.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.555,
+                "t0_us": -576459744723131,
+                "handle_params_ms": [
+                  5.787
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 25.026,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.161
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 16.57
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 4.295
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6976.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 25.385,
+                "t0_us": -576459743944537,
+                "handle_params_ms": [
+                  5.221
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 29.688,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.754
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 20.261
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 3.673
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.6997.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 24.316,
+                "t0_us": -576459743140959,
+                "handle_params_ms": [
+                  5.24
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 27.327,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.444
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 19.152
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 3.731
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7018.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.865,
+                "t0_us": -576459742354517,
+                "handle_params_ms": [
+                  6.143
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 24.757,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.434
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 15.701
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 4.622
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7039.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.525,
+                "t0_us": -576459741594692,
+                "handle_params_ms": [
+                  5.287
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 21.759,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.398
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 13.667
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 3.694
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7060.0>",
+                "view": "PlatformWeb.ControlCenterLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 23.304,
+                "t0_us": -576459740800089,
+                "handle_params_ms": [
+                  6.428
+                ],
+                "arrival_queries": 130,
+                "arrival_query_ms": 26.506,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.289
+                  },
+                  "mount": {
+                    "count": 73,
+                    "ms": 17.272
+                  },
+                  "handle_params": {
+                    "count": 29,
+                    "ms": 4.945
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "experiments",
+            "href": "/control/experiments",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 61.95000001788139,
+              "p90": 66.20000004768372
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 51.94999998807907,
+              "p90": 59.90000003576279
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 57779,
+              "p90": 57781
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 10662,
+              "p90": 10662
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 69234,
+              "p90": 69244
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11447.5,
+              "p90": 11449
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 69254,
+              "p90": 69264
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.ExperimentsLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 15.8465,
+                "p90": 17.185
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 1.22,
+                "p90": 2.108
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 79,
+                "p90": 79
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "experiments",
+            "href": "/control/experiments",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/control/experiments",
+                "tap_ms": 58.5,
+                "ready_ms": 53.60000002384186,
+                "loading_stop_ms": 39.89999997615814,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69231,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69231
+                },
+                "window_deflate_estimate_bytes": 11441,
+                "join_reply_deflate_estimate_bytes": 10661,
+                "wire_down_bytes": 69251,
+                "wire_up_bytes": 1671
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 66.20000004768372,
+                "ready_ms": 59.30000001192093,
+                "loading_stop_ms": 51.30000001192093,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11444,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 67.5,
+                "ready_ms": 50.59999996423721,
+                "loading_stop_ms": 42.89999997615814,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11449,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 53,
+                "ready_ms": 46.39999997615814,
+                "loading_stop_ms": 39.30000001192093,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11446,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 65.80000001192093,
+                "ready_ms": 63.19999998807907,
+                "loading_stop_ms": 47.5,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11450,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 61,
+                "ready_ms": 54.69999998807907,
+                "loading_stop_ms": 46.89999997615814,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11448,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 61.40000003576279,
+                "ready_ms": 45.60000002384186,
+                "loading_stop_ms": 37.90000003576279,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57779,
+                "topic_other_raw_bytes": 11324,
+                "window_raw_recv_bytes": 69234,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69234
+                },
+                "window_deflate_estimate_bytes": 11448,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69254,
+                "wire_up_bytes": 1672
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 62.5,
+                "ready_ms": 59.90000003576279,
+                "loading_stop_ms": 46,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57781,
+                "topic_other_raw_bytes": 11328,
+                "window_raw_recv_bytes": 69241,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69241
+                },
+                "window_deflate_estimate_bytes": 11447,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69261,
+                "wire_up_bytes": 1677
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 65.30000001192093,
+                "ready_ms": 52.5,
+                "loading_stop_ms": 41.30000001192093,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57781,
+                "topic_other_raw_bytes": 11328,
+                "window_raw_recv_bytes": 69244,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69244
+                },
+                "window_deflate_estimate_bytes": 11446,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69264,
+                "wire_up_bytes": 1678
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 54.09999996423721,
+                "ready_ms": 51.39999997615814,
+                "loading_stop_ms": 39.59999996423721,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57781,
+                "topic_other_raw_bytes": 11328,
+                "window_raw_recv_bytes": 69244,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69244
+                },
+                "window_deflate_estimate_bytes": 11449,
+                "join_reply_deflate_estimate_bytes": 10662,
+                "wire_down_bytes": 69264,
+                "wire_up_bytes": 1678
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/control/experiments",
+                "tap_ms": 50.10000002384186,
+                "ready_ms": 47.60000002384186,
+                "loading_stop_ms": 36.19999998807907,
+                "join_topic": "lv:phx-GOJArLWeE4I5Jxpj",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 57781,
+                "topic_other_raw_bytes": 11328,
+                "window_raw_recv_bytes": 69244,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArLWeE4I5Jxpj": 69244
+                },
+                "window_deflate_estimate_bytes": 11446,
+                "join_reply_deflate_estimate_bytes": 10663,
+                "wire_down_bytes": 69264,
+                "wire_up_bytes": 1678
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.7144.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.119,
+                "t0_us": -576459738750734,
+                "handle_params_ms": [
+                  3.516
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 22.287,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.641
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.23
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 3.416
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7164.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.431,
+                "t0_us": -576459737964048,
+                "handle_params_ms": [
+                  1.923
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 17.126,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.362
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.97
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 1.794
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7184.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.495,
+                "t0_us": -576459737195211,
+                "handle_params_ms": [
+                  0.726
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 19.243,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.561
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.042
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 0.64
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7204.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.376,
+                "t0_us": -576459736430804,
+                "handle_params_ms": [
+                  2.108
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 21.142,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.664
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.472
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 2.006
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7224.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.091,
+                "t0_us": -576459735638593,
+                "handle_params_ms": [
+                  1.373
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 19.978,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.007
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.685
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 1.286
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7244.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.185,
+                "t0_us": -576459734875539,
+                "handle_params_ms": [
+                  2.199
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 21.6,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.706
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.798
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 2.096
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7264.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.812,
+                "t0_us": -576459734129643,
+                "handle_params_ms": [
+                  0.817
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 18.134,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.696
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 11.705
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 0.733
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7284.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.601,
+                "t0_us": -576459733369361,
+                "handle_params_ms": [
+                  1.067
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 18.544,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.447
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.127
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 0.97
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7304.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.453,
+                "t0_us": -576459732597712,
+                "handle_params_ms": [
+                  1.045
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 18.322,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.364
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 0.958
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7324.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.338,
+                "t0_us": -576459731839259,
+                "handle_params_ms": [
+                  1.436
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 23.83,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 8.168
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 14.331
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 1.331
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7344.0>",
+                "view": "PlatformWeb.ExperimentsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.602,
+                "t0_us": -576459731086763,
+                "handle_params_ms": [
+                  0.801
+                ],
+                "arrival_queries": 79,
+                "arrival_query_ms": 18.167,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.661
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 11.783
+                  },
+                  "handle_params": {
+                    "count": 4,
+                    "ms": 0.723
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "changelog",
+            "href": "/changelog",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 64.19999998807907,
+              "p90": 69.60000002384186
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 52.30000001192093,
+              "p90": 66.60000002384186
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 52379,
+              "p90": 52381
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 9324,
+              "p90": 9324
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 63738,
+              "p90": 63748
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 10104,
+              "p90": 10106
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 63758,
+              "p90": 63768
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.ChangelogLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 16.661,
+                "p90": 19.191
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 0.038,
+                "p90": 0.067
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 75,
+                "p90": 75
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "changelog",
+            "href": "/changelog",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/changelog",
+                "tap_ms": 49.19999998807907,
+                "ready_ms": 43.39999997615814,
+                "loading_stop_ms": 35.09999996423721,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63735,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63735
+                },
+                "window_deflate_estimate_bytes": 10102,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63755,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 74.30000001192093,
+                "ready_ms": 71.89999997615814,
+                "loading_stop_ms": 43.19999998807907,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10100,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 51.69999998807907,
+                "ready_ms": 48.90000003576279,
+                "loading_stop_ms": 39.5,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10102,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 63.30000001192093,
+                "ready_ms": 46.19999998807907,
+                "loading_stop_ms": 39.69999998807907,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10102,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 69,
+                "ready_ms": 66.60000002384186,
+                "loading_stop_ms": 44,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10106,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 56.80000001192093,
+                "ready_ms": 49.80000001192093,
+                "loading_stop_ms": 42.40000003576279,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10105,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 44.19999998807907,
+                "ready_ms": 38.5,
+                "loading_stop_ms": 32,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52379,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 63738,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63738
+                },
+                "window_deflate_estimate_bytes": 10104,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63758,
+                "wire_up_bytes": 1662
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 69.60000002384186,
+                "ready_ms": 54.40000003576279,
+                "loading_stop_ms": 47.10000002384186,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52381,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 63745,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63745
+                },
+                "window_deflate_estimate_bytes": 10104,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63765,
+                "wire_up_bytes": 1667
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 65.40000003576279,
+                "ready_ms": 62.80000001192093,
+                "loading_stop_ms": 45.10000002384186,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52381,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 63748,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63748
+                },
+                "window_deflate_estimate_bytes": 10101,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63768,
+                "wire_up_bytes": 1668
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 63.60000002384186,
+                "ready_ms": 50.19999998807907,
+                "loading_stop_ms": 43.5,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52381,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 63748,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63748
+                },
+                "window_deflate_estimate_bytes": 10107,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63768,
+                "wire_up_bytes": 1668
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/changelog",
+                "tap_ms": 64.79999995231628,
+                "ready_ms": 62.5,
+                "loading_stop_ms": 43.69999998807907,
+                "join_topic": "lv:phx-GOJArvb0idU5J1VD",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 52381,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 63748,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJArvb0idU5J1VD": 63748
+                },
+                "window_deflate_estimate_bytes": 10105,
+                "join_reply_deflate_estimate_bytes": 9324,
+                "wire_down_bytes": 63768,
+                "wire_up_bytes": 1668
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.7427.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.037,
+                "t0_us": -576459729088599,
+                "handle_params_ms": [
+                  0.04
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.113,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.798
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.315
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7447.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.666,
+                "t0_us": -576459728326537,
+                "handle_params_ms": [
+                  0.039
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 17.826,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.723
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.103
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7467.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.457,
+                "t0_us": -576459727545090,
+                "handle_params_ms": [
+                  0.037
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 15.702,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.71
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.992
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7487.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.316,
+                "t0_us": -576459726795292,
+                "handle_params_ms": [
+                  0.067
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.64,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.547
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.093
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7507.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.006,
+                "t0_us": -576459726008929,
+                "handle_params_ms": [
+                  0.044
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.441,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.789
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.652
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7527.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.955,
+                "t0_us": -576459725217327,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 29.05,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 10.76
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 18.29
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7547.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.862,
+                "t0_us": -576459724471242,
+                "handle_params_ms": [
+                  0.03
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 17.092,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.066
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.026
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7567.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.191,
+                "t0_us": -576459723729860,
+                "handle_params_ms": [
+                  0.07
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 22.919,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 7.13
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 15.789
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7587.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.064,
+                "t0_us": -576459722955546,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.618,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.142
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.476
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7607.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.18,
+                "t0_us": -576459722174003,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 17.581,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.788
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.793
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7627.0>",
+                "view": "PlatformWeb.ChangelogLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.42,
+                "t0_us": -576459721393088,
+                "handle_params_ms": [
+                  0.045
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 20.33,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.238
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 14.092
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "settings",
+            "href": "/settings",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 62.30000001192093,
+              "p90": 65.5
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 54.549999952316284,
+              "p90": 62.5
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 62541,
+              "p90": 62543
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 10671,
+              "p90": 10671
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 76795,
+              "p90": 76805
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11618.5,
+              "p90": 11620
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 76815,
+              "p90": 76825
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.SettingsLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 16.2925,
+                "p90": 17.204
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 0.034,
+                "p90": 0.035
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 75,
+                "p90": 75
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "settings",
+            "href": "/settings",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/settings",
+                "tap_ms": 52.89999997615814,
+                "ready_ms": 50.39999997615814,
+                "loading_stop_ms": 36.69999998807907,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76792,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76792
+                },
+                "window_deflate_estimate_bytes": 11613,
+                "join_reply_deflate_estimate_bytes": 10670,
+                "wire_down_bytes": 76812,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 64.89999997615814,
+                "ready_ms": 62.5,
+                "loading_stop_ms": 47.89999997615814,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11614,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 55.89999997615814,
+                "ready_ms": 53.5,
+                "loading_stop_ms": 39.89999997615814,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11619,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 61.69999998807907,
+                "ready_ms": 54.299999952316284,
+                "loading_stop_ms": 45.69999998807907,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11618,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 63,
+                "ready_ms": 60.700000047683716,
+                "loading_stop_ms": 48,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11616,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 62.90000003576279,
+                "ready_ms": 55,
+                "loading_stop_ms": 47,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11619,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 50.10000002384186,
+                "ready_ms": 47.19999998807907,
+                "loading_stop_ms": 35,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62541,
+                "topic_other_raw_bytes": 14123,
+                "window_raw_recv_bytes": 76795,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76795
+                },
+                "window_deflate_estimate_bytes": 11620,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76815,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 72.40000003576279,
+                "ready_ms": 69.70000004768372,
+                "loading_stop_ms": 46.30000001192093,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62543,
+                "topic_other_raw_bytes": 14127,
+                "window_raw_recv_bytes": 76802,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76802
+                },
+                "window_deflate_estimate_bytes": 11619,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76822,
+                "wire_up_bytes": 1666
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 65.5,
+                "ready_ms": 54.799999952316284,
+                "loading_stop_ms": 34,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62543,
+                "topic_other_raw_bytes": 14127,
+                "window_raw_recv_bytes": 76805,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76805
+                },
+                "window_deflate_estimate_bytes": 11617,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76825,
+                "wire_up_bytes": 1667
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 58.69999998807907,
+                "ready_ms": 51.39999997615814,
+                "loading_stop_ms": 43.19999998807907,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62543,
+                "topic_other_raw_bytes": 14127,
+                "window_raw_recv_bytes": 76805,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76805
+                },
+                "window_deflate_estimate_bytes": 11622,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76825,
+                "wire_up_bytes": 1667
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/settings",
+                "tap_ms": 58.30000001192093,
+                "ready_ms": 44,
+                "loading_stop_ms": 36.10000002384186,
+                "join_topic": "lv:phx-GOJAsTsl9Vs5J8AF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 62543,
+                "topic_other_raw_bytes": 14127,
+                "window_raw_recv_bytes": 76805,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAsTsl9Vs5J8AF": 76805
+                },
+                "window_deflate_estimate_bytes": 11618,
+                "join_reply_deflate_estimate_bytes": 10671,
+                "wire_down_bytes": 76825,
+                "wire_up_bytes": 1667
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.7710.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.092,
+                "t0_us": -576459719354682,
+                "handle_params_ms": [
+                  0.029
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.428,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.189
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.239
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7730.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.088,
+                "t0_us": -576459718584982,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 16.636,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.48
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.156
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7750.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.552,
+                "t0_us": -576459717817759,
+                "handle_params_ms": [
+                  0.034
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.823,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.516
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.307
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7770.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.88,
+                "t0_us": -576459717007079,
+                "handle_params_ms": [
+                  0.034
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 14.882,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.524
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 10.358
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7790.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.804,
+                "t0_us": -576459716221261,
+                "handle_params_ms": [
+                  0.034
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.757,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.411
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.346
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7810.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.497,
+                "t0_us": -576459715438409,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.521,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.526
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.995
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7830.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.476,
+                "t0_us": -576459714667666,
+                "handle_params_ms": [
+                  0.028
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.98,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.132
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 12.848
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7850.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.687,
+                "t0_us": -576459713912346,
+                "handle_params_ms": [
+                  0.036
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 19.252,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.228
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.024
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7870.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.522,
+                "t0_us": -576459713135550,
+                "handle_params_ms": [
+                  0.03
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 18.058,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.255
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 11.803
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7890.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.204,
+                "t0_us": -576459712345914,
+                "handle_params_ms": [
+                  0.032
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 20.105,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.174
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 13.931
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.7910.0>",
+                "view": "PlatformWeb.SettingsLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 12.921,
+                "t0_us": -576459711600899,
+                "handle_params_ms": [
+                  0.034
+                ],
+                "arrival_queries": 75,
+                "arrival_query_ms": 14.373,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.71
+                  },
+                  "mount": {
+                    "count": 47,
+                    "ms": 9.663
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        }
+      ],
+      "errors": [],
+      "sidebar_hrefs": [
+        "/chat",
+        "/voice",
+        "/tasks",
+        "/meetings",
+        "/inbox",
+        "/files",
+        "/files?tab=browse&type=canvas",
+        "/skills",
+        "/org_memory",
+        "/control",
+        "/control/experiments",
+        "/changelog",
+        "/settings"
+      ],
+      "websocket_connections": [
+        {
+          "id": 5,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 9,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 11,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 13,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 15,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 17,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 19,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        }
+      ],
+      "finished_at": "2026-10-27T02:05:41.254Z"
     }
   ]
 }
