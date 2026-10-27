@@ -177,6 +177,10 @@ defmodule Platform.Application do
          # and its ephemeral ETS store (NonceCache shape). No DB, no
          # PubSub; both must exist before the Endpoint takes a tools/call.
          Platform.CodeMode.Slots,
+         # The node-wide native guest gate (task 01a17b0b stage 1) every
+         # Runtime.run in either slot pool waits on, so the wasmex epoch
+         # ticker always has a tokio worker.
+         Platform.CodeMode.Permits,
          # Canvas handlers' own slot pool (task 01a1316b-aab0 stage 1):
          # the same module under a second name, so a busy canvas can never
          # take an agent's burrow_run slot or the reverse.

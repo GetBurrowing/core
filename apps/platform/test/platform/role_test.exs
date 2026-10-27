@@ -149,6 +149,7 @@ defmodule Platform.RoleTest do
                Platform.Federation.Peers.Boot,
                Platform.TaskSupervisor,
                Platform.CodeMode.Slots,
+               Platform.CodeMode.Permits,
                Platform.Canvas.ScriptEngine.Slots,
                Platform.CodeMode.Store,
                Platform.Push.RelayRateLimit,

@@ -9,7 +9,11 @@ defmodule Platform.CodeMode.Limits do
     * `:wall_ms` (10 s) and `:max_wall_ms` (30 s): the wall-clock bound. A
       `burrow_run` may ask for a different `timeout_ms`, clamped to
       `1..max_wall_ms`. Enforced natively: Wasmex interrupts the call at its
-      deadline through wasmtime epoch interruption.
+      deadline through wasmtime epoch interruption. The budget runs from the
+      moment the run is called and includes any wait for a native guest
+      permit (`Platform.CodeMode.Permits`, at most one fewer concurrent guest
+      per node than wasmex has tokio workers, so the epoch ticker always gets
+      a worker); a run still waiting at its deadline ends in `timeout`.
     * `:fuel_per_ms`: wasm fuel granted per millisecond of wall budget. Fuel
       counts executed wasm instructions, so it bounds CPU independently of
       the wall clock (a run that waits in host calls burns no fuel). Sized
@@ -30,7 +34,9 @@ defmodule Platform.CodeMode.Limits do
     * `:inner_result_bytes` (1 MB): each inner call's JSON result as the
       script sees it. Past that the call fails recoverably.
     * `:log_bytes` (8 KB): `console.log` output kept per run.
-    * `:per_runtime_concurrency` (2) and `:global_concurrency` (8).
+    * `:per_runtime_concurrency` (2) and `:global_concurrency` (8): runs
+      admitted per pool. Admitted runs past the node's native permit count
+      queue for a permit inside their own wall budget.
     * Store: `:store_ttl_ms` (30 min), `:store_max_ttl_ms` (6 h),
       `:store_value_bytes` (256 KB), `:store_agent_bytes` (4 MB).
   """

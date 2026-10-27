@@ -25,11 +25,20 @@ defmodule Platform.CodeMode.Slots do
   their own pool, `Platform.Canvas.ScriptEngine.Slots`, keyed by canvas id
   with the canvas limits, so a canvas can never hold an agent's slot or the
   reverse. The one-argument forms are unchanged.
+
+  ## Slots are not native permits
+
+  A slot bounds how many runs a pool admits; it is refused at once, never
+  queued. Holding a slot does not take a native permit: every admitted run
+  then waits, inside `Platform.CodeMode.Runtime`, for one of the node-wide
+  `Platform.CodeMode.Permits` that bound how many guests execute at once
+  across both pools.
   """
 
   use GenServer
 
   alias Platform.CodeMode.Limits
+  alias Platform.CodeMode.Runtime
 
   def start_link(opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name, __MODULE__)
@@ -130,13 +139,7 @@ defmodule Platform.CodeMode.Slots do
         state
 
       %{store: store} ->
-        server = self()
-
-        Task.start(fn ->
-          _ = Wasmex.StoreOrCaller.get_fuel(store)
-          send(server, {:idle, slot})
-        end)
-
+        :ok = Runtime.notify_when_idle(store, self(), {:idle, slot})
         update_slot(state, slot, &%{&1 | draining: true})
 
       nil ->

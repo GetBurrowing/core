@@ -103,6 +103,9 @@ defmodule Platform.Canvas.ScriptEngine do
   """
   @spec run(map(), map(), map(), map(), map()) :: outcome()
   def run(handler, event, state, bindings, limits \\ limits()) do
+    deadline = System.monotonic_time(:millisecond) + Limits.wall_ms(limits, nil)
+    bindings = Map.put(bindings, :script_deadline_ms, deadline)
+
     with {:ok, engine} <- engine_for(Map.get(handler, "engine", "js")) do
       engine.run(handler, event, state, bindings, limits)
     end

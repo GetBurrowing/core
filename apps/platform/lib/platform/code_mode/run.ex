@@ -114,7 +114,8 @@ defmodule Platform.CodeMode.Run do
           tools: Bindings.tool_names(runtime),
           limits: limits,
           wall_ms: Limits.wall_ms(limits, Keyword.get(opts, :timeout_ms)),
-          on_store: &Slots.attach_store(slot, &1)
+          on_store: &Slots.attach_store(slot, &1),
+          permit_key: {:agent, runtime.runtime_id}
         )
       rescue
         error ->

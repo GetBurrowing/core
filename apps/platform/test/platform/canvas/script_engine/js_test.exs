@@ -8,6 +8,7 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
 
   use Platform.DataCase, async: false
 
+  import Platform.CanvasPoolHelpers
   import Platform.CodeModeFixtures
 
   alias Platform.Canvas.ScriptEngine
@@ -33,6 +34,14 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
   end
 
   defp event(args \\ %{}), do: %{"type" => "call", "args" => args}
+
+  # A looping test's timed-out runs hold their canvas slots until their
+  # Stores are idle; start every test on an empty canvas pool so none
+  # measures the previous one (the "every agent slot held" test read 2).
+  setup do
+    await_canvas_pool_empty!()
+    :ok
+  end
 
   defp run(source, opts \\ []) do
     ScriptEngine.run(
@@ -272,7 +281,17 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
 
       # Another canvas is not affected.
       assert {:ok, [], []} = run("(e, ctx) => {}")
-      Enum.each(tasks, &Task.await(&1, 10_000))
+
+      for task <- tasks do
+        assert {:error, kind, _} = Task.await(task, 10_000)
+        assert kind in ["fuel", "timeout"]
+      end
+
+      # No drain bounded by the wall here (task 01a17b0b stage 3): with free
+      # tokio workers the wall interrupt is still sometimes missed and the
+      # guest ends by fuel, so fuel, not the wall, is the hard bound. The
+      # per-test setup above waits for the pool, so no later test measures
+      # these runs.
     end
 
     test "with every agent slot held, a canvas run still runs" do

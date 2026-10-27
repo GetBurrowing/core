@@ -207,6 +207,7 @@ defmodule Platform.Role do
     Platform.Federation.RuntimeHostRegistry,
     Platform.TaskSupervisor,
     Platform.CodeMode.Slots,
+    Platform.CodeMode.Permits,
     Platform.Canvas.ScriptEngine.Slots,
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
