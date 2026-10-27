@@ -104,14 +104,14 @@ defmodule Platform.Meetings.Completion do
   end
 
   defp callback(agent_id, role, params, fun) do
-    with true <- Platform.Roles.agent_id_for_role(role) == agent_id || {:error, :unauthorized_role},
+    with true <- is_binary(agent_id) and Platform.Roles.agent_id_for_role(role) == agent_id || {:error, :unauthorized_role},
          true <- Enum.all?(~w(meeting_id run_id transcript_id canvas_id), &Platform.UUID.valid?(params[&1])) || {:error, :invalid_identity},
          %Meeting{status: "ended"} = meeting <- Repo.get(Meeting, params["meeting_id"]),
          %Canvas{deleted_at: nil} = canvas <- Repo.get(Canvas, params["canvas_id"]),
          true <- canvas.space_id == meeting.chat_space_id || {:error, :foreign_canvas} do
       locked(meeting.id, fn run ->
         with true <- not is_nil(run.capture_finished_at) || {:error, :capture_active},
-             true <- run.id == params["run_id"] and run.transcript_id == params["transcript_id"] || {:error, :run_mismatch},
+             true <- run.id == params["run_id"] and run.transcript_id == params["transcript_id"] and run.snapshot_hash == params["snapshot_hash"] || {:error, :run_mismatch},
              {:ok, snapshot, _} <- snapshot(meeting),
              true <- hash(snapshot) == run.snapshot_hash || {:error, :transcript_changed} do
           fun.(run, meeting, canvas)
@@ -172,7 +172,10 @@ defmodule Platform.Meetings.Completion do
       where: t.space_id == ^meeting.chat_space_id,
       order_by: [asc: t.started_at, asc: t.id])
       |> Enum.filter(fn t -> is_nil(meeting.started_at) or
-        DateTime.compare(t.completed_at || DateTime.utc_now(), meeting.started_at) != :lt end)
+        DateTime.compare(t.completed_at || DateTime.utc_now(), meeting.started_at) != :lt
+      end)
+      |> Enum.filter(fn t -> is_nil(meeting.ended_at) or
+        DateTime.compare(t.started_at || t.inserted_at, meeting.ended_at) != :gt end)
     active_recording = room && Repo.exists?(from r in Recording,
       where: r.room_id == ^room.id and r.status in ["recording", "processing"])
     canonical = Enum.find(Enum.reverse(transcripts), &(&1.status == "complete"))
@@ -204,7 +207,7 @@ defmodule Platform.Meetings.Completion do
 
   defp payload(run, meeting), do: %{meeting_id: meeting.id, run_id: run.id,
     space_id: meeting.chat_space_id, room_id: meeting.livekit_room_name,
-    transcript_id: run.transcript_id, canvas_id: run.canvas_id,
+    transcript_id: run.transcript_id, canvas_id: run.canvas_id, snapshot_hash: run.snapshot_hash,
     completion_transcript: run.snapshot["segments"], source_transcript_ids: run.snapshot["source_transcript_ids"]}
 
   defp dispatch(run, role, fun, status) do

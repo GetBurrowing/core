@@ -158,11 +158,11 @@ defmodule Platform.Federation.ReturnSchemas do
   end
 
   def for_tool("meeting_scribe_complete") do
-    closed(%{"meeting_id" => string(), "run_id" => string(), "status" => string(), "canvas_id" => string()})
+    closed(%{"meeting_id" => string(), "run_id" => string(), "status" => string(), "canvas_id" => nullable(string()), "task_ids" => array(string())})
   end
 
   def for_tool("meeting_triage_file") do
-    closed(%{"meeting_id" => string(), "run_id" => string(), "status" => string(), "task_ids" => array(string())})
+    closed(%{"meeting_id" => string(), "run_id" => string(), "status" => string(), "canvas_id" => nullable(string()), "task_ids" => array(string())})
   end
 
   def for_tool("meeting_say") do

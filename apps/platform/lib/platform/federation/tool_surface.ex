@@ -3425,7 +3425,7 @@ defmodule Platform.Federation.ToolSurface do
     filing? = name == "meeting_triage_file"
 
     parameters =
-      Map.new(~w(meeting_id run_id transcript_id canvas_id), fn key ->
+      Map.new(~w(meeting_id run_id transcript_id canvas_id snapshot_hash), fn key ->
         {String.to_atom(key), %{type: "string", required: true, description: "Canonical #{key} from the completion dispatch; identities must match the finalized run."}}
       end)
 

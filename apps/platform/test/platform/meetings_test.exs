@@ -1819,7 +1819,7 @@ defmodule Platform.MeetingsTest do
       :ok
     end
 
-    test "the scribe becomes writable in the meeting's chat space before the signal fires" do
+    test "transcript completion without a finalized meeting run does not invite or dispatch a scribe" do
       # Task 019fb90f stage 2 — the behaviour change, at the layer it actually
       # lands. `maybe_dispatch_scribe_attention/1` already put
       # `transcript.space_id` in the payload, so routing the broadcast through
@@ -1872,20 +1872,13 @@ defmodule Platform.MeetingsTest do
       assert {:ok, %Transcript{status: "complete"}} =
                Meetings.complete_transcript(transcript.id, "the summary text")
 
-      # Positional: invite first, signal second.
-      assert_receive first, 500
-
-      assert {:auto_invite, _event, %{count: 1}, %{outcome: :invited, source: :meeting_scribe}} =
-               first
-
-      assert_receive second, 500
-      assert %Phoenix.Socket.Broadcast{event: "attention"} = second
-
-      assert %Platform.Chat.Participant{attention_mode: "mention", role: "member"} =
-               Platform.Chat.get_agent_participant(space.id, agent.id)
+      # A transcript alone has no finalized meeting run and cannot dispatch.
+      refute_receive {:auto_invite, _, _, _}, 50
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 50
+      refute Platform.Chat.get_agent_participant(space.id, agent.id)
     end
 
-    test "happy path: broadcasts attention signal on runtime topic when scribe role + runtime are wired" do
+    test "a linked scribe is not dispatched for a transcript without a finalized meeting run" do
       user = create_user!()
       agent = create_agent!()
 
@@ -1906,21 +1899,10 @@ defmodule Platform.MeetingsTest do
       assert {:ok, %Transcript{status: "complete"}} =
                Meetings.complete_transcript(transcript.id, "the summary text")
 
-      assert_receive %Phoenix.Socket.Broadcast{
-                       topic: broadcast_topic,
-                       event: "attention",
-                       payload: %{
-                         signal: %{
-                           reason: "meeting_scribe_completion",
-                           space_id: ^space_id,
-                           room_id: ^room_id,
-                           transcript_id: ^transcript_id
-                         }
-                       }
-                     },
-                     500
-
-      assert broadcast_topic == "runtime:#{runtime_id}"
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 50
+      assert transcript_id == transcript.id
+      assert space_id == transcript.space_id
+      assert room_id == transcript.room_id
     end
 
     test "no-scribe fallback: no broadcast, no telemetry, Summarizer path unchanged" do
@@ -1977,17 +1959,8 @@ defmodule Platform.MeetingsTest do
       assert {:ok, %Transcript{status: "complete"}} =
                Meetings.complete_transcript(transcript.id, "runtime offline path")
 
-      agent_id = agent.id
-
-      assert_receive {:telemetry, @scribe_event, %{count: 1},
-                      %{
-                        agent_id: ^agent_id,
-                        reason: :runtime_unresolvable,
-                        actor_type: "system",
-                        resource_type: "agent",
-                        resource_id: ^agent_id
-                      }},
-                     500
+      # No ended/finalized meeting: offline runtime is not contacted yet.
+      refute_receive {:telemetry, @scribe_event, _, _}, 50
     end
   end
 
@@ -2057,7 +2030,7 @@ defmodule Platform.MeetingsTest do
       transcript = create_processing_transcript_with_space()
       canvas = %Platform.Chat.Canvas{id: Ecto.UUID.generate()}
 
-      assert :ok = Meetings.on_scribe_canvas_created(transcript, canvas)
+      assert {:error, :role_unassigned} = Meetings.on_scribe_canvas_created(transcript, canvas)
 
       # Silent no-op: no broadcast and no fallback telemetry.
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 100
@@ -2074,7 +2047,7 @@ defmodule Platform.MeetingsTest do
       transcript = create_processing_transcript_with_space()
       canvas = %Platform.Chat.Canvas{id: Ecto.UUID.generate()}
 
-      assert :ok = Meetings.on_scribe_canvas_created(transcript, canvas)
+      assert {:error, :runtime_unresolvable} = Meetings.on_scribe_canvas_created(transcript, canvas)
 
       agent_id = agent.id
 
