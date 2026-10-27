@@ -6964,30 +6964,58 @@ defmodule Platform.Chat do
   defp after_attention_added(%Space{} = space, %Message{} = message, writer, added, targets) do
     added_ids = Enum.map(added, & &1.participant_id)
 
-    {:ok, _decisions} =
-      Platform.Chat.AttentionRouter.route_attention(message, added_ids, writer)
+    attention_side_effect(message, added_ids, "routing handoff", fn ->
+      case Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+             attention_side_effect(message, added_ids, "routing worker", fn ->
+               # The worker may wait for a busy router; the LiveView never does.
+               # A timed-out request can still dispatch, so do not retry it.
+               {:ok, _decisions} =
+                 Platform.Chat.AttentionRouter.route_attention(message, added_ids, writer, :infinity)
+             end)
+           end) do
+        {:ok, _pid} -> :ok
+        {:error, reason} -> raise "attention routing handoff failed: #{inspect(reason)}"
+      end
+    end)
 
     added_set = MapSet.new(added_ids)
 
-    targets
-    |> Enum.filter(&(&1.participant_type == "user" and MapSet.member?(added_set, &1.id)))
-    |> emit_chat_mention_inbox(
-      message,
-      space,
-      mention_inbox_title(writer.display_name, message, space)
-    )
+    attention_side_effect(message, added_ids, "inbox", fn ->
+      targets
+      |> Enum.filter(&(&1.participant_type == "user" and MapSet.member?(added_set, &1.id)))
+      |> emit_chat_mention_inbox(
+        message,
+        space,
+        mention_inbox_title(writer.display_name, message, space)
+      )
+    end)
 
-    message = %{message | attention: list_message_attention(message.id)}
-    ChatPubSub.broadcast(space.id, {:message_attention_changed, message})
+    attention_side_effect(message, added_ids, "broadcast", fn ->
+      message = %{message | attention: list_message_attention(message.id)}
+      ChatPubSub.broadcast(space.id, {:message_attention_changed, message})
+    end)
+
     :ok
+  end
+
+  defp attention_side_effect(message, recipient_ids, operation, fun) do
+    fun.()
   rescue
     error ->
-      Logger.error(
-        "[Chat] add_message_attention side effects failed for message #{inspect(message.id)}: " <>
-          Exception.format(:error, error, __STACKTRACE__)
-      )
+      log_attention_failure(message, recipient_ids, operation, :error, error, __STACKTRACE__)
+  catch
+    kind, reason ->
+      log_attention_failure(message, recipient_ids, operation, kind, reason, __STACKTRACE__)
+  end
 
-      :ok
+  defp log_attention_failure(message, recipient_ids, operation, kind, reason, stacktrace) do
+    Logger.error(
+      "[Chat] add_message_attention #{operation} failed " <>
+        "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(recipient_ids, ",")}: " <>
+        Exception.format(kind, reason, stacktrace)
+    )
+
+    :ok
   end
 
   @doc """

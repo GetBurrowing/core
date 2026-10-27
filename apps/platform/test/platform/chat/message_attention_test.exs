@@ -176,6 +176,80 @@ defmodule Platform.Chat.MessageAttentionTest do
     end
   end
 
+  # Existing synchronous assertions must wait for this test's unlinked worker.
+  defp add_attention_and_settle(actor, space_id, message_id, ids) do
+    result = Chat.add_message_attention(actor, space_id, message_id, ids)
+    assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+    result
+  end
+
+  describe "post-commit routing isolation" do
+    test "slow routing does not block persistence, human inbox or broadcast and dispatches once" do
+      space = channel!()
+      alice = member!(space, user!("Alice"))
+      bob_user = user!("Bob")
+      bob = member!(space, bob_user)
+      {_agent, zip} = agent!(space, "Zip")
+      message = post!(space, alice, "slow router")
+      :ok = Chat.PubSub.subscribe(space.id)
+      router = Process.whereis(AttentionRouter)
+      :ok = :sys.suspend(router)
+
+      try do
+        started = System.monotonic_time(:millisecond)
+        assert {:ok, %{added: [_, _]}} =
+                 Chat.add_message_attention(actor(alice), space.id, message.id, [
+                   zip.participant_id, bob.participant_id
+                 ])
+        assert System.monotonic_time(:millisecond) - started < 1_000
+        assert length(rows(message.id)) == 2
+        assert length(inbox_rows(bob_user.id)) == 1
+        assert_receive {:message_attention_changed, %Message{id: id}}
+        assert id == message.id
+        refute_receive {:attention_needed, _}, 5_100
+        :ok = :sys.resume(router)
+        assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+        zip_id = zip.id
+        message_id = message.id
+        assert_receive {:attention_needed, %{participant_id: ^zip_id, message_id: ^message_id}}
+        refute_receive {:attention_needed, %{participant_id: ^zip_id, message_id: ^message_id}}, 100
+      after
+        :sys.resume(router)
+      end
+    end
+
+    test "router exit is logged without killing the caller or losing independent side effects" do
+      space = channel!()
+      alice = member!(space, user!("Alice"))
+      {_agent, zip} = agent!(space, "Zip")
+      message = post!(space, alice, "router exit")
+      :ok = Chat.PubSub.subscribe(space.id)
+      router = Process.whereis(AttentionRouter)
+      :ok = :sys.suspend(router)
+
+      log = ExUnit.CaptureLog.capture_log(fn ->
+        try do
+          assert {:ok, %{added: [_]}} =
+                   Chat.add_message_attention(actor(alice), space.id, message.id, [zip.participant_id])
+          assert_eventually(fn ->
+            {:messages, messages} = Process.info(router, :messages)
+            Enum.any?(messages, &match?({:"$gen_call", _, {:route_attention, _, _}}, &1))
+          end)
+          :ok = :sys.terminate(router, :normal)
+          assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+          assert [%MessageAttention{}] = rows(message.id)
+          assert_receive {:message_attention_changed, _}
+        after
+          if Process.alive?(router), do: :sys.resume(router)
+        end
+      end)
+
+      assert log =~ "add_message_attention routing worker failed"
+      assert log =~ "message=#{message.id} space=#{space.id} recipients=#{zip.id}"
+      assert log =~ "exited in: GenServer.call"
+    end
+  end
+
   # ── Own message ────────────────────────────────────────────────────────────
 
   describe "adding attention to your own message" do
@@ -194,7 +268,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       log =
         with_debug_log(fn ->
           assert {:ok, %{added: [row], unchanged: [], refused: []}} =
-                   Chat.add_message_attention(actor(alice), space.id, message.id, [
+                   add_attention_and_settle(actor(alice), space.id, message.id, [
                      zip.participant_id
                    ])
 
@@ -241,7 +315,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [_, _]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [
+               add_attention_and_settle(actor(alice), space.id, message.id, [
                  zip.participant_id,
                  nova.participant_id
                ])
@@ -263,7 +337,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       message = post!(space, alice, "the build is red")
 
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(bob), space.id, message.id, [zip.participant_id])
+               add_attention_and_settle(actor(bob), space.id, message.id, [zip.participant_id])
 
       assert [row] = rows(message.id)
       assert row.added_by_participant_id == bob.id
@@ -288,7 +362,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       ids = [ctx.zip.participant_id]
 
       assert {:error, :forbidden} =
-               Chat.add_message_attention(
+               add_attention_and_settle(
                  {:user, Ecto.UUID.generate()},
                  ctx.space.id,
                  ctx.message.id,
@@ -296,10 +370,10 @@ defmodule Platform.Chat.MessageAttentionTest do
                )
 
       assert {:error, :forbidden} =
-               Chat.add_message_attention(nil, ctx.space.id, ctx.message.id, ids)
+               add_attention_and_settle(nil, ctx.space.id, ctx.message.id, ids)
 
       assert {:error, :forbidden} =
-               Chat.add_message_attention(
+               add_attention_and_settle(
                  {:agent, ctx.agent.id},
                  ctx.space.id,
                  ctx.message.id,
@@ -310,7 +384,7 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       # POSITIVE CONTROL: same space, message and principal, a member.
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, ctx.message.id, ids)
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, ctx.message.id, ids)
     end
 
     test "a member of ANOTHER space cannot add attention to this one's message", ctx do
@@ -318,7 +392,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       mallory = member!(other, user!("Mallory"))
 
       assert {:error, :forbidden} =
-               Chat.add_message_attention(actor(mallory), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(mallory), ctx.space.id, ctx.message.id, [
                  ctx.zip.participant_id
                ])
 
@@ -332,14 +406,14 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       # The actor IS a member of both spaces; only the space/message pairing is forged.
       assert {:error, :not_found} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, foreign.id, [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, foreign.id, [
                  ctx.zip.participant_id
                ])
 
       assert rows(foreign.id) == []
 
       assert {:ok, _} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, ctx.message.id, [
                  ctx.zip.participant_id
                ])
     end
@@ -348,17 +422,17 @@ defmodule Platform.Chat.MessageAttentionTest do
       {:ok, _} = Chat.delete_message(ctx.message)
 
       assert {:error, :not_found} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, ctx.message.id, [
                  ctx.zip.participant_id
                ])
 
       assert {:error, :not_found} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, Ecto.UUID.generate(), [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, Ecto.UUID.generate(), [
                  ctx.zip.participant_id
                ])
 
       assert {:error, :not_found} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, "not-a-uuid", [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, "not-a-uuid", [
                  ctx.zip.participant_id
                ])
 
@@ -369,7 +443,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       {:ok, _} = Chat.archive_space(ctx.space)
 
       assert {:error, :space_archived} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, ctx.message.id, [
                  ctx.zip.participant_id
                ])
 
@@ -383,7 +457,7 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       # Alice is author AND actor.
       assert {:error, :invalid} =
-               Chat.add_message_attention(actor(ctx.alice), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(ctx.alice), ctx.space.id, ctx.message.id, [
                  ctx.alice.participant_id,
                  "here",
                  stranger
@@ -391,19 +465,19 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       # Bob is actor; Alice is author.
       assert {:error, :invalid} =
-               Chat.add_message_attention(actor(bob), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(bob), ctx.space.id, ctx.message.id, [
                  bob.participant_id,
                  ctx.alice.participant_id
                ])
 
       assert {:error, :invalid} =
-               Chat.add_message_attention(actor(bob), ctx.space.id, ctx.message.id, [])
+               add_attention_and_settle(actor(bob), ctx.space.id, ctx.message.id, [])
 
       assert rows(ctx.message.id) == []
 
       # POSITIVE CONTROL: the dropped ids ride along with a real one.
       assert {:ok, %{added: [row]}} =
-               Chat.add_message_attention(actor(bob), ctx.space.id, ctx.message.id, [
+               add_attention_and_settle(actor(bob), ctx.space.id, ctx.message.id, [
                  bob.participant_id,
                  ctx.alice.participant_id,
                  "here",
@@ -428,7 +502,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       ids = [zip.participant_id, bob.participant_id]
 
       assert {:ok, %{added: [_, _], unchanged: []}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, ids)
+               add_attention_and_settle(actor(alice), space.id, message.id, ids)
 
       zip_id = zip.id
       bob_id = bob.id
@@ -438,7 +512,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       flush_mailbox()
 
       assert {:ok, %{added: [], unchanged: [_, _]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, ids)
+               add_attention_and_settle(actor(alice), space.id, message.id, ids)
 
       refute_receive {:attention_needed, _}, 200
       refute_received {:message_attention_changed, _}
@@ -461,7 +535,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [zip.participant_id])
+               add_attention_and_settle(actor(alice), space.id, message.id, [zip.participant_id])
 
       zip_id = zip.id
       assert_receive {:attention_needed, %{participant_id: ^zip_id, reason: :mention}}
@@ -480,7 +554,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [zip.participant_id])
+               add_attention_and_settle(actor(alice), space.id, message.id, [zip.participant_id])
 
       zip_id = zip.id
       assert_receive {:attention_needed, %{participant_id: ^zip_id, reason: :mention}}
@@ -501,7 +575,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [row]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [bob_user.id])
+               add_attention_and_settle(actor(alice), space.id, message.id, [bob_user.id])
 
       assert row.participant_type == "user"
       bob_id = bob.id
@@ -539,7 +613,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [], unchanged: [], refused: [%Agent{id: refused_id}]}} =
-               Chat.add_message_attention(actor(bob), space.id, message.id, [outsider.id])
+               add_attention_and_settle(actor(bob), space.id, message.id, [outsider.id])
 
       assert refused_id == outsider.id
       assert Chat.get_agent_participant(space.id, outsider.id) == nil
@@ -548,7 +622,7 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       # POSITIVE CONTROL: the same agent, an admin actor.
       assert {:ok, %{added: [row], refused: []}} =
-               Chat.add_message_attention(actor(admin), space.id, message.id, [outsider.id])
+               add_attention_and_settle(actor(admin), space.id, message.id, [outsider.id])
 
       seated = Chat.get_agent_participant(space.id, outsider.id)
       assert row.participant_id == seated.id
@@ -572,7 +646,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       message = post!(dm, alice, "just us")
 
       assert {:error, :invalid} =
-               Chat.add_message_attention(actor(alice), dm.id, message.id, [outsider.id])
+               add_attention_and_settle(actor(alice), dm.id, message.id, [outsider.id])
 
       assert Chat.get_agent_participant(dm.id, outsider.id) == nil
     end
@@ -593,14 +667,14 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = Chat.PubSub.subscribe(space.id)
 
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [zip.participant_id])
+               add_attention_and_settle(actor(alice), space.id, message.id, [zip.participant_id])
 
       zip_id = zip.id
       assert_receive {:attention_needed, %{participant_id: ^zip_id, reason: :mention}}
 
       # Zip's stub reply is a NEW message that routes on its own; only signals
       # for THIS message id are about the added attention.
-      # route_attention/3 is a call: every signal for M is already in the mailbox.
+      # The supervised routing worker has settled: all signals for M are in the mailbox.
       message_id = message.id
 
       for p <- [holder, nova, carol] do
@@ -666,7 +740,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       message = post!(space, alice, "a message that does not name the agent")
 
       assert {:ok, %{added: [_]}} =
-               Chat.add_message_attention(actor(alice), space.id, message.id, [agent.id])
+               add_attention_and_settle(actor(alice), space.id, message.id, [agent.id])
 
       assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
       signal = payload[:signal] || payload["signal"]
@@ -685,7 +759,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       {_z, zip} = agent!(space, "Zip")
       one = post!(space, alice, "one")
       two = post!(space, alice, "two")
-      {:ok, _} = Chat.add_message_attention(actor(alice), space.id, one.id, [zip.participant_id])
+      {:ok, _} = add_attention_and_settle(actor(alice), space.id, one.id, [zip.participant_id])
 
       assert %{} = map = Chat.attention_by_message_ids([one.id, two.id, "junk"])
       assert Map.keys(map) == [one.id]

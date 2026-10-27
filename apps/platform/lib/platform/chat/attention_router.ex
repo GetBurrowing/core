@@ -195,11 +195,14 @@ defmodule Platform.Chat.AttentionRouter do
   """
   @spec route_attention(Message.t(), [binary()], Participant.t() | nil) ::
           {:ok, [%{participant_id: binary(), reason: atom()}]}
-  def route_attention(%Message{} = message, added_participant_ids, adder)
+  def route_attention(message, added_participant_ids, adder, timeout \\ 5_000)
+
+  def route_attention(%Message{} = message, added_participant_ids, adder, timeout)
       when is_list(added_participant_ids) do
     GenServer.call(
       __MODULE__,
-      {:route_attention, message, %{ids: MapSet.new(added_participant_ids), adder: adder}}
+      {:route_attention, message, %{ids: MapSet.new(added_participant_ids), adder: adder}},
+      timeout
     )
   end
 
