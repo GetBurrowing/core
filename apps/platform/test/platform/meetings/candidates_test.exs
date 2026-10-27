@@ -646,25 +646,14 @@ defmodule Platform.Meetings.CandidatesTest do
       %{meeting: create_meeting!(acme_org_id())}
     end
 
-    test "a :task candidate gets a real task, and canvas_id stays nil", %{meeting: meeting} do
-      {:ok, candidate} =
-        Candidates.create(candidate_attrs(meeting.id, %{outcome_kind: :task}))
-
+    test "a task candidate requires final triage, including direct graduate callers", %{
+      meeting: meeting
+    } do
+      {:ok, candidate} = Candidates.create(candidate_attrs(meeting.id, %{outcome_kind: :task}))
       before_count = Repo.aggregate(Platform.Tasks.Task, :count)
-
-      assert {:ok, graduated} = Candidates.graduate(candidate)
-
-      assert graduated.task_id
-      assert graduated.canvas_id == nil
-      assert graduated.state == :closed
-      assert graduated.disposition == :accepted
-      assert graduated.closed_reason == :done
-
-      # A real row, in the meeting's project — not merely a non-nil id.
-      task = Repo.get(Platform.Tasks.Task, graduated.task_id)
-      assert task
-      assert task.project_id == meeting.project_id
-      assert Repo.aggregate(Platform.Tasks.Task, :count) == before_count + 1
+      assert {:error, :task_requires_triage} = Candidates.graduate(candidate)
+      assert Repo.aggregate(Platform.Tasks.Task, :count) == before_count
+      assert Candidates.get(candidate.id).task_id == nil
     end
 
     test "an :artifact candidate gets a canvas and NO task at all", %{meeting: meeting} do
@@ -690,7 +679,7 @@ defmodule Platform.Meetings.CandidatesTest do
       assert graduated.disposition == :accepted
     end
 
-    test "a frozen project surfaces the create_task/2 error and leaves the candidate un-closed",
+    test "a frozen project still requires final triage and leaves the candidate un-closed",
          %{meeting: meeting} do
       Repo.get!(Platform.Tasks.Project, meeting.project_id)
       |> Ecto.Changeset.change(%{archived_at: DateTime.utc_now()})
@@ -701,7 +690,7 @@ defmodule Platform.Meetings.CandidatesTest do
 
       before_count = Repo.aggregate(Platform.Tasks.Task, :count)
 
-      assert {:error, :project_archived} = Candidates.graduate(candidate)
+      assert {:error, :task_requires_triage} = Candidates.graduate(candidate)
 
       assert Repo.aggregate(Platform.Tasks.Task, :count) == before_count
 

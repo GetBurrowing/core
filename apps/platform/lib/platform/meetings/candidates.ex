@@ -549,7 +549,10 @@ defmodule Platform.Meetings.Candidates do
   # `nil` is written, not omitted: `reconcile/2` UPDATES a row that is
   # already armed, so leaving the key out leaves the deadline standing.
   defp put_disarm_if_unroutable(attrs) do
-    if routable_attrs?(attrs), do: attrs, else: Map.put(attrs, :acts_at, nil)
+    if (attr(attrs, :outcome_kind) || :task) in [:task, "task"] or
+         not routable_attrs?(attrs),
+       do: Map.put(attrs, :acts_at, nil),
+       else: attrs
   end
 
   # Only a SKELETON is reconcilable. A row that already carries a
@@ -1546,7 +1549,7 @@ defmodule Platform.Meetings.Candidates do
     with {:ok, %MeetingCandidate{id: id}} <- fetch(candidate_or_id),
          {:ok, %MeetingCandidate{} = candidate} <- fetch(id) do
       cond do
-        candidate.state == :closed ->
+        candidate.outcome_kind == :task or candidate.state == :closed ->
           {:error, :not_armed}
 
         is_nil(candidate.acts_at) ->
@@ -1678,6 +1681,11 @@ defmodule Platform.Meetings.Candidates do
   end
 
   defp apply_correction(candidate, %{apply: {:update, changes}}, _opts, now) do
+    changes =
+      if Map.get(changes, :outcome_kind, candidate.outcome_kind) == :task,
+        do: Map.put(changes, :acts_at, nil),
+        else: changes
+
     with {:ok, %MeetingCandidate{} = corrected} <-
            candidate |> MeetingCandidate.changeset(changes) |> Repo.update() do
       rearm_after_correction(corrected, now)
@@ -1748,107 +1756,10 @@ defmodule Platform.Meetings.Candidates do
   end
 
   @doc """
-  Atomically claim every candidate whose countdown is due, and return
-  the claimed rows.
-
-  This is the sweeper's whole read-and-write, and it is ONE statement on
-  purpose. A `SELECT` followed by a `graduate/2` is not safe here:
-  `graduate/2` has no guard of its own, there is no advisory lock,
-  leader election or `:global` registration anywhere in `lib/`, and
-  every sweeper in this codebase is node-local and boot-flag gated. Two
-  nodes sweeping one meeting would both clear the read and both reach
-  `mint/1` — one candidate, two tasks. The claim is what makes the fire
-  exactly-once, and the idempotence lives in the data exactly as it does
-  for every other sweeper here.
-
-  Claiming sets `acts_at` to nil (so the row cannot be re-claimed even
-  if the state write were later rolled forward) and moves the row to
-  `:acting`, stamping `acted_at` only if it is not already stamped —
-  the same first-entry-wins rule `advance/3` applies.
-
-  `automation_mode` is re-checked HERE as well as at arming time. A
-  meeting muted after its cards were armed must not fire them, and that
-  is the requirement that cannot be traded away, so it is a join in the
-  claim rather than a filter the caller could forget.
-
-  ## `:acting` is NOT an eligibility filter (task 01a06575 stage 2)
-
-  It used to be, and that is the whole reason production reached 280
-  candidates with ZERO `task_id`s — including the ones the classifier
-  had labelled correctly.
-
-  `:acting` has two authors that mean different things by it. This
-  module writes it as the sweeper's own claim marker in `claim_ids/2`.
-  `Platform.Meetings.IntentQueue.Server`'s ack mirror ALSO writes it,
-  from `apply_ack_status(candidate, :working)`, meaning "the agent this
-  was dispatched to has picked it up". The live rail always produces the
-  second one, and within a second or two: `IntentContext.ack_preamble/1`
-  is composed onto the front of the recipient's system turn precisely so
-  it acks immediately. So every correctly-classified, routable card was
-  `:acting` long before its 30-second deadline, and this filter then made
-  it permanently unclaimable. The countdown never fired for a single one
-  of them.
-
-  The filter was never what made the claim exactly-once. `acts_at IS NOT
-  NULL` on the UPDATE in `claim_ids/2` is — the claim nils it in the same
-  statement, and Postgres re-evaluates the predicate after taking the row
-  lock, so a second sweeper's UPDATE simply does not match. That is what
-  the paragraph above already says. `:closed` is the only STATE that is
-  an eligibility question, and it stays.
-
-  ## An unclassified card is not due (task 01a06575 round 3)
-
-  `classified_intent IS NOT NULL` is the other eligibility question, and
-  it is about vetting rather than about state.
-
-  A skeleton is armed at the moment somebody SPOKE, before the model has
-  answered — deliberately, so the deadline is not moved by the model's
-  latency (`put_armed_acts_at/1`). The answer normally lands a second or
-  two later and `reconcile/2` either keeps the deadline or takes it away.
-  But the answer can simply be SLOW: `Platform.Meetings.Countdown`
-  documents the inversion, and the short version is that the providers
-  allow a model call twice as long as this countdown while the sweeper
-  ticks every second. `routable_attrs?/1` cannot help — every other
-  outcome closes the skeleton through `IntentClassifier.close_skeleton/4`,
-  but slow is not an outcome, and the sweeper arrives before any outcome
-  exists. The card graduated carrying `classified_intent: nil`, into a
-  task titled with the raw utterance, vetted by nothing.
-
-  Note WHERE this sits. It is an eligibility filter and not a refusal
-  inside `fire/1`, and the difference is the whole behaviour:
-
-    * As eligibility, an unvetted card is passed over and keeps its
-      deadline, so the instant its classification lands it is claimed on
-      the next tick (routable) or disarmed by `reconcile/2` (not). A late
-      answer costs the card the model's latency and nothing else.
-    * As a refusal after the claim, the card would already have been
-      moved to `:acting` with `acts_at` nilled, and would never fire at
-      all. That is how a correctly-classified ask silently stops
-      producing anything — the 0-of-280 shape this task began with.
-
-  It is deliberately NOT in `graduate/2`. That function is also reached
-  from `PlatformWeb.MeetingLive`'s `Go ahead` button, where a human has
-  looked at the card and said yes; the rule here is about the rail that
-  acts with nobody watching.
-
-  ## An unclassified card is reaped, not graduated (task 01a06638)
-
-  The eligibility rule above has a tail: a skeleton whose classification
-  NEVER arrives — the classifier crashed mid-call, the chunk was never
-  queued, the provider timed out and `close_skeleton/4` was not reached
-  — keeps its deadline forever. It is armed, overdue, unclassified, and
-  passed over on every tick for the life of the row: it never fires and
-  never closes. That orphan is what `reap_unclassified/2` closes.
-
-  The bound is `acts_at + grace`, and the grace is pinned to the SLOWEST
-  genuine answer the shipped classifier path can produce —
-  `Platform.Meetings.CandidateSweeper.default_unclassified_grace_ms/0`,
-  which the sweeper's tests hold at or above every provider's receive
-  timeout. Inside the grace the card is merely late and the rule above
-  applies untouched; past it there is no answer coming, and the card is
-  closed with reason `:unclassified` and disposition `:timed_out`, on
-  the record and through `close/2`, so the rail narrates it. Nothing is
-  minted and no classification is re-requested.
+  Claim due, classified artifact candidates in automated meetings.
+  Task candidates, including stale armed rows, remain evidence for final triage.
+  The conditional update disarms each artifact so competing sweepers cannot
+  create two canvases. Unclassified artifact orphans are reaped separately.
   """
   @spec claim_due(DateTime.t(), keyword()) :: [MeetingCandidate.t()]
   def claim_due(now \\ DateTime.utc_now(), opts \\ []) do
@@ -1863,6 +1774,7 @@ defmodule Platform.Meetings.Candidates do
       # Unvetted cards are not due. See "An unclassified card is not due"
       # above — this is what stops a model call slower than the countdown
       # graduating a card nothing ever classified.
+      |> where([c], c.outcome_kind == :artifact)
       |> where([c], not is_nil(c.classified_intent))
       # `automation_mode == :off` is `intent_muted_at` being set — one
       # switch, not two. See `Platform.Meetings.automation_mode/1`.
@@ -1899,6 +1811,7 @@ defmodule Platform.Meetings.Candidates do
       # reconciled since. A row that gained a classification in between
       # is fine to claim; one that never had one must not be, and the
       # statement that WRITES is the one that has to say so.
+      |> where([c], c.outcome_kind == :artifact)
       |> where([c], not is_nil(c.classified_intent))
       |> select([c], c)
       |> Repo.update_all(
@@ -1980,18 +1893,8 @@ defmodule Platform.Meetings.Candidates do
   end
 
   @doc """
-  Fire one claimed candidate: mint its deliverable and narrate it.
-
-  Separate from `claim_due/2` so the claim stays a single statement and
-  the minting — which reaches `Platform.Tasks.create_task/2` and can
-  fail on an archived project — happens outside it.
-
-  A failed mint leaves the row `:acting` and DISARMED. It is not
-  re-armed: `graduate/2` propagates `{:error, :project_archived}` for a
-  frozen project, and a sweeper that re-armed on failure would retry
-  that same permanent error every second for the life of the meeting.
-  The row stays visible as an `:acting` candidate with no deliverable,
-  which is the truthful reading of what happened.
+  Create a claimed artifact canvas and narrate it. Task candidates are refused
+  by graduate/2, even when a caller holds a stale pre-cutover struct.
   """
   @spec fire(MeetingCandidate.t()) :: {:ok, MeetingCandidate.t()} | {:error, term()}
   def fire(%MeetingCandidate{} = candidate) do
@@ -2015,27 +1918,13 @@ defmodule Platform.Meetings.Candidates do
     end
   end
 
-  # The arming arithmetic, applied to the attrs a create is about to
-  # write. Four things have to be true before a card counts down, and
-  # each of them is a `nil` here rather than a raise:
-  #
-  #   * there is an utterance time to count from,
-  #   * the row is not being created already closed,
-  #   * the meeting's automation is on,
-  #   * the classification the row carries, if it carries one at all,
-  #     names somebody it could reach (`routable_attrs?/1`).
-  #
-  # The automation check at ARMING time is what stops an "off" meeting
-  # becoming a landmine: without it a muted meeting would accumulate
-  # cards with deadlines in the past and fire all of them the instant
-  # somebody turned automation back on. Cards opened while it is off are
-  # simply never armed, so switching on affects what happens next and
-  # nothing that already happened.
-  #
-  # The routability check is there for the same reason in the same
-  # place. See `routable_attrs?/1`.
+  # Only artifact candidates may count down. Ignore even explicit task
+  # deadlines: old callers must not revive live task filing.
   defp put_armed_acts_at(attrs) do
     cond do
+      (attr(attrs, :outcome_kind) || :task) in [:task, "task"] ->
+        attrs |> Map.delete("acts_at") |> Map.put(:acts_at, nil)
+
       Map.has_key?(attrs, :acts_at) or Map.has_key?(attrs, "acts_at") ->
         attrs
 
@@ -2126,6 +2015,7 @@ defmodule Platform.Meetings.Candidates do
 
   # An already-disarmed card stays disarmed — a stop is not undone by
   # somebody carrying on talking, and neither is an "off" meeting.
+  defp extended_acts_at(%MeetingCandidate{outcome_kind: :task}, _at), do: nil
   defp extended_acts_at(%MeetingCandidate{acts_at: nil}, _at), do: nil
 
   defp extended_acts_at(%MeetingCandidate{}, at), do: Countdown.acts_at(at)
@@ -2137,58 +2027,9 @@ defmodule Platform.Meetings.Candidates do
   # ── graduate ──────────────────────────────────────────────────────────────
 
   @doc """
-  Turn a candidate into its deliverable and close it out.
-
-  The pipeline is identical for both `outcome_kind`s — resolve the
-  meeting, mint the deliverable, record `:accepted`, close `:done`.
-  ONLY the minting step differs:
-
-    * `:task` — `Platform.Tasks.create_task/2` against the meeting's
-      `project_id`; the new task id lands in `task_id` and `canvas_id`
-      stays nil.
-    * `:artifact` — `Platform.Chat.create_canvas/1` in the meeting's
-      `chat_space_id`; the new canvas id lands in `canvas_id` and NO
-      TASK IS CREATED. `task_id` stays nil.
-
-  The artifact branch has no code path that reaches `create_task/2`.
-  The stage-1 changeset rule (artifact + `task_id` is invalid) is a
-  backstop, not the mechanism: an artifact candidate is one where the
-  canvas IS the deliverable, so there is nothing to create.
-
-  `create_task/2` goes through `Platform.Tenancy.Lifecycle.ensure_project_writable/1`
-  and returns `{:error, :project_archived}` for a frozen project. That
-  error is PROPAGATED, and the candidate is left un-closed so the call
-  can be retried once the project thaws. Same for a canvas failure.
-
-  ## Options
-
-    * `:project_id` — override the task's project (default: the
-      meeting's `project_id`).
-    * `:space_id` — override the canvas's space (default: the meeting's
-      `chat_space_id` — note `meetings` has NO `space_id` column; the
-      chat space is `chat_space_id`).
-    * `:created_by` — canvas creator participant (default: the
-      meeting's `host_participant_id`).
-    * `:title` / `:description` — deliverable copy; both default from
-      the candidate's `evidence_quote`.
-    * `:task_attrs` / `:canvas_attrs` — merged last over the built
-      attrs for a caller with better context.
-
-  ## Provenance
-
-  A minted TASK carries `metadata` naming the meeting and the candidate
-  it came from (`"source" => "meetings.candidate"`). That backlink is
-  the join key the post-meeting reconciliation pass reads — see
-  `Platform.Meetings.Triage` — and it is the direction
-  `meeting_candidates.task_id` does not answer. A caller's
-  `:task_attrs` still wins, since it is merged last.
-
-  Since task 01a03fba this IS reached in production, from
-  `Platform.Meetings.CandidateSweeper` via `fire/1` — the server-side
-  countdown. Since task 01a03f4e-78b1 it is ALSO reached from a
-  LiveView: `PlatformWeb.MeetingLive`'s `approve_candidate` handler is
-  the `Go ahead` button on the meeting task board, which is the "board
-  that calls it" this doc used to be waiting for.
+  Create an artifact canvas and close its candidate. Task candidates return
+  `{:error, :task_requires_triage}`: only end-of-meeting triage files tasks.
+  Canvas options are `:space_id`, `:created_by`, `:title` and `:canvas_attrs`.
   """
   @spec graduate(MeetingCandidate.t() | binary(), keyword() | map()) ::
           {:ok, MeetingCandidate.t()} | {:error, term()}
@@ -2206,178 +2047,18 @@ defmodule Platform.Meetings.Candidates do
 
   # ── complete by ack (task 01a06638-e7c7) ──────────────────────────────────
 
-  @doc """
-  The recipient agent said `:completed` — mint the task anyway, already
-  `done`.
-
-  This is the ack mirror's `:completed` arm, moved here from
-  `Platform.Meetings.IntentQueue.Server.close_ack/4` because it now
-  WRITES a deliverable, and a deliverable is minted in exactly one
-  module. The decision it implements (product decision, 2026-09-03): an agent that
-  finishes an armed task-rail candidate before its 30-second countdown
-  fires does not cancel the task, it closes it. The task board is the
-  log of what the meeting decided, and a decision that got acted on
-  inside 30 seconds is still a decision. Before this, the ack recorded
-  `:accepted` / `:done` on the candidate and minted NOTHING — so the
-  faster the agent, the emptier the board. There is deliberately no
-  flag for this: the board either is the log or is not.
-
-  ## Ownership
-
-  The ack races the sweeper for the same row, exactly as `stop/2` does,
-  and it takes ownership the same way — one conditional `UPDATE` that
-  nils `acts_at`, so whoever commits first leaves the other's `WHERE`
-  unsatisfiable:
-
-      UPDATE meeting_candidates
-         SET acts_at = NULL, queue_status = 'completed'
-       WHERE id = $1
-         AND state <> 'closed'
-         AND acts_at IS NOT NULL
-         AND outcome_kind = 'task'
-         AND task_id IS NULL
-
-  Win the claim and this call mints. Lose it — or never have a claim to
-  win — and this call only records what the ack said, which is what
-  `close_ack/4` always did. A `SELECT` followed by `graduate/2` would
-  not do: `graduate/2` has no guard of its own, and the sweeper's
-  `claim_ids/2` is one statement away from minting the same card.
-
-  ## The minted task
-
-  `status: "done"` at INSERT. `Platform.Tasks.Task.changeset/2` casts
-  `:status` and validates it against the status list, and its
-  `prepare_changes(&record_status_transition/1)` hook skips inserts on
-  purpose — the parent `tasks` row does not exist yet when it runs — so
-  this writes no `task_phase_transitions` row and consults nothing in
-  `Platform.Tasks.valid_task_transitions/0`. That is the correct
-  reading, not a loophole: the task never WAS `backlog`, so there is no
-  transition to record. Its first interval is anchored at `inserted_at`
-  like every other task's.
-
-  The task's `metadata` keeps `provenance_metadata/1`'s three keys —
-  `Platform.Meetings.Triage` reads `"source"` — and adds how it got
-  here: `"completed_via" => "meeting_intent_ack"`, the ack time, and the
-  intent id. A `:task_attrs` `metadata` REPLACES the provenance map
-  rather than merging into it, which is why the merge is done here.
-
-  ## When the mint fails
-
-  `graduate/2` propagates `{:error, :project_archived}` from
-  `Platform.Tasks.create_task/2` and leaves the candidate open. That is
-  right for the sweeper (`fire/1` documents why) and wrong here: the
-  claim above already disarmed the row, the agent already said it is
-  finished, and a disarmed-and-open card is one nothing will ever close.
-  So a failed mint logs and falls through to the record-only close —
-  the same row the ack would have produced before this function existed.
-
-  Always `:ok`: this is a recording act reached from the mirror, and the
-  mirror's contract is that recording degrades, never propagates.
-  """
+  @doc "Record a completed live intent without filing a task or canvas."
   @spec complete_by_ack(MeetingCandidate.t()) :: :ok
-  def complete_by_ack(%MeetingCandidate{} = candidate) do
-    now = DateTime.utc_now()
-
-    claimed =
-      MeetingCandidate
-      |> where([c], c.id == ^candidate.id)
-      |> where([c], c.state != :closed)
-      # The exactly-once guard, and the same one `claim_ids/2` uses: the
-      # `set:` below nils `acts_at`, so the sweeper re-evaluating ITS
-      # `acts_at IS NOT NULL` under the row lock finds nothing — and if
-      # the sweeper got here first, this finds nothing. It also answers
-      # "was this ever going to fire?": a card that was never armed
-      # (muted meeting, `off_topic`, unroutable) has a nil `acts_at`,
-      # and an ack does not mint what the countdown would not have.
-      |> where([c], not is_nil(c.acts_at))
-      # The artifact rail's deliverable is a canvas, and nothing on the
-      # ack path creates one. See `graduate/2`.
-      |> where([c], c.outcome_kind == :task)
-      # Belt to the braces above: a card that already has its task must
-      # not get a second one, whatever `acts_at` says.
-      |> where([c], is_nil(c.task_id))
-      |> select([c], c.id)
-      # `queue_status` rides along because it is a fact already true of
-      # the queue row by the time the mirror runs, and `graduate/2` has
-      # no slot to record it — see `record_only_close/2` for the other
-      # branch, where `record_disposition/3` carries it instead.
-      |> Repo.update_all(set: [acts_at: nil, queue_status: "completed", updated_at: now])
-
-    case claimed do
-      {1, _} ->
-        task_attrs = %{
-          status: "done",
-          metadata:
-            Map.merge(provenance_metadata(candidate), %{
-              "completed_via" => "meeting_intent_ack",
-              "acked_at" => DateTime.to_iso8601(now),
-              "intent_id" => candidate.intent_id
-            })
-        }
-
-        # The ID, not the struct: `fetch/1`'s struct clause returns its
-        # argument untouched, and the struct the mirror handed in
-        # predates the claim above.
-        case graduate(candidate.id, task_attrs: task_attrs) do
-          {:ok, _graduated} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning(
-              "meeting candidate complete-by-ack mint failed, closing without a task: " <>
-                "candidate=#{candidate.id} reason=#{inspect(reason)}"
-            )
-
-            record_only_close(candidate)
-        end
-
-      _ ->
-        # Nothing to claim. Every way here is one where the countdown
-        # would not have minted either, so the ack does not:
-        #
-        #   * the sweeper claimed it first (`acts_at` already nil, state
-        #     `:acting`) — it is minting, or has minted (`task_id` set);
-        #   * a human pressed stop (`acts_at` nil, then `:closed`);
-        #   * it was never armed — muted meeting, `off_topic`, unroutable
-        #     — and `put_armed_acts_at/1` left `acts_at` nil;
-        #   * it is an `:artifact` candidate;
-        #   * it already carries a `task_id`.
-        #
-        # What remains is what `close_ack/4` always recorded.
-        record_only_close(candidate)
-    end
-
-    :ok
-  end
-
-  # The pre-01a06638 shape of a `:completed` ack, kept as the fallback:
-  # `:accepted` with the queue status, then `:done`. By ID so both calls
-  # re-read the row — `close/2` is idempotent on a `:closed` row ONLY if
-  # it sees that the row is closed, and the struct we hold predates the
-  # claim. Neither call's error is the mirror's business.
-  defp record_only_close(%MeetingCandidate{id: id}) do
-    _ = record_disposition(id, :accepted, %{queue_status: "completed"})
+  def complete_by_ack(%MeetingCandidate{id: id}) do
+    # Re-read by id: repeated acknowledgements may carry a stale struct.
+    _ = record_disposition(id, :accepted, %{queue_status: "completed", acts_at: nil})
     _ = close(id, :done)
     :ok
   end
 
-  # The one difference between the two kinds.
-  defp mint(candidate, :task, opts) do
-    meeting = meeting_for(candidate)
-
-    attrs =
-      %{
-        project_id: Map.get(opts, :project_id) || meeting_field(meeting, :project_id),
-        title: deliverable_title(candidate, opts),
-        description: Map.get(opts, :description) || candidate.evidence_quote,
-        metadata: provenance_metadata(candidate)
-      }
-      |> Map.merge(Map.get(opts, :task_attrs, %{}))
-
-    with {:ok, task} <- Platform.Tasks.create_task(attrs) do
-      {:ok, {:task_id, task.id}}
-    end
-  end
+  # Tasks belong to end-of-meeting triage, including direct callers of
+  # graduate/2 and stale pre-cutover candidates.
+  defp mint(_candidate, :task, _opts), do: {:error, :task_requires_triage}
 
   defp mint(candidate, :artifact, opts) do
     meeting = meeting_for(candidate)
@@ -2393,27 +2074,6 @@ defmodule Platform.Meetings.Candidates do
     with {:ok, canvas} <- Platform.Chat.create_canvas(attrs) do
       {:ok, {:canvas_id, canvas.id}}
     end
-  end
-
-  # The task→candidate backlink (task 01a03fda).
-  #
-  # `meeting_candidates.task_id` already answers "what did THIS candidate
-  # produce". It does not answer the question a reader holding a task
-  # asks — "where did this come from" — and that is the direction the
-  # post-meeting reconciliation pass needs, because it starts from the
-  # meeting and from tasks, not from a candidate it has never seen.
-  #
-  # `"source"` is deliberately `"meetings.candidate"` and NOT
-  # `"meetings.triage"`: `Platform.Meetings.Triage` counts its own
-  # backlog against `metadata->>'source' = <its source>`, so a live-path
-  # task wearing the triage source string would silently consume the
-  # triage backlog cap for work triage never filed.
-  defp provenance_metadata(%MeetingCandidate{} = candidate) do
-    %{
-      "source" => "meetings.candidate",
-      "meeting_id" => candidate.meeting_id,
-      "candidate_id" => candidate.id
-    }
   end
 
   defp record_deliverable(candidate, {column, id}) do

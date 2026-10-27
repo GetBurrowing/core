@@ -168,6 +168,8 @@ defmodule Platform.Meetings.CandidateSweeper do
     now
     |> Candidates.claim_due(limit: batch_size)
     |> Enum.flat_map(fn candidate ->
+      # claim_due/2 selects artifact candidates only; graduate/2 also
+      # refuses task candidates, including stale pre-cutover rows.
       case Candidates.fire(candidate) do
         {:ok, fired} ->
           :telemetry.execute(

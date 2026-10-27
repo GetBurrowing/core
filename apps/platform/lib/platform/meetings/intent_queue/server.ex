@@ -1421,12 +1421,8 @@ defmodule Platform.Meetings.IntentQueue.Server do
     })
   end
 
-  # The ack mirror reads the ACK status, not the destination status:
-  # `:completed` and `:rejected` both land the row on `:completed`, and
-  # collapsing them here is exactly how a corpus of 100% negatives (or
-  # 100% positives) gets built. `:completed` is the one arm that WRITES
-  # a deliverable — `Candidates.complete_by_ack/1` mints the task, at
-  # `done`, and owns the race with the sweeper (task 01a06638-e7c7).
+  # Preserve the ACK disposition: rejected and completed share a queue
+  # status but teach different things. Completed records no deliverable.
   defp mirror_ack(state, row, ack_status) do
     mirror(%{
       meeting_id: state.meeting_id,
@@ -1458,10 +1454,6 @@ defmodule Platform.Meetings.IntentQueue.Server do
     :ok
   end
 
-  # Not `close_ack/4`: a completed ack on an armed task candidate mints
-  # the task the countdown would have, already `done`. The record-only
-  # close is what `complete_by_ack/1` falls back to when there is
-  # nothing to mint.
   defp apply_ack_status(candidate, :completed),
     do: Candidates.complete_by_ack(candidate)
 
