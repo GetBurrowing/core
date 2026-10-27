@@ -59,6 +59,8 @@ defmodule Platform.Regression.LazyHtmlSelectorGuidanceAuditTest do
 
   use ExUnit.Case, async: true
 
+  alias Platform.TestSupport.SourceIndex
+
   @repo_root Path.expand("../../../../..", __DIR__)
 
   # The CALL form. `LazyHTML.filter/2` (the arity form used in prose) does not
@@ -134,12 +136,12 @@ defmodule Platform.Regression.LazyHtmlSelectorGuidanceAuditTest do
   defp markdown_corpus do
     @repo_root
     |> Path.join("**/*.md")
-    |> Path.wildcard()
+    |> SourceIndex.wildcard()
     |> Enum.reject(
       &(String.contains?(&1, "/_build/") or String.contains?(&1, "/deps/") or
           String.contains?(&1, "/node_modules/") or String.contains?(&1, "/.git/"))
     )
     |> Enum.sort()
-    |> Enum.map(&{Path.relative_to(&1, @repo_root), File.read!(&1)})
+    |> Enum.map(&{Path.relative_to(&1, @repo_root), SourceIndex.read!(&1)})
   end
 end
