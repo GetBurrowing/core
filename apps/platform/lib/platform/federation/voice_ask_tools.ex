@@ -16,9 +16,12 @@ defmodule Platform.Federation.VoiceAskTools do
   tools live in a narrow bundle that holds exactly them, and the seed grants
   that bundle.
 
-  Both tools require `chat.write`: asking posts one chat message in the
-  meeting's space under the caller's own participant, which is the same write
-  `send_media` and `react` already need.
+  Both tools require `meetings.join`, the permission the Meetings and Voice
+  surfaces already ask of their humans. `chat.write` alone is not enough: a
+  guest owner holds it, and a guest-owned agent's tool list stays the six
+  legacy chat tools (`Platform.Access.ToolListEquivalenceTest`). Asking still
+  posts one chat message under the caller's own participant, so the space
+  write is checked as well.
   """
 
   @names ~w(voice_ask_agent voice_ask_poll)
