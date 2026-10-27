@@ -322,6 +322,7 @@ class BurrowAnswerSource:
         self._poll_wait_ms = poll_wait_ms
         self.answered_by: str | None = None
         self.ask_id: str | None = None
+        self.question_message_id: str | None = None
         self.polls = 0
         self.final_status: str | None = None
 
@@ -333,6 +334,7 @@ class BurrowAnswerSource:
             args["meeting_id"] = self._meeting_id
         asked = await self._call_tool(ASK_TOOL_NAME, args)
         self.ask_id = asked.get("ask_id")
+        self.question_message_id = asked.get("message_id")
         self.answered_by = asked.get("agent_id") or self.answered_by
         if not self.ask_id:
             raise RuntimeError(f"{ASK_TOOL_NAME} returned no ask_id: {asked!r}")

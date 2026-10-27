@@ -34,6 +34,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import math
 import os
 import re
@@ -48,6 +49,11 @@ from dataclasses import asdict, dataclass, field
 
 from meeting_voice_agent import routing
 from meeting_voice_agent.config import DEFAULT_ROUTING, LlmConfig, RoutingConfig
+
+logger = logging.getLogger(__name__)
+
+# Core's loop breaker lets an agent wake another once per space per 30 s.
+DEFAULT_ASK_SPACING_S = 30.0
 
 ANSWER_STYLE = (
     "Answer in one to three short spoken sentences, plain text, no markdown. "
@@ -145,6 +151,13 @@ class TtfswRow:
     timed_out: bool = False
     first_clause_ms: float | None = None
     tts_first_audio_ms: float | None = None
+    # Provenance: the agent that authored the reply message, not the ask-time target.
+    ask_target_agent_id: str | None = None
+    reply_author_agent_id: str | None = None
+    # Timing, ms from the start of the turn; the first two make overlap measurable.
+    tts_start_ms: float | None = None
+    stream_end_ms: float | None = None
+    tts_started_before_stream_end: bool | None = None
 
 
 @dataclass
@@ -199,6 +212,10 @@ def summarize_ttfsw(label: str, rows: list[TtfswRow]) -> Summary:
             "answered": len(values),
             "timed_out": sum(1 for r in rows if r.timed_out),
             "answered_by": sorted({r.answered_by or "local" for r in rows}),
+            "reply_author_agent_ids": sorted(
+                {r.reply_author_agent_id for r in rows if r.reply_author_agent_id}
+            ),
+            "tts_before_stream_end": sum(1 for r in rows if r.tts_started_before_stream_end),
             "mean_ms": statistics.mean(values) if values else None,
             "first_clause_p50_ms": _p(rows, "first_clause_ms", 0.5),
             "first_clause_p90_ms": _p(rows, "first_clause_ms", 0.9),
@@ -342,25 +359,63 @@ async def mcp_call_tool_factory(base_url: str, token: str):
     from contextlib import asynccontextmanager
 
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared._httpx_utils import create_mcp_http_client
 
     @asynccontextmanager
     async def connect():
-        async with streamablehttp_client(
-            base_url, headers={"Authorization": f"Bearer {token}"}
-        ) as (read, write, _):
+        # mcp 2.x: headers ride on the httpx client, and the transport yields (read, write).
+        http_client = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
+        async with (
+            http_client,
+            streamable_http_client(base_url, http_client=http_client) as (
+                read,
+                write,
+            ),
+        ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 
                 async def call_tool(name: str, args: dict) -> dict:
                     result = await session.call_tool(name, args)
-                    if result.isError:
+                    if result.is_error:
                         raise RuntimeError(" ".join(getattr(c, "text", "") for c in result.content))
                     return routing.decode_tool_result(result.content[0].model_dump_json())
 
                 yield call_tool
 
     return connect()
+
+
+async def resolve_reply_author(call_tool, source) -> str | None:
+    """The agent id that authored the reply message to `source`'s question.
+
+    Core's `answered_by` is the ask-time target. The truth is the message in
+    the space: the newest message after the question whose author is an agent
+    participant. Best effort: returns None when it cannot be determined.
+    """
+    space_id = getattr(source, "_space_id", None)
+    question_id = getattr(source, "question_message_id", None)
+    if not space_id or not question_id:
+        return None
+    try:
+        roster = await call_tool("space_list_agents", {"space_id": space_id})
+        by_participant = {
+            a["participant_id"]: a["agent_id"]
+            for a in roster.get("agents") or []
+            if a.get("participant_id") and a.get("agent_id")
+        }
+        listed = await call_tool("space_get_messages", {"space_id": space_id, "limit": 20})
+    except Exception as exc:
+        logger.warning("could not resolve reply author: %s", exc)
+        return None
+    for message in listed.get("messages") or []:  # newest first
+        if message.get("id") == question_id:
+            break
+        agent_id = by_participant.get(message.get("participant_id"))
+        if agent_id:
+            return agent_id
+    return None
 
 
 class SayTts:
@@ -447,25 +502,36 @@ async def run_ttfsw(
     utterances: list[Utterance],
     tts,
     brain_factory,
+    *,
+    call_tool=None,
+    min_ask_spacing_s: float = DEFAULT_ASK_SPACING_S,
+    sleep=asyncio.sleep,
 ) -> list[TtfswRow]:
     classifier = routing.LocalClassifier.from_llm_config(
         llm_config, timeout_s=routing_config.classifier_timeout_s
     )
     await classifier.classify("hello")
     rows = []
+    last_ask_at: float | None = None
     for u in [u for u in utterances if u.expected_class == "substantive"]:
-        started = time.monotonic()
         classification = await classifier.classify(u.text)
         variant = routing_config.variant_for(classification.turn_class)
+        if variant == "burrow" and last_ask_at is not None:
+            wait = min_ask_spacing_s - (time.monotonic() - last_ask_at)
+            if wait > 0:
+                await sleep(wait)
+        started = time.monotonic()
         ack_ms = None
         if variant == "burrow":
+            last_ask_at = started
             source = brain_factory()
             ack_task = asyncio.create_task(tts.first_audio_ms(routing_config.ack_text))
         else:
             source = MouthStream(llm_config)
             ack_task = None
         record = routing.RoutedAnswer(u.text, classification.turn_class, variant)
-        ttfsw = first_clause_ms = tts_ms = None
+        ttfsw = first_clause_ms = tts_start_ms = None
+        tts_task = None
         async for clause, from_answer in routing.routed_clauses(
             source,
             u.text,
@@ -474,19 +540,29 @@ async def run_ttfsw(
             no_answer_text=routing_config.no_answer_text,
             record=record,
         ):
-            if ttfsw is None and from_answer:
+            if tts_task is None and from_answer:
+                # Start TTS without blocking the clause loop, so the stream keeps
+                # draining and its end time is real.
                 first_clause_ms = (time.monotonic() - started) * 1000
-                tts_ms = await tts.first_audio_ms(clause)
-                ttfsw = first_clause_ms + tts_ms
+                tts_start_ms = first_clause_ms
+                tts_task = asyncio.create_task(tts.first_audio_ms(clause))
+        stream_end_ms = (time.monotonic() - started) * 1000
+        tts_ms = None
+        if tts_task is not None:
+            tts_ms = await tts_task
+            ttfsw = first_clause_ms + tts_ms
         if ack_task is not None:
             ack_ms = (classification.latency_ms) + await ack_task
+        reply_author = None
+        if call_tool is not None and variant == "burrow":
+            reply_author = await resolve_reply_author(call_tool, source)
         answer = record.text
         rows.append(
             TtfswRow(
                 question=u.text,
                 turn_class=classification.turn_class,
                 variant=variant,
-                answered_by=record.answered_by,
+                answered_by=reply_author or record.answered_by,
                 ack_audio_ms=ack_ms,
                 ttfsw_ms=ttfsw,
                 total_ms=(time.monotonic() - started) * 1000,
@@ -495,6 +571,13 @@ async def run_ttfsw(
                 timed_out=record.timed_out,
                 first_clause_ms=first_clause_ms,
                 tts_first_audio_ms=tts_ms,
+                ask_target_agent_id=record.answered_by,
+                reply_author_agent_id=reply_author,
+                tts_start_ms=tts_start_ms,
+                stream_end_ms=stream_end_ms,
+                tts_started_before_stream_end=(
+                    tts_start_ms < stream_end_ms if tts_start_ms is not None else None
+                ),
             )
         )
     return rows
@@ -534,6 +617,8 @@ async def _amain(args) -> int:
                     space_id=os.environ["MVA_HARNESS_SPACE_ID"],
                     agent_id=os.environ.get("MVA_BURROW_AGENT_ID"),
                 ),
+                call_tool=call_tool,
+                min_ask_spacing_s=args.ask_spacing,
             )
     else:
         rows = await run_ttfsw(
@@ -542,6 +627,7 @@ async def _amain(args) -> int:
             utterances,
             tts,
             lambda: ClaudeCliStream(model=args.claude_model),
+            min_ask_spacing_s=args.ask_spacing,
         )
     label = args.label or (
         "before (all local)" if args.substantive == "local" else f"after (brain={args.brain})"
@@ -573,6 +659,12 @@ def main(argv: list[str] | None = None) -> int:
     ttfsw.add_argument("--brain", choices=["burrow", "claude-cli"], default="burrow")
     ttfsw.add_argument("--claude-model", default=None)
     ttfsw.add_argument("--answer-timeout", type=float, default=30.0)
+    ttfsw.add_argument(
+        "--ask-spacing",
+        type=float,
+        default=float(os.environ.get("MVA_HARNESS_ASK_SPACING_S", DEFAULT_ASK_SPACING_S)),
+        help="minimum seconds between Burrow asks (Core's loop breaker allows one wake per 30 s)",
+    )
     for p in (mouth, ttfsw):
         p.add_argument("--label", default=None)
         p.add_argument("--out", default=None, help="append JSON results to this file")
