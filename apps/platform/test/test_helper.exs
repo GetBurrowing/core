@@ -31,6 +31,19 @@ ExUnit.start(
       Platform.SlowTests.excluded_tags() ++ Platform.IsolatedBeamTests.excluded_tags()
 )
 
+# Task 01a17ac3: on CI, print the 100 slowest tests and 50 slowest modules at
+# the end of every run, so the suite-cost audit reads its list from the hosted
+# job log instead of a one-off local run. Gated on `CI` so a local default run
+# stays quiet; set here rather than on the ci.yml command line so the workflow
+# file is untouched. NOT ExUnit's `slowest:` option: that forces trace mode,
+# i.e. `max_cases: 1`, and would serialize the very run it is measuring (see
+# `Platform.SuiteCostFormatter`'s moduledoc). The formatter only listens.
+if System.get_env("CI") do
+  ExUnit.configure(
+    formatters: ExUnit.configuration()[:formatters] ++ [Platform.SuiteCostFormatter]
+  )
+end
+
 # `Platform.LivekitStubPlug` (see its moduledoc for the incident). Meeting
 # tests that deliberately poke `url: "wss://livekit.test"` into `:platform,
 # :livekit` app env must resolve that URL against a plug, not the network —
