@@ -211,25 +211,26 @@ defmodule Platform.CiNoDockerHubTest do
 
   # ---- scanning --------------------------------------------------------------
 
-  defp scanned_paths do
-    {out, 0} =
-      System.cmd(
-        "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--"] ++
-          [
-            ":(glob).github/workflows/*.yml",
-            ":(glob).github/workflows/*.yaml",
-            ":(glob)**/Dockerfile*",
-            ":(glob)**/*.Dockerfile",
-            ":(glob)**/Containerfile*"
-          ],
-        cd: @repo_root
-      )
+  # A filesystem walk, not `git ls-files`: CI runs this inside a job container
+  # where git refuses the checkout (exit 128, the workspace is owned by another
+  # uid), and a crashed setup_all invalidates every test without a failure line.
+  @scan_globs [
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    "**/Dockerfile*",
+    "**/*.Dockerfile",
+    "**/Containerfile*"
+  ]
+  @skip_segments ~w(.git deps _build node_modules)
 
-    out
-    |> String.split(<<0>>, trim: true)
+  defp scanned_paths do
+    @scan_globs
+    |> Enum.flat_map(&Path.wildcard(Path.join(@repo_root, &1), match_dot: true))
     |> Enum.uniq()
-    |> Enum.filter(&File.regular?(Path.join(@repo_root, &1)))
+    |> Enum.filter(&File.regular?/1)
+    |> Enum.map(&Path.relative_to(&1, @repo_root))
+    |> Enum.reject(fn rel -> Enum.any?(Path.split(rel), &(&1 in @skip_segments)) end)
+    |> Enum.sort()
   end
 
   # {line, reason} for every Docker Hub reference in one file.
