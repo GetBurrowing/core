@@ -130,7 +130,7 @@ d("per-agent OS users on a real systemd", () => {
   });
 
   test("B cannot read A's credentials; A can (positive control)", () => {
-    const creds = `${homeDir(A)}/.config/suite/agents/${connectionKey(workDir(A))}.credentials.json`;
+    const creds = `${homeDir(A)}/.config/burrow/agents/${connectionKey(workDir(A))}.credentials.json`;
     const own = asUser(userName(A), ["cat", creds]);
     expect(own.exitCode).toBe(0);
     expect(text(own.stdout)).toContain(TOK_A);
