@@ -8865,7 +8865,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # Let the LV process the broadcast.
       _ = render(view)
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
       html = render(view)
 
       assert html =~ "Ada Lovelace"
@@ -9937,7 +9937,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       )
 
       _ = render(view)
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       after_broadcast = :sys.get_state(view.pid).socket.assigns
       assert length(after_broadcast.participants) == 2

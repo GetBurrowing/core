@@ -1766,8 +1766,8 @@ defmodule PlatformWeb.ChatLiveTest do
          }}
       )
 
-      # Give the LV a tick to process the info message.
-      :ok = Process.sleep(50)
+      # Handled after every message already in the LV's mailbox.
+      _ = :sys.get_state(view.pid)
 
       html = render(view)
       refute html =~ "is thinking"
@@ -1799,7 +1799,7 @@ defmodule PlatformWeb.ChatLiveTest do
          }}
       )
 
-      :ok = Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       assert render(view) =~ "is thinking"
     end
@@ -1831,7 +1831,7 @@ defmodule PlatformWeb.ChatLiveTest do
         {:agent_typing, %{participant_id: agent_participant.id, typing: true}}
       )
 
-      :ok = Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       refute render(view) =~ "is thinking"
     end
@@ -3862,7 +3862,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # The pin/3 call already broadcasts on the space-lifecycle topic
       # ChatLive subscribes to. Wait for the assign refresh to propagate.
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       assert has_element?(
                view,
@@ -3890,7 +3890,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, :removed} = ChatPins.unpin(task.id, %{kind: "user", id: user.email}, user.email)
 
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       refute has_element?(
                view,
@@ -3920,7 +3920,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # filter must drop it: participant_id != user_a.email.
       %{space: b_space} = seed_pin_for(user_b, title: "Not Mine")
 
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       refute has_element?(
                view,
@@ -3935,7 +3935,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # all (e.g. an agent pin) also doesn't crash the handler or
       # surface a row for user_a.
       _ = ChatPubSub.broadcast_space_event({:task_pin_added, %{participant_kind: "agent"}})
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
       refute has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
     end
 
@@ -3987,7 +3987,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # DB is authoritative: no pin row remains for this user + task.
       refute Platform.Tasks.ChatPins.pinned?(task.id, %{kind: "user", id: user.email})
 
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       refute has_element?(
                view,
@@ -4038,7 +4038,7 @@ defmodule PlatformWeb.ChatLiveTest do
       |> element("button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']")
       |> render_click()
 
-      Process.sleep(50)
+      _ = :sys.get_state(view.pid)
 
       refute has_element?(
                view,
