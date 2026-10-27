@@ -12,7 +12,7 @@
 # Built by .github/workflows/ci.yml (build-and-push-agent-host) only when
 # services/agent-host/** changes, because every push restarts every agent on an
 # AutoUpdate host. Context: services/agent-host.
-FROM docker.io/library/debian:bookworm-slim
+FROM ghcr.io/getburrowing/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
