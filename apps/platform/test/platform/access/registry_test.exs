@@ -140,7 +140,10 @@ defmodule Platform.Access.RegistryTest do
       end
 
       assert Registry.install_level_permissions() == ["install.admin"]
-      assert Enum.sort(Registry.module_admin_permissions()) == ["prompts.manage", "tasks.manage"]
+      # `admin.use` (task 01a17b10 stage 3): the `admin` MCP bundle, held only
+      # through the root-admin rule, like the other two.
+      assert Enum.sort(Registry.module_admin_permissions()) ==
+               ["admin.use", "prompts.manage", "tasks.manage"]
     end
 
     test "org visibility is the one derived permission (stage 2)" do

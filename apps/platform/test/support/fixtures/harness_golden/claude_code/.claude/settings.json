@@ -1,0 +1,12 @@
+{
+  "model": "fixture-model",
+  "permissions": {
+    "allow": [
+      "Read"
+    ],
+    "deny": [
+      "Bash(rm:*)"
+    ]
+  },
+  "theme": "dark"
+}

@@ -144,6 +144,7 @@ defmodule Platform.RoleTest do
                Platform.Federation.DeadLetterReplay,
                Platform.Federation.Peers.NonceCache,
                Platform.Federation.Peers.Registry,
+               Platform.Federation.RuntimeHostRegistry,
                Platform.Federation.Peers.Supervisor,
                Platform.Federation.Peers.Boot,
                Platform.TaskSupervisor,
@@ -166,6 +167,7 @@ defmodule Platform.RoleTest do
                Platform.Meetings.SayRegistry,
                Platform.Meetings.VoiceSeatCache,
                Platform.Meetings.AgentActivity.Store,
+               Platform.Meetings.VoiceAsk.Supervisor,
                Platform.Meetings.IntentQueue.Supervisor,
                Platform.Vault.RefreshWorker,
                Platform.Chat.AttachmentReaper,
@@ -200,7 +202,8 @@ defmodule Platform.RoleTest do
                Platform.Mail.Outbox,
                :canvas_search_backfill,
                :burrow_docs_seed,
-               :default_space_seed
+               :default_space_seed,
+               :burrow_seed
              ]
     end
 

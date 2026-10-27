@@ -1,0 +1,16 @@
+model = "fixture-model"
+sandbox_mode = "workspace-write"
+
+[mcp_servers.docs]
+url = "https://mcp.example.test/mcp"
+
+[mcp_servers.docs.env_http_headers]
+X-Api-Key = "X_API_KEY"
+
+[mcp_servers.files]
+args = ["-y", "example-files-server"]
+command = "npx"
+env_vars = ["FILES_ROOT", "FILES_TOKEN"]
+
+[tui]
+notifications = true

@@ -27,7 +27,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { PhoenixChannel, agentHostUrl, backoffMs, type SocketLike } from "../src/phoenix.ts";
 import { alive, runAgent, type RunnerIo } from "../src/runner.ts";
-import { isFileKey, parseFiles, writeAgentFiles } from "../src/files.ts";
+import { READ_SCRIPT, detectDrift, isFileKey, parseFiles, redactForRead, sha256Hex, writeAgentFiles } from "../src/files.ts";
 import type { Runner } from "../src/exec.ts";
 import { LOGIN_MARKERS, captureArgv, redactPane, scrubLine } from "../src/pane.ts";
 import { Host, withAuth, type AuthDeps } from "../src/host.ts";
@@ -237,9 +237,17 @@ describe("observed state", () => {
     expect(loginScreenStatus({ state: "ready" })).toBe(false);
   });
 
-  test("needs_login carries the step and the url suite-cli reported, and nothing else", () => {
-    const o = observe(A, show("active"), { state: "needs_login", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
-    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
+  // Core task 01a17b10: Burrow never relays a login. observeAgent returns
+  // observe() of the status file, so this is what core would receive.
+  test("needs_login carries the step only: a url suite-cli reported is never copied", () => {
+    const url = "https://claude.com/cai/oauth/authorize?x=1";
+    const status = { state: "needs_login", login: { step: "login_url", url } } as Parameters<typeof observe>[2];
+    const o = observe(A, show("active"), status);
+    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url" } });
+    expect(Object.keys(o.login ?? {})).toEqual(["step"]);
+    expect("url" in (o.login ?? {})).toBe(false);
+    expect(JSON.stringify(o)).not.toContain(url);
+    expect(JSON.stringify(o)).not.toContain("oauth");
   });
 });
 
@@ -348,14 +356,14 @@ describe("the runner", () => {
 // real filesystem with planted symlinks) are in test/isolation.test.ts.
 describe("agent file keys (same rule as core's NativeAgents.valid_file_key?/1)", () => {
   test("accepts relative keys up to three deep", () => {
-    for (const k of ["CLAUDE.md", "AGENTS.md", ".claude/settings.json", "a/b/c.md", ".mcp.json"]) {
+    for (const k of ["CLAUDE.md", "AGENTS.md", ".claude/settings.json", "a/b/c.md", ".mcp.json", ".claude/skills/x/SKILL.md"]) {
       expect(isFileKey(k)).toBe(true);
     }
   });
 
   test("refuses traversal, absolute, home-relative, too deep and odd characters", () => {
     for (const k of [
-      "../x", "a/../../x", "a/..", "./x", "/etc/x", "~/x", "~agent/x", "a/b/c/d", "", "a//b", "a/",
+      "../x", "a/../../x", "a/..", "./x", "/etc/x", "~/x", "~agent/x", "a/b/c/d/e", "", "a//b", "a/",
       "a\nb", "a b", "-rf", "a/\0", "..", ".", "...", "x\\y", 42, null,
     ]) {
       expect(isFileKey(k)).toBe(false);
@@ -516,10 +524,27 @@ describe("no path from Burrow into an agent's pane", () => {
     }
   });
 
-  test("the commands core can send are exactly start, restart, stop, logs, pane and check_auth", () => {
+  test("the commands core can send are exactly start, restart, stop, logs, pane, file_read, check_auth, env_names and admin", () => {
     const main = readFileSync(resolve(src, "main.ts"), "utf8");
     const events = [...main.matchAll(/channel\.on\("([^"]+)"/g)].map((m) => m[1]).sort();
-    expect(events).toEqual(["agent.check_auth", "agent.logs", "agent.pane", "agent.restart", "agent.start", "agent.stop"]);
+    expect(events).toEqual([
+      "agent.check_auth",
+      "agent.file_read",
+      "agent.logs",
+      "agent.pane",
+      "agent.restart",
+      "agent.start",
+      "agent.stop",
+      "host.admin",
+      "host.env_names",
+    ]);
+  });
+
+  test("the two host.* commands never reach a pane or a login: no pane, tmux or login code in docker.ts", () => {
+    const docker = readFileSync(resolve(src, "docker.ts"), "utf8");
+    expect(docker).not.toMatch(/tmux|capture-pane|statusSaysLogin|agentPane/);
+    // Counter-pin: the scan reads real source (docker.ts names the runtime socket).
+    expect(docker).toContain("AGENT_HOST_RUNTIME_SOCKET");
   });
 });
 
@@ -751,5 +776,171 @@ describe("BURROW_ env names with a SUITE_ fallback", () => {
     const main = readFileSync(resolve(import.meta.dir, "..", "src", "main.ts"), "utf8");
     expect(main).toContain('readEnv("BURROW_CORE_URL", "SUITE_CORE_URL")');
     expect(main).not.toContain('required("SUITE_CORE_URL")');
+  });
+});
+
+// Task 01a17b1c stage 2: drift detection, force_keys and the redacted file read.
+describe("native file drift", () => {
+  const user = { name: "agent-98259d347cbe", uid: 1001, gid: 1001, home: "/h", work: "/h/work", runDir: "/run/x" };
+
+  /** A runner whose "disk" is a map; READ_SCRIPT serves it, WRITE_SCRIPT updates it. */
+  function diskRunner(disk: Map<string, string>) {
+    const writes: string[] = [];
+    const runner: Runner = {
+      run: async (argv, opts) => {
+        const script = argv[argv.indexOf("-c") + 1];
+        const join = (dir: string, base: string) => (dir === "" ? base : `${dir}/${base}`);
+        if (script === READ_SCRIPT) {
+          const body = disk.get(join(argv[argv.length - 2]!, argv[argv.length - 1]!));
+          return body === undefined ? { exitCode: 4, stdout: "", stderr: "" } : { exitCode: 0, stdout: body, stderr: "" };
+        }
+        const key = join(argv[argv.length - 3]!, argv[argv.length - 2]!);
+        writes.push(key);
+        disk.set(key, opts?.stdin ?? "");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    return { runner, writes };
+  }
+
+  test("a file the agent edited since the host wrote it is left alone, and reported", async () => {
+    const disk = new Map([["CLAUDE.md", "# v1\n"], ["notes.md", "n1\n"]]);
+    const { runner, writes } = diskRunner(disk);
+    const priorShas = { "CLAUDE.md": sha256Hex("# v1\n"), "notes.md": sha256Hex("n1\n") };
+    disk.set("CLAUDE.md", "# v1\nthe agent added a line\n");
+
+    const res = await writeAgentFiles(
+      runner,
+      user,
+      [{ key: "CLAUDE.md", content: "# v2\n", version: 2 }, { key: "notes.md", content: "n2\n", version: 2 }],
+      { priorShas },
+    );
+
+    expect(res.drifted).toEqual(["CLAUDE.md"]);
+    expect(res.applied).toEqual({ "notes.md": 2 });
+    expect(disk.get("CLAUDE.md")).toBe("# v1\nthe agent added a line\n");
+    expect(writes).toEqual(["notes.md"]);
+    expect(res.shas).toEqual({ "notes.md": sha256Hex("n2\n") });
+  });
+
+  test("a drifted key is overwritten only when core names it in force_keys", async () => {
+    const disk = new Map([["CLAUDE.md", "edited by the agent\n"]]);
+    const { runner } = diskRunner(disk);
+    const priorShas = { "CLAUDE.md": sha256Hex("# v1\n") };
+    const file = { key: "CLAUDE.md", content: "# owner resolved\n", version: 3 };
+
+    expect((await writeAgentFiles(runner, user, [file], { priorShas })).drifted).toEqual(["CLAUDE.md"]);
+    const forced = await writeAgentFiles(runner, user, [file], { priorShas, force: new Set(["CLAUDE.md"]) });
+    expect(forced.drifted).toEqual([]);
+    expect(forced.applied).toEqual({ "CLAUDE.md": 3 });
+    expect(disk.get("CLAUDE.md")).toBe("# owner resolved\n");
+  });
+
+  test("a deleted file counts as drift; a key with no record is written", async () => {
+    const disk = new Map<string, string>();
+    const { runner } = diskRunner(disk);
+    expect(await detectDrift(runner, user, { "gone.md": sha256Hex("x") })).toEqual(["gone.md"]);
+    const res = await writeAgentFiles(runner, user, [{ key: "new.md", content: "n\n", version: 1 }], { priorShas: {} });
+    expect(res.applied).toEqual({ "new.md": 1 });
+  });
+
+  test("detectDrift is quiet while the disk matches", async () => {
+    const disk = new Map([["a.md", "same\n"]]);
+    const { runner } = diskRunner(disk);
+    expect(await detectDrift(runner, user, { "a.md": sha256Hex("same\n") })).toEqual([]);
+  });
+
+  test("parseStart carries force_keys; a malformed list is refused", () => {
+    const good = {
+      agent_id: A, runtime_id: "ada-native-1234abcd", runtime_token: "t".repeat(32), harness: "claude_code",
+      core_url: "http://core:4000", env: {},
+    };
+    expect(parseStart(good)).toMatchObject({ force_keys: [] });
+    expect(parseStart({ ...good, force_keys: ["CLAUDE.md"] })).toMatchObject({ force_keys: ["CLAUDE.md"] });
+    expect(parseStart({ ...good, force_keys: ["../x"] })).toBeString();
+    expect(parseStart({ ...good, force_keys: "CLAUDE.md" })).toBeString();
+  });
+
+  test("a read never shows a secret value: names only, env/headers replaced", () => {
+    const probe = `probe-${crypto.randomUUID()}`;
+    const env = redactForRead(".env", `API_KEY=${probe}\nexport OTHER=${probe}\n`);
+    expect(env).toBe("API_KEY\nOTHER\n");
+    const creds = redactForRead(".claude/.credentials.json", JSON.stringify({ oauth: { token: probe } }));
+    expect(creds).toBe("oauth.token\n");
+    const mcp = redactForRead(
+      ".mcp.json",
+      JSON.stringify({ mcpServers: { s: { command: "x", env: { FAKE_TOKEN: probe, OK: "${OK}" }, headers: { "X-Key": probe } } } }),
+    );
+    expect(mcp).not.toContain(probe);
+    expect(mcp).toContain("FAKE_TOKEN");
+    expect(mcp).toContain("${OK}");
+    expect(redactForRead(".mcp.json", `{"broken": ${probe}`)).not.toContain(probe);
+    expect(redactForRead("CLAUDE.md", "# hello\n")).toBe("# hello\n");
+  });
+
+  test("the file read is read only: no write or tmux command in its script", () => {
+    expect(READ_SCRIPT).not.toMatch(/mktemp|mv |chmod|send-keys|capture-pane|> "/);
+  });
+});
+
+describe("full root (task 01a17b10 stage 3)", () => {
+  const deps = { runner: { async run() { return { exitCode: 0, stdout: "", stderr: "" }; } } as Runner, secrets: new SecretRegistry(), runnerCommand: ["x"], log: () => {} };
+  const auth = (env: Record<string, string> | null): AuthDeps => ({ readEnv: () => env, fetch: async () => ({ status: 200 }) });
+
+  function fakeDocker() {
+    const calls: string[] = [];
+    const docker = async (path: string, init: { method: string; body?: string }) => {
+      calls.push(`${init.method} ${path.split("?")[0]}`);
+      const body: unknown = path.startsWith("/containers/json")
+        ? [{ Id: "abc" }]
+        : path === "/containers/abc/json"
+          ? { Id: "abc", Name: "/core", Config: { Image: "registry.invalid/core:old" }, HostConfig: {}, NetworkSettings: { Networks: { default: {} } } }
+          : path.startsWith("/containers/create")
+            ? { Id: "new1" }
+            : {};
+      return { status: 200, json: async () => body, text: async () => "" };
+    };
+    return { docker, calls };
+  }
+
+  test("the hello advertises full_root, false by default", () => {
+    expect(new Host(deps, { push: async () => "ok" }, "contained").hello()).toEqual({ profile: "contained", full_root: false });
+    expect(new Host(deps, { push: async () => "ok" }, "contained", undefined, true, null).hello()).toEqual({ profile: "contained", full_root: true });
+  });
+
+  test("with full root off, restart/deploy/rollback answer requires_full_root and touch no socket", async () => {
+    const { docker, calls } = fakeDocker();
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, false, docker);
+    for (const op of ["restart", "deploy", "rollback"]) await host.handleAdmin({ op, service: "core", tag: "t", ref: op });
+    expect(calls).toEqual([]);
+    expect(pushed).toHaveLength(3);
+    for (const [event, p] of pushed) {
+      expect(event).toBe("host.reply");
+      expect((p.result as Record<string, unknown>).error).toBe("requires_full_root");
+      expect((p.result as Record<string, unknown>).manifest_key).toBe("agents.full_root");
+    }
+  });
+
+  test("with full root on, restart and deploy drive the runtime socket", async () => {
+    const { docker, calls } = fakeDocker();
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, true, docker);
+    await host.handleAdmin({ op: "restart", service: "core", ref: "r1" });
+    expect(calls).toContain("POST /containers/abc/restart");
+    await host.handleAdmin({ op: "deploy", service: "core", tag: "new", ref: "r2" });
+    expect(calls).toContain("POST /images/create");
+    expect(calls).toContain("POST /containers/new1/start");
+    expect((pushed[1]?.[1].result as Record<string, unknown>).image).toBe("registry.invalid/core:new");
+    await host.handleAdmin({ op: "rollback", service: "core", ref: "r3" });
+    expect((pushed[2]?.[1].result as Record<string, unknown>).image).toBe("registry.invalid/core:old");
+  });
+
+  test("env names reply carries names only, never values", async () => {
+    const pushed: [string, Record<string, unknown>][] = [];
+    const host = new Host(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", auth({ ZED: "secret-value-1", ALPHA: "secret-value-2" }));
+    await host.handleEnvNames({ agent_id: A, ref: "r" });
+    expect(pushed).toEqual([["host.reply", { ref: "r", result: { names: ["ALPHA", "ZED"] } }]]);
+    expect(JSON.stringify(pushed)).not.toContain("secret-value");
   });
 });

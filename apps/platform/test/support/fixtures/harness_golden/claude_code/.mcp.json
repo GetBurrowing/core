@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "docs": {
+      "headers": {
+        "X-Api-Key": "${X_API_KEY}"
+      },
+      "type": "http",
+      "url": "https://mcp.example.test/mcp"
+    },
+    "files": {
+      "args": [
+        "-y",
+        "example-files-server"
+      ],
+      "command": "npx",
+      "env": {
+        "FILES_ROOT": "${FILES_ROOT}",
+        "FILES_TOKEN": "${FILES_TOKEN}"
+      }
+    }
+  }
+}

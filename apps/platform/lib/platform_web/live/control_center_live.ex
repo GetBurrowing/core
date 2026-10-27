@@ -24,9 +24,9 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.AgentDetail
   alias PlatformWeb.ControlCenter.MemoryEvents
   alias PlatformWeb.ControlCenter.NativeAgentEvents
-  alias PlatformWeb.ControlCenter.NativeFileEvents
   alias PlatformWeb.ControlCenter.NativeLogin, as: NativeLoginPanel
   alias PlatformWeb.ControlCenter.NativeFiles
+  alias PlatformWeb.AgentConfig.{Session, SessionStrip}
   alias PlatformWeb.ControlCenter.NativeStatus
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
@@ -65,8 +65,9 @@ defmodule PlatformWeb.ControlCenterLive do
        :workspace_form,
        to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file)
      )
-     |> NativeFileEvents.reset()
      |> NativeAgentEvents.reset()
+     |> assign(:session, nil)
+     |> assign(:config_entry?, false)
      |> assign(:memory_filters, AgentData.default_memory_filters())
      |> assign(
        :memory_filter_form,
@@ -161,7 +162,15 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply, refresh_native(socket)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    case Session.handle_info(msg, socket) do
+      :unhandled -> {:noreply, socket}
+      reply -> reply
+    end
+  end
+
+  @impl true
+  def handle_async(:session_restart, result, socket), do: Session.handle_async(result, socket)
 
   @doc """
   Re-read the directory and every native-agent view (rows, the managed
@@ -216,6 +225,7 @@ defmodule PlatformWeb.ControlCenterLive do
     restarting? = socket.assigns.restarting_agent_id == entry.agent.id
     connected? = socket.assigns.agent_host_connected?
     key_set? = NativeLogin.api_key_set?(entry.agent)
+    login_mode = NativeLogin.login_mode()
 
     %{
       view: view,
@@ -233,7 +243,8 @@ defmodule PlatformWeb.ControlCenterLive do
       buttons: NativeStatus.header_buttons(view, connected?, restarting?),
       # Login (stage 6): is an API key saved, and which step to show.
       key_set?: key_set?,
-      login_step: NativeLogin.step(entry.observed, key_set?)
+      login_mode: login_mode,
+      login_step: NativeLogin.step(entry.observed, key_set?, login_mode)
     }
   end
 
@@ -302,8 +313,9 @@ defmodule PlatformWeb.ControlCenterLive do
     "native_api_key_save" => :ui,
     "native_api_key_remove" => :ui,
     "native_recent_output" => :ui,
-    "native_file_change" => :ui,
-    "native_file_save" => :ui
+    "session_restart" => :ui,
+    "session_restart_confirm" => :ui,
+    "session_restart_cancel" => :ui
   }
 
   @impl true
@@ -712,11 +724,16 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("native_recent_output", params, socket),
     do: NativeAgentEvents.handle("native_recent_output", params, socket)
 
-  defp handle_control_event("native_file_change", params, socket),
-    do: NativeFileEvents.handle("native_file_change", params, socket)
+  # Restart session (task 01a17b1c stage 5). `:ui` in the policy because
+  # ConfigFiles.restart/3 is the gate, and audits a refusal.
+  defp handle_control_event("session_restart", params, socket),
+    do: Session.handle_event("session_restart", params, socket)
 
-  defp handle_control_event("native_file_save", params, socket),
-    do: NativeFileEvents.handle("native_file_save", params, socket)
+  defp handle_control_event("session_restart_confirm", params, socket),
+    do: Session.handle_event("session_restart_confirm", params, socket)
+
+  defp handle_control_event("session_restart_cancel", params, socket),
+    do: Session.handle_event("session_restart_cancel", params, socket)
 
   # ── Runtime management events (delegated) ─────────────────────────
 
@@ -966,6 +983,26 @@ defmodule PlatformWeb.ControlCenterLive do
             />
 
             <div :if={@selected_agent.runtime_type == "external"} class="flex flex-col gap-6">
+              <section
+                :if={@config_entry?}
+                id="agent-session"
+                class="overflow-hidden rounded-3xl border border-edge bg-base-100"
+              >
+                <SessionStrip.strip :if={@session} id="agent-session-strip" session={@session} />
+                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <span class="text-sm text-base-content">
+                    Instructions, skills, settings and MCP servers
+                  </span>
+                  <.link
+                    id="open-agent-config"
+                    navigate={~p"/control/#{@selected_agent.slug}/config"}
+                    class="btn btn-sm btn-ghost border border-subtle"
+                  >
+                    Configuration
+                  </.link>
+                </div>
+              </section>
+
               <AgentDetail.federation_panels
                 agent={@selected_agent}
                 config_form={@config_form}
@@ -992,22 +1029,14 @@ defmodule PlatformWeb.ControlCenterLive do
                 can_manage?={@native_header.can_manage?}
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
+                mode={@native_header.login_mode}
               />
 
-              <NativeFiles.editor
+              <NativeFiles.summary
                 :if={@native_header && @native_header.view.state != :needs_login}
                 agent={@selected_agent}
                 can_manage?={@native_header.can_manage?}
-                live?={@native_header.live?}
-                pending_keys={@native_header.pending_keys}
-                applied_known?={@native_header.applied_known?}
-                restarting?={@native_header.restarting?}
                 workspace_files={@workspace_files}
-                selected_workspace_file={@selected_workspace_file}
-                form={@native_file_form}
-                dirty?={@native_file_dirty?}
-                json_error={@native_file_json_error}
-                saved_key={@native_saved_key}
               />
 
               <NativeLoginPanel.summary
@@ -1019,6 +1048,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 can_manage?={@native_header.can_manage?}
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
+                mode={@native_header.login_mode}
               />
 
               <NativeLoginPanel.logs
@@ -1132,8 +1162,9 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:selected_workspace_file, nil)
     |> assign(:selected_file_key, nil)
     |> assign(:workspace_form, to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file))
-    |> NativeFileEvents.reset()
     |> NativeAgentEvents.reset()
+    |> Session.init(nil, nil, :none)
+    |> assign(:config_entry?, false)
     |> assign(:memory_filters, AgentData.default_memory_filters())
     |> assign(
       :memory_filter_form,
@@ -1213,7 +1244,6 @@ defmodule PlatformWeb.ControlCenterLive do
         Keyword.get(opts, :workspace_params, %{})
       )
     )
-    |> NativeFileEvents.reset(saved_key: Keyword.get(opts, :native_saved_key))
     |> assign(:memory_filters, memory_filters)
     |> assign(:memory_filter_form, to_form(memory_filters, as: :memory_filters))
     |> assign(:recent_memories, AgentData.list_filtered_memories(agent.id, memory_filters))
@@ -1234,7 +1264,24 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign_federation_data(agent)
     |> assign_native()
+    |> assign_session_strip(agent)
   end
+
+  # The standalone Restart session strip and the Configuration entry (task
+  # 01a17b1c stage 5), behind ConfigFiles' own gate. An owner whose agent
+  # cannot be configured right now (opt-in off, CLI too old, offline) still
+  # gets the entry: the screen says why in one line.
+  defp assign_session_strip(socket, %Agent{runtime_type: "external"} = agent) do
+    actor = %{id: socket.assigns.current_user_id}
+    described = Platform.Agents.ConfigFiles.describe(actor, agent)
+
+    socket
+    |> Session.init(actor, agent, described)
+    |> assign(:config_entry?, described != {:error, :forbidden})
+  end
+
+  defp assign_session_strip(socket, _agent),
+    do: socket |> Session.init(nil, nil, :none) |> assign(:config_entry?, false)
 
   defp assign_federation_data(socket, %Agent{runtime_type: "external"} = agent) do
     runtime = Federation.get_runtime_for_agent(agent)

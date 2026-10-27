@@ -23,6 +23,9 @@ defmodule PlatformWeb.ModuleGate do
     # The remote terminal (task 01a17b17): the owner's own agent, so the same
     # module and permission as the agent page that links to it.
     PlatformWeb.TerminalLive => {:agents, "agents.manage_own"},
+    # The configuration screen (task 01a17b1c stage 5): same module and
+    # permission as the agent page; `ConfigFiles.Access` is the real gate.
+    PlatformWeb.AgentConfigLive => {:agents, "agents.manage_own"},
     PlatformWeb.ExtensionPageLive => {:extension, nil},
     PlatformWeb.UsageLive => {:admin, "agents.manage_own"},
     PlatformWeb.ExperimentsLive => {:experiments, nil},

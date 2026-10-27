@@ -73,6 +73,30 @@ defmodule PlatformWeb.NativeTabBridgeTest do
     assert has_element?(view, "#native-tab-bridge[data-more-unread='false']")
   end
 
+  # Task 01a174e8 stage 1: the hook reads the bar's inks off these two probes.
+  # They are not tabs: nothing that matches .bottom-nav-tab may see them.
+  test "the bridge carries the two ink probes, which are not bar tabs", %{conn: conn} do
+    {:ok, view, html} = live(authenticated_conn(conn), ~p"/chat")
+
+    assert has_element?(view, "#bottom-nav #native-tab-bridge > span[data-native-ink='selected']")
+
+    assert has_element?(
+             view,
+             "#bottom-nav #native-tab-bridge > span[data-native-ink='unselected']"
+           )
+
+    refute has_element?(view, "[data-native-ink].bottom-nav-tab")
+    refute has_element?(view, ".bottom-nav-tab [data-native-ink]")
+
+    probes =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#native-tab-bridge [data-native-ink]")
+      |> LazyHTML.attribute("data-native-ink")
+
+    assert probes == ["selected", "unselected"]
+  end
+
   test "/tasks selects tasks", %{conn: conn} do
     {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
     assert has_element?(view, "#native-tab-bridge[data-active-key='tasks']")

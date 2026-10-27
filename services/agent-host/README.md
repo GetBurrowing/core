@@ -5,7 +5,8 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
 - It dials **out** to core at `${BURROW_CORE_URL}/agent-host/websocket` and
   presents `AGENT_HOST_TOKEN` in the `x-agent-host-token` header. Core pushes
   commands down that channel. Core is never given a container-runtime socket
-  or the host's D-Bus.
+  or the host's D-Bus (the opt-in "Full root" below puts the socket in the host,
+  never in core).
 - Every agent is a systemd unit, `burrow-agent@<agent id>.service`, running as
   its own OS user `agent-<last 12 hex of the id>`. The user has a 0700 home, a
   0600 env file at `/etc/burrow-agents/<id>.env` and a 0700 tmux dir at
@@ -18,12 +19,15 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   agent with sudo can read every other agent's home, env file and tokens.
 - This daemon never types into an agent's pane and never handles a Claude
   login code. It relays what suite-cli's status file reports: that a login is
-  needed. Burrow does not offer a Claude subscription login (it would need the
-  person's code relayed into the CLI, which Anthropic's terms forbid); a
-  native agent logs in with an Anthropic API key a manager saves in Burrow,
+  needed, and the step's name. Never a login URL or code: whatever else the
+  status file holds stays on this host (core task 01a17b10). Burrow does not
+  offer a Claude subscription login through its UI (it would need the
+  person's code relayed into the CLI, which Anthropic's terms forbid). By
+  default (`api_key` login mode) a native agent logs in with an Anthropic API
+  key a manager saves in Burrow,
   which reaches ONLY that agent's 0600 env file as `ANTHROPIC_API_KEY`
   (stage 6). suite-cli answers Claude Code's "use this API key?" prompt for
-  that key only.
+  that key only. The other mode, `operator`, is below.
 - `agent.pane` returns the agent's recent pane text for Burrow's read-only
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
@@ -75,6 +79,52 @@ The image is pushed by CI (`build-and-push-agent-host`) as
 pre-rename name `suite-agent-host` (GHCR and Docker Hub) for hosts installed
 before the rename, only when a push to main changes `services/agent-host/**`,
 because every push restarts every agent on an `AutoUpdate=registry` host.
+
+## Operator login
+
+An install opts in with `[agents] login = "operator"` in its manifest (the
+default is `api_key`). The installer renders that into core's env as
+`NATIVE_AGENT_LOGIN=operator`. In this mode core sends no API key in
+`agent.start`, even when one is saved, and does not read the Vault for it.
+The agent's pane stops at Claude Code's own login screen and waits for a
+person.
+
+A person with shell access to the machine attaches to the agent's pane and
+logs in there. Exec into the agent-host container, become the agent's user
+with its tmux dir, and attach to its session:
+
+    docker exec -it <agent-host container> \
+      runuser -u agent-<12 hex> -- \
+      env TMUX_TMPDIR=/run/burrow-agents/<agent id> \
+      tmux attach -t suite-agent
+
+Use `podman exec` where the install runs podman. `<agent id>` is the agent's
+full id and `<12 hex>` is its last 12 hex characters. On `full_machine` there
+is no container, so run the `runuser` line on the host. Detach with `Ctrl-b d`
+and leave the session running.
+
+Claude Code shows its login URL in that pane. The person opens it, and then
+types the code into Claude Code's own prompt in the attached pane. Burrow
+never sees the code or the URL: the host passes core only the login step's
+name, and "Recent output" stays withheld while a login screen is up
+(`src/pane.ts`).
+
+## Full root (opt-in)
+
+Off by default (`[agents] full_root = false` in the install manifest). Core is never
+given the container-runtime socket; when the install turns this on, the HOST holds it and
+acts on core's `host.admin` command (restart, deploy or rollback of a compose service).
+
+- `contained`: the render mounts exactly one socket (`/var/run/docker.sock`) into this
+  container and sets `AGENT_HOST_FULL_ROOT=true`. Nothing is mounted otherwise.
+- `full_machine`: no mount (the host is already root); the host env file gets
+  `AGENT_HOST_FULL_ROOT=true`.
+- The hello carries `full_root`. With it off, `host.admin` answers `requires_full_root`
+  and the socket is never touched. `host.env_names` returns the NAMES in an agent's env
+  file, never values.
+
+The `admin_rpc` tool evaluates code in the running core release. That is a shell inside
+core and is NOT gated by `full_root`; the key governs only the runtime socket.
 
 ## Hosts installed before the rename
 

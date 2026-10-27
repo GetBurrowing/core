@@ -97,7 +97,7 @@ write_files:
 
       [Service]
       Type=simple
-      PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
+      PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE AGENT_HOST_FULL_ROOT
       EnvironmentFile=-/etc/burrow-agent-host.env
       # Node and bun read only their bundled roots without this; the system bundle
       # carries an install's internal root CA once update-ca-certificates has run.
@@ -762,6 +762,7 @@ write_files:
             APP_URL: "https://burrow-01a0d69d.test"
             FILES_SERVICE_URL: "http://files-service:8200"
             MEMORY_SERVICE_URL: "http://memory-service:8100"
+            NATIVE_AGENT_LOGIN: "api_key"
             OIDC_CLIENT_ID: "suite-core"
             OIDC_ISSUER: "https://auth.burrow-01a0d69d.test"
             OIDC_PKCE_ENABLED: "true"

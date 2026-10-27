@@ -26,10 +26,18 @@ defmodule Platform.AgentHost do
       harness, core_url, env, files}`, the token minted fresh every time;
       `files` is `[%{key, content, version}]` (`NativeAgents.start_files/1`),
       written into the agent's work dir AS THE AGENT before it launches;
+      `force_keys` names the drifted keys (edited on disk by the agent since the
+      host wrote them) the owner has resolved; the host overwrites no other
+      drifted key (`NativeAgents.force_keys/1`);
     * `agent.stop` `{agent_id}`;
     * `agent.logs` `{agent_id, lines, ref}`;
     * `agent.pane` `{agent_id, lines, ref}`: the agent's recent pane text, for
       the read-only "Recent output" disclosure (stage 6);
+    * `agent.file_read` `{agent_id, key, ref}`: one file of the work dir, redacted,
+      answered by `agent.file` `{ref, content, sha256}` or `{ref, error}`;
+    * `agent.restart` may carry a `ref`; the host then answers
+      `agent.restarted` `{ref, agent_id, outcome, before, after}` with the tool
+      snapshots (`restart_with_tools/2`);
     * `agent.check_auth` `{agent_id, ref}`: does the agent's API key still
       work? Asked by the no-reply watchdog (stage 7 round 2,
       `Platform.Chat.ReplyFailure.Watchdog`).
@@ -40,7 +48,9 @@ defmodule Platform.AgentHost do
       files_applied}]}`. The host REPORTS its capability profile; core
       displays it and never branches on it. `files_applied` is
       `%{key => version}` as of the agent's last start, or nil;
-    * `agent.state` `{agent_id, state, detail, files_applied}`;
+    * `agent.state` `{agent_id, state, detail, files_applied, files_drifted}`;
+      `files_drifted` is the keys whose disk copy no longer matches what the host
+      wrote;
     * `agent.log` `{ref, agent_id, lines}`;
     * `agent.pane` `{ref, agent_id, lines, hidden}`: `hidden` is `"login"` (and
       `lines` empty) while the pane shows a login screen;
@@ -56,6 +66,8 @@ defmodule Platform.AgentHost do
   alias Platform.Agents.{Agent, NativeAgents}
 
   @logs_timeout_ms 5_000
+  # The host waits up to 90 s for the agent to come back, then probes.
+  @restart_timeout_ms 120_000
   # The host's own request to the API times out at 8 s (auth.ts).
   @auth_timeout_ms 10_000
 
@@ -129,6 +141,49 @@ defmodule Platform.AgentHost do
       Reconciler.restart(agent.id)
     end
   end
+
+  @doc """
+  Restart `agent` and wait for the host's account of it (task 01a17b1c stage
+  4): `{:ok, %{outcome, before, after}}`. The host takes a tool snapshot of the
+  MCP servers the agent loads (as the agent's user) before it rewrites the
+  files and after the agent is back; `before`/`after` are
+  `%{"servers" => [...], "tools" => [...]}` or nil (a `needs_login` agent is
+  not probed). `outcome` is `ready | needs_login | gone | timeout`.
+
+  The same `agent.restart` command as `restart_agent/1`, with a `ref`; there is
+  no second restart command.
+  """
+  @spec restart_with_tools(Agent.t(), keyword()) ::
+          {:ok, %{outcome: String.t(), before: map() | nil, after: map() | nil}}
+          | {:error, term()}
+  def restart_with_tools(%Agent{} = agent, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @restart_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = restart_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with {:ok, _runtime} <- NativeAgents.set_desired_state(agent, "running"),
+           :ok <- Reconciler.restart(agent.id, ref) do
+        receive do
+          {:agent_host_restarted, ^ref, payload} ->
+            {:ok,
+             %{
+               outcome: Map.get(payload, "outcome", "gone"),
+               before: Map.get(payload, "before"),
+               after: Map.get(payload, "after")
+             }}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def restart_topic(ref), do: "agent_host:restart:" <> ref
 
   @doc """
   What the host last reported for `agent` (or an agent id): `%{state, detail,
@@ -217,6 +272,48 @@ defmodule Platform.AgentHost do
   def pane_topic(ref), do: "agent_host:pane:" <> ref
 
   @doc """
+  One file of `agent`'s work dir as the host sees it on disk, asked of the host
+  and waited for: `{:ok, %{content, sha256}}`. The host redacts before it
+  sends and `Platform.Agents.Config` redacts again. The sha256 is over the full
+  on-disk bytes. Used so a conflict can show the disk copy (Compare).
+  """
+  @spec file_read(Agent.t() | binary(), String.t(), keyword()) ::
+          {:ok, %{content: binary(), sha256: String.t()}}
+          | {:error, :not_connected | :timeout | :not_found | :unreadable}
+  def file_read(agent, key, opts \\ [])
+  def file_read(%Agent{id: id}, key, opts), do: file_read(id, key, opts)
+
+  def file_read(agent_id, key, opts) when is_binary(agent_id) do
+    timeout = Keyword.get(opts, :timeout, @logs_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = file_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with :ok <- Reconciler.request_file(agent_id, key, ref) do
+        receive do
+          {:agent_host_file, ^ref, %{"content" => c, "sha256" => s}}
+          when is_binary(c) and is_binary(s) ->
+            {:ok, %{content: c, sha256: s}}
+
+          {:agent_host_file, ^ref, %{"error" => "not_found"}} ->
+            {:error, :not_found}
+
+          {:agent_host_file, ^ref, _} ->
+            {:error, :unreadable}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def file_topic(ref), do: "agent_host:file:" <> ref
+
+  @doc """
   Ask the host whether `agent`'s API key still works, and wait for the answer:
   `{:ok, :ok | :rejected | :unknown}`.
 
@@ -254,6 +351,39 @@ defmodule Platform.AgentHost do
   defp parse_auth("ok"), do: :ok
   defp parse_auth("rejected"), do: :rejected
   defp parse_auth(_), do: :unknown
+
+  @doc "True when the connected host advertised `full_root` in its hello."
+  @spec full_root?() :: boolean()
+  def full_root?, do: match?(%{full_root: true}, host())
+
+  @doc """
+  Send the host a command and wait for its `host.reply` (task 01a17b10 stage
+  3): `{:ok, result_map}`. Used by the admin tools for `host.env_names` and
+  `host.admin`.
+  """
+  @spec host_call(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, :not_connected | :timeout}
+  def host_call(event, payload, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @logs_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = reply_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with :ok <- Reconciler.host_call(event, Map.put(payload, "ref", ref)) do
+        receive do
+          {:agent_host_reply, ^ref, result} -> {:ok, result}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def reply_topic(ref), do: "agent_host:reply:" <> ref
 
   @doc "Subscribe the caller to observed-state changes."
   @spec subscribe() :: :ok | {:error, term()}

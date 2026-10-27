@@ -36,10 +36,23 @@ import {
   isRuntimeId,
   statusFile,
   unitName,
+  userName,
+  workDir,
 } from "./ids.ts";
 import { dropIn, templateUnit } from "./units.ts";
 import { ensureAgentUser, type AgentUser } from "./users.ts";
-import { parseFiles, readApplied, recordApplied, writeAgentFiles, type AgentFile } from "./files.ts";
+import {
+  detectDrift,
+  isFileKey,
+  parseFiles,
+  readApplied,
+  readShas,
+  recordApplied,
+  recordShas,
+  writeAgentFiles,
+  type AgentFile,
+  type FilesShas,
+} from "./files.ts";
 import { loadSuiteConventions, renderUserMemory, writeUserMemory } from "./conventions.ts";
 
 export type ObservedState = "starting" | "running" | "stopped" | "crashed" | "needs_login";
@@ -49,8 +62,14 @@ export interface Observation {
   state: ObservedState;
   detail: string | null;
   files_applied: unknown;
-  /** Only for needs_login: what suite-cli's status file reported. */
-  login?: { step: string; url?: string };
+  /** Keys the agent changed on disk since the host wrote them. Absent: not checked. */
+  files_drifted?: string[];
+  /**
+   * Only for needs_login: the step suite-cli's status file named, and nothing
+   * else. Never a login URL or code (core task 01a17b10): Burrow does not
+   * relay a Claude login; a human logs in at the agent's own pane.
+   */
+  login?: { step: string };
 }
 
 export interface StartCommand {
@@ -62,6 +81,8 @@ export interface StartCommand {
   env: Record<string, string>;
   /** The agent's own files, written into its work dir before the unit starts. Null: core sent none. */
   files: AgentFile[] | null;
+  /** Drifted keys core says to overwrite (the owner resolved them). */
+  force_keys: string[];
 }
 
 export interface AgentsDeps {
@@ -78,7 +99,7 @@ export interface AgentsDeps {
 export const SUPPORTED_HARNESSES = new Set(["claude_code"]);
 
 export function parseStart(payload: Record<string, unknown>): StartCommand | string {
-  const { agent_id, runtime_id, runtime_token, harness, core_url, env, files } = payload;
+  const { agent_id, runtime_id, runtime_token, harness, core_url, env, files, force_keys } = payload;
   if (!isAgentId(agent_id)) return "agent_id is not an agent id";
   if (!isRuntimeId(runtime_id)) return "runtime_id is not a runtime id";
   if (typeof runtime_token !== "string" || runtime_token.length < 16) return "runtime_token missing";
@@ -95,7 +116,12 @@ export function parseStart(payload: Record<string, unknown>): StartCommand | str
   }
   const parsedFiles = parseFiles(files);
   if (typeof parsedFiles === "string") return parsedFiles;
-  return { agent_id, runtime_id, runtime_token, harness, core_url, env: cleanEnv, files: parsedFiles };
+  let forceKeys: string[] = [];
+  if (force_keys !== undefined && force_keys !== null) {
+    if (!Array.isArray(force_keys) || !force_keys.every(isFileKey)) return "force_keys is not a list of file keys";
+    forceKeys = force_keys as string[];
+  }
+  return { agent_id, runtime_id, runtime_token, harness, core_url, env: cleanEnv, files: parsedFiles, force_keys: forceKeys };
 }
 
 /** Write `content` to `path` as `user`, via a temp file and a rename. Content travels on stdin. */
@@ -177,9 +203,26 @@ export async function startAgent(deps: AgentsDeps, cmd: StartCommand): Promise<v
   // starts: the stored copy wins, and suite-cli writes CLAUDE.md only when
   // it is absent.
   if (cmd.files !== null) {
-    const { applied, rejected } = await writeAgentFiles(deps.runner, user, cmd.files);
+    // A key the agent edited since the last write is left alone unless core
+    // names it in force_keys: nothing the agent wrote is lost silently.
+    const priorShas = readShas(cmd.agent_id) ?? {};
+    const previousApplied = readApplied(cmd.agent_id) ?? {};
+    const { applied, rejected, shas, drifted } = await writeAgentFiles(deps.runner, user, cmd.files, {
+      priorShas,
+      force: new Set(cmd.force_keys),
+    });
     for (const r of rejected) deps.log(`agent ${cmd.agent_id}: file ${JSON.stringify(r.key)} refused: ${r.reason}`);
-    recordApplied(cmd.agent_id, applied);
+    for (const k of drifted) deps.log(`agent ${cmd.agent_id}: file ${JSON.stringify(k)} changed on disk; not overwritten`);
+    const keptShas: FilesShas = { ...shas };
+    const keptApplied = { ...applied };
+    for (const k of drifted) {
+      const sha = priorShas[k];
+      if (sha !== undefined) keptShas[k] = sha;
+      const version = previousApplied[k];
+      if (version !== undefined) keptApplied[k] = version;
+    }
+    recordApplied(cmd.agent_id, keptApplied);
+    recordShas(cmd.agent_id, keptShas);
   }
   await writeConventions(deps, user, cmd.agent_id);
   // restart, not start: a start command for a running agent carries a new
@@ -234,7 +277,8 @@ export function parseShow(stdout: string): UnitState {
 
 export interface PaneStatus {
   state?: string;
-  login?: { step?: unknown; url?: unknown };
+  // suite-cli may write more under `login` (a URL); only `step` is read.
+  login?: { step?: unknown };
   dialog?: string;
   title?: string;
   reason?: string;
@@ -293,8 +337,9 @@ export function observe(
   if (unit.active !== "active") return { ...base, state: "starting", detail: unit.sub || null };
   if (status?.state === "needs_login") {
     const step = typeof status.login?.step === "string" ? status.login.step : "login";
-    const url = typeof status.login?.url === "string" ? status.login.url : undefined;
-    return { ...base, state: "needs_login", detail: step, login: url === undefined ? { step } : { step, url } };
+    // The step only: whatever else suite-cli reported (a login URL) is not
+    // copied, so it never leaves this host (core task 01a17b10).
+    return { ...base, state: "needs_login", detail: step, login: { step } };
   }
   if (status?.state === "ready") return { ...base, state: "running" };
   if (status?.state === "stuck") {
@@ -309,5 +354,9 @@ export function observe(
 
 export async function observeAgent(deps: AgentsDeps, agentId: string): Promise<Observation> {
   const r = await deps.runner.run(["systemctl", "show", unitName(agentId), "--property=ActiveState,SubState"]);
-  return observe(agentId, parseShow(r.stdout), readStatus(agentId), readApplied(agentId));
+  const obs = observe(agentId, parseShow(r.stdout), readStatus(agentId), readApplied(agentId));
+  const shas = readShas(agentId);
+  if (shas === null) return obs;
+  const files_drifted = await detectDrift(deps.runner, { name: userName(agentId), work: workDir(agentId) }, shas);
+  return { ...obs, files_drifted };
 }

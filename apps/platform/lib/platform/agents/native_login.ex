@@ -39,6 +39,17 @@ defmodule Platform.Agents.NativeLogin do
     * Never logged, never put in an assign, never rendered.
 
   Only `NativeAgents.can_manage?/2` may set or remove it.
+
+  ## Login mode: `api_key` (default) or `operator` (task 01a17b10 stage 1)
+
+  Install config, `config :platform, :native_agent_login`, set from the env
+  `NATIVE_AGENT_LOGIN` (the installer renders it from the manifest's
+  `[agents] login`). `api_key` is the shipped default and what an unset or
+  unrecognised value means. `operator` is opt-in: the agent carries NO API key
+  (`start_env/1` returns `%{}` without reading the Vault, even when a key is
+  saved), its pane waits at Claude Code's own login, and a human operator
+  attaches to that pane and logs in there (README, "Operator login"). Burrow
+  never sees, relays or stores the login code or the login URL.
   """
 
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
@@ -46,6 +57,40 @@ defmodule Platform.Agents.NativeLogin do
 
   @slug "anthropic-api-key"
   @env_name "ANTHROPIC_API_KEY"
+
+  @modes [:api_key, :operator]
+
+  @doc """
+  The install's native-agent login mode: `:api_key` unless the install opted in
+  to `:operator` (`config :platform, :native_agent_login`, env
+  `NATIVE_AGENT_LOGIN`). Anything other than exactly `operator` is `:api_key`.
+  """
+  @spec login_mode() :: :api_key | :operator
+  def login_mode, do: parse_mode(Application.get_env(:platform, :native_agent_login))
+
+  @doc "Every login mode, the default first."
+  def login_modes, do: @modes
+
+  @doc "True when the install runs native agents in operator login mode."
+  @spec operator?() :: boolean()
+  def operator?, do: login_mode() == :operator
+
+  defp parse_mode(:operator), do: :operator
+  defp parse_mode("operator"), do: :operator
+  defp parse_mode(_), do: :api_key
+
+  @doc """
+  The command an operator runs to reach a native agent's pane, as a template:
+  placeholders only, filled in by the person. Mirrors how the host reads the
+  pane (services/agent-host/src/pane.ts `captureArgv`); see the agent-host
+  README, "Operator login".
+  """
+  @spec attach_command_template() :: String.t()
+  def attach_command_template do
+    "docker exec -it <agent-host container> " <>
+      "runuser -u agent-<12 hex> -- " <>
+      "env TMUX_TMPDIR=/run/burrow-agents/<agent id> tmux attach -t suite-agent"
+  end
 
   @doc "The Vault slug an agent's Anthropic API key is stored under."
   def slug, do: @slug
@@ -131,10 +176,13 @@ defmodule Platform.Agents.NativeLogin do
   when a key is saved and the harness is Claude Code, else `%{}`. Read as the
   agent itself, at the moment of the start. The result goes into the start
   command and nowhere else.
+
+  In `:operator` login mode it is always `%{}` and the Vault is not read.
   """
   @spec start_env(Agent.t()) :: %{optional(String.t()) => String.t()}
   def start_env(%Agent{} = agent) do
-    with %AgentRuntime{harness: harness} <- NativeAgents.get_managed_runtime(agent),
+    with :api_key <- login_mode(),
+         %AgentRuntime{harness: harness} <- NativeAgents.get_managed_runtime(agent),
          true <- api_key_harness?(harness),
          {:ok, key} <- Vault.get(@slug, scope: {:agent, agent.id}, accessor: {:agent, agent.id}) do
       %{@env_name => key}
@@ -153,13 +201,32 @@ defmodule Platform.Agents.NativeLogin do
     * `:waiting` — a key is saved and the agent is starting with it;
     * `:logged_in` — a key is saved and the agent is running;
     * `:idle` — anything else (stopped, crashed, no observation).
+
+  In `:operator` mode (`step/3`) a saved key is irrelevant:
+
+    * `:needs_operator` — the agent is waiting at Claude's login for a human
+      to attach to its pane;
+    * `:waiting` / `:logged_in` — starting / running;
+    * `:idle` — anything else.
   """
-  @spec step(map() | nil, boolean()) :: :needs_key | :key_refused | :waiting | :logged_in | :idle
-  def step(%{state: :needs_login}, false), do: :needs_key
-  def step(%{state: :needs_login}, true), do: :key_refused
-  def step(%{state: :starting}, true), do: :waiting
-  def step(%{state: :running}, true), do: :logged_in
-  def step(_observed, _key_set?), do: :idle
+  @spec step(map() | nil, boolean()) ::
+          :needs_key | :needs_operator | :key_refused | :waiting | :logged_in | :idle
+  def step(observed, key_set?), do: step(observed, key_set?, login_mode())
+
+  @doc "`step/2` for an explicit login mode."
+  @spec step(map() | nil, boolean(), :api_key | :operator) ::
+          :needs_key | :needs_operator | :key_refused | :waiting | :logged_in | :idle
+  def step(%{state: :needs_login}, _key_set?, :operator), do: :needs_operator
+  def step(%{state: :starting}, _key_set?, :operator), do: :waiting
+  def step(%{state: :running}, _key_set?, :operator), do: :logged_in
+  def step(_observed, _key_set?, :operator), do: :idle
+  def step(observed, key_set?, _api_key), do: api_key_step(observed, key_set?)
+
+  defp api_key_step(%{state: :needs_login}, false), do: :needs_key
+  defp api_key_step(%{state: :needs_login}, true), do: :key_refused
+  defp api_key_step(%{state: :starting}, true), do: :waiting
+  defp api_key_step(%{state: :running}, true), do: :logged_in
+  defp api_key_step(_observed, _key_set?), do: :idle
 
   defp managed_runtime(agent) do
     case NativeAgents.get_managed_runtime(agent) do

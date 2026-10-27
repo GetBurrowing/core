@@ -101,6 +101,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # `@template_sites`.
   @placeholder_exclusions %{
     "platform_web/components/action_patterns.ex" => :global_default,
+    "platform_web/live/agent_config/agent_config_live.ex" => :global_default,
     "platform_web/components/chat_message.ex" => :rule_painted,
     "platform_web/components/meetings/intents_collapse.ex" => :global_default,
     "platform_web/components/meetings/invite_control.ex" => :global_default,
@@ -119,7 +120,6 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/partials/details_panel.ex" => :global_default,
     "platform_web/live/chat/settings_component.ex" => :global_default,
     "platform_web/live/control_center/agent_detail.ex" => :global_default,
-    "platform_web/live/control_center/native_files.ex" => :global_default,
     "platform_web/live/control_center/native_login.ex" => :global_default,
     "platform_web/live/control_center/onboarding.ex" => :global_default,
     "platform_web/live/email_live.ex" => :global_default,

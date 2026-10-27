@@ -1012,6 +1012,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.ControlCenterLive ->
         "Agents"
 
+      PlatformWeb.AgentConfigLive ->
+        "Agents"
+
       PlatformWeb.TasksLive ->
         "Tasks"
 

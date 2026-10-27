@@ -927,6 +927,8 @@ defmodule PlatformWeb.Router do
       live("/control/experiments", ExperimentsLive, :index)
       live("/control/experiments/:slug", ExperimentsLive, :show)
       live("/control/:agent_slug", ControlCenterLive, :show)
+      # Task 01a17b1c stage 5: the agent's configuration files and session strip.
+      live("/control/:agent_slug/config", AgentConfigLive, :show)
       # Task 01a17b17 stage 3: the owner's remote terminal. Keyed by runtime id
       # so a direct URL for someone else's runtime reaches the same refusal
       # core's channel gives.

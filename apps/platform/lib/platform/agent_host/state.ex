@@ -12,12 +12,12 @@ defmodule Platform.AgentHost.State do
   One row per agent:
 
       {agent_id, %{state: observed(), detail: String.t() | nil,
-                   files_applied: term(), login_url: String.t() | nil,
-                   profile: String.t() | nil, observed_at: DateTime.t()}}
+                   files_applied: term(), profile: String.t() | nil,
+                   observed_at: DateTime.t()}}
 
-  `login_url` is the login page the host reported for a `needs_login` agent
-  (stage 4). It is only ever a link the person opens; nothing is relayed back
-  through core.
+  There is deliberately no login page or login code here (task 01a17b10): a
+  `needs_login` agent is a state and a step name only. Burrow never relays or
+  handles a Claude login; a human logs in at the agent's own pane.
 
   plus one `{:__host__, %{profile, connected_at}}` row for the connected host.
 
@@ -35,7 +35,7 @@ defmodule Platform.AgentHost.State do
           state: observed(),
           detail: String.t() | nil,
           files_applied: term(),
-          login_url: String.t() | nil,
+          files_drifted: [String.t()] | nil,
           profile: String.t() | nil,
           observed_at: DateTime.t()
         }
@@ -102,7 +102,7 @@ defmodule Platform.AgentHost.State do
       state: state,
       detail: Map.get(attrs, :detail),
       files_applied: Map.get(attrs, :files_applied),
-      login_url: Map.get(attrs, :login_url),
+      files_drifted: Map.get(attrs, :files_drifted),
       profile: Map.get(attrs, :profile) || host_profile(),
       observed_at: Map.get(attrs, :observed_at) || DateTime.utc_now()
     }

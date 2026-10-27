@@ -15,7 +15,11 @@ defmodule Platform.Agents.NativeLoginTest do
       "the key reaches only its own agent's start" goes red;
     * return `%{}` from `start_env/1` → the positive control in the same test
       goes red;
-    * accept any string in `api_key_shape/1` → the login-code case goes red.
+    * accept any string in `api_key_shape/1` → the login-code case goes red;
+    * let `start_env/1` return the saved key in operator mode → "operator
+      mode carries no API key" goes red (task 01a17b10 stage 1);
+    * default `login_mode/0` to `:operator` → "the default is api_key" goes
+      red.
   """
   use PlatformWeb.ChannelCase, async: false
 
@@ -213,6 +217,88 @@ defmodule Platform.Agents.NativeLoginTest do
         "agent_id" => ^agent_id,
         "env" => %{"ANTHROPIC_API_KEY" => @key}
       }
+    end
+  end
+
+  describe "login mode (task 01a17b10 stage 1)" do
+    setup do
+      previous = Application.fetch_env(:platform, :native_agent_login)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:platform, :native_agent_login, value)
+          :error -> Application.delete_env(:platform, :native_agent_login)
+        end
+      end)
+
+      :ok
+    end
+
+    test "the default is api_key, and a saved key is delivered", %{owner: owner} do
+      Application.delete_env(:platform, :native_agent_login)
+      assert NativeLogin.login_mode() == :api_key
+      refute NativeLogin.operator?()
+      assert hd(NativeLogin.login_modes()) == :api_key
+
+      {agent, _} = native!(owner, "Kit")
+      :ok = NativeLogin.put_api_key(owner.id, agent, @key)
+      assert NativeLogin.start_env(agent) == %{"ANTHROPIC_API_KEY" => @key}
+
+      # Only exactly `operator` opts in; anything else is the default.
+      for value <- ["api_key", "", "Operator ", "subscription", nil, :api_key] do
+        Application.put_env(:platform, :native_agent_login, value)
+        assert NativeLogin.login_mode() == :api_key, inspect(value)
+      end
+    end
+
+    test "operator mode carries no API key, even with one saved", %{owner: owner} do
+      {agent, _} = native!(owner, "Lux")
+      :ok = NativeLogin.put_api_key(owner.id, agent, @key)
+      # Positive control: in api_key mode this agent's start carries the key.
+      Application.put_env(:platform, :native_agent_login, "api_key")
+      assert NativeLogin.start_env(agent) == %{"ANTHROPIC_API_KEY" => @key}
+
+      Application.put_env(:platform, :native_agent_login, "operator")
+      assert NativeLogin.login_mode() == :operator
+      assert NativeLogin.start_env(agent) == %{}
+    end
+
+    test "operator mode: the agent.start push carries an empty env", %{owner: owner} do
+      Application.put_env(:platform, :native_agent_login, "operator")
+      {agent, _} = native!(owner, "Mae")
+      :ok = NativeLogin.put_api_key(owner.id, agent, @key)
+      _channel = join_host!()
+
+      log =
+        capture_log(fn ->
+          {:ok, _} = NativeAgents.set_desired_state(agent, "running")
+          :ok = Platform.AgentHost.Reconciler.converge(agent.id)
+          agent_id = agent.id
+          assert_push "agent.start", %{"agent_id" => ^agent_id, "env" => env}
+          assert env == %{}
+        end)
+
+      refute log =~ @key
+    end
+
+    test "the attach command is a template: placeholders, no host or id" do
+      cmd = NativeLogin.attach_command_template()
+      assert cmd =~ "tmux attach -t suite-agent"
+      assert cmd =~ "TMUX_TMPDIR=/run/burrow-agents/<agent id>"
+      assert cmd =~ "agent-<12 hex>"
+      refute cmd =~ ~r/[0-9a-f]{8}-[0-9a-f]{4}/
+      refute cmd =~ ".com"
+    end
+
+    test "step/3 in operator mode never asks for a key" do
+      assert NativeLogin.step(%{state: :needs_login}, false, :operator) == :needs_operator
+      assert NativeLogin.step(%{state: :needs_login}, true, :operator) == :needs_operator
+      assert NativeLogin.step(%{state: :starting}, false, :operator) == :waiting
+      assert NativeLogin.step(%{state: :running}, false, :operator) == :logged_in
+      assert NativeLogin.step(%{state: :stopped}, true, :operator) == :idle
+      assert NativeLogin.step(nil, false, :operator) == :idle
+      # api_key mode is unchanged.
+      assert NativeLogin.step(%{state: :needs_login}, false, :api_key) == :needs_key
     end
   end
 

@@ -199,10 +199,31 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # scrubbed by the host, redacted again by the caller. Only a caller of
     # `recent_output/2` knows the ref.
     {"agent_host:pane:<id>", :resource},
+    # Task 01a17b1c stage 2. The same rendezvous for `AgentHost.file_read/3`:
+    # one file of one native agent's work dir, redacted by the host and again by
+    # the caller (secret files arrive as names only). Only a caller of
+    # `file_read/3` knows the ref.
+    {"agent_host:file:<id>", :resource},
     # Task 01a10322 stage 7. The same rendezvous for `AgentHost.check_auth/2`:
     # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
     # key. Only a caller of `check_auth/2` knows the ref.
     {"agent_host:auth:<id>", :resource},
+    # Task 01a17b1c stage 4. The same rendezvous for
+    # `AgentHost.restart_with_tools/2`: the outcome and tool NAMES the host
+    # probed before and after one native agent's restart. Only a caller of
+    # `restart_with_tools/2` knows the ref.
+    {"agent_host:restart:<id>", :resource},
+    # Task 01a17b1c stage 4. Keyed by an agent id: `{:agent_session_restarted,
+    # agent_id, diff}` after `ConfigFiles.restart/3` succeeds, for the session
+    # strip. The diff is tool names, counts and the outcome; no file content
+    # and no secret. A subscriber is the config screen, which has already
+    # passed `ConfigFiles.Access.authorize/2` for that agent.
+    {"agent_config:<id>", :resource},
+    # Task 01a17b10 stage 3. The same rendezvous for `AgentHost.host_call/3`
+    # (`host.env_names` and `host.admin`): the host's reply map, env NAMES or
+    # the result of a restart/deploy/rollback, never a value or a token. Only
+    # a caller of `host_call/3` knows the ref.
+    {"agent_host:reply:<id>", :resource},
     # Task 01a17b17 stage 2. One remote-terminal session: sealed frames and
     # control events between the owner's view channel and the agent's CLI
     # channel. The id is random and only those two channel processes hold it.

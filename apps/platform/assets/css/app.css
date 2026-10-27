@@ -1335,6 +1335,17 @@ body, .font-suite {
      #fbfaf9 and 6.4978:1 on base-300. Dark is #ff9b55 in both dark selectors
      below, 8.2625:1 on base-100 #191b20. */
   --color-interactive: #8b3b04;
+  /* Native tab bar inks (task 01a174e8 stage 3, substitution rules of the
+     design direction's contrast node). Measured on the iOS simulator over
+     the real glass: the light selected ink at --color-primary drew 4.22:1
+     on its own lens over white, under the label's 4.5, so light sends
+     --color-interactive; dark keeps --color-primary (reset in both dark
+     selectors below). The unselected ink at --tab-ink (base-content at 55%)
+     failed over the opposite-extreme backdrop, so it is raised to opaque
+     base-content, the raise the web bar makes for high contrast. Read only
+     by the #native-tab-bridge probes; the web bar is unchanged. */
+  --native-tab-selected: var(--color-interactive);
+  --native-tab-unselected: var(--color-base-content);
   /* The focus indicator has NO declaration here. Task 01a0785c stage 3 first
      declared a --color-focus-ring alias in this :root and in both dark
      selectors below; task 01a0833d landed first with the bare --focus-ring
@@ -1359,6 +1370,7 @@ body, .font-suite {
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
   --color-interactive: #ff9b55;
+  --native-tab-selected: var(--color-primary);
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
     0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
 }
@@ -1370,6 +1382,7 @@ body, .font-suite {
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
     --color-interactive: #ff9b55;
+    --native-tab-selected: var(--color-primary);
     --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
       0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
   }
@@ -5389,6 +5402,21 @@ body, .font-suite {
   height: 8px;
   border-radius: 9999px;
   background: var(--color-primary);
+}
+
+/* Native tab bar inks (task 01a174e8 stage 1). Two hidden probes inside
+   #native-tab-bridge resolve the inks this bar paints, so the NativeTabBar
+   hook can read them with getComputedStyle and send them to the iOS bar in
+   tabBarState.ink. --native-tab-selected / --native-tab-unselected are slots
+   the token layer may set (stage 3's contrast substitution); unset, the
+   probes follow the web bar exactly: --tab-ink at rest, --color-primary
+   active. Semantic tokens only, never qualified by data-theme. */
+.bottom-nav [data-native-ink="unselected"] {
+  color: var(--native-tab-unselected, var(--tab-ink));
+}
+
+.bottom-nav [data-native-ink="selected"] {
+  color: var(--native-tab-selected, var(--color-primary));
 }
 
 /* Desktop sidebar (Burrow redesign 22 stage 1; master-desktop.html #side,

@@ -82,7 +82,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
+PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE AGENT_HOST_FULL_ROOT
 EnvironmentFile=-/etc/burrow-agent-host.env
 # Node and bun read only their bundled roots without this; the system bundle
 # carries an install's internal root CA once update-ca-certificates has run.
@@ -170,6 +170,7 @@ def host_env(plan, token):
         f"AGENT_HOST_TOKEN={token}\n"
         f"BURROW_CORE_URL=https://{plan.primary}\n"
         f"SUITE_CORE_URL=https://{plan.primary}\n"
+        + ("AGENT_HOST_FULL_ROOT=true\n" if plan.full_root else "")
     )
 
 
