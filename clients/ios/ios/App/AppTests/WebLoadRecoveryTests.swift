@@ -179,6 +179,17 @@ final class WebLoadRecoveryTests: XCTestCase {
         XCTAssertEqual(loads.map(\.url), [fixture.url])
     }
 
+    func testATerminationReportedAfterTheFinishStillReissues() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        recovery.terminated()
+        recovery.didFinish(url: fixture.url)  // the finish lands after the termination was scheduled
+        fire()
+        fire()
+        XCTAssertEqual(loads.map(\.url), [fixture.url])
+    }
+
     func testFinishDisarmsTheFinishBound() {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
@@ -221,6 +232,7 @@ final class WebLoadRecoveryTests: XCTestCase {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
         recovery.didCommit(url: fixture.url)
+        recovery.didFinish(url: fixture.url)
         fire()
         fire()
         XCTAssertTrue(loads.isEmpty)

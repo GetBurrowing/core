@@ -113,7 +113,9 @@ final class WebLoadRecovery {
             log("recovery ignored finish of the bootstrap page")
             return
         }
-        epoch += 1
+        // No epoch bump: a retry already scheduled (a termination reported
+        // just after the finish) must still run. The finish bound checks
+        // `finished` itself.
         finished = true
         guard recoveredCommitSeen else { return }
         recoveredCommitSeen = false
