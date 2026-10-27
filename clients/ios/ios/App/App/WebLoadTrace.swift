@@ -76,56 +76,18 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         inFlight += 1
         WebLoadLog.logger.notice("didStartProvisional url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
+        #if DEBUG
+            if injection == "provisional", !injected, isFixture(webView.url) {
+                injected = true
+                // WebKit reports a real didFailProvisionalNavigation (-999) for
+                // a stopped provisional load. Cancelling in decidePolicyFor does
+                // not: it delivers no failure callback at all (run 40515959708).
+                WebLoadLog.logger.notice("injected provisional failure (stopLoading) url=\(WebLoadLog.describe(webView.url), privacy: .public)")
+                DispatchQueue.main.async { webView.stopLoading() }
+            }
+        #endif
         target?.webView?(webView, didStartProvisionalNavigation: navigation)
     }
-
-    /// Capacitor's handler decides every navigation; this only lets the DEBUG
-    /// seam cancel the first fixture navigation, so WebKit reports a real
-    /// provisional failure. Both policy entry points are covered because
-    /// WebKit calls the `preferences:` one when a delegate answers it.
-    func webView(
-        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-    ) {
-        #if DEBUG
-            if shouldInjectCancel(navigationAction) {
-                decisionHandler(.cancel)
-                return
-            }
-        #endif
-        if let target, target.responds(to: Selector(("webView:decidePolicyFor:decisionHandler:"))) {
-            target.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
-        } else {
-            decisionHandler(.allow)
-        }
-    }
-
-    func webView(
-        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences,
-        decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
-    ) {
-        #if DEBUG
-            if shouldInjectCancel(navigationAction) {
-                decisionHandler(.cancel, preferences)
-                return
-            }
-        #endif
-        if let target, target.responds(to: Selector(("webView:decidePolicyFor:preferences:decisionHandler:"))) {
-            target.webView?(webView, decidePolicyFor: navigationAction, preferences: preferences, decisionHandler: decisionHandler)
-        } else {
-            self.webView(webView, decidePolicyFor: navigationAction) { decisionHandler($0, preferences) }
-        }
-    }
-
-    #if DEBUG
-        private func shouldInjectCancel(_ action: WKNavigationAction) -> Bool {
-            guard injection == "provisional", !injected, action.targetFrame?.isMainFrame ?? true, isFixture(action.request.url) else { return false }
-            injected = true
-            WebLoadLog.logger.notice(
-                "injected provisional failure (cancelled in decidePolicyFor) url=\(WebLoadLog.describe(action.request.url), privacy: .public)")
-            return true
-        }
-    #endif
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         WebLoadLog.logger.notice("didCommit url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
