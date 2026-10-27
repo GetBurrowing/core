@@ -226,7 +226,7 @@ defmodule Platform.Meetings.CandidateSweeperTest do
     candidate = heard!(meeting, DateTime.utc_now(), outcome_kind: :artifact) |> reload!()
     meeting |> Ecto.Changeset.change(intent_muted_at: DateTime.utc_now()) |> Repo.update!()
     assert CandidateSweeper.sweep(now: candidate.acts_at) == []
-    meeting |> Ecto.Changeset.change(intent_muted_at: nil) |> Repo.update!()
+    meeting |> Repo.reload!() |> Ecto.Changeset.change(intent_muted_at: nil) |> Repo.update!()
     assert [_] = CandidateSweeper.sweep(now: candidate.acts_at)
     assert tasks_for(meeting.project_id) == []
   end
