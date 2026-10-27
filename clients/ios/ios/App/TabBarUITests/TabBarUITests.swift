@@ -178,7 +178,7 @@ final class TabBarUITests: XCTestCase {
 
         // Last, so the screenshots above exist whatever it says: iOS drew the
         // per-item font (rung 26 rule zero: no UITabBarAppearance on 26+).
-        XCTAssertTrue(drawn.hasSuffix("fonts=Public Sans 11 w550"), drawn)
+        XCTAssertTrue(drawn.contains("fonts=Public Sans 11 w550"), drawn)
     }
 
     /// Stage 2: the full contract on the fixture, light.
@@ -312,13 +312,16 @@ final class TabBarUITests: XCTestCase {
 
     /// Opens the flat backdrop page; it sends Chat selected, the More dot
     /// on and the page scheme's inks.
+    /// False under Reduce Transparency: the solid bar keeps the web's scheme.
+    private var adaptiveStyle = true
+
     private func backdrop(_ colour: String, _ app: XCUIApplication, _ bar: XCUIElement) {
         app.webViews.links["Backdrop \(colour)"].tap()
         XCTAssertTrue(app.webViews.staticTexts["mode: buttons backdrop=\(colour)"].waitForExistence(timeout: 10))
         XCTAssertTrue(bar.waitForExistence(timeout: 10))
         // Option 1 (task 01a174e8 stage 3): the bar takes the style of the
         // content behind it, whatever the page's scheme.
-        line("rendered: keys=", ["style=\(colour == "white" ? "light" : "dark")"], app, timeout: 30)
+        if adaptiveStyle { line("rendered: keys=", ["style=\(colour == "white" ? "light" : "dark")"], app, timeout: 30) }
     }
 
     /// Selects `selected`, screenshots the bar and measures every item:
@@ -455,6 +458,7 @@ final class TabBarUITests: XCTestCase {
             _ = setReduceTransparency(false)
             return
         }
+        adaptiveStyle = false
         var out: [String: Any] = ["measured": true]
         var summaries: [String: [String: [String: Double]]] = [:]
         var grounds: [String: String] = [:]

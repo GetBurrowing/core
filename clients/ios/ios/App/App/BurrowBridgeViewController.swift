@@ -324,7 +324,14 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// Snapshots the web content behind the bar and gives the bar the style
     /// that matches it.
     private func sampleBackdrop() {
-        guard !backdropSampling, let webView, let host = tabBarHost, !host.bar.isHidden else { return }
+        guard let webView, let host = tabBarHost, !host.bar.isHidden else { return }
+        // Reduce Transparency draws the bar as a solid system fill: nothing
+        // behind it shows through, so the web's own scheme and inks stand.
+        if UIAccessibility.isReduceTransparencyEnabled {
+            host.applyBackdrop(nil)
+            return
+        }
+        guard !backdropSampling else { return }
         let area = webView.convert(host.bar.bounds, from: host.bar).intersection(webView.bounds)
         guard !area.isNull, area.width > 1, area.height > 1 else { return }
         backdropSampling = true
@@ -352,7 +359,10 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 let current = (self.tabBarHost as? StandaloneTabBarHost)?.backdropStyle
                 self.tabBarHost?.applyBackdrop(NativeTabBarBackdrop.style(forLuminance: luminance, current: current))
                 #if DEBUG
-                    if before != self.tabBarHost?.bar.overrideUserInterfaceStyle { self.reportTabBarFixture() }
+                    // Only the flat backdrop pages wait on the style; a report at
+                    // a random moment could catch a tap mid-flight on the others.
+                    let onBackdropPage = self.webView?.url?.query?.contains("backdrop=") == true
+                    if onBackdropPage, before != self.tabBarHost?.bar.overrideUserInterfaceStyle { self.reportTabBarFixture() }
                 #endif
             }
         }
