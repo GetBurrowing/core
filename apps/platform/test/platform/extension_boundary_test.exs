@@ -60,6 +60,8 @@ defmodule Platform.ExtensionBoundaryTest do
 
   use ExUnit.Case, async: true
 
+  alias Platform.TestSupport.SourceIndex
+
   # Headroom, not the fix: the scan is one prefilter pass per file (see
   # `compile/1`). It reads every file under five roots, so a slow CI host
   # gets more than ExUnit's default 60 s.
@@ -83,14 +85,14 @@ defmodule Platform.ExtensionBoundaryTest do
 
   defp elixir_files(dir),
     do:
-      Path.wildcard(Path.join(dir, "**/*.{ex,exs}"))
+      SourceIndex.wildcard(Path.join(dir, "**/*.{ex,exs}"))
       |> Enum.reject(&String.contains?(&1, "/deps/"))
 
   # Full module names `defmodule` declares in `files`, nesting resolved.
   defp defined_modules(files) do
     files
     |> Enum.flat_map(fn path ->
-      path |> File.read!() |> Code.string_to_quoted!(file: path) |> collect_modules([])
+      path |> SourceIndex.read!() |> Code.string_to_quoted!(file: path) |> collect_modules([])
     end)
     |> Enum.uniq()
   end
@@ -160,7 +162,7 @@ defmodule Platform.ExtensionBoundaryTest do
   defp env_var_names do
     sibling_projects()
     |> Enum.flat_map(&elixir_files(Path.join(&1, "lib")))
-    |> Enum.flat_map(&Regex.scan(@env_read, File.read!(&1), capture: :all_but_first))
+    |> Enum.flat_map(&Regex.scan(@env_read, SourceIndex.read!(&1), capture: :all_but_first))
     |> List.flatten()
     |> Enum.uniq()
     |> Enum.sort()
@@ -197,7 +199,7 @@ defmodule Platform.ExtensionBoundaryTest do
   defp scan_files(root) do
     root
     |> Path.join("**/*")
-    |> Path.wildcard(match_dot: true)
+    |> SourceIndex.wildcard(match_dot: true)
     |> Enum.filter(&(File.regular?(&1) and Path.extname(&1) in @scan_exts))
     |> Enum.reject(&String.contains?(&1, "/node_modules/"))
   end
@@ -221,7 +223,7 @@ defmodule Platform.ExtensionBoundaryTest do
   defp scan(roots, compiled) do
     for root <- roots,
         file <- scan_files(root),
-        hit <- scan_text(File.read!(file), rel(file), compiled),
+        hit <- scan_text(SourceIndex.read!(file), rel(file), compiled),
         do: hit
   end
 

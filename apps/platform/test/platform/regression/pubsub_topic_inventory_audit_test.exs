@@ -219,6 +219,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # and no secret. A subscriber is the config screen, which has already
     # passed `ConfigFiles.Access.authorize/2` for that agent.
     {"agent_config:<id>", :resource},
+    # Task 01a17b17 stage 2. One remote-terminal session: sealed frames and
+    # control events between the owner's view channel and the agent's CLI
+    # channel. The id is random and only those two channel processes hold it.
+    # Core never decrypts and never stores what passes.
+    {"terminal_session:<id>", :resource},
     # Task 01a1694a stage 3. Keyed by a `meeting_briefings` id; the reachable
     # set is that briefing's attendees. Payload is
     # `{:meeting_briefing_changed, briefing_id}`, the id only, and a

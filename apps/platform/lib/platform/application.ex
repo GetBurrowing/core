@@ -9,6 +9,10 @@ defmodule Platform.Application do
   def start(_type, _args) do
     Platform.Config.validate!()
 
+    # The terminal relay's refusal-audit window (task 01a17b17). An ETS table
+    # owned by this start process; no DB.
+    Platform.Terminal.init_refusals()
+
     # Task 01a08b49 stage 1 — FIRST, ahead of the seven handlers below.
     # `:telemetry` detaches a handler that raises OR exits, VM-wide and for
     # the rest of the run; this listens on `[:telemetry, :handler, :failure]`
@@ -96,6 +100,7 @@ defmodule Platform.Application do
          # only the full role starts it. See Platform.Role.Relay.
          Platform.Role.RelayReceiver,
          {Registry, keys: :unique, name: Platform.Agents.Registry},
+         {Registry, keys: :duplicate, name: Platform.Terminal.Registry},
          {Registry, keys: :unique, name: Platform.Execution.Registry},
          {Registry, keys: :unique, name: Platform.Orchestration.Registry},
          {Registry, keys: :unique, name: Platform.Chat.Registry},

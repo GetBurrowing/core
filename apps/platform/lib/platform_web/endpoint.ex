@@ -16,6 +16,12 @@ defmodule PlatformWeb.Endpoint do
     websocket: [timeout: 120_000, check_origin: false],
     longpoll: false
 
+  # The owner's browser terminal (task 01a17b17). Origin-checked, unlike the
+  # runtime socket: a browser, not a daemon, connects here.
+  socket "/terminal/ws", PlatformWeb.TerminalSocket,
+    websocket: [timeout: 120_000],
+    longpoll: false
+
   # The install's agent host dials out to core here (task 01a10322 stage 2).
   # The token travels in the `x-agent-host-token` header, hence `:x_headers`.
   socket "/agent-host", PlatformWeb.AgentHostSocket,
@@ -28,7 +34,10 @@ defmodule PlatformWeb.Endpoint do
   # CONNECTED mount would read nil and quietly replace the browser-specific
   # instruction with the generic one a moment after the page settles.
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [:user_agent, session: @session_options]],
+    # `compress: true` lets Bandit negotiate permessage-deflate (Phoenix's
+    # default is false). Join replies for chat/tasks are 190-433 KiB of JSON
+    # (docs/perf/tab-switch-baseline.md). Do not strip it from /live.
+    websocket: [compress: true, connect_info: [:user_agent, session: @session_options]],
     longpoll: [connect_info: [:user_agent, session: @session_options]]
   )
 

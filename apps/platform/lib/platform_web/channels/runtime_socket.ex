@@ -12,6 +12,9 @@ defmodule PlatformWeb.RuntimeSocket do
 
   channel "runtime:*", PlatformWeb.RuntimeChannel
   channel "runtime_host:*", PlatformWeb.RuntimeHostChannel
+  # Opt-in remote terminal (task 01a17b17). Its own topic: terminal bytes never
+  # ride `runtime:*`.
+  channel "terminal:*", PlatformWeb.TerminalCliChannel
 
   @impl true
   def connect(%{"runtime_id" => runtime_id, "token" => token}, socket, _connect_info) do
