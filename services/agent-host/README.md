@@ -18,12 +18,15 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   agent with sudo can read every other agent's home, env file and tokens.
 - This daemon never types into an agent's pane and never handles a Claude
   login code. It relays what suite-cli's status file reports: that a login is
-  needed. Burrow does not offer a Claude subscription login (it would need the
-  person's code relayed into the CLI, which Anthropic's terms forbid); a
-  native agent logs in with an Anthropic API key a manager saves in Burrow,
+  needed, and the step's name. Never a login URL or code: whatever else the
+  status file holds stays on this host (core task 01a17b10). Burrow does not
+  offer a Claude subscription login through its UI (it would need the
+  person's code relayed into the CLI, which Anthropic's terms forbid). By
+  default (`api_key` login mode) a native agent logs in with an Anthropic API
+  key a manager saves in Burrow,
   which reaches ONLY that agent's 0600 env file as `ANTHROPIC_API_KEY`
   (stage 6). suite-cli answers Claude Code's "use this API key?" prompt for
-  that key only.
+  that key only. The other mode, `operator`, is below.
 - `agent.pane` returns the agent's recent pane text for Burrow's read-only
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
@@ -75,6 +78,35 @@ The image is pushed by CI (`build-and-push-agent-host`) as
 pre-rename name `suite-agent-host` (GHCR and Docker Hub) for hosts installed
 before the rename, only when a push to main changes `services/agent-host/**`,
 because every push restarts every agent on an `AutoUpdate=registry` host.
+
+## Operator login
+
+An install opts in with `[agents] login = "operator"` in its manifest (the
+default is `api_key`). The installer renders that into core's env as
+`NATIVE_AGENT_LOGIN=operator`. In this mode core sends no API key in
+`agent.start`, even when one is saved, and does not read the Vault for it.
+The agent's pane stops at Claude Code's own login screen and waits for a
+person.
+
+A person with shell access to the machine attaches to the agent's pane and
+logs in there. Exec into the agent-host container, become the agent's user
+with its tmux dir, and attach to its session:
+
+    docker exec -it <agent-host container> \
+      runuser -u agent-<12 hex> -- \
+      env TMUX_TMPDIR=/run/burrow-agents/<agent id> \
+      tmux attach -t suite-agent
+
+Use `podman exec` where the install runs podman. `<agent id>` is the agent's
+full id and `<12 hex>` is its last 12 hex characters. On `full_machine` there
+is no container, so run the `runuser` line on the host. Detach with `Ctrl-b d`
+and leave the session running.
+
+Claude Code shows its login URL in that pane. The person opens it, and then
+types the code into Claude Code's own prompt in the attached pane. Burrow
+never sees the code or the URL: the host passes core only the login step's
+name, and "Recent output" stays withheld while a login screen is up
+(`src/pane.ts`).
 
 ## Hosts installed before the rename
 

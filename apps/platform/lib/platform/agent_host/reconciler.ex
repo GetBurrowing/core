@@ -299,10 +299,11 @@ defmodule Platform.AgentHost.Reconciler do
        when is_binary(agent_id) do
     case State.parse_state(raw) do
       {:ok, observed} ->
+        # `payload["login"]` is never read (task 01a17b10): whatever a host
+        # sends there, no login page or code is stored or passed on.
         State.put(agent_id, observed, %{
           detail: string_or_nil(payload["detail"]),
           files_applied: payload["files_applied"],
-          login_url: login_url(observed, payload["login"]),
           profile: profile
         })
 
@@ -353,7 +354,8 @@ defmodule Platform.AgentHost.Reconciler do
           # The agent's own login (stage 6): its Anthropic API key, if one is
           # saved, read from the Vault as the agent at this moment. It goes
           # into this push and, on the host, into that agent's 0600 env file
-          # only. Never logged.
+          # only. Never logged. In operator login mode (task 01a17b10) this
+          # is `%{}` and the Vault is not read.
           "env" => NativeLogin.start_env(agent),
           # The agent's own files (stage 5), written into its work dir as its
           # uid before the unit starts. Read at this moment, so a Restart
@@ -387,18 +389,6 @@ defmodule Platform.AgentHost.Reconciler do
   defp broadcast(event) do
     Phoenix.PubSub.broadcast(Platform.PubSub, @status_topic, {:agent_host_status, event})
   end
-
-  # The login page a `needs_login` agent reported (`login: {step, url}`), kept
-  # only when it is an absolute https URL: it is rendered as a link, so any
-  # other scheme (javascript:, data:, a relative path) is dropped.
-  defp login_url(:needs_login, %{"url" => url}) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> url
-      _ -> nil
-    end
-  end
-
-  defp login_url(_state, _login), do: nil
 
   defp string_or_nil(value) when is_binary(value) and value != "", do: value
   defp string_or_nil(_), do: nil

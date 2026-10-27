@@ -1765,6 +1765,33 @@ jobs:
             ghcr.io/getburrowing/burrow-agent-host:latest
             ghcr.io/getburrowing/burrow-agent-host:${{ github.sha }}
 
+  # The agent host's typecheck and unit tests on every PULL REQUEST (task
+  # 01a17b10 stage 1). Before this they ran only inside
+  # build-and-push-agent-host, which runs on a push to main, so a PR that
+  # broke services/agent-host merged green. Same docker invocation as that
+  # job's "Typecheck and unit-test the agent host" step, after the GHCR login
+  # (the bun image is a ghcr.io/getburrowing mirror).
+  agent-host-checks:
+    name: Agent host (typecheck + unit tests)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Typecheck and unit-test the agent host
+        run: |
+          docker run --rm -v "$PWD/services/agent-host:/src:ro" ghcr.io/getburrowing/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d sh -c \
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
+
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
   # only, so the stock image needs no apt or pip step.

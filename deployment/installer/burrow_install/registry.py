@@ -595,6 +595,8 @@ def _core_env(ctx):
     if ctx.agents != "off":
         # Task 01a10322: without it core refuses every agent host.
         env["AGENT_HOST_TOKEN"] = "{secret:AGENT_HOST_TOKEN}"
+        # Task 01a17b10: how native agents log in ([agents] login).
+        env["NATIVE_AGENT_LOGIN"] = ctx.m["agents"]["login"]
     if ctx.agents == "contained":
         # Agents in the agent-host container reach core on the agents network,
         # not through the public URL (AgentHost.core_url/0's default).

@@ -183,6 +183,7 @@ agent host reports.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `profile` | `full_machine` \| `contained` \| `off` | `full_machine` when the table is present, `off` when it is absent | A manifest without `[agents]` renders exactly as it did before the table existed. On `target = "mac"` any profile other than `off` is `field_not_applicable`. |
+| `login` | `api_key` \| `operator` | `api_key` | How native agents log in to Claude (core task 01a17b10). Rendered into core-platform's env as `NATIVE_AGENT_LOGIN` whenever the profile is not `off`. `operator`: core sends no API key and a person attaches to the agent's pane to log in to Claude Code there (services/agent-host/README.md, "Operator login"). |
 
 - **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
   service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,

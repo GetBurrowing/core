@@ -62,6 +62,11 @@ MEDIA_REACH = ("lan", "tailnet", "public")
 # this table existed renders byte-unchanged; a table that omits `profile` gets
 # "full_machine", the profile for a VM we provision.
 AGENT_PROFILES = ("full_machine", "contained", "off")
+# How native agents log in to Claude (core task 01a17b10): "api_key" (the
+# shipped default) or "operator" (no API key; a human attaches to the agent's
+# pane and logs in to Claude Code there). Rendered into core's env as
+# NATIVE_AGENT_LOGIN.
+AGENT_LOGINS = ("api_key", "operator")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -164,6 +169,7 @@ SCHEMA = {
     # packaging. Core never branches on it; the agent host reports it.
     "agents": {
         "profile": _enum(AGENT_PROFILES, "full_machine"),
+        "login": _enum(AGENT_LOGINS, "api_key"),
     },
 }
 

@@ -421,6 +421,47 @@ class ContainedTest(unittest.TestCase):
         self.assertNotIn("NOPASSWD", user_data)
 
 
+class LoginModeTest(unittest.TestCase):
+    """[agents] login (core task 01a17b10 stage 1): api_key by default,
+    operator opt-in, rendered into core-platform's env as NATIVE_AGENT_LOGIN."""
+
+    def test_the_manifest_default_is_api_key(self):
+        for table in ({}, {"profile": "contained"}, {"profile": "full_machine"}):
+            with self.subTest(table=table):
+                errors, m = validate(with_agents(EXAMPLE, table))
+                self.assertEqual(errors, [])
+                self.assertEqual(m["agents"]["login"], "api_key")
+        _e, absent = validate(with_agents(EXAMPLE, None))
+        self.assertEqual(absent["agents"]["login"], "api_key")
+
+    def test_operator_is_accepted_and_anything_else_refused(self):
+        errors, m = validate(with_agents(EXAMPLE, {"profile": "contained", "login": "operator"}))
+        self.assertEqual(errors, [])
+        self.assertEqual(m["agents"]["login"], "operator")
+        errors, m = validate(with_agents(EXAMPLE, {"profile": "contained", "login": "oauth"}))
+        self.assertIsNone(m)
+        self.assertEqual([(e.code, e.path) for e in errors], [("invalid_enum", "agents.login")])
+
+    def core_env(self, table):
+        errors, m = validate(with_agents(EXAMPLE, table))
+        self.assertEqual(errors, [])
+        return compose_services(build(m).files["compose.yaml"][0])["core-platform"]
+
+    def test_core_env_carries_the_mode(self):
+        self.assertIn('NATIVE_AGENT_LOGIN: "api_key"', self.core_env({"profile": "contained"}))
+        self.assertIn(
+            'NATIVE_AGENT_LOGIN: "operator"',
+            self.core_env({"profile": "contained", "login": "operator"}),
+        )
+        self.assertIn(
+            'NATIVE_AGENT_LOGIN: "operator"',
+            self.core_env({"profile": "full_machine", "login": "operator"}),
+        )
+
+    def test_off_renders_no_login_mode(self):
+        self.assertNotIn("NATIVE_AGENT_LOGIN", self.core_env({"profile": "off"}))
+
+
 class PackagingTest(unittest.TestCase):
     """The installer's copies are the files the agent-host image ships."""
 

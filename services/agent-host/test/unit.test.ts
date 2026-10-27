@@ -237,9 +237,17 @@ describe("observed state", () => {
     expect(loginScreenStatus({ state: "ready" })).toBe(false);
   });
 
-  test("needs_login carries the step and the url suite-cli reported, and nothing else", () => {
-    const o = observe(A, show("active"), { state: "needs_login", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
-    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url", url: "https://claude.com/cai/oauth/authorize?x=1" } });
+  // Core task 01a17b10: Burrow never relays a login. observeAgent returns
+  // observe() of the status file, so this is what core would receive.
+  test("needs_login carries the step only: a url suite-cli reported is never copied", () => {
+    const url = "https://claude.com/cai/oauth/authorize?x=1";
+    const status = { state: "needs_login", login: { step: "login_url", url } } as Parameters<typeof observe>[2];
+    const o = observe(A, show("active"), status);
+    expect(o).toMatchObject({ state: "needs_login", detail: "login_url", login: { step: "login_url" } });
+    expect(Object.keys(o.login ?? {})).toEqual(["step"]);
+    expect("url" in (o.login ?? {})).toBe(false);
+    expect(JSON.stringify(o)).not.toContain(url);
+    expect(JSON.stringify(o)).not.toContain("oauth");
   });
 });
 
