@@ -96,6 +96,7 @@ defmodule Platform.Application do
          # only the full role starts it. See Platform.Role.Relay.
          Platform.Role.RelayReceiver,
          {Registry, keys: :unique, name: Platform.Agents.Registry},
+         {Registry, keys: :duplicate, name: Platform.Terminal.Registry},
          {Registry, keys: :unique, name: Platform.Execution.Registry},
          {Registry, keys: :unique, name: Platform.Orchestration.Registry},
          {Registry, keys: :unique, name: Platform.Chat.Registry},
