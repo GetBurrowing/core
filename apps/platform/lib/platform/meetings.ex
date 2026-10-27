@@ -5837,14 +5837,9 @@ defmodule Platform.Meetings do
   @doc """
   Mark a transcript as complete with the generated summary text.
 
-  On successful update, opportunistically dispatches a `meeting_scribe_completion`
-  attention signal to whichever agent currently holds the `meeting_scribe` role
-  (via `Platform.Federation.dispatch_scribe_attention/2`). Progressive-enhancement
-  contract: the dispatch is best-effort — a nil role assignment is a silent
-  no-op, and every failure path inside the Federation call is swallowed there
-  via telemetry (`[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]`),
-  so this function's `{:ok, transcript} | {:error, term()}` contract to the
-  Summarizer stays unchanged.
+  On success, refreshes the persisted completion run. The scribe is dispatched
+  only after the meeting ends, capture has finished, and the full transcript
+  is ready. Delivery failures remain on that run for retry.
 
   ## The success path CLEARS `failure_reason`
 
@@ -5913,14 +5908,11 @@ defmodule Platform.Meetings do
   dispatches a `meeting_triage_dispatch` attention signal so the triage agent
   can pick up the canvas and convert action items into tasks.
 
-  Progressive-enhancement contract: nil role assignment is a silent no-op
-  (avoids audit noise for orgs that never assigned a triage_officer). All
-  dispatch failures beyond that are swallowed inside
-  `Federation.dispatch_triage_attention/2` via
-  `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
-  so the caller sees a clean `:ok` regardless.
+  Dispatch errors are returned to the persisted completion run for retry;
+  a successful delivery does not mark triage filing complete.
   """
-  @spec on_scribe_canvas_created(Transcript.t(), Platform.Chat.Canvas.t()) :: :ok
+  @spec on_scribe_canvas_created(Transcript.t(), Platform.Chat.Canvas.t()) ::
+          :ok | {:error, term()}
   def on_scribe_canvas_created(%Transcript{} = transcript, %Platform.Chat.Canvas{} = canvas) do
     case safe_agent_id_for_role("triage_officer") do
       nil ->

@@ -41,6 +41,9 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionToolsTest do
   test "skill signal contract changes without rewriting human additions" do
     content = """
     Human addition preserved.
+    ## 1. Signal shape
+
+    The `meeting_triage_dispatch` attention signal (broadcast by
     `Platform.Federation.dispatch_triage_attention/2`) carries four ids in
     its payload:
     """

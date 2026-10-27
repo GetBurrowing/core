@@ -4987,28 +4987,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     # deleted the ack preamble that used to interpolate it. Enforcing the
     # reverse direction would require deleting those, which is a different
     # argument than this stage's.
-    @s5_placeholder_exemptions %{
-      # `dispatch.scribe_completion` embeds the shared `task_ack` preamble, so
-      # its body carries `{{task_id}}` and `{{stage_id}}` — but it declares
-      # neither, and, more to the point, NO CODE PATH RENDERS THIS SLUG AT ALL
-      # (`grep -rn "render_template(" lib/` at this commit lists 16 call sites;
-      # none names it). Both placeholders therefore resolve to "" for any
-      # caller that ever does render it. This is a real instance of exactly the
-      # defect class this guard exists for, found by writing the guard.
-      #
-      # It is EXEMPTED rather than papered over. Adding the two names to
-      # `variables` would make this file green while advertising, in the admin
-      # variables sidebar, a contract no render site keeps. The honest fix is
-      # to drop the ack preamble from a stage-less template — the same shape
-      # task 019fa469 stage 5 removed from `dispatch.planning` — which changes
-      # `content` and therefore needs its own force-update migration. Out of
-      # scope for this stage; recorded here so it cannot be forgotten.
-      #
-      # The exemption is SELF-RETIRING: the test below asserts the violation is
-      # still present, so whoever fixes the descriptor is forced to delete this
-      # entry rather than leave a hole behind.
-      "dispatch.scribe_completion" => ["task_id", "stage_id"]
-    }
+    @s5_placeholder_exemptions %{}
 
     test "every {{placeholder}} in a dispatch.* body is declared in that descriptor's variables" do
       descriptors = s5_dispatch_descriptors()

@@ -115,9 +115,13 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionTools do
 
   @skill_replacements [
     {~S"""
+     ## 1. Signal shape
+
      The `meeting_triage_dispatch` attention signal (broadcast by
      """,
      ~S"""
+     ## 1. Signal shape
+
      Call `meeting_triage_file` with `meeting_id`, `run_id`, `transcript_id`,
      `canvas_id`, `snapshot_hash` copied from the completion dispatch, plus
      `action_items`. Read `completion_transcript` (the full ordered segments

@@ -5408,7 +5408,20 @@ defmodule Platform.Federation.ToolSurface do
           {:ok, response}
 
         {:error, reason} ->
-          {:error, %{error: "#{name}: #{inspect(reason)}", code: reason, recoverable: false}}
+          {:error,
+           %{
+             error: "#{name}: #{inspect(reason)}",
+             code: reason,
+             recoverable:
+               reason in [
+                 :role_unassigned,
+                 :runtime_unresolvable,
+                 :transcription_pending,
+                 :capture_active,
+                 :transcript_changed,
+                 :run_mismatch
+               ]
+           }}
       end
     else
       _ ->

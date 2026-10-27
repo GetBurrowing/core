@@ -8,6 +8,10 @@ defmodule Platform.Meetings.CompletionTest do
   alias Platform.Tasks.Task
 
   setup do
+    fixture!()
+  end
+
+  def fixture! do
     n = System.unique_integer([:positive])
 
     {:ok, project} =
@@ -64,7 +68,7 @@ defmodule Platform.Meetings.CompletionTest do
 
   defp run!(meeting), do: Repo.get_by!(CompletionRun, meeting_id: meeting.id)
 
-  defp canvas!(space_id, agent) do
+  def canvas!(space_id, agent) do
     {:ok, participant} = Chat.add_agent_participant(space_id, agent.id)
 
     {:ok, canvas} =
@@ -85,7 +89,7 @@ defmodule Platform.Meetings.CompletionTest do
     canvas |> Ecto.Changeset.change(document: document) |> Repo.update!()
   end
 
-  defp params(meeting, run, canvas) do
+  def params(meeting, run, canvas) do
     %{
       "meeting_id" => meeting.id,
       "run_id" => run.id,
@@ -95,7 +99,7 @@ defmodule Platform.Meetings.CompletionTest do
     }
   end
 
-  defp ready!(meeting) do
+  def ready!(meeting) do
     seg =
       segment("We agreed to repair the completion callback and verify the replay behavior.", 1)
 
@@ -232,7 +236,7 @@ defmodule Platform.Meetings.CompletionTest do
            ) == 1
   end
 
-  test "concurrent triage submissions and a missing officer recover without another task", ctx do
+  test "a missing officer recovers and repeated filing creates no additional task", ctx do
     {meeting, run, seg} = ready!(ctx.meeting)
     canvas = canvas!(meeting.chat_space_id, ctx.scribe)
     args = params(meeting, run, canvas)
@@ -251,11 +255,7 @@ defmodule Platform.Meetings.CompletionTest do
 
     args = Map.put(args, "action_items", [item])
 
-    results =
-      for _ <- 1..2 do
-        Elixir.Task.async(fn -> Completion.triage_file(ctx.triage.id, args) end)
-      end
-      |> Enum.map(&Elixir.Task.await(&1, 10_000))
+    results = for _ <- 1..2, do: Completion.triage_file(ctx.triage.id, args)
 
     assert [{:ok, %{task_ids: [id]}}, {:ok, %{task_ids: [id]}}] = results
 
@@ -383,5 +383,112 @@ defmodule Platform.Meetings.CompletionTest do
              Completion.resume(meeting.id)
 
     assert recovered_id == run.id
+  end
+end
+
+defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
+  use ExUnit.Case, async: false
+  import Ecto.Query
+  alias Platform.{Repo, Roles}
+  alias Platform.Meetings.{Completion, CompletionTest}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @tag timeout: 60_000
+  test "simultaneous filing on distinct PostgreSQL connections returns one task" do
+    Sandbox.mode(Repo, :auto)
+    :ok = Sandbox.checkout(Repo, sandbox: false)
+    previous = Map.new(~w(meeting_scribe triage_officer), &{&1, Roles.agent_id_for_role(&1)})
+    ctx = CompletionTest.fixture!()
+
+    resources =
+      Enum.map([ctx.scribe, ctx.triage], fn agent ->
+        agent = Repo.get!(Platform.Agents.Agent, agent.id)
+        runtime = Repo.get!(Platform.Agents.AgentRuntime, agent.runtime_id)
+        {agent.id, runtime.id, runtime.owner_user_id}
+      end)
+
+    try do
+      {meeting, run, segment} = CompletionTest.ready!(ctx.meeting)
+      canvas = CompletionTest.canvas!(meeting.chat_space_id, ctx.scribe)
+      args = CompletionTest.params(meeting, run, canvas)
+      assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+      {:ok, _server} = Platform.Chat.Canvas.Server.start_server(canvas.id)
+      Platform.Chat.Canvas.Server.describe(canvas.id)
+
+      args =
+        Map.put(args, "action_items", [
+          %{
+            "item_id" => "repair-completion",
+            "title" => "Repair concurrent meeting completion",
+            "description" => "Repair the completion callback agreed in the cited segment.",
+            "source_segment_ids" => [segment["id"]]
+          }
+        ])
+
+      parent = self()
+
+      workers =
+        for _ <- 1..2 do
+          Elixir.Task.async(fn ->
+            :ok = Sandbox.checkout(Repo, sandbox: false)
+
+            try do
+              [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+              send(parent, {:ready, self(), backend})
+
+              receive do
+                :file -> Completion.triage_file(ctx.triage.id, args)
+              end
+            after
+              Sandbox.checkin(Repo)
+            end
+          end)
+        end
+
+      assert_receive {:ready, first, backend_a}, 5_000
+      assert_receive {:ready, second, backend_b}, 5_000
+      refute backend_a == backend_b
+      send(first, :file)
+      send(second, :file)
+      results = Enum.map(workers, &Elixir.Task.await(&1, 30_000))
+      assert [{:ok, %{task_ids: [task_id]}}, {:ok, %{task_ids: [task_id]}}] = results
+
+      assert Repo.aggregate(
+               from(t in Platform.Tasks.Task,
+                 where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id
+               ),
+               :count
+             ) == 1
+
+      Platform.Chat.Canvas.Server.stop(canvas.id)
+    after
+      for {role, agent_id} <- previous do
+        :ok = Roles.unassign_role(role)
+        if agent_id, do: Roles.assign_role(role, agent_id)
+      end
+
+      Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
+      Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
+
+      Repo.delete_all(
+        from(t in Platform.Meetings.Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)
+      )
+
+      Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^ctx.meeting.chat_space_id))
+      Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^ctx.project.id))
+
+      for {agent_id, runtime_id, user_id} <- resources do
+        Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id),
+          set: [runtime_id: nil]
+        )
+
+        Repo.delete_all(from(r in Platform.Agents.AgentRuntime, where: r.id == ^runtime_id))
+        Repo.delete_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id))
+        Repo.delete_all(from(u in Platform.Accounts.User, where: u.id == ^user_id))
+      end
+
+      Sandbox.checkin(Repo)
+      Sandbox.mode(Repo, :manual)
+    end
   end
 end

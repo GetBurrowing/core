@@ -1,4 +1,9 @@
 defmodule Platform.Repo.Migrations.CreateMeetingCompletionRuns do
+  @moduledoc """
+  Task 01a17f00-832c-7000-b480-64ab6d710532 stores the final meeting
+  completion identity, finalized transcript snapshot and per-item filing
+  ledger so reconnects and concurrent callbacks cannot mint duplicate work.
+  """
   use Ecto.Migration
 
   def change do
