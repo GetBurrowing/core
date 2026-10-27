@@ -10,7 +10,7 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionToolsTest do
 
   test "exact legacy handoff replacement preserves unrelated human text and is idempotent" do
     content = """
-    Human identity: user:ryan; preserve install corrections.
+    Human identity: user:operator; preserve install corrections.
     Fetch meeting + transcript context via `space_get_context` on `{{space_id}}` and direct
     Meetings context reads keyed by `{{transcript_id}}`. Filter `memory_search` calls with
     `transcript_id={{transcript_id}}` so other meetings' content does not leak into your canvas.
@@ -21,7 +21,7 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionToolsTest do
     updated = Migration.rewrite(content)
     assert updated =~ "full"
     assert updated =~ "completion_transcript"
-    assert updated =~ "Human identity: user:ryan; preserve install corrections."
+    assert updated =~ "Human identity: user:operator; preserve install corrections."
     assert updated =~ "Human footer: retain this sentence unchanged."
     assert Migration.rewrite(updated) == updated
   end
