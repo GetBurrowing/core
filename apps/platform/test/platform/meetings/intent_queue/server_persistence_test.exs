@@ -386,7 +386,7 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
 
     @grace_ms 5_000
 
-    test "a skeleton the mirror could not fill is reaped, not stranded" do
+    test "a task skeleton the mirror could not fill stays disarmed evidence" do
       # Same stand-in for "Postgres is momentarily unavailable" as the
       # case above — the queue owner is started, never allowed, and
       # shared mode is off so it cannot borrow anybody's connection —
@@ -404,7 +404,7 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       chunk_id = Ecto.UUID.generate()
       skeleton = skeleton!(meeting, chunk_id)
       acts_at = skeleton.acts_at
-      assert %DateTime{} = acts_at
+      assert is_nil(acts_at)
 
       # Started from a bare process rather than from this one:
       # `QueueSupervisor.ensure_started/2` hands the owner its caller's
@@ -439,16 +439,12 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       assert is_nil(row.task_id)
 
       # The reaper, at the grace: closed on the record and nothing minted.
-      at = DateTime.add(acts_at, @grace_ms + 1_000, :millisecond)
+      at = DateTime.add(DateTime.utc_now(), @grace_ms + 60_000, :millisecond)
 
-      assert %{fired: [], reaped: [reaped]} =
-               CandidateSweeper.sweep_all(now: at, grace_ms: @grace_ms)
-
-      assert reaped.id == skeleton.id
-
+      assert %{fired: [], reaped: []} = CandidateSweeper.sweep_all(now: at, grace_ms: @grace_ms)
       row = reload!(skeleton)
-      assert row.state == :closed
-      assert row.closed_reason == :unclassified
+      assert row.state == :heard
+      assert is_nil(row.closed_reason)
       assert is_nil(row.task_id)
       assert tasks_for(meeting.project_id) == []
 
@@ -459,7 +455,7 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       on_exit(fn -> Sandbox.stop_owner(restored) end)
     end
 
-    test "with the connection intact the same skeleton is filled and fires" do
+    test "with the connection intact the same task skeleton is filled without filing" do
       # Positive control for the case above, on the same posture and the
       # same sequence with only the connection differing. Without it the
       # reap could be read as "the mirror never fills skeletons".
@@ -492,17 +488,17 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
       assert filled.classified_intent == "action_items"
       assert filled.acts_at == acts_at
 
-      assert %{fired: [fired], reaped: []} =
-               CandidateSweeper.sweep_all(now: acts_at, grace_ms: @grace_ms)
-
-      assert fired.id == skeleton.id
+      assert %{fired: [], reaped: []} =
+               CandidateSweeper.sweep_all(
+                 now: DateTime.add(DateTime.utc_now(), 60, :second),
+                 grace_ms: @grace_ms
+               )
 
       row = reload!(skeleton)
-      assert row.state == :closed
-      assert row.closed_reason == :done
-      assert row.task_id
-      assert [task] = tasks_for(meeting.project_id)
-      assert task.id == row.task_id
+      assert row.state == :heard
+      assert is_nil(row.closed_reason)
+      assert is_nil(row.task_id)
+      assert tasks_for(meeting.project_id) == []
     end
   end
 

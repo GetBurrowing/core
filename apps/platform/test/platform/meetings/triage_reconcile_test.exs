@@ -33,7 +33,6 @@ defmodule Platform.Meetings.TriageReconcileTest do
 
   import Ecto.Query
 
-  alias Platform.Meetings.CandidateSweeper
   alias Platform.Meetings.Candidates
   alias Platform.Meetings.Triage
   alias Platform.Repo
@@ -107,11 +106,8 @@ defmodule Platform.Meetings.TriageReconcileTest do
     %{project: project, meeting: meeting, canvas: canvas, space: space}
   end
 
-  # Open a card that is already past its deadline, so one sweep fires it.
-  #
-  # It carries a classification because the sweeper will not graduate a
-  # card the classifier has not answered for (`Candidates.claim_due/2`),
-  # and these tests are about the RECONCILER, not about vetting.
+  # Historical live-source task fixtures preserve reconciliation coverage;
+  # countdowns and acknowledgements no longer create these rows.
   defp arm!(meeting, quote) do
     {:ok, candidate} =
       Candidates.create(%{
@@ -120,25 +116,38 @@ defmodule Platform.Meetings.TriageReconcileTest do
         state: :heard,
         outcome_kind: :task,
         classified_intent: "action_items",
-        target_role: "meeting_scribe",
-        acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        target_role: "meeting_scribe"
       })
 
-    candidate
+    {:ok, task} =
+      Platform.Tasks.create_task(%{
+        project_id: meeting.project_id,
+        title: quote,
+        metadata: %{
+          "source" => "meetings.candidate",
+          "meeting_id" => meeting.id,
+          "candidate_id" => candidate.id
+        }
+      })
+
+    candidate |> Ecto.Changeset.change(task_id: task.id) |> Repo.update!()
   end
 
-  # Run the real server-side countdown, not `graduate/2` directly, so
-  # these tests exercise the path that actually reaches production.
   defp fire_all!(count) do
-    fired = CandidateSweeper.sweep(now: DateTime.utc_now())
+    rows =
+      Repo.all(
+        from(c in Platform.Meetings.MeetingCandidate,
+          where: not is_nil(c.task_id) and c.state != :closed
+        )
+      )
 
-    assert length(fired) == count,
-           "the live countdown must fire #{count} cards; fired #{length(fired)}"
+    assert length(rows) == count
 
-    assert Enum.all?(fired, &is_binary(&1.task_id)),
-           "each fired card must carry a real task id"
-
-    fired
+    Enum.map(rows, fn row ->
+      {:ok, _} = Candidates.record_disposition(row, :accepted)
+      {:ok, closed} = Candidates.close(row.id, :done)
+      closed
+    end)
   end
 
   defp project_task_count(project_id) do

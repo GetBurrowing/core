@@ -2084,7 +2084,6 @@ defmodule PlatformWeb.InboxLiveTest do
   describe "the meeting briefing row and detail" do
     alias Platform.Access.Scope
     alias Platform.Meetings
-    alias Platform.Meetings.Candidates
     alias Platform.Meetings.Meeting
     alias Platform.Meetings.MeetingBriefings
     alias Platform.Meetings.Participant
@@ -2102,18 +2101,20 @@ defmodule PlatformWeb.InboxLiveTest do
       user
     end
 
-    defp graduate_task!(%Meeting{} = meeting, quote) do
-      {:ok, candidate} =
-        Candidates.create(%{
-          meeting_id: meeting.id,
-          evidence_quote: quote,
-          state: :heard,
-          outcome_kind: :task,
-          acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+    # Historical live-minted task fixture; live code must no longer create it.
+    defp graduate_task!(meeting, quote) do
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: meeting.project_id,
+          title: quote,
+          metadata: %{
+            "source" => "meetings.candidate",
+            "meeting_id" => meeting.id,
+            "candidate_id" => Ecto.UUID.generate()
+          }
         })
 
-      {:ok, graduated} = Candidates.graduate(candidate)
-      Repo.get!(TaskRecord, graduated.task_id)
+      task
     end
 
     # A meeting A and B attended, with two backlog tasks, concluded through

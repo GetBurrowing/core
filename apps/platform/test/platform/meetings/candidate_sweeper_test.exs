@@ -197,4 +197,96 @@ defmodule Platform.Meetings.CandidateSweeperTest do
     assert CandidateSweeper.sweep(now: candidate.acts_at) == []
     assert tasks_for(meeting.project_id) == []
   end
+
+  test "artifact claims stay exactly once under concurrent sweepers" do
+    meeting = meeting!() |> with_host!()
+    candidate = heard!(meeting, DateTime.utc_now(), outcome_kind: :artifact) |> reload!()
+    parent = self()
+
+    jobs =
+      for _ <- 1..2,
+          do:
+            Task.async(fn ->
+              Sandbox.allow(Repo, parent, self())
+              CandidateSweeper.sweep(now: candidate.acts_at)
+            end)
+
+    assert jobs |> Enum.flat_map(&Task.await/1) |> length() == 1
+
+    assert Repo.aggregate(
+             from(c in Platform.Chat.Canvas, where: c.space_id == ^meeting.chat_space_id),
+             :count
+           ) == 1
+
+    assert tasks_for(meeting.project_id) == []
+  end
+
+  test "muting suppresses artifact countdown until automation resumes" do
+    meeting = meeting!() |> with_host!()
+    candidate = heard!(meeting, DateTime.utc_now(), outcome_kind: :artifact) |> reload!()
+    meeting |> Ecto.Changeset.change(intent_muted_at: DateTime.utc_now()) |> Repo.update!()
+    assert CandidateSweeper.sweep(now: candidate.acts_at) == []
+    meeting |> Ecto.Changeset.change(intent_muted_at: nil) |> Repo.update!()
+    assert [_] = CandidateSweeper.sweep(now: candidate.acts_at)
+    assert tasks_for(meeting.project_id) == []
+  end
+
+  test "unclassified artifact orphans are reaped after grace, without deliverables" do
+    meeting = meeting!()
+    now = DateTime.utc_now()
+    candidate = heard!(meeting, now, outcome_kind: :artifact, classify: false)
+    assert candidate.acts_at
+    grace = CandidateSweeper.default_unclassified_grace_ms()
+    before = DateTime.add(candidate.acts_at, grace - 1, :millisecond)
+    assert %{fired: [], reaped: []} = CandidateSweeper.sweep_all(now: before)
+
+    assert %{fired: [], reaped: [reaped]} =
+             CandidateSweeper.sweep_all(now: DateTime.add(before, 1, :millisecond))
+
+    assert reaped.id == candidate.id
+    assert reaped.closed_reason == :unclassified
+    assert reaped.disposition == :timed_out
+    assert tasks_for(meeting.project_id) == []
+  end
+
+  @classifier_providers [
+    Platform.Agents.Providers.Ollama,
+    Platform.Agents.Providers.Anthropic,
+    Platform.Agents.Providers.OpenAI,
+    Platform.Agents.Providers.Codex
+  ]
+
+  test "the default grace is at or above every provider's receive timeout" do
+    grace = CandidateSweeper.default_unclassified_grace_ms()
+
+    # Every concrete provider module is accounted for, so a new adapter
+    # cannot ship without being pinned here.
+    concrete =
+      "../../../lib/platform/agents/providers/*.ex"
+      |> Path.expand(__DIR__)
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename(&1, ".ex"))
+      |> Enum.reject(&(&1 == "provider"))
+      |> Enum.sort()
+
+    pinned =
+      @classifier_providers
+      |> Enum.map(&(&1 |> Module.split() |> List.last() |> String.downcase()))
+      |> Enum.sort()
+
+    assert concrete == pinned
+
+    for provider <- @classifier_providers do
+      Code.ensure_loaded!(provider)
+
+      assert function_exported?(provider, :receive_timeout_ms, 0),
+             "#{inspect(provider)} exposes no receive_timeout_ms/0 to pin against"
+
+      timeout = provider.receive_timeout_ms()
+
+      assert grace >= timeout,
+             "#{inspect(provider)} allows a #{timeout}ms model call but the reaper's grace " <>
+               "is #{grace}ms — a genuine late answer would be reaped"
+    end
+  end
 end

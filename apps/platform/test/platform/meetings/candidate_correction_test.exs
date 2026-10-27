@@ -107,7 +107,10 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
         )
       )
 
+    # Existing pre-cutover armed rows still support correction controls.
     candidate
+    |> Ecto.Changeset.change(acts_at: Map.get(overrides, :acts_at, DateTime.add(now, 5, :second)))
+    |> Repo.update!()
   end
 
   defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
@@ -218,7 +221,7 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
   # ── the re-arm ────────────────────────────────────────────────────────────
 
   describe "correct/3 gives the countdown back" do
-    test ":reassign restores the FULL 30 seconds, not the 5 that were left", ctx do
+    test ":reassign disarms a stale task countdown", ctx do
       candidate = armed!(ctx)
 
       # The control. Without it the assertion below is satisfied by a
@@ -228,7 +231,7 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
       assert {:ok, _} =
                Candidates.correct(candidate, :reassign, agent_id: ctx.designer.id, now: ctx.now)
 
-      assert Countdown.remaining_seconds(reload!(candidate).acts_at, ctx.now) == 30
+      assert is_nil(reload!(candidate).acts_at)
     end
 
     test ":flip_outcome restores the FULL 30 seconds", ctx do
@@ -361,14 +364,14 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
       assert row.correction == :removed_no_action
     end
 
-    test ":reassign on a nil-intent card writes the sentinel and re-arms", ctx do
+    test ":reassign on a nil-intent task card writes the sentinel and disarms", ctx do
       candidate = armed!(ctx, %{classified_intent: nil})
 
       assert {:ok, _} =
                Candidates.correct(candidate, :reassign, agent_id: ctx.designer.id, now: ctx.now)
 
       assert only_correction!().classified_intent == "unclassified"
-      assert Countdown.remaining_seconds(reload!(candidate).acts_at, ctx.now) == 30
+      assert is_nil(reload!(candidate).acts_at)
     end
 
     test ":flip_outcome on a nil-intent card writes the sentinel and a corrected_intent", ctx do
@@ -394,13 +397,15 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
   # ── rearm/2 on its own ────────────────────────────────────────────────────
 
   describe "rearm/2" do
-    test "it sets the full countdown from now", ctx do
+    test "it refuses stale armed task cards", ctx do
       candidate = armed!(ctx)
+      assert {:error, :not_armed} = Candidates.rearm(candidate, ctx.now)
+    end
 
+    test "it restores the artifact countdown", ctx do
+      candidate = armed!(ctx, %{outcome_kind: :artifact})
       assert {:ok, rearmed} = Candidates.rearm(candidate, ctx.now)
-
       assert rearmed.acts_at == Countdown.acts_at(ctx.now)
-      assert Countdown.remaining_seconds(reload!(candidate).acts_at, ctx.now) == 30
     end
 
     test "it refuses a disarmed card", ctx do

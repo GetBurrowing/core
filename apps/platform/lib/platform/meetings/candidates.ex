@@ -1923,7 +1923,9 @@ defmodule Platform.Meetings.Candidates do
   defp put_armed_acts_at(attrs) do
     cond do
       (attr(attrs, :outcome_kind) || :task) in [:task, "task"] ->
-        attrs |> Map.delete("acts_at") |> Map.put(:acts_at, nil)
+        if Map.has_key?(attrs, "meeting_id"),
+          do: attrs |> Map.delete(:acts_at) |> Map.put("acts_at", nil),
+          else: attrs |> Map.delete("acts_at") |> Map.put(:acts_at, nil)
 
       Map.has_key?(attrs, :acts_at) or Map.has_key?(attrs, "acts_at") ->
         attrs

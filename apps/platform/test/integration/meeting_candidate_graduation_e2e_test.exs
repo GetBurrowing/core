@@ -1,41 +1,5 @@
 defmodule Platform.Integration.MeetingCandidateGraduationE2ETest do
-  @moduledoc """
-  The candidate rail, end to end, all the way to a row in `tasks`
-  (task 01a06575 stage 2).
-
-  Production had 280 `meeting_candidates` and ZERO with a `task_id` —
-  including the ones the classifier had labelled correctly. Every test
-  in this repo that touched graduation started from
-  `Candidates.record_heard/1` and a candidate that stayed `:heard`,
-  which is a state the live pipeline never leaves a card in. So the
-  countdown was covered and the rail was not.
-
-  This walks the whole chain a real utterance walks:
-
-      Meetings.append_segment/2
-        -> PubSub.broadcast_transcript_chunk/2
-        -> IntentClassifier                (stubbed provider, answers `action_items`)
-        -> IntentQueue.enqueue/2           -> mirror_enqueue -> meeting_candidates row, ARMED
-        -> IntentDispatcher                (responsibility fork)
-        -> "meeting:action_item_intent"    (REAL broadcast)
-        -> intent_ack(:working)            (what the recipient agent does next)
-        -> CandidateSweeper.sweep(now: …)  (past the deadline)
-        -> Candidates.graduate/2 -> Platform.Tasks.create_task/2
-        -> a row in `tasks`
-
-  Only two things are stood in for, and both are genuinely outside the
-  platform: the classifier's LLM call (the `provider_module:` seam the
-  sibling e2e tests use) and the recipient agent's `intent_ack`, which
-  in production arrives over MCP from somebody else's machine.
-
-  ## The assertion is on the `tasks` row
-
-  Not on `candidate.task_id` being non-nil, and not on the candidate's
-  `state` or `disposition`. A candidate can be `:closed` / `:accepted`
-  with no deliverable anywhere — that is exactly the shape the 280
-  production rows had — and an id column can hold a value pointing at
-  nothing. The only fact worth asserting is that the task EXISTS.
-  """
+  @moduledoc "Transcript classification and working/completed acknowledgements never file live tasks."
 
   use Platform.DataCase, async: false
 
@@ -235,60 +199,17 @@ defmodule Platform.Integration.MeetingCandidateGraduationE2ETest do
       candidate = await_candidate(row.id)
       assert candidate.classified_intent == "action_items"
 
-      # It is ARMED. If this is nil the card never had a deadline and
-      # everything below is moot.
-      assert candidate.acts_at,
-             "candidate was mirrored with no acts_at — it never started counting down"
-
-      # What the recipient agent does next, in production, over MCP:
-      # it picks the dispatch up and says it is working.
-      {:ok, _acked} =
-        IntentQueue.ack(meeting.id, row.id, Ecto.UUID.generate(), :working)
-
-      # The ack has landed, so the card is now mid-flight with an agent.
-      # It must STILL be armed: the countdown gates graduation, the
-      # cursor gates dispatch, and they are different rails.
+      assert is_nil(candidate.acts_at)
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, Ecto.UUID.generate(), :working)
       acked_candidate = Repo.get!(MeetingCandidate, candidate.id)
-
-      # BOTH halves, because `acts_at` alone does not say it. Closing a
-      # candidate does not nil `acts_at` — `Candidates.close/2` writes
-      # `closed_reason`, `closed_at` and the state and leaves the
-      # deadline where it was — so a card that had been closed out from
-      # under this ack would satisfy the assertion below while being
-      # permanently unclaimable (`claim_due/2` excludes `:closed`). The
-      # state was named only inside the failure MESSAGE, where it is
-      # rendered after the assertion has already decided.
-      refute acked_candidate.state == :closed,
-             "the ack closed the candidate — it can never be claimed " <>
-               "(closed_reason=#{inspect(acked_candidate.closed_reason)} " <>
-               "queue_status=#{inspect(acked_candidate.queue_status)})"
-
-      assert acked_candidate.acts_at,
-             "the ack disarmed the countdown (state=#{acked_candidate.state})"
-
-      # Past the deadline. `now` is injected rather than slept for — the
-      # countdown is 30 real seconds and stays 30 real seconds.
-      fired = CandidateSweeper.sweep(now: DateTime.add(candidate.acts_at, 1, :second))
-
-      assert Enum.map(fired, & &1.id) == [candidate.id],
-             "the sweeper claimed nothing at the deadline. " <>
-               "candidate state=#{inspect(acked_candidate.state)} " <>
-               "queue_status=#{inspect(acked_candidate.queue_status)} " <>
-               "acts_at=#{inspect(acked_candidate.acts_at)}"
-
+      refute acked_candidate.state == :closed
+      assert is_nil(acked_candidate.acts_at)
+      assert CandidateSweeper.sweep(now: DateTime.add(DateTime.utc_now(), 120, :second)) == []
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, Ecto.UUID.generate(), :completed)
       reloaded = Repo.get!(MeetingCandidate, candidate.id)
-
-      assert reloaded.task_id,
-             "the candidate graduated with no task_id"
-
-      # THE assertion. A non-nil id pointing at nothing would satisfy
-      # the line above.
-      task = Repo.get(WorkTask, reloaded.task_id)
-
-      assert task, "candidate.task_id=#{reloaded.task_id} points at no row in `tasks`"
-      assert task.project_id == project.id
-      assert task.metadata["source"] == "meetings.candidate"
-      assert task.metadata["candidate_id"] == candidate.id
+      assert reloaded.task_id == nil
+      assert reloaded.closed_reason == :done
+      assert Repo.all(from(t in WorkTask, where: t.project_id == ^project.id)) == []
     end
   end
 end

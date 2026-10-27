@@ -16,7 +16,6 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
   alias Platform.Chat.Message
   alias Platform.Inbox
   alias Platform.Meetings
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingBriefings
@@ -50,46 +49,37 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
 
   defp scope(%User{} = user), do: Scope.for_user(Repo.get!(User, user.id))
 
-  defp graduate!(%Meeting{} = meeting, quote) do
-    {:ok, candidate} =
-      Candidates.create(%{
-        meeting_id: meeting.id,
-        evidence_quote: quote,
-        state: :heard,
-        outcome_kind: :task,
-        acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+  # Historical live-minted task fixture; live code must no longer create it.
+  defp graduate!(meeting, quote) do
+    {:ok, task} =
+      Platform.Tasks.create_task(%{
+        project_id: meeting.project_id,
+        title: quote,
+        metadata: %{
+          "source" => "meetings.candidate",
+          "meeting_id" => meeting.id,
+          "candidate_id" => Ecto.UUID.generate()
+        }
       })
 
-    {:ok, graduated} = Candidates.graduate(candidate)
-    Repo.get!(TaskRecord, graduated.task_id)
+    task
   end
 
-  # A task minted `done` by the ack path, exactly as production mints one.
-  defp ack_done!(%Meeting{} = meeting) do
-    now = DateTime.utc_now()
-
-    {:ok, candidate} =
-      Candidates.create(%{
-        meeting_id: meeting.id,
-        evidence_quote: "somebody write the CSV export",
-        classified_intent: "action_items",
-        state: :shaping,
-        outcome_kind: :task,
-        heard_at: now,
-        last_utterance_at: now,
-        acts_at: DateTime.add(now, 30, :second)
+  # Historical completed-ack task, for briefing rollback coverage after cutover.
+  defp ack_done!(meeting) do
+    {:ok, task} =
+      Platform.Tasks.create_task(%{
+        project_id: meeting.project_id,
+        title: "somebody write the CSV export",
+        status: "done",
+        metadata: %{
+          "source" => "meetings.candidate",
+          "meeting_id" => meeting.id,
+          "candidate_id" => Ecto.UUID.generate(),
+          "completed_via" => "meeting_intent_ack"
+        }
       })
 
-    assert :ok = Candidates.complete_by_ack(candidate)
-
-    task =
-      Repo.one!(
-        from(t in TaskRecord,
-          where: fragment("?->>'candidate_id' = ?", t.metadata, ^candidate.id)
-        )
-      )
-
-    assert task.status == "done"
     task
   end
 
