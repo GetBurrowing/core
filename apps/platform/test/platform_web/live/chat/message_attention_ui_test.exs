@@ -409,37 +409,65 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
       presence = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
       Sandbox.allow(Repo, self(), presence)
       n = System.unique_integer([:positive])
-      runtime = Repo.insert!(%AgentRuntime{
-        owner_user_id: ctx.alice.id, status: "active", runtime_id: "attn-ui-runtime-#{n}",
-        display_name: "Attention UI runtime #{n}"
-      })
-      agent = ctx.agent_row |> Ecto.Changeset.change(%{runtime_type: "external", runtime_id: runtime.id}) |> Repo.update!()
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: ctx.alice.id,
+          status: "active",
+          runtime_id: "attn-ui-runtime-#{n}",
+          display_name: "Attention UI runtime #{n}"
+        })
+
+      agent =
+        ctx.agent_row
+        |> Ecto.Changeset.change(%{runtime_type: "external", runtime_id: runtime.id})
+        |> Repo.update!()
+
       runtime |> Ecto.Changeset.change(%{agent_id: agent.id}) |> Repo.update!()
       RuntimePresence.track(runtime.runtime_id)
       on_exit(fn -> RuntimePresence.untrack(runtime.runtime_id) end)
       topic = "runtime:#{runtime.runtime_id}"
       :ok = PlatformWeb.Endpoint.subscribe(topic)
-      space = ctx.space |> Ecto.Changeset.change(%{agent_attention_policy: "on_mention", agents_awake: true}) |> Repo.update!()
+
+      space =
+        ctx.space
+        |> Ecto.Changeset.change(%{agent_attention_policy: "on_mention", agents_awake: true})
+        |> Repo.update!()
+
       message = post!(space, ctx.alice_p, "Plain request without a mention")
       drain()
       refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 100
       view = open_chat(ctx.alice_conn, space)
-      {:ok, runtime_topic: topic, delivery_message: message, delivery_view: view,
+
+      {:ok,
+       runtime_topic: topic,
+       delivery_message: message,
+       delivery_view: view,
        original_version_count: MessageVersions.count_versions(message.id)}
     end
 
-    test "real picker dispatches the original message once and duplicate clicks do not resend", ctx do
+    test "real picker dispatches the original message once and duplicate clicks do not resend",
+         ctx do
       monitor = Process.monitor(ctx.delivery_view.pid)
       pick_agent(ctx)
       assert_runtime_attention(ctx)
       assert_original_message(ctx)
-      render_click(ctx.delivery_view, "open_message_attention", %{"message-id" => ctx.delivery_message.id})
-      assert has_element?(ctx.delivery_view,
-        ~s(#message-attention-sheet [data-principal-id="#{ctx.agent_row.id}"][data-added="true"]))
+
+      render_click(ctx.delivery_view, "open_message_attention", %{
+        "message-id" => ctx.delivery_message.id
+      })
+
+      assert has_element?(
+               ctx.delivery_view,
+               ~s(#message-attention-sheet [data-principal-id="#{ctx.agent_row.id}"][data-added="true"])
+             )
+
       # A stale client can still send the original click after the row becomes disabled.
       render_click(ctx.delivery_view, "add_message_attention", %{
-        "message-id" => ctx.delivery_message.id, "ids" => [ctx.agent_row.id]
+        "message-id" => ctx.delivery_message.id,
+        "ids" => [ctx.agent_row.id]
       })
+
       drain()
       topic = ctx.runtime_topic
       refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 200
@@ -449,10 +477,12 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
     end
 
     @tag timeout: 20_000
-    test "picker stays interactive beyond the old five-second timeout and dispatches after release", ctx do
+    test "picker stays interactive beyond the old five-second timeout and dispatches after release",
+         ctx do
       router = Process.whereis(AttentionRouter)
       monitor = Process.monitor(ctx.delivery_view.pid)
       :ok = :sys.suspend(router)
+
       try do
         pick_agent(ctx)
         worker = queued_attention_worker(router)
@@ -463,7 +493,10 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
         topic = ctx.runtime_topic
         refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 5_100
         # A server round trip on the same pid proves the socket did not merely remount.
-        render_click(ctx.delivery_view, "open_message_attention", %{"message-id" => ctx.delivery_message.id})
+        render_click(ctx.delivery_view, "open_message_attention", %{
+          "message-id" => ctx.delivery_message.id
+        })
+
         assert has_element?(ctx.delivery_view, "#message-attention-sheet")
         assert Process.alive?(ctx.delivery_view.pid)
         refute_received {:DOWN, ^monitor, _, _, _}
@@ -476,39 +509,56 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
       end
     end
 
-    test "router exit preserves the LiveView, viewer update and human inbox with a correlated failure", ctx do
+    test "router exit preserves the LiveView, viewer update and human inbox with a correlated failure",
+         ctx do
       alias Platform.Inbox.Item
       router = Process.whereis(AttentionRouter)
       monitor = Process.monitor(ctx.delivery_view.pid)
       viewer = open_chat(ctx.bob_conn, ctx.space)
       :ok = Chat.PubSub.subscribe(ctx.space.id)
       :ok = :sys.suspend(router)
-      log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
-        try do
-          render_click(ctx.delivery_view, "open_message_attention", %{"message-id" => ctx.delivery_message.id})
-          # Select the agent through the actual picker; add a person in a second request
-          # while the router is parked to prove inbox is independent of it.
-          pick_agent(ctx)
-          worker = queued_attention_worker(router)
-          worker_monitor = Process.monitor(worker)
-          render_click(ctx.delivery_view, "add_message_attention", %{
-            "message-id" => ctx.delivery_message.id, "ids" => [ctx.bob.id]
-          })
-          assert_receive {:message_attention_changed, _}
-          assert render(viewer) =~ "asked @#{ctx.agent_p.display_name} to look"
-          assert Repo.exists?(from(i in Item, where: i.user_id == ^ctx.bob.id))
-          :ok = :sys.terminate(router, :normal)
-          assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :normal}, 2_000
-          render_click(ctx.delivery_view, "open_message_attention", %{"message-id" => ctx.delivery_message.id})
-          assert has_element?(ctx.delivery_view, "#message-attention-sheet")
-          assert Process.alive?(ctx.delivery_view.pid)
-          refute_received {:DOWN, ^monitor, _, _, _}
-        after
-          if Process.alive?(router), do: :sys.resume(router)
-        end
-      end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          try do
+            render_click(ctx.delivery_view, "open_message_attention", %{
+              "message-id" => ctx.delivery_message.id
+            })
+
+            # Select the agent through the actual picker; add a person in a second request
+            # while the router is parked to prove inbox is independent of it.
+            pick_agent(ctx)
+            worker = queued_attention_worker(router)
+            worker_monitor = Process.monitor(worker)
+
+            render_click(ctx.delivery_view, "add_message_attention", %{
+              "message-id" => ctx.delivery_message.id,
+              "ids" => [ctx.bob.id]
+            })
+
+            assert_receive {:message_attention_changed, _}
+            assert render(viewer) =~ "asked @#{ctx.agent_p.display_name} to look"
+            assert Repo.exists?(from(i in Item, where: i.user_id == ^ctx.bob.id))
+            :ok = :sys.terminate(router, :normal)
+            assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :normal}, 2_000
+
+            render_click(ctx.delivery_view, "open_message_attention", %{
+              "message-id" => ctx.delivery_message.id
+            })
+
+            assert has_element?(ctx.delivery_view, "#message-attention-sheet")
+            assert Process.alive?(ctx.delivery_view.pid)
+            refute_received {:DOWN, ^monitor, _, _, _}
+          after
+            if Process.alive?(router), do: :sys.resume(router)
+          end
+        end)
+
       assert log =~ "add_message_attention routing worker failed phase=failure"
-      assert log =~ "message=#{ctx.delivery_message.id} space=#{ctx.space.id} recipients=#{ctx.agent_p.id}"
+
+      assert log =~
+               "message=#{ctx.delivery_message.id} space=#{ctx.space.id} recipients=#{ctx.agent_p.id}"
+
       assert log =~ "kind=exit"
       topic = ctx.runtime_topic
       refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 100
@@ -516,7 +566,10 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
   end
 
   defp pick_agent(ctx) do
-    render_click(ctx.delivery_view, "open_message_attention", %{"message-id" => ctx.delivery_message.id})
+    render_click(ctx.delivery_view, "open_message_attention", %{
+      "message-id" => ctx.delivery_message.id
+    })
+
     ctx.delivery_view
     |> element(~s(#message-attention-sheet [data-principal-id="#{ctx.agent_row.id}"]))
     |> render_click()
@@ -524,7 +577,10 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
 
   defp assert_runtime_attention(ctx) do
     topic = ctx.runtime_topic
-    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention", payload: payload}, 2_000
+
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention", payload: payload},
+                   2_000
+
     signal = payload[:signal] || payload["signal"]
     assert (signal[:message_id] || signal["message_id"]) == ctx.delivery_message.id
     assert (signal[:reason] || signal["reason"]) in [:mention, "mention"]
@@ -533,7 +589,9 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
   end
 
   defp assert_original_message(ctx) do
-    assert [%MessageAttention{participant_id: participant_id}] = attention_rows(ctx.delivery_message.id)
+    assert [%MessageAttention{participant_id: participant_id}] =
+             attention_rows(ctx.delivery_message.id)
+
     assert participant_id == ctx.agent_p.id
     message = Chat.get_message(ctx.delivery_message.id)
     assert message.content == ctx.delivery_message.content
@@ -542,11 +600,17 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
   end
 
   defp queued_attention_worker(router, attempts \\ 200)
-  defp queued_attention_worker(_router, 0), do: flunk("routing worker never queued its GenServer call")
+
+  defp queued_attention_worker(_router, 0),
+    do: flunk("routing worker never queued its GenServer call")
+
   defp queued_attention_worker(router, attempts) do
     {:messages, messages} = Process.info(router, :messages)
+
     case Enum.find(messages, &match?({:"$gen_call", _, {:route_attention, _, _}}, &1)) do
-      {:"$gen_call", {worker, _}, _} -> worker
+      {:"$gen_call", {worker, _}, _} ->
+        worker
+
       nil ->
         Process.sleep(5)
         queued_attention_worker(router, attempts - 1)
