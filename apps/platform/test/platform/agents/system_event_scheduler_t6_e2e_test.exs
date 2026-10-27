@@ -761,7 +761,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # (admin_health, admin_logs, admin_env_names, admin_migrations, admin_rpc,
     # admin_restart, admin_deploy, admin_rollback); scheduler T6 adds none.
     # (+8 admin -> 145)
-    @t6_baseline_tool_count 145
+    # bumped by task 01a17b10 stage 4 — the 2-tool `voice_ask` bundle
+    # (voice_ask_agent, voice_ask_poll); scheduler T6 adds none.
+    # (+2 voice_ask -> 147)
+    @t6_baseline_tool_count 147
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -918,8 +918,8 @@ defmodule Platform.ExtensionsTest do
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask)
     @main_rail [
       :chat,
       # The Voice tab (task 01a1557a-eab7 stage 2).
@@ -992,8 +992,15 @@ defmodule Platform.ExtensionsTest do
 
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
-      {extra, legacy} = Enum.split_with(defs, &(&1.bundle in ["access", "admin"]))
+
+      {extra, legacy} =
+        Enum.split_with(defs, &(&1.bundle in ["access", "admin", "voice_ask"]))
+
+      {voice_ask, extra} = Enum.split_with(extra, &(&1.bundle == "voice_ask"))
       {access, admin} = Enum.split_with(extra, &(&1.bundle == "access"))
+
+      # Task 01a17b10 stage 4: the `voice_ask` bundle, additive like `admin`.
+      assert Enum.map(voice_ask, & &1.name) == ~w(voice_ask_agent voice_ask_poll)
 
       assert Enum.map(access, & &1.name) ==
                ~w(access_explain access_propose access_apply access_undo)

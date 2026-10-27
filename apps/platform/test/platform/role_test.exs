@@ -166,6 +166,7 @@ defmodule Platform.RoleTest do
                Platform.Meetings.SayRegistry,
                Platform.Meetings.VoiceSeatCache,
                Platform.Meetings.AgentActivity.Store,
+               Platform.Meetings.VoiceAsk.Supervisor,
                Platform.Meetings.IntentQueue.Supervisor,
                Platform.Vault.RefreshWorker,
                Platform.Chat.AttachmentReaper,

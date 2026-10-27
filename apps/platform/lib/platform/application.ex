@@ -260,6 +260,10 @@ defmodule Platform.Application do
          # value module with no `init/1` — see that module's
          # `pushed_table/0` and the store's own moduledoc.
          Platform.Meetings.AgentActivity.Store,
+         # Per-ask answer accumulators for the `voice_ask` tools (task
+         # 01a17b10 stage 4): a Registry and an empty DynamicSupervisor.
+         # Needs PubSub (each accumulator subscribes to a space topic).
+         Platform.Meetings.VoiceAsk.Supervisor,
          # Per-MEETING intent queues (task 019f70b8 stage 2) — one
          # on-demand GenServer per meeting, each owning an unnamed
          # ETS table that dies with it. No sweeper: cleanup is

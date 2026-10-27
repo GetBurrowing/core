@@ -14,7 +14,7 @@ defmodule Platform.Access.ToolPermissions do
               {"canvas.write", ~w(canvas_create canvas_patch canvas_restore)},
               {"chat.read",
                ~w(space_get_context space_get_messages space_list space_search_messages)},
-              {"chat.write", ~w(react send_media)},
+              {"chat.write", ~w(react send_media voice_ask_agent voice_ask_poll)},
               {"experiments.propose",
                ~w(code_mode_report experiment_conclude experiment_create experiment_exclude experiment_goal_set experiment_promote experiment_start experiment_stop experiment_variant_add)},
               {"experiments.read",
@@ -76,7 +76,8 @@ defmodule Platform.Access.ToolPermissions do
     "skill" => ~w(skill_list skill_get skill_upsert),
     "space" => ~w(space_create space_list space_list_agents space_leave dm_create),
     "task" =>
-      ~w(project_list org_list_descendants project_update epic_list epic_update epic_create task_create task_get task_transition_list runtime_event_list execution_lease_list task_list task_complete task_close_as_delivered task_delivery_candidate_list task_update task_start task_ack alarm_silence task_dependencies task_attach_canvas task_design_decline task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list stack_add stack_add_dependency stack_remove_dependency stack_eject stack_abandon stack_complete stack_start stack_retry_member_merge stack_start_planning stack_assign_agents stack_attach_canvas stack_detach_canvas janitor_hand_back)
+      ~w(project_list org_list_descendants project_update epic_list epic_update epic_create task_create task_get task_transition_list runtime_event_list execution_lease_list task_list task_complete task_close_as_delivered task_delivery_candidate_list task_update task_start task_ack alarm_silence task_dependencies task_attach_canvas task_design_decline task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list stack_add stack_add_dependency stack_remove_dependency stack_eject stack_abandon stack_complete stack_start stack_retry_member_merge stack_start_planning stack_assign_agents stack_attach_canvas stack_detach_canvas janitor_hand_back),
+    "voice_ask" => ~w(voice_ask_agent voice_ask_poll)
   }
 
   @spec for_tool(String.t()) :: String.t() | nil
