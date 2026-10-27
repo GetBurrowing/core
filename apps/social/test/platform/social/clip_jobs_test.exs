@@ -57,6 +57,40 @@ defmodule Platform.Social.ClipJobsTest do
   defp renders(clip_id),
     do: Repo.all(from(r in ClipRender, where: r.clip_id == ^clip_id, order_by: r.rev))
 
+  test "caption fix snapshots accumulate user corrections without rewriting earlier versions",
+       w do
+    clip = rendered_clip!(w)
+    [base] = renders(clip.id)
+    first = %{"position" => 2, "original" => "there", "replacement" => "their"}
+    second = %{"position" => 4, "original" => "form", "replacement" => "from"}
+
+    {:ok, job} =
+      ClipJobs.enqueue_fix(
+        w.org_id,
+        clip.id,
+        w.approver.id,
+        Map.merge(first, %{"base_render_id" => base.id, "operation" => "caption_word"})
+      )
+
+    claimed!(w, job)
+    {:ok, _} = ClipJobs.complete(w.scope, job.id, w.agent.id, %{file_id: w.f2.id})
+    [original, corrected] = renders(clip.id)
+    assert original.caption_fixes == nil
+    assert corrected.caption_fixes == %{"edits" => [first]}
+
+    {:ok, next} =
+      ClipJobs.enqueue_fix(
+        w.org_id,
+        clip.id,
+        w.approver.id,
+        Map.merge(second, %{"base_render_id" => corrected.id, "operation" => "caption_word"})
+      )
+
+    assert next.payload["caption_fixes"] == %{"edits" => [first, second]}
+    assert renders(clip.id) == [original, corrected]
+    assert Repo.get!(Clip, clip.id).render_file_id == w.f2.id
+  end
+
   describe "enqueue_new_clip" do
     test "a new_clip job's clip is never in rendering", w do
       {clip, job} = new_clip!(w, %{title: "Who makes Total War?"})
