@@ -208,6 +208,17 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
     # key. Only a caller of `check_auth/2` knows the ref.
     {"agent_host:auth:<id>", :resource},
+    # Task 01a17b1c stage 4. The same rendezvous for
+    # `AgentHost.restart_with_tools/2`: the outcome and tool NAMES the host
+    # probed before and after one native agent's restart. Only a caller of
+    # `restart_with_tools/2` knows the ref.
+    {"agent_host:restart:<id>", :resource},
+    # Task 01a17b1c stage 4. Keyed by an agent id: `{:agent_session_restarted,
+    # agent_id, diff}` after `ConfigFiles.restart/3` succeeds, for the session
+    # strip. The diff is tool names, counts and the outcome; no file content
+    # and no secret. A subscriber is the config screen, which has already
+    # passed `ConfigFiles.Access.authorize/2` for that agent.
+    {"agent_config:<id>", :resource},
     # Task 01a1694a stage 3. Keyed by a `meeting_briefings` id; the reachable
     # set is that briefing's attendees. Payload is
     # `{:meeting_briefing_changed, briefing_id}`, the id only, and a

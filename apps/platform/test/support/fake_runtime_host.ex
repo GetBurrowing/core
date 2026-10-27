@@ -9,6 +9,11 @@ defmodule Platform.FakeRuntimeHost do
   default `"claude_code"`), `:opt_in` (hello `config_opt_in`, default
   `"owner_only"`), `:raw` (when true the host does NOT redact, to prove core
   redacts again).
+
+  `session.restart` (stage 4): `:session` is `{before_tools, after_tools}`,
+  the snapshots the host reports (`"<server>/<tool>"` names); nil (default)
+  answers `no_recorded_session`, as a folder with nothing in its roster does;
+  `:silent` makes the host never answer a restart (core's timeout path).
   """
   use GenServer
   import Phoenix.ChannelTest
@@ -62,6 +67,8 @@ defmodule Platform.FakeRuntimeHost do
        root: Keyword.fetch!(opts, :root),
        adapter: adapter,
        raw: Keyword.get(opts, :raw, false),
+       session: Keyword.get(opts, :session),
+       silent: Keyword.get(opts, :silent, false),
        served: []
      }}
   end
@@ -76,8 +83,12 @@ defmodule Platform.FakeRuntimeHost do
         state
       ) do
     state = %{state | served: [{event, payload["actor_role"]} | state.served]}
-    reply = serve(event, payload, state)
-    push(state.socket, "reply", Map.put(reply, "ref", ref))
+
+    unless event == "session.restart" and state.silent do
+      reply = serve(event, payload, state)
+      push(state.socket, "reply", Map.put(reply, "ref", ref))
+    end
+
     {:noreply, state}
   end
 
@@ -148,6 +159,24 @@ defmodule Platform.FakeRuntimeHost do
     else
       _ -> %{"error" => "invalid"}
     end
+  end
+
+  defp serve("session.restart", _payload, %{session: nil}),
+    do: %{"error" => "no_recorded_session"}
+
+  defp serve("session.restart", _payload, %{session: {before, after_tools}}) do
+    snap = fn tools -> %{"taken_at" => "t", "servers" => [], "tools" => tools} end
+
+    %{
+      "ok" => %{
+        "outcome" => "ready",
+        "resumed" => true,
+        "relaunched" => true,
+        "before_basis" => "loaded",
+        "before" => snap.(before),
+        "after" => snap.(after_tools)
+      }
+    }
   end
 
   defp serve(_event, _payload, _state), do: %{"error" => "unsupported"}

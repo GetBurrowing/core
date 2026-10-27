@@ -4,6 +4,10 @@ defmodule Platform.FakeAgentHost do
   registers as the host with `Platform.AgentHost.Reconciler`, serves
   `agent.file_read` from a tmp directory (the agents' work dirs, one
   sub-directory per agent id) and reports `agent.state`.
+
+  `agent.restart` with a ref (stage 4) is answered `agent.restarted` with the
+  `:restart` option: `{outcome, before_tools | nil, after_tools | nil}`
+  (default `{"ready", [], []}`).
   """
   use GenServer
 
@@ -18,7 +22,9 @@ defmodule Platform.FakeAgentHost do
   @impl true
   def init(opts) do
     :ok = Reconciler.host_joined(self(), %{"profile" => "contained"})
-    {:ok, %{root: Keyword.fetch!(opts, :root)}}
+
+    {:ok,
+     %{root: Keyword.fetch!(opts, :root), restart: Keyword.get(opts, :restart, {"ready", [], []})}}
   end
 
   @impl true
@@ -48,6 +54,31 @@ defmodule Platform.FakeAgentHost do
       Platform.PubSub,
       Platform.AgentHost.file_topic(ref),
       {:agent_host_file, ref, payload}
+    )
+
+    {:noreply, s}
+  end
+
+  def handle_info({:agent_host_push, "agent.restart", %{"ref" => ref, "agent_id" => id}}, s)
+      when is_binary(ref) do
+    {outcome, before, after_tools} = s.restart
+
+    snap = fn
+      nil -> nil
+      tools -> %{"servers" => [], "tools" => tools}
+    end
+
+    # Through the real channel handler's sanitising, as the host's reply would be.
+    PlatformWeb.AgentHostChannel.handle_in(
+      "agent.restarted",
+      %{
+        "ref" => ref,
+        "agent_id" => id,
+        "outcome" => outcome,
+        "before" => snap.(before),
+        "after" => snap.(after_tools)
+      },
+      %Phoenix.Socket{}
     )
 
     {:noreply, s}

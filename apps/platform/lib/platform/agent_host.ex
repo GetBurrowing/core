@@ -35,6 +35,9 @@ defmodule Platform.AgentHost do
       the read-only "Recent output" disclosure (stage 6);
     * `agent.file_read` `{agent_id, key, ref}`: one file of the work dir, redacted,
       answered by `agent.file` `{ref, content, sha256}` or `{ref, error}`;
+    * `agent.restart` may carry a `ref`; the host then answers
+      `agent.restarted` `{ref, agent_id, outcome, before, after}` with the tool
+      snapshots (`restart_with_tools/2`);
     * `agent.check_auth` `{agent_id, ref}`: does the agent's API key still
       work? Asked by the no-reply watchdog (stage 7 round 2,
       `Platform.Chat.ReplyFailure.Watchdog`).
@@ -63,6 +66,8 @@ defmodule Platform.AgentHost do
   alias Platform.Agents.{Agent, NativeAgents}
 
   @logs_timeout_ms 5_000
+  # The host waits up to 90 s for the agent to come back, then probes.
+  @restart_timeout_ms 120_000
   # The host's own request to the API times out at 8 s (auth.ts).
   @auth_timeout_ms 10_000
 
@@ -136,6 +141,49 @@ defmodule Platform.AgentHost do
       Reconciler.restart(agent.id)
     end
   end
+
+  @doc """
+  Restart `agent` and wait for the host's account of it (task 01a17b1c stage
+  4): `{:ok, %{outcome, before, after}}`. The host takes a tool snapshot of the
+  MCP servers the agent loads (as the agent's user) before it rewrites the
+  files and after the agent is back; `before`/`after` are
+  `%{"servers" => [...], "tools" => [...]}` or nil (a `needs_login` agent is
+  not probed). `outcome` is `ready | needs_login | gone | timeout`.
+
+  The same `agent.restart` command as `restart_agent/1`, with a `ref`; there is
+  no second restart command.
+  """
+  @spec restart_with_tools(Agent.t(), keyword()) ::
+          {:ok, %{outcome: String.t(), before: map() | nil, after: map() | nil}}
+          | {:error, term()}
+  def restart_with_tools(%Agent{} = agent, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @restart_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = restart_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with {:ok, _runtime} <- NativeAgents.set_desired_state(agent, "running"),
+           :ok <- Reconciler.restart(agent.id, ref) do
+        receive do
+          {:agent_host_restarted, ^ref, payload} ->
+            {:ok,
+             %{
+               outcome: Map.get(payload, "outcome", "gone"),
+               before: Map.get(payload, "before"),
+               after: Map.get(payload, "after")
+             }}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def restart_topic(ref), do: "agent_host:restart:" <> ref
 
   @doc """
   What the host last reported for `agent` (or an agent id): `%{state, detail,
