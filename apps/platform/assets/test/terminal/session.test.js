@@ -283,6 +283,15 @@ describe("source guards for the browser end", () => {
     }
   })
 
+  it("builds xterm only once a session has connected, never for a refused join", () => {
+    const code = strip(readFileSync(resolve(JS, "terminal_island.js"), "utf8"))
+    expect(code.match(/new Terminal\(/g)).toHaveLength(1)
+    const open = code.slice(code.indexOf("const openTerm"), code.indexOf("const refit"))
+    expect(open).toContain("new Terminal(")
+    // openTerm is reached from exactly two places: the first write and the connected state.
+    expect(code.match(/openTerm\(\)/g)).toHaveLength(2)
+  })
+
   it("never inspects output: the output path only decrypts and writes", () => {
     const code = strip(readFileSync(resolve(JS, "terminal/session.js"), "utf8"))
     const outPath = code.slice(code.indexOf("async #onOut"), code.indexOf("#dropped(chan) {"))

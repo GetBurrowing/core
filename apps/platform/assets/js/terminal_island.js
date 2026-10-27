@@ -106,56 +106,76 @@ async function mount(ctx) {
   }
 
   const phone = window.matchMedia("(max-width: 1023px)")
-  const term = new Terminal({
-    theme: THEME,
-    fontFamily: FONT,
-    fontSize: phone.matches ? 13 : 14,
-    lineHeight: 1.2,
-    letterSpacing: 0,
-    cursorStyle: "block",
-    cursorBlink: false,
-    allowProposedApi: false,
-    disableStdin: true,
-    scrollback: 5000,
-  })
-  const fit = new FitAddon()
-  term.loadAddon(fit)
-  term.open(host)
+  const enc = new TextEncoder()
+  let term = null
+  let fit = null
+  let ctrl = false
+  let observer = null
+
+  // xterm is created only once a session has really connected, so a refused
+  // join (someone else's terminal, the opt-in off) never builds a terminal.
+  const openTerm = () => {
+    if (term) return
+    term = new Terminal({
+      theme: THEME,
+      fontFamily: FONT,
+      fontSize: phone.matches ? 13 : 14,
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      cursorStyle: "block",
+      cursorBlink: false,
+      allowProposedApi: false,
+      disableStdin: true,
+      scrollback: 5000,
+    })
+    fit = new FitAddon()
+    term.loadAddon(fit)
+    term.open(host)
+    term.onData((text) => sendText(text))
+    term.onResize(({ cols, rows }) => session.resize(cols, rows))
+    observer = new ResizeObserver(refit)
+    observer.observe(host)
+    refit()
+    session.resize(term.cols, term.rows)
+  }
+
   const refit = () => {
     try {
-      fit.fit()
+      fit?.fit()
     } catch {
       /* hidden or zero-sized */
     }
   }
-  refit()
 
-  let ctrl = false
   const session = new TerminalSession({
     getToken: () =>
       new Promise((resolve) => ctx.pushEvent("terminal_token", {}, (reply) => resolve(reply?.token ?? null))),
     connect: (token) => phoenixConnect(runtimeId, token),
     term: {
-      // The session sees only these four. There is deliberately no clear or reset.
-      write: (bytes) => term.write(bytes),
-      setInputEnabled: (on) => (term.options.disableStdin = !on),
+      // The session sees only these three. There is deliberately no clear or reset.
+      write: (bytes) => {
+        openTerm()
+        term.write(bytes)
+      },
+      setInputEnabled: (on) => {
+        if (term) term.options.disableStdin = !on
+      },
       setDimmed: (dim) => host.setAttribute("data-dimmed", String(dim)),
     },
-    onState: state,
+    onState: (s, reason) => {
+      if (s === "connected") openTerm()
+      state(s, reason)
+    },
     onCwd: (cwd) => ctx.pushEvent("terminal_cwd", { cwd }),
     onMode: (mode) => ctx.pushEvent("terminal_mode", { mode }),
   })
 
-  const enc = new TextEncoder()
   const sendText = (text) => session.send(enc.encode(ctrl ? applyCtrl(text) : text)).then(() => (ctrl = false))
-  term.onData((text) => sendText(text))
-  term.onResize(({ cols, rows }) => session.resize(cols, rows))
-  session.resize(term.cols, term.rows)
 
   // Multi-line paste: acts on the user's clipboard text before it is sent.
   const onPaste = (e) => {
     const text = e.clipboardData?.getData("text") ?? ""
-    if (session.mode === "rw" && needsConfirm(text)) {
+    if (term && session.mode === "rw" && needsConfirm(text)) {
       e.preventDefault()
       e.stopPropagation()
       confirmPaste(root, text).then((yes) => yes && term.paste(text))
@@ -174,27 +194,24 @@ async function mount(ctx) {
     } else if (KEY_BYTES[key]) {
       session.send(enc.encode(KEY_BYTES[key]))
     }
-    term.focus()
+    term?.focus()
   }
   root.addEventListener("click", onKey)
 
   ctx.handleEvent("terminal:set_mode", async ({ mode }) => {
     const ok = await session.setMode(mode)
-    if (ok && mode === "rw") term.focus()
+    if (ok && mode === "rw") term?.focus()
   })
-
-  const observer = new ResizeObserver(refit)
-  observer.observe(host)
 
   session.start()
 
   return {
     destroy() {
-      observer.disconnect()
+      observer?.disconnect()
       host.removeEventListener("paste", onPaste, true)
       root.removeEventListener("click", onKey)
       session.detach()
-      term.dispose()
+      term?.dispose()
     },
   }
 }
