@@ -305,8 +305,13 @@ mv "$out.tmp" "$out"
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backup")
 BACKUP_UNIT_NAME = "burrow-backup.service"
 BACKUP_TIMER_NAME = "burrow-backup.timer"
-# Pinned: the s3-compatible target uploads with this CLI image.
-AWS_CLI_IMAGE = "amazon/aws-cli:2.17.62"
+# Pinned: the s3-compatible target uploads with this CLI image. A digest-pinned
+# mirror of the upstream index (see .github/workflows/mirror-images.yml), never
+# Docker Hub directly.
+AWS_CLI_IMAGE = (
+    "ghcr.io/getburrowing/aws-cli:2.17.62"
+    "@sha256:183d4bb76169d35c12ba99e3384b605fee9a72fcb7ff1eeaa857fc27aa8fc713"
+)
 # Data volumes a backup snapshots when the install runs them.
 BACKUP_VOLUMES = ("core-data", "agent-homes")
 

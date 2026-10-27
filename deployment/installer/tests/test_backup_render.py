@@ -7,6 +7,7 @@ credentials are secret refs only.
 
 import copy
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,32 @@ class HostedDefault(unittest.TestCase):
         )
         errors, _ = validate(raw)
         self.assertEqual([e.code for e in errors], ["invalid_value"])
+
+
+class ImagePins(unittest.TestCase):
+    """Every image ref in templates.py is a digest-pinned ghcr mirror."""
+
+    def test_every_image_constant_is_a_pinned_mirror(self):
+        from burrow_install import templates
+
+        refs = {n: v for n, v in vars(templates).items() if n.endswith("_IMAGE")}
+        self.assertIn("AWS_CLI_IMAGE", refs)
+        for name, ref in sorted(refs.items()):
+            with self.subTest(name):
+                self.assertRegex(
+                    ref, r"^ghcr\.io/getburrowing/[a-z0-9._-]+:[\w.-]+@sha256:[0-9a-f]{64}$"
+                )
+
+    def test_every_quoted_image_ref_in_templates_is_pinned(self):
+        src = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "burrow_install",
+            "templates.py",
+        )
+        with open(src, encoding="utf-8") as handle:
+            text = handle.read()
+        for ref in re.findall(r"[\"'](?:docker\.io/|amazon/)[^\"'\s]+[\"']", text):
+            self.fail(f"Docker Hub image ref in templates.py: {ref}")
 
 
 class TargetNone(unittest.TestCase):
