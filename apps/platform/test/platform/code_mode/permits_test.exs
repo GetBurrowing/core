@@ -193,6 +193,13 @@ defmodule Platform.CodeMode.PermitsTest do
   end
 
   describe "Runtime.run on the node's gate" do
+    # Compile the module first: a node's one-time compile is not permit
+    # wait, and these tests time the run.
+    setup do
+      {:ok, _} = Runtime.compiled()
+      :ok
+    end
+
     # Take every permit of the node's gate from helper processes.
     defp occupy_all do
       size = Permits.status().size
