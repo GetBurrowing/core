@@ -19,7 +19,7 @@ final class TabBarUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30) -> XCUIApplication {
+    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 60) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
         // The shell loads the bundled fixture once, from viewDidAppear, and
@@ -30,6 +30,13 @@ final class TabBarUITests: XCTestCase {
         // normal: read it from the `fixture-launch:` line (relaunches=1) and
         // from webload.log, do not tolerate it. If the fixture is still
         // missing after the allowed attempts the test fails.
+        //
+        // The wait is 60 s, not 30: webload.log of run 40538916731 shows the
+        // "blank" first launch is a slow cold load, not a failed one. The
+        // fixture committed (didCommit at ~+17 s) but had not finished loading
+        // when a 30 s wait expired and terminated the app mid-load; no failure,
+        // termination or watchdog event was logged, so there was nothing for
+        // recovery to re-issue.
         var shown = false
         var attempts = 0
         for _ in 0 ..< maxAttempts where !shown {
