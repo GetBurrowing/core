@@ -101,9 +101,51 @@ defmodule PlatformWeb.TabSwitchProbeTest do
   test "the dump carries only names, durations and counts", %{user: user} do
     keys =
       ~w(pid t0_us view connected mount_ms handle_params_ms arrival_queries arrival_query_ms
-         queries_by_phase refresh_board refresh_board_ms count_by_scope list_all_tasks)
+         queries_by_phase refresh_board refresh_board_ms count_by_scope list_all_tasks
+         enter_space_segments)
 
     {_tasks, [mount]} = arrive(user)
     assert Enum.sort(Map.keys(mount)) == Enum.sort(keys)
+  end
+
+  # Task 01a17bf4 stage 1: chat's enter_space segment spans, per mount, in
+  # run order, each with names, a duration and a query count and nothing
+  # else. The names are literals (not read from the module) so a segment
+  # the probe stops recording shows up here.
+  test "a chat space entry records every enter_space segment with only names, us and queries",
+       %{user: user} do
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Probe chat",
+        slug: "probe-chat-#{System.unique_integer([:positive])}",
+        kind: "channel",
+        org_id: Platform.Tenancy.get_org_by_slug!("acme").id
+      })
+
+    probe(:reset)
+    {:ok, view, _} = live(conn_for(user), ~p"/chat/#{space.slug}")
+    _ = render(view)
+
+    [mount] =
+      probe(:dump)
+      |> Jason.decode!()
+      |> Enum.filter(&(&1["pid"] == inspect(view.pid)))
+
+    segments = mount["enter_space_segments"]
+
+    assert Enum.map(segments, & &1["segment"]) |> Enum.sort() ==
+             Enum.sort(~w(participants rail_channels list_spaces rail_archived_channels
+                restricted_channel_ids rail_dm_conversations presence message_window
+                space_sheet pins canvases agents_sheet channel_sections sidebar_sections
+                chat_list_data))
+
+    for s <- segments do
+      assert Enum.sort(Map.keys(s)) == ["queries", "segment", "us"]
+      assert is_integer(s["us"]) and s["us"] >= 0
+      assert is_integer(s["queries"]) and s["queries"] >= 0
+    end
+
+    # The message window reads the database, so its queries are charged to it.
+    assert Enum.find(segments, &(&1["segment"] == "message_window"))["queries"] > 0
   end
 end
