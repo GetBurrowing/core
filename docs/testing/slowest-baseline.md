@@ -286,3 +286,34 @@ lib/assets/docs/test/priv/config). 236 files match that definition.
 BEAM: 906 s (104.6 s async, 801.4 s sync), 25,357 tests, 1 failure
 (`tool_aliases_test.exs:610`, a known local baseline). The sync share
 (88%) agrees with the hosted result.
+
+## Stage 4: sleeps converted and sleeps kept
+
+Converted (sleep stood in for a sync point; the assertion could run before the
+process under test had handled the event, so a `refute` could pass vacuously):
+`intent_classifier_test.exs` (9 sites), `intent_dispatcher_test.exs` (the
+`start_dispatcher!` init wait), `chat_live_test.exs` (9 sites) and
+`meeting_live_test.exs` (2 sites). Each now calls `:sys.get_state/1` on the
+process under test, which is handled after every message already in its
+mailbox. A local PubSub broadcast has put its message in the subscriber's
+mailbox before it returns, so the barrier is complete. No timeout or TTL
+constant was changed.
+
+Kept, because the elapsed time or the sleep is the behaviour under test:
+
+- `adversarial_test.exs:606,:620,:633,:712`: measurement window for a rate or budget limit.
+- `mask_names_chip_test.exs:198`: waits for a real clock to pass a stored expiry.
+- `intent_classifier_test.exs:1611`: the debounce window is the subject.
+- `intent_dispatcher_test.exs:1397`: three heartbeats across more than two ack windows.
+- `task_router_test.exs:2525,:2528`: elapsed wall clock is the subject of `d1 - d3 >= 200`.
+- Bounded poll loops (`intent_dispatcher_test.exs:191`, `adversarial_test.exs:229,:256`, `js_test.exs:325`, `intent_eval_e2e_scoring_test.exs:592,:615`): a deadline-bounded poll, not a fixed wait.
+
+Not converted, ~280 further `Process.sleep` sites outside the slow list; not audited here.
+
+Reported, not fixed: the press-window grace timer tests still have no
+"not before grace" assertion, so an early-firing timer would pass.
+
+`lazy_html_selector_guidance_audit_test.exs` keeps its 300 s module timeout.
+With SourceIndex it takes ~24 s with the other module locally, but in the full
+local run (heavily loaded) its first test still hit the 60 s default while
+walking `**/*.md` across the whole repo, so the timeout is still needed.
