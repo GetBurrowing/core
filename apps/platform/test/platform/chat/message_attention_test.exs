@@ -715,6 +715,10 @@ defmodule Platform.Chat.MessageAttentionTest do
 
   describe "AttentionRouter.route_attention/3" do
     test "execution log-only attention persists but logs no decision, with a dispatch positive control" do
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
       space = channel!(%{kind: "execution", agent_attention_policy: "on_mention"})
       alice = member!(space, user!("Alice"))
       {_agent, zip} = agent!(space, "Zip")
