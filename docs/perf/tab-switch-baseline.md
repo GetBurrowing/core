@@ -15,6 +15,77 @@ fixture, so the wire-bytes columns can be compared on/off.
 - **Raw data:** `docs/perf/tab-switch-baseline.data.json` (every tap, every
   server mount).
 
+## Per-destination table (before and after compression, one row per destination)
+
+One row per `IconRail` destination (17 keys in `icon_rail.ex`, in rail order;
+tasks has two rows, S1 and S2). "off" is `/live` websocket compression off
+(before), "on" is on (after). Local rows are loopback, 1280x800, N = 10, median
+or p90 of the 10 measured taps; the destination keys are checked against
+`icon_rail.ex` by `e2e/scripts/tab-switch-doc.test.mjs`. Every cell holds a
+number or a marker (`not measurable: <reason>`, `pending deploy`,
+`unavailable on exp`).
+
+- **Source of the numbers.** The off and on columns for all rows except tasks
+  S2 come from one back-to-back session (`tab-switch-compress.data.json`). Tasks
+  S2 off and on were run back to back in a later session after the fixture was
+  reseeded with `--no-project-pref` (`tab-switch-4g.data.json`, runs
+  `loopback-off-tasksS2` and `loopback-on-tasksS2`). The raw join reply is
+  identical off and on, so it is one column.
+- **Loopback latency is not evidence of a compression effect.** Transfer is
+  near free on loopback and the box was shared and loaded, so off/on gaps of a
+  few ms (and the p90 outliers, e.g. agents on 143, changelog on 84) are noise.
+  The latency effect of compression is the 4G section below.
+- **Not measurable here.** games (`games_enabled?` false), email
+  (`Mail.Config.enabled?` false), prompts and admin (root-only, fixture user is
+  a member) are not rendered for the fixture user, so there is nothing to tap.
+- **Mount ms** is the arriving LiveView's `mount` median (handle_params is in
+  the per-tab table further down). "agents" is the `/control` tab; "context" is
+  `/org_memory`.
+- **Exp rows.** No account was provided, so nothing was measured on exp. Exp
+  "before" is `unavailable on exp`; "after" is `pending deploy` (and also needs
+  the account).
+
+<!-- per-tab-table:start -->
+| destination (IconRail key) | path | server mount ms (off / on) | raw join reply KiB | wire KiB (off / on) | tap-to-interactive median ms (off / on) | tap-to-interactive p90 ms (off / on) | data source |
+|---|---|---|---|---|---|---|---|
+| chat | `/chat` | 36.2 / 24.4 | 313.4 | 342.4 / 34.1 | 254 / 230 | 273 / 248 | local seeded |
+| voice | `/voice` | 16.5 / 18.6 | 65.3 | 76.5 / 11.5 | 54 / 56 | 82 / 64 | local seeded |
+| tasks (S1, stored project) | `/tasks` | 15.2 / 15.4 | 190.5 | 203.0 / 24.9 | 116 / 115 | 133 / 132 | local seeded |
+| tasks (S2, no stored project) | `/tasks` | 14.7 / 16.9 | 432.0 | 444.6 / 40.4 | 264 / 269 | 271 / 296 | local seeded |
+| inbox | `/inbox` | 14.8 / 16.2 | 57.5 | 68.7 / 10.4 | 51 / 53 | 61 / 59 | local seeded |
+| agents | `/control` | 19.6 / 22.2 | 60.4 | 71.6 / 11.4 | 71 / 66 | 76 / 143 | local seeded |
+| skills | `/skills` | 37.0 / 16.8 | 51.6 | 59.1 / 9.4 | 81 / 53 | 118 / 58 | local seeded |
+| files | `/files` | 24.9 / 16.0 | 78.3 | 89.5 / 12.1 | 73 / 60 | 104 / 72 | local seeded |
+| canvases | `/files?tab=browse&type=canvas` | 38.7 / 15.5 | 79.2 | 90.3 / 12.2 | 105 / 59 | 141 / 63 | local seeded |
+| games | `/files?tab=browse&type=game` | not measurable: games disabled on this install | not measurable: games disabled on this install | not measurable: games disabled on this install | not measurable: games disabled on this install | not measurable: games disabled on this install | local seeded |
+| context | `/org_memory` | 15.3 / 17.1 | 65.1 | 76.7 / 11.5 | 59 / 53 | 69 / 62 | local seeded |
+| prompts | `/admin/prompts` | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | local seeded |
+| experiments | `/control/experiments` | 14.9 / 17.1 | 56.4 | 67.6 / 10.5 | 58 / 56 | 71 / 58 | local seeded |
+| meetings | `/meetings` | 15.1 / 15.4 | 71.2 | 84.0 / 12.3 | 61 / 60 | 78 / 62 | local seeded |
+| email | `/email` | not measurable: email disabled on this install | not measurable: email disabled on this install | not measurable: email disabled on this install | not measurable: email disabled on this install | not measurable: email disabled on this install | local seeded |
+| changelog | `/changelog` | 14.2 / 15.2 | 51.2 | 62.3 / 9.2 | 47 / 55 | 56 / 84 | local seeded |
+| admin | `/admin` | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | not measurable: root-only, fixture user is a member | local seeded |
+| settings | `/settings` | 14.0 / 14.2 | 61.1 | 75.0 / 10.7 | 66 / 58 | 71 / 65 | local seeded |
+| chat | `/chat` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| voice | `/voice` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| tasks (S1, stored project) | `/tasks` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| tasks (S2, no stored project) | `/tasks` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| inbox | `/inbox` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| agents | `/control` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| skills | `/skills` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| files | `/files` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| canvases | `/files?tab=browse&type=canvas` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| games | `/files?tab=browse&type=game` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| context | `/org_memory` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| prompts | `/admin/prompts` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| experiments | `/control/experiments` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| meetings | `/meetings` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| email | `/email` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| changelog | `/changelog` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| admin | `/admin` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+| settings | `/settings` | unavailable on exp | unavailable on exp | unavailable on exp / pending deploy | unavailable on exp / pending deploy | unavailable on exp / pending deploy | exp |
+<!-- per-tab-table:end -->
+
 ## Method
 
 **Fixture.** `apps/platform/priv/scripts/seed_tab_switch_fixture.exs` writes
@@ -143,19 +214,19 @@ Notes on reading the table:
 
 ## Tasks tab: chat -> tasks arrival (folds in 01a166be)
 
-Task 01a166be's fix shipped in #1341. On new main that is
+Task 01a166be (full id 01a166be-5556-7000-b10f-b23e7f6a7648; two tasks share the 8-character prefix)'s fix shipped in #1341. On new main that is
 `86620c37f17a34fc7eb8b3966d3ae4b874380e05`, found by subject; it is the same
 sha as on the old repo. The fix is `defer_board/1`, one `count_by_scope/1` per
 refresh, and the `[:platform_web, :tasks, :refresh_board]` span. These rows
 measure an arrival from the busy channel with the real browser, per arrival,
 N = 10:
 
-| scenario | viewport | refresh_board | count_by_scope | first board load | handle_params calls | Repo queries | mount ms | raw join reply KiB | tap-to-interactive ms |
-|---|---|---|---|---|---|---|---|---|---|
-| S1 stored project | 1280x800 | 1 | 1 | narrowed (one project, all epics) | 1 | 105 | 16.6 / 20.8 | 190.5 | 127 / 138 |
-| S2 no stored project (`?project=all`) | 1280x800 | 1 | 1 | widest (all projects) | 1 | 101 | 15.5 / 18.3 | 432.6 | 260 / 272 |
-| S2 no stored project | 390x844 | 1 | 1 | widest (all projects) | 1 | 101 | 27.3 / 35.7 | 450.5 | 213 / 233 (Tab-key probe) |
-| S1 stored project | 390x844 | 1 | 1 | narrowed | 1 | 105 | 28.0 / 38.5 | **INCONCLUSIVE** | **INCONCLUSIVE** |
+| scenario | viewport | refresh_board | count_by_scope | widest-first? | first board load | handle_params calls | Repo queries | mount ms | raw join reply KiB | tap-to-interactive ms |
+|---|---|---|---|---|---|---|---|---|---|---|
+| S1 stored project | 1280x800 | 1 | 1 | no (narrowed to one project) | narrowed (one project, all epics) | 1 | 105 | 16.6 / 20.8 | 190.5 | 127 / 138 |
+| S2 no stored project (`?project=all`) | 1280x800 | 1 | 1 | yes, with no second pass | widest (all projects) | 1 | 101 | 15.5 / 18.3 | 432.6 | 260 / 272 |
+| S2 no stored project | 390x844 | 1 | 1 | yes, with no second pass | widest (all projects) | 1 | 101 | 27.3 / 35.7 | 450.5 | 213 / 233 (Tab-key probe) |
+| S1 stored project | 390x844 | 1 | 1 | no (narrowed to one project) | narrowed | 1 | 105 | 28.0 / 38.5 | **INCONCLUSIVE** | **INCONCLUSIVE** |
 
 - **The 01a166be fix holds in a real browser.** Every arrival ran exactly one
   board load and one `count_by_scope`. S1's first load is already narrowed to
@@ -330,7 +401,7 @@ Reading it:
   (bytes over a slow link), which this rig does not have.
   Two on-run cells (control p90 143, changelog p90 84) are single outliers
   from load, not compression effects: their medians match the off run.
-- **Tasks S2 and phone viewports were not re-run.** S2 needs the fixture
+- **Tasks S2 and phone viewports were not re-run in this stage's session.** (Tasks S2 was measured off and on later: see the per-destination table at the top and the stage 3 section. Phone is still not re-run.) S2 needs the fixture
   re-seeded with `--no-project-pref`; the `--tasks-scenario S2` flag alone
   re-ran the S1 board (join reply 195,065 B), so no S2 number is claimed.
   An earlier full on-run in this session, taken while the box was at load 17,
@@ -494,13 +565,14 @@ above 288 ms, sticky is the next step; so it is if the target becomes the
 round-trip floor (85 of 142 to 154 ms on every small tab), which only a
 mounted-and-kept view can remove. Nothing was implemented.
 
-### 01a166be verdict (do not close; task 01a166be untouched)
+### 01a166be verdict (task 01a166be-5556-7000-b10f-b23e7f6a7648, not closed or modified)
 
 Measured on main (including #1341, `86620c37f`), per arrival from the busy
 channel, in every 4G run here (S1 and S2, both proxy and CDP, on and off,
 11 arrivals each): **refresh_board 1, count_by_scope 1, handle_params 1**.
-First load: S1 narrowed (`project: one`), S2 widest (`project: all`), with no
-second pass. 105 queries (S1) and 101 (S2).
+Widest-first load per arrival: **S1: no** (narrowed to one project,
+`project: one`); **S2: yes**, widest (`project: all`) **with no second pass**.
+105 queries (S1) and 101 (S2).
 
 Chat to tasks against other tabs: loopback 127 ms (S1) and 260 ms (S2) against
 56 to 74; on the 4G link 229 ms (S1) and 406 ms (S2) against 142 to 154.

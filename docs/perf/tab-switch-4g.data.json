@@ -19365,6 +19365,1776 @@
      ]
     }
    ]
+  },
+  "loopback-on-tasksS2": {
+   "label": "lb-on-s2",
+   "started_at": "2026-10-27T03:53:42.182Z",
+   "throttle": null,
+   "load_avg_at_start": [
+    3.9287109375,
+    5.85888671875,
+    7.92919921875
+   ],
+   "chrome": "Chrome/156.0.8078.48",
+   "viewport": "1280x800",
+   "websocket_connections": [
+    {
+     "id": 5,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": true
+    },
+    {
+     "id": 9,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": true
+    },
+    {
+     "id": 11,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": true
+    }
+   ],
+   "errors": [],
+   "tabs": [
+    {
+     "summary": {
+      "key": "tasks",
+      "href": "/tasks",
+      "origin": "/chat/tab-switch-busy",
+      "probe": "task search (#task-search)",
+      "n": 10,
+      "websocket_join_every_tap": true,
+      "tap_ms": {
+       "n": 10,
+       "median": 269.15000000596046,
+       "p90": 296
+      },
+      "ready_ms": {
+       "n": 10,
+       "median": 183.40000000596046,
+       "p90": 189
+      },
+      "join_reply_raw_bytes": {
+       "n": 10,
+       "median": 442373,
+       "p90": 442373
+      },
+      "join_reply_deflate_estimate_bytes": {
+       "n": 10,
+       "median": 41157,
+       "p90": 41157
+      },
+      "window_raw_recv_bytes": {
+       "n": 10,
+       "median": 455280,
+       "p90": 455282
+      },
+      "window_deflate_estimate_bytes": {
+       "n": 10,
+       "median": 42088,
+       "p90": 42090
+      },
+      "wire_down_bytes": {
+       "n": 10,
+       "median": 41349.5,
+       "p90": 41350
+      },
+      "client_script_ms": {
+       "n": 10,
+       "median": 92.42350000000005,
+       "p90": 94.21899999999994
+      },
+      "client_layout_ms": {
+       "n": 10,
+       "median": 20.29899999999997,
+       "p90": 21.412
+      },
+      "client_style_ms": {
+       "n": 10,
+       "median": 107.89299999999999,
+       "p90": 108.43700000000011
+      },
+      "client_task_ms": {
+       "n": 10,
+       "median": 246.0165000000003,
+       "p90": 251.34199999999973
+      },
+      "server": {
+       "mounts_seen": 11,
+       "view": "PlatformWeb.TasksLive",
+       "mount_ms": {
+        "n": 10,
+        "median": 16.8875,
+        "p90": 18.035
+       },
+       "handle_params_ms": {
+        "n": 10,
+        "median": 9.6735,
+        "p90": 13.849
+       },
+       "arrival_queries": {
+        "n": 10,
+        "median": 101,
+        "p90": 101
+       },
+       "refresh_board": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       },
+       "count_by_scope": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       },
+       "list_all_tasks_first": [
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "handle_params_calls": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       }
+      }
+     },
+     "taps": [
+      {
+       "i": 0,
+       "warmup": true,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 401.10000002384186,
+       "ready_ms": 323,
+       "loading_stop_ms": 249.30000001192093,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442406,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455304,
+       "window_deflate_estimate_bytes": 42105,
+       "join_reply_deflate_estimate_bytes": 41175,
+       "wire_down_bytes": 41379,
+       "wire_up_bytes": 120,
+       "client": {
+        "script_ms": 94.58500000000001,
+        "layout_ms": 11.562000000000003,
+        "style_ms": 80.283,
+        "task_ms": 216.05200000000002,
+        "layout_count": 3,
+        "style_count": 26
+       },
+       "trace": null
+      },
+      {
+       "i": 1,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 263.4000000357628,
+       "ready_ms": 179.9000000357628,
+       "loading_stop_ms": 110,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42087,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41349,
+       "wire_up_bytes": 70,
+       "client": {
+        "script_ms": 90.419,
+        "layout_ms": 21.412,
+        "style_ms": 107.95700000000002,
+        "task_ms": 245.83500000000004,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 2,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 262.5,
+       "ready_ms": 177,
+       "loading_stop_ms": 103.70000004768372,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42085,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41348,
+       "wire_up_bytes": 66,
+       "client": {
+        "script_ms": 92.27200000000002,
+        "layout_ms": 20.200999999999997,
+        "style_ms": 108.32300000000006,
+        "task_ms": 245.04400000000004,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 3,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 297.10000002384186,
+       "ready_ms": 189,
+       "loading_stop_ms": 119.19999998807907,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42087,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41346,
+       "wire_up_bytes": 66,
+       "client": {
+        "script_ms": 94.21899999999994,
+        "layout_ms": 20.93099999999999,
+        "style_ms": 108.73100000000002,
+        "task_ms": 251.34199999999973,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 4,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 279.5999999642372,
+       "ready_ms": 194.29999995231628,
+       "loading_stop_ms": 124,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42089,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41350,
+       "wire_up_bytes": 66,
+       "client": {
+        "script_ms": 93.34700000000007,
+        "layout_ms": 21.105999999999987,
+        "style_ms": 108.43700000000011,
+        "task_ms": 249.62799999999996,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 5,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 296,
+       "ready_ms": 187.4000000357628,
+       "loading_stop_ms": 118.70000004768372,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455278,
+       "window_deflate_estimate_bytes": 42088,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41349,
+       "wire_up_bytes": 65,
+       "client": {
+        "script_ms": 106.78199999999993,
+        "layout_ms": 21.688000000000013,
+        "style_ms": 106.379,
+        "task_ms": 263.776,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 6,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 270.9000000357628,
+       "ready_ms": 184.4000000357628,
+       "loading_stop_ms": 116.60000002384186,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42088,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41349,
+       "wire_up_bytes": 62,
+       "client": {
+        "script_ms": 90.71600000000002,
+        "layout_ms": 19.99100000000001,
+        "style_ms": 107.11100000000017,
+        "task_ms": 244.81300000000016,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 7,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 268.30000001192093,
+       "ready_ms": 181.69999998807907,
+       "loading_stop_ms": 110.80000001192093,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42089,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41350,
+       "wire_up_bytes": 64,
+       "client": {
+        "script_ms": 92.79499999999996,
+        "layout_ms": 20.217999999999986,
+        "style_ms": 107.82899999999995,
+        "task_ms": 246.63099999999983,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 8,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 265.60000002384186,
+       "ready_ms": 182.60000002384186,
+       "loading_stop_ms": 113.30000001192093,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42091,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41353,
+       "wire_up_bytes": 65,
+       "client": {
+        "script_ms": 88.01299999999989,
+        "layout_ms": 20.325999999999983,
+        "style_ms": 107.98400000000008,
+        "task_ms": 242.7520000000003,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 9,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 252.89999997615814,
+       "ready_ms": 172.69999998807907,
+       "loading_stop_ms": 107.09999996423721,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42090,
+       "join_reply_deflate_estimate_bytes": 41156,
+       "wire_down_bytes": 41350,
+       "wire_up_bytes": 62,
+       "client": {
+        "script_ms": 86.50599999999997,
+        "layout_ms": 20.271999999999956,
+        "style_ms": 104.84199999999966,
+        "task_ms": 236.96699999999993,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 10,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 270,
+       "ready_ms": 184.19999998807907,
+       "loading_stop_ms": 114.69999998807907,
+       "join_topic": "lv:phx-GOJGmPYihJWE8xID",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42088,
+       "join_reply_deflate_estimate_bytes": 41157,
+       "wire_down_bytes": 41350,
+       "wire_up_bytes": 65,
+       "client": {
+        "script_ms": 92.57500000000007,
+        "layout_ms": 20.185999999999982,
+        "style_ms": 107.46000000000011,
+        "task_ms": 246.19800000000058,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      }
+     ],
+     "server": [
+      {
+       "connected": true,
+       "pid": "#PID<0.1060.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 44.816,
+       "t0_us": -576460706689176,
+       "handle_params_ms": [
+        65.575,
+        0.051
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 40.434,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.996
+        },
+        "mount": {
+         "count": 60,
+         "ms": 20.897
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 11.541
+        }
+       },
+       "refresh_board_ms": [
+        59.557
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1093.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 13.228,
+       "t0_us": -576460704223758,
+       "handle_params_ms": [
+        7.675
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 23.043,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.763
+        },
+        "mount": {
+         "count": 60,
+         "ms": 11.528
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.752
+        }
+       },
+       "refresh_board_ms": [
+        7.626
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1126.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 11.241,
+       "t0_us": -576460701963411,
+       "handle_params_ms": [
+        7.532
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 20.967,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.065
+        },
+        "mount": {
+         "count": 60,
+         "ms": 9.844
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.058
+        }
+       },
+       "refresh_board_ms": [
+        7.486
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1159.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 18.035,
+       "t0_us": -576460699710164,
+       "handle_params_ms": [
+        14.602
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 32.866,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 10.81
+        },
+        "mount": {
+         "count": 60,
+         "ms": 15.895
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 6.161
+        }
+       },
+       "refresh_board_ms": [
+        14.557
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1192.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 24.08,
+       "t0_us": -576460697310978,
+       "handle_params_ms": [
+        13.849
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 33.72,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 6.953
+        },
+        "mount": {
+         "count": 60,
+         "ms": 21.222
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 5.545
+        }
+       },
+       "refresh_board_ms": [
+        13.808
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1225.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 17.337,
+       "t0_us": -576460695025824,
+       "handle_params_ms": [
+        12.727
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 28.102,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.813
+        },
+        "mount": {
+         "count": 60,
+         "ms": 15.289
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 5
+        }
+       },
+       "refresh_board_ms": [
+        12.675
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1258.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 17.417,
+       "t0_us": -576460692708803,
+       "handle_params_ms": [
+        13.761
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 30.165,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.932
+        },
+        "mount": {
+         "count": 60,
+         "ms": 15.074
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 7.159
+        }
+       },
+       "refresh_board_ms": [
+        13.679
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1291.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 14.931,
+       "t0_us": -576460690414107,
+       "handle_params_ms": [
+        8.956
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 24.095,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.058
+        },
+        "mount": {
+         "count": 60,
+         "ms": 13.209
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.828
+        }
+       },
+       "refresh_board_ms": [
+        8.91
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1324.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 16.438,
+       "t0_us": -576460688145115,
+       "handle_params_ms": [
+        9.298
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 26.149,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.071
+        },
+        "mount": {
+         "count": 60,
+         "ms": 14.493
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.585
+        }
+       },
+       "refresh_board_ms": [
+        9.265
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1357.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 11.559,
+       "t0_us": -576460685877265,
+       "handle_params_ms": [
+        7.992
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 22.277,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.963
+        },
+        "mount": {
+         "count": 60,
+         "ms": 9.963
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.351
+        }
+       },
+       "refresh_board_ms": [
+        7.954
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1390.0>",
+       "view": "PlatformWeb.TasksLive",
+       "count_by_scope": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "refresh_board": 1,
+       "mount_ms": 17.933,
+       "t0_us": -576460683630139,
+       "handle_params_ms": [
+        10.049
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 27.934,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 9.479
+        },
+        "mount": {
+         "count": 60,
+         "ms": 15.723
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.732
+        }
+       },
+       "refresh_board_ms": [
+        9.993
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "loopback-off-tasksS2": {
+   "label": "lb-off-s2",
+   "started_at": "2026-10-27T03:55:16.847Z",
+   "throttle": null,
+   "load_avg_at_start": [
+    4.984375,
+    5.85009765625,
+    7.7109375
+   ],
+   "chrome": "Chrome/156.0.8078.48",
+   "viewport": "1280x800",
+   "websocket_connections": [
+    {
+     "id": 5,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": false
+    },
+    {
+     "id": 9,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": false
+    },
+    {
+     "id": 11,
+     "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+     "deflate_offered": true,
+     "deflate_accepted": false
+    }
+   ],
+   "errors": [],
+   "tabs": [
+    {
+     "summary": {
+      "key": "tasks",
+      "href": "/tasks",
+      "origin": "/chat/tab-switch-busy",
+      "probe": "task search (#task-search)",
+      "n": 10,
+      "websocket_join_every_tap": true,
+      "tap_ms": {
+       "n": 10,
+       "median": 264.09999999403954,
+       "p90": 271.19999998807907
+      },
+      "ready_ms": {
+       "n": 10,
+       "median": 176.59999999403954,
+       "p90": 183.10000002384186
+      },
+      "join_reply_raw_bytes": {
+       "n": 10,
+       "median": 442373,
+       "p90": 442373
+      },
+      "join_reply_deflate_estimate_bytes": {
+       "n": 10,
+       "median": 41174,
+       "p90": 41175
+      },
+      "window_raw_recv_bytes": {
+       "n": 10,
+       "median": 455280,
+       "p90": 455282
+      },
+      "window_deflate_estimate_bytes": {
+       "n": 10,
+       "median": 42110,
+       "p90": 42112
+      },
+      "wire_down_bytes": {
+       "n": 10,
+       "median": 455306,
+       "p90": 455308
+      },
+      "client_script_ms": {
+       "n": 10,
+       "median": 91.98499999999993,
+       "p90": 93.77999999999997
+      },
+      "client_layout_ms": {
+       "n": 10,
+       "median": 20.352999999999984,
+       "p90": 21.35200000000001
+      },
+      "client_style_ms": {
+       "n": 10,
+       "median": 107.2050000000001,
+       "p90": 108.81800000000008
+      },
+      "client_task_ms": {
+       "n": 10,
+       "median": 244.6759999999999,
+       "p90": 247.93699999999941
+      },
+      "server": {
+       "mounts_seen": 11,
+       "view": "PlatformWeb.TasksLive",
+       "mount_ms": {
+        "n": 10,
+        "median": 14.7205,
+        "p90": 16.311
+       },
+       "handle_params_ms": {
+        "n": 10,
+        "median": 8.175,
+        "p90": 8.833
+       },
+       "arrival_queries": {
+        "n": 10,
+        "median": 101,
+        "p90": 101
+       },
+       "refresh_board": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       },
+       "count_by_scope": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       },
+       "list_all_tasks_first": [
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        },
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "handle_params_calls": {
+        "n": 10,
+        "median": 1,
+        "p90": 1
+       }
+      }
+     },
+     "taps": [
+      {
+       "i": 0,
+       "warmup": true,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 274.10000002384186,
+       "ready_ms": 200,
+       "loading_stop_ms": 127.80000001192093,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442406,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455304,
+       "window_deflate_estimate_bytes": 42127,
+       "join_reply_deflate_estimate_bytes": 41192,
+       "wire_down_bytes": 455330,
+       "wire_up_bytes": 1657,
+       "client": {
+        "script_ms": 91.53999999999999,
+        "layout_ms": 11.235999999999997,
+        "style_ms": 71.16900000000001,
+        "task_ms": 198.976,
+        "layout_count": 3,
+        "style_count": 18
+       },
+       "trace": null
+      },
+      {
+       "i": 1,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 255.4000000357628,
+       "ready_ms": 174.4000000357628,
+       "loading_stop_ms": 108.40000003576279,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42110,
+       "join_reply_deflate_estimate_bytes": 41175,
+       "wire_down_bytes": 455298,
+       "wire_up_bytes": 1670,
+       "client": {
+        "script_ms": 88.87900000000002,
+        "layout_ms": 19.794000000000008,
+        "style_ms": 105.42399999999996,
+        "task_ms": 239.5790000000001,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 2,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 265.10000002384186,
+       "ready_ms": 176.4000000357628,
+       "loading_stop_ms": 106.30000001192093,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42108,
+       "join_reply_deflate_estimate_bytes": 41175,
+       "wire_down_bytes": 455298,
+       "wire_up_bytes": 1670,
+       "client": {
+        "script_ms": 93.213,
+        "layout_ms": 19.963,
+        "style_ms": 107.638,
+        "task_ms": 246.61700000000008,
+        "layout_count": 4,
+        "style_count": 17
+       },
+       "trace": null
+      },
+      {
+       "i": 3,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 271.19999998807907,
+       "ready_ms": 183.89999997615814,
+       "loading_stop_ms": 103.69999998807907,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42109,
+       "join_reply_deflate_estimate_bytes": 41175,
+       "wire_down_bytes": 455298,
+       "wire_up_bytes": 1670,
+       "client": {
+        "script_ms": 96.29299999999996,
+        "layout_ms": 22.086999999999996,
+        "style_ms": 92.98300000000003,
+        "task_ms": 237.82400000000004,
+        "layout_count": 3,
+        "style_count": 15
+       },
+       "trace": null
+      },
+      {
+       "i": 4,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 257.89999997615814,
+       "ready_ms": 176.79999995231628,
+       "loading_stop_ms": 106.19999998807907,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442371,
+       "topic_other_raw_bytes": 12770,
+       "window_raw_recv_bytes": 455272,
+       "window_deflate_estimate_bytes": 42112,
+       "join_reply_deflate_estimate_bytes": 41175,
+       "wire_down_bytes": 455298,
+       "wire_up_bytes": 1670,
+       "client": {
+        "script_ms": 91.719,
+        "layout_ms": 20.098000000000006,
+        "style_ms": 106.228,
+        "task_ms": 243.48599999999988,
+        "layout_count": 4,
+        "style_count": 15
+       },
+       "trace": null
+      },
+      {
+       "i": 5,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 261.19999998807907,
+       "ready_ms": 175.80000001192093,
+       "loading_stop_ms": 105.19999998807907,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455278,
+       "window_deflate_estimate_bytes": 42110,
+       "join_reply_deflate_estimate_bytes": 41174,
+       "wire_down_bytes": 455304,
+       "wire_up_bytes": 1674,
+       "client": {
+        "script_ms": 92.43500000000004,
+        "layout_ms": 20.543000000000006,
+        "style_ms": 107.40400000000005,
+        "task_ms": 245.86599999999993,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 6,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 268.5,
+       "ready_ms": 172.9000000357628,
+       "loading_stop_ms": 108.30000001192093,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42110,
+       "join_reply_deflate_estimate_bytes": 41174,
+       "wire_down_bytes": 455308,
+       "wire_up_bytes": 1676,
+       "client": {
+        "script_ms": 85.29700000000007,
+        "layout_ms": 20.62900000000001,
+        "style_ms": 108.81800000000008,
+        "task_ms": 240.1279999999999,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 7,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 245.5,
+       "ready_ms": 166.80000001192093,
+       "loading_stop_ms": 102.19999998807907,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42112,
+       "join_reply_deflate_estimate_bytes": 41174,
+       "wire_down_bytes": 455308,
+       "wire_up_bytes": 1676,
+       "client": {
+        "script_ms": 87.09699999999998,
+        "layout_ms": 19.736000000000004,
+        "style_ms": 106.91899999999998,
+        "task_ms": 238.28199999999987,
+        "layout_count": 4,
+        "style_count": 15
+       },
+       "trace": null
+      },
+      {
+       "i": 8,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 263.0999999642372,
+       "ready_ms": 179,
+       "loading_stop_ms": 109.39999997615814,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42113,
+       "join_reply_deflate_estimate_bytes": 41174,
+       "wire_down_bytes": 455308,
+       "wire_up_bytes": 1676,
+       "client": {
+        "script_ms": 93.77999999999997,
+        "layout_ms": 21.35200000000001,
+        "style_ms": 107.00600000000016,
+        "task_ms": 247.93699999999941,
+        "layout_count": 4,
+        "style_count": 15
+       },
+       "trace": null
+      },
+      {
+       "i": 9,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 269.80000001192093,
+       "ready_ms": 183.10000002384186,
+       "loading_stop_ms": 112.5,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42111,
+       "join_reply_deflate_estimate_bytes": 41173,
+       "wire_down_bytes": 455308,
+       "wire_up_bytes": 1676,
+       "client": {
+        "script_ms": 92.25099999999986,
+        "layout_ms": 20.372999999999976,
+        "style_ms": 107.50500000000018,
+        "task_ms": 247.95200000000062,
+        "layout_count": 4,
+        "style_count": 16
+       },
+       "trace": null
+      },
+      {
+       "i": 10,
+       "warmup": false,
+       "url": "/tasks?project=all",
+       "probe_used": "task search (#task-search)",
+       "tap_ms": 280,
+       "ready_ms": 177.69999998807907,
+       "loading_stop_ms": 109.80000001192093,
+       "join_topic": "lv:phx-GOJGruG5li6ZfxNh",
+       "join_reply_status": "ok",
+       "join_reply_raw_bytes": 442373,
+       "topic_other_raw_bytes": 12774,
+       "window_raw_recv_bytes": 455282,
+       "window_deflate_estimate_bytes": 42110,
+       "join_reply_deflate_estimate_bytes": 41174,
+       "wire_down_bytes": 455308,
+       "wire_up_bytes": 1676,
+       "client": {
+        "script_ms": 90.87299999999998,
+        "layout_ms": 20.33299999999999,
+        "style_ms": 108.90099999999991,
+        "task_ms": 246.0009999999997,
+        "layout_count": 4,
+        "style_count": 15
+       },
+       "trace": null
+      }
+     ],
+     "server": [
+      {
+       "connected": true,
+       "pid": "#PID<0.1253.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 33.602,
+       "t0_us": -576460707770852,
+       "handle_params_ms": [
+        22.446,
+        0.032
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 26.392,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 6.028
+        },
+        "mount": {
+         "count": 60,
+         "ms": 16.331
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 4.033
+        }
+       },
+       "refresh_board_ms": [
+        21.104
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1286.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 15.02,
+       "t0_us": -576460705479485,
+       "handle_params_ms": [
+        8.218
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 26.366,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 9.469
+        },
+        "mount": {
+         "count": 60,
+         "ms": 13.417
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.48
+        }
+       },
+       "refresh_board_ms": [
+        8.178
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1319.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 15.437,
+       "t0_us": -576460703230019,
+       "handle_params_ms": [
+        8.176
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 24.542,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.569
+        },
+        "mount": {
+         "count": 60,
+         "ms": 13.735
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.238
+        }
+       },
+       "refresh_board_ms": [
+        8.137
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1352.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 12.934,
+       "t0_us": -576460700814966,
+       "handle_params_ms": [
+        7.788
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 21.419,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.129
+        },
+        "mount": {
+         "count": 60,
+         "ms": 11.411
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.879
+        }
+       },
+       "refresh_board_ms": [
+        7.751
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1385.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 14.421,
+       "t0_us": -576460698547182,
+       "handle_params_ms": [
+        8.833
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 23.785,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.476
+        },
+        "mount": {
+         "count": 60,
+         "ms": 12.851
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.458
+        }
+       },
+       "refresh_board_ms": [
+        8.791
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1418.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 13.623,
+       "t0_us": -576460696283106,
+       "handle_params_ms": [
+        8.255
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 23.191,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.249
+        },
+        "mount": {
+         "count": 60,
+         "ms": 12.06
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.882
+        }
+       },
+       "refresh_board_ms": [
+        8.212
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1451.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 11.389,
+       "t0_us": -576460694028083,
+       "handle_params_ms": [
+        7.448
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 21.773,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 9.066
+        },
+        "mount": {
+         "count": 60,
+         "ms": 9.912
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.795
+        }
+       },
+       "refresh_board_ms": [
+        7.413
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1484.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 10.772,
+       "t0_us": -576460691745599,
+       "handle_params_ms": [
+        6.778
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 19.92,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 8.336
+        },
+        "mount": {
+         "count": 60,
+         "ms": 9.296
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.288
+        }
+       },
+       "refresh_board_ms": [
+        6.739
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1517.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 16.208,
+       "t0_us": -576460689500941,
+       "handle_params_ms": [
+        8.174
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 24.432,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 6.749
+        },
+        "mount": {
+         "count": 60,
+         "ms": 14.427
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.256
+        }
+       },
+       "refresh_board_ms": [
+        8.127
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1550.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 19.66,
+       "t0_us": -576460687235870,
+       "handle_params_ms": [
+        10.142
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 29.759,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 9.213
+        },
+        "mount": {
+         "count": 60,
+         "ms": 17.22
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 3.326
+        }
+       },
+       "refresh_board_ms": [
+        10.09
+       ]
+      },
+      {
+       "connected": true,
+       "pid": "#PID<0.1583.0>",
+       "view": "PlatformWeb.TasksLive",
+       "refresh_board": 1,
+       "list_all_tasks": [
+        {
+         "project": "all",
+         "epic": "all"
+        }
+       ],
+       "count_by_scope": 1,
+       "mount_ms": 16.311,
+       "t0_us": -576460684961558,
+       "handle_params_ms": [
+        7.571
+       ],
+       "arrival_queries": 101,
+       "arrival_query_ms": 24.159,
+       "queries_by_phase": {
+        "between": {
+         "count": 33,
+         "ms": 7.637
+        },
+        "mount": {
+         "count": 60,
+         "ms": 14.108
+        },
+        "handle_params": {
+         "count": 8,
+         "ms": 2.414
+        }
+       },
+       "refresh_board_ms": [
+        7.535
+       ]
+      }
+     ]
+    }
+   ]
   }
  }
 }
