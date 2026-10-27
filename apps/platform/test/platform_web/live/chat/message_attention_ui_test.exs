@@ -544,7 +544,15 @@ defmodule PlatformWeb.ChatLive.MessageAttentionUITest do
                    ) ==
                      ["@#{ctx.agent_p.display_name}", "@#{ctx.bob_p.display_name}"]
 
-            assert Repo.exists?(from(i in Item, where: i.user_id == ^ctx.bob.id))
+            assert Repo.exists?(
+                     from(i in Item,
+                       where:
+                         i.user_id == ^ctx.bob.id and i.kind == "chat_mention" and
+                           i.source_type == "chat_message" and
+                           i.source_id == ^ctx.delivery_message.id
+                     )
+                   )
+
             :ok = :sys.terminate(router, :normal)
             assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :normal}, 2_000
 
