@@ -66,3 +66,70 @@ test("local rows that were measured carry no pending or unavailable markers", ()
     for (const c of r.slice(2, 7)) assert.ok(!/pending deploy|unavailable on exp/.test(c), `${r[0]}: '${c}'`);
   }
 });
+
+// Task 01a17bf4 stage 4: the before/after table in
+// docs/perf/tab-switch-first-frame.md. One row per measured tab (the literal
+// list below, cross-checked against the data file's before-run), no blank
+// cells, every cell "before / after" with both halves numeric, and chat's
+// after first-frame KiB and tap must be numbers.
+const FF_DOC = path.join(root, "docs/perf/tab-switch-first-frame.md");
+const FF_DATA = path.join(root, "docs/perf/tab-switch-first-frame.data.json");
+const FF_ROWS = [
+  "chat|1280x800", "chat|390x844", "voice|1280x800", "tasks|1280x800", "meetings|1280x800",
+  "inbox|1280x800", "files|1280x800", "canvases|1280x800", "skills|1280x800", "org_memory|1280x800",
+  "control|1280x800", "experiments|1280x800", "changelog|1280x800", "settings|1280x800",
+];
+
+function markedTable(text, name) {
+  const m = text.match(new RegExp(`<!-- ${name}:start -->\\n([\\s\\S]*?)\\n<!-- ${name}:end -->`));
+  assert.ok(m, `${name} markers missing`);
+  const lines = m[1].split("\n").filter((l) => l.startsWith("|"));
+  const split = (l) => l.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  return { header: split(lines[0]), rows: lines.slice(2).map(split) };
+}
+
+const halves = (c) => c.split(" / ").map((p) => p.trim());
+const num = (c) => /^[+-]?\d+(\.\d+)?$/.test(c);
+
+test("first-frame table: one row per measured tab, every cell before / after and numeric", () => {
+  const doc = readFileSync(FF_DOC, "utf8");
+  const { header, rows } = markedTable(doc, "first-frame-table");
+  assert.equal(header.length, 6, "tab | viewport | mount us | first-frame KiB | tap median | tap p90");
+  const got = rows.map((r) => `${r[0]}|${r[1]}`);
+  for (const want of FF_ROWS) assert.equal(got.filter((g) => g === want).length, 1, `row for ${want}`);
+  assert.equal(rows.length, FF_ROWS.length, "row count");
+
+  const data = JSON.parse(readFileSync(FF_DATA, "utf8"));
+  const beforeKeys = data.runs.before.tabs.map((t) => t.summary.key);
+  for (const k of beforeKeys) assert.ok(got.includes(`${k}|1280x800`), `before-run tab ${k} has no row`);
+
+  for (const r of rows) {
+    assert.equal(r.length, header.length, `row ${r[0]} ${r[1]} has ${r.length} cells`);
+    for (const c of r.slice(2)) {
+      assert.notEqual(c, "", `${r[0]} ${r[1]}: blank cell`);
+      const h = halves(c);
+      assert.equal(h.length, 2, `${r[0]} ${r[1]}: '${c}' needs before / after`);
+      for (const p of h) assert.ok(num(p), `${r[0]} ${r[1]}: '${c}' is not numeric`);
+    }
+  }
+});
+
+test("first-frame table: chat's after first-frame KiB and tap are numbers", () => {
+  const { rows } = markedTable(readFileSync(FF_DOC, "utf8"), "first-frame-table");
+  const chat = rows.find((r) => r[0] === "chat" && r[1] === "1280x800");
+  assert.ok(chat, "chat 1280x800 row missing");
+  for (const i of [3, 4, 5]) assert.ok(Number.isFinite(Number(halves(chat[i])[1])), `chat after column ${i}: '${chat[i]}'`);
+});
+
+test("first-frame doc: chat attribution before and after, local-not-prod statement, 288 ms rule", () => {
+  const doc = readFileSync(FF_DOC, "utf8");
+  const { header, rows } = markedTable(doc, "chat-attribution");
+  assert.equal(header.length, 8, "run | tap | server | client main thread | RTT | transfer (wire KiB) | sum | gap");
+  for (const run of ["before", "after"]) {
+    const r = rows.find((x) => x[0] === `chat ${run}`);
+    assert.ok(r, `chat ${run} attribution row missing`);
+    for (const c of r.slice(1)) assert.ok(num(c.split(" ")[0]), `chat ${run}: '${c}'`);
+  }
+  assert.match(doc, /local seeded, shaped link, not prod/);
+  assert.match(doc, /288 ms/);
+});
