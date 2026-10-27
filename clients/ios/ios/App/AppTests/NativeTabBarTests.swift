@@ -152,6 +152,57 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertNil(host.bar.backgroundColor, "the material stays stock")
     }
 
+    // MARK: Adaptive bar (task 01a174e8 stage 3, option 1)
+
+    private func flat(_ grey: UInt8) throws -> CGImage {
+        var pixels = [UInt8](repeating: grey, count: 4 * 4 * 4)
+        for index in stride(from: 3, to: pixels.count, by: 4) { pixels[index] = 255 }
+        let data = Data(pixels) as CFData
+        let provider = try XCTUnwrap(CGDataProvider(data: data))
+        return try XCTUnwrap(
+            CGImage(
+                width: 4, height: 4, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 16,
+                space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil,
+                shouldInterpolate: false, intent: .defaultIntent))
+    }
+
+    func testBackdropLuminanceChoosesTheStyle() throws {
+        XCTAssertEqual(try XCTUnwrap(NativeTabBarBackdrop.luminance(of: flat(255))), 1, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(NativeTabBarBackdrop.luminance(of: flat(0))), 0, accuracy: 0.01)
+        XCTAssertEqual(NativeTabBarBackdrop.style(forLuminance: 1), .light)
+        XCTAssertEqual(NativeTabBarBackdrop.style(forLuminance: 0), .dark)
+        // Inside the hysteresis band the current style stays.
+        XCTAssertEqual(NativeTabBarBackdrop.style(forLuminance: 0.19, current: .dark), .dark)
+        XCTAssertEqual(NativeTabBarBackdrop.style(forLuminance: 0.17, current: .light), .light)
+    }
+
+    func testTheBarTakesTheBackdropStyleAndTheSystemInkWhenItCrossesTheWebScheme() throws {
+        let web = NativeTabInkColors(selected: BurrowColor.primary.uiColor, unselected: BurrowColor.muted.uiColor)
+        let same = NativeTabBarBackdrop.adapted(web, webStyle: .light, backdrop: .light)
+        XCTAssertEqual(same.ink, web)
+        XCTAssertEqual(same.style, .light)
+        let unsampled = NativeTabBarBackdrop.adapted(web, webStyle: .dark, backdrop: nil)
+        XCTAssertEqual(unsampled.ink, web)
+        XCTAssertEqual(unsampled.style, .dark)
+        let crossed = NativeTabBarBackdrop.adapted(web, webStyle: .dark, backdrop: .light)
+        XCTAssertEqual(crossed.style, .light)
+        XCTAssertEqual(crossed.ink.selected, .label)
+        XCTAssertEqual(crossed.ink.unselected, .label)
+
+        let parent = UIViewController()
+        let host = StandaloneTabBarHost()
+        host.install(in: parent)
+        host.render(state(["items": five, "visible": true, "ink": ["selected": "#f47721ff", "unselected": "#eeeff1ff"], "scheme": "dark"]))
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .dark)
+        host.applyBackdrop(.light)
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .light)
+        XCTAssertEqual(host.bar.tintColor, .label)
+        host.applyBackdrop(nil)
+        XCTAssertEqual(host.bar.overrideUserInterfaceStyle, .dark)
+        XCTAssertEqual(rgba(host.bar.tintColor), [0xf4, 0x77, 0x21, 0xff])
+    }
+
     func testStateStartsHiddenWithNoItemsAndNoBadge() {
         let start = NativeTabBarState()
         XCTAssertFalse(start.visible)

@@ -165,13 +165,16 @@ final class TabBarUITests: XCTestCase {
         shot("restyle-\(appearance)-tasks")
 
         let other = appearance == "dark" ? "light" : "dark"
+        // The bar follows the content behind it, which is still the page's
+        // own ground: the style stays, and the crossed web ink gives way to
+        // the system label ink.
         send(other == "dark" ? "Ink dark" : "Ink light", app)
-        rendered(["ink=\(inks[other]!)", "style=\(other)"], app)
+        rendered(["style=\(appearance)"], app)
         sleep(1)
         shot("restyle-\(appearance)-then-\(other)")
         send("Ink malformed", app)
         sleep(2)
-        rendered(["ink=\(inks[other]!)", "style=\(other)"], app)
+        rendered(["style=\(appearance)"], app)
 
         // Last, so the screenshots above exist whatever it says: iOS drew the
         // per-item font (rung 26 rule zero: no UITabBarAppearance on 26+).
@@ -313,6 +316,9 @@ final class TabBarUITests: XCTestCase {
         app.webViews.links["Backdrop \(colour)"].tap()
         XCTAssertTrue(app.webViews.staticTexts["mode: buttons backdrop=\(colour)"].waitForExistence(timeout: 10))
         XCTAssertTrue(bar.waitForExistence(timeout: 10))
+        // Option 1 (task 01a174e8 stage 3): the bar takes the style of the
+        // content behind it, whatever the page's scheme.
+        rendered(["style=\(colour == "white" ? "light" : "dark")"], app)
     }
 
     /// Selects `selected`, screenshots the bar and measures every item:

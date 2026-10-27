@@ -203,6 +203,70 @@ struct NativeTabBarState: Equatable {
     func isReselect(_ key: String) -> Bool { key == selected }
 }
 
+/// Task 01a174e8 stage 3, option 1: the bar adapts to the content behind it,
+/// the way Apple's own bars do. The host samples the web content under the
+/// bar; the bar takes the interface style that matches it (a light backdrop
+/// gets light glass and dark ink, a dark one dark glass and light ink), so
+/// the crossed cases (light ink on a light backdrop, dark ink on a dark one)
+/// cannot happen.
+enum NativeTabBarBackdrop {
+    /// The relative luminance where black and white ink contrast equally
+    /// (sqrt(1.05 * 0.05) - 0.05).
+    static let crossover = 0.179
+    /// How far past the crossover the backdrop must go to flip the style, so
+    /// a backdrop sitting on it does not flap.
+    static let hysteresis = 0.03
+
+    /// The style for a backdrop of this luminance; `current` is kept inside
+    /// the hysteresis band.
+    static func style(forLuminance luminance: Double, current: UIUserInterfaceStyle? = nil) -> UIUserInterfaceStyle {
+        if luminance > crossover + hysteresis { return .light }
+        if luminance < crossover - hysteresis { return .dark }
+        return current ?? (luminance > crossover ? .light : .dark)
+    }
+
+    /// The mean WCAG relative luminance (0...1) of an image, nil if it
+    /// cannot be read.
+    static func luminance(of image: CGImage) -> Double? {
+        let side = 8
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                let context = CGContext(
+                    data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                    space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return nil }
+        func linear(_ byte: UInt8) -> Double {
+            let value = Double(byte) / 255
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        var total = 0.0
+        for index in 0..<(side * side) {
+            let base = index * 4
+            total += 0.2126 * linear(pixels[base]) + 0.7152 * linear(pixels[base + 1]) + 0.0722 * linear(pixels[base + 2])
+        }
+        return total / Double(side * side)
+    }
+
+    /// The inks and style the bar paints. With no sample yet, or a backdrop
+    /// matching the web's scheme, the web's own inks on the web's style. When
+    /// the backdrop is the opposite of the web's scheme the web's inks would
+    /// sit on glass of the wrong lightness, so the bar takes the backdrop's
+    /// style and the system label ink, which adapts with it.
+    static func adapted(
+        _ web: NativeTabInkColors, webStyle: UIUserInterfaceStyle, backdrop: UIUserInterfaceStyle?
+    ) -> (ink: NativeTabInkColors, style: UIUserInterfaceStyle) {
+        guard let backdrop else { return (web, webStyle) }
+        if backdrop == webStyle { return (web, webStyle) }
+        return (NativeTabInkColors(selected: .label, unselected: .label), backdrop)
+    }
+}
+
 /// The bar's material. iOS 26+ draws Liquid Glass when nothing is set. On
 /// iOS 17-25 a bar with no tracked scroll view would use its transparent
 /// scroll-edge appearance, so both appearances get the system DEFAULT
@@ -237,6 +301,9 @@ protocol NativeTabBarHosting: AnyObject {
     var onTap: ((String) -> Void)? { get set }
     func install(in parent: UIViewController)
     func render(_ state: NativeTabBarState)
+    /// The style of the content behind the bar (nil: not sampled); the bar
+    /// takes it over the web's scheme.
+    func applyBackdrop(_ style: UIUserInterfaceStyle?)
 }
 
 @MainActor
@@ -304,6 +371,8 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     /// Where the bar is heading; a hide finishing after a newer show does
     /// not hide it.
     private var shownTarget = false
+    /// The style of the web content under the bar, once sampled.
+    private(set) var backdropStyle: UIUserInterfaceStyle?
 
     func install(in parent: UIViewController) {
         bar.items = []
@@ -333,13 +402,24 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
             bar.setItems(tabs.enumerated().map { NativeTabBarFactory.item($1, index: $0, compatibleWith: traits) }, animated: false)
         }
         ink = ink.applying(state.ink)
-        NativeTabBarFactory.paint(bar, ink: ink, style: state.interfaceStyle)
+        repaint()
         let index = state.selected.flatMap { renderedKeys.firstIndex(of: $0) }
         bar.selectedItem = index.flatMap { bar.items?[$0] }
         for (key, item) in zip(renderedKeys, bar.items ?? []) {
             item.badgeValue = NativeTabBarFactory.badge(for: key, state)
         }
         setShown(state.shown)
+    }
+
+    func applyBackdrop(_ style: UIUserInterfaceStyle?) {
+        guard style != backdropStyle else { return }
+        backdropStyle = style
+        repaint()
+    }
+
+    private func repaint() {
+        let adapted = NativeTabBarBackdrop.adapted(ink, webStyle: state.interfaceStyle, backdrop: backdropStyle)
+        NativeTabBarFactory.paint(bar, ink: adapted.ink, style: adapted.style)
     }
 
     /// Every label at the font for the bar's current content size.
