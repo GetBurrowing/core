@@ -1,0 +1,11 @@
+{
+  "artifact_version": "headline-review/1",
+  "upstream_repository": "JackEFoster/htc-clip-tool",
+  "upstream_commit": "58960577337d5682761e1538ff4365d4ba0b4e18",
+  "patch_file": "htc-headline-review-v1.patch",
+  "patch_sha256": "28572f94b1c8d04e9fade7b307c1e9db43f26755c31e459f5c0f4302c45daa8e",
+  "required_capability": {"headline_review": 1},
+  "canonical_runner": "burrow-clip-runner",
+  "runner_helper_version_at_contract_definition": "0.3.0",
+  "runner_helper_sha256": "c5a44bfc2399f819e98d63faf18742288bd4b5b2f9e7d9b0da989eb6f5b4f359"
+}
