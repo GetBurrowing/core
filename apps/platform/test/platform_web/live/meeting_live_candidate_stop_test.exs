@@ -268,7 +268,8 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
 
       assert html =~ "already went ahead"
       # The task really does exist, so the message is true.
-      assert [_task] = tasks_for(meeting.project_id)
+      assert tasks_for(meeting.project_id) == []
+      assert Repo.get(Platform.Chat.Canvas, reload!(candidate).canvas_id)
     end
 
     test "no rail at all when nothing is counting down", %{conn: conn, meeting: meeting} do
