@@ -46,7 +46,7 @@ defmodule PlatformWeb.AgentConfig.SessionStrip do
       aria-live="polite"
     >
       <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div class="min-w-0 flex-1">
+        <div class="min-w-48 flex-1">
           <p :if={@s.phase == :restarting} id={"#{@id}-restarting"} class="flex items-center gap-2">
             <span class="loading loading-spinner loading-xs text-base-content" aria-hidden="true">
             </span>
