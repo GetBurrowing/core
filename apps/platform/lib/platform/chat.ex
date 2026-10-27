@@ -6970,7 +6970,12 @@ defmodule Platform.Chat do
                # The worker may wait for a busy router; the LiveView never does.
                # A timed-out request can still dispatch, so do not retry it.
                {:ok, _decisions} =
-                 Platform.Chat.AttentionRouter.route_attention(message, added_ids, writer, :infinity)
+                 Platform.Chat.AttentionRouter.route_attention(
+                   message,
+                   added_ids,
+                   writer,
+                   :infinity
+                 )
              end)
            end) do
         {:ok, _pid} -> :ok

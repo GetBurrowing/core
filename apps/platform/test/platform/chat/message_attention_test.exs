@@ -197,10 +197,13 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       try do
         started = System.monotonic_time(:millisecond)
+
         assert {:ok, %{added: [_, _]}} =
                  Chat.add_message_attention(actor(alice), space.id, message.id, [
-                   zip.participant_id, bob.participant_id
+                   zip.participant_id,
+                   bob.participant_id
                  ])
+
         assert System.monotonic_time(:millisecond) - started < 1_000
         assert length(rows(message.id)) == 2
         assert length(inbox_rows(bob_user.id)) == 1
@@ -212,7 +215,9 @@ defmodule Platform.Chat.MessageAttentionTest do
         zip_id = zip.id
         message_id = message.id
         assert_receive {:attention_needed, %{participant_id: ^zip_id, message_id: ^message_id}}
-        refute_receive {:attention_needed, %{participant_id: ^zip_id, message_id: ^message_id}}, 100
+
+        refute_receive {:attention_needed, %{participant_id: ^zip_id, message_id: ^message_id}},
+                       100
       after
         :sys.resume(router)
       end
@@ -227,22 +232,27 @@ defmodule Platform.Chat.MessageAttentionTest do
       router = Process.whereis(AttentionRouter)
       :ok = :sys.suspend(router)
 
-      log = ExUnit.CaptureLog.capture_log(fn ->
-        try do
-          assert {:ok, %{added: [_]}} =
-                   Chat.add_message_attention(actor(alice), space.id, message.id, [zip.participant_id])
-          assert_eventually(fn ->
-            {:messages, messages} = Process.info(router, :messages)
-            Enum.any?(messages, &match?({:"$gen_call", _, {:route_attention, _, _}}, &1))
-          end)
-          :ok = :sys.terminate(router, :normal)
-          assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
-          assert [%MessageAttention{}] = rows(message.id)
-          assert_receive {:message_attention_changed, _}
-        after
-          if Process.alive?(router), do: :sys.resume(router)
-        end
-      end)
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          try do
+            assert {:ok, %{added: [_]}} =
+                     Chat.add_message_attention(actor(alice), space.id, message.id, [
+                       zip.participant_id
+                     ])
+
+            assert_eventually(fn ->
+              {:messages, messages} = Process.info(router, :messages)
+              Enum.any?(messages, &match?({:"$gen_call", _, {:route_attention, _, _}}, &1))
+            end)
+
+            :ok = :sys.terminate(router, :normal)
+            assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+            assert [%MessageAttention{}] = rows(message.id)
+            assert_receive {:message_attention_changed, _}
+          after
+            if Process.alive?(router), do: :sys.resume(router)
+          end
+        end)
 
       assert log =~ "add_message_attention routing worker failed"
       assert log =~ "message=#{message.id} space=#{space.id} recipients=#{zip.id}"
