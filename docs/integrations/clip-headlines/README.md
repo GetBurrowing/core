@@ -199,3 +199,42 @@ Neither was suppressed or counted as a pass. Final helper and video digests,
 commands, mutation dispositions and fixture limits are pinned in artifact.json.
 The real fixture also seeds a saved `caption_style = "none"`; explicit enabled
 finalize captions must override it for the changed burn to appear.
+
+## Review bay integration (stage 3)
+
+The single **Headline** input and **Render headline** action are in the existing
+Social Clips review bay. They require the same fresh human approver check as
+other review writes. The form sends its displayed immutable `base_render_id`;
+the server never substitutes a fresh base for a stale submitted form.
+`ClipJobs.enqueue_fix` locks the clip and resolves that version in the org and
+profile, preserving source/candidate, snapped bounds, look and caption fixes.
+Its internal `edit_headline` operation becomes `payload.headline =
+{"consumer":"edit","requested_headline":"<human text>"}`, with no `fix`
+operation: canonical helper 0.4.0 recognizes this edit boundary and skips
+generation. Exact human input is retained in the new immutable snapshot even
+when the local runner returns `title: null`. Empty or multiline inputs are
+rejected. Queueing and failure leave the prior playable video intact.
+
+Both episode task `01a17e37-97c2` and regenerate task `01a17e37-836f` use helper
+0.4.0: new_clip automatically selects consumer episode;
+`fix.operation = regenerate_headline` selects consumer regenerate. The private
+agent loop resolves `context.headline_voice = {revision, direction}` and
+`context.base_render_id` from the selected immutable snapshot. No transcript,
+generated headline or voice direction is shipped through MCP. Missing context
+is a visible runner failure, never a default show identity or voice policy.
+
+The review input displays only privacy-permitted stored text: human-authored
+edits or metadata the runner was permitted to export. Local generated headlines
+remain absent from its completion payload, snapshot and input; the burn is
+visible in the uploaded video. Error UI exposes a fixed allowlist of stable
+headline codes with a generic fallback, never raw runner error text. Errors
+survive reload through persisted job status; users can retry a failed attempt.
+No approval, schedule or publish is performed by a headline edit.
+
+This branch adopts the sibling's immutable ClipVersions and typed-fix commits
+through `f13c6af5`; it adds no competing store or migration. `selected_render`
+is the bay's immutable version assign (latest on open/promotion); the sibling
+version selector must reuse it for the hidden base ID and headline value. A
+historical base is refused by the shared enqueue guard once a newer revision
+has been promoted. Existing title metadata editing remains distinct from the
+one headline render input. No timeline, keyframes or canvas editor was added.
