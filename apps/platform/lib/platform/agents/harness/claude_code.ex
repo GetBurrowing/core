@@ -41,6 +41,12 @@ defmodule Platform.Agents.Harness.ClaudeCode do
   def instructions_path, do: "CLAUDE.md"
 
   @impl true
+  def settings_path, do: @settings
+
+  @impl true
+  def settings_seed, do: "{}"
+
+  @impl true
   def known_paths do
     [
       {"CLAUDE.md", :plain},

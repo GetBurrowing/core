@@ -75,7 +75,8 @@ defmodule Platform.Agents.NativeAgents do
 
   Seeds the agent's files in the same transaction: `CLAUDE.md` (Claude Code)
   or `AGENTS.md` (Codex) from `identity_template/2`, and
-  `.claude/settings.json` as `{}`.
+  the harness's settings file (`.claude/settings.json` as `{}`, or
+  `.codex/config.toml`).
 
   Returns `{:ok, agent, runtime}`. The raw runtime token is discarded, never
   returned or logged.
@@ -215,8 +216,22 @@ defmodule Platform.Agents.NativeAgents do
     end
   end
 
-  @doc "The settings file seeded for every native agent."
-  def settings_key, do: ".claude/settings.json"
+  @doc """
+  The settings file a harness reads, from its adapter (`.claude/settings.json`
+  for Claude Code, `.codex/config.toml` for Codex), or `:unsupported`.
+  """
+  @spec settings_key(String.t() | nil) :: String.t() | :unsupported
+  def settings_key(harness) do
+    case Platform.Agents.Harness.adapter_for(harness) do
+      {:ok, adapter} -> adapter.settings_path()
+      :unsupported -> :unsupported
+    end
+  end
+
+  defp settings_seed(harness) do
+    {:ok, adapter} = Platform.Agents.Harness.adapter_for(harness)
+    adapter.settings_seed()
+  end
 
   @doc """
   The identity file a new native agent starts with. It tells the agent what
@@ -395,7 +410,7 @@ defmodule Platform.Agents.NativeAgents do
   defp seed_files(%Agent{id: id, name: name}, harness) do
     seeds = [
       {instructions_key(harness), identity_template(name, harness)},
-      {settings_key(), "{}"}
+      {settings_key(harness), settings_seed(harness)}
     ]
 
     Enum.reduce_while(seeds, :ok, fn {key, content}, :ok ->

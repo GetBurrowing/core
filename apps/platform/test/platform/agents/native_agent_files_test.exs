@@ -113,7 +113,15 @@ defmodule Platform.Agents.NativeAgentFilesTest do
       assert %WorkspaceFile{content: agents_md} = file(agent, "AGENTS.md")
       assert agents_md =~ "Codex CLI"
       assert is_nil(file(agent, "CLAUDE.md"))
-      assert %WorkspaceFile{content: "{}"} = file(agent, ".claude/settings.json")
+      assert %WorkspaceFile{content: "# Codex settings" <> _} = file(agent, ".codex/config.toml")
+      assert is_nil(file(agent, ".claude/settings.json"))
+    end
+
+    test "settings_key/1 delegates to the adapter" do
+      assert NativeAgents.settings_key("claude_code") == ".claude/settings.json"
+      assert NativeAgents.settings_key("codex") == ".codex/config.toml"
+      assert NativeAgents.settings_key("hermes") == :unsupported
+      assert NativeAgents.settings_key(nil) == :unsupported
     end
   end
 

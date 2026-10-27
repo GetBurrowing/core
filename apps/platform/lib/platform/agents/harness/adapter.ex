@@ -16,6 +16,9 @@ defmodule Platform.Agents.Harness.Adapter do
   @callback concepts() :: [atom()]
   @callback known_paths() :: [{String.t(), tag()}]
   @callback instructions_path() :: String.t()
+  @callback settings_path() :: String.t()
+  @doc "The non-empty content a new native agent's settings file starts with."
+  @callback settings_seed() :: binary()
   @callback render(Config.t()) :: [{String.t(), binary()}]
   @callback parse([{String.t(), binary()}]) :: {:ok, Config.t()} | {:error, term()}
   @callback redact(String.t(), binary()) :: {binary(), [String.t()]}

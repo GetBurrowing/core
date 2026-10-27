@@ -63,6 +63,12 @@ defmodule Platform.Agents.Harness.Codex do
   def instructions_path, do: "AGENTS.md"
 
   @impl true
+  def settings_path, do: @config
+
+  @impl true
+  def settings_seed, do: "# Codex settings for this agent.\n"
+
+  @impl true
   def known_paths do
     [
       {"AGENTS.md", :plain},
