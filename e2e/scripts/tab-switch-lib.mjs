@@ -152,8 +152,57 @@ export function deflateEstimateNoTakeover(payloads) {
  * bytes: WebSocket framing (and deflate, once negotiated) included, TCP/IP
  * headers not.
  */
-export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPort }) {
+/**
+ * A one-direction link shaper: serialization at `bps` bits/s (a shared FIFO,
+ * so back-to-back chunks queue behind each other) plus a fixed one-way delay.
+ * deliver() runs at (queue-start + bytes/bps + owdMs). bps = 0 means no
+ * bandwidth cap. Ordering is preserved because departures are monotone and
+ * the one-way delay is constant. Not modelled: TCP slow start, loss.
+ * The proxy shapes only the /live websocket connection: page and asset loads
+ * (multi-MB unminified dev JS) would otherwise hold the pipe and push
+ * LiveView onto long-poll, which is a fault of the rig, not a tab switch.
+ */
+export function makeLink({ bps = 0, owdMs = 0 } = {}) {
+  let free = 0;
+  // A single ordered queue drained by one timer. Separate setTimeout calls
+  // can fire out of order when their delays differ by under a millisecond
+  // (Node truncates them), which reorders bytes on a TCP stream.
+  const queue = [];
+  let timer = null;
+  const pump = () => {
+    timer = null;
+    const now = performance.now();
+    while (queue.length && queue[0].at <= now) queue.shift().deliver();
+    if (queue.length) timer = setTimeout(pump, Math.max(0, queue[0].at - performance.now()));
+  };
+  return {
+    send(bytes, deliver) {
+      const now = performance.now();
+      const start = Math.max(now, free);
+      free = start + (bps ? (bytes * 8 * 1000) / bps : 0);
+      const at = free + owdMs;
+      queue.push({ at, deliver });
+      if (timer == null) timer = setTimeout(pump, Math.max(0, at - now));
+      return at - now;
+    },
+  };
+}
+
+/** Chrome's CDP Network.emulateNetworkConditions params for a profile. */
+export function cdpConditions({ downBps, upBps, rttMs }) {
+  return { offline: false, latency: rttMs, downloadThroughput: downBps / 8, uploadThroughput: upBps / 8 };
+}
+
+export const PROFILES = {
+  "4g": { downBps: 9_000_000, upBps: 1_500_000, rttMs: 85 },
+};
+
+export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPort, shape = null }) {
   const log = [];
+  // One shared link per direction: every connection competes for the same
+  // pipe, as on a real access link.
+  const downLink = shape ? makeLink({ bps: shape.downBps, owdMs: shape.rttMs / 2 }) : null;
+  const upLink = shape ? makeLink({ bps: shape.upBps, owdMs: shape.rttMs / 2 }) : null;
   const conns = new Map();
   let nextId = 1;
 
@@ -170,8 +219,15 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
         info.ws = /^GET \/live\/websocket/.test(head) && /upgrade:\s*websocket/i.test(head);
         info.deflateOffered = /sec-websocket-extensions:[^\r\n]*permessage-deflate/i.test(head);
       }
-      log.push({ conn: id, dir: "up", bytes: chunk.length, t: performance.now() });
-      upstream.write(chunk);
+      if (upLink && info.ws) {
+        upLink.send(chunk.length, () => {
+          log.push({ conn: id, dir: "up", bytes: chunk.length, t: performance.now() });
+          upstream.write(chunk);
+        });
+      } else {
+        log.push({ conn: id, dir: "up", bytes: chunk.length, t: performance.now() });
+        upstream.write(chunk);
+      }
     });
     upstream.on("data", (chunk) => {
       if (info.ws && info.upgradeStatus === undefined) {
@@ -181,8 +237,17 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
           info.deflateAccepted = /sec-websocket-extensions:[^\r\n]*permessage-deflate/i.test(head);
         }
       }
-      log.push({ conn: id, dir: "down", bytes: chunk.length, t: performance.now() });
-      client.write(chunk);
+      // Shaped: the byte is logged when it reaches the client, so a window
+      // sum is what the browser had received by then.
+      if (downLink && info.ws) {
+        downLink.send(chunk.length, () => {
+          log.push({ conn: id, dir: "down", bytes: chunk.length, t: performance.now() });
+          if (!client.destroyed) client.write(chunk);
+        });
+      } else {
+        log.push({ conn: id, dir: "down", bytes: chunk.length, t: performance.now() });
+        client.write(chunk);
+      }
     });
     const close = () => {
       client.destroy();
@@ -219,6 +284,45 @@ export function sumWindow(log, conns, t0, t1, dir = "down", wsOnly = true) {
     total += e.bytes;
   }
   return total;
+}
+
+/**
+ * Sum of main-thread trace event durations by name. The main thread is the
+ * pid:tid with the most RunTask time.
+
+// Events nest (FunctionCall inside EventDispatch inside RunTask), so the
+// names are NOT additive; each is that event type's own total.
+export function traceBreakdown(events) {
+  const tasks = new Map();
+  for (const e of events) if (e.name === "RunTask" && e.ph === "X") tasks.set(`${e.pid}:${e.tid}`, (tasks.get(`${e.pid}:${e.tid}`) || 0) + e.dur);
+  const main = [...tasks.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const out = {};
+  for (const e of events) {
+    if (e.ph !== "X" || `${e.pid}:${e.tid}` !== main) continue;
+    out[e.name] = (out[e.name] || 0) + e.dur / 1000;
+  }
+  const keep = ["RunTask", "EventDispatch", "FunctionCall", "EvaluateScript", "v8.compile", "TimerFire", "FireAnimationFrame", "UpdateLayoutTree", "Layout", "PrePaint", "Paint", "Layerize", "Commit", "ParseHTML", "MinorGC", "MajorGC", "V8.GC_MC_BACKGROUND_MARKING"];
+  return Object.fromEntries(keep.filter((k) => out[k] != null).map((k) => [k, out[k]]));
+}
+
+
+/**
+ * Sum of main-thread trace event durations by name, in ms. The main thread is
+ * the pid:tid with the most RunTask time. Events nest (FunctionCall inside
+ * EventDispatch inside RunTask), so the names are NOT additive: each is that
+ * event type's own total.
+ */
+export function traceBreakdown(events) {
+  const tasks = new Map();
+  for (const e of events) if (e.name === "RunTask" && e.ph === "X") tasks.set(`${e.pid}:${e.tid}`, (tasks.get(`${e.pid}:${e.tid}`) || 0) + e.dur);
+  const main = [...tasks.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const out = {};
+  for (const e of events) {
+    if (e.ph !== "X" || `${e.pid}:${e.tid}` !== main) continue;
+    out[e.name] = (out[e.name] || 0) + e.dur / 1000;
+  }
+  const keep = ["RunTask", "EventDispatch", "FunctionCall", "EvaluateScript", "v8.compile", "TimerFire", "FireAnimationFrame", "UpdateLayoutTree", "Layout", "PrePaint", "Paint", "Layerize", "Commit", "ParseHTML", "MinorGC", "MajorGC"];
+  return Object.fromEntries(keep.filter((k) => out[k] != null).map((k) => [k, out[k]]));
 }
 
 // ── Chrome ────────────────────────────────────────────────────────────────

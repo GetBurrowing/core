@@ -14,6 +14,10 @@ import {
   deflateEstimateNoTakeover,
   startByteProxy,
   sumWindow,
+  makeLink,
+  cdpConditions,
+  PROFILES,
+  traceBreakdown,
 } from "./tab-switch-lib.mjs";
 
 test("percentile is nearest-rank and ignores non-numbers", () => {
@@ -157,4 +161,100 @@ test("startByteProxy forwards bytes both ways and tags the LiveView websocket", 
 
   await proxy.close();
   await new Promise((r) => upstream.close(r));
+});
+
+test("makeLink serializes at the cap and adds the one-way delay, in order", async () => {
+  // 800 kbit/s = 100 B/ms; 2000 B takes 20 ms on the wire. owd 30 ms.
+  const link = makeLink({ bps: 800_000, owdMs: 30 });
+  const t0 = performance.now();
+  const got = [];
+  const done = new Promise((resolve) => {
+    link.send(2000, () => got.push(["a", performance.now() - t0]));
+    link.send(2000, () => {
+      got.push(["b", performance.now() - t0]);
+      resolve();
+    });
+  });
+  await done;
+  assert.deepEqual(got.map((g) => g[0]), ["a", "b"]);
+  // a: 20 + 30 = 50 ms; b queues behind a: 40 + 30 = 70 ms.
+  assert.ok(got[0][1] >= 48 && got[0][1] < 80, `a at ${got[0][1]}`);
+  assert.ok(got[1][1] >= 68 && got[1][1] < 100, `b at ${got[1][1]}`);
+  assert.ok(got[1][1] - got[0][1] >= 15, "second chunk waited behind the first");
+});
+
+test("cdpConditions converts bits/s to CDP bytes/s and RTT to latency", () => {
+  assert.deepEqual(cdpConditions(PROFILES["4g"]), {
+    offline: false,
+    latency: 85,
+    downloadThroughput: 1_125_000,
+    uploadThroughput: 187_500,
+  });
+});
+
+test("a shaped proxy delays the websocket connection and counts delivered bytes", async () => {
+  const REQ = "GET /live/websocket HTTP/1.1\r\nUpgrade: websocket\r\n\r\n";
+  const echo = net.createServer((c) => c.on("data", (d) => c.write(d)));
+  await new Promise((r) => echo.listen(0, "127.0.0.1", r));
+  const proxy = await startByteProxy({
+    listenPort: 0,
+    targetPort: echo.address().port,
+    shape: { downBps: 8_000_000, upBps: 8_000_000, rttMs: 100 },
+  });
+  const t0 = performance.now();
+  const c = net.connect(proxy.port, "127.0.0.1");
+  const got = await new Promise((resolve) => {
+    c.write(REQ);
+    c.once("data", (d) => resolve({ d: d.toString(), ms: performance.now() - t0 }));
+  });
+  assert.equal(got.d, REQ);
+  assert.ok(got.ms >= 95, `round trip ${got.ms} ms should carry the 100 ms RTT`);
+  assert.equal(proxy.log.filter((e) => e.dir === "down").reduce((s, e) => s + e.bytes, 0), REQ.length);
+  c.destroy();
+  await proxy.close();
+  await new Promise((r) => echo.close(r));
+});
+
+test("traceBreakdown sums durations on the busiest thread only, in ms", () => {
+  const ev = (pid, tid, name, dur) => ({ pid, tid, name, dur, ph: "X" });
+  const out = traceBreakdown([
+    ev(1, 1, "RunTask", 50_000),
+    ev(1, 1, "Layout", 8_000),
+    ev(1, 1, "Layout", 2_000),
+    ev(1, 1, "FunctionCall", 30_000),
+    ev(1, 2, "RunTask", 1_000),
+    ev(1, 2, "Layout", 99_000),
+    { pid: 1, tid: 1, name: "Layout", ph: "B" },
+  ]);
+  assert.deepEqual(out, { RunTask: 50, FunctionCall: 30, Layout: 10 });
+});
+
+test("a shaped proxy leaves non-websocket connections unshaped", async () => {
+  const echo = net.createServer((c) => c.on("data", (d) => c.write(d)));
+  await new Promise((r) => echo.listen(0, "127.0.0.1", r));
+  const proxy = await startByteProxy({
+    listenPort: 0,
+    targetPort: echo.address().port,
+    shape: { downBps: 8_000_000, upBps: 8_000_000, rttMs: 400 },
+  });
+  const t0 = performance.now();
+  const c = net.connect(proxy.port, "127.0.0.1");
+  const ms = await new Promise((resolve) => {
+    c.write("GET /assets/app.js HTTP/1.1\r\n\r\n");
+    c.once("data", () => resolve(performance.now() - t0));
+  });
+  assert.ok(ms < 150, `asset connection took ${ms} ms despite the 400 ms RTT`);
+  c.destroy();
+  await proxy.close();
+  await new Promise((r) => echo.close(r));
+});
+
+test("makeLink never reorders chunks queued within the same millisecond", async () => {
+  const link = makeLink({ bps: 0, owdMs: 20 });
+  const got = [];
+  const done = new Promise((resolve) => {
+    for (let i = 0; i < 200; i++) link.send(1, () => { got.push(i); if (got.length === 200) resolve(); });
+  });
+  await done;
+  assert.deepEqual(got, [...Array(200).keys()]);
 });

@@ -48,6 +48,9 @@ import {
   deflateEstimate,
   parseFrame,
   summarize,
+  PROFILES,
+  cdpConditions,
+  traceBreakdown,
 } from "./tab-switch-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -84,12 +87,25 @@ function parseArgs(argv) {
       case "--label": a.label = v(); break;
       case "--tasks-scenario": a.tasksScenario = v(); break;
       case "--no-proxy": a.proxy = false; break;
+      // --throttle proxy:4g shapes the byte proxy (bandwidth + RTT, both
+      // directions, shared pipe); --throttle cdp:4g uses CDP
+      // Network.emulateNetworkConditions. Chrome's emulation may not touch
+      // WebSocket frames; --throttle-check reports whether it did.
+      case "--throttle": a.throttle = v(); break;
+      case "--trace": a.trace = true; break;
       case "--server-log-level": a.serverLogLevel = v(); break;
       case "--headed": a.headed = true; break;
       default: throw new Error(`unknown argument ${k}`);
     }
   }
   if (!["debug", "info", "warning", "error"].includes(a.serverLogLevel)) throw new Error("bad --server-log-level");
+  if (a.throttle) {
+    const [mode, prof] = a.throttle.split(":");
+    if (!["proxy", "cdp"].includes(mode) || !PROFILES[prof]) throw new Error("bad --throttle (proxy:4g | cdp:4g)");
+    a.throttleMode = mode;
+    a.throttleProfile = PROFILES[prof];
+    if (mode === "proxy" && a.proxy === false) throw new Error("--throttle proxy needs the proxy");
+  }
   if (!a.baseUrl) throw new Error("--base-url is required");
   if (!a.out) throw new Error("--out is required");
   if (!a.loginAs && !a.authState) throw new Error("--login-as (local /dev/login) or --auth-state is required");
@@ -259,6 +275,25 @@ async function keystroke(page, probe) {
   return { at: key, used: probe.name };
 }
 
+// CDP Performance.getMetrics: cumulative main-thread seconds. A tap's client
+// cost is the delta from just before the click to ready.
+async function perfMetrics(cdp) {
+  const { metrics } = await cdp.send("Performance.getMetrics");
+  const m = Object.fromEntries(metrics.map((x) => [x.name, x.value]));
+  return {
+    script: m.ScriptDuration, layout: m.LayoutDuration, style: m.RecalcStyleDuration, task: m.TaskDuration,
+    layoutCount: m.LayoutCount, styleCount: m.RecalcStyleCount, nodes: m.Nodes,
+  };
+}
+const perfDelta = (a, b) => ({
+  script_ms: (b.script - a.script) * 1000,
+  layout_ms: (b.layout - a.layout) * 1000,
+  style_ms: (b.style - a.style) * 1000,
+  task_ms: (b.task - a.task) * 1000,
+  layout_count: b.layoutCount - a.layoutCount,
+  style_count: b.styleCount - a.styleCount,
+});
+
 // ── one tab ───────────────────────────────────────────────────────────────
 
 async function measureTab(ctx, args, tab, frames, proxy) {
@@ -278,9 +313,20 @@ async function measureTab(ctx, args, tab, frames, proxy) {
     if (!link) throw new Error(`no visible navigate link for ${destHref} on ${originHref}`);
     await arm(page);
     const frameIdx = frames.length;
+    const traced = args.trace && !warmup && tab.key === "chat";
+    if (traced) await ctx.browser.startTracing(page, { categories: ["devtools.timeline", "v8.execute", "disabled-by-default-devtools.timeline"], screenshots: false });
+    const pm0 = await perfMetrics(ctx.cdp);
     const nodeT0 = performance.now();
     await link.click();
     const r = await waitReady(page, probe, 30_000);
+    const pm1 = await perfMetrics(ctx.cdp);
+    let trace = null;
+    if (traced) {
+      const buf = await ctx.browser.stopTracing();
+      const evs = JSON.parse(buf.toString("utf8")).traceEvents || [];
+      // The trace ran from just before the click to ready.
+      trace = traceBreakdown(evs.filter((e) => e.ph !== "X" || e.dur != null));
+    }
     // The byte window closes at "ready": the keystroke below sends events of
     // its own (search, typing) whose replies are not part of the switch.
     const nodeT1 = performance.now();
@@ -321,6 +367,8 @@ async function measureTab(ctx, args, tab, frames, proxy) {
       join_reply_deflate_estimate_bytes: replyEst,
       wire_down_bytes: proxy ? proxy.sum(nodeT0, nodeT1, "down") : null,
       wire_up_bytes: proxy ? proxy.sum(nodeT0, nodeT1, "up") : null,
+      client: perfDelta(pm0, pm1),
+      trace,
     };
     taps.push(tap);
     process.stderr.write(`  ${tab.key} tap ${i}${warmup ? " (warm-up)" : ""}: ${tap.tap_ms.toFixed(0)} ms, reply ${tap.join_reply_raw_bytes} B, wire ${tap.wire_down_bytes}\n`);
@@ -367,6 +415,10 @@ function summarizeTab(t) {
     window_raw_recv_bytes: pick("window_raw_recv_bytes"),
     window_deflate_estimate_bytes: pick("window_deflate_estimate_bytes"),
     wire_down_bytes: pick("wire_down_bytes"),
+    client_script_ms: summarize(measured.map((x) => x.client?.script_ms)),
+    client_layout_ms: summarize(measured.map((x) => x.client?.layout_ms)),
+    client_style_ms: summarize(measured.map((x) => x.client?.style_ms)),
+    client_task_ms: summarize(measured.map((x) => x.client?.task_ms)),
   };
   if (Array.isArray(t.server)) {
     const ms = t.server.slice(1);
@@ -400,6 +452,8 @@ async function openSession(args, baseUrl) {
   const sockets = new Map();
   const cdp = await context.newCDPSession(page);
   await cdp.send("Network.enable");
+  await cdp.send("Performance.enable");
+  if (args.throttleMode === "cdp") await cdp.send("Network.emulateNetworkConditions", cdpConditions(args.throttleProfile));
   cdp.on("Network.webSocketCreated", (e) => sockets.set(e.requestId, new URL(e.url).pathname));
   cdp.on("Network.webSocketFrameSent", (e) => {
     if (e.response.opcode === 1) frames.push({ dir: "sent", socket: sockets.get(e.requestId) || e.requestId, t: e.timestamp, wall: performance.now(), data: e.response.payloadData });
@@ -410,7 +464,7 @@ async function openSession(args, baseUrl) {
   if (args.loginAs) {
     await page.goto(`${baseUrl}/dev/login?as=${encodeURIComponent(args.loginAs)}`);
   }
-  return { chrome, browser, context, page, frames, version: chrome.version };
+  return { chrome, browser, context, page, cdp, frames, version: chrome.version };
 }
 
 async function closeSession(s) {
@@ -431,7 +485,7 @@ async function main() {
   let proxy = null;
   let baseUrl = args.baseUrl;
   if (args.proxy && target.protocol === "http:") {
-    proxy = await startByteProxy({ listenPort: 0, targetHost: "127.0.0.1", targetPort: Number(target.port || 80) });
+    proxy = await startByteProxy({ listenPort: 0, targetHost: "127.0.0.1", targetPort: Number(target.port || 80), shape: args.throttleMode === "proxy" ? args.throttleProfile : null });
     baseUrl = `http://localhost:${proxy.port}`;
   }
   const runArgs = { ...args, baseUrl };
@@ -444,6 +498,8 @@ async function main() {
     base: args.proxy ? "local dev server via byte-counting proxy" : "direct",
     viewport: args.viewport,
     taps_per_tab: args.taps,
+    throttle: args.throttle ? { mode: args.throttleMode, ...args.throttleProfile } : null,
+    load_avg_at_start: os.loadavg(),
     tasks_scenario: args.tasksScenario || null,
     server_log_level: args.probeNode ? args.serverLogLevel : null,
     machine: { platform: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0]?.model, cores: os.cpus().length, mem_gb: Math.round(os.totalmem() / 2 ** 30) },

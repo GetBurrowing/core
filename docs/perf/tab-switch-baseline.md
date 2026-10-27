@@ -370,3 +370,187 @@ Exp numbers exist only once this is merged and deployed and an account Ryan
 provided is available. The estimated-deflate column in the stage 1 table stands
 as the forecast. Nothing here used a borrowed credential, wrote to prod, or ran
 on hive.
+
+
+## Stage 3: attribution on a 4G link, recommendation, 01a166be verdict (task 01a17b00)
+
+Data: `docs/perf/tab-switch-4g.data.json` (every tap, server mounts, client
+metrics, handshake log per run). Same fixture, same machine, same harness,
+N = 10 per cell, back to back on one build; "off" is the endpoint with
+`compress: true` removed locally and restored before the commit. Chrome 156.
+
+### How the link was emulated, and what was learned about CDP
+
+The brief asked for CDP `Network.emulateNetworkConditions` at 9 Mbps down, 1.5
+Mbps up, 85 ms RTT. Both of these were run, same numbers:
+
+- **proxy (primary).** The byte proxy shapes the `/live` websocket only:
+  one shared FIFO pipe per direction, serialization at the cap, half the RTT
+  each way. Page and asset loads are not shaped; the multi-MB unminified dev
+  JS would hold the pipe and push LiveView onto long-poll (that happened in
+  the first attempt; it is a rig fault, not a tab cost). Wire bytes are logged
+  at delivery. Not modelled: TCP slow start and loss, so it is a floor for a
+  real 4G link. Helper tested in `tab-switch-lib.test.mjs` (including a
+  bug found on the way: two `setTimeout`s under a millisecond apart fired out
+  of order and corrupted the stream; the link is now one ordered queue).
+- **cdp (cross-check).** It does throttle the websocket, but **it does not
+  charge compressed bytes**: chat on/off differs by 139 ms under CDP against
+  257 ms under the proxy for the same 288 KiB difference on the wire (9 Mbps
+  predicts 256 ms), and compressed chat is 591 ms under CDP against 380 ms
+  under the proxy with the same 34 KiB on the wire. The CDP residuals track the
+  *decompressed* size over 9 Mbps (chat 313 KiB is 278 ms, tasks S2 432 KiB is
+  384 ms). That is an inference from those numbers, not something I verified in
+  Chrome. Treat CDP rows as a cross-check on direction only. They understate
+  compression's benefit.
+
+Load average at start of each run is in the data file. The compress-on runs
+started at 6 to 9 and the compress-off runs at 13 to 25, because other agents
+share this box. The chat on/off gap is nevertheless what bandwidth arithmetic
+predicts (see below), so load is not what explains it. A first off run had
+three small tabs fall back to long-poll (rig fault, discarded and re-run; it
+is `off-proxy4g-run1` in the scratch dir, not in the data file).
+
+### Per-tab attribution (proxy 4G, compress on, ms, median of 10)
+
+server = mount + handle_params from the node's telemetry. client = CDP
+`Performance.getMetrics` TaskDuration delta from just before the tap to
+ready. RTT = 85 (one round trip: the join). transfer = wire KiB over 9 Mbps.
+"sum" is those four. "gap" is tap minus sum.
+
+| tab | tap | server | client main thread | RTT | transfer (wire KiB) | sum | gap |
+|---|---|---|---|---|---|---|---|
+| chat | 380 | 80 | 139 | 85 | 30 (33.4) | 334 | +46 |
+| tasks S1 | 229 | 20 | 110 | 85 | 22 (24.7) | 237 | -8 |
+| tasks S2 | 406 | 23 | 248 | 85 | 37 (40.3) | 393 | +13 |
+| inbox | 154 | 16 | 43 | 85 | 9 (10.3) | 153 | +1 |
+| skills | 142 | 15 | 42 | 85 | 8 (9.3) | 150 | -8 |
+| settings | 144 | 12 | 45 | 85 | 10 (10.6) | 152 | -8 |
+
+The components add up within about 10 ms for five rows. **Chat does not**:
+46 ms (12 percent) is unexplained. The keystroke round trip (5 to 80 ms,
+stage 1) and the two diff frames that follow the join reply are the candidates;
+I did not isolate either, so it stays labelled unexplained.
+
+What dominates, per tab:
+
+- **Small tabs (142 to 154 ms):** the round trip (85 ms, 55 to 60 percent)
+  and a fixed ~43 ms client patch. Server 12 to 16 ms, transfer under 10 ms.
+  Nothing size-related to fix.
+- **Chat (380):** client is the largest piece (139 ms, 37 percent), then the
+  round trip, then server (80 ms; 250 queries), transfer 30 ms. Over the
+  small-tab median (144) chat carries **236 ms of excess**: about 65 ms
+  server, 97 ms client, 21 ms transfer, plus the 46 ms unexplained.
+- **Tasks S1 (229):** client 110 ms. Excess over small tabs: 85 ms.
+- **Tasks S2 (406):** client 248 ms (61 percent of the tap). Excess: 262 ms,
+  almost all client. Transfer is 37 ms once compressed.
+- **Chat client breakdown (Tracing, 6 taps, main thread):** about 145 ms of
+  tasks per tap. Style recalculation (`UpdateLayoutTree`) 64 to 70 ms, script
+  (`FunctionCall`, includes style/layout it triggers) 99 to 114 ms, layout
+  only 6 to 7 ms, paint 6 to 9 ms, HTML parse about 10 ms, 34 to 37 style
+  recalcs and 9 layouts per tap. The cost scales with how much DOM arrives,
+  not with layout.
+
+### Compression on a 4G link (the latency effect stage 2 could not show)
+
+Proxy, tap-to-interactive median, off to on:
+
+| tab | wire off to on (KiB) | tap off | tap on | change |
+|---|---|---|---|---|
+| chat | 321 to 33 | 637 | 380 | -257 |
+| tasks S1 | 199 to 25 | 397 | 229 | -168 |
+| tasks S2 | 445 to 40 | 821 | 406 | -415 |
+| inbox | 65 to 10 | 198 | 154 | -44 |
+| skills | 59 to 9 | 194 | 142 | -52 |
+| settings | 70 to 11 | 236 | 144 | -92 |
+
+At 9 Mbps 288 KiB is 256 ms; chat moved 257. Tasks S2 (400 KiB less) predicts
+364 ms and moved 415, with the off run at load 18. Compression is the largest
+single lever on this link. Without it transfer would be chat's biggest piece
+(292 ms of 637).
+
+### Recommendation: what comes next
+
+**Smaller first frame next (fewer initial messages and `assign_async` for the
+chat side panels, and a lighter first board for tasks S2). Do not start with
+sticky child LiveViews.**
+
+Threshold used: a tab is slow if its 4G tap with compression on exceeds twice
+the small-tab median (2 x 144 = 288 ms). Chat (380) and tasks S2 (406) pass
+it; tasks S1 (229) and the 11 small tabs do not. A lever is worth doing first
+if it can act on at least 100 ms of the slow tabs' excess.
+
+Why the first frame: the excess is client plus server work that scales with the
+size of the first frame (chat: 97 + 65 of 236 ms; tasks S2: about 225 of
+262 ms), and a smaller first frame also cuts the remaining transfer. That
+shares one cause with the 50-message cap and 250 queries. Style recalculation
+on chat alone is 65 to 70 ms and only shrinks if fewer nodes arrive. Sticky
+child views do not touch first visits, and they hold a LiveView process per
+tab per session; keep that for after.
+
+What the numbers do not say: how often a user returns to a tab (sticky helps
+only returns) and how much of the 236 ms a smaller frame really removes. Both
+are untested here. If after the first-frame work chat or tasks S2 is still
+above 288 ms, sticky is the next step; so it is if the target becomes the
+round-trip floor (85 of 142 to 154 ms on every small tab), which only a
+mounted-and-kept view can remove. Nothing was implemented.
+
+### 01a166be verdict (do not close; task 01a166be untouched)
+
+Measured on main (including #1341, `86620c37f`), per arrival from the busy
+channel, in every 4G run here (S1 and S2, both proxy and CDP, on and off,
+11 arrivals each): **refresh_board 1, count_by_scope 1, handle_params 1**.
+First load: S1 narrowed (`project: one`), S2 widest (`project: all`), with no
+second pass. 105 queries (S1) and 101 (S2).
+
+Chat to tasks against other tabs: loopback 127 ms (S1) and 260 ms (S2) against
+56 to 74; on the 4G link 229 ms (S1) and 406 ms (S2) against 142 to 154.
+
+**Verdict: fixed by #1341 and this work, no own fix needed.** Its hypotheses
+(repeated `refresh_board`, repeated `count_by_scope`, widest-first load
+followed by a narrowed one) are gone and the counts are exact. The residual
+tasks slowness is board size (S2 only: 248 of 406 ms is client patch of a 432
+KiB first frame), not extra loads, and the first-frame follow-up above owns
+it. No fix landed here.
+
+### Required statements
+
+**(a) The strongest claim.** "Every tab tap fully remounts the destination
+LiveView, and the first post-navigate frame is large enough that deflate
+measurably shrinks the bytes on the wire." Falsifier: wire bytes with
+compression on within 10 percent of raw for chat, or a tap that shows no new
+mount telemetry event. **Not falsified.** Chat on/raw wire is 33.4 KiB against
+321 KiB off (0.10, nowhere near the 0.9 falsifier line). Every one of the 11
+taps per cell (warm-up plus 10; 7 in the trace run) produced one new connected
+mount of the destination view: 271 of 271 across the 9 runs (4 full matrices of
+5 tabs, 4 tasks S2 runs, 1 chat trace run).
+
+**(b) Brief claims the numbers contradicted or corrected.**
+- "client = tap minus server minus transfer": the residual also contains the
+  85 ms round trip, which is not transfer bandwidth. Client was measured
+  directly and the four parts were summed instead. By the brief's formula chat's
+  client would have been 380 - 80 - 30 = 270 ms; measured main-thread time is
+  139 ms.
+- Stage 1: "most of the rest is shipping and applying the diff". On loopback,
+  client main thread is 139 of 233 ms for chat, so *applying* dominates;
+  shipping is near zero locally and becomes 30 to 290 ms only on the link.
+- Stage 2: compression latency "INCONCLUSIVE". On the shaped link it is
+  conclusive: 44 to 415 ms faster per tab, in line with bandwidth arithmetic.
+  Loopback stays inconclusive.
+- The suggested CDP throttle does not reproduce the link for a compressed
+  socket (above); the proxy shaper was used as the primary instead.
+- Stage 2: "tasks S2 not re-run". Now run (fixture reseeded with
+  `--no-project-pref`, join reply 432 KiB).
+- Stage 1 reading of the 313 KiB chat reply as mostly a server cost is wrong:
+  server is 80 of 380 ms.
+
+**(c) Exp.** **Still pending.** No account from Ryan is available to this
+stage, so no exp row was measured. The command in "Not measured yet" stands. Nothing here borrowed a
+credential, wrote to prod, ran on hive, or kept PII telemetry (the probe keeps
+module names, durations and counts; the fixture users are fake).
+
+### Limits
+
+Local dev server (code reloading, Logger at `:info`), a loaded shared box,
+proxy shaping without slow start, headless Chrome, one machine. Chat's 46 ms
+gap is unexplained. The CDP/compression behaviour is inferred. Phone viewports
+were not re-run.
