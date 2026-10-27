@@ -457,6 +457,28 @@ defmodule Platform.GameStream do
   end
 
   @doc """
+  How long the task's most recent finished build took, in milliseconds: the
+  newest ended session of the task that left `building` for `connecting` or
+  `live` (`build_ms` is set). `nil` when none did, and for a task id that is
+  not a UUID. The Building card shows it as "Last build took N min" and
+  waits for twice that before saying a build is taking longer than usual.
+  """
+  @spec last_build_ms(term()) :: pos_integer() | nil
+  def last_build_ms(task_id) do
+    if Platform.UUID.valid?(task_id) do
+      SessionRecord
+      |> where([r], r.task_id == ^task_id and not is_nil(r.build_ms) and r.build_ms > 0)
+      |> order_by([r], desc: r.ended_at, desc: r.id)
+      |> limit(1)
+      |> Repo.one()
+      |> case do
+        %SessionRecord{build_ms: ms} -> ms
+        nil -> nil
+      end
+    end
+  end
+
+  @doc """
   How many of the task's sessions ended at or after `since` (a
   `DateTime`): the Game view's "runs today" tile, with `since` 24 hours ago.
   `0` for a task id that is not a UUID.

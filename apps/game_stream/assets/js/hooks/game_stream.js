@@ -68,6 +68,7 @@
  */
 
 import { AudioPlayback, routeInboundTrack } from "./lib/game_stream_audio.js"
+import { buildFailureStep, buildTail, longerThanUsual } from "./lib/game_stream_build.js"
 import { captureReduce, initialCapture } from "./lib/game_stream_capture.js"
 import {
   InputRouter,
@@ -185,6 +186,7 @@ const GameStream = {
     this.warnMs = parseInt(d.latencyWarnMs, 10) || 50
     this.serverState = d.state || "unavailable"
     this.buildStartedAt = Date.now() - (parseInt(d.elapsedMs, 10) || 0)
+    this.lastBuildMs = parseInt(d.lastBuildMs, 10) || null
     this.attachMode = memo.mount(this.canvasId, this.nodeId, this.sessionId)
     this.viewerToken = null
     this.peerId = null
@@ -203,6 +205,8 @@ const GameStream = {
     this.controllerEl = q("[data-gs-controller]")
     this.hintEl = q("[data-gs-hint]")
     this.elapsedEl = q("[data-gs-elapsed]")
+    this.buildTitleEl = q("[data-gs-building-title]")
+    this.longerEl = q("[data-gs-longer]")
     this.stuckEl = q("[data-gs-stuck]")
     this.connectingLineEl = q("[data-gs-connecting-line]")
     this.panels = Array.from(this.el.querySelectorAll("[data-gs-panel]"))
@@ -866,8 +870,20 @@ const GameStream = {
       if (!["building", "connecting", "live"].includes(this.panel)) this.show("connecting")
       this.renderAttach()
     } else {
+      if (state === "building") this.renderBuildDetail(status.detail)
       this.show(state)
     }
+  },
+
+  // The Building card names the step the host is in: the text after the sha.
+  renderBuildDetail(detail) {
+    const node = this.buildTitleEl && this.buildTitleEl.lastChild
+    if (node && node.nodeType === 3) node.nodeValue = buildTail(detail)
+  },
+
+  // "Taking longer than usual" only after twice the last build; never without one.
+  renderLonger(now) {
+    if (this.longerEl) this.longerEl.hidden = !longerThanUsual(now - this.buildStartedAt, this.lastBuildMs)
   },
 
   refused(error) {
@@ -940,7 +956,21 @@ const GameStream = {
   setReason(state, text) {
     const panel = this.panels.find(p => p.dataset.gsPanel === state)
     const el = panel && panel.querySelector("[data-gs-reason]")
-    if (el && text) el.textContent = text
+    // A build that did not finish says so, names its step and offers Open
+    // task; a fix comes from the task branch, so Start again is hidden.
+    const step = state === "failed" ? buildFailureStep(text) : null
+    if (panel && state === "failed") {
+      const q = sel => panel.querySelector(sel)
+      const stepEl = q("[data-gs-fail-step]")
+      const nameEl = q("[data-gs-fail-step-name]")
+      const open = q("[data-gs-open-task]")
+      const restart = q("[data-gs-restart]")
+      if (stepEl) stepEl.hidden = !step
+      if (nameEl && step) nameEl.textContent = step
+      if (open) open.hidden = !step
+      if (restart) restart.hidden = !!step
+    }
+    if (el && text) el.textContent = step ? "Build didn't finish" : text
   },
 
   // ── WebRTC ────────────────────────────────────────────────────────────
@@ -1282,6 +1312,7 @@ const GameStream = {
     if (this.endBtn) this.endBtn.hidden = !RUNNING.includes(this.serverState) || playingElsewhere(panel) || this.multi
     if (panel === "building" && this.elapsedEl) {
       this.elapsedEl.textContent = formatElapsed(Date.now() - this.buildStartedAt)
+      this.renderLonger(Date.now())
     }
     this.renderStuck()
     this.renderRoster()
@@ -1440,6 +1471,7 @@ const GameStream = {
 
     if (this.panel === "building" && this.elapsedEl) {
       this.elapsedEl.textContent = formatElapsed(now - this.buildStartedAt)
+      this.renderLonger(now)
     }
 
     // Expire probes that never came back.
