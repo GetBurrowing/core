@@ -403,7 +403,7 @@ Reading it, honestly: the hosted numbers do NOT show a speed-up from this task.
 | 15 | 11019 | async | `test/platform/regression/boot_telemetry_handler_detach_audit_test.exs:312` | test sandbox-owner-chain claims in comments and docs every @known_unqualified_claims entry still carries an un |
 | 16 | 10958 | async | `test/platform/memory/memory_service_env_async_guard_test.exs:69` | test no async: true test module writes the global :memory_service env |
 | 17 | 10795 | async | `test/platform/design/subtle_text_ratchet_test.exs:192` | test the retired faint tier stays retired in lib, assets/css and assets/js |
-| 18 | 10536 | async | `test/platform/regression/lazy_html_selector_guidance_audit_test.exs:100` | test LazyHTML selector guidance every paragraph naming LazyHTML.filter also states the root-node caveat |
+| 18 | 10536 | async | `test/platform/regression/lazy_html_selector_guidance_audit_test.exs:100` | test LazyHTML selector guidance every paragraph naming LazyHTML filter also states the root-node caveat |
 | 19 | 10418 | async | `test/platform/tasks/status_writer_guard_test.exs:222` | test check C — no bulk or raw status writes against tasks no raw SQL updates the tasks table |
 | 20 | 10390 | async | `test/platform/design/text_exemption_guard_test.exs:294` | test every text-disabled and text-decorative in the tree sits where it is exempt |
 | 21 | 10230 | async | `test/platform/parallel_ui_test.exs:268` | test live tree every ledger entry is marked and every marker is registered |
