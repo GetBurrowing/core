@@ -771,6 +771,8 @@ defmodule Platform.ExtensionsTest do
       {"file_search", "files"},
       {"file_add", "files"},
       {"file_delete", "files"},
+      {"meeting_scribe_complete", "meetings"},
+      {"meeting_triage_file", "meetings"},
       {"meeting_create", "meetings"},
       {"meeting_say", "meetings"},
       {"meeting_activity_push", "meetings"},
