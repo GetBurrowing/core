@@ -43,8 +43,8 @@ defmodule BurrowRelease.MixProject do
     [
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       # `compile` first: the generator reads the configured extensions'
-      # `assets/0`. Island profiles (excalidraw, emoji) are core's and are
-      # wired for the image in stage 4.
+      # `assets/0`. Island profiles are core's and are wired for the image in
+      # stage 4.
       "assets.build": [
         "compile",
         "platform.extensions.assets --out assets/generated",
@@ -62,8 +62,7 @@ defmodule BurrowRelease.MixProject do
         "platform.extensions.assets --out assets/generated",
         "tailwind platform --minify",
         "esbuild platform --minify",
-        "esbuild excalidraw --minify",
-        "esbuild emoji --minify"
+        &build_islands/1
       ]
     ]
   end
@@ -78,5 +77,23 @@ defmodule BurrowRelease.MixProject do
         runtime_config_path: "../platform/config/runtime.exs"
       ]
     ]
+  end
+
+  # Builds every island config/config.exs retargets (all of core's), so a new
+  # core island reaches the image without anyone editing this file. Reads the
+  # loaded :esbuild config at run time, after `compile` in the alias above.
+  defp build_islands(_args) do
+    islands =
+      for {name, profile} <- Application.get_all_env(:esbuild),
+          name != :platform,
+          Keyword.keyword?(profile) and Keyword.has_key?(profile, :args),
+          do: name
+
+    if islands == [], do: Mix.raise("burrow_release: no esbuild islands configured")
+
+    for island <- islands do
+      Mix.Task.run("esbuild", [to_string(island), "--minify"])
+      Mix.Task.reenable("esbuild")
+    end
   end
 end

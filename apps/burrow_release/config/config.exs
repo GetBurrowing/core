@@ -52,9 +52,17 @@ retarget_island = fn name ->
   )
 end
 
-config :esbuild,
-  excalidraw: retarget_island.(:excalidraw),
-  emoji: retarget_island.(:emoji)
+# Every island core defines is retargeted, not a hand-kept list: the image
+# missed core's `terminal` island (task 01a17b17) for exactly that reason, so
+# prod served /assets/js/terminal_island.js as a 404. `:platform` is replaced
+# above with this host's generated entry point; `:version` is not a profile.
+island_profiles =
+  for {name, profile} <- core_esbuild,
+      name != :platform,
+      Keyword.keyword?(profile) and Keyword.has_key?(profile, :args),
+      do: {name, retarget_island.(name)}
+
+config :esbuild, island_profiles
 
 # The generated wrapper stylesheet imports core's app.css and adds each
 # module's stylesheet and Tailwind `@source`.
