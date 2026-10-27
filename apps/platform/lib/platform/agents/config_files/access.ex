@@ -5,7 +5,7 @@ defmodule Platform.Agents.ConfigFiles.Access do
   ## Native agents (install-managed)
 
   `NativeAgents.can_manage?/2`: the runtime owner OR an install root admin.
-  Root admins keep edit rights (Ryan, task 01a17b1c).
+  Root admins keep edit rights (a sponsor ruling on task 01a17b1c).
 
   ## Federated agents
 

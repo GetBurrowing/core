@@ -199,6 +199,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # scrubbed by the host, redacted again by the caller. Only a caller of
     # `recent_output/2` knows the ref.
     {"agent_host:pane:<id>", :resource},
+    # Task 01a17b1c stage 2. The same rendezvous for `AgentHost.file_read/3`:
+    # one file of one native agent's work dir, redacted by the host and again by
+    # the caller (secret files arrive as names only). Only a caller of
+    # `file_read/3` knows the ref.
+    {"agent_host:file:<id>", :resource},
     # Task 01a10322 stage 7. The same rendezvous for `AgentHost.check_auth/2`:
     # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
     # key. Only a caller of `check_auth/2` knows the ref.

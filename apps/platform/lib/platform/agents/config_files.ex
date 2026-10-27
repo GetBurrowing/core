@@ -154,7 +154,7 @@ defmodule Platform.Agents.ConfigFiles do
   end
 
   defp actor_id(%{id: id}) when is_binary(id) do
-    case Ecto.UUID.cast(id) do
+    case Platform.UUID.cast(id) do
       {:ok, uuid} -> uuid
       :error -> nil
     end

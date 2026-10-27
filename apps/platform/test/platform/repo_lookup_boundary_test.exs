@@ -143,6 +143,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_agent/1's predicate is now Platform.UUID.valid?/1, so a 16-character agent slug takes the slug branch instead of clearing a bare cast and raising against Agent's strict UUIDv7 PK. Reverting it to Ecto.UUID.cast/1 reintroduces an unclassified :ecto_uuid_cast key here AND drops this count — two failures naming this file"},
     {"platform/agents/config.ex", :get, "Agent", 1, :safe_internal,
      "reached only via fetch_agent/1's Platform.UUID.valid?/1 branch, so the value is a canonical 36-character uuid by construction; a slug goes to Platform.Agents.SlugLookup.resolve/2 (Repo.all, limit 2), which fails closed on a slug shared across workspaces (task 01a0e77c)"},
+    {"platform/agents/config_files.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "actor_id/1 only decides whether an audit row's actor_id column can hold the actor's id: Platform.UUID.cast/1 returns :error for anything that is not a canonical uuid and the row then records no actor. It does no lookup and cannot raise"},
     {"platform/agents/historian_dispatcher.ex", :get, "Agent", 1, :safe_internal,
      "agent_id comes from `Roles.agent_id_for_role(\"historian\")`, i.e. a `role_assignments.agent_id` column selected out of the DB"},
     {"platform/agents/historian_dispatcher.ex", :get_by, "Chat.Participant", 1, :safe_internal,
