@@ -213,6 +213,7 @@ defmodule Platform.MixProject do
       {:ecto_sql, "~> 3.10"},
       {:cloak_ecto, "~> 1.3"},
       {:req, "~> 0.5"},
+      {:toml, "~> 0.7"},
       {:postgrex, ">= 0.0.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},

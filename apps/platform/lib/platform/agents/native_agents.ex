@@ -203,12 +203,17 @@ defmodule Platform.Agents.NativeAgents do
   # ── Agent files (stage 5) ─────────────────────────────────────────
 
   @doc """
-  The instructions file a harness reads: `AGENTS.md` for Codex, `CLAUDE.md`
-  for Claude Code (and anything else).
+  The instructions file a harness reads, from its adapter (`AGENTS.md` for
+  Codex, `CLAUDE.md` for Claude Code). A harness with no adapter is
+  `:unsupported`; it no longer defaults to `CLAUDE.md`.
   """
-  @spec instructions_key(String.t() | nil) :: String.t()
-  def instructions_key("codex"), do: "AGENTS.md"
-  def instructions_key(_), do: "CLAUDE.md"
+  @spec instructions_key(String.t() | nil) :: String.t() | :unsupported
+  def instructions_key(harness) do
+    case Platform.Agents.Harness.adapter_for(harness) do
+      {:ok, adapter} -> adapter.instructions_path()
+      :unsupported -> :unsupported
+    end
+  end
 
   @doc "The settings file seeded for every native agent."
   def settings_key, do: ".claude/settings.json"
@@ -383,6 +388,9 @@ defmodule Platform.Agents.NativeAgents do
   @spec live?(map() | nil) :: boolean()
   def live?(%{state: state}) when state in @live_states, do: true
   def live?(_), do: false
+
+  defp seed_files(%Agent{}, harness) when harness not in ~w(claude_code codex),
+    do: {:error, {:unsupported_harness, harness}}
 
   defp seed_files(%Agent{id: id, name: name}, harness) do
     seeds = [
