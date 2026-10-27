@@ -1,0 +1,2570 @@
+{
+ "on": {
+  "label": "local-compress-on",
+  "summaries": {
+   "chat": {
+    "key": "chat",
+    "href": "/chat",
+    "origin": "/inbox",
+    "probe": "composer (#compose_text)",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 230.4500000178814,
+     "p90": 248.19999998807907
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 157.65000000596046,
+     "p90": 173.39999997615814
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 320901,
+     "p90": 320902
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 33372,
+     "p90": 33373
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 350548.5,
+     "p90": 350557
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 35608.5,
+     "p90": 35610
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 34886,
+     "p90": 34887
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ChatLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 24.3645,
+      "p90": 28.558
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 28.378,
+      "p90": 44.36
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 250,
+      "p90": 250
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "voice": {
+    "key": "voice",
+    "href": "/voice",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 56.05000001192093,
+     "p90": 63.80000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 49.95000001788139,
+     "p90": 53.39999997615814
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 66903,
+     "p90": 66905
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11988,
+     "p90": 11988
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 78262,
+     "p90": 78272
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12775,
+     "p90": 12776
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 11793,
+     "p90": 11795
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.VoiceLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 18.595,
+      "p90": 20.054
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.027,
+      "p90": 0.047
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 80,
+      "p90": 80
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "tasks": {
+    "key": "tasks",
+    "href": "/tasks",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "task search (#task-search)",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 114.7000000178814,
+     "p90": 131.60000002384186
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 87.2999999821186,
+     "p90": 92.19999998807907
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 195065,
+     "p90": 195065
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 25252,
+     "p90": 25253
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 207996,
+     "p90": 207998
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 26193,
+     "p90": 26195
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 25490.5,
+     "p90": 25493
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.TasksLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.376999999999999,
+      "p90": 20.037
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 7.744999999999999,
+      "p90": 9.802
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 105,
+      "p90": 105
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     },
+     "list_all_tasks_first": [
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      }
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "meetings": {
+    "key": "meetings",
+    "href": "/meetings",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 59.85000002384186,
+     "p90": 62.30000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 55.34999996423721,
+     "p90": 57.5
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 72922,
+     "p90": 72924
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12352,
+     "p90": 12353
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 85964,
+     "p90": 85974
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13262,
+     "p90": 13264
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 12590,
+     "p90": 12591
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.MeetingLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.372,
+      "p90": 16.481
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 2.0020000000000002,
+      "p90": 2.349
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 82,
+      "p90": 82
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "inbox": {
+    "key": "inbox",
+    "href": "/inbox",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 53.349999994039536,
+     "p90": 58.89999997615814
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 50.099999994039536,
+     "p90": 53
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 58908,
+     "p90": 58910
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10530,
+     "p90": 10531
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 70308,
+     "p90": 70318
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11332,
+     "p90": 11333
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 10665,
+     "p90": 10667
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.InboxLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 16.163,
+      "p90": 18.698
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 3.1235,
+      "p90": 4.352
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 90,
+      "p90": 90
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "files": {
+    "key": "files",
+    "href": "/files",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 59.849999994039536,
+     "p90": 71.90000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 52.75,
+     "p90": 56.90000003576279
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 80228,
+     "p90": 80230
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12456.5,
+     "p90": 12457
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 91587,
+     "p90": 91597
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13239.5,
+     "p90": 13243
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 12342,
+     "p90": 12344
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.FilesLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.954,
+      "p90": 17.032
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 2.5975,
+      "p90": 2.88
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 90,
+      "p90": 90
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "canvases": {
+    "key": "canvases",
+    "href": "/files?tab=browse&type=canvas",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 58.5,
+     "p90": 63.40000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 51.29999998211861,
+     "p90": 54.39999997615814
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 81119,
+     "p90": 81121
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12619.5,
+     "p90": 12620
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 92478,
+     "p90": 92488
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13400,
+     "p90": 13404
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 12499,
+     "p90": 12502
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.FilesLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.468499999999999,
+      "p90": 17.519
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 2.0745,
+      "p90": 2.222
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 89,
+      "p90": 89
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "skills": {
+    "key": "skills",
+    "href": "/skills",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 52.60000002384186,
+     "p90": 58.10000002384186
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 46.75,
+     "p90": 54.700000047683716
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 52859,
+     "p90": 52861
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 9533.5,
+     "p90": 9534
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 64218,
+     "p90": 64228
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10310.5,
+     "p90": 10312
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 9648.5,
+     "p90": 9649
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.SkillsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 16.761000000000003,
+      "p90": 18.992
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.0325,
+      "p90": 0.047
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "org_memory": {
+    "key": "org_memory",
+    "href": "/org_memory",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 53.150000005960464,
+     "p90": 61.80000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 45.75000002980232,
+     "p90": 55.10000002384186
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 66629,
+     "p90": 66631
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11553,
+     "p90": 11553
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 78525,
+     "p90": 78535
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12411.5,
+     "p90": 12414
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 11731.5,
+     "p90": 11734
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.OrgMemoryLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 17.055,
+      "p90": 20.428
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.033,
+      "p90": 0.034
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 76,
+      "p90": 76
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "control": {
+    "key": "control",
+    "href": "/control",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 66.40000000596046,
+     "p90": 142.89999997615814
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 56.44999998807907,
+     "p90": 138.5
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 61843,
+     "p90": 61845
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11551,
+     "p90": 11551
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 73262,
+     "p90": 73272
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12333,
+     "p90": 12333
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 11682,
+     "p90": 11683
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ControlCenterLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 22.1905,
+      "p90": 80.038
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 5.702999999999999,
+      "p90": 9.37
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 130,
+      "p90": 130
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "experiments": {
+    "key": "experiments",
+    "href": "/control/experiments",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 56.150000005960464,
+     "p90": 57.80000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 47.89999997615814,
+     "p90": 53.10000002384186
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 57780,
+     "p90": 57782
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10669,
+     "p90": 10669
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 69235,
+     "p90": 69245
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11454.5,
+     "p90": 11457
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 10793,
+     "p90": 10794
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ExperimentsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 17.112000000000002,
+      "p90": 19.985
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.962,
+      "p90": 1.192
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 79,
+      "p90": 79
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "changelog": {
+    "key": "changelog",
+    "href": "/changelog",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 54.75000002980232,
+     "p90": 84.19999998807907
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 51.80000001192093,
+     "p90": 72.80000001192093
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 52380,
+     "p90": 52382
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 9328,
+     "p90": 9328
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 63739,
+     "p90": 63739
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10104,
+     "p90": 10108
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 9451,
+     "p90": 9454
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ChangelogLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.188,
+      "p90": 30.585
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.032,
+      "p90": 0.035
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "settings": {
+    "key": "settings",
+    "href": "/settings",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 57.599999994039536,
+     "p90": 64.69999998807907
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 48.59999996423721,
+     "p90": 55.40000003576279
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 62542,
+     "p90": 62544
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10685,
+     "p90": 10685
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 76796,
+     "p90": 76806
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11632,
+     "p90": 11635
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 10957.5,
+     "p90": 10959
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.SettingsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 14.248000000000001,
+      "p90": 14.716
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.032,
+      "p90": 0.038
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   }
+  },
+  "websocket_connections": [
+   {
+    "id": 5,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 9,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 12,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 13,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 15,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 17,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 19,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 27,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 31,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 33,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 35,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 37,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 39,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 41,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   },
+   {
+    "id": 43,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": true
+   }
+  ]
+ },
+ "off": {
+  "label": "local-compress-off",
+  "summaries": {
+   "chat": {
+    "key": "chat",
+    "href": "/chat",
+    "origin": "/inbox",
+    "probe": "composer (#compose_text)",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 254.09999999403954,
+     "p90": 272.80000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 194,
+     "p90": 216.30000001192093
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 320900,
+     "p90": 320901
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 33367.5,
+     "p90": 33369
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 350547.5,
+     "p90": 350556
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 35606,
+     "p90": 35608
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 350577.5,
+     "p90": 350586
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ChatLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 36.1605,
+      "p90": 45.02
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 41.221999999999994,
+      "p90": 48.076
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 250,
+      "p90": 250
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "voice": {
+    "key": "voice",
+    "href": "/voice",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 54.05000001192093,
+     "p90": 82.30000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 44.45000001788139,
+     "p90": 70.10000002384186
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 66902,
+     "p90": 66904
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11998,
+     "p90": 11998
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 78261,
+     "p90": 78271
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12789.5,
+     "p90": 12791
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 78287,
+     "p90": 78297
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.VoiceLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 16.451999999999998,
+      "p90": 26.028
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.0325,
+      "p90": 0.047
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 80,
+      "p90": 80
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "tasks": {
+    "key": "tasks",
+    "href": "/tasks",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "task search (#task-search)",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 116.05000001192093,
+     "p90": 132.69999998807907
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 93.10000002384186,
+     "p90": 107
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 194916,
+     "p90": 194916
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 25260,
+     "p90": 25260
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 207847,
+     "p90": 207849
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 26203.5,
+     "p90": 26205
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 207873,
+     "p90": 207875
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.TasksLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.203,
+      "p90": 27.69
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 8.947,
+      "p90": 10.559
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 105,
+      "p90": 105
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     },
+     "list_all_tasks_first": [
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      },
+      {
+       "project": "one",
+       "epic": "all"
+      }
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "meetings": {
+    "key": "meetings",
+    "href": "/meetings",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 61.30000001192093,
+     "p90": 77.59999996423721
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 54.84999996423721,
+     "p90": 67.69999998807907
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 72921,
+     "p90": 72923
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12363,
+     "p90": 12363
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 85963,
+     "p90": 85973
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13278.5,
+     "p90": 13283
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 85989,
+     "p90": 85999
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.MeetingLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.104,
+      "p90": 22.939
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 2.7504999999999997,
+      "p90": 4.125
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 82,
+      "p90": 82
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "inbox": {
+    "key": "inbox",
+    "href": "/inbox",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 51.19999998807907,
+     "p90": 61.40000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 47.80000001192093,
+     "p90": 53.10000002384186
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 58907,
+     "p90": 58909
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10545,
+     "p90": 10545
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 70307,
+     "p90": 70317
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11355.5,
+     "p90": 11356
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 70327,
+     "p90": 70337
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.InboxLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 14.758,
+      "p90": 18.812
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 3.597,
+      "p90": 6
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 90,
+      "p90": 90
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "files": {
+    "key": "files",
+    "href": "/files",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 73.24999997019768,
+     "p90": 103.60000002384186
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 65.99999997019768,
+     "p90": 96.80000001192093
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 80227,
+     "p90": 80229
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12471,
+     "p90": 12473
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 91586,
+     "p90": 91596
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13258,
+     "p90": 13259
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 91612,
+     "p90": 91622
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.FilesLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 24.869,
+      "p90": 39.059
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 5.245,
+      "p90": 8.109
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 90,
+      "p90": 90
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "canvases": {
+    "key": "canvases",
+    "href": "/files?tab=browse&type=canvas",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 104.74999997019768,
+     "p90": 140.5
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 98.40000000596046,
+     "p90": 131.5
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 81118,
+     "p90": 81120
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12627,
+     "p90": 12628
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 88724.5,
+     "p90": 92477
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 13332.5,
+     "p90": 13415
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 92503,
+     "p90": 92510
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.FilesLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 38.72,
+      "p90": 57.737
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 7.1045,
+      "p90": 12.764
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 89,
+      "p90": 89
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "skills": {
+    "key": "skills",
+    "href": "/skills",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 81.00000002980232,
+     "p90": 117.89999997615814
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 66.05000001192093,
+     "p90": 109.5
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 52857,
+     "p90": 52859
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 9549,
+     "p90": 9549
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 56711,
+     "p90": 64223
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10182.5,
+     "p90": 10325
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 60479.5,
+     "p90": 64243
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.SkillsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 37.0215,
+      "p90": 63.984
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.0495,
+      "p90": 0.061
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "org_memory": {
+    "key": "org_memory",
+    "href": "/org_memory",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 58.5,
+     "p90": 69.40000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 52.39999997615814,
+     "p90": 66.80000001192093
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 66628,
+     "p90": 66630
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11569,
+     "p90": 11569
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 78524,
+     "p90": 78534
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12435,
+     "p90": 12437
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 78550,
+     "p90": 78560
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.OrgMemoryLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 15.306000000000001,
+      "p90": 15.965
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.0365,
+      "p90": 0.04
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 76,
+      "p90": 76
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "control": {
+    "key": "control",
+    "href": "/control",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 71.30000001192093,
+     "p90": 76.40000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 66.05000001192093,
+     "p90": 70.5
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 61842,
+     "p90": 61844
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11566,
+     "p90": 11567
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 73261,
+     "p90": 73271
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 12353,
+     "p90": 12353
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 73281,
+     "p90": 73291
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ControlCenterLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 19.6025,
+      "p90": 20.246
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 4.859500000000001,
+      "p90": 5.791
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 130,
+      "p90": 130
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "experiments": {
+    "key": "experiments",
+    "href": "/control/experiments",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 58.099999994039536,
+     "p90": 70.90000003576279
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 52.650000005960464,
+     "p90": 68.30000001192093
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 57779,
+     "p90": 57781
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10683,
+     "p90": 10683
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 69234,
+     "p90": 69244
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11470.5,
+     "p90": 11472
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 69254,
+     "p90": 69264
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ExperimentsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 14.886500000000002,
+      "p90": 17.057
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 1.1285,
+      "p90": 1.874
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 79,
+      "p90": 79
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "changelog": {
+    "key": "changelog",
+    "href": "/changelog",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 47.349999994039536,
+     "p90": 56.30000001192093
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 42.64999997615814,
+     "p90": 49.299999952316284
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 52379,
+     "p90": 52381
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 9344.5,
+     "p90": 9345
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 63738,
+     "p90": 63748
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10127.5,
+     "p90": 10128
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 63758,
+     "p90": 63768
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.ChangelogLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 14.242,
+      "p90": 15.962
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.034,
+      "p90": 0.043
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   },
+   "settings": {
+    "key": "settings",
+    "href": "/settings",
+    "origin": "/chat/tab-switch-busy",
+    "probe": "Tab key moves focus into the new main LiveView",
+    "n": 10,
+    "websocket_join_every_tap": true,
+    "tap_ms": {
+     "n": 10,
+     "median": 65.69999998807907,
+     "p90": 71.39999997615814
+    },
+    "ready_ms": {
+     "n": 10,
+     "median": 56.89999997615814,
+     "p90": 66
+    },
+    "join_reply_raw_bytes": {
+     "n": 10,
+     "median": 62541,
+     "p90": 62543
+    },
+    "join_reply_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 10697,
+     "p90": 10697
+    },
+    "window_raw_recv_bytes": {
+     "n": 10,
+     "median": 76795,
+     "p90": 76805
+    },
+    "window_deflate_estimate_bytes": {
+     "n": 10,
+     "median": 11646,
+     "p90": 11649
+    },
+    "wire_down_bytes": {
+     "n": 10,
+     "median": 76815,
+     "p90": 76825
+    },
+    "server": {
+     "mounts_seen": 11,
+     "view": "PlatformWeb.SettingsLive",
+     "mount_ms": {
+      "n": 10,
+      "median": 14.038499999999999,
+      "p90": 15.33
+     },
+     "handle_params_ms": {
+      "n": 10,
+      "median": 0.0375,
+      "p90": 0.039
+     },
+     "arrival_queries": {
+      "n": 10,
+      "median": 75,
+      "p90": 75
+     },
+     "refresh_board": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "count_by_scope": {
+      "n": 10,
+      "median": 0,
+      "p90": 0
+     },
+     "list_all_tasks_first": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+     ],
+     "handle_params_calls": {
+      "n": 10,
+      "median": 1,
+      "p90": 1
+     }
+    }
+   }
+  },
+  "websocket_connections": [
+   {
+    "id": 6,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 11,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 13,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 14,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 16,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 18,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 20,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 28,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 32,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 34,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 36,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 38,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 40,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 42,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   },
+   {
+    "id": 44,
+    "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+    "deflate_offered": true,
+    "deflate_accepted": false
+   }
+  ]
+ }
+}
