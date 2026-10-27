@@ -132,6 +132,50 @@ defmodule Platform.Admin.ToolsTest do
     end
   end
 
+  describe "admin_health backup_status" do
+    setup do
+      path =
+        Path.join(System.tmp_dir!(), "backup-status-#{System.unique_integer([:positive])}.json")
+
+      previous = Application.get_env(:platform, :backup_status_path)
+      Application.put_env(:platform, :backup_status_path, path)
+
+      on_exit(fn ->
+        File.rm(path)
+
+        if previous,
+          do: Application.put_env(:platform, :backup_status_path, previous),
+          else: Application.delete_env(:platform, :backup_status_path)
+      end)
+
+      %{path: path}
+    end
+
+    test "no status file reads as not configured", %{ctx: ctx} do
+      assert {:ok, %{backup_status: %{configured: false}}} =
+               ToolSurface.execute("admin_health", %{}, ctx)
+    end
+
+    test "reports last success time and size from the job's status file", %{ctx: ctx, path: path} do
+      File.write!(
+        path,
+        ~s({"last_success_at":"2026-10-27T03:15:42Z","size_bytes":4016,"target":"local-path","databases":3})
+      )
+
+      assert {:ok, %{backup_status: status}} = ToolSurface.execute("admin_health", %{}, ctx)
+      assert status.configured
+      assert status.last_success_at == "2026-10-27T03:15:42Z"
+      assert status.size_bytes == 4016
+    end
+
+    test "a garbled file is reported, not crashed on", %{ctx: ctx, path: path} do
+      File.write!(path, "not json")
+
+      assert {:ok, %{backup_status: %{configured: true, error: "invalid"}}} =
+               ToolSurface.execute("admin_health", %{}, ctx)
+    end
+  end
+
   describe "an audit row per tool" do
     test "every tool writes one row with actor, tool, args, result and time", %{
       agent: agent,

@@ -35,6 +35,7 @@ validation instead of silently keeping its default.
 | `name` | string | required | `[a-z][a-z0-9-]{0,62}`. Names the install; becomes `DEPLOY_TARGET`. |
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
 | `target` | `single-host` \| `mac` | `single-host` | Which renderer the manifest is for (task 01a0d6ab). The validator applies that target's rules; `render --target`, if given, must match (`target_mismatch`). |
+| `hosted` | bool | `false` | An install we provision. Requires a backup target; see `[backup]`. |
 | `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `<registry>/core:core`, `["play"]` runs `<registry>/core:play` (legacy `image_namespace`: `suite-core:core` / `suite-core:play`). A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`

@@ -21,7 +21,7 @@ defmodule Platform.Federation.AdminTools do
         "admin_health",
         "Health of core, its database, the memory service and the agent host.",
         %{},
-        "core, repo, memory, agent_host (configured, connected, full_root)",
+        "core, repo, memory, backup_status (configured, last_success_at, size_bytes), agent_host (configured, connected, full_root)",
         "First stop when something looks wrong on this install."
       ),
       definition(

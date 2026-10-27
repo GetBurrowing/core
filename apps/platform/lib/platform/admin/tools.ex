@@ -181,6 +181,7 @@ defmodule Platform.Admin.Tools do
        core: %{status: "ok", node: to_string(node())},
        repo: repo,
        memory: memory,
+       backup_status: Platform.Admin.BackupStatus.read(),
        agent_host: %{
          configured: AgentHost.configured?(),
          connected: AgentHost.connected?(),
