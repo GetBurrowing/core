@@ -35,6 +35,7 @@ defmodule Platform.AgentHost.State do
           state: observed(),
           detail: String.t() | nil,
           files_applied: term(),
+          files_drifted: [String.t()] | nil,
           profile: String.t() | nil,
           observed_at: DateTime.t()
         }
@@ -101,6 +102,7 @@ defmodule Platform.AgentHost.State do
       state: state,
       detail: Map.get(attrs, :detail),
       files_applied: Map.get(attrs, :files_applied),
+      files_drifted: Map.get(attrs, :files_drifted),
       profile: Map.get(attrs, :profile) || host_profile(),
       observed_at: Map.get(attrs, :observed_at) || DateTime.utc_now()
     }

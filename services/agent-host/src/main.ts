@@ -90,10 +90,11 @@ if (import.meta.main) {
   const host = new Host(deps, channel, profile, undefined, fullRoot, fullRoot ? liveDockerFetch(socketPath()) : null);
 
   channel.on("agent.start", (p) => void host.handleStart(p));
-  channel.on("agent.restart", (p) => void host.handleStart(p));
+  channel.on("agent.restart", (p) => void host.handleRestart(p));
   channel.on("agent.stop", (p) => void host.handleStop(p));
   channel.on("agent.logs", (p) => void host.handleLogs(p).catch((e: unknown) => log(`logs failed: ${String(e)}`)));
   channel.on("agent.pane", (p) => void host.handlePane(p).catch((e: unknown) => log(`pane failed: ${String(e)}`)));
+  channel.on("agent.file_read", (p) => void host.handleFileRead(p).catch((e: unknown) => log(`file read failed: ${String(e)}`)));
   channel.on("agent.check_auth", (p) => void host.handleCheckAuth(p));
   channel.on("host.env_names", (p) => void host.handleEnvNames(p).catch((e: unknown) => log(`env_names failed: ${String(e)}`)));
   channel.on("host.admin", (p) => void host.handleAdmin(p).catch((e: unknown) => log(`admin failed: ${String(e)}`)));

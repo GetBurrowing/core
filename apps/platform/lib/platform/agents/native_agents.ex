@@ -57,7 +57,7 @@ defmodule Platform.Agents.NativeAgents do
   # is not what it is running.
   @live_states [:running, :starting, :needs_login]
 
-  @max_file_depth 3
+  @max_file_depth 4
   # One path component: letters, digits and `._@+-`, not starting with `-`,
   # and a leading dot only before a letter, digit or `_` (so never "." or
   # ".."). The agent host's `isFileKey` (services/agent-host/src/files.ts) is
@@ -75,7 +75,8 @@ defmodule Platform.Agents.NativeAgents do
 
   Seeds the agent's files in the same transaction: `CLAUDE.md` (Claude Code)
   or `AGENTS.md` (Codex) from `identity_template/2`, and
-  `.claude/settings.json` as `{}`.
+  the harness's settings file (`.claude/settings.json` as `{}`, or
+  `.codex/config.toml`).
 
   Returns `{:ok, agent, runtime}`. The raw runtime token is discarded, never
   returned or logged.
@@ -203,15 +204,34 @@ defmodule Platform.Agents.NativeAgents do
   # ── Agent files (stage 5) ─────────────────────────────────────────
 
   @doc """
-  The instructions file a harness reads: `AGENTS.md` for Codex, `CLAUDE.md`
-  for Claude Code (and anything else).
+  The instructions file a harness reads, from its adapter (`AGENTS.md` for
+  Codex, `CLAUDE.md` for Claude Code). A harness with no adapter is
+  `:unsupported`; it no longer defaults to `CLAUDE.md`.
   """
-  @spec instructions_key(String.t() | nil) :: String.t()
-  def instructions_key("codex"), do: "AGENTS.md"
-  def instructions_key(_), do: "CLAUDE.md"
+  @spec instructions_key(String.t() | nil) :: String.t() | :unsupported
+  def instructions_key(harness) do
+    case Platform.Agents.Harness.adapter_for(harness) do
+      {:ok, adapter} -> adapter.instructions_path()
+      :unsupported -> :unsupported
+    end
+  end
 
-  @doc "The settings file seeded for every native agent."
-  def settings_key, do: ".claude/settings.json"
+  @doc """
+  The settings file a harness reads, from its adapter (`.claude/settings.json`
+  for Claude Code, `.codex/config.toml` for Codex), or `:unsupported`.
+  """
+  @spec settings_key(String.t() | nil) :: String.t() | :unsupported
+  def settings_key(harness) do
+    case Platform.Agents.Harness.adapter_for(harness) do
+      {:ok, adapter} -> adapter.settings_path()
+      :unsupported -> :unsupported
+    end
+  end
+
+  defp settings_seed(harness) do
+    {:ok, adapter} = Platform.Agents.Harness.adapter_for(harness)
+    adapter.settings_seed()
+  end
 
   @doc """
   The identity file a new native agent starts with. It tells the agent what
@@ -385,6 +405,41 @@ defmodule Platform.Agents.NativeAgents do
 
   def pending_file_keys(_files, _observed), do: []
 
+  @doc """
+  Keys the agent changed on disk since the host last wrote them
+  (`files_drifted` in the host's `agent.state`). Empty when unknown.
+  """
+  @spec drifted_keys(Agent.t()) :: [String.t()]
+  def drifted_keys(%Agent{id: id}) do
+    case Platform.AgentHost.status(id) do
+      %{files_drifted: keys} when is_list(keys) -> Enum.filter(keys, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  @doc """
+  The drifted keys an owner has since resolved: their stored version is newer
+  than the one the host last applied (`Config` only lets a drifted key be
+  saved once the owner has seen the disk copy). Sent as `force_keys` in
+  `agent.start`/`agent.restart`; the host overwrites a drifted key only when
+  it is named there.
+  """
+  @spec force_keys(Agent.t()) :: [String.t()]
+  def force_keys(%Agent{id: id} = agent) do
+    applied =
+      case Platform.AgentHost.status(id) do
+        %{files_applied: %{} = applied} -> applied
+        _ -> %{}
+      end
+
+    drifted = drifted_keys(agent)
+
+    for %WorkspaceFile{file_key: key, version: version} <- list_files(agent),
+        key in drifted,
+        Map.get(applied, key) != version,
+        do: key
+  end
+
   @doc "True when a running agent has not picked up a saved file (\"Restart to apply\")."
   @spec restart_to_apply?([WorkspaceFile.t()], map() | nil) :: boolean()
   def restart_to_apply?(files, observed), do: pending_file_keys(files, observed) != []
@@ -399,10 +454,13 @@ defmodule Platform.Agents.NativeAgents do
 
   defp seed_instructions(name, harness), do: identity_template(name, harness)
 
+  defp seed_files(%Agent{}, harness) when harness not in ~w(claude_code codex),
+    do: {:error, {:unsupported_harness, harness}}
+
   defp seed_files(%Agent{id: id, name: name}, harness) do
     seeds = [
       {instructions_key(harness), seed_instructions(name, harness)},
-      {settings_key(), "{}"}
+      {settings_key(harness), settings_seed(harness)}
     ]
 
     Enum.reduce_while(seeds, :ok, fn {key, content}, :ok ->

@@ -107,9 +107,14 @@ defmodule Platform.AgentHost.Reconciler do
   @spec converge(binary() | :all) :: :ok | {:error, :not_connected}
   def converge(target), do: GenServer.call(server(), {:converge, target})
 
-  @doc "Restart an agent: stop it and start it again with a fresh token."
-  @spec restart(binary()) :: :ok | {:error, term()}
-  def restart(agent_id), do: GenServer.call(server(), {:restart, agent_id})
+  @doc """
+  Restart an agent: stop it and start it again with a fresh token. With a
+  `ref`, the host answers `agent.restarted` under it once the agent is back
+  (or the wait ran out), carrying the tool snapshots taken before and after
+  (task 01a17b1c stage 4).
+  """
+  @spec restart(binary(), String.t() | nil) :: :ok | {:error, term()}
+  def restart(agent_id, ref \\ nil), do: GenServer.call(server(), {:restart, agent_id, ref})
 
   @doc "Ask the host for the last `lines` log lines of an agent, answered under `ref`."
   @spec request_logs(binary(), pos_integer(), String.t()) :: :ok | {:error, :not_connected}
@@ -120,6 +125,11 @@ defmodule Platform.AgentHost.Reconciler do
   @spec request_pane(binary(), pos_integer(), String.t()) :: :ok | {:error, :not_connected}
   def request_pane(agent_id, lines, ref),
     do: GenServer.call(server(), {:pane, agent_id, lines, ref})
+
+  @doc "Ask the host for one file of an agent's work dir (redacted by the host), answered under `ref`."
+  @spec request_file(binary(), String.t(), String.t()) :: :ok | {:error, :not_connected}
+  def request_file(agent_id, key, ref),
+    do: GenServer.call(server(), {:file, agent_id, key, ref})
 
   @doc "Ask the host whether an agent's API key still works, answered under `ref`."
   @spec request_auth_check(binary(), String.t()) :: :ok | {:error, :not_connected}
@@ -231,13 +241,15 @@ defmodule Platform.AgentHost.Reconciler do
     end
   end
 
-  defp do_call({:restart, _agent_id}, _from, %{host: nil} = state),
+  defp do_call({:restart, _agent_id, _ref}, _from, %{host: nil} = state),
     do: {:reply, {:error, :not_connected}, state}
 
-  defp do_call({:restart, agent_id}, _from, state) do
+  defp do_call({:restart, agent_id, ref}, _from, state) do
+    extra = if is_binary(ref), do: %{"ref" => ref}, else: %{}
+
     case native_entry(agent_id) do
       nil -> {:reply, {:error, :not_managed}, state}
-      entry -> {:reply, send_start(state.host, entry, "agent.restart"), state}
+      entry -> {:reply, send_start(state.host, entry, "agent.restart", extra), state}
     end
   end
 
@@ -246,6 +258,14 @@ defmodule Platform.AgentHost.Reconciler do
 
   defp do_call({:logs, agent_id, lines, ref}, _from, state) do
     push(state.host, "agent.logs", %{"agent_id" => agent_id, "lines" => lines, "ref" => ref})
+    {:reply, :ok, state}
+  end
+
+  defp do_call({:file, _agent_id, _key, _ref}, _from, %{host: nil} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:file, agent_id, key, ref}, _from, state) do
+    push(state.host, "agent.file_read", %{"agent_id" => agent_id, "key" => key, "ref" => ref})
     {:reply, :ok, state}
   end
 
@@ -322,6 +342,7 @@ defmodule Platform.AgentHost.Reconciler do
         State.put(agent_id, observed, %{
           detail: string_or_nil(payload["detail"]),
           files_applied: payload["files_applied"],
+          files_drifted: drifted_list(payload["files_drifted"]),
           profile: profile
         })
 
@@ -333,6 +354,9 @@ defmodule Platform.AgentHost.Reconciler do
   end
 
   defp record_observation(_payload, _profile), do: :error
+
+  defp drifted_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp drifted_list(_), do: nil
 
   defp converge_all(host) do
     for entry <- NativeAgents.list(), do: converge_one(host, entry)
@@ -356,30 +380,39 @@ defmodule Platform.AgentHost.Reconciler do
     end
   end
 
-  defp send_start(host, %{agent: agent, runtime: %AgentRuntime{} = runtime}, event) do
+  defp send_start(host, entry, event, extra \\ %{})
+
+  defp send_start(host, %{agent: agent, runtime: %AgentRuntime{} = runtime}, event, extra) do
     case Federation.generate_runtime_token(runtime) do
       {:ok, updated, raw_token} ->
         # Any socket still on the previous token goes; it no longer
         # authenticates a reconnect either.
         PlatformWeb.Endpoint.broadcast("runtime:#{updated.runtime_id}", "disconnect", %{})
 
-        push(host, event, %{
-          "agent_id" => agent.id,
-          "runtime_id" => updated.runtime_id,
-          "runtime_token" => raw_token,
-          "harness" => updated.harness,
-          "core_url" => Platform.AgentHost.core_url(),
-          # The agent's own login (stage 6): its Anthropic API key, if one is
-          # saved, read from the Vault as the agent at this moment. It goes
-          # into this push and, on the host, into that agent's 0600 env file
-          # only. Never logged. In operator login mode (task 01a17b10) this
-          # is `%{}` and the Vault is not read.
-          "env" => NativeLogin.start_env(agent),
-          # The agent's own files (stage 5), written into its work dir as its
-          # uid before the unit starts. Read at this moment, so a Restart
-          # always carries the latest save.
-          "files" => NativeAgents.start_files(agent)
-        })
+        push(
+          host,
+          event,
+          %{
+            "agent_id" => agent.id,
+            "runtime_id" => updated.runtime_id,
+            "runtime_token" => raw_token,
+            "harness" => updated.harness,
+            "core_url" => Platform.AgentHost.core_url(),
+            # The agent's own login (stage 6): its Anthropic API key, if one is
+            # saved, read from the Vault as the agent at this moment. It goes
+            # into this push and, on the host, into that agent's 0600 env file
+            # only. Never logged. In operator login mode (task 01a17b10) this
+            # is `%{}` and the Vault is not read.
+            "env" => NativeLogin.start_env(agent),
+            # The agent's own files (stage 5), written into its work dir as its
+            # uid before the unit starts. Read at this moment, so a Restart
+            # always carries the latest save.
+            "files" => NativeAgents.start_files(agent),
+            # Drifted keys the owner has resolved; the host overwrites no other.
+            "force_keys" => NativeAgents.force_keys(agent)
+          }
+          |> Map.merge(extra)
+        )
 
         State.put(agent.id, :starting, %{detail: nil})
         broadcast({:agent, agent.id})

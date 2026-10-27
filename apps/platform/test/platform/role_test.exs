@@ -144,6 +144,7 @@ defmodule Platform.RoleTest do
                Platform.Federation.DeadLetterReplay,
                Platform.Federation.Peers.NonceCache,
                Platform.Federation.Peers.Registry,
+               Platform.Federation.RuntimeHostRegistry,
                Platform.Federation.Peers.Supervisor,
                Platform.Federation.Peers.Boot,
                Platform.TaskSupervisor,

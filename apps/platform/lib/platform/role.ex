@@ -204,6 +204,7 @@ defmodule Platform.Role do
     Platform.Federation.RuntimePresence,
     Platform.Federation.Peers.NonceCache,
     Platform.Federation.Peers.Registry,
+    Platform.Federation.RuntimeHostRegistry,
     Platform.TaskSupervisor,
     Platform.CodeMode.Slots,
     Platform.Canvas.ScriptEngine.Slots,

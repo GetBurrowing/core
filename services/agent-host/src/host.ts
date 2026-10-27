@@ -2,9 +2,11 @@
  * The protocol: core's commands in, observed state out.
  *
  *   in   agent.start | agent.restart  {agent_id, runtime_id, runtime_token, harness, core_url, env, files}
+ *        agent.restart + ref          the same, answered by agent.restarted (tools.ts)
  *        agent.stop                   {agent_id}
  *        agent.logs                   {agent_id, lines, ref}
  *        agent.pane                   {agent_id, lines, ref}              read only (pane.ts)
+ *        agent.file_read              {agent_id, key, ref}                one file, redacted (files.ts)
  *        agent.check_auth             {agent_id, ref}                     does its API key work? (auth.ts)
  *        host.env_names               {agent_id?, ref}                    env NAMES only, never values
  *        host.admin                   {op, service, tag?, ref}            restart|deploy|rollback, full_root only
@@ -12,7 +14,9 @@
  *        agent.state                  observation                         on every change
  *        agent.log                    {ref, agent_id, lines}
  *        agent.pane                   {ref, agent_id, lines, hidden}
+ *        agent.file                   {ref, agent_id, content, sha256} | {ref, agent_id, error}
  *        agent.auth                   {ref, agent_id, result}             ok | rejected | unknown
+ *        agent.restarted              {ref, agent_id, outcome, before, after}   tool snapshots, names only
  *        host.reply                   {ref, result}                       answer to host.env_names | host.admin
  *
  * An agent whose key a check found `rejected` reads `needs_login` (detail
@@ -36,9 +40,12 @@ import {
   stopAgent,
   type AgentsDeps,
   type Observation,
+  type StartCommand,
 } from "./agents.ts";
 import { checkApiKey, readAgentEnv, type AuthResult, type Fetch } from "./auth.ts";
-import { isAgentId } from "./ids.ts";
+import { isFileKey, readAgentFileRaw, redactForRead, sha256Hex } from "./files.ts";
+import { homeDir, isAgentId, userName, workDir } from "./ids.ts";
+import { snapshotTools, type ProbeUser, type ToolSnapshot } from "./tools.ts";
 import { agentPane } from "./pane.ts";
 import { deployService, restartService, rollbackService, type AdminResult, type DockerFetch } from "./docker.ts";
 import type { Payload } from "./phoenix.ts";
@@ -63,7 +70,19 @@ export class Host {
     /** True only when the install enabled `[agents] full_root`; advertised in the hello. */
     private readonly fullRoot: boolean = false,
     private readonly docker: DockerFetch | null = null,
-  ) {}
+    restart?: Partial<RestartDeps>,
+  ) {
+    this.restartDeps = {
+      snapshot: (user) => snapshotTools({ runner: deps.runner }, user),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      waitMs: RESTART_WAIT_MS,
+      pollMs: 1_000,
+      startAgent,
+      ...restart,
+    };
+  }
+
+  private readonly restartDeps: RestartDeps;
 
   /** The host's hello: its profile, and whether full root is on. */
   hello(): Payload {
@@ -143,33 +162,95 @@ export class Host {
 
   handleStart(payload: Payload): Promise<void> {
     const cmd = parseStart(payload);
-    const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
     if (typeof cmd === "string") {
       this.deps.log(`agent.start refused: ${cmd}`);
       return Promise.resolve();
     }
     return this.enqueue(cmd.agent_id, async () => {
-      if (!SUPPORTED_HARNESSES.has(cmd.harness)) {
-        await this.report(
-          { agent_id: agentId, state: "stopped", detail: `harness ${cmd.harness} is not available on this host yet`, files_applied: null },
-          true,
-        );
-        return;
-      }
-      // A start is the only way an agent gets a new key: forget the old verdict.
-      this.authRejected.delete(cmd.agent_id);
-      await this.report({ agent_id: cmd.agent_id, state: "starting", detail: null, files_applied: null }, true);
-      try {
-        await startAgent(this.deps, cmd);
-      } catch (error) {
-        await this.report(
-          { agent_id: cmd.agent_id, state: "crashed", detail: error instanceof Error ? error.message : String(error), files_applied: null },
-          true,
-        );
-        throw error;
-      }
-      await this.report(await this.observe(cmd.agent_id));
+      await this.start(cmd);
     });
+  }
+
+  /** The start itself, inside the agent's queue. False when the harness is not runnable here. */
+  private async start(cmd: StartCommand): Promise<boolean> {
+    if (!SUPPORTED_HARNESSES.has(cmd.harness)) {
+      await this.report(
+        { agent_id: cmd.agent_id, state: "stopped", detail: `harness ${cmd.harness} is not available on this host yet`, files_applied: null },
+        true,
+      );
+      return false;
+    }
+    // A start is the only way an agent gets a new key: forget the old verdict.
+    this.authRejected.delete(cmd.agent_id);
+    await this.report({ agent_id: cmd.agent_id, state: "starting", detail: null, files_applied: null }, true);
+    try {
+      await this.restartDeps.startAgent(this.deps, cmd);
+    } catch (error) {
+      await this.report(
+        { agent_id: cmd.agent_id, state: "crashed", detail: error instanceof Error ? error.message : String(error), files_applied: null },
+        true,
+      );
+      throw error;
+    }
+    await this.report(await this.observe(cmd.agent_id));
+    return true;
+  }
+
+  /**
+   * `agent.restart`. Without a `ref` it is a start (the old contract). With
+   * one (task 01a17b1c stage 4) the host also answers `agent.restarted`
+   * `{ref, agent_id, outcome, before, after}`: a tool snapshot BEFORE the
+   * files are rewritten (what the running agent loaded at its last start),
+   * the restart, a wait for the agent to come back, and a snapshot after.
+   * An agent at a login screen is not probed: before and after are null.
+   * The same command, never a second restart path.
+   */
+  handleRestart(payload: Payload): Promise<void> {
+    const ref = typeof payload.ref === "string" && payload.ref !== "" ? payload.ref : null;
+    if (ref === null) return this.handleStart(payload);
+    const cmd = parseStart(payload);
+    if (typeof cmd === "string") {
+      this.deps.log(`agent.restart refused: ${cmd}`);
+      const agentId = isAgentId(payload.agent_id) ? payload.agent_id : "";
+      return this.transport.push("agent.restarted", { ref, agent_id: agentId, outcome: "gone", before: null, after: null }).then(() => undefined);
+    }
+    return this.enqueue(cmd.agent_id, async () => {
+      const id = cmd.agent_id;
+      const user = { name: userName(id), home: homeDir(id), work: workDir(id) };
+      let outcome = "gone";
+      let before: ToolSnapshot | null = null;
+      let after: ToolSnapshot | null = null;
+      try {
+        const loginBefore = (await this.observe(id)).state === "needs_login";
+        before = loginBefore ? null : await this.restartDeps.snapshot(user);
+        if (await this.start(cmd)) {
+          outcome = await this.waitBack(id);
+          after = outcome === "needs_login" || loginBefore ? null : await this.restartDeps.snapshot(user);
+          if (outcome === "needs_login") before = null;
+        }
+      } finally {
+        await this.transport.push("agent.restarted", {
+          ref,
+          agent_id: id,
+          outcome,
+          before: before as unknown as Payload,
+          after: after as unknown as Payload,
+        });
+      }
+    });
+  }
+
+  /** Until the agent reads running (ready), needs_login, crashed (gone), or the wait runs out. */
+  private async waitBack(agentId: string): Promise<string> {
+    const deadline = Date.now() + this.restartDeps.waitMs;
+    for (;;) {
+      const o = await this.observe(agentId);
+      if (o.state === "running") return "ready";
+      if (o.state === "needs_login") return "needs_login";
+      if (o.state === "crashed") return "gone";
+      if (Date.now() >= deadline) return "timeout";
+      await this.restartDeps.sleep(this.restartDeps.pollMs);
+    }
   }
 
   handleStop(payload: Payload): Promise<void> {
@@ -197,6 +278,26 @@ export class Host {
   }
 
   /**
+   * One file of the agent's work dir, for Compare. Read as the agent, redacted
+   * here (a secret value never leaves the machine) and again in core; the hash
+   * is over the full bytes so core can use it as a precondition.
+   */
+  async handleFileRead(payload: Payload): Promise<void> {
+    const { agent_id: agentId, key, ref } = payload;
+    if (!isAgentId(agentId) || typeof ref !== "string") return;
+    if (typeof key !== "string" || !isFileKey(key)) {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, error: "invalid_key" });
+      return;
+    }
+    const r = await readAgentFileRaw(this.deps.runner, { name: userName(agentId), work: workDir(agentId) }, key);
+    if (r.status === "ok") {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, content: redactForRead(key, r.content), sha256: sha256Hex(r.content) });
+    } else {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, error: r.status === "not_found" ? "not_found" : "unreadable" });
+    }
+  }
+
+  /**
    * core's no-reply watchdog asks whether the agent's key still works. The
    * answer goes back first; a rejected key then changes the observed state
    * (needs_login), which is reported as any change is.
@@ -214,6 +315,17 @@ export class Host {
       }
     });
   }
+}
+
+export const RESTART_WAIT_MS = 90_000;
+
+export interface RestartDeps {
+  snapshot(user: ProbeUser): Promise<ToolSnapshot>;
+  /** Test seam: {@link startAgent} needs root. */
+  startAgent(deps: AgentsDeps, cmd: StartCommand): Promise<void>;
+  sleep(ms: number): Promise<void>;
+  waitMs: number;
+  pollMs: number;
 }
 
 export interface AuthDeps {
@@ -242,5 +354,5 @@ export interface PaneDeps {
 }
 
 function key(o: Observation): string {
-  return JSON.stringify([o.state, o.detail, o.login ?? null, o.files_applied ?? null]);
+  return JSON.stringify([o.state, o.detail, o.login ?? null, o.files_applied ?? null, o.files_drifted ?? null]);
 }
