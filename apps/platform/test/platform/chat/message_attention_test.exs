@@ -709,11 +709,13 @@ defmodule Platform.Chat.MessageAttentionTest do
       Logger.configure(level: :info)
 
       try do
-        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          assert {:ok, [%{participant_id: id, reason: :mention}]} =
-                   AttentionRouter.route_attention(message, [zip.id], alice)
-          assert id == zip.id
-        end)
+        log =
+          ExUnit.CaptureLog.capture_log([level: :info], fn ->
+            assert {:ok, [%{participant_id: id, reason: :mention}]} =
+                     AttentionRouter.route_attention(message, [zip.id], alice)
+
+            assert id == zip.id
+          end)
 
         assert log =~ "added_attention phase=decision"
         assert log =~ "space=#{space.id} message=#{message.id} requested=#{zip.id}"
@@ -722,20 +724,27 @@ defmodule Platform.Chat.MessageAttentionTest do
         refute log =~ "private-content-sentinel"
 
         ghost = %{message | space_id: Ecto.UUID.generate()}
-        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          assert {:ok, []} = AttentionRouter.route_attention(ghost, [zip.id], alice)
-        end)
+
+        log =
+          ExUnit.CaptureLog.capture_log([level: :info], fn ->
+            assert {:ok, []} = AttentionRouter.route_attention(ghost, [zip.id], alice)
+          end)
+
         assert log =~ "space=#{ghost.space_id} message=#{message.id} requested=#{zip.id}"
         assert log =~ "outcome=empty"
         assert log =~ "skipped_reason=space_not_found"
 
         missing = Ecto.UUID.generate()
-        log = ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          assert {:ok, []} = AttentionRouter.route_attention(message, [missing], alice)
-        end)
+
+        log =
+          ExUnit.CaptureLog.capture_log([level: :info], fn ->
+            assert {:ok, []} = AttentionRouter.route_attention(message, [missing], alice)
+          end)
+
         assert log =~ "requested=#{missing}"
         assert log =~ "outcome=empty"
         assert log =~ "not_selected=#{missing}"
+        assert log =~ "skipped_reason=no_eligible_recipients"
       after
         Logger.configure(level: previous)
       end

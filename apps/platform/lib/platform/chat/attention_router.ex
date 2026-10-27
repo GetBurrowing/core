@@ -1090,6 +1090,7 @@ defmodule Platform.Chat.AttentionRouter do
       policy = if space, do: resolve_attention_mode(space, nil), else: :unknown
       awake = if space, do: space.agents_awake, else: :unknown
       outcome = if decisions == [], do: :empty, else: :selected
+      reason = if decisions == [] and reason == :none, do: :no_eligible_recipients, else: reason
 
       "[AttentionRouter] added_attention phase=decision space=#{message.space_id} " <>
         "message=#{message.id} requested=#{requested} policy=#{policy} awake=#{awake} " <>
