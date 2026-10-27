@@ -19,16 +19,17 @@ final class TabBarUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 4, shownTimeout: TimeInterval = 30) -> XCUIApplication {
+    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
-        // The shell loads the bundled fixture once, from viewDidAppear. On a
-        // cold runner simulator the first launches of a run sometimes come up
-        // with an empty web view that never loads (the failure hierarchy is a
-        // BurrowBridgeViewController over an empty UIScrollView; the same
-        // build passes on the next launch). Waiting longer on that launch
-        // does not help, so relaunch on a missing fixture and only fail when
-        // every attempt shows nothing.
+        // The shell loads the bundled fixture once, from viewDidAppear, and
+        // WebLoadRecovery (task 01a17d1f) re-issues that load if it fails
+        // provisionally, loses its WebContent process, or never commits. So a
+        // normal launch shows the fixture the first time. One relaunch is
+        // still allowed, but a relaunch is a regression signal, not something
+        // normal: read it from the `fixture-launch:` line (relaunches=1) and
+        // from webload.log, do not tolerate it. If the fixture is still
+        // missing after the allowed attempts the test fails.
         var shown = false
         var attempts = 0
         for _ in 0 ..< maxAttempts where !shown {
