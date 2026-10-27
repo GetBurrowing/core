@@ -97,7 +97,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
         </p>
         <pre
           id="native-login-attach-command"
-          class="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-box bg-neutral p-3 font-mono text-xs leading-5 text-neutral-content"
+          class="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-box bg-neutral p-3 font-mono text-xs leading-5 text-neutral-content"
         >{@command}</pre>
         <p id="native-login-operator-code" class="mt-2 text-sm text-base-content">
           {operator_code_line()}
