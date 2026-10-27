@@ -354,7 +354,7 @@ final class TabBarUITests: XCTestCase {
         for state in ["selected", "unselected"] {
             var regions: [String: Double] = [:]
             for region in ["label", "glyph"] {
-                if let worst = measured.filter({ $0.state == state && $0.region == region }).map(\\.value).min() {
+                if let worst = measured.filter({ $0.state == state && $0.region == region }).map(\.value).min() {
                     regions[region] = TabContrast.round(worst)
                 }
             }
