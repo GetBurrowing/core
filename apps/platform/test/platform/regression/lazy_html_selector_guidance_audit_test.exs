@@ -59,6 +59,9 @@ defmodule Platform.Regression.LazyHtmlSelectorGuidanceAuditTest do
 
   use ExUnit.Case, async: true
 
+  # The repo-wide `**/*.md` walk is the cost; it ran 60 s+ on a loaded full run.
+  @moduletag timeout: 300_000
+
   alias Platform.TestSupport.SourceIndex
 
   @repo_root Path.expand("../../../../..", __DIR__)
