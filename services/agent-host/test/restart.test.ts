@@ -49,7 +49,7 @@ function harness(states: ObservedState[], snapshots: ToolSnapshot[]) {
     waitMs: 1_000,
     pollMs: 0,
   };
-  const host = new StubHost(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, restart);
+  const host = new StubHost(deps, { push: async (e, p) => (pushed.push([e, p]), "ok") }, "contained", undefined, false, null, restart);
   host.states = states;
   return { host, events, pushed };
 }

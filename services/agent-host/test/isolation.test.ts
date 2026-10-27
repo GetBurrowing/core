@@ -200,12 +200,13 @@ d("per-agent OS users on a real systemd", () => {
     expect(scan(TOK_B)).toEqual([]);
   });
 
-  test("suite-cli's needs_login status reads needs_login, with its login url", async () => {
+  test("suite-cli's needs_login status reads needs_login, with its step and never its login url", async () => {
     writeFileSync("/tmp/suite-stub-login", "1");
     try {
       await until("needs_login", async () => (await observeAgent(deps, A)).state === "needs_login", 30_000);
       const o = await observeAgent(deps, A);
-      expect(o.login).toEqual({ step: "login_url", url: "https://claude.com/cai/oauth/authorize?stub=1" });
+      expect(o.login).toEqual({ step: "login_url" });
+      expect(JSON.stringify(o)).not.toContain("oauth");
     } finally {
       rmSync("/tmp/suite-stub-login", { force: true });
     }

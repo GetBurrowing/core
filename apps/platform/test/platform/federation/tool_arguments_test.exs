@@ -210,7 +210,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `canvas_id` (task 01a1559a stage 2). All four are HONEST: each handler
   # reads both under the declared key only and passes them straight to
   # `CanvasAttachments`; no alias, no context fallback, no absence default.
-  @surveyed_required_count 191
+  # 196 adds `voice_ask_agent`'s `space_id` and `question` and
+  # `voice_ask_poll`'s `ask_id` (task 01a17b10 stage 4). All three are HONEST:
+  # `Platform.Meetings.VoiceAsk` reads each under its declared key only and
+  # refuses absence; no alias, no context fallback, no absence default.
+  @surveyed_required_count 196
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

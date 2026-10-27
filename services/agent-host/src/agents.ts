@@ -64,8 +64,12 @@ export interface Observation {
   files_applied: unknown;
   /** Keys the agent changed on disk since the host wrote them. Absent: not checked. */
   files_drifted?: string[];
-  /** Only for needs_login: what suite-cli's status file reported. */
-  login?: { step: string; url?: string };
+  /**
+   * Only for needs_login: the step suite-cli's status file named, and nothing
+   * else. Never a login URL or code (core task 01a17b10): Burrow does not
+   * relay a Claude login; a human logs in at the agent's own pane.
+   */
+  login?: { step: string };
 }
 
 export interface StartCommand {
@@ -273,7 +277,8 @@ export function parseShow(stdout: string): UnitState {
 
 export interface PaneStatus {
   state?: string;
-  login?: { step?: unknown; url?: unknown };
+  // suite-cli may write more under `login` (a URL); only `step` is read.
+  login?: { step?: unknown };
   dialog?: string;
   title?: string;
   reason?: string;
@@ -332,8 +337,9 @@ export function observe(
   if (unit.active !== "active") return { ...base, state: "starting", detail: unit.sub || null };
   if (status?.state === "needs_login") {
     const step = typeof status.login?.step === "string" ? status.login.step : "login";
-    const url = typeof status.login?.url === "string" ? status.login.url : undefined;
-    return { ...base, state: "needs_login", detail: step, login: url === undefined ? { step } : { step, url } };
+    // The step only: whatever else suite-cli reported (a login URL) is not
+    // copied, so it never leaves this host (core task 01a17b10).
+    return { ...base, state: "needs_login", detail: step, login: { step } };
   }
   if (status?.state === "ready") return { ...base, state: "running" };
   if (status?.state === "stuck") {

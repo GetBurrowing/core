@@ -369,12 +369,22 @@ defmodule Platform.Agents.NativeAgents do
 
   @doc """
   The files `agent.start` carries: every file with a valid key, as
-  `%{"key", "content", "version"}`.
+  `%{"key", "content", "version"}`. For the Burrow agent
+  (`Platform.Agents.Burrow`) the instructions file also carries a generated
+  owner / admins section, read from the database on every call.
   """
   @spec start_files(Agent.t()) :: [map()]
   def start_files(%Agent{} = agent) do
+    burrow? = Platform.Agents.Burrow.burrow?(agent)
+    section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
+
     for %WorkspaceFile{} = f <- list_files(agent), valid_file_key?(f.file_key) do
-      %{"key" => f.file_key, "content" => f.content, "version" => f.version}
+      content =
+        if burrow? and f.file_key == instructions_key("claude_code"),
+          do: f.content <> section,
+          else: f.content
+
+      %{"key" => f.file_key, "content" => content, "version" => f.version}
     end
   end
 
@@ -439,12 +449,17 @@ defmodule Platform.Agents.NativeAgents do
   def live?(%{state: state}) when state in @live_states, do: true
   def live?(_), do: false
 
+  defp seed_instructions(name, "claude_code") when name == "Burrow",
+    do: Platform.Agents.Burrow.identity_template(name)
+
+  defp seed_instructions(name, harness), do: identity_template(name, harness)
+
   defp seed_files(%Agent{}, harness) when harness not in ~w(claude_code codex),
     do: {:error, {:unsupported_harness, harness}}
 
   defp seed_files(%Agent{id: id, name: name}, harness) do
     seeds = [
-      {instructions_key(harness), identity_template(name, harness)},
+      {instructions_key(harness), seed_instructions(name, harness)},
       {settings_key(harness), settings_seed(harness)}
     ]
 

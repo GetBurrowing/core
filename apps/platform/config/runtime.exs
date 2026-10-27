@@ -146,6 +146,16 @@ case System.get_env("AGENT_HOST_CORE_URL") do
   value -> config :platform, :agent_host_core_url, String.trim(value)
 end
 
+# NATIVE_AGENT_LOGIN  how native agents log in to Claude (task 01a17b10):
+#                     `api_key` (default; unset means this) or `operator` (no
+#                     API key; a human attaches to the agent's pane and logs
+#                     in to Claude Code there). See Platform.Agents.NativeLogin.
+case System.get_env("NATIVE_AGENT_LOGIN") do
+  nil -> :ok
+  "" -> :ok
+  value -> config :platform, :native_agent_login, value |> String.trim() |> String.downcase()
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when

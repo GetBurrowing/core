@@ -276,7 +276,7 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
 
   describe "CI builds from the repo root" do
     test "every docker build step uses the root context and the app's Dockerfile", %{ci: ci} do
-      entries = ci |> without_agent_host_job() |> lines()
+      entries = ci |> without_agent_host_jobs() |> lines()
 
       build_steps = Enum.count(entries, &(&1 == "uses: docker/build-push-action@v7"))
 
@@ -338,31 +338,48 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
                ["context: services/agent-host"]
 
       # Positive control for the cut: the rest of ci.yml still holds every
-      # other build step, and none of the agent-host job's lines.
-      rest = without_agent_host_job(ci)
+      # other build step, and none of the agent-host jobs' lines.
+      rest = without_agent_host_jobs(ci)
       assert rest =~ "file: apps/platform/Dockerfile"
       refute rest =~ "services/agent-host"
     end
+
+    # Task 01a17b10 stage 1: `agent-host-checks` runs the agent host's
+    # typecheck and unit tests on a pull request. It reads services/agent-host,
+    # so it is cut out by job name as well, and pinned here to build NO image:
+    # a build step added to it cannot hide behind the cut either.
+    test "the PR-only agent-host checks job builds no image", %{ci: ci} do
+      job = job_body(ci, "agent-host-checks")
+      assert job != "", "no `agent-host-checks` job in ci.yml"
+      assert job =~ "services/agent-host"
+      refute job =~ "docker/build-push-action"
+      refute Enum.any?(lines(job), &String.starts_with?(&1, "file: "))
+      refute Enum.any?(lines(job), &String.starts_with?(&1, "context: "))
+    end
   end
 
-  # The `build-and-push-agent-host` job body: from its `  <name>:` line (job
-  # indent, two spaces) to the next line at job indent. "" when absent.
-  defp agent_host_job(ci) do
-    case String.split(ci, "\n  build-and-push-agent-host:\n", parts: 2) do
+  defp agent_host_job(ci), do: job_body(ci, "build-and-push-agent-host")
+
+  # A job body: from its `  <name>:` line (job indent, two spaces) to the
+  # next line at job indent. "" when absent.
+  defp job_body(ci, name) do
+    case String.split(ci, "\n  #{name}:\n", parts: 2) do
       [_before, rest] ->
         [body | _] = Regex.split(~r/^  [a-z#]/m, rest, parts: 2)
-        "  build-and-push-agent-host:\n" <> body
+        "  #{name}:\n" <> body
 
       [_] ->
         ""
     end
   end
 
-  defp without_agent_host_job(ci) do
-    case agent_host_job(ci) do
-      "" -> ci
-      job -> String.replace(ci, job, "", global: false)
-    end
+  defp without_agent_host_jobs(ci) do
+    Enum.reduce(["build-and-push-agent-host", "agent-host-checks"], ci, fn name, acc ->
+      case job_body(acc, name) do
+        "" -> acc
+        job -> String.replace(acc, job, "", global: false)
+      end
+    end)
   end
 
   defp lines(text) do

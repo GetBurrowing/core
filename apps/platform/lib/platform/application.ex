@@ -7,6 +7,9 @@ defmodule Platform.Application do
 
   @impl true
   def start(_type, _args) do
+    # Recent-log tail for the admin_logs tool (task 01a17b10 stage 3).
+    Platform.Admin.LogTail.install()
+
     Platform.Config.validate!()
 
     # The terminal relay's refusal-audit window (task 01a17b17). An ETS table
@@ -260,6 +263,10 @@ defmodule Platform.Application do
          # value module with no `init/1` — see that module's
          # `pushed_table/0` and the store's own moduledoc.
          Platform.Meetings.AgentActivity.Store,
+         # Per-ask answer accumulators for the `voice_ask` tools (task
+         # 01a17b10 stage 4): a Registry and an empty DynamicSupervisor.
+         # Needs PubSub (each accumulator subscribes to a space topic).
+         Platform.Meetings.VoiceAsk.Supervisor,
          # Per-MEETING intent queues (task 019f70b8 stage 2) — one
          # on-demand GenServer per meeting, each owning an unnamed
          # ETS table that dies with it. No sweeper: cleanup is
@@ -312,6 +319,7 @@ defmodule Platform.Application do
     |> maybe_add_canvas_search_backfill(flag)
     |> maybe_add_burrow_docs_seed(flag)
     |> maybe_add_default_space_seed(flag)
+    |> maybe_add_burrow_seed(flag)
     |> ensure_task_router_watcher_after_endpoint()
     |> maybe_add_web_boot_gate(role)
     |> maybe_add_web_peer_link(role)
@@ -533,6 +541,27 @@ defmodule Platform.Application do
           Supervisor.child_spec(
             {Task, fn -> Platform.Chat.DefaultSpace.run_at_boot() end},
             id: :default_space_seed,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
+  # Burrow, the install's own native agent (task 01a17b10 stage 3): installs
+  # that already have users never insert a new one, so the login hook alone
+  # would never create Burrow there. Same shape as the seeds above: a one-shot
+  # `Task`, `restart: :transient`, entry point `run_at_boot/0`, which never
+  # raises. A no-op without AGENT_HOST_TOKEN or a root admin. Disabled in
+  # config/test.exs; tests call `Burrow.ensure/1`.
+  defp maybe_add_burrow_seed(children, flag) do
+    if flag.(:platform, :start_burrow_seed, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.Agents.Burrow.run_at_boot() end},
+            id: :burrow_seed,
             restart: :transient
           )
         ]

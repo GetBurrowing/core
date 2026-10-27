@@ -109,6 +109,9 @@ class Plan:
         # "full_machine" (an agent host on the HOST, target layer) or
         # "contained" (the agent-host container, a registry service).
         self.agents = manifest["agents"]["profile"]
+        # [backup] (task 01a17b10 stage 5): None when target = "none".
+        self.backup = None if manifest["backup"]["target"] == "none" else manifest["backup"]
+        self.full_root = self.agents != "off" and manifest["agents"].get("full_root") is True
 
     def routes(self):
         out = {}

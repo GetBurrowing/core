@@ -8,6 +8,8 @@
  *        agent.pane                   {agent_id, lines, ref}              read only (pane.ts)
  *        agent.file_read              {agent_id, key, ref}                one file, redacted (files.ts)
  *        agent.check_auth             {agent_id, ref}                     does its API key work? (auth.ts)
+ *        host.env_names               {agent_id?, ref}                    env NAMES only, never values
+ *        host.admin                   {op, service, tag?, ref}            restart|deploy|rollback, full_root only
  *   out  host.inventory               {profile, agents: [observation]}   on every join
  *        agent.state                  observation                         on every change
  *        agent.log                    {ref, agent_id, lines}
@@ -15,6 +17,7 @@
  *        agent.file                   {ref, agent_id, content, sha256} | {ref, agent_id, error}
  *        agent.auth                   {ref, agent_id, result}             ok | rejected | unknown
  *        agent.restarted              {ref, agent_id, outcome, before, after}   tool snapshots, names only
+ *        host.reply                   {ref, result}                       answer to host.env_names | host.admin
  *
  * An agent whose key a check found `rejected` reads `needs_login` (detail
  * `auth_error`) until its next start, which is the only thing that can give
@@ -44,6 +47,7 @@ import { isFileKey, readAgentFileRaw, redactForRead, sha256Hex } from "./files.t
 import { homeDir, isAgentId, userName, workDir } from "./ids.ts";
 import { snapshotTools, type ProbeUser, type ToolSnapshot } from "./tools.ts";
 import { agentPane } from "./pane.ts";
+import { deployService, restartService, rollbackService, type AdminResult, type DockerFetch } from "./docker.ts";
 import type { Payload } from "./phoenix.ts";
 
 export interface Transport {
@@ -63,6 +67,9 @@ export class Host {
     private readonly transport: Transport,
     private readonly profile: string,
     private readonly auth: AuthDeps = liveAuthDeps,
+    /** True only when the install enabled `[agents] full_root`; advertised in the hello. */
+    private readonly fullRoot: boolean = false,
+    private readonly docker: DockerFetch | null = null,
     restart?: Partial<RestartDeps>,
   ) {
     this.restartDeps = {
@@ -76,6 +83,46 @@ export class Host {
   }
 
   private readonly restartDeps: RestartDeps;
+
+  /** The host's hello: its profile, and whether full root is on. */
+  hello(): Payload {
+    return { profile: this.profile, full_root: this.fullRoot };
+  }
+
+  /** Env names (never values) of one agent's env file. Answered as `host.reply`. */
+  async handleEnvNames(payload: Payload): Promise<void> {
+    const { agent_id: agentId, ref } = payload;
+    if (typeof ref !== "string") return;
+    const names = isAgentId(agentId) ? Object.keys(this.auth.readEnv(agentId) ?? {}).sort() : [];
+    await this.transport.push("host.reply", { ref, result: { names } });
+  }
+
+  /**
+   * restart | deploy | rollback of a compose service. Without full root the
+   * answer is `requires_full_root` and the socket is never touched.
+   */
+  async handleAdmin(payload: Payload): Promise<void> {
+    const { op, service, tag, ref } = payload;
+    if (typeof ref !== "string") return;
+    const reply = (result: AdminResult): Promise<string> => this.transport.push("host.reply", { ref, result: result as unknown as Payload });
+    if (!this.fullRoot || this.docker === null) {
+      await reply({ error: "requires_full_root", manifest_key: "agents.full_root" });
+      return;
+    }
+    if (typeof service !== "string" || service.trim() === "") {
+      await reply({ error: "invalid", detail: "service is required" });
+      return;
+    }
+    try {
+      const t = typeof tag === "string" && tag !== "" ? tag : undefined;
+      if (op === "restart") await reply(await restartService(this.docker, service));
+      else if (op === "deploy" && t !== undefined) await reply(await deployService(this.docker, service, t));
+      else if (op === "rollback") await reply(await rollbackService(this.docker, service, t));
+      else await reply({ error: "invalid", detail: "op must be restart, deploy (with tag) or rollback" });
+    } catch (error) {
+      await reply({ error: "failed", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
 
   /** What the host reports: the unit and status file, then a rejected key on top. */
   async observe(agentId: string): Promise<Observation> {

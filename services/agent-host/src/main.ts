@@ -5,7 +5,9 @@
  * It dials OUT to `${BURROW_CORE_URL}/agent-host/websocket` with
  * `AGENT_HOST_TOKEN`, reconnecting with backoff, and core pushes commands.
  * Core is never given a way into this machine: no container-runtime socket and
- * no D-Bus is shared with it.
+ * no D-Bus is shared with it. The one exception is the install's opt-in
+ * `[agents] full_root`, where the HOST (not core) holds the runtime socket and
+ * acts on core's restart/deploy/rollback commands.
  *
  * Runs as root (a systemd service on `full_machine`, container root under the
  * container's systemd on `contained`; packaging is stage 3), because it
@@ -16,11 +18,14 @@
  *                        (legacy SUITE_CORE_URL is still read, with a deprecation line)
  *   AGENT_HOST_TOKEN     the install's shared agent-host secret
  *   AGENT_HOST_PROFILE   "full_machine" | "contained", reported to core as is
+ *   AGENT_HOST_FULL_ROOT "true" only when the install set [agents] full_root; reported in the
+ *                        hello. The runtime socket (AGENT_HOST_RUNTIME_SOCKET) is mounted only then.
  */
 import { resolve } from "node:path";
 import { readEnv } from "./env.ts";
 import { SecretRegistry, liveRunner } from "./exec.ts";
 import { Host, WATCH_MS } from "./host.ts";
+import { liveDockerFetch, socketPath } from "./docker.ts";
 import { adoptLegacy, liveLegacyFs } from "./legacy.ts";
 import { PhoenixChannel, agentHostUrl, bunSocket } from "./phoenix.ts";
 
@@ -76,12 +81,13 @@ if (import.meta.main) {
     url: agentHostUrl(coreUrl),
     headers: { "x-agent-host-token": token },
     topic: "agent_host:control",
-    joinPayload: () => ({ profile }),
+    joinPayload: () => host.hello(),
     socket: bunSocket,
     log,
     onJoined: () => void host.inventory().catch((e: unknown) => log(`inventory failed: ${String(e)}`)),
   });
-  const host = new Host(deps, channel, profile);
+  const fullRoot = process.env.AGENT_HOST_FULL_ROOT?.trim() === "true";
+  const host = new Host(deps, channel, profile, undefined, fullRoot, fullRoot ? liveDockerFetch(socketPath()) : null);
 
   channel.on("agent.start", (p) => void host.handleStart(p));
   channel.on("agent.restart", (p) => void host.handleRestart(p));
@@ -90,6 +96,8 @@ if (import.meta.main) {
   channel.on("agent.pane", (p) => void host.handlePane(p).catch((e: unknown) => log(`pane failed: ${String(e)}`)));
   channel.on("agent.file_read", (p) => void host.handleFileRead(p).catch((e: unknown) => log(`file read failed: ${String(e)}`)));
   channel.on("agent.check_auth", (p) => void host.handleCheckAuth(p));
+  channel.on("host.env_names", (p) => void host.handleEnvNames(p).catch((e: unknown) => log(`env_names failed: ${String(e)}`)));
+  channel.on("host.admin", (p) => void host.handleAdmin(p).catch((e: unknown) => log(`admin failed: ${String(e)}`)));
 
   log(`dialling ${agentHostUrl(coreUrl)} as profile ${profile}`);
   channel.connect();

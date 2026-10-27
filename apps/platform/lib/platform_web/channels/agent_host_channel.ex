@@ -96,6 +96,19 @@ defmodule PlatformWeb.AgentHostChannel do
     {:reply, :ok, socket}
   end
 
+  # The answer to `host.env_names` / `host.admin` (task 01a17b10 stage 3).
+  # Env names only; never logged here.
+  def handle_in("host.reply", %{"ref" => ref, "result" => result}, socket)
+      when is_binary(ref) and is_map(result) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      AgentHost.reply_topic(ref),
+      {:agent_host_reply, ref, result}
+    )
+
+    {:reply, :ok, socket}
+  end
+
   def handle_in(_event, _payload, socket), do: {:reply, {:error, %{reason: "invalid"}}, socket}
 
   @impl true

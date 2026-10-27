@@ -250,6 +250,80 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
     end
   end
 
+  # ── Operator login mode (task 01a17b10 stage 1) ───────────────────
+
+  describe "operator login mode" do
+    setup do
+      previous = Application.fetch_env(:platform, :native_agent_login)
+      Application.put_env(:platform, :native_agent_login, "operator")
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:platform, :native_agent_login, value)
+          :error -> Application.delete_env(:platform, :native_agent_login)
+        end
+      end)
+
+      :ok
+    end
+
+    test "the login step shows the attach-command template in place of the key field", %{
+      conn: conn,
+      owner: owner
+    } do
+      host = host!()
+      agent = native!(owner, "Ora")
+
+      observe!(host, agent, "needs_login", %{
+        "login" => %{
+          "step" => "login_url",
+          "url" => "https://claude.com/cai/oauth/authorize?code=true&state=OPSTATE"
+        }
+      })
+
+      {:ok, view, html} = live(as(conn, owner), ~p"/control/#{agent.slug}")
+
+      assert has_element?(view, "#native-login[data-mode=operator] h2", "Log Ora in to Claude")
+      assert has_element?(view, "#native-login-attach-command", "tmux attach -t suite-agent")
+      assert has_element?(view, "#native-login-attach-command", "agent-<12 hex>")
+      assert has_element?(view, "#native-login-operator-code", "Burrow never sees it.")
+
+      # No key field, no form, no input of any kind; no login page.
+      refute has_element?(view, "#native-api-key-form")
+      refute has_element?(view, "#native-login input")
+      refute has_element?(view, "#native-login a")
+      refute html =~ "oauth/authorize"
+      refute html =~ "OPSTATE"
+    end
+
+    test "a non-manager sees the locked line, not the command", %{conn: conn, owner: owner} do
+      host = host!()
+      agent = native!(owner, "Pia")
+      observe!(host, agent, "needs_login", %{"login" => %{"step" => "login_url"}})
+      stranger = member!("member")
+
+      {:ok, view, _html} = live(as(conn, stranger), ~p"/control/#{agent.slug}")
+
+      assert has_element?(view, "#native-login-locked")
+      refute has_element?(view, "#native-login-attach-command")
+    end
+
+    test "running: the summary says it logs in at its terminal, with no key form", %{
+      conn: conn,
+      owner: owner
+    } do
+      host = host!()
+      agent = native!(owner, "Quin")
+      observe!(host, agent, "running")
+
+      {:ok, view, _html} = live(as(conn, owner), ~p"/control/#{agent.slug}")
+
+      assert has_element?(view, "#native-login-summary[data-mode=operator]")
+      assert has_element?(view, "#native-login-success", "Quin is logged in to Claude.")
+      refute has_element?(view, "#native-api-key-form")
+    end
+  end
+
   describe "a non-manager cannot start a login" do
     test "no form is shown, and the event is refused server-side", %{conn: conn, owner: owner} do
       host = host!()

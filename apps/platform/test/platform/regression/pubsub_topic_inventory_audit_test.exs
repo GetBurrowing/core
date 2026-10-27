@@ -219,6 +219,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # and no secret. A subscriber is the config screen, which has already
     # passed `ConfigFiles.Access.authorize/2` for that agent.
     {"agent_config:<id>", :resource},
+    # Task 01a17b10 stage 3. The same rendezvous for `AgentHost.host_call/3`
+    # (`host.env_names` and `host.admin`): the host's reply map, env NAMES or
+    # the result of a restart/deploy/rollback, never a value or a token. Only
+    # a caller of `host_call/3` knows the ref.
+    {"agent_host:reply:<id>", :resource},
     # Task 01a17b17 stage 2. One remote-terminal session: sealed frames and
     # control events between the owner's view channel and the agent's CLI
     # channel. The id is random and only those two channel processes hold it.

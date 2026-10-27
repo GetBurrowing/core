@@ -274,6 +274,59 @@ needs to re-run the same harness command against the new commit to confirm
 these for real; see the task's execution space
 (`01a0d4d2-22d5-7001-b66a-04e3b16d7470`) for the exact ask.
 
+## Voice brain routing (task 01a17b10 stage 4)
+
+The local model is the mouth; the install's Burrow agent is the brain.
+
+- **`MVA_ROUTING`** maps each turn class to a variant, as data:
+  `ack=local,turn_taking=local,substantive=burrow` is the default, and every
+  class can be set to `local` or `burrow` (a JSON object also works). An
+  unknown class or variant fails config loading.
+- **Classification** (`routing.LocalClassifier`): the mouth model on
+  `MVA_LLM_*` labels each committed turn `ack`, `turn_taking` or
+  `substantive`. If that endpoint errors or takes longer than
+  `MVA_CLASSIFIER_TIMEOUT_S` (1.5 s), rules decide instead, so an unreachable
+  mouth host never blocks a routed answer. A question of five or more words
+  the rules call substantive stays substantive whatever the model says.
+- **A `burrow` turn** (`MeetingVoiceAgent.llm_node`): the mouth speaks
+  `MVA_ROUTED_ACK_TEXT` at once, then Core's `voice_ask_agent` posts the
+  question in the meeting chat with an `@[Burrow]` mention, so Burrow is
+  dispatched the ordinary way. `voice_ask_poll` long-polls Burrow's
+  cumulative `suite_reply_chunk` text, and each complete clause is handed to
+  TTS with a flush as it arrives. Barge-in cancels `llm_node`, which closes
+  the stream and stops polling. If no answer text arrives within
+  `MVA_ROUTED_ANSWER_TIMEOUT_S` (20 s), or Core refuses the ask, the mouth
+  says `MVA_ROUTED_NO_ANSWER_TEXT` and nothing else.
+- **Provenance**: Core's poll reply names `answered_by` (Burrow's agent id,
+  never this persona's) and `variant`; the worker logs it and publishes it on
+  the room's `mva.routing` data topic, and Burrow's reply is its own message
+  in the meeting chat. Burrow must be on the meeting space's roster
+  (`voice_ask_agent` returns `agent_not_in_space` otherwise).
+- The persona's runtime needs the `voice_ask` bundle
+  (`mix platform.seed_meeting_voice_agent` grants it).
+
+### Routing harness
+
+`meeting-voice-routing-harness` runs against any OpenAI-compatible mouth
+named by `MVA_LLM_BASE_URL` / `MVA_LLM_MODEL`:
+
+```bash
+# mouth candidates: ack latency (classify + first reply token) p50/p90 and
+# turn-class correctness over the scripted set (12 questions, 4 acks, 4 turn-taking)
+MVA_LLM_BASE_URL=http://<mouth-host>:<port>/v1 MVA_LLM_MODEL=<alias> \
+  uv run meeting-voice-routing-harness mouth --label <name>
+
+# time to first substantive word (first TTS audio of the answer, not the ack)
+uv run meeting-voice-routing-harness ttfsw --substantive local            # before
+uv run meeting-voice-routing-harness ttfsw --substantive burrow           # after, real Core path
+uv run meeting-voice-routing-harness ttfsw --substantive burrow --brain claude-cli  # after, model stand-in
+```
+
+The real Core path needs `MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN` (the voice
+persona's runtime token) and `MVA_HARNESS_SPACE_ID` (a space Burrow is in).
+TTS is `MVA_TTS_BASE_URL` when set, else macOS `say`; the report names it.
+`--out FILE` appends the JSON results.
+
 ## Known gap: Core cannot invite this service into a real meeting (dual-agent case)
 
 Dalton's live test-host run found the dual-agent regression e2e case could not be

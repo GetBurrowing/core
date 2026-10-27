@@ -1765,6 +1765,58 @@ jobs:
             ghcr.io/getburrowing/burrow-agent-host:latest
             ghcr.io/getburrowing/burrow-agent-host:${{ github.sha }}
 
+  # The agent host's typecheck and unit tests on every PULL REQUEST (task
+  # 01a17b10 stage 1). Before this they ran only inside
+  # build-and-push-agent-host, which runs on a push to main, so a PR that
+  # broke the agent host merged green. Same docker invocation as that
+  # job's "Typecheck and unit-test the agent host" step, after the GHCR login
+  # (the bun image is a ghcr.io/getburrowing mirror).
+  agent-host-checks:
+    name: Agent host (typecheck + unit tests)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Typecheck and unit-test the agent host
+        run: |
+          docker run --rm -v "$PWD/services/agent-host:/src:ro" ghcr.io/getburrowing/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d sh -c \
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
+
+  # The meeting voice service's unit tests (task 01a17b10 stage 4). Mocked
+  # backends only: tests/live is excluded twice over (the path and the
+  # pyproject's `-m 'not live_infra'`), so no network endpoint is needed.
+  meeting-voice-agent:
+    name: Meeting voice agent (pytest)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/python:3.12-slim@sha256:5b8b1421ccb6a525860a77863c049eab5847076cda34e030c75a80c58faf3f3c
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: services/meeting-voice-agent
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        run: python3 -m pip install --no-cache-dir uv
+
+      - name: Run unit tests
+        env:
+          UV_PYTHON_PREFERENCE: only-system
+        run: uv run --locked --extra dev pytest --ignore=tests/live -q
+
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
   # only, so the stock image needs no apt or pip step.
