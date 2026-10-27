@@ -203,6 +203,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
     # key. Only a caller of `check_auth/2` knows the ref.
     {"agent_host:auth:<id>", :resource},
+    # Task 01a17b10 stage 3. The same rendezvous for `AgentHost.host_call/3`
+    # (`host.env_names` and `host.admin`): the host's reply map, env NAMES or
+    # the result of a restart/deploy/rollback, never a value or a token. Only
+    # a caller of `host_call/3` knows the ref.
+    {"agent_host:reply:<id>", :resource},
     # Task 01a1694a stage 3. Keyed by a `meeting_briefings` id; the reachable
     # set is that briefing's attendees. Payload is
     # `{:meeting_briefing_changed, briefing_id}`, the id only, and a

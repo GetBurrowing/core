@@ -5,7 +5,8 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
 - It dials **out** to core at `${BURROW_CORE_URL}/agent-host/websocket` and
   presents `AGENT_HOST_TOKEN` in the `x-agent-host-token` header. Core pushes
   commands down that channel. Core is never given a container-runtime socket
-  or the host's D-Bus.
+  or the host's D-Bus (the opt-in "Full root" below puts the socket in the host,
+  never in core).
 - Every agent is a systemd unit, `burrow-agent@<agent id>.service`, running as
   its own OS user `agent-<last 12 hex of the id>`. The user has a 0700 home, a
   0600 env file at `/etc/burrow-agents/<id>.env` and a 0700 tmux dir at
@@ -107,6 +108,23 @@ types the code into Claude Code's own prompt in the attached pane. Burrow
 never sees the code or the URL: the host passes core only the login step's
 name, and "Recent output" stays withheld while a login screen is up
 (`src/pane.ts`).
+
+## Full root (opt-in)
+
+Off by default (`[agents] full_root = false` in the install manifest). Core is never
+given the container-runtime socket; when the install turns this on, the HOST holds it and
+acts on core's `host.admin` command (restart, deploy or rollback of a compose service).
+
+- `contained`: the render mounts exactly one socket (`/var/run/docker.sock`) into this
+  container and sets `AGENT_HOST_FULL_ROOT=true`. Nothing is mounted otherwise.
+- `full_machine`: no mount (the host is already root); the host env file gets
+  `AGENT_HOST_FULL_ROOT=true`.
+- The hello carries `full_root`. With it off, `host.admin` answers `requires_full_root`
+  and the socket is never touched. `host.env_names` returns the NAMES in an agent's env
+  file, never values.
+
+The `admin_rpc` tool evaluates code in the running core release. That is a shell inside
+core and is NOT gated by `full_root`; the key governs only the runtime socket.
 
 ## Hosts installed before the rename
 

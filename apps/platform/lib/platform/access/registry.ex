@@ -349,6 +349,11 @@ defmodule Platform.Access.Registry do
         rail: [%{key: :prompts, permission: "prompts.manage"}]
       },
       %{module: "access", permissions: ~w(access.manage)},
+      # Task 01a17b10 stage 3: the `admin` MCP bundle's tools. A module-admin
+      # permission, like `prompts.manage`: no role carries it, and root admins
+      # hold it through `Scope.grant_root_admin/3`, so an agent (capped at its
+      # owner) holds it only when its owner is a root admin. No role migration.
+      %{module: "admin", permissions: [%{name: "admin.use", module_admin: true}]},
       %{module: "orgs", permissions: [%{name: "orgs.read", derived: true}]},
       %{
         module: "install",

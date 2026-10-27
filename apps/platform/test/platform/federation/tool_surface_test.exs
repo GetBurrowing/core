@@ -187,7 +187,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # Four optional access consent tools (task 01a1386e-72e1).
       # 137 as of task 01a1559a stage 2: `stack_attach_canvas` and
       # `stack_detach_canvas` in `task`. Genuinely new tools, no new bundle.
-      assert length(tools) == 137
+      # 145 as of task 01a17b10 stage 3, which added the 8-tool `admin` bundle
+      # (admin_health, admin_logs, admin_env_names, admin_migrations, admin_rpc,
+      # admin_restart, admin_deploy, admin_rollback).
+      assert length(tools) == 145
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

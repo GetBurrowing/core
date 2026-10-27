@@ -334,6 +334,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`acknowledged/3` checks the `data.message_id` a peer's inbox answered with before `SharedSpaces.record_outbound/3` inserts it into `federation_message_links.remote_message_id` (an `Ecto.UUID` column); a malformed id records no link and the cursor still advances"},
     {"platform/federation/peers/shared_spaces.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "`accept_share/2` checks a remote `space.share` payload's `space_id` before `existing_replica/2` compares it against `remote_space_id` (an `Ecto.UUID` column); a malformed id is `{:error, :invalid_payload}`"},
+    {"platform/admin/tools.ex", :get_by, "Agent", 1, :safe_internal,
+     "`execute/3` looks the calling agent up by `runtime_id: runtime.id`, where `runtime` is the %AgentRuntime{} `Federation.get_runtime_by_runtime_id/1` just loaded, so the value is that struct's own binary_id primary key and cannot be malformed"},
     {"platform/federation/task_attrs.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`default_agent_resolver/1` is the injection seam for tests; callers pass an `assignee_id` that `TaskAttrs` has already shape-validated"},
     {"platform/federation/tool_surface.ex", :platform_uuid_guard, "-", 11, :safe_internal,

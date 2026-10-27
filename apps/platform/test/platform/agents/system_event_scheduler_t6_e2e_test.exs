@@ -757,7 +757,11 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # `stack_detach_canvas` in the `task` bundle beside `stack_assign_agents`;
     # no schedule, no trigger and no historian surface.
     # (+stack_attach_canvas, +stack_detach_canvas -> 137)
-    @t6_baseline_tool_count 137
+    # bumped by task 01a17b10 stage 3 — the 8-tool `admin` bundle
+    # (admin_health, admin_logs, admin_env_names, admin_migrations, admin_rpc,
+    # admin_restart, admin_deploy, admin_rollback); scheduler T6 adds none.
+    # (+8 admin -> 145)
+    @t6_baseline_tool_count 145
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

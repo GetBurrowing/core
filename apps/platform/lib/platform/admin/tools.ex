@@ -30,8 +30,10 @@ defmodule Platform.Admin.Tools do
   allow-list. The capability boundary is `[agents] full_root`: off, the
   destructive tools return `requires_full_root` naming `agents.full_root`.
 
-  Authorization is `install.admin` on the calling runtime's scope (capped at
-  its owner), checked again here even though the tool surface checks it.
+  Authorization is `admin.use`, a module-admin permission held only by an admin
+  of the ROOT org (`Scope.grant_root_admin/3`) and capped at the runtime's
+  owner, so an agent owned by a member or a sub-org admin is refused. The tool
+  surface checks it, and this module checks it again.
   """
 
   require Logger
@@ -64,11 +66,14 @@ defmodule Platform.Admin.Tools do
         audit(tool, args, nil, {:error, :forbidden, "no runtime"})
         {:error, error("forbidden", "no runtime for this call")}
 
-      not Access.can?(Scope.for_runtime(runtime), "install.admin") ->
-        audit(tool, args, agent, {:error, :forbidden, "install.admin not held"})
+      not Access.can?(Scope.for_runtime(runtime), "admin.use") ->
+        audit(tool, args, agent, {:error, :forbidden, "admin.use not held"})
 
         {:error,
-         error("forbidden", "tool '#{tool}' requires install.admin, capped at your owner")}
+         error(
+           "forbidden",
+           "tool '#{tool}' requires admin.use (root admin), capped at your owner"
+         )}
 
       true ->
         run(tool, args, agent, context)

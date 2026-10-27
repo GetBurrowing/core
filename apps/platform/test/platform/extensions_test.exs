@@ -918,8 +918,8 @@ defmodule Platform.ExtensionsTest do
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin)
     @main_rail [
       :chat,
       # The Voice tab (task 01a1557a-eab7 stage 2).
@@ -992,10 +992,16 @@ defmodule Platform.ExtensionsTest do
 
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
-      {access, legacy} = Enum.split_with(defs, &(&1.bundle == "access"))
+      {extra, legacy} = Enum.split_with(defs, &(&1.bundle in ["access", "admin"]))
+      {access, admin} = Enum.split_with(extra, &(&1.bundle == "access"))
 
       assert Enum.map(access, & &1.name) ==
                ~w(access_explain access_propose access_apply access_undo)
+
+      # Task 01a17b10 stage 3: the `admin` bundle is additive to main's list,
+      # split off like `access`; `legacy` below is still main's list exactly.
+      assert Enum.map(admin, & &1.name) ==
+               ~w(admin_health admin_logs admin_env_names admin_migrations admin_rpc admin_restart admin_deploy admin_rollback)
 
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
       # canvas_create embeds the kind union. Strip only the two additive

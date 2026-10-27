@@ -210,7 +210,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `canvas_id` (task 01a1559a stage 2). All four are HONEST: each handler
   # reads both under the declared key only and passes them straight to
   # `CanvasAttachments`; no alias, no context fallback, no absence default.
-  @surveyed_required_count 191
+  @surveyed_required_count 193
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

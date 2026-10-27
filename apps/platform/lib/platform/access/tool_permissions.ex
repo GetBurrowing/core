@@ -23,7 +23,7 @@ defmodule Platform.Access.ToolPermissions do
                ~w(attachment_get_inline file_get_metadata file_get_text file_list file_search)},
               {"files.write",
                ~w(attachment_upload_inline attachment_upload_start file_add file_delete)},
-              {"install.admin",
+              {"admin.use",
                ~w(admin_health admin_logs admin_env_names admin_migrations admin_rpc admin_restart admin_deploy admin_rollback)},
               {"mail.use",
                ~w(mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},

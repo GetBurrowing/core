@@ -121,7 +121,13 @@ defmodule Platform.Access.ScopeTest do
     }
   end
 
-  @root_admin_rule %{"install.admin" => :all, "tasks.manage" => :all, "prompts.manage" => :all}
+  @root_admin_rule %{
+    "install.admin" => :all,
+    "tasks.manage" => :all,
+    "prompts.manage" => :all,
+    # Task 01a17b10 stage 3: the `admin` MCP bundle's permission.
+    "admin.use" => :all
+  }
 
   defp guest_map(p), do: %{"chat.read" => p, "chat.write" => p}
 

@@ -117,10 +117,10 @@ defmodule Platform.Admin.ToolsTest do
       assert Enum.sort(names) == Enum.sort(@all_tools)
 
       for t <- @all_tools,
-          do: assert(Platform.Access.ToolPermissions.for_tool(t) == "install.admin")
+          do: assert(Platform.Access.ToolPermissions.for_tool(t) == "admin.use")
 
       assert Platform.Access.ToolPermissions.bundle_permissions("admin") ==
-               MapSet.new(["install.admin"])
+               MapSet.new(["admin.use"])
     end
 
     test "no admin tool takes a confirm or approve argument" do

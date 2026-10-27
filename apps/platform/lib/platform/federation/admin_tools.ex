@@ -99,7 +99,7 @@ defmodule Platform.Federation.AdminTools do
       parameters: parameters,
       returns: returns,
       limitations:
-        "Requires install.admin (an install admin's agent; capped at its owner). Every call writes an audit row. Takes no confirmation argument.",
+        "Requires admin.use, held through a root-org admin owner (capped at your owner). Every call writes an audit row. Takes no confirmation argument.",
       when_to_use: usage
     }
 end
