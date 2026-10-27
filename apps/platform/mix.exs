@@ -332,6 +332,7 @@ defmodule Platform.MixProject do
         "esbuild platform",
         "esbuild excalidraw",
         "esbuild emoji",
+        "esbuild terminal",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
       "assets.deploy": [
@@ -339,6 +340,7 @@ defmodule Platform.MixProject do
         "esbuild platform --minify",
         "esbuild excalidraw --minify",
         "esbuild emoji --minify",
+        "esbuild terminal --minify",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"
       ],

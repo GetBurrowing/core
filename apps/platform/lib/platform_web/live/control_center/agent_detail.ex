@@ -327,6 +327,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:available_meeting_spaces, :list, default: [])
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
+  attr(:current_user_id, :string, default: nil)
 
   def federation_panels(assigns) do
     ~H"""
@@ -355,6 +356,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         can_manage?={@can_manage?}
         managed?={@managed?}
       />
+      <PlatformWeb.TerminalPanel.entry agent={@agent} user_id={@current_user_id} />
     </section>
 
     <%!-- Identity and Voice are two CARDS inside ONE form (01a06dff stage 2).

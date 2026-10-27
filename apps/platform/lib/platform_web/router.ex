@@ -927,6 +927,10 @@ defmodule PlatformWeb.Router do
       live("/control/experiments", ExperimentsLive, :index)
       live("/control/experiments/:slug", ExperimentsLive, :show)
       live("/control/:agent_slug", ControlCenterLive, :show)
+      # Task 01a17b17 stage 3: the owner's remote terminal. Keyed by runtime id
+      # so a direct URL for someone else's runtime reaches the same refusal
+      # core's channel gives.
+      live("/terminal/:runtime_id", TerminalLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
       # Task 01a13867 stage 5 — direct entry to the Insights tab (renamed
       # from Proposals). `live_action == :insights` mounts the same

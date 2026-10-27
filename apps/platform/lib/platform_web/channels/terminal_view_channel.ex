@@ -45,7 +45,9 @@ defmodule PlatformWeb.TerminalViewChannel do
          cli_pid = Terminal.cli_pid(runtime_id),
          {:opt_in, true} <- {:opt_in, RemoteAccess.permitted?(kind, cli_pid != nil)},
          {:audit, :ok} <- {:audit, Audit.record("opened", user_id, runtime_id, %{mode: "ro"})} do
-      {:ok, %{mode: "ro"}, start_session(socket, runtime_id, cli_pid)}
+      socket = start_session(socket, runtime_id, cli_pid)
+      # The session id is the HKDF salt the browser needs; it is not a secret.
+      {:ok, %{mode: "ro", session_id: socket.assigns.session_id}, socket}
     else
       {:user, _} -> {:error, %{reason: "unauthorized"}}
       {:allowed, _} -> refuse(user_id, runtime_id, "forbidden")

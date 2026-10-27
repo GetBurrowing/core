@@ -76,6 +76,7 @@ import Sheet from "./sheet"
 import ModeToggle from "./mode_toggle"
 import SidebarCollapse from "./sidebar_collapse"
 import TabPill from "./tab_pill"
+import TerminalHost from "./terminal_host"
 import TabSwitchCache from "./tab_switch_cache"
 import VoiceContext from "./voice_context"
 import VoiceTab from "./voice_tab"
@@ -162,6 +163,7 @@ export default {
   ModeToggle,
   SidebarCollapse,
   TabPill,
+  TerminalHost,
   TabSwitchCache,
   VoiceContext,
   VoiceTab,
