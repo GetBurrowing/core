@@ -230,4 +230,30 @@ describe("ScrollToBottom: a server-initiated prepend", () => {
 
     expect(distanceFromBottom(el)).toBe(0);
   });
+
+  it("pushes through #message-list-push-proxy, so #message-list is never the locked element", () => {
+    const { hook } = settled({ distance: 0 });
+    // This suite runs without a DOM; a stand-in document holds the proxy.
+    const proxy = { id: "message-list-push-proxy" };
+    const priorDocument = globalThis.document;
+    globalThis.document = { getElementById: (id) => (id === proxy.id ? proxy : null) };
+    hook.liveSocket = { execJS: vi.fn() };
+    hook.pushEvent.mockClear();
+    try {
+      hook._lastAway = null;
+      hook._reportDistance();
+
+      expect(hook.pushEvent).not.toHaveBeenCalled();
+      expect(hook.liveSocket.execJS).toHaveBeenCalledTimes(1);
+      const [el, js, type] = hook.liveSocket.execJS.mock.calls[0];
+      expect(el).toBe(proxy);
+      expect(type).toBe("hook");
+      expect(JSON.parse(js)).toEqual([
+        ["push", { event: "jump_to_latest_distance", value: { away: false, deep: false } }],
+      ]);
+    } finally {
+      if (priorDocument === undefined) delete globalThis.document;
+      else globalThis.document = priorDocument;
+    }
+  });
 });

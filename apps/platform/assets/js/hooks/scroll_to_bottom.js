@@ -391,6 +391,28 @@ const ScrollToBottom = {
     this._preUpdateDistance = this.distanceFromBottom();
     this._capturePrependAnchor();
   },
+  // Every push this hook makes goes through `#message-list-push-proxy`
+  // (chat_live.html.heex), never `this.pushEvent` on #message-list itself
+  // (task 01a17bf4 stage 2). LiveView LOCKS the element a hook pushes from
+  // until the reply arrives, and a stream diff that reaches a locked
+  // element is patched into a clone and merged back afterwards, losing the
+  // stream's insert positions. Measured in Chrome on a 4G-shaped link: the
+  // first-frame backfill arrived while this hook's `jump_to_latest_distance`
+  // push was unacknowledged, and its 40 `at: 0` rows were APPENDED after the
+  // first frame. A JS `push` from the proxy puts the lock on the proxy.
+  // Without the proxy (a test fixture, an embed without it) the plain
+  // pushEvent still works.
+  _push(event, value) {
+    const proxy =
+      typeof document !== "undefined" && document.getElementById
+        ? document.getElementById("message-list-push-proxy")
+        : null;
+    if (proxy && this.liveSocket && typeof this.liveSocket.execJS === "function") {
+      this.liveSocket.execJS(proxy, JSON.stringify([["push", { event, value }]]), "hook");
+    } else {
+      this.pushEvent(event, value);
+    }
+  },
   // ── A SERVER-initiated prepend keeps the reading position (task 01a17bf4)
   //
   // Chat's first frame carries only the newest few messages and the server
@@ -1081,7 +1103,7 @@ const ScrollToBottom = {
     if (away === this._lastAway && deep === this._lastDeep) return;
     this._lastAway = away;
     this._lastDeep = deep;
-    this.pushEvent("jump_to_latest_distance", { away, deep });
+    this._push("jump_to_latest_distance", { away, deep });
     // KEEP-OR-DROP on `holdAnchorThroughReflow()`, REVISITED under task
     // 01a0419a v3. This SUPERSEDES the v2 stage 4 ruling that stood here.
     //
