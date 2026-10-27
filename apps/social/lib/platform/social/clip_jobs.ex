@@ -69,6 +69,68 @@ defmodule Platform.Social.ClipJobs do
   def clip_user_profile(%Profile{id: id}), do: clip_user_profile(id)
   def clip_user_profile(id) when is_binary(id), do: "burrow-" <> id
 
+  @doc """
+  Internal discovery path: queues a source episode without a human identity or
+  clip/trim. Both ids are re-read under a transaction; source eligibility is
+  checked against the persisted pipeline and tenant project. Never exposed as
+  a tool or used to bypass the manual enqueue approver checks.
+  """
+  def enqueue_episode(pipeline_id, source_file_id) do
+    Repo.transaction(fn ->
+      pipeline = Repo.get(Platform.Social.EpisodePipeline, pipeline_id)
+      profile = pipeline && Repo.get(Profile, pipeline.profile_id)
+
+      source =
+        Repo.one(
+          from(f in Platform.Files.File, where: f.id == ^source_file_id, lock: "FOR UPDATE")
+        )
+
+      project = profile && Repo.get(Platform.Tasks.Project, profile.project_id)
+
+      unless pipeline && profile && source && project && project.org_id == profile.org_id &&
+               is_nil(project.archived_at) &&
+               Platform.Social.EpisodeDiscovery.eligible?(source, profile, pipeline) do
+        Repo.rollback(:ineligible_episode)
+      end
+
+      payload = %{
+        "kind" => "episode",
+        "source_file_id" => source.id,
+        "episode" => %{"source_file_id" => source.id},
+        "profile_id" => profile.id,
+        "project_id" => profile.project_id,
+        "pipeline_id" => pipeline.id,
+        "pipeline_version" => pipeline.version,
+        "clip_user_profile" => clip_user_profile(profile),
+        "look" => ClipLook.effective(profile.show_look)
+      }
+
+      %ClipJob{}
+      |> ClipJob.enqueue_changeset(%{
+        profile_id: profile.id,
+        kind: "episode",
+        source_file_id: source.id,
+        episode_pipeline_id: pipeline.id,
+        payload: payload
+      })
+      |> Repo.insert(
+        on_conflict: :nothing,
+        conflict_target: [:profile_id, :source_file_id, :episode_pipeline_id]
+      )
+      |> case do
+        {:ok, _} ->
+          Repo.get_by!(ClipJob,
+            profile_id: profile.id,
+            source_file_id: source.id,
+            episode_pipeline_id: pipeline.id
+          )
+
+        {:error, error} ->
+          Repo.rollback(error)
+      end
+    end)
+  end
+
   # ── Human side ───────────────────────────────────────────────────────
 
   @doc "Queues a typed text fix against the current immutable render, without changing playback."
