@@ -359,12 +359,15 @@ defmodule PlatformWeb.MeetingAskFloorPressTest do
     # grace elapses with nothing claimed does the server's own
     # empty-press path close it (`reason: :unclassified`), and only THEN
     # does the veil crumble off that same signal.
-    Process.sleep(PressWindow.release_grace_ms() + 300)
-
-    assert_push_event(alice_view, "meeting_ask_outcome", %{
-      "outcome" => "crumble",
-      "candidate_id" => ^candidate_id
-    })
+    # Bounded wait on the server's own grace timer instead of a fixed sleep:
+    # the deadline is the one the sleep plus the default 100 ms assert window
+    # gave (grace + 300 + 100 ms), but it returns as soon as the push lands.
+    assert_push_event(
+      alice_view,
+      "meeting_ask_outcome",
+      %{"outcome" => "crumble", "candidate_id" => ^candidate_id},
+      PressWindow.release_grace_ms() + 400
+    )
 
     closed = Candidates.get(candidate_id)
     assert closed.state == :closed
