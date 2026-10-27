@@ -308,7 +308,12 @@ config :platform, :github_webhook_signature_required, true
 # before-run (docs/perf/tab-switch-first-frame.data.json) saw at most 3
 # message rows in view (1280x800; 2 at 390x844), so ceil(3) + 3 = 6,
 # clamped to the 10..25 floor. `deferred_side_state`: enter_space segments
-# loaded after the join reply instead of in it.
+# loaded after the join reply instead of in it. EMPTY BY MEASUREMENT, not by
+# omission: the rule is "defer every segment over 3 ms median that the first
+# paint does not need", and in both stage 1 (N = 50) and the stage 3
+# re-measure (N = 10) the only segment over 3 ms was message_window (24.0 ms,
+# then 10.2 ms), which the first paint needs. The next largest was
+# chat_list_data at 2.0 ms. See docs/perf/tab-switch-first-frame.data.json.
 config :platform, PlatformWeb.ChatLive,
   initial_message_count: 10,
   deferred_side_state: []

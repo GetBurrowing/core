@@ -13816,6 +13816,2055 @@
         }
       ],
       "finished_at": "2026-10-27T07:16:47.890Z"
+    },
+    "stage3-remeasure-n10-chat": {
+      "label": "stage3-remeasure-n10",
+      "started_at": "2026-10-27T08:15:32.938Z",
+      "base": "local dev server via byte-counting proxy",
+      "viewport": "1280x800",
+      "taps_per_tab": 10,
+      "throttle": {
+        "mode": "proxy",
+        "downBps": 9000000,
+        "upBps": 1500000,
+        "rttMs": 85
+      },
+      "load_avg_at_start": [
+        1.345703125,
+        1.36083984375,
+        1.65576171875
+      ],
+      "tasks_scenario": null,
+      "server_log_level": "info",
+      "machine": {
+        "platform": "Darwin 25.3.0 arm64",
+        "cpu": "Apple M4",
+        "cores": 10,
+        "mem_gb": 16
+      },
+      "chrome": "Chrome/156.0.8078.48",
+      "node_destinations": {
+        "destinations": [
+          {
+            "path": "/chat",
+            "key": "chat"
+          },
+          {
+            "path": "/voice",
+            "key": "voice"
+          },
+          {
+            "path": "/tasks",
+            "key": "tasks"
+          },
+          {
+            "path": "/inbox",
+            "key": "inbox"
+          },
+          {
+            "path": "/control",
+            "key": "agents"
+          },
+          {
+            "path": "/skills",
+            "key": "skills"
+          },
+          {
+            "path": "/files",
+            "key": "files"
+          },
+          {
+            "path": "/files?tab=browse&type=canvas",
+            "key": "canvases"
+          },
+          {
+            "path": "/org_memory",
+            "key": "context"
+          },
+          {
+            "path": "/control/experiments",
+            "key": "experiments"
+          },
+          {
+            "path": "/meetings",
+            "key": "meetings"
+          },
+          {
+            "path": "/changelog",
+            "key": "changelog"
+          }
+        ],
+        "email_enabled": false,
+        "games_enabled": false
+      },
+      "chat_config": {
+        "initial_message_count": 10,
+        "deferred_side_state": []
+      },
+      "tabs": [
+        {
+          "summary": {
+            "key": "chat",
+            "href": "/chat",
+            "origin": "/inbox",
+            "probe": "composer (#compose_text)",
+            "n": 10,
+            "websocket_join_every_tap": true,
+            "tap_ms": {
+              "n": 10,
+              "median": 288.69999998807907,
+              "p90": 300
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 229.39999997615814,
+              "p90": 239.5999999642372
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 184257,
+              "p90": 184258
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 26280,
+              "p90": 26282
+            },
+            "first_frame_wire_bytes": {
+              "n": 10,
+              "median": 25542,
+              "p90": 25543
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 192219,
+              "p90": 339548
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 27058.5,
+              "p90": 36284
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 35557,
+              "p90": 35561
+            },
+            "client_script_ms": {
+              "n": 10,
+              "median": 23.58599999999998,
+              "p90": 24.777999999999967
+            },
+            "client_layout_ms": {
+              "n": 10,
+              "median": 5.470000000000002,
+              "p90": 6.220999999999997
+            },
+            "client_style_ms": {
+              "n": 10,
+              "median": 43.379500000000014,
+              "p90": 46.16599999999998
+            },
+            "client_task_ms": {
+              "n": 10,
+              "median": 95.68450000000001,
+              "p90": 101.43199999999996
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.ChatLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 26.2105,
+                "p90": 27.21
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 21.4705,
+                "p90": 28.163
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 208,
+                "p90": 208
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              },
+              "enter_space": {
+                "segments": {
+                  "participants": {
+                    "us": {
+                      "n": 10,
+                      "median": 158.5,
+                      "p90": 176
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    }
+                  },
+                  "rail_channels": {
+                    "us": {
+                      "n": 10,
+                      "median": 567,
+                      "p90": 643
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 2,
+                      "p90": 2
+                    }
+                  },
+                  "list_spaces": {
+                    "us": {
+                      "n": 10,
+                      "median": 235.5,
+                      "p90": 250
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    }
+                  },
+                  "rail_archived_channels": {
+                    "us": {
+                      "n": 10,
+                      "median": 494.5,
+                      "p90": 559
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 2,
+                      "p90": 2
+                    }
+                  },
+                  "restricted_channel_ids": {
+                    "us": {
+                      "n": 10,
+                      "median": 356,
+                      "p90": 390
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    }
+                  },
+                  "rail_dm_conversations": {
+                    "us": {
+                      "n": 10,
+                      "median": 1193,
+                      "p90": 1315
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 2,
+                      "p90": 2
+                    }
+                  },
+                  "presence": {
+                    "us": {
+                      "n": 10,
+                      "median": 552.5,
+                      "p90": 781
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 2,
+                      "p90": 2
+                    }
+                  },
+                  "message_window": {
+                    "us": {
+                      "n": 10,
+                      "median": 10202.5,
+                      "p90": 16826
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 13,
+                      "p90": 13
+                    }
+                  },
+                  "space_sheet": {
+                    "us": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 0,
+                      "p90": 0
+                    }
+                  },
+                  "pins": {
+                    "us": {
+                      "n": 10,
+                      "median": 699,
+                      "p90": 1033
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    }
+                  },
+                  "canvases": {
+                    "us": {
+                      "n": 10,
+                      "median": 893.5,
+                      "p90": 1355
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 3,
+                      "p90": 3
+                    }
+                  },
+                  "agents_sheet": {
+                    "us": {
+                      "n": 10,
+                      "median": 350,
+                      "p90": 450
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 2,
+                      "p90": 2
+                    }
+                  },
+                  "channel_sections": {
+                    "us": {
+                      "n": 10,
+                      "median": 126,
+                      "p90": 146
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 1,
+                      "p90": 1
+                    }
+                  },
+                  "sidebar_sections": {
+                    "us": {
+                      "n": 10,
+                      "median": 945.5,
+                      "p90": 1063
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 7,
+                      "p90": 7
+                    }
+                  },
+                  "chat_list_data": {
+                    "us": {
+                      "n": 10,
+                      "median": 1980,
+                      "p90": 2117
+                    },
+                    "queries": {
+                      "n": 10,
+                      "median": 3,
+                      "p90": 3
+                    }
+                  }
+                },
+                "ranked": [
+                  {
+                    "segment": "message_window",
+                    "median_us": 10202.5,
+                    "p90_us": 16826,
+                    "median_queries": 13
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "median_us": 1980,
+                    "p90_us": 2117,
+                    "median_queries": 3
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "median_us": 1193,
+                    "p90_us": 1315,
+                    "median_queries": 2
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "median_us": 945.5,
+                    "p90_us": 1063,
+                    "median_queries": 7
+                  },
+                  {
+                    "segment": "canvases",
+                    "median_us": 893.5,
+                    "p90_us": 1355,
+                    "median_queries": 3
+                  },
+                  {
+                    "segment": "pins",
+                    "median_us": 699,
+                    "p90_us": 1033,
+                    "median_queries": 1
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "median_us": 567,
+                    "p90_us": 643,
+                    "median_queries": 2
+                  },
+                  {
+                    "segment": "presence",
+                    "median_us": 552.5,
+                    "p90_us": 781,
+                    "median_queries": 2
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "median_us": 494.5,
+                    "p90_us": 559,
+                    "median_queries": 2
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "median_us": 356,
+                    "p90_us": 390,
+                    "median_queries": 1
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "median_us": 350,
+                    "p90_us": 450,
+                    "median_queries": 2
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "median_us": 235.5,
+                    "p90_us": 250,
+                    "median_queries": 1
+                  },
+                  {
+                    "segment": "participants",
+                    "median_us": 158.5,
+                    "p90_us": 176,
+                    "median_queries": 1
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "median_us": 126,
+                    "p90_us": 146,
+                    "median_queries": 1
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "median_us": 1,
+                    "p90_us": 1,
+                    "median_queries": 0
+                  }
+                ],
+                "total_us": {
+                  "n": 10,
+                  "median": 19285,
+                  "p90": 26016
+                }
+              }
+            }
+          },
+          "raw": {
+            "key": "chat",
+            "href": "/chat",
+            "origin": "/inbox",
+            "probe": "composer (#compose_text)",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 299.80000001192093,
+                "ready_ms": 225.5,
+                "loading_stop_ms": 197.80000001192093,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 155155,
+                "window_raw_recv_bytes": 339539,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 339539
+                },
+                "window_deflate_estimate_bytes": 36259,
+                "join_reply_deflate_estimate_bytes": 26277,
+                "first_frame_wire_bytes": 25541,
+                "wire_down_bytes": 35531,
+                "wire_up_bytes": 185,
+                "client": {
+                  "script_ms": 31.463000000000005,
+                  "layout_ms": 3.8989999999999996,
+                  "style_ms": 27.144000000000002,
+                  "task_ms": 89.908,
+                  "layout_count": 7,
+                  "style_count": 32
+                },
+                "trace": null
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 298.19999998807907,
+                "ready_ms": 235.39999997615814,
+                "loading_stop_ms": 211.80000001192093,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 7876,
+                "window_raw_recv_bytes": 192132,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192132
+                },
+                "window_deflate_estimate_bytes": 27018,
+                "join_reply_deflate_estimate_bytes": 26280,
+                "first_frame_wire_bytes": 25541,
+                "wire_down_bytes": 35518,
+                "wire_up_bytes": 45,
+                "client": {
+                  "script_ms": 24.38899999999998,
+                  "layout_ms": 5.689,
+                  "style_ms": 46.16599999999998,
+                  "task_ms": 97.17600000000004,
+                  "layout_count": 9,
+                  "style_count": 33
+                },
+                "trace": null
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 283.5999999642372,
+                "ready_ms": 220.80000001192093,
+                "loading_stop_ms": 197,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 7903,
+                "window_raw_recv_bytes": 192211,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192211
+                },
+                "window_deflate_estimate_bytes": 27057,
+                "join_reply_deflate_estimate_bytes": 26278,
+                "first_frame_wire_bytes": 25539,
+                "wire_down_bytes": 35557,
+                "wire_up_bytes": 46,
+                "client": {
+                  "script_ms": 23.798999999999985,
+                  "layout_ms": 4.963000000000002,
+                  "style_ms": 38.59800000000002,
+                  "task_ms": 86.0010000000001,
+                  "layout_count": 9,
+                  "style_count": 32
+                },
+                "trace": null
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 300.89999997615814,
+                "ready_ms": 239.5999999642372,
+                "loading_stop_ms": 215.39999997615814,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 7903,
+                "window_raw_recv_bytes": 192211,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192211
+                },
+                "window_deflate_estimate_bytes": 27062,
+                "join_reply_deflate_estimate_bytes": 26280,
+                "first_frame_wire_bytes": 25542,
+                "wire_down_bytes": 35561,
+                "wire_up_bytes": 45,
+                "client": {
+                  "script_ms": 24.777999999999967,
+                  "layout_ms": 5.953,
+                  "style_ms": 45.78400000000005,
+                  "task_ms": 98.4259999999999,
+                  "layout_count": 9,
+                  "style_count": 35
+                },
+                "trace": null
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 290,
+                "ready_ms": 229.89999997615814,
+                "loading_stop_ms": 205,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 155234,
+                "window_raw_recv_bytes": 339542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 339542
+                },
+                "window_deflate_estimate_bytes": 36284,
+                "join_reply_deflate_estimate_bytes": 26279,
+                "first_frame_wire_bytes": 25540,
+                "wire_down_bytes": 35557,
+                "wire_up_bytes": 63,
+                "client": {
+                  "script_ms": 24.206000000000007,
+                  "layout_ms": 6.220999999999997,
+                  "style_ms": 44.96500000000003,
+                  "task_ms": 98.90999999999983,
+                  "layout_count": 9,
+                  "style_count": 33
+                },
+                "trace": null
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 297.80000001192093,
+                "ready_ms": 228.89999997615814,
+                "loading_stop_ms": 205.10000002384186,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184256,
+                "topic_other_raw_bytes": 7903,
+                "window_raw_recv_bytes": 192211,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192211
+                },
+                "window_deflate_estimate_bytes": 27058,
+                "join_reply_deflate_estimate_bytes": 26280,
+                "first_frame_wire_bytes": 25543,
+                "wire_down_bytes": 35559,
+                "wire_up_bytes": 44,
+                "client": {
+                  "script_ms": 23.318999999999978,
+                  "layout_ms": 5.809000000000002,
+                  "style_ms": 45.969999999999956,
+                  "task_ms": 94.19299999999997,
+                  "layout_count": 9,
+                  "style_count": 34
+                },
+                "trace": null
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 280.5,
+                "ready_ms": 222.5,
+                "loading_stop_ms": 198.5,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184258,
+                "topic_other_raw_bytes": 155238,
+                "window_raw_recv_bytes": 339548,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 339548
+                },
+                "window_deflate_estimate_bytes": 36284,
+                "join_reply_deflate_estimate_bytes": 26280,
+                "first_frame_wire_bytes": 25543,
+                "wire_down_bytes": 35558,
+                "wire_up_bytes": 58,
+                "client": {
+                  "script_ms": 22.71899999999999,
+                  "layout_ms": 5.251000000000006,
+                  "style_ms": 41.794,
+                  "task_ms": 90.5609999999999,
+                  "layout_count": 9,
+                  "style_count": 33
+                },
+                "trace": null
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 300,
+                "ready_ms": 236.60000002384186,
+                "loading_stop_ms": 214.5,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184258,
+                "topic_other_raw_bytes": 7907,
+                "window_raw_recv_bytes": 192219,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192219
+                },
+                "window_deflate_estimate_bytes": 27057,
+                "join_reply_deflate_estimate_bytes": 26282,
+                "first_frame_wire_bytes": 25542,
+                "wire_down_bytes": 35556,
+                "wire_up_bytes": 43,
+                "client": {
+                  "script_ms": 22.52899999999991,
+                  "layout_ms": 4.894999999999997,
+                  "style_ms": 39.850000000000165,
+                  "task_ms": 101.43199999999996,
+                  "layout_count": 9,
+                  "style_count": 33
+                },
+                "trace": null
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 283.5,
+                "ready_ms": 210.5,
+                "loading_stop_ms": 185.70000004768372,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184258,
+                "topic_other_raw_bytes": 7961,
+                "window_raw_recv_bytes": 192219,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192219
+                },
+                "window_deflate_estimate_bytes": 27054,
+                "join_reply_deflate_estimate_bytes": 26280,
+                "first_frame_wire_bytes": 25542,
+                "wire_down_bytes": 35557,
+                "wire_up_bytes": 59,
+                "client": {
+                  "script_ms": 23.372999999999976,
+                  "layout_ms": 4.0820000000000025,
+                  "style_ms": 37.188,
+                  "task_ms": 80.68100000000022,
+                  "layout_count": 9,
+                  "style_count": 31
+                },
+                "trace": null
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 287.39999997615814,
+                "ready_ms": 241.0999999642372,
+                "loading_stop_ms": 203.79999995231628,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184258,
+                "topic_other_raw_bytes": 155293,
+                "window_raw_recv_bytes": 339551,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 339551
+                },
+                "window_deflate_estimate_bytes": 36281,
+                "join_reply_deflate_estimate_bytes": 26281,
+                "first_frame_wire_bytes": 25540,
+                "wire_down_bytes": 35554,
+                "wire_up_bytes": 84,
+                "client": {
+                  "script_ms": 35.575000000000024,
+                  "layout_ms": 7.179999999999992,
+                  "style_ms": 48.87000000000019,
+                  "task_ms": 118.04900000000006,
+                  "layout_count": 11,
+                  "style_count": 35
+                },
+                "trace": null
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "probe_used": "composer (#compose_text)",
+                "tap_ms": 271.5,
+                "ready_ms": 209.0999999642372,
+                "loading_stop_ms": 185.29999995231628,
+                "join_topic": "lv:phx-GOJU4t62ltWMHgDl",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 184258,
+                "topic_other_raw_bytes": 7907,
+                "window_raw_recv_bytes": 192219,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJU4t62ltWMHgDl": 192219
+                },
+                "window_deflate_estimate_bytes": 27059,
+                "join_reply_deflate_estimate_bytes": 26282,
+                "first_frame_wire_bytes": 25545,
+                "wire_down_bytes": 35561,
+                "wire_up_bytes": 45,
+                "client": {
+                  "script_ms": 22.386999999999937,
+                  "layout_ms": 3.9779999999999953,
+                  "style_ms": 35.501999999999924,
+                  "task_ms": 77.8669999999999,
+                  "layout_count": 9,
+                  "style_count": 33
+                },
+                "trace": null
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.1053.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 25.072,
+                "t0_us": -576460741890062,
+                "handle_params_ms": [
+                  25.868
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 51.925,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 7.313
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 22.426
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 22.186
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 271
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 668
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 262
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 592
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 345
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1459
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 620
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 13526
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 956
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 905
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 509
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 125
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 929
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 2028
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1074.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 26.651,
+                "t0_us": -576460740839505,
+                "handle_params_ms": [
+                  25.551
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 50.811,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 6.419
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 23.712
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 20.68
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 144
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 565
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 248
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 650
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 390
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1361
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 781
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 13607
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 1033
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 936
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 480
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 118
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 809
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 2117
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1095.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 24.759,
+                "t0_us": -576460739867322,
+                "handle_params_ms": [
+                  22.316
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 46.002,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 6.994
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 21.887
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 17.121
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 146
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 560
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 236
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 459
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 352
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1135
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 941
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 10516
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 1099
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 749
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 330
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 136
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 948
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1987
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1116.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 27.708,
+                "t0_us": -576460738871635,
+                "handle_params_ms": [
+                  28.163
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 52.343,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.018
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 24.285
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 23.04
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 171
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 624
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 261
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 559
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 366
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1315
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 588
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 16826
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 135
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 1415
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 450
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 131
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 1027
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 2147
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1137.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 26.06,
+                "t0_us": -576460737871104,
+                "handle_params_ms": [
+                  20.846
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 43.773,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.168
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 22.907
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 15.698
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 159
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 744
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 235
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 502
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 354
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1187
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 636
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 9463
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 970
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 851
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 272
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 117
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 1063
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1973
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1158.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 26.567,
+                "t0_us": -576460736896994,
+                "handle_params_ms": [
+                  20.161
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 44.349,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.862
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 23.266
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 15.221
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 196
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 628
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 250
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 492
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 358
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1224
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 484
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 9367
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 979
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 591
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 370
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 118
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 774
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1997
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1179.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.855,
+                "t0_us": -576460735915864,
+                "handle_params_ms": [
+                  20.963
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 41.415,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.591
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 19.982
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 15.842
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 165
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 643
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 245
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 513
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 393
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1280
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 543
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 9889
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 988
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 688
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 419
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 146
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 951
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 2111
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1200.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 27.21,
+                "t0_us": -576460734949509,
+                "handle_params_ms": [
+                  34.872
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 56.087,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 6.337
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 24.159
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 25.591
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 176
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 569
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 229
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 483
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 329
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1142
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 562
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 24647
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 157
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 1355
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 286
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 152
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 943
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1884
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1221.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.987,
+                "t0_us": -576460733976336,
+                "handle_params_ms": [
+                  18.288
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 37.414,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 6.898
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 17.117
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 13.399
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 129
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 487
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 181
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 497
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 290
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 960
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 376
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 8667
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 428
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 681
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 379
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 110
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 717
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1884
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1242.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 26.361,
+                "t0_us": -576460732989575,
+                "handle_params_ms": [
+                  21.978
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 45.347,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.056
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 23.158
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 17.133
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 158
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 515
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 228
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 452
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 382
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1172
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 492
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 11903
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 159
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 1275
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 250
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 128
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 760
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1920
+                  }
+                ],
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.1263.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.895,
+                "t0_us": -576460732026358,
+                "handle_params_ms": [
+                  18.784
+                ],
+                "arrival_queries": 208,
+                "arrival_query_ms": 37.647,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 35,
+                    "ms": 5.217
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 18.293
+                  },
+                  "handle_params": {
+                    "count": 49,
+                    "ms": 14.137
+                  }
+                },
+                "enter_space_segments": [
+                  {
+                    "segment": "participants",
+                    "queries": 1,
+                    "us": 141
+                  },
+                  {
+                    "segment": "rail_channels",
+                    "queries": 2,
+                    "us": 471
+                  },
+                  {
+                    "segment": "list_spaces",
+                    "queries": 1,
+                    "us": 209
+                  },
+                  {
+                    "segment": "rail_archived_channels",
+                    "queries": 2,
+                    "us": 437
+                  },
+                  {
+                    "segment": "restricted_channel_ids",
+                    "queries": 1,
+                    "us": 282
+                  },
+                  {
+                    "segment": "rail_dm_conversations",
+                    "queries": 2,
+                    "us": 1199
+                  },
+                  {
+                    "segment": "presence",
+                    "queries": 2,
+                    "us": 528
+                  },
+                  {
+                    "segment": "message_window",
+                    "queries": 13,
+                    "us": 8927
+                  },
+                  {
+                    "segment": "space_sheet",
+                    "queries": 0,
+                    "us": 1
+                  },
+                  {
+                    "segment": "pins",
+                    "queries": 1,
+                    "us": 191
+                  },
+                  {
+                    "segment": "canvases",
+                    "queries": 3,
+                    "us": 1240
+                  },
+                  {
+                    "segment": "agents_sheet",
+                    "queries": 2,
+                    "us": 301
+                  },
+                  {
+                    "segment": "channel_sections",
+                    "queries": 1,
+                    "us": 124
+                  },
+                  {
+                    "segment": "sidebar_sections",
+                    "queries": 7,
+                    "us": 1168
+                  },
+                  {
+                    "segment": "chat_list_data",
+                    "queries": 3,
+                    "us": 1776
+                  }
+                ],
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        }
+      ],
+      "errors": [],
+      "sidebar_hrefs": [
+        "/chat",
+        "/voice",
+        "/tasks",
+        "/meetings",
+        "/inbox",
+        "/files",
+        "/files?tab=browse&type=canvas",
+        "/skills",
+        "/org_memory",
+        "/control",
+        "/control/experiments",
+        "/changelog",
+        "/settings"
+      ],
+      "websocket_connections": [
+        {
+          "id": 5,
+          "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+          "deflate_offered": true,
+          "deflate_accepted": true
+        },
+        {
+          "id": 10,
+          "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+          "deflate_offered": true,
+          "deflate_accepted": true
+        },
+        {
+          "id": 12,
+          "upgrade_status": "HTTP/1.1 101 Switching Protocols",
+          "deflate_offered": true,
+          "deflate_accepted": true
+        }
+      ],
+      "finished_at": "2026-10-27T08:15:47.526Z"
     }
   },
   "visible_rows": [
@@ -13976,5 +16025,106 @@
       "message_window"
     ],
     "segments": []
+  },
+  "stage3_deferred_set": {
+    "rule": "defer only what is measured: every enter_space segment over 3 ms median not needed to paint the composer and the message list",
+    "measured_on": "task branch after stage 2 (initial_message_count 10, batched edited-count query), chat only, same fixture/link/compress, 10 taps",
+    "ranked": [
+      {
+        "segment": "message_window",
+        "median_us": 10202.5,
+        "p90_us": 16826,
+        "median_queries": 13
+      },
+      {
+        "segment": "chat_list_data",
+        "median_us": 1980,
+        "p90_us": 2117,
+        "median_queries": 3
+      },
+      {
+        "segment": "rail_dm_conversations",
+        "median_us": 1193,
+        "p90_us": 1315,
+        "median_queries": 2
+      },
+      {
+        "segment": "sidebar_sections",
+        "median_us": 945.5,
+        "p90_us": 1063,
+        "median_queries": 7
+      },
+      {
+        "segment": "canvases",
+        "median_us": 893.5,
+        "p90_us": 1355,
+        "median_queries": 3
+      },
+      {
+        "segment": "pins",
+        "median_us": 699,
+        "p90_us": 1033,
+        "median_queries": 1
+      },
+      {
+        "segment": "rail_channels",
+        "median_us": 567,
+        "p90_us": 643,
+        "median_queries": 2
+      },
+      {
+        "segment": "presence",
+        "median_us": 552.5,
+        "p90_us": 781,
+        "median_queries": 2
+      },
+      {
+        "segment": "rail_archived_channels",
+        "median_us": 494.5,
+        "p90_us": 559,
+        "median_queries": 2
+      },
+      {
+        "segment": "restricted_channel_ids",
+        "median_us": 356,
+        "p90_us": 390,
+        "median_queries": 1
+      },
+      {
+        "segment": "agents_sheet",
+        "median_us": 350,
+        "p90_us": 450,
+        "median_queries": 2
+      },
+      {
+        "segment": "list_spaces",
+        "median_us": 235.5,
+        "p90_us": 250,
+        "median_queries": 1
+      },
+      {
+        "segment": "participants",
+        "median_us": 158.5,
+        "p90_us": 176,
+        "median_queries": 1
+      },
+      {
+        "segment": "channel_sections",
+        "median_us": 126,
+        "p90_us": 146,
+        "median_queries": 1
+      },
+      {
+        "segment": "space_sheet",
+        "median_us": 1,
+        "p90_us": 1,
+        "median_queries": 0
+      }
+    ],
+    "over_3ms": [
+      "message_window"
+    ],
+    "segments": [],
+    "verdict": "empty: only message_window (needed for first paint) is over 3 ms; deferred_side_state stays []"
   }
 }

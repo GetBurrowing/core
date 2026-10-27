@@ -226,4 +226,68 @@ defmodule PlatformWeb.ChatLiveFirstFrameBackfillTest do
       0 -> acc
     end
   end
+
+  # Stage 3 (task 01a17bf4): the switch budget for chat's SYNCHRONOUS join
+  # path (connected mount + handle_params, everything before the join reply),
+  # read only for queries the view's own pid runs. The backfill is held so its
+  # queries cannot land in the count. Stage 1's before-run measured, on the
+  # harness fixture, 62 queries inside the message-window span (50 of them
+  # the per-message edited-count COUNT) and 250 for the whole arrival. This
+  # fixture is smaller, so the budgets are THIS fixture's counts at N = 12
+  # after the fix, measured 3/3 runs on 2026-10-27: 11 in the message window
+  # and 112 on the whole synchronous join. The headroom is under N, so going
+  # back to one COUNT per message (+12 queries) trips both.
+  @message_window_query_budget 12
+  @join_query_budget 116
+
+  test "(f) the synchronous join stays inside its query budget", %{conn: conn, space: space} do
+    Application.put_env(:platform, :chat_async_fault, [{:hold, :history_backfill, self()}])
+    test_pid = self()
+    handler = "first-frame-join-budget-#{System.unique_integer([:positive])}"
+    window = [:platform_web, :chat, :enter_space, :message_window]
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [window ++ [:start], window ++ [:stop], [:platform, :repo, :query]],
+        fn
+          [_, _, _, :message_window, :start], _, _, _ ->
+            Process.put(:ff_window, true)
+
+          [_, _, _, :message_window, :stop], _, _, _ ->
+            Process.put(:ff_window, false)
+
+          [:platform, :repo, :query], _, _, _ ->
+            send(test_pid, {:ff_q, self(), Process.get(:ff_window, false)})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+    assert_receive {:chat_async_held, :history_backfill, task}, 2_000
+    :telemetry.detach(handler)
+
+    {total, in_window} = count_join_queries(view.pid, {0, 0})
+
+    assert in_window <= @message_window_query_budget,
+           "message window ran #{in_window} queries (budget #{@message_window_query_budget})"
+
+    assert total <= @join_query_budget,
+           "synchronous join ran #{total} queries (budget #{@join_query_budget})"
+
+    send(task, :release)
+    render_async(view)
+  end
+
+  defp count_join_queries(pid, {total, window} = acc) do
+    receive do
+      {:ff_q, ^pid, true} -> count_join_queries(pid, {total + 1, window + 1})
+      {:ff_q, ^pid, false} -> count_join_queries(pid, {total + 1, window})
+      {:ff_q, _other, _} -> count_join_queries(pid, acc)
+    after
+      0 -> acc
+    end
+  end
 end
