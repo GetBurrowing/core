@@ -37,7 +37,11 @@ while [ $# -gt 0 ]; do
     --node) pass+=(--probe-node "${2:-}"); shift 2 ;;
     --timebox-s) timebox_s="${2:-}"; shift 2 ;;
     --no-proxy|--headed) pass+=("$1"); shift ;;
-    --login-as|--auth-state|--cookie-file|--out|--tabs|--taps|--viewport|--chrome-port|--busy-slug|--label|--tasks-scenario|--server-log-level)
+    --out|--auth-state|--cookie-file)
+      # The driver runs from e2e/, so a relative path is resolved here.
+      p="${2:-}"; case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+      pass+=("$1" "$p"); shift 2 ;;
+    --login-as|--tabs|--taps|--viewport|--chrome-port|--busy-slug|--label|--tasks-scenario|--server-log-level)
       pass+=("$1" "${2:-}"); shift 2 ;;
     -h|--help) sed -n '1,30p' "$0"; exit 2 ;;
     *) echo "measure-tab-switch: unknown argument '$1'" >&2; exit 2 ;;

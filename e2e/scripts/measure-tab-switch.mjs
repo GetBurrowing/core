@@ -144,7 +144,8 @@ const nodeDestinations = async (args) => {
 
 const PROBES = {
   chat: { kind: "text", selector: "#compose_text", name: "composer (#compose_text)" },
-  voice: { kind: "text", selector: "#ctx-search", name: "space search (#ctx-search)" },
+  // voice: #ctx-search lives in the closed "Talking about" sheet, so it is
+  // not a page input; voice takes the Tab-key probe like the other tabs.
   tasks: { kind: "text", selector: "#task-search", name: "task search (#task-search)" },
 };
 const TAB_FOCUS = { kind: "tabfocus", selector: null, name: "Tab key moves focus into the new main LiveView" };

@@ -1,0 +1,2905 @@
+{
+  "runs": [
+    {
+      "label": "local seeded",
+      "started_at": "2026-10-27T02:02:07.196Z",
+      "base": "local dev server via byte-counting proxy",
+      "viewport": "1280x800",
+      "taps_per_tab": 10,
+      "tasks_scenario": "S1",
+      "server_log_level": "info",
+      "machine": {
+        "platform": "Darwin 25.3.0 arm64",
+        "cpu": "Apple M4",
+        "cores": 10,
+        "mem_gb": 16
+      },
+      "chrome": "Chrome/156.0.8078.48",
+      "node_destinations": {
+        "destinations": [
+          {
+            "path": "/chat",
+            "key": "chat"
+          },
+          {
+            "path": "/voice",
+            "key": "voice"
+          },
+          {
+            "path": "/tasks",
+            "key": "tasks"
+          },
+          {
+            "path": "/inbox",
+            "key": "inbox"
+          },
+          {
+            "path": "/control",
+            "key": "agents"
+          },
+          {
+            "path": "/skills",
+            "key": "skills"
+          },
+          {
+            "path": "/files",
+            "key": "files"
+          },
+          {
+            "path": "/files?tab=browse&type=canvas",
+            "key": "canvases"
+          },
+          {
+            "path": "/org_memory",
+            "key": "context"
+          },
+          {
+            "path": "/control/experiments",
+            "key": "experiments"
+          },
+          {
+            "path": "/meetings",
+            "key": "meetings"
+          },
+          {
+            "path": "/changelog",
+            "key": "changelog"
+          }
+        ],
+        "email_enabled": false,
+        "games_enabled": false
+      },
+      "tabs": [
+        {
+          "summary": {
+            "key": "chat",
+            "href": "/chat",
+            "origin": "/inbox",
+            "probe": "composer (#compose_text)",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 232.80000001192093,
+              "p90": 244.80000001192093
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 184.69999998807907,
+              "p90": 189.0999999642372
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 320900,
+              "p90": 320901
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 33397,
+              "p90": 33398
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 350547.5,
+              "p90": 350556
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 35670.5,
+              "p90": 35672
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 350577.5,
+              "p90": 350586
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.ChatLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 30.539,
+                "p90": 31.425
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 31.790999999999997,
+                "p90": 34.81
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 250,
+                "p90": 250
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "chat",
+            "href": "/chat",
+            "origin": "/inbox",
+            "probe": "composer (#compose_text)",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 223.9000000357628,
+                "ready_ms": 164.5,
+                "loading_stop_ms": 98.90000003576279,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350539,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350539
+                },
+                "window_deflate_estimate_bytes": 35672,
+                "join_reply_deflate_estimate_bytes": 33398,
+                "wire_down_bytes": 350569,
+                "wire_up_bytes": 1450
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 229.39999997615814,
+                "ready_ms": 184.89999997615814,
+                "loading_stop_ms": 114.80000001192093,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350542
+                },
+                "window_deflate_estimate_bytes": 35670,
+                "join_reply_deflate_estimate_bytes": 33397,
+                "wire_down_bytes": 350572,
+                "wire_up_bytes": 1451
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 243.10000002384186,
+                "ready_ms": 196.80000001192093,
+                "loading_stop_ms": 117.80000001192093,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350542
+                },
+                "window_deflate_estimate_bytes": 35672,
+                "join_reply_deflate_estimate_bytes": 33398,
+                "wire_down_bytes": 350572,
+                "wire_up_bytes": 1451
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 244.80000001192093,
+                "ready_ms": 175,
+                "loading_stop_ms": 122.90000003576279,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350542
+                },
+                "window_deflate_estimate_bytes": 35671,
+                "join_reply_deflate_estimate_bytes": 33397,
+                "wire_down_bytes": 350572,
+                "wire_up_bytes": 1451
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 229.30000001192093,
+                "ready_ms": 184.20000004768372,
+                "loading_stop_ms": 110.60000002384186,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350542
+                },
+                "window_deflate_estimate_bytes": 35665,
+                "join_reply_deflate_estimate_bytes": 33396,
+                "wire_down_bytes": 350572,
+                "wire_up_bytes": 1451
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 253.19999998807907,
+                "ready_ms": 181.69999998807907,
+                "loading_stop_ms": 126.80000001192093,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320899,
+                "topic_other_raw_bytes": 29512,
+                "window_raw_recv_bytes": 350542,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350542
+                },
+                "window_deflate_estimate_bytes": 35670,
+                "join_reply_deflate_estimate_bytes": 33397,
+                "wire_down_bytes": 350572,
+                "wire_up_bytes": 1451
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 239.80000001192093,
+                "ready_ms": 184.80000001192093,
+                "loading_stop_ms": 113.39999997615814,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320901,
+                "topic_other_raw_bytes": 29520,
+                "window_raw_recv_bytes": 350553,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350553
+                },
+                "window_deflate_estimate_bytes": 35670,
+                "join_reply_deflate_estimate_bytes": 33397,
+                "wire_down_bytes": 350583,
+                "wire_up_bytes": 1460
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 228,
+                "ready_ms": 184.5999999642372,
+                "loading_stop_ms": 115.89999997615814,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320901,
+                "topic_other_raw_bytes": 29520,
+                "window_raw_recv_bytes": 350556,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350556
+                },
+                "window_deflate_estimate_bytes": 35673,
+                "join_reply_deflate_estimate_bytes": 33398,
+                "wire_down_bytes": 350586,
+                "wire_up_bytes": 1461
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 230.20000004768372,
+                "ready_ms": 185.80000001192093,
+                "loading_stop_ms": 117.20000004768372,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320901,
+                "topic_other_raw_bytes": 29520,
+                "window_raw_recv_bytes": 350556,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350556
+                },
+                "window_deflate_estimate_bytes": 35671,
+                "join_reply_deflate_estimate_bytes": 33396,
+                "wire_down_bytes": 350586,
+                "wire_up_bytes": 1461
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 229.19999998807907,
+                "ready_ms": 178.5999999642372,
+                "loading_stop_ms": 107.5,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320901,
+                "topic_other_raw_bytes": 29520,
+                "window_raw_recv_bytes": 350556,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350556
+                },
+                "window_deflate_estimate_bytes": 35670,
+                "join_reply_deflate_estimate_bytes": 33398,
+                "wire_down_bytes": 350586,
+                "wire_up_bytes": 1461
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/chat/tab-switch-busy",
+                "tap_ms": 235.39999997615814,
+                "ready_ms": 189.0999999642372,
+                "loading_stop_ms": 118.79999995231628,
+                "join_topic": "lv:phx-GOJAgf-toC9_rGEF",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 320901,
+                "topic_other_raw_bytes": 29520,
+                "window_raw_recv_bytes": 350556,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAgf-toC9_rGEF": 350556
+                },
+                "window_deflate_estimate_bytes": 35672,
+                "join_reply_deflate_estimate_bytes": 33398,
+                "wire_down_bytes": 350586,
+                "wire_up_bytes": 1461
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.3688.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 33.675,
+                "t0_us": -576459922267426,
+                "handle_params_ms": [
+                  30.763
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 58.847,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.969
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 30.766
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 23.112
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3708.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 30.585,
+                "t0_us": -576459921412319,
+                "handle_params_ms": [
+                  28.285
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 51.917,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.393
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 27.417
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 19.107
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3728.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 29.561,
+                "t0_us": -576459920573818,
+                "handle_params_ms": [
+                  29.637
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 50.595,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.171
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 26.494
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 19.93
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3748.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 30.724,
+                "t0_us": -576459919721695,
+                "handle_params_ms": [
+                  34.81
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 56.932,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.616
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 27.455
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 24.861
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3768.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 28.515,
+                "t0_us": -576459918888223,
+                "handle_params_ms": [
+                  32.763
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 52.681,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.607
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 25.492
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 22.582
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3788.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 29.392,
+                "t0_us": -576459918038402,
+                "handle_params_ms": [
+                  32.95
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 67.07,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 17.355
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 26.405
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 23.31
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3808.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 34.91,
+                "t0_us": -576459917120605,
+                "handle_params_ms": [
+                  30.819
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 57.511,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.989
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 31.338
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 21.184
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3828.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 31.425,
+                "t0_us": -576459916228365,
+                "handle_params_ms": [
+                  29.595
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 52.64,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.604
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 28.352
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 19.684
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3848.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 30.493,
+                "t0_us": -576459915381468,
+                "handle_params_ms": [
+                  34.731
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 55.686,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.258
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 27.474
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 22.954
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3868.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 27.564,
+                "t0_us": -576459914543410,
+                "handle_params_ms": [
+                  24.606
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 44.325,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 3.945
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 24.6
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 15.78
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.3888.0>",
+                "view": "PlatformWeb.ChatLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 30.995,
+                "t0_us": -576459913705094,
+                "handle_params_ms": [
+                  40.272
+                ],
+                "arrival_queries": 250,
+                "arrival_query_ms": 64.261,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.358
+                  },
+                  "mount": {
+                    "count": 124,
+                    "ms": 27.711
+                  },
+                  "handle_params": {
+                    "count": 98,
+                    "ms": 30.192
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "tasks",
+            "href": "/tasks",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "task search (#task-search)",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 126.5,
+              "p90": 138.0999999642372
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 103.75,
+              "p90": 111.80000001192093
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 195064,
+              "p90": 195064
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 25255,
+              "p90": 25255
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 207995,
+              "p90": 207997
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 26194,
+              "p90": 26196
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 208021,
+              "p90": 208023
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.TasksLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 16.619999999999997,
+                "p90": 20.778
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 8.2295,
+                "p90": 9.306
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 105,
+                "p90": 105
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              },
+              "list_all_tasks_first": [
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                },
+                {
+                  "project": "one",
+                  "epic": "all"
+                }
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "tasks",
+            "href": "/tasks",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "task search (#task-search)",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 126.59999996423721,
+                "ready_ms": 102.59999996423721,
+                "loading_stop_ms": 63.299999952316284,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195130,
+                "topic_other_raw_bytes": 12794,
+                "window_raw_recv_bytes": 208052,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 208052
+                },
+                "window_deflate_estimate_bytes": 26235,
+                "join_reply_deflate_estimate_bytes": 25297,
+                "wire_down_bytes": 208078,
+                "wire_up_bytes": 1657
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 126.10000002384186,
+                "ready_ms": 103.69999998807907,
+                "loading_stop_ms": 76.10000002384186,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195062,
+                "topic_other_raw_bytes": 12794,
+                "window_raw_recv_bytes": 207987,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207987
+                },
+                "window_deflate_estimate_bytes": 26194,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208013,
+                "wire_up_bytes": 1703
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 131.80000001192093,
+                "ready_ms": 103.80000001192093,
+                "loading_stop_ms": 76.59999996423721,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195062,
+                "topic_other_raw_bytes": 12794,
+                "window_raw_recv_bytes": 207987,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207987
+                },
+                "window_deflate_estimate_bytes": 26192,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208013,
+                "wire_up_bytes": 1703
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 122.89999997615814,
+                "ready_ms": 106.09999996423721,
+                "loading_stop_ms": 74.19999998807907,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195062,
+                "topic_other_raw_bytes": 12794,
+                "window_raw_recv_bytes": 207987,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207987
+                },
+                "window_deflate_estimate_bytes": 26193,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208013,
+                "wire_up_bytes": 1703
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 119.5,
+                "ready_ms": 102.80000001192093,
+                "loading_stop_ms": 71.30000001192093,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195062,
+                "topic_other_raw_bytes": 12794,
+                "window_raw_recv_bytes": 207987,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207987
+                },
+                "window_deflate_estimate_bytes": 26195,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208013,
+                "wire_up_bytes": 1703
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 120.60000002384186,
+                "ready_ms": 101.30000001192093,
+                "loading_stop_ms": 67.80000001192093,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207993,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207993
+                },
+                "window_deflate_estimate_bytes": 26194,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208019,
+                "wire_up_bytes": 1707
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 143.80000001192093,
+                "ready_ms": 111.80000001192093,
+                "loading_stop_ms": 84,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207997,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207997
+                },
+                "window_deflate_estimate_bytes": 26194,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208023,
+                "wire_up_bytes": 1709
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 128.80000001192093,
+                "ready_ms": 103.40000003576279,
+                "loading_stop_ms": 75,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207997,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207997
+                },
+                "window_deflate_estimate_bytes": 26196,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208023,
+                "wire_up_bytes": 1709
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 126.89999997615814,
+                "ready_ms": 104.09999996423721,
+                "loading_stop_ms": 75.19999998807907,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207997,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207997
+                },
+                "window_deflate_estimate_bytes": 26197,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208023,
+                "wire_up_bytes": 1709
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 138.0999999642372,
+                "ready_ms": 118.09999996423721,
+                "loading_stop_ms": 80.80000001192093,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207997,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207997
+                },
+                "window_deflate_estimate_bytes": 26195,
+                "join_reply_deflate_estimate_bytes": 25254,
+                "wire_down_bytes": 208023,
+                "wire_up_bytes": 1709
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/tasks?project=01a17b0d-c2d6-7000-9bb2-d1c053a26dbf",
+                "tap_ms": 114.59999996423721,
+                "ready_ms": 89.89999997615814,
+                "loading_stop_ms": 62.299999952316284,
+                "join_topic": "lv:phx-GOJAh1n-HZMxCLpB",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 195064,
+                "topic_other_raw_bytes": 12798,
+                "window_raw_recv_bytes": 207997,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAh1n-HZMxCLpB": 207997
+                },
+                "window_deflate_estimate_bytes": 26194,
+                "join_reply_deflate_estimate_bytes": 25255,
+                "wire_down_bytes": 208023,
+                "wire_up_bytes": 1709
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.4086.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 19.018,
+                "t0_us": -576459899175733,
+                "handle_params_ms": [
+                  7.551,
+                  0.035
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 27.262,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.692
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 15.799
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 4.771
+                  }
+                },
+                "refresh_board_ms": [
+                  5.638
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4118.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 17.842,
+                "t0_us": -576459897031039,
+                "handle_params_ms": [
+                  8.688
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 27.705,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.698
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 15.874
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 5.133
+                  }
+                },
+                "refresh_board_ms": [
+                  6.346
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4150.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 16.305,
+                "t0_us": -576459894897108,
+                "handle_params_ms": [
+                  8.857
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 25.522,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 5.589
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 14.638
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 5.295
+                  }
+                },
+                "refresh_board_ms": [
+                  6.826
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4182.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 16.863,
+                "t0_us": -576459892766580,
+                "handle_params_ms": [
+                  7.836
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 25.783,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.257
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 15.038
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 4.488
+                  }
+                },
+                "refresh_board_ms": [
+                  6.299
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4214.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 15.369,
+                "t0_us": -576459890654883,
+                "handle_params_ms": [
+                  7.797
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 25.061,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.569
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 13.722
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 4.77
+                  }
+                },
+                "refresh_board_ms": [
+                  6.533
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4246.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 21.145,
+                "t0_us": -576459888546381,
+                "handle_params_ms": [
+                  6.977
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 28.725,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 7.184
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 17.866
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 3.675
+                  }
+                },
+                "refresh_board_ms": [
+                  5.771
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4278.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 16.139,
+                "t0_us": -576459886406326,
+                "handle_params_ms": [
+                  9.306
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 26.487,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 5.962
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 14.427
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 6.098
+                  }
+                },
+                "refresh_board_ms": [
+                  7.864
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4310.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 16.377,
+                "t0_us": -576459884272907,
+                "handle_params_ms": [
+                  9.359
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 25.955,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.058
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 14.484
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 5.413
+                  }
+                },
+                "refresh_board_ms": [
+                  7.5
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4342.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 19.927,
+                "t0_us": -576459882156878,
+                "handle_params_ms": [
+                  8.383
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 28.835,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 5.776
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 17.905
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 5.154
+                  }
+                },
+                "refresh_board_ms": [
+                  6.982
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4374.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 20.778,
+                "t0_us": -576459880013244,
+                "handle_params_ms": [
+                  7.14
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 31.498,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 9.273
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 18.331
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 3.894
+                  }
+                },
+                "refresh_board_ms": [
+                  5.271
+                ]
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4406.0>",
+                "view": "PlatformWeb.TasksLive",
+                "count_by_scope": 1,
+                "list_all_tasks": [
+                  {
+                    "project": "one",
+                    "epic": "all"
+                  }
+                ],
+                "refresh_board": 1,
+                "mount_ms": 16.303,
+                "t0_us": -576459877882766,
+                "handle_params_ms": [
+                  8.076
+                ],
+                "arrival_queries": 105,
+                "arrival_query_ms": 26.434,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 33,
+                    "ms": 6.505
+                  },
+                  "mount": {
+                    "count": 60,
+                    "ms": 14.632
+                  },
+                  "handle_params": {
+                    "count": 12,
+                    "ms": 5.297
+                  }
+                },
+                "refresh_board_ms": [
+                  6.099
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "summary": {
+            "key": "meetings",
+            "href": "/meetings",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 66.25,
+              "p90": 69.5
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 59.150000005960464,
+              "p90": 62.59999996423721
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 72921,
+              "p90": 72921
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12330,
+              "p90": 12330
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 85963,
+              "p90": 85971
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 13247,
+              "p90": 13250
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 85989,
+              "p90": 85997
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.MeetingLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 14.998999999999999,
+                "p90": 16.362
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 2.7855,
+                "p90": 3.761
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 82,
+                "p90": 82
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "meetings",
+            "href": "/meetings",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/meetings",
+                "tap_ms": 66.5,
+                "ready_ms": 56.60000002384186,
+                "loading_stop_ms": 45.39999997615814,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85960,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85960
+                },
+                "window_deflate_estimate_bytes": 13244,
+                "join_reply_deflate_estimate_bytes": 12331,
+                "wire_down_bytes": 85986,
+                "wire_up_bytes": 1660
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 78.20000004768372,
+                "ready_ms": 67.70000004768372,
+                "loading_stop_ms": 58.10000002384186,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85963,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85963
+                },
+                "window_deflate_estimate_bytes": 13243,
+                "join_reply_deflate_estimate_bytes": 12329,
+                "wire_down_bytes": 85989,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 59.30000001192093,
+                "ready_ms": 50.80000001192093,
+                "loading_stop_ms": 42,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85963,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85963
+                },
+                "window_deflate_estimate_bytes": 13249,
+                "join_reply_deflate_estimate_bytes": 12329,
+                "wire_down_bytes": 85989,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 56.799999952316284,
+                "ready_ms": 53.39999997615814,
+                "loading_stop_ms": 39.19999998807907,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85963,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85963
+                },
+                "window_deflate_estimate_bytes": 13246,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85989,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 55.19999998807907,
+                "ready_ms": 47.09999996423721,
+                "loading_stop_ms": 38.39999997615814,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72919,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85961,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85961
+                },
+                "window_deflate_estimate_bytes": 13245,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85987,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 68.40000003576279,
+                "ready_ms": 60.10000002384186,
+                "loading_stop_ms": 51.10000002384186,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72919,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85961,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85961
+                },
+                "window_deflate_estimate_bytes": 13250,
+                "join_reply_deflate_estimate_bytes": 12332,
+                "wire_down_bytes": 85987,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 67.90000003576279,
+                "ready_ms": 59.30000001192093,
+                "loading_stop_ms": 49.60000002384186,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72919,
+                "topic_other_raw_bytes": 12911,
+                "window_raw_recv_bytes": 85961,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85961
+                },
+                "window_deflate_estimate_bytes": 13248,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85987,
+                "wire_up_bytes": 1661
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 69.5,
+                "ready_ms": 61.299999952316284,
+                "loading_stop_ms": 52.09999996423721,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12915,
+                "window_raw_recv_bytes": 85968,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85968
+                },
+                "window_deflate_estimate_bytes": 13250,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85994,
+                "wire_up_bytes": 1666
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 58.19999998807907,
+                "ready_ms": 49.80000001192093,
+                "loading_stop_ms": 41.19999998807907,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12915,
+                "window_raw_recv_bytes": 85971,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85971
+                },
+                "window_deflate_estimate_bytes": 13245,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85997,
+                "wire_up_bytes": 1667
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 65.30000001192093,
+                "ready_ms": 62.59999996423721,
+                "loading_stop_ms": 48.39999997615814,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12915,
+                "window_raw_recv_bytes": 85971,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85971
+                },
+                "window_deflate_estimate_bytes": 13249,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85997,
+                "wire_up_bytes": 1667
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/meetings",
+                "tap_ms": 67.19999998807907,
+                "ready_ms": 59,
+                "loading_stop_ms": 50,
+                "join_topic": "lv:phx-GOJAjRq7Ptby8t0B",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 72921,
+                "topic_other_raw_bytes": 12915,
+                "window_raw_recv_bytes": 85971,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAjRq7Ptby8t0B": 85971
+                },
+                "window_deflate_estimate_bytes": 13246,
+                "join_reply_deflate_estimate_bytes": 12330,
+                "wire_down_bytes": 85997,
+                "wire_up_bytes": 1667
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.4509.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 17.835,
+                "t0_us": -576459874420840,
+                "handle_params_ms": [
+                  4.189
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 25.706,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 7.388
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 14.691
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 3.627
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4529.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.084,
+                "t0_us": -576459873643455,
+                "handle_params_ms": [
+                  3.761
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 28.84,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 8.851
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 17.141
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.848
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4549.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.276,
+                "t0_us": -576459872867516,
+                "handle_params_ms": [
+                  2.837
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 19.262,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.568
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 11.346
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.348
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4569.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.443,
+                "t0_us": -576459872120768,
+                "handle_params_ms": [
+                  2.241
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 17.682,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 4.207
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 11.722
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 1.753
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4589.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.939,
+                "t0_us": -576459871373587,
+                "handle_params_ms": [
+                  2.269
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 20.269,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.443
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 12.025
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 1.801
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4609.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.362,
+                "t0_us": -576459870608422,
+                "handle_params_ms": [
+                  2.734
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 21.13,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.965
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 12.938
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.227
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4629.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 14.801,
+                "t0_us": -576459869829348,
+                "handle_params_ms": [
+                  3.23
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 19.472,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.624
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 11.274
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.574
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4649.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.458,
+                "t0_us": -576459869063660,
+                "handle_params_ms": [
+                  3.919
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 20.868,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.824
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 11.76
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 3.284
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4669.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.059,
+                "t0_us": -576459868316429,
+                "handle_params_ms": [
+                  2.641
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 20.356,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.879
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 12.312
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.165
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4689.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 13.298,
+                "t0_us": -576459867541203,
+                "handle_params_ms": [
+                  1.872
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 14.956,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 3.685
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 9.893
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 1.378
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4709.0>",
+                "view": "PlatformWeb.MeetingLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 15.929,
+                "t0_us": -576459866782353,
+                "handle_params_ms": [
+                  3.359
+                ],
+                "arrival_queries": 82,
+                "arrival_query_ms": 20.639,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.621
+                  },
+                  "mount": {
+                    "count": 46,
+                    "ms": 12.274
+                  },
+                  "handle_params": {
+                    "count": 8,
+                    "ms": 2.744
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        }
+      ],
+      "errors": [
+        {
+          "tab": "voice",
+          "error": "page.waitForFunction: Timeout 10000ms exceeded."
+        }
+      ],
+      "sidebar_hrefs": [
+        "/chat",
+        "/voice",
+        "/tasks",
+        "/meetings",
+        "/inbox",
+        "/files",
+        "/files?tab=browse&type=canvas",
+        "/skills",
+        "/org_memory",
+        "/control",
+        "/control/experiments",
+        "/changelog",
+        "/settings"
+      ],
+      "websocket_connections": [
+        {
+          "id": 5,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 9,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 12,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 13,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 19,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 23,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 31,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        }
+      ],
+      "finished_at": "2026-10-27T02:03:06.087Z"
+    },
+    {
+      "label": "local seeded",
+      "started_at": "2026-10-27T02:03:34.101Z",
+      "base": "local dev server via byte-counting proxy",
+      "viewport": "1280x800",
+      "taps_per_tab": 10,
+      "tasks_scenario": null,
+      "server_log_level": "info",
+      "machine": {
+        "platform": "Darwin 25.3.0 arm64",
+        "cpu": "Apple M4",
+        "cores": 10,
+        "mem_gb": 16
+      },
+      "chrome": "Chrome/156.0.8078.48",
+      "node_destinations": {
+        "destinations": [
+          {
+            "path": "/chat",
+            "key": "chat"
+          },
+          {
+            "path": "/voice",
+            "key": "voice"
+          },
+          {
+            "path": "/tasks",
+            "key": "tasks"
+          },
+          {
+            "path": "/inbox",
+            "key": "inbox"
+          },
+          {
+            "path": "/control",
+            "key": "agents"
+          },
+          {
+            "path": "/skills",
+            "key": "skills"
+          },
+          {
+            "path": "/files",
+            "key": "files"
+          },
+          {
+            "path": "/files?tab=browse&type=canvas",
+            "key": "canvases"
+          },
+          {
+            "path": "/org_memory",
+            "key": "context"
+          },
+          {
+            "path": "/control/experiments",
+            "key": "experiments"
+          },
+          {
+            "path": "/meetings",
+            "key": "meetings"
+          },
+          {
+            "path": "/changelog",
+            "key": "changelog"
+          }
+        ],
+        "email_enabled": false,
+        "games_enabled": false
+      },
+      "tabs": [
+        {
+          "summary": {
+            "key": "voice",
+            "href": "/voice",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "n": 10,
+            "tap_ms": {
+              "n": 10,
+              "median": 65.94999998807907,
+              "p90": 70.90000003576279
+            },
+            "ready_ms": {
+              "n": 10,
+              "median": 59.54999998211861,
+              "p90": 66.69999998807907
+            },
+            "join_reply_raw_bytes": {
+              "n": 10,
+              "median": 66902,
+              "p90": 66904
+            },
+            "join_reply_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 11978,
+              "p90": 11978
+            },
+            "window_raw_recv_bytes": {
+              "n": 10,
+              "median": 78261,
+              "p90": 78271
+            },
+            "window_deflate_estimate_bytes": {
+              "n": 10,
+              "median": 12766,
+              "p90": 12767
+            },
+            "wire_down_bytes": {
+              "n": 10,
+              "median": 78287,
+              "p90": 78297
+            },
+            "server": {
+              "mounts_seen": 11,
+              "view": "PlatformWeb.VoiceLive",
+              "mount_ms": {
+                "n": 10,
+                "median": 20.596,
+                "p90": 21.935
+              },
+              "handle_params_ms": {
+                "n": 10,
+                "median": 0.033,
+                "p90": 0.037
+              },
+              "arrival_queries": {
+                "n": 10,
+                "median": 80,
+                "p90": 80
+              },
+              "refresh_board": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "count_by_scope": {
+                "n": 10,
+                "median": 0,
+                "p90": 0
+              },
+              "list_all_tasks_first": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "handle_params_calls": {
+                "n": 10,
+                "median": 1,
+                "p90": 1
+              }
+            }
+          },
+          "raw": {
+            "key": "voice",
+            "href": "/voice",
+            "origin": "/chat/tab-switch-busy",
+            "probe": "Tab key moves focus into the new main LiveView",
+            "taps": [
+              {
+                "i": 0,
+                "warmup": true,
+                "url": "/voice",
+                "tap_ms": 61,
+                "ready_ms": 56.5,
+                "loading_stop_ms": 41.19999998807907,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78258,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78258
+                },
+                "window_deflate_estimate_bytes": 12765,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78284,
+                "wire_up_bytes": 1657
+              },
+              {
+                "i": 1,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 71.09999996423721,
+                "ready_ms": 67.29999995231628,
+                "loading_stop_ms": 48.299999952316284,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12763,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 2,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 57,
+                "ready_ms": 49.59999996423721,
+                "loading_stop_ms": 40.69999998807907,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12766,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 3,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 70.90000003576279,
+                "ready_ms": 62.80000001192093,
+                "loading_stop_ms": 53.30000001192093,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12765,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 4,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 66.69999998807907,
+                "ready_ms": 63.80000001192093,
+                "loading_stop_ms": 44,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12766,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 5,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 70.09999996423721,
+                "ready_ms": 62.09999996423721,
+                "loading_stop_ms": 52.5,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12764,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 6,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 69.69999998807907,
+                "ready_ms": 66.69999998807907,
+                "loading_stop_ms": 42.19999998807907,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66902,
+                "topic_other_raw_bytes": 11228,
+                "window_raw_recv_bytes": 78261,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78261
+                },
+                "window_deflate_estimate_bytes": 12767,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78287,
+                "wire_up_bytes": 1658
+              },
+              {
+                "i": 7,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 53.69999998807907,
+                "ready_ms": 50.10000002384186,
+                "loading_stop_ms": 37.10000002384186,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66904,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 78268,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78268
+                },
+                "window_deflate_estimate_bytes": 12767,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78294,
+                "wire_up_bytes": 1663
+              },
+              {
+                "i": 8,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 62.10000002384186,
+                "ready_ms": 54.19999998807907,
+                "loading_stop_ms": 45.10000002384186,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66904,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 78271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78271
+                },
+                "window_deflate_estimate_bytes": 12766,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78297,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 9,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 54.5,
+                "ready_ms": 46.10000002384186,
+                "loading_stop_ms": 36.90000003576279,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66904,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 78271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78271
+                },
+                "window_deflate_estimate_bytes": 12768,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78297,
+                "wire_up_bytes": 1664
+              },
+              {
+                "i": 10,
+                "warmup": false,
+                "url": "/voice",
+                "tap_ms": 65.19999998807907,
+                "ready_ms": 57,
+                "loading_stop_ms": 48.09999996423721,
+                "join_topic": "lv:phx-GOJAli69kacdPBlk",
+                "join_reply_status": "ok",
+                "join_reply_raw_bytes": 66904,
+                "topic_other_raw_bytes": 11232,
+                "window_raw_recv_bytes": 78271,
+                "window_raw_recv_by_socket_topic": {
+                  "/live/websocket|lv:phx-GOJAli69kacdPBlk": 78271
+                },
+                "window_deflate_estimate_bytes": 12767,
+                "join_reply_deflate_estimate_bytes": 11978,
+                "wire_down_bytes": 78297,
+                "wire_up_bytes": 1664
+              }
+            ],
+            "server": [
+              {
+                "connected": true,
+                "pid": "#PID<0.4911.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.902,
+                "t0_us": -576459835494584,
+                "handle_params_ms": [
+                  0.051
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 21.941,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.701
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 15.24
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4931.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.636,
+                "t0_us": -576459834721436,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 22.229,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.379
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 16.85
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4951.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.399,
+                "t0_us": -576459833942152,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 22.249,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 7.202
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 15.047
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4971.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.754,
+                "t0_us": -576459833143088,
+                "handle_params_ms": [
+                  0.037
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 20.486,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.339
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 15.147
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.4991.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.935,
+                "t0_us": -576459832371940,
+                "handle_params_ms": [
+                  0.031
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 23.263,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.038
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 17.225
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5011.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 22.641,
+                "t0_us": -576459831583702,
+                "handle_params_ms": [
+                  0.036
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 24.257,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.589
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 17.668
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5031.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 20.438,
+                "t0_us": -576459830822989,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 21.419,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.448
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 15.971
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5051.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 16.305,
+                "t0_us": -576459830023147,
+                "handle_params_ms": [
+                  0.048
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 16.685,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.009
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 11.676
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5071.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 19.981,
+                "t0_us": -576459829273901,
+                "handle_params_ms": [
+                  0.035
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 20.678,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.424
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 15.254
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5091.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 18.111,
+                "t0_us": -576459828514920,
+                "handle_params_ms": [
+                  0.032
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 20.768,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 6.989
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 13.779
+                  }
+                },
+                "refresh_board_ms": []
+              },
+              {
+                "connected": true,
+                "pid": "#PID<0.5111.0>",
+                "view": "PlatformWeb.VoiceLive",
+                "count_by_scope": 0,
+                "list_all_tasks": [],
+                "refresh_board": 0,
+                "mount_ms": 21.413,
+                "t0_us": -576459827752583,
+                "handle_params_ms": [
+                  0.033
+                ],
+                "arrival_queries": 80,
+                "arrival_query_ms": 22.18,
+                "queries_by_phase": {
+                  "between": {
+                    "count": 28,
+                    "ms": 5.689
+                  },
+                  "mount": {
+                    "count": 52,
+                    "ms": 16.491
+                  }
+                },
+                "refresh_board_ms": []
+              }
+            ]
+          }
+        }
+      ],
+      "errors": [],
+      "sidebar_hrefs": [
+        "/chat",
+        "/voice",
+        "/tasks",
+        "/meetings",
+        "/inbox",
+        "/files",
+        "/files?tab=browse&type=canvas",
+        "/skills",
+        "/org_memory",
+        "/control",
+        "/control/experiments",
+        "/changelog",
+        "/settings"
+      ],
+      "websocket_connections": [
+        {
+          "id": 5,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 9,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        },
+        {
+          "id": 11,
+          "deflate_offered": true,
+          "deflate_accepted": false
+        }
+      ],
+      "finished_at": "2026-10-27T02:03:45.066Z"
+    }
+  ]
+}
