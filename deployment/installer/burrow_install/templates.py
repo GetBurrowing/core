@@ -329,8 +329,8 @@ def backup_conf(plan):
         "PG_CONTAINER=core-postgres",
         f"PG_USER={registry.POSTGRES_USER}",
         f"HELPER_IMAGE={plan.services['core-postgres'].image}",
-        f"VOLUMES=\"{' '.join(volumes)}\"",
-        f"HOST_DIRS=\"{'/home' if plan.agents == 'full_machine' else ''}\"",
+        f'VOLUMES="{" ".join(volumes)}"',
+        f'HOST_DIRS="{"/home" if plan.agents == "full_machine" else ""}"',
         f"STATUS_VOLUME={plan.name}_core-data",
     ]
     if b["target"] == "local-path":

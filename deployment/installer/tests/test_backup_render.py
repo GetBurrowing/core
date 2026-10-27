@@ -15,9 +15,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from burrow_install.manifest import load  # noqa: E402
-from burrow_install.render import build  # noqa: E402
-from burrow_install.validate import validate  # noqa: E402
+from burrow_install.manifest import load
+from burrow_install.render import build
+from burrow_install.validate import validate
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 EXAMPLE = os.path.join(REPO, "deployment", "examples", "single-host.install.toml")
@@ -101,7 +101,9 @@ class HostedDefault(unittest.TestCase):
         self.assertNotIn("burrow-backup", all_text(rendered))
 
     def test_opt_out_contradicting_a_target_is_refused(self):
-        raw = raw_manifest(hosted=True, backup={"target": "local-path", "path": "/b", "hosted_opt_out": True})
+        raw = raw_manifest(
+            hosted=True, backup={"target": "local-path", "path": "/b", "hosted_opt_out": True}
+        )
         errors, _ = validate(raw)
         self.assertEqual([e.code for e in errors], ["invalid_value"])
 
@@ -123,7 +125,9 @@ class S3Credentials(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             supplied = os.path.join(tmp, "customer.env")
             with open(supplied, "w", encoding="utf-8") as handle:
-                handle.write(f"BACKUP_ACCESS_KEY={ACCESS_VALUE}\nBACKUP_SECRET_KEY={SECRET_VALUE}\n")
+                handle.write(
+                    f"BACKUP_ACCESS_KEY={ACCESS_VALUE}\nBACKUP_SECRET_KEY={SECRET_VALUE}\n"
+                )
             return render(raw_manifest(hosted=True, backup=dict(S3)), customer_secrets=supplied)
 
     def test_refs_only_in_every_rendered_file_but_the_secret_env(self):
@@ -163,11 +167,14 @@ class S3Credentials(unittest.TestCase):
 class Scripts(unittest.TestCase):
     def test_scripts_parse(self):
         for name in ("burrow-backup.sh", "burrow-restore-drill.sh"):
-            result = subprocess.run(["bash", "-n", os.path.join(BACKUP_DIR, name)], capture_output=True)
+            result = subprocess.run(
+                ["bash", "-n", os.path.join(BACKUP_DIR, name)], capture_output=True, check=False
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_drill_prints_restored_lines_only(self):
-        text = open(os.path.join(BACKUP_DIR, "burrow-restore-drill.sh"), encoding="utf-8").read()
+        with open(os.path.join(BACKUP_DIR, "burrow-restore-drill.sh"), encoding="utf-8") as handle:
+            text = handle.read()
         self.assertIn('echo "restored $name $rows"', text)
 
 

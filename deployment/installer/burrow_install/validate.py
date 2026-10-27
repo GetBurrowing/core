@@ -430,16 +430,12 @@ def _rules(m, bad, errors, present=frozenset()):
         add(
             "backup_required_hosted",
             "backup.target",
-            'a hosted install needs a backup target; set one, or set backup.hosted_opt_out = true '
+            "a hosted install needs a backup target; set one, or set backup.hosted_opt_out = true "
             "to run without backups on purpose",
         )
     if backup["hosted_opt_out"] is True and target != "none":
         add("invalid_value", "backup.hosted_opt_out", 'contradicts target = "' + target + '"')
-    if (
-        type(backup["keep"]) is int
-        and backup["keep"] < 1
-        and not _is_bad("backup.keep", bad)
-    ):
+    if type(backup["keep"]) is int and backup["keep"] < 1 and not _is_bad("backup.keep", bad):
         add("invalid_value", "backup.keep", "must be at least 1")
     if target == "local-path" and backup["path"] is not None and not backup["path"].startswith("/"):
         add("invalid_value", "backup.path", "must be an absolute path")
