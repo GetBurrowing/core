@@ -12,10 +12,10 @@ defmodule Platform.Social.ToolDefinitions do
   1/9) submit a clip rendered outside Burrow for review, (Social 5/7)
   queue a clip's render and list clips with their render and review state,
   (Social 6/7) file a social task for an ask heard in a meeting or chat,
-  and (Clip Studio 1/9) five tools a clip runner uses to work Clip Studio's
-  job list (list, claim, progress, complete, fail), and (Social authoring
+  and six tools a clip runner uses to work Clip Studio's
+  job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Seventeen in all. No tool
+  Nineteen in all. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -33,7 +33,7 @@ defmodule Platform.Social.ToolDefinitions do
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
             social_post_list social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
-            social_clip_job_progress social_clip_job_complete social_clip_job_fail
+            social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
             social_idea_create social_idea_list social_idea_note_add)
 
   @doc "The sentence every tool's description carries."
@@ -516,6 +516,21 @@ defmodule Platform.Social.ToolDefinitions do
           "The claimer is always you (your agent), never an argument. " <>
             @job_errors <> " " <> @privacy_null,
         when_to_use: "Before running `clip` for a queued job."
+      },
+      %{
+        name: "social_clip_job_source",
+        description:
+          "Download the source of an automatic episode job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{type: "string", required: true, description: "Your open episode job id."}
+        },
+        returns: "%{file_id, project_id, url, expires_at, content_type, byte_size}",
+        limitations:
+          "Only the claimer of a claimed/running episode job. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
+            @job_errors <> " " <> @privacy_null,
+        when_to_use:
+          "After claiming an episode, to fetch its source automatically; call again if a download URL expired."
       },
       %{
         name: "social_clip_job_progress",

@@ -502,6 +502,43 @@ defmodule Platform.Social.ClipJobs do
   defp check_progress(_, _), do: {:error, :invalid_progress}
 
   @doc """
+  Short-lived source download for the claimer of an open automatic episode
+  job. The source is taken from the durable job identity, never caller attrs.
+  Re-check readiness/provenance and project ownership before minting a Files
+  signed URL; do not persist or log the returned bearer URL.
+  """
+  @spec source_download(Social.scope(), term(), Ecto.UUID.t()) :: {:ok, map()} | error()
+  def source_download(scope, job_id, agent_id) do
+    locked(scope, job_id, agent_id, fn job, profile ->
+      source = job.source_file_id && Platform.Files.get_file(job.source_file_id)
+
+      pipeline =
+        job.episode_pipeline_id &&
+          Repo.get(Platform.Social.EpisodePipeline, job.episode_pipeline_id)
+
+      project = profile.project_id && Repo.get(Platform.Tasks.Project, profile.project_id)
+
+      unless job.kind == "episode" && source && pipeline && project &&
+               project.org_id == profile.org_id && is_nil(project.archived_at) &&
+               Platform.Social.EpisodeDiscovery.eligible?(source, profile, pipeline) do
+        Repo.rollback(:source_unavailable)
+      end
+
+      expires_at = DateTime.add(DateTime.utc_now(), 900, :second)
+      url = ok_or_rollback(Platform.Files.SignedUrl.url(source, expires_at: expires_at))
+
+      %{
+        file_id: source.id,
+        project_id: profile.project_id,
+        url: url,
+        expires_at: expires_at,
+        content_type: source.content_type,
+        byte_size: source.byte_size
+      }
+    end)
+  end
+
+  @doc """
   The claimer completes the job with `result` (only `result_keys/0` are
   read). For `new_clip` and `rerender` the file must be a video in the
   profile's project; the clip (locked FOR UPDATE) becomes rendered with that
