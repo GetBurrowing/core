@@ -86,7 +86,7 @@ defmodule PlatformWeb.AgentConfigLiveTest do
         start_supervised!(
           {FakeRuntimeHost,
            [runtime_id: runtime.runtime_id, root: root, test_process: self()] ++
-             Keyword.take(opts, [:opt_in, :harness, :session, :capabilities])},
+             Keyword.take(opts, [:opt_in, :harness, :session, :capabilities, :resumes])},
           id: {:host, n}
         )
 
@@ -350,6 +350,63 @@ defmodule PlatformWeb.AgentConfigLiveTest do
       assert has_element?(view, "#agent-session-strip-up-to-date", "Session is up to date")
       assert has_element?(view, "#agent-session-strip-restart", "Restart session")
       assert has_element?(view, ~s(#open-agent-config[href="/control/#{agent.slug}/config"]))
+    end
+  end
+
+  describe "the strip's other states" do
+    test "a harness that cannot resume says so before the click", %{conn: conn, owner: owner} do
+      %{agent: agent} = federated!(owner, resumes: false)
+      {:ok, _view, html} = live(as(conn, owner), ~p"/control/#{agent.slug}/config")
+
+      assert texts(html, "#session-strip-fresh") |> Enum.map(&String.trim/1) == [
+               "Starts a fresh conversation"
+             ]
+
+      # POSITIVE CONTROL: one that resumes does not.
+      %{agent: other} = federated!(owner)
+      {:ok, _view, html} = live(as(conn, owner), ~p"/control/#{other.slug}/config")
+      refute present?(html, "#session-strip-fresh")
+    end
+
+    test "a diff with no earlier baseline carries the muted note" do
+      diff = %{
+        before: ["a/x"],
+        after: ["a/x", "b/y"],
+        added: ["b/y"],
+        removed: [],
+        outcome: "ready",
+        resumed: true,
+        before_basis: "now",
+        restarted_at: ~U[2026-10-27 14:02:00Z]
+      }
+
+      session = %{
+        phase: :restarted,
+        diff: diff,
+        last: diff,
+        pending: 0,
+        error: nil,
+        confirm: nil,
+        restart?: true,
+        resumes?: true,
+        agent_name: "Saru"
+      }
+
+      html =
+        render_component(&PlatformWeb.AgentConfig.SessionStrip.strip/1, id: "s", session: session)
+
+      assert texts(html, "#s-diff-basis") |> hd() =~
+               "taken just now, so earlier changes may not show"
+
+      assert texts(html, "#s-diff p:first-child > span:first-child") |> hd() =~ "Tools 1 → 2:"
+
+      html =
+        render_component(&PlatformWeb.AgentConfig.SessionStrip.strip/1,
+          id: "s",
+          session: %{session | diff: %{diff | before_basis: "loaded"}}
+        )
+
+      refute present?(html, "#s-diff-basis")
     end
   end
 

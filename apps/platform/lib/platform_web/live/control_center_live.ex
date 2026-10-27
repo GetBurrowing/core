@@ -724,9 +724,14 @@ defmodule PlatformWeb.ControlCenterLive do
 
   # Restart session (task 01a17b1c stage 5). `:ui` in the policy because
   # ConfigFiles.restart/3 is the gate, and audits a refusal.
-  defp handle_control_event(event, params, socket)
-       when event in ~w(session_restart session_restart_confirm session_restart_cancel),
-       do: Session.handle_event(event, params, socket)
+  defp handle_control_event("session_restart", params, socket),
+    do: Session.handle_event("session_restart", params, socket)
+
+  defp handle_control_event("session_restart_confirm", params, socket),
+    do: Session.handle_event("session_restart_confirm", params, socket)
+
+  defp handle_control_event("session_restart_cancel", params, socket),
+    do: Session.handle_event("session_restart_cancel", params, socket)
 
   # ── Runtime management events (delegated) ─────────────────────────
 

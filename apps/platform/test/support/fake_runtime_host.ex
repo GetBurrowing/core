@@ -14,7 +14,8 @@ defmodule Platform.FakeRuntimeHost do
   the snapshots the host reports (`"<server>/<tool>"` names); nil (default)
   answers `no_recorded_session`, as a folder with nothing in its roster does;
   `:silent` makes the host never answer a restart (core's timeout path).
-  `:capabilities` overrides the hello's list (stage 5 passes `file.delete`).
+  `:capabilities` overrides the hello's list (stage 5 passes `file.delete`);
+  `:resumes` (default true) is the hello's `resumes`.
   """
   use GenServer
   import Phoenix.ChannelTest
@@ -56,7 +57,7 @@ defmodule Platform.FakeRuntimeHost do
       "harness" => harness,
       "cli_version" => "0.0.0-test",
       "capabilities" => Keyword.get(opts, :capabilities, ["file", "session"]),
-      "resumes" => true,
+      "resumes" => Keyword.get(opts, :resumes, true),
       "config_opt_in" => Keyword.get(opts, :opt_in, "owner_only")
     }
 
