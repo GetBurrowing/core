@@ -158,6 +158,12 @@ defmodule Platform.CodeMode.PermitsTest do
     defp occupy_all do
       size = Permits.status().size
       pids = for i <- 1..size, do: holder(Permits, {:occupy, i})
+      # A failed assertion must not leave the node's gate occupied.
+      on_exit(fn ->
+        Enum.each(pids, &Process.exit(&1, :kill))
+        wait_for(fn -> Permits.status().held == 0 end)
+      end)
+
       for i <- 1..size, do: assert_receive({{:occupy, ^i}, {:ok, _}}, 1_000)
       pids
     end
@@ -166,21 +172,40 @@ defmodule Platform.CodeMode.PermitsTest do
       test = self()
       limits = %{Limits.get() | fuel_per_ms: 1_000_000_000}
 
+      # The host call proves the guest is inside cm_run, past setup: a
+      # caller killed during setup leaves nothing running, so its permit is
+      # rightly free at once.
+      host = fn "ping", _args ->
+        send(test, :in_guest)
+        ~s({"ok":true,"data":null})
+      end
+
       runner =
         spawn(fn ->
-          Runtime.run("while(true){}", nil,
+          Runtime.run(~s|burrow.call("ping", {}); while(true){}|, nil,
             limits: limits,
             wall_ms: 1_500,
+            host: host,
             on_store: fn store -> send(test, {:store, store}) end
           )
         end)
 
       assert_receive {:store, store}, 5_000
+      assert_receive :in_guest, 5_000
       assert Permits.status().held == 1
 
-      # The caller dies mid-run: the permit stays until the Store is idle.
+      # Let the host callback hand its result back before the kill.
+      receive do
+      after
+        100 -> :ok
+      end
+
+      # The caller dies mid-loop: the permit stays until the Store is idle
+      # (the guest has over a second of its wall budget left).
+      ref = Process.monitor(runner)
       Process.exit(runner, :kill)
-      assert Permits.status().held == 1
+      assert_receive {:DOWN, ^ref, :process, _, :killed}
+      refute wait_for(fn -> Permits.status().held == 0 end, 300)
       _ = Wasmex.StoreOrCaller.get_fuel(store)
       assert wait_for(fn -> Permits.status().held == 0 end)
     end
