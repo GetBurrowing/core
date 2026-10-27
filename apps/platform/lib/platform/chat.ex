@@ -7025,7 +7025,7 @@ defmodule Platform.Chat do
     category = if is_exception(reason), do: inspect(reason.__struct__), else: inspect(kind)
 
     Logger.error(
-      "[Chat] add_message_attention #{operation} failed " <>
+      "[Chat] add_message_attention #{operation} failed phase=failure " <>
         "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(recipient_ids, ",")}: " <>
         "kind=#{kind} category=#{category}"
     )

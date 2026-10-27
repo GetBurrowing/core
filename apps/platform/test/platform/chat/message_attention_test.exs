@@ -165,6 +165,17 @@ defmodule Platform.Chat.MessageAttentionTest do
     row
   end
 
+  defp with_info_log(fun) do
+    previous = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      ExUnit.CaptureLog.capture_log([level: :info], fun)
+    after
+      Logger.configure(level: previous)
+    end
+  end
+
   defp with_debug_log(fun) do
     previous = Logger.level()
     Logger.configure(level: :debug)
@@ -233,7 +244,7 @@ defmodule Platform.Chat.MessageAttentionTest do
       :ok = :sys.suspend(router)
 
       log =
-        ExUnit.CaptureLog.capture_log(fn ->
+        with_info_log(fn ->
           try do
             assert {:ok, %{added: [_]}} =
                      Chat.add_message_attention(actor(alice), space.id, message.id, [
@@ -256,7 +267,10 @@ defmodule Platform.Chat.MessageAttentionTest do
 
       assert log =~ "add_message_attention routing worker failed"
       assert log =~ "message=#{message.id} space=#{space.id} recipients=#{zip.id}"
+      assert log =~ "phase=failure"
       assert log =~ "kind=exit category=:exit"
+      assert log =~ "phase=handoff message=#{message.id}"
+      assert log =~ "outcome=accepted"
       refute log =~ "router exit"
     end
   end
