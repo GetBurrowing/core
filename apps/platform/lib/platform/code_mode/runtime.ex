@@ -38,7 +38,8 @@ defmodule Platform.CodeMode.Runtime do
   every run's native work (Store, instance, setup and `cm_run`) holds one of
   the node's `Platform.CodeMode.Permits`: at most one fewer guest than
   wasmex has tokio workers runs at once, node-wide, whichever pool started
-  it. The wall deadline is taken when `run/3` is called and the wait for a
+  it, and no one `:permit_key` holds all of them. The wall deadline is
+  taken when `run/3` is called and the wait for a
   permit is charged to it: `cm_run` gets `wall_ms` minus that wait, and a
   run still waiting at its deadline returns `timeout` without running.
   Setup calls keep their own 5 s bound and are not charged. The permit is
@@ -103,6 +104,9 @@ defmodule Platform.CodeMode.Runtime do
     * `:wall_ms` — the wall budget, default `limits.wall_ms`.
     * `:on_store` — called with the Store before it runs anything, so a
       caller can track it (`Platform.CodeMode.Slots`).
+    * `:permit_key` — the key the run's native permit is capped under
+      (`Platform.CodeMode.Permits`): one key may hold at most one fewer
+      permit than the node has. Default nil, no per-key cap.
 
   Returns `{:ok, %{result, logs, logs_truncated}}` or
   `{:error, kind, message}` with kind one of `timeout`, `memory`, `fuel`,
@@ -130,7 +134,8 @@ defmodule Platform.CodeMode.Runtime do
         started_at: started_at,
         deadline: started_at + wall_ms,
         host: host,
-        on_store: on_store
+        on_store: on_store,
+        permit_key: Keyword.get(opts, :permit_key)
       })
     end
   end
@@ -147,7 +152,7 @@ defmodule Platform.CodeMode.Runtime do
   # charged to the run's wall budget; a run that cannot get one before its
   # deadline times out like any other.
   defp execute(script, inputs_json, config, ctx) do
-    case Permits.acquire(ctx.deadline) do
+    case Permits.acquire(ctx.permit_key, ctx.deadline) do
       {:ok, permit} ->
         waited = max(System.monotonic_time(:millisecond) - ctx.started_at, 0)
         execute_with_permit(script, inputs_json, config, ctx, permit, ctx.wall_ms - waited)

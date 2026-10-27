@@ -23,11 +23,20 @@ defmodule Platform.CodeMode.Permits do
   on, capped by a cgroup v2 CPU quota (`/sys/fs/cgroup/cpu.max`) when one
   is set.
 
+  ## One key cannot take the whole node
+
+  A run may name a key (`Platform.CodeMode.Runtime`'s `:permit_key`: one
+  canvas, one agent runtime). A key holds at most `max(1, size - 1)`
+  permits at once, so one canvas looping in every handler slot it is
+  allowed still leaves a permit for every other canvas and agent. A waiter
+  held back only by its own key's cap does not hold back other keys.
+
   ## Waiting and releasing
 
-  A run that finds every permit taken waits in FIFO order until `deadline`
-  (a monotonic millisecond time, the run's own wall deadline), then gets
-  `{:error, :timeout}`. A waiter that dies leaves the queue.
+  A run that cannot take a permit waits until `deadline` (a monotonic
+  millisecond time, the run's own wall deadline), then gets
+  `{:error, :timeout}`. Freed permits go to the oldest waiter whose key is
+  under its cap. A waiter that dies leaves the queue.
 
   A permit is returned when its guest is idle, not when its caller gives
   up: `release/2` after the native call returned, `release_when_idle/2`
@@ -99,12 +108,13 @@ defmodule Platform.CodeMode.Permits do
   defp cgroup_quota(_), do: nil
 
   @doc """
-  Take a permit for the calling process, waiting until `deadline`
+  Take a permit for the calling process under `key` (any term; nil for no
+  per-key cap), waiting until `deadline`
   (`System.monotonic_time(:millisecond)`) at the latest.
   """
-  @spec acquire(GenServer.server(), integer()) :: {:ok, reference()} | {:error, :timeout}
-  def acquire(server \\ __MODULE__, deadline),
-    do: GenServer.call(server, {:acquire, self(), deadline}, :infinity)
+  @spec acquire(GenServer.server(), term(), integer()) :: {:ok, reference()} | {:error, :timeout}
+  def acquire(server \\ __MODULE__, key, deadline),
+    do: GenServer.call(server, {:acquire, self(), key, deadline}, :infinity)
 
   @doc "Record the Store a permit's guest runs in."
   def attach_store(server \\ __MODULE__, permit, store),
@@ -117,32 +127,41 @@ defmodule Platform.CodeMode.Permits do
   def release_when_idle(server \\ __MODULE__, permit),
     do: GenServer.cast(server, {:release_when_idle, permit})
 
-  @doc "`%{size: n, held: n, waiting: n}` now."
+  @doc "`%{size: n, per_key: n, held: n, waiting: n}` now."
   def status(server \\ __MODULE__), do: GenServer.call(server, :status)
 
   @impl true
   def init(opts) do
     size = Keyword.get_lazy(opts, :size, &configured_size/0)
-    {:ok, %{size: size, held: %{}, waiting: :queue.new()}}
+    per_key = Keyword.get(opts, :per_key, max(1, size - 1))
+    {:ok, %{size: size, per_key: per_key, held: %{}, waiting: :queue.new()}}
   end
 
   @impl true
-  def handle_call({:acquire, pid, deadline}, from, state) do
+  # Freed permits are handed off at once, so any waiter still queued is
+  # held back by the node cap or its own key's cap: a new run that is
+  # eligible now takes a permit without overtaking an eligible waiter.
+  def handle_call({:acquire, pid, key, deadline}, from, state) do
     monitor = Process.monitor(pid)
 
-    if map_size(state.held) < state.size and :queue.is_empty(state.waiting) do
-      {:reply, {:ok, monitor}, grant(state, monitor)}
+    if eligible?(state, key) do
+      {:reply, {:ok, monitor}, grant(state, monitor, key)}
     else
       wait = max(deadline - System.monotonic_time(:millisecond), 0)
       timer = Process.send_after(self(), {:expire, monitor}, wait)
-      waiter = %{ref: monitor, from: from, timer: timer}
+      waiter = %{ref: monitor, key: key, from: from, timer: timer}
       {:noreply, %{state | waiting: :queue.in(waiter, state.waiting)}}
     end
   end
 
   def handle_call(:status, _from, state) do
-    {:reply, %{size: state.size, held: map_size(state.held), waiting: :queue.len(state.waiting)},
-     state}
+    {:reply,
+     %{
+       size: state.size,
+       per_key: state.per_key,
+       held: map_size(state.held),
+       waiting: :queue.len(state.waiting)
+     }, state}
   end
 
   @impl true
@@ -174,8 +193,13 @@ defmodule Platform.CodeMode.Permits do
 
   def handle_info({:idle, permit}, state), do: {:noreply, free(state, permit)}
 
-  defp grant(state, ref),
-    do: put_in(state, [:held, ref], %{store: nil, draining: false})
+  defp grant(state, ref, key),
+    do: put_in(state, [:held, ref], %{key: key, store: nil, draining: false})
+
+  defp eligible?(state, key) do
+    map_size(state.held) < state.size and
+      (key == nil or Enum.count(state.held, fn {_, h} -> h.key == key end) < state.per_key)
+  end
 
   defp drain(state, permit) do
     case Map.get(state.held, permit) do
@@ -205,13 +229,16 @@ defmodule Platform.CodeMode.Permits do
     end
   end
 
-  # Grant freed permits to the oldest waiters.
+  # Grant freed permits to the oldest waiters whose key is under its cap.
   defp hand_off(state) do
+    waiting = :queue.to_list(state.waiting)
+
     with true <- map_size(state.held) < state.size,
-         {{:value, waiter}, rest} <- :queue.out(state.waiting) do
+         %{} = waiter <- Enum.find(waiting, &eligible?(state, &1.key)) do
       Process.cancel_timer(waiter.timer)
       GenServer.reply(waiter.from, {:ok, waiter.ref})
-      hand_off(grant(%{state | waiting: rest}, waiter.ref))
+      rest = :queue.from_list(Enum.reject(waiting, &(&1.ref == waiter.ref)))
+      hand_off(grant(%{state | waiting: rest}, waiter.ref, waiter.key))
     else
       _ -> state
     end

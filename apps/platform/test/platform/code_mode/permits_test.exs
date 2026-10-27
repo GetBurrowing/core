@@ -23,11 +23,13 @@ defmodule Platform.CodeMode.PermitsTest do
 
   # A process that takes a permit from `gate`, reports it, and holds it
   # until told to release (or is killed).
-  defp holder(gate, tag, deadline \\ nil) do
+  defp holder(gate, tag, opts \\ []) do
     test = self()
+    key = Keyword.get(opts, :key)
+    deadline = Keyword.get_lazy(opts, :deadline, &far/0)
 
     spawn(fn ->
-      result = Permits.acquire(gate, deadline || far())
+      result = Permits.acquire(gate, key, deadline)
       send(test, {tag, result})
 
       receive do
@@ -120,7 +122,7 @@ defmodule Platform.CodeMode.PermitsTest do
       send(pid, :release)
     end
 
-    assert wait_for(fn -> Permits.status(gate) == %{size: 1, held: 0, waiting: 0} end)
+    assert wait_for(fn -> match?(%{held: 0, waiting: 0}, Permits.status(gate)) end)
   end
 
   test "a holder that dies returns its permit, and a dead waiter leaves the queue" do
@@ -141,13 +143,50 @@ defmodule Platform.CodeMode.PermitsTest do
     refute_received {:dead, _}
   end
 
+  test "one key holds at most size - 1 permits and does not block other keys" do
+    gate = start_gate(3)
+    assert Permits.status(gate).per_key == 2
+
+    a1 = holder(gate, :a1, key: {:canvas, "a"})
+    a2 = holder(gate, :a2, key: {:canvas, "a"})
+    assert_receive {:a1, {:ok, _}}
+    assert_receive {:a2, {:ok, _}}
+
+    # A third run on the same key waits although a permit is free...
+    _a3 = holder(gate, :a3, key: {:canvas, "a"})
+    assert wait_for(fn -> Permits.status(gate).waiting == 1 end)
+    refute_received {:a3, _}
+
+    # ...and does not stand in front of another key.
+    b1 = holder(gate, :b1, key: {:canvas, "b"})
+    assert_receive {:b1, {:ok, _}}, 1_000
+    assert %{held: 3, waiting: 1} = Permits.status(gate)
+
+    # A permit freed by another key does not lift key a's cap...
+    send(b1, :release)
+    refute_receive {:a3, _}, 100
+    assert %{held: 2, waiting: 1} = Permits.status(gate)
+
+    # ...one freed by key a goes to its waiter.
+    send(a1, :release)
+    assert_receive {:a3, {:ok, _}}, 1_000
+    send(a2, :release)
+  end
+
+  test "a size-one gate still admits a keyed run" do
+    gate = start_gate(1)
+    assert Permits.status(gate).per_key == 1
+    _a = holder(gate, :a, key: "k")
+    assert_receive {:a, {:ok, _}}
+  end
+
   test "a waiter still queued at its deadline gets a timeout" do
     gate = start_gate(1)
     _first = holder(gate, :first)
     assert_receive {:first, {:ok, _}}
 
     started = System.monotonic_time(:millisecond)
-    _late = holder(gate, :late, started + 200)
+    _late = holder(gate, :late, deadline: started + 200)
     assert_receive {:late, {:error, :timeout}}, 1_000
     assert System.monotonic_time(:millisecond) - started >= 200
     assert %{held: 1, waiting: 0} = Permits.status(gate)
