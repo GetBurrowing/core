@@ -306,6 +306,33 @@ defmodule Platform.Agents.ConfigFilesTest do
   # ── federated: kind x opt-in ───────────────────────────────────────
 
   describe "federated agent (Host backend)" do
+    test "every request names the actor role", %{owner: owner, admin: admin} do
+      %{agent: agent, host: host} = federated!(owner, opt_in: "admins")
+      {:ok, _} = ConfigFiles.list(owner, agent)
+      {:ok, _} = ConfigFiles.list(admin, agent)
+      assert FakeRuntimeHost.served(host) == [{"file.list", "owner"}, {"file.list", "admin"}]
+    end
+
+    test "a skill (four path segments) can be written on both backends", %{owner: owner} do
+      path = ".claude/skills/probe-skill/SKILL.md"
+
+      assert {:ok, _} =
+               ConfigFiles.write(
+                 owner,
+                 native!(owner),
+                 path,
+                 "---\nname: probe-skill\n---\n",
+                 nil
+               )
+
+      %{agent: agent, root: root} = federated!(owner)
+
+      assert {:ok, _} =
+               ConfigFiles.write(owner, agent, path, "---\nname: probe-skill\n---\n", nil)
+
+      assert File.exists?(Path.join(root, path))
+    end
+
     test "the owner can write through the host, the disk changes, one audit row", %{owner: owner} do
       %{agent: agent, root: root} = federated!(owner)
       File.write!(Path.join(root, "CLAUDE.md"), "# before\n")

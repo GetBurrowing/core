@@ -57,7 +57,7 @@ defmodule Platform.Agents.NativeAgents do
   # is not what it is running.
   @live_states [:running, :starting, :needs_login]
 
-  @max_file_depth 3
+  @max_file_depth 4
   # One path component: letters, digits and `._@+-`, not starting with `-`,
   # and a leading dot only before a letter, digit or `_` (so never "." or
   # ".."). The agent host's `isFileKey` (services/agent-host/src/files.ts) is

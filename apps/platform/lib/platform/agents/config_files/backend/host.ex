@@ -61,5 +61,10 @@ defmodule Platform.Agents.ConfigFiles.Backend.Host do
     end
   end
 
-  defp ask(ctx, event, payload), do: RuntimeHosts.request(ctx.runtime.runtime_id, event, payload)
+  # Every request names the actor's ROLE (never an id): the CLI checks it
+  # against the opt-in chosen on the machine (`owner_only` refuses an admin).
+  defp ask(ctx, event, payload) do
+    payload = Map.put(payload, "actor_role", to_string(Map.get(ctx, :role) || :other))
+    RuntimeHosts.request(ctx.runtime.runtime_id, event, payload)
+  end
 end

@@ -185,8 +185,15 @@ defmodule Platform.Agents.NativeAgentFilesTest do
   # ── Keys ──────────────────────────────────────────────────────────
 
   describe "valid_file_key?/1" do
-    test "accepts relative keys up to three deep" do
-      for key <- ["CLAUDE.md", "AGENTS.md", ".claude/settings.json", "a/b/c.md", ".mcp.json"] do
+    test "accepts relative keys up to four deep (a skill is .claude/skills/<name>/SKILL.md)" do
+      for key <- [
+            "CLAUDE.md",
+            "AGENTS.md",
+            ".claude/settings.json",
+            "a/b/c.md",
+            ".mcp.json",
+            ".claude/skills/x/SKILL.md"
+          ] do
         assert NativeAgents.valid_file_key?(key), key
       end
     end
@@ -200,7 +207,7 @@ defmodule Platform.Agents.NativeAgentFilesTest do
             "./x",
             "~/x",
             "~agent/x",
-            "a/b/c/d",
+            "a/b/c/d/e",
             "",
             "a//b",
             "a/",

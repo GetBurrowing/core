@@ -11,7 +11,7 @@
  * THE RULES, each enforced here and not only in core:
  *
  *   - a key is relative: no leading "/" or "~", no "." or ".." component, no
- *     empty component, at most 3 components, printable characters only
+ *     empty component, at most 4 components, printable characters only
  *     ({@link isFileKey}, the same rule as core's `valid_file_key?/1`);
  *   - every write runs AS THE AGENT (`runuser`), so the file is the agent's
  *     own and a symlink the agent planted can never redirect a ROOT write;
@@ -51,7 +51,7 @@ export type FilesShas = Record<string, string>;
 /** Key → version the host last wrote into the agent's work dir. */
 export type FilesApplied = Record<string, number>;
 
-export const MAX_FILE_DEPTH = 3;
+export const MAX_FILE_DEPTH = 4;
 export const MAX_FILE_BYTES = 512 * 1024;
 
 const COMPONENT = /^[A-Za-z0-9_][A-Za-z0-9._@+-]*$|^\.[A-Za-z0-9_][A-Za-z0-9._@+-]*$/;

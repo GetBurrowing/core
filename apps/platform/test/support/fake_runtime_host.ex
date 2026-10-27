@@ -75,9 +75,10 @@ defmodule Platform.FakeRuntimeHost do
         %Phoenix.Socket.Message{event: event, payload: %{"ref" => ref} = payload},
         state
       ) do
+    state = %{state | served: [{event, payload["actor_role"]} | state.served]}
     reply = serve(event, payload, state)
     push(state.socket, "reply", Map.put(reply, "ref", ref))
-    {:noreply, %{state | served: [event | state.served]}}
+    {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}

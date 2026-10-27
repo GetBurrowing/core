@@ -348,14 +348,14 @@ describe("the runner", () => {
 // real filesystem with planted symlinks) are in test/isolation.test.ts.
 describe("agent file keys (same rule as core's NativeAgents.valid_file_key?/1)", () => {
   test("accepts relative keys up to three deep", () => {
-    for (const k of ["CLAUDE.md", "AGENTS.md", ".claude/settings.json", "a/b/c.md", ".mcp.json"]) {
+    for (const k of ["CLAUDE.md", "AGENTS.md", ".claude/settings.json", "a/b/c.md", ".mcp.json", ".claude/skills/x/SKILL.md"]) {
       expect(isFileKey(k)).toBe(true);
     }
   });
 
   test("refuses traversal, absolute, home-relative, too deep and odd characters", () => {
     for (const k of [
-      "../x", "a/../../x", "a/..", "./x", "/etc/x", "~/x", "~agent/x", "a/b/c/d", "", "a//b", "a/",
+      "../x", "a/../../x", "a/..", "./x", "/etc/x", "~/x", "~agent/x", "a/b/c/d/e", "", "a//b", "a/",
       "a\nb", "a b", "-rf", "a/\0", "..", ".", "...", "x\\y", 42, null,
     ]) {
       expect(isFileKey(k)).toBe(false);

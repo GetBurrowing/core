@@ -42,7 +42,8 @@ defmodule Platform.Agents.ConfigFiles.Access do
           actor: map(),
           backend: :workspace_store | :host,
           adapter: module(),
-          opt_in: atom() | nil
+          opt_in: atom() | nil,
+          role: :owner | :admin | nil
         }
 
   @doc "Every opt-in level."
@@ -138,7 +139,7 @@ defmodule Platform.Agents.ConfigFiles.Access do
         {:error, :forbidden}
 
       decide(kind, opt_in, if(owner?, do: :owner, else: :admin)) ->
-        with_adapter(actor, agent, runtime, host, opt_in)
+        with_adapter(actor, agent, runtime, host, opt_in, if(owner?, do: :owner, else: :admin))
 
       owner? and opt_in == :off ->
         {:error, :opt_in_required}
@@ -148,7 +149,7 @@ defmodule Platform.Agents.ConfigFiles.Access do
     end
   end
 
-  defp with_adapter(actor, agent, runtime, host, opt_in) do
+  defp with_adapter(actor, agent, runtime, host, opt_in, role) do
     with {:ok, adapter} <- adapter(host.hello.harness) do
       {:ok,
        %{
@@ -157,7 +158,8 @@ defmodule Platform.Agents.ConfigFiles.Access do
          actor: actor,
          backend: :host,
          adapter: adapter,
-         opt_in: opt_in
+         opt_in: opt_in,
+         role: role
        }}
     end
   end
