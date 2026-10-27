@@ -6,7 +6,7 @@ defmodule Platform.Meetings.Completion do
   """
   import Ecto.Query
   alias Platform.{Repo, Meetings}
-  alias Platform.Meetings.{Meeting, Transcript, Room, Recording, CompletionRun, Triage}
+  alias Platform.Meetings.{Meeting, Transcript, Room, CompletionRun, Triage}
   alias Platform.Chat.Canvas
 
   def resume(meeting_id) do
@@ -299,21 +299,13 @@ defmodule Platform.Meetings.Completion do
       )
       |> Enum.filter(&belongs_to_meeting?(&1, meeting))
 
-    active_recording =
-      room &&
-        Repo.exists?(
-          from(r in Recording,
-            where: r.room_id == ^room.id and r.status in ["recording", "processing"]
-          )
-        )
-
     canonical = Enum.find(Enum.reverse(transcripts), &(&1.status == "complete"))
 
+    # The room-finished fence is capture completion. Recording `processing`
+    # means MP4/file finalization after capture stopped, not pending speech;
+    # it must not hold an already-final transcript hostage.
     cond do
       room && room.status != "idle" ->
-        {:error, :capture_active}
-
-      active_recording ->
         {:error, :capture_active}
 
       Enum.any?(

@@ -77,6 +77,36 @@ defmodule Platform.Meetings.TranscriptOwnershipTest do
     assert Repo.get!(Transcript, prior.id).status == "failed"
   end
 
+  test "finished capture is not held by recording file processing", ctx do
+    room =
+      Repo.insert!(%Meetings.Room{
+        space_id: ctx.meeting.chat_space_id,
+        livekit_room_name: ctx.meeting.livekit_room_name,
+        status: "idle"
+      })
+
+    Repo.insert!(%Meetings.Recording{
+      room_id: room.id,
+      space_id: ctx.meeting.chat_space_id,
+      status: "processing"
+    })
+
+    {:ok, transcript} =
+      Meetings.create_transcript(%{
+        room_id: ctx.meeting.livekit_room_name,
+        space_id: ctx.meeting.chat_space_id,
+        status: "complete",
+        completed_at: ctx.now,
+        segments: [%{"id" => Ecto.UUID.generate(), "text" => "Final agreed action"}]
+      })
+
+    {:ok, meeting} = Meetings.end_meeting(ctx.meeting)
+    Completion.capture_finished_for_space(meeting.chat_space_id)
+    run = Repo.get_by!(CompletionRun, meeting_id: meeting.id)
+    assert run.snapshot["source_transcript_ids"] == [transcript.id]
+    assert run.status != "waiting"
+  end
+
   test "prior summary finishing during a meeting does not enter its snapshot", ctx do
     prior =
       Repo.insert!(%Transcript{
