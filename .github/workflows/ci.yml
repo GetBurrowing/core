@@ -1815,7 +1815,7 @@ jobs:
       - name: Run unit tests
         env:
           UV_PYTHON_PREFERENCE: only-system
-        run: uv run --extra dev pytest --ignore=tests/live -q
+        run: uv run --locked --extra dev pytest --ignore=tests/live -q
 
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
