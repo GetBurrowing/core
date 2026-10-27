@@ -242,7 +242,7 @@ final class NativeTabBarContractTests: XCTestCase {
         }
         // A filled bubble puts full ink in the gaps; three dots leave them
         // well under the dots. The iPad simulator's antialiasing leaves a
-        // softer edge (84 at x=10.5 on rock, iOS 27.0) than the iPhone, so
+        // softer edge (84 at x=10.5, iOS 27.0) than the iPhone, so
         // the gap is held to clearly below half ink and clearly below every
         // dot rather than to one runtime's exact edge.
         let weakestDot = dots.min() ?? 0

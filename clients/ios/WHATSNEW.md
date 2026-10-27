@@ -15,6 +15,11 @@ Please try:
 5. Light and dark mode both.
 6. On an iPad held so the app is wide (a 13-inch iPad, or any iPad in landscape), the app shows its sidebar instead and the bottom bar stays hidden.
 
+Also in this build: the tab bar now looks like the rest of the app. It keeps Apple's glass, but the icons are the app's own, the labels are in the app's typeface, and the tabs use the app's colours: a deeper orange for the selected tab in light mode, the app's orange in dark mode, and full-strength text for the others. Labels grow with larger text sizes up to a cap. Past it, press and hold a tab to see its name.
+
+7. Check the bar in light and dark mode over a light page and a dark page (a photo works well), and with Settings > Accessibility > Display & Text Size > Reduce Transparency on. Tell us if a tab's icon or name is hard to read. On a page whose brightness is the opposite of the app's mode, the selected orange tab is known to be faint.
+8. Set the largest text size and check that no tab name is cut off.
+
 Known gaps: the bar needs the matching web update on your install. An install that does not have it yet keeps the old bottom bar inside the page, which still works.
 
 ## v1.2
