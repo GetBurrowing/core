@@ -714,6 +714,36 @@ defmodule Platform.Chat.MessageAttentionTest do
   # ── Router entry (D3) ──────────────────────────────────────────────────────
 
   describe "AttentionRouter.route_attention/3" do
+    test "execution log-only attention persists but logs no decision, with a dispatch positive control" do
+      space = channel!(%{kind: "execution", agent_attention_policy: "on_mention"})
+      alice = member!(space, user!("Alice"))
+      {_agent, zip} = agent!(space, "Zip")
+      message = post!(space, alice, "execution log")
+      message |> Ecto.Changeset.change(log_only: true) |> Repo.update!()
+      :ok = Chat.PubSub.subscribe(space.id)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert {:ok, %{added: [_]}} =
+                   add_attention_and_settle(actor(alice), space.id, message.id, [zip.participant_id])
+        end)
+
+      assert length(rows(message.id)) == 1
+      assert log =~ "message=#{message.id} requested=#{zip.id}"
+      assert log =~ "outcome=empty"
+      assert log =~ "skipped_reason=execution_log_only"
+      refute_receive {:attention_needed, _}, 100
+      refute_received {:agent_chat_called, _, _}
+
+      positive = post!(space, alice, "explicit request")
+
+      assert {:ok, %{added: [_]}} =
+               add_attention_and_settle(actor(alice), space.id, positive.id, [zip.participant_id])
+
+      zip_id = zip.id
+      assert_receive {:attention_needed, %{participant_id: ^zip_id, reason: :mention}}
+    end
+
     test "added attention decisions are visible at info without message content" do
       space = channel!(%{agent_attention_policy: "on_mention", agents_awake: true})
       alice = member!(space, user!("Alice"))
