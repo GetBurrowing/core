@@ -11,7 +11,9 @@ import Foundation
 /// - a failed or provisionally failed navigation of that load, except a
 ///   cancellation (-999) that a newer shell load caused;
 /// - a WebContent process termination;
-/// - a watchdog that fires when nothing commits soon enough after a load.
+/// - a watchdog that fires when nothing commits soon enough after a load;
+/// - the same for a page that commits but does not finish loading (the
+///   mechanism behind the blank first launch, task 01a17d1f).
 ///
 /// Attempts are bounded per shell load and spaced by a short backoff. Pure
 /// (the clock and the web view are injected) so it can be unit tested.
@@ -22,6 +24,12 @@ final class WebLoadRecovery {
         var backoff: [TimeInterval] = [0.5, 1, 2]
         /// Longest a load may go without committing. A cold runner took 13 s.
         var watchdog: TimeInterval = 25
+        /// Longest a committed page may go without finishing. In run
+        /// 40538916731 (cold runner) two launches committed and never finished
+        /// while the test waited; the slowest cold commit-to-finish that did
+        /// land took 8.4 s, a warm one 0.1 s. A re-issue on a warm renderer is
+        /// cheap, so the bound sits just above the slowest healthy cold case.
+        var finishBound: TimeInterval = 10
     }
 
     private let config: Config
@@ -35,6 +43,7 @@ final class WebLoadRecovery {
     private(set) var intended: URLRequest?
     private(set) var attempts = 0
     private(set) var committed = false
+    private(set) var finished = false
     /// Pages that finished loading after a re-issue.
     private(set) var recoveredPages = 0
     private var awaitingRecoveredCommit = false
@@ -64,14 +73,28 @@ final class WebLoadRecovery {
         intended = request
         attempts = 0
         committed = false
+        finished = false
         awaitingRecoveredCommit = false
         recoveredCommitSeen = false
         armWatchdog()
     }
 
+    /// Capacitor's own bootstrap page (`capacitor://…/`), not a load the shell
+    /// asked for: its commit or finish must not stand in for the intended one.
+    private func isBootstrapOfAnotherLoad(_ url: URL?) -> Bool {
+        guard let url, let intended, url.scheme == "capacitor", ["", "/", "/index.html"].contains(url.path) else { return false }
+        return url.absoluteString != intended.url?.absoluteString
+    }
+
     func didCommit(url: URL?) {
+        if isBootstrapOfAnotherLoad(url) {
+            log("recovery ignored commit of the bootstrap page")
+            return
+        }
         epoch += 1
         committed = true
+        finished = false
+        armFinishWatchdog()
         // Whatever is on screen now is what a later termination restores.
         if let url { intended = URLRequest(url: url) }
         if awaitingRecoveredCommit {
@@ -80,7 +103,13 @@ final class WebLoadRecovery {
         }
     }
 
-    func didFinish() {
+    func didFinish(url: URL? = nil) {
+        if isBootstrapOfAnotherLoad(url) {
+            log("recovery ignored finish of the bootstrap page")
+            return
+        }
+        epoch += 1
+        finished = true
         guard recoveredCommitSeen else { return }
         recoveredCommitSeen = false
         recoveredPages += 1
@@ -135,10 +164,20 @@ final class WebLoadRecovery {
         attempts += 1
         epoch += 1
         committed = false
+        finished = false
         awaitingRecoveredCommit = true
         log("recovery reissue attempt=\(attempts) reason=\(reason)")
         load(intended)
         armWatchdog()
+    }
+
+    private func armFinishWatchdog() {
+        let captured = epoch
+        schedule(config.finishBound) { [weak self] in
+            guard let self, self.epoch == captured, self.committed, !self.finished else { return }
+            self.log("recovery committed but did not finish")
+            self.scheduleRetry("commit without finish")
+        }
     }
 
     private func armWatchdog() {

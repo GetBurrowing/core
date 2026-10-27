@@ -110,7 +110,7 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         finishOne()
         WebLoadLog.logger.notice("didFinish url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
-        recovery.didFinish()
+        recovery.didFinish(url: webView.url)
         target?.webView?(webView, didFinish: navigation)
     }
 

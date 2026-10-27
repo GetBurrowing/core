@@ -118,6 +118,57 @@ final class WebLoadRecoveryTests: XCTestCase {
         XCTAssertEqual(loads.map(\.url), [fixture.url])
     }
 
+    func testCommitWithoutFinishReissuesTheLoad() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        XCTAssertEqual(timers.map(\.delay), [WebLoadRecovery.Config().watchdog, WebLoadRecovery.Config().finishBound])
+        fire()  // the finish bound: schedules the backoff (the stale no-commit watchdog does nothing)
+        XCTAssertTrue(loads.isEmpty)
+        XCTAssertTrue(lines.contains { $0.contains("did not finish") })
+        fire()  // the backoff
+        XCTAssertEqual(loads.map(\.url), [fixture.url])
+        XCTAssertEqual(recovery.attempts, 1)
+    }
+
+    func testFinishDisarmsTheFinishBound() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        recovery.didFinish()
+        fire()
+        fire()
+        XCTAssertTrue(loads.isEmpty)
+        XCTAssertFalse(lines.contains { $0.contains("did not finish") })
+    }
+
+    func testCommitWithoutFinishIsBoundedLikeAnyOtherFailure() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        for _ in 0..<4 {
+            fire()  // the finish bound
+            fire()  // the backoff, then the re-issue
+            recovery.didCommit(url: fixture.url)  // it commits again, and again never finishes
+        }
+        XCTAssertEqual(loads.count, 3)
+        XCTAssertTrue(lines.contains { $0.contains("exhausted") })
+    }
+
+    func testTheBootstrapPageDoesNotStandInForTheIntendedLoad() {
+        let recovery = makeRecovery()
+        let bootstrap = URL(string: "capacitor://localhost/")!
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: bootstrap)
+        recovery.didFinish(url: bootstrap)
+        XCTAssertFalse(recovery.committed)
+        // The intended load then fails: it is still retried.
+        recovery.failed(url: fixture.url, domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        fire()
+        fire()
+        XCTAssertEqual(loads.map(\.url), [fixture.url])
+    }
+
     func testCommitDisarmsTheWatchdog() {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
