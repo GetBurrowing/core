@@ -328,6 +328,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         let area = webView.convert(host.bar.bounds, from: host.bar).intersection(webView.bounds)
         guard !area.isNull, area.width > 1, area.height > 1 else { return }
         backdropSampling = true
+        // A snapshot that never calls back must not stop later samples.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.backdropSampling = false }
         let configuration = WKSnapshotConfiguration()
         configuration.rect = area
         configuration.snapshotWidth = 64
@@ -335,7 +337,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.backdropSampling = false
-                guard let cgImage = image?.cgImage, let luminance = NativeTabBarBackdrop.luminance(of: cgImage) else { return }
+                guard let cgImage = image?.cgImage, let luminance = NativeTabBarBackdrop.luminance(of: cgImage) else {
+                    #if DEBUG
+                        NativeTabBarProbe.lastBackdrop = "snapshot-failed"
+                    #endif
+                    return
+                }
+                #if DEBUG
+                    NativeTabBarProbe.lastBackdrop = String(format: "%.3f", luminance)
+                #endif
                 #if DEBUG
                     let before = self.tabBarHost?.bar.overrideUserInterfaceStyle
                 #endif

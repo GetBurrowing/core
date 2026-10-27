@@ -318,7 +318,7 @@ final class TabBarUITests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 10))
         // Option 1 (task 01a174e8 stage 3): the bar takes the style of the
         // content behind it, whatever the page's scheme.
-        rendered(["style=\(colour == "white" ? "light" : "dark")"], app)
+        line("rendered: keys=", ["style=\(colour == "white" ? "light" : "dark")"], app, timeout: 30)
     }
 
     /// Selects `selected`, screenshots the bar and measures every item:

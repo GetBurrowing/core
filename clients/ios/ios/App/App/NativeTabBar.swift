@@ -257,13 +257,13 @@ enum NativeTabBarBackdrop {
     /// matching the web's scheme, the web's own inks on the web's style. When
     /// the backdrop is the opposite of the web's scheme the web's inks would
     /// sit on glass of the wrong lightness, so the bar takes the backdrop's
-    /// style and the system label ink, which adapts with it.
+    /// style and the Burrow on-surface slot, an asset colour that adapts with it.
     static func adapted(
         _ web: NativeTabInkColors, webStyle: UIUserInterfaceStyle, backdrop: UIUserInterfaceStyle?
     ) -> (ink: NativeTabInkColors, style: UIUserInterfaceStyle) {
         guard let backdrop else { return (web, webStyle) }
         if backdrop == webStyle { return (web, webStyle) }
-        return (NativeTabInkColors(selected: .label, unselected: .label), backdrop)
+        return (NativeTabInkColors(selected: BurrowColor.onSurface.uiColor, unselected: BurrowColor.onSurface.uiColor), backdrop)
     }
 }
 
@@ -472,6 +472,9 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         /// `keys=chat,voice selected=chat badges=more hidden=false
         /// ink=ad4b07ff/0000008c style=light truncated=none
         /// fonts=Public Sans 11 w550`.
+        /// The last sampled backdrop luminance (or why there is none).
+        nonisolated(unsafe) static var lastBackdrop = "none"
+
         static func rendered(bar: UITabBar, keys: [String]) -> String {
             let selected = bar.selectedItem.flatMap { item in bar.items?.firstIndex(of: item) }.map { keys[$0] } ?? "none"
             let badges = zip(keys, bar.items ?? []).filter { $0.1.badgeValue != nil }.map(\.0)
@@ -481,7 +484,7 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
             return "keys=\(keys.joined(separator: ",")) titles=\(titles.joined(separator: ",")) selected=\(selected) "
                 + "badges=\(badges.isEmpty ? "none" : badges.joined(separator: ",")) hidden=\(bar.isHidden) "
                 + "ink=\(hex(bar.tintColor, bar))/\(hex(bar.unselectedItemTintColor, bar)) style=\(style) "
-                + "truncated=\(truncatedLabels(bar)) fonts=\(labelFonts(bar))"
+                + "truncated=\(truncatedLabels(bar)) fonts=\(labelFonts(bar)) backdrop=\(lastBackdrop)"
         }
 
         /// The visible tab labels the system cut short (task 01a174e8 stage
