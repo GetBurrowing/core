@@ -158,11 +158,12 @@ defmodule Platform.Federation.PlayToolsTest do
     end
   end
 
-  # The `admin` bundle (task 01a17b10 stage 3) is additive to main's list and
-  # is set aside here; the core tests assert it by name.
+  # The `admin` and `voice_ask` bundles (task 01a17b10 stages 3 and 4) are
+  # additive to main's list and are set aside here; the core tests assert
+  # them by name.
   defp catalogue_names do
     ToolSurface.tool_definitions()
-    |> Enum.reject(&(&1.bundle == "admin"))
+    |> Enum.reject(&(&1.bundle in ["admin", "voice_ask"]))
     |> Enum.map(& &1.name)
   end
 

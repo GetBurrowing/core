@@ -401,8 +401,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     @main_kinds_tool_schemas_digest_on "d5525de283443869efe51122adc1649e78e95da27bab2b2adc1deee59855878d"
     # Task 01a13867 adds the core metric insight_acceptance_rate to the catalog.
     @main_metrics_catalog_digest "3a5e4c9bd2a90f895185dea9a79084f151e73f9cb4eebd9ec42a2cb8500a260a"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
     # Canvases joined it as the More sheet's row into the Files browser
     # (task 01a1557a-b5f9 stage 3).
@@ -467,16 +467,17 @@ defmodule Platform.GameStream.ExtensionParityTest do
     end
 
     test "flag off: tool_definitions/0 is main's, name for name and byte for byte" do
-      # Task 01a17b10 stage 3: the `admin` bundle is additive to main's list,
-      # set aside here (and asserted by name in the core extensions_test).
-      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle == "admin"))
+      # Task 01a17b10 stages 3 and 4: the `admin` and `voice_ask` bundles are
+      # additive to main's list, set aside here (and asserted by name in the
+      # core extensions_test).
+      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
       assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
       assert digest(defs) == @main_tool_digest_off
     end
 
     test "flag on: tool_definitions/0 is main's, byte for byte" do
       Application.put_env(:game_stream, :enabled, true)
-      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle == "admin"))
+      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
 
       assert Enum.map(defs, &{&1.name, &1.bundle}) ==
                @main_tool_names_off ++
