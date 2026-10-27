@@ -139,6 +139,9 @@ defmodule PlatformWeb.MeetingLiveCandidateExpiryTest do
         joined_at: DateTime.utc_now()
       })
 
+    meeting =
+      meeting |> Ecto.Changeset.change(host_participant_id: participant.id) |> Repo.update!()
+
     {meeting, participant}
   end
 
@@ -168,6 +171,7 @@ defmodule PlatformWeb.MeetingLiveCandidateExpiryTest do
         transcript_chunk_id: chunk_id,
         evidence_quote: text,
         speaker: speaker,
+        outcome_kind: :artifact,
         heard_at: spoken_at
       })
 
@@ -183,7 +187,7 @@ defmodule PlatformWeb.MeetingLiveCandidateExpiryTest do
         target_role: "meeting_scribe",
         state: :heard,
         queue_status: "queued",
-        outcome_kind: :task,
+        outcome_kind: :artifact,
         heard_at: spoken_at,
         last_utterance_at: spoken_at
       })
@@ -266,13 +270,13 @@ defmodule PlatformWeb.MeetingLiveCandidateExpiryTest do
       # says something was actually created.
       graduated = reload!(expiring)
 
-      refute is_nil(graduated.task_id),
+      refute is_nil(graduated.canvas_id),
              "the countdown ended and nothing was created: the row is " <>
                "#{graduated.state} with no task_id and no canvas_id"
 
-      assert %WorkTask{} = task = Repo.get(WorkTask, graduated.task_id)
-      assert task.title =~ "CSV export"
-      assert [^task] = tasks_for(meeting.project_id)
+      assert canvas = Repo.get(Platform.Chat.Canvas, graduated.canvas_id)
+      assert canvas.title =~ "CSV export"
+      assert tasks_for(meeting.project_id) == []
 
       # HALF 2 — the rail no longer offers stop for it. Rendered fresh
       # from the database rather than waiting on a PubSub frame, so the

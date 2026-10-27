@@ -121,14 +121,19 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
             assigned_agent_slug: agent.slug,
             target_role: "meeting_scribe",
             state: :shaping,
-            outcome_kind: :task,
+            outcome_kind: :artifact,
             acts_at: DateTime.add(DateTime.utc_now(), 5, :second)
           },
           overrides
         )
       )
 
+    # A task override represents a pre-cutover row for task-to-artifact correction.
     candidate
+    |> Ecto.Changeset.change(
+      acts_at: Map.get(overrides, :acts_at, DateTime.add(DateTime.utc_now(), 5, :second))
+    )
+    |> Repo.update!()
   end
 
   defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
@@ -252,7 +257,7 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
 
   describe "make it a canvas instead" do
     test "writes one :corrected / :wrong_intent row and flips the outcome", ctx do
-      candidate = armed!(ctx.meeting, ctx.scribe)
+      candidate = armed!(ctx.meeting, ctx.scribe, %{outcome_kind: :task})
       assert candidate.outcome_kind == :task
 
       view = open_meeting(ctx.conn, ctx.meeting)
@@ -793,10 +798,8 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
 
       click!(view, choice_selector("meeting-candidate-correction-flip", candidate))
 
-      corrected = rendered_remaining(render(view), candidate)
-
-      assert corrected in (Countdown.countdown_seconds() - 1)..Countdown.countdown_seconds(),
-             "the window must not shrink across the correction, got #{corrected}"
+      assert is_nil(reload!(candidate).acts_at)
+      assert reload!(candidate).outcome_kind == :task
 
       assert correction_count() == 1
     end

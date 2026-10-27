@@ -108,7 +108,7 @@ defmodule PlatformWeb.MeetingLiveCandidateUndoTest do
         classified_intent: "action_items",
         target_role: "meeting_scribe",
         state: :shaping,
-        outcome_kind: :task,
+        outcome_kind: :artifact,
         acts_at: DateTime.add(DateTime.utc_now(), secs, :second)
       })
 

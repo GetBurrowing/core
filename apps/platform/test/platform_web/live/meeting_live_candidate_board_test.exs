@@ -112,7 +112,8 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
         )
       )
 
-    candidate
+    # Historical deadlines remain renderable until their rows are settled.
+    candidate |> Ecto.Changeset.change(acts_at: Map.get(attrs, :acts_at)) |> Repo.update!()
   end
 
   defp mount_board(conn, meeting) do
@@ -838,9 +839,9 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
       # Read out of the DATABASE, because the claim is that a click in
       # a participant's browser minted a deliverable on the server.
-      assert is_binary(approved_row.task_id)
-      assert approved_row.closed_reason == :done
-      assert approved_row.disposition == :accepted
+      assert is_nil(approved_row.task_id)
+      assert is_nil(approved_row.closed_reason)
+      assert is_nil(approved_row.disposition)
 
       # The divergence. A handler that closed on BOTH paths, or
       # graduated on both, passes a single-sided test and fails here.

@@ -86,6 +86,9 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
         joined_at: DateTime.utc_now()
       })
 
+    meeting =
+      meeting |> Ecto.Changeset.change(host_participant_id: participant.id) |> Repo.update!()
+
     {meeting, participant}
   end
 
@@ -103,6 +106,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
         transcript_chunk_id: chunk_id,
         evidence_quote: text,
         speaker: "alice",
+        outcome_kind: :artifact,
         heard_at: at
       })
 
@@ -124,7 +128,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
         target_role: "meeting_scribe",
         state: :heard,
         queue_status: "queued",
-        outcome_kind: :task,
+        outcome_kind: :artifact,
         heard_at: at,
         last_utterance_at: at
       })
@@ -195,10 +199,10 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
       # fire. Without this the refutation above would pass under a
       # sweeper that never fires anything.
       assert untouched.id in fired_ids
-      assert reload!(untouched).task_id
+      assert reload!(untouched).canvas_id
 
-      assert [task] = tasks_for(meeting.project_id)
-      assert task.title =~ "pricing page"
+      assert tasks_for(meeting.project_id) == []
+      assert Repo.get!(Platform.Chat.Canvas, reload!(untouched).canvas_id).title =~ "pricing page"
     end
 
     test "the stopped card leaves the rail, and the other one stays", %{
