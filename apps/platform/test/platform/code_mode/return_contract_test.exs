@@ -130,6 +130,7 @@ defmodule Platform.CodeMode.ReturnContractTest do
                Enum.sort(~w(task_list task_get plan_get stage_list validation_list
                             execution_lease_list runtime_event_list federation_status
                             space_get_messages principal_search intent_ack meeting_say
+                            meeting_scribe_complete meeting_triage_file
                             burrow_run_describe))
     end
 

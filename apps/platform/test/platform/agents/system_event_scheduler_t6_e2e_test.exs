@@ -764,7 +764,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by task 01a17b10 stage 4 — the 2-tool `voice_ask` bundle
     # (voice_ask_agent, voice_ask_poll); scheduler T6 adds none.
     # (+2 voice_ask -> 147)
-    @t6_baseline_tool_count 147
+    # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
+    @t6_baseline_tool_count 149
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 
