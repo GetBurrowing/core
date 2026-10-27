@@ -29,6 +29,11 @@ defmodule Platform.Meetings.CandidateCompleteByAckTest do
         slug: "complete-by-ack-meeting-#{n}"
       })
 
+    meeting =
+      meeting
+      |> Meetings.Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
+      |> Repo.update!()
+
     {project, meeting}
   end
 
@@ -127,6 +132,7 @@ defmodule Platform.Meetings.CandidateCompleteByAckTest do
 
   test "real queue completed acknowledgements never file tasks" do
     {project, meeting} = meeting!()
+    assert meeting.status == "live"
     {:ok, _} = IntentQueue.ensure_started(meeting.id, ack_timeout_ms: 60_000)
     on_exit(fn -> IntentQueue.stop(meeting.id) end)
 

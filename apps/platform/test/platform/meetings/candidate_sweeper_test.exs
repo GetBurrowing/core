@@ -28,6 +28,8 @@ defmodule Platform.Meetings.CandidateSweeperTest do
       })
 
     meeting
+    |> Meetings.Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
+    |> Repo.update!()
   end
 
   # A real host participant, so an `:artifact` candidate has somebody to
