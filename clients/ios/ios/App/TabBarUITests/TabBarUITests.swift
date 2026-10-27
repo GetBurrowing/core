@@ -22,8 +22,20 @@ final class TabBarUITests: XCTestCase {
     private func launch(_ appearance: String, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
-        app.launch()
-        XCTAssertTrue(app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: 60))
+        // The shell loads the bundled fixture once, from viewDidAppear. On a
+        // cold runner simulator the first launches of a run sometimes come up
+        // with an empty web view that never loads (the failure hierarchy is a
+        // BurrowBridgeViewController over an empty UIScrollView; the same
+        // build passes on the next launch). Waiting longer on that launch
+        // does not help, so relaunch on a missing fixture and only fail when
+        // every attempt shows nothing.
+        var shown = false
+        for _ in 0 ..< 4 where !shown {
+            app.launch()
+            shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: 30)
+            if !shown { app.terminate() }
+        }
+        XCTAssertTrue(shown, "the tab bar fixture never rendered in 4 launches")
         XCTAssertTrue(app.webViews.staticTexts["plugin: tabBarState present"].waitForExistence(timeout: 10))
         return app
     }
