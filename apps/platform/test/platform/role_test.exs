@@ -124,6 +124,7 @@ defmodule Platform.RoleTest do
                Phoenix.PubSub.Supervisor,
                Platform.Role.RelayReceiver,
                Platform.Agents.Registry,
+               Platform.Terminal.Registry,
                Platform.Execution.Registry,
                Platform.Orchestration.Registry,
                Platform.Chat.Registry,

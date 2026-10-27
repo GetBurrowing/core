@@ -11,6 +11,9 @@ defmodule PlatformWeb.RuntimeSocket do
   alias Platform.Agents.AgentRuntime
 
   channel "runtime:*", PlatformWeb.RuntimeChannel
+  # Opt-in remote terminal (task 01a17b17). Its own topic: terminal bytes never
+  # ride `runtime:*`.
+  channel "terminal:*", PlatformWeb.TerminalCliChannel
 
   @impl true
   def connect(%{"runtime_id" => runtime_id, "token" => token}, socket, _connect_info) do
