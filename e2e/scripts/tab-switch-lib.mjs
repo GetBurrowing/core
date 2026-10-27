@@ -260,6 +260,15 @@ export async function launchChrome({ port, headless = true, timeoutMs = 20000 })
       rmSync(profile, { recursive: true, force: true });
     } catch {}
   };
+  // The runner's timebox ends the driver with SIGALRM: take our Chrome with
+  // it rather than leaving a headless browser on the port.
+  for (const sig of ["SIGALRM", "SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.once(sig, () => {
+      kill();
+      process.exit(128 + (os.constants.signals[sig] || 0));
+    });
+  }
+  process.once("exit", kill);
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
