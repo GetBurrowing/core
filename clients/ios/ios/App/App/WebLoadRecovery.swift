@@ -24,12 +24,14 @@ final class WebLoadRecovery {
         var backoff: [TimeInterval] = [0.5, 1, 2]
         /// Longest a load may go without committing. A cold runner took 13 s.
         var watchdog: TimeInterval = 25
-        /// Longest a committed page may go without finishing. In run
-        /// 40538916731 (cold runner) two launches committed and never finished
-        /// while the test waited; the slowest cold commit-to-finish that did
-        /// land took 8.4 s, a warm one 0.1 s. A re-issue on a warm renderer is
-        /// cheap, so the bound sits just above the slowest healthy cold case.
-        var finishBound: TimeInterval = 10
+        /// Longest a committed page may go without finishing, for the first
+        /// load, then after the first and the second re-issue (the last
+        /// repeats). In run 40538916731 (cold runner) two launches committed
+        /// and never finished while the test waited; the slowest cold
+        /// commit-to-finish that did land took 8.4 s, a warm one 0.1 s. The
+        /// bound grows because a re-issue restarts the load: a slow but
+        /// healthy device must eventually be left to finish.
+        var finishBounds: [TimeInterval] = [10, 20, 40]
     }
 
     private let config: Config
@@ -44,6 +46,8 @@ final class WebLoadRecovery {
     private(set) var attempts = 0
     private(set) var committed = false
     private(set) var finished = false
+    private var lastProgress = 0.0
+    private var progressTicks = 0
     /// Pages that finished loading after a re-issue.
     private(set) var recoveredPages = 0
     private var awaitingRecoveredCommit = false
@@ -74,6 +78,7 @@ final class WebLoadRecovery {
         attempts = 0
         committed = false
         finished = false
+        lastProgress = 0
         awaitingRecoveredCommit = false
         recoveredCommitSeen = false
         armWatchdog()
@@ -165,16 +170,34 @@ final class WebLoadRecovery {
         epoch += 1
         committed = false
         finished = false
+        lastProgress = 0
         awaitingRecoveredCommit = true
         log("recovery reissue attempt=\(attempts) reason=\(reason)")
         load(intended)
         armWatchdog()
     }
 
+    /// `WKWebView.estimatedProgress`. A load that is still moving is left alone.
+    func progress(_ value: Double) {
+        guard value > lastProgress else { return }
+        lastProgress = value
+        progressTicks += 1
+    }
+
     private func armFinishWatchdog() {
-        let captured = epoch
-        schedule(config.finishBound) { [weak self] in
+        let bounds = config.finishBounds
+        let bound = bounds.isEmpty ? 10 : bounds[min(attempts, bounds.count - 1)]
+        armFinishWatchdog(epoch: epoch, ticks: progressTicks, bound: bound)
+    }
+
+    private func armFinishWatchdog(epoch captured: Int, ticks: Int, bound: TimeInterval) {
+        schedule(bound) { [weak self] in
             guard let self, self.epoch == captured, self.committed, !self.finished else { return }
+            if self.progressTicks != ticks {
+                self.log("recovery finish bound passed but the load is still progressing")
+                self.armFinishWatchdog(epoch: captured, ticks: self.progressTicks, bound: bound)
+                return
+            }
             self.log("recovery committed but did not finish")
             self.scheduleRetry("commit without finish")
         }

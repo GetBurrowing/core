@@ -35,6 +35,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var didStart = false
     private var navTrace: WebLoadTracingDelegate?
     private var webRecovery: WebLoadRecovery?
+    private var progressObservation: NSKeyValueObservation?
     private var pickerHost: UIViewController?
     private let launcher = InstallLauncher()
     private let switchBanner = SwitchBannerPresenter()
@@ -123,6 +124,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 }
             #endif
             webRecovery = recovery
+            progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak recovery] webView, _ in
+                recovery?.progress(webView.estimatedProgress)
+            }
             let trace = WebLoadTracingDelegate(target: webView.navigationDelegate, recovery: recovery)
             navTrace = trace
             webView.navigationDelegate = trace

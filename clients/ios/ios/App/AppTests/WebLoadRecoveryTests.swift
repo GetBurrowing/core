@@ -122,13 +122,61 @@ final class WebLoadRecoveryTests: XCTestCase {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
         recovery.didCommit(url: fixture.url)
-        XCTAssertEqual(timers.map(\.delay), [WebLoadRecovery.Config().watchdog, WebLoadRecovery.Config().finishBound])
+        XCTAssertEqual(timers.map(\.delay), [WebLoadRecovery.Config().watchdog, WebLoadRecovery.Config().finishBounds[0]])
         fire()  // the finish bound: schedules the backoff (the stale no-commit watchdog does nothing)
         XCTAssertTrue(loads.isEmpty)
         XCTAssertTrue(lines.contains { $0.contains("did not finish") })
         fire()  // the backoff
         XCTAssertEqual(loads.map(\.url), [fixture.url])
         XCTAssertEqual(recovery.attempts, 1)
+    }
+
+    /// A slow but healthy device: the first load needs 15 s, so the 10 s bound
+    /// re-issues it once; the re-issue gets 20 s, finishes inside it, and the
+    /// budget is not exhausted.
+    func testASlowLoadLandsOnTheSecondAttemptAndDoesNotExhaust() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        XCTAssertEqual(timers.last?.delay, 10)
+        fire()  // 10 s: not finished, no progress
+        fire()  // backoff: the re-issue
+        XCTAssertEqual(loads.count, 1)
+        recovery.didCommit(url: fixture.url)
+        XCTAssertEqual(timers.last?.delay, 20, "the re-issue gets a longer bound")
+        recovery.didFinish(url: fixture.url)  // lands at 15 s
+        fire()
+        fire()
+        XCTAssertEqual(loads.count, 1)
+        XCTAssertEqual(recovery.attempts, 1)
+        XCTAssertFalse(lines.contains { $0.contains("exhausted") })
+    }
+
+    func testTheBoundKeepsGrowingToTheLastEntry() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        var armed: [TimeInterval] = []
+        for _ in 0..<3 {
+            recovery.didCommit(url: fixture.url)
+            armed.append(timers.last?.delay ?? 0)
+            fire()
+            fire()
+        }
+        XCTAssertEqual(armed, [10, 20, 40])
+    }
+
+    func testALoadStillProgressingIsNotReissued() {
+        let recovery = makeRecovery()
+        recovery.shellLoad(fixture)
+        recovery.didCommit(url: fixture.url)
+        recovery.progress(0.3)
+        fire()  // the bound passes, but the load moved
+        XCTAssertFalse(lines.contains { $0.contains("did not finish") })
+        XCTAssertTrue(lines.contains { $0.contains("still progressing") })
+        XCTAssertEqual(timers.last?.delay, 10, "it is checked again")
+        fire()  // no further progress
+        fire()
+        XCTAssertEqual(loads.map(\.url), [fixture.url])
     }
 
     func testFinishDisarmsTheFinishBound() {
