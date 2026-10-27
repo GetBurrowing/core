@@ -206,7 +206,11 @@ defmodule Platform.Agents.Harness.Codex do
           end)
 
         out = if servers == [], do: m, else: Map.put(m, "mcp_servers", Map.new(servers))
-        {encode_toml(out), names |> Enum.uniq() |> Enum.sort()}
+        names = names |> Enum.uniq() |> Enum.sort()
+
+        # Nothing to hide (or the host already hid it): the bytes as they are,
+        # so comments and order survive a read-edit-write round trip.
+        if out == m, do: {binary, names}, else: {encode_toml(out), names}
 
       _ ->
         {"[unparseable file not shown]\n", []}

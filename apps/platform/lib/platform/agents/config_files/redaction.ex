@@ -55,13 +55,26 @@ defmodule Platform.Agents.ConfigFiles.Redaction do
           _ -> []
         end
       else
-        for line <- String.split(content, "\n"),
-            [_, name] <- [Regex.run(~r/\A\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/, line)],
-            do: name
+        env_names(content)
       end
 
     names = names |> Enum.uniq() |> Enum.sort()
     {Enum.map_join(names, "", &(&1 <> "\n")), names}
+  end
+
+  # `NAME=value` lines. Content with no `=` at all is already names-only (the
+  # host redacted it to one name per line), so its identifier lines are the
+  # names; a bare line is never taken from a file that has assignments.
+  defp env_names(content) do
+    lines = String.split(content, "\n")
+
+    if String.contains?(content, "=") do
+      for line <- lines,
+          [_, name] <- [Regex.run(~r/\A\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/, line)],
+          do: name
+    else
+      for line <- lines, Regex.match?(~r/\A[A-Za-z_][A-Za-z0-9_]*\z/, line), do: line
+    end
   end
 
   defp leaf_names(map, prefix) do

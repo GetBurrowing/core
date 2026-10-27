@@ -14,10 +14,10 @@ defmodule Platform.Agents.NativeAgentFilesTest do
     * delete the `can_manage?/2` clause in `NativeAgents.save_file/5` →
       "a member who neither owns nor administers the agent is refused" goes
       red (the row changes);
-    * delete the `can_manage?/2` check in `NativeFileEvents` AND the one in
-      `save_file/5` → the LiveView refusal cases go red;
-    * drop the `managed?` routing in `WorkspaceEvents` → "the old
-      save_workspace_file event is refused too" goes red;
+    * route `save_workspace_file` for a native agent back to a save in
+      `WorkspaceEvents` → "the retired editor's events write nothing" goes
+      red (the editor's write path was retired in task 01a17b1c stage 5;
+      `Platform.Agents.ConfigFiles` is the only door);
     * drop `"files"` from the reconciler's `agent.start` → the start payload
       case goes red.
   """
@@ -67,10 +67,6 @@ defmodule Platform.Agents.NativeAgentFilesTest do
   defp as(conn, user), do: init_test_session(conn, current_user_id: user.id)
 
   defp join_host!, do: :ok = Reconciler.host_joined(self(), %{"profile" => "contained"})
-
-  defp observe!(%Agent{id: id}, state, extra \\ %{}) do
-    :ok = Reconciler.agent_state(self(), Map.merge(%{"agent_id" => id, "state" => state}, extra))
-  end
 
   setup do
     previous = Application.get_env(:platform, :agent_host_token)
@@ -352,10 +348,10 @@ defmodule Platform.Agents.NativeAgentFilesTest do
     end
   end
 
-  # ── The editor on Agent Resources ─────────────────────────────────
+  # ── Agent files on Agent Resources (read-only since 01a17b1c stage 5) ──
 
   describe "Agent files on Agent Resources" do
-    test "a non-manager sees the message, not the files", %{
+    test "a non-manager sees the message, not the files or the way in", %{
       conn: conn,
       owner: owner,
       other: other
@@ -370,33 +366,40 @@ defmodule Platform.Agents.NativeAgentFilesTest do
                "Only the agent's owner or an admin can edit its files."
              )
 
-      refute has_element?(view, "#native-file-form")
+      refute has_element?(view, "#native-files-list")
+      refute has_element?(view, "#native-files-configure")
       refute html =~ "You are Ada"
 
-      # Positive control: the owner sees the editor and the file.
+      # Positive control: the owner sees the files and the Configuration link.
       {:ok, owner_view, _} = live(as(conn, owner), ~p"/control/#{agent.slug}")
-      assert has_element?(owner_view, "#native-file-form")
+      assert has_element?(owner_view, "#native-files-list", "CLAUDE.md")
+
+      assert has_element?(
+               owner_view,
+               ~s(#native-files-configure[href="/control/#{agent.slug}/config"])
+             )
+
       refute has_element?(owner_view, "#native-files-locked")
     end
 
-    test "a non-manager's save is refused server-side even when sent directly", %{
+    test "the retired editor's events write nothing, even for the owner", %{
       conn: conn,
-      owner: owner,
-      other: other
+      owner: owner
     } do
       {agent, _} = native!(owner, "Ada")
       before = file(agent, ".claude/settings.json")
       hook = ~s({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"id"}]}]}})
 
       {:ok, view, _} =
-        live(as(conn, other), ~p"/control/#{agent.slug}?file=.claude/settings.json")
+        live(as(conn, owner), ~p"/control/#{agent.slug}?file=.claude/settings.json")
+
+      refute has_element?(view, "#native-file-form")
 
       render_hook(view, "native_file_save", %{
         "native_file" => %{"file_key" => ".claude/settings.json", "content" => hook},
         "intent" => "save"
       })
 
-      # The older editor's event is not a way around it either.
       render_hook(view, "save_workspace_file", %{
         "workspace_file" => %{"file_key" => ".claude/settings.json", "content" => hook}
       })
@@ -408,130 +411,20 @@ defmodule Platform.Agents.NativeAgentFilesTest do
       after_ = file(agent, ".claude/settings.json")
       assert {after_.content, after_.version} == {before.content, before.version}
       assert is_nil(file(agent, "new.md"))
-    end
 
-    test "POSITIVE CONTROL: the owner's same direct save is written", %{conn: conn, owner: owner} do
-      {agent, _} = native!(owner, "Ada")
+      # POSITIVE CONTROL: the one remaining door, ConfigFiles, does write.
+      sha = Platform.Agents.ConfigFiles.Backend.WorkspaceStore.sha256(before.content)
 
-      {:ok, view, _} =
-        live(as(conn, owner), ~p"/control/#{agent.slug}?file=.claude/settings.json")
-
-      render_hook(view, "native_file_save", %{
-        "native_file" => %{"file_key" => ".claude/settings.json", "content" => ~s({"a":1})},
-        "intent" => "save"
-      })
-
-      assert %{version: 2, content: ~s({"a":1})} = file(agent, ".claude/settings.json")
-    end
-
-    test "unsaved dot, invalid JSON, and the stopped Save-only hint", %{conn: conn, owner: owner} do
-      join_host!()
-      {agent, _} = native!(owner, "Ada")
-      observe!(agent, "stopped")
-
-      {:ok, view, _} =
-        live(as(conn, owner), ~p"/control/#{agent.slug}?file=.claude/settings.json")
-
-      refute has_element?(view, "[data-role=unsaved-dot]")
-      # Stopped: Save only.
-      assert has_element?(view, "#native-file-save")
-      refute has_element?(view, "#native-file-save-restart")
-
-      view
-      |> form("#native-file-form", native_file: %{content: "{\n  \"a\": 1,\n  oops\n}"})
-      |> render_change()
-
-      assert has_element?(view, "[data-role=unsaved-dot]")
-      assert has_element?(view, "#native-files-json-error", "line 3")
-      assert has_element?(view, "#native-file-save[disabled]")
-
-      view
-      |> form("#native-file-form", native_file: %{content: ~s({"a": 1})})
-      |> render_change()
-
-      refute has_element?(view, "#native-files-json-error")
-      refute has_element?(view, "#native-file-save[disabled]")
-
-      view
-      |> form("#native-file-form", native_file: %{content: ~s({"a": 1})})
-      |> render_submit(%{"intent" => "save"})
+      assert {:ok, _} =
+               Platform.Agents.ConfigFiles.write(
+                 owner,
+                 agent,
+                 ".claude/settings.json",
+                 ~s({"a": 1}),
+                 sha
+               )
 
       assert %{version: 2} = file(agent, ".claude/settings.json")
-      refute has_element?(view, "[data-role=unsaved-dot]")
-
-      assert has_element?(
-               view,
-               "#native-files-meta",
-               "Saved. Ada will use this the next time it starts."
-             )
-
-      refute has_element?(view, "#native-files-applied-bar")
-    end
-
-    test "saved while running: the info bar, Restart now, and Save and restart", %{
-      conn: conn,
-      owner: owner
-    } do
-      join_host!()
-      {agent, _} = native!(owner, "Ada")
-      {:ok, _} = NativeAgents.set_desired_state(agent, "running")
-
-      observe!(agent, "running", %{
-        "files_applied" => %{"CLAUDE.md" => 1, ".claude/settings.json" => 1}
-      })
-
-      {:ok, view, _} = live(as(conn, owner), ~p"/control/#{agent.slug}?file=CLAUDE.md")
-
-      assert has_element?(view, "#native-file-save-restart.btn-primary")
-      refute has_element?(view, "#native-files-applied-bar")
-
-      view
-      |> form("#native-file-form", native_file: %{content: "# Ada v2"})
-      |> render_submit(%{"intent" => "save"})
-
-      assert has_element?(
-               view,
-               "#native-files-applied-bar",
-               "Saved. Ada is still running the earlier version."
-             )
-
-      assert has_element?(view, "#native-files-restart-now", "Restart now")
-      # The row says so too.
-      assert has_element?(
-               view,
-               "#agent-row-#{agent.slug} [data-role=row-tag]",
-               "Restart to apply"
-             )
-
-      # Save and restart sends agent.restart carrying the new file.
-      view
-      |> form("#native-file-form", native_file: %{content: "# Ada v3"})
-      |> render_submit(%{"intent" => "save_restart"})
-
-      assert_receive {:agent_host_push, "agent.restart", %{"files" => files}}
-
-      assert %{"content" => "# Ada v3", "version" => 3} =
-               Enum.find(files, &(&1["key"] == "CLAUDE.md"))
-
-      # Once the host reports the new versions applied, the bar goes.
-      observe!(agent, "running", %{
-        "files_applied" => %{"CLAUDE.md" => 3, ".claude/settings.json" => 1}
-      })
-
-      refute has_element?(view, "#native-files-applied-bar")
-      refute has_element?(view, "#agent-row-#{agent.slug} [data-role=row-tag]")
-    end
-
-    test "narrow screens get a select and a read-only copy", %{conn: conn, owner: owner} do
-      {agent, _} = native!(owner, "Ada")
-
-      {:ok, view, _} = live(as(conn, owner), ~p"/control/#{agent.slug}?file=CLAUDE.md")
-
-      assert has_element?(view, "#native-files-narrow.md\\:hidden select#native-files-select")
-      assert has_element?(view, "#native-files-narrow pre#native-files-readonly", "You are Ada")
-      assert has_element?(view, "#native-files-narrow", "Edit files on a larger screen.")
-      refute has_element?(view, "#native-files-narrow textarea")
-      assert has_element?(view, "#native-files-wide.hidden.md\\:grid")
     end
   end
 end

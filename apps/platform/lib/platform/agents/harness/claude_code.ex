@@ -203,8 +203,11 @@ defmodule Platform.Agents.Harness.ClaudeCode do
   def redact(path, binary) when path in [@mcp, @settings, @local] do
     case Jason.decode(binary) do
       {:ok, %{} = m} ->
-        {m, names} = redact_map(m, path)
-        {Harness.encode_json(m), names |> Enum.uniq() |> Enum.sort()}
+        {out, names} = redact_map(m, path)
+        names = names |> Enum.uniq() |> Enum.sort()
+
+        # Nothing to hide (or the host already hid it): the bytes as they are.
+        if out == m, do: {binary, names}, else: {Harness.encode_json(out), names}
 
       _ ->
         {"[unparseable file not shown]\n", []}
