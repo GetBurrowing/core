@@ -13,7 +13,10 @@
          app.css by native_tab_bar_contract.test.js, task 01a174e8).
          ?mode=silent is a document that never sends a state (the bar must
          hide after didFinish); ?mode=auto sends one on load (it must stay). Rows under the bar give the glass something
-         to refract. -->
+         to refract. ?backdrop=white|black (task 01a174e8 stage 3) fills the
+         page with one flat colour instead of the rows and sends the
+         Chat-selected, dot-on state with the page scheme's inks on load,
+         for the contrast measurement over the two extremes. -->
     <style>
       :root { color-scheme: light dark; --ink: #221f1b; --ground: #fbfaf9; --edge: #d9d3c9; }
       @media (prefers-color-scheme: dark) { :root { --ink: #eeeff1; --ground: #191b20; --edge: #383b42; } }
@@ -24,6 +27,9 @@
       button { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--edge); background: transparent; color: var(--ink); }
       #events { margin: 0 0 12px; padding-left: 20px; min-height: 24px; }
       #native { font: 11px ui-monospace, monospace; white-space: pre-wrap; margin: 0 0 12px; }
+      :root[data-backdrop="white"], :root[data-backdrop="white"] body { --ink: #000000; --edge: #000000; background: #ffffff; }
+      :root[data-backdrop="black"], :root[data-backdrop="black"] body { --ink: #ffffff; --edge: #ffffff; background: #000000; }
+      :root[data-backdrop] #rows { display: none; }
       .row { height: 64px; margin: 8px 0; border-radius: 12px; display: flex; align-items: center; padding: 0 16px; color: #fff; font-weight: 600; }
     </style>
   </head>
@@ -35,7 +41,11 @@
         <button data-ink="light" data-state='{}'>Ink light</button>
         <button data-ink="dark" data-state='{}'>Ink dark</button>
         <button data-state='{"ink":{"selected":"orange","unselected":"#12"},"scheme":"sepia"}'>Ink malformed</button>
+        <button data-state='{"selected":"chat"}'>Select chat</button>
+        <button data-state='{"selected":"voice"}'>Select voice</button>
         <button data-state='{"selected":"tasks"}'>Select tasks</button>
+        <button data-state='{"selected":"meetings"}'>Select meetings</button>
+        <button data-state='{"selected":"more"}'>Select more</button>
         <button data-state='{"selected":null}'>Select none</button>
         <button data-state='{"more_dot":true}'>Dot on</button>
         <button data-state='{"more_dot":false}'>Dot off</button>
@@ -47,6 +57,8 @@
         <button data-state='{"selected":"voice","more_dot":true}'>No items field</button>
         <a href="tabbar-fixture.html?mode=silent">Silent page</a>
         <a href="tabbar-fixture.html?mode=auto">Stateful page</a>
+        <a href="tabbar-fixture.html?backdrop=white">Backdrop white</a>
+        <a href="tabbar-fixture.html?backdrop=black">Backdrop black</a>
       </div>
       <p id="plugin">plugin: checking</p>
       <ol id="events"></ol>
@@ -116,8 +128,16 @@
           p.tabBarState(withInk({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "tasks", more_dot: false, visible: true }, "auto"))
             .catch(function () {});
         }
+        var backdrop = (location.search.match(/backdrop=(white|black)/) || [])[1];
+        if (backdrop) {
+          document.documentElement.setAttribute("data-backdrop", backdrop);
+          if (p && typeof p.tabBarState === "function") {
+            p.tabBarState(withInk({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "chat", more_dot: true, visible: true }, "auto"))
+              .catch(function () {});
+          }
+        }
         var modeLine = document.createElement("p");
-        modeLine.textContent = "mode: " + mode;
+        modeLine.textContent = "mode: " + mode + (backdrop ? " backdrop=" + backdrop : "");
         document.querySelector("main").insertBefore(modeLine, document.getElementById("plugin"));
 
         document.querySelectorAll("button[data-state]").forEach(function (button) {

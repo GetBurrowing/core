@@ -390,7 +390,8 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     enum NativeTabBarProbe {
         /// What the bar is drawing right now, for the fixture page:
         /// `keys=chat,voice selected=chat badges=more hidden=false
-        /// ink=ad4b07ff/0000008c style=light fonts=Public Sans 11 w550`.
+        /// ink=ad4b07ff/0000008c style=light truncated=none
+        /// fonts=Public Sans 11 w550`.
         static func rendered(bar: UITabBar, keys: [String]) -> String {
             let selected = bar.selectedItem.flatMap { item in bar.items?.firstIndex(of: item) }.map { keys[$0] } ?? "none"
             let badges = zip(keys, bar.items ?? []).filter { $0.1.badgeValue != nil }.map(\.0)
@@ -399,7 +400,34 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
             let style = styles[bar.overrideUserInterfaceStyle] ?? "unspecified"
             return "keys=\(keys.joined(separator: ",")) titles=\(titles.joined(separator: ",")) selected=\(selected) "
                 + "badges=\(badges.isEmpty ? "none" : badges.joined(separator: ",")) hidden=\(bar.isHidden) "
-                + "ink=\(hex(bar.tintColor, bar))/\(hex(bar.unselectedItemTintColor, bar)) style=\(style) fonts=\(labelFonts(bar))"
+                + "ink=\(hex(bar.tintColor, bar))/\(hex(bar.unselectedItemTintColor, bar)) style=\(style) "
+                + "truncated=\(truncatedLabels(bar)) fonts=\(labelFonts(bar))"
+        }
+
+        /// The visible tab labels the system cut short (task 01a174e8 stage
+        /// 3): the text at the label's font is wider than the label (a label
+        /// that shrinks to fit counts at its smallest scale). `none` when
+        /// every visible label fits.
+        static func truncatedLabels(_ bar: UITabBar) -> String {
+            var cut: [String] = []
+            func visible(_ view: UIView) -> Bool {
+                var current: UIView? = view
+                while let node = current, node !== bar.superview {
+                    if node.isHidden || node.alpha <= 0.01 { return false }
+                    current = node.superview
+                }
+                return true
+            }
+            func walk(_ view: UIView) {
+                if let label = view as? UILabel, let text = label.text, !text.isEmpty, label.bounds.width > 1, visible(label) {
+                    let needed = (text as NSString).size(withAttributes: [.font: label.font as Any]).width
+                    let floor = label.adjustsFontSizeToFitWidth ? max(label.minimumScaleFactor, 0.01) : 1
+                    if needed * floor > label.bounds.width + 0.5, !cut.contains(text) { cut.append(text) }
+                }
+                for child in view.subviews { walk(child) }
+            }
+            walk(bar)
+            return cut.isEmpty ? "none" : cut.joined(separator: ",")
         }
 
         /// A tint as `rrggbbaa`, resolved in the bar's own traits.
