@@ -771,8 +771,6 @@ defmodule Platform.ExtensionsTest do
       {"file_search", "files"},
       {"file_add", "files"},
       {"file_delete", "files"},
-      {"meeting_scribe_complete", "meetings"},
-      {"meeting_triage_file", "meetings"},
       {"meeting_create", "meetings"},
       {"meeting_say", "meetings"},
       {"meeting_activity_push", "meetings"},
@@ -994,6 +992,16 @@ defmodule Platform.ExtensionsTest do
 
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
+
+      # Task 01a17f00 stage 2 adds authenticated completion tools. Pin these
+      # explicitly while preserving the frozen byte oracle for existing tools.
+      {completion, defs} =
+        Enum.split_with(defs, &(&1.name in ["meeting_scribe_complete", "meeting_triage_file"]))
+
+      assert Enum.map(completion, &{&1.name, &1.bundle}) == [
+               {"meeting_scribe_complete", "meetings"},
+               {"meeting_triage_file", "meetings"}
+             ]
 
       {extra, legacy} =
         Enum.split_with(defs, &(&1.bundle in ["access", "admin", "voice_ask"]))
