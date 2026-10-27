@@ -315,7 +315,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # test and the countdown suites either call `sweep/1` directly (the
     # timing assertions need an injectable `now`) or start their own
     # named instance with `start_supervised!/1`.
-    :start_candidate_sweeper
+    :start_candidate_sweeper,
+
+    # Completion retries belong to explicit lifecycle fixtures; the ambient
+    # singleton must never query another DataCase sandbox.
+    :start_meeting_completion_sweeper
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

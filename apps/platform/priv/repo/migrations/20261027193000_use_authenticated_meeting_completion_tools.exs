@@ -5,12 +5,12 @@ defmodule Platform.Repo.Migrations.UseAuthenticatedMeetingCompletionTools do
   Task 01a17f00-832c-7000-b480-64ab6d710532 stage 2 replaces unreachable
   internal meeting handoff instructions with authenticated completion tools.
   Exact span replacements preserve human edits and install-specific scribe
-  correction rules measured on Kobo and milv before authoring this migration.
+  correction rules measured on both production installs before authoring this migration.
   A repeated run is a no-op; down does not restore the broken filing contract.
   """
   alias Platform.Orchestration.PromptTemplates
 
-  # Read BOTH Kobo and milv before authoring (2026-10-27): same legacy handoff spans;
+  # Read BOTH both production installs before authoring (2026-10-27): same legacy handoff spans;
   # scribe rows retain install corrections and identity examples. Replace exact spans only.
   @replacements [
     {~S"""
