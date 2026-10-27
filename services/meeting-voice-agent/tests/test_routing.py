@@ -239,6 +239,9 @@ def test_barge_in_cancels_the_stream_and_tts(during):
         task.cancel()  # barge-in
         with pytest.raises(asyncio.CancelledError):
             await task
+        # Checked inside the loop: asyncio.run's own asyncgen shutdown would
+        # close an abandoned stream later and hide a leak.
+        assert record.ask_id == "ask-1", "the stream's finally ran: it was closed, not abandoned"
         polls_at_cancel = core.polls
         await asyncio.sleep(0.15)
         return polls_at_cancel
@@ -247,7 +250,6 @@ def test_barge_in_cancels_the_stream_and_tts(during):
     assert tts_calls == ["The Berlin Wall fell in 1989."]
     assert core.polls == polls_at_cancel, "no poll may follow a barge-in"
     assert not core.finished
-    assert record.ask_id == "ask-1", "the stream's finally ran: it was closed, not abandoned"
 
 
 def test_timeout_says_it_could_not_answer_and_invents_nothing():
