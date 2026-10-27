@@ -314,7 +314,7 @@
  @hooks.command("generate")
 --- /dev/null
 +++ b/clip-agent/tests/test_headline_contract.py
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,204 @@
 +import json
 +import tomllib
 +
@@ -500,3 +500,22 @@
 +    assert result.exit_code != 0
 +    assert "HEADLINE_PREPARE_FAILED" in result.output
 +    assert "PRIVATE TRANSCRIPT" not in result.output
++
++
++def test_public_cli_prepares_edit_without_text_export(project, monkeypatch):
++    from click.testing import CliRunner
++
++    from clip_agent import cli, manifest, pipeline
++    path, m, cfg, words = project
++    request = path / "request.json"
++    request.write_text(json.dumps(payload("edit") | {"requested_headline": "The team celebrated"}))
++    monkeypatch.setenv("CLIP_NO_CONTENT", "1")
++    monkeypatch.setattr(cli, "_load", lambda *a: cfg)
++    monkeypatch.setattr(pipeline, "find_project_dir", lambda *a: path)
++    monkeypatch.setattr(manifest, "load_manifest", lambda *a: m)
++    result = CliRunner().invoke(cli.cli, ["hooks", "prepare-review", "fixture", "--request", str(request)])
++    assert result.exit_code == 0, result.output
++    receipt = json.loads(result.output)
++    assert receipt["status"] == "prepared" and receipt["candidate_id"] == "abc123"
++    assert "celebrated" not in result.output and "shipped" not in result.output
++    assert tomllib.loads((path / "review.toml").read_text())["clip"][0]["headline"] == "The team celebrated"
