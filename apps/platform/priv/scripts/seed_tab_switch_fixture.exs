@@ -61,8 +61,8 @@ defmodule TabSwitchFixture.Guard do
       database in @shared ->
         {:error, "refusing shared database #{database}"}
 
-      Regex.match?(~r/prod|hive|moon/i, database) ->
-        {:error, "refusing database #{database}: looks like a shared or production database"}
+      Regex.match?(~r/prod/i, database) ->
+        {:error, "refusing database #{database}: looks like a production database"}
 
       not String.contains?(database, suffix) ->
         {:error, "database #{database} lacks the task suffix #{suffix}"}

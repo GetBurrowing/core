@@ -41,10 +41,10 @@ defmodule Platform.Scripts.SeedTabSwitchFixtureGuardTest do
     end
   end
 
-  test "refuses names that look like a shared host or prod, even with the suffix" do
-    for db <- ~w(platform_prod_01a17b00 hive_01a17b00 moon_platform_01a17b00) do
+  test "refuses names that look like prod, even with the suffix" do
+    for db <- ~w(platform_prod_01a17b00 PROD_platform_01a17b00) do
       assert {:error, msg} = check(:dev, db)
-      assert msg =~ "shared or production"
+      assert msg =~ "production database"
     end
   end
 

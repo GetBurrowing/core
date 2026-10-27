@@ -222,6 +222,16 @@ async function waitReady(page, probe, timeout) {
 }
 
 async function keystroke(page, probe) {
+  // A text probe that is in the DOM but not rendered (the phone layout puts
+  // task search behind a sheet) cannot take a keystroke: fall back to the
+  // Tab-key probe and say so in the tap record.
+  if (probe.kind === "text") {
+    const visible = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+    }, probe.selector);
+    if (!visible) return { at: await keystroke(page, TAB_FOCUS).then((r) => r.at), used: TAB_FOCUS.name + " (text probe not rendered)" };
+  }
   if (probe.kind === "text") {
     await page.evaluate((sel) => {
       const el = document.querySelector(sel);
@@ -246,7 +256,7 @@ async function keystroke(page, probe) {
   await page.waitForFunction(() => window.__tsp.key != null, null, { timeout: 10_000 });
   const key = await page.evaluate(() => window.__tsp.key);
   if (probe.kind === "text") await page.keyboard.press("Backspace");
-  return key;
+  return { at: key, used: probe.name };
 }
 
 // ── one tab ───────────────────────────────────────────────────────────────
@@ -274,7 +284,7 @@ async function measureTab(ctx, args, tab, frames, proxy) {
     // The byte window closes at "ready": the keystroke below sends events of
     // its own (search, typing) whose replies are not part of the switch.
     const nodeT1 = performance.now();
-    const key = await keystroke(page, probe);
+    const { at: key, used: probeUsed } = await keystroke(page, probe);
     await page.waitForTimeout(150);
 
     const all = frames.slice(frameIdx).filter((f) => f.wall <= nodeT1);
@@ -297,6 +307,7 @@ async function measureTab(ctx, args, tab, frames, proxy) {
       i,
       warmup,
       url: await page.evaluate(() => location.pathname + location.search),
+      probe_used: probeUsed,
       tap_ms: key - r.t0,
       ready_ms: r.ready - r.t0,
       loading_stop_ms: r.stop - r.t0,
@@ -343,8 +354,12 @@ function summarizeTab(t) {
     key: t.key,
     href: t.href,
     origin: t.origin,
-    probe: t.probe,
+    probe: [...new Set(measured.map((x) => x.probe_used))].join("; ") || t.probe,
     n: measured.length,
+    // A tap with no phx_join on /live/websocket did not switch over the
+    // websocket (LiveView fell back to long-poll, seen once on this rig):
+    // its timings and bytes are not comparable, and the tab is flagged.
+    websocket_join_every_tap: measured.every((x) => x.join_reply_raw_bytes != null),
     tap_ms: pick("tap_ms"),
     ready_ms: pick("ready_ms"),
     join_reply_raw_bytes: pick("join_reply_raw_bytes"),
@@ -469,7 +484,7 @@ async function main() {
   }
 
   if (proxy) {
-    run.websocket_connections = [...proxy.conns.values()].filter((c) => c.ws).map((c) => ({ id: c.id, deflate_offered: c.deflateOffered, deflate_accepted: c.deflateAccepted ?? null }));
+    run.websocket_connections = [...proxy.conns.values()].filter((c) => c.ws).map((c) => ({ id: c.id, upgrade_status: c.upgradeStatus ?? null, deflate_offered: c.deflateOffered, deflate_accepted: c.deflateAccepted ?? null }));
   }
   run.finished_at = new Date().toISOString();
   writeFileSync(args.out, JSON.stringify(result, null, 2));

@@ -174,8 +174,9 @@ export function startByteProxy({ listenPort, targetHost = "127.0.0.1", targetPor
       upstream.write(chunk);
     });
     upstream.on("data", (chunk) => {
-      if (info.ws && info.deflateAccepted === undefined) {
+      if (info.ws && info.upgradeStatus === undefined) {
         const head = chunk.subarray(0, 2048).toString("latin1");
+        info.upgradeStatus = head.split("\r\n", 1)[0];
         if (head.startsWith("HTTP/1.1 101")) {
           info.deflateAccepted = /sec-websocket-extensions:[^\r\n]*permessage-deflate/i.test(head);
         }
