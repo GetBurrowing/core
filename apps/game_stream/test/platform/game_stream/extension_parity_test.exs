@@ -246,6 +246,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"file_search", "files"},
       {"file_add", "files"},
       {"file_delete", "files"},
+      {"meeting_scribe_complete", "meetings"},
+      {"meeting_triage_file", "meetings"},
       {"meeting_create", "meetings"},
       {"meeting_say", "meetings"},
       {"meeting_activity_push", "meetings"},
@@ -393,8 +395,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # `attachment_ids` property and the prose describing it, so both
     # tool-definition digests move. Names and bundles are unchanged. Measured
     # by CI on the task branch (c7c3379ce), PR #1320.
-    @main_tool_digest_off "050023b276e3c4fdfc90c392a66d20b31d069de76b73e80909530434a74cbc84"
-    @main_tool_digest_on "4ef38c89f22d96e3758201a3d923cb6af29a132c5a0c775587620f254d12c129"
+    @main_tool_digest_off "17f33483eff7d5eaf25085daa3ea9e82718f12d326b6d8635f8d134172299039"
+    @main_tool_digest_on "0acc5874f6d3d0a7c7bc8b066a231f9c7987e8a7f9f083746b5f026afeea0fda"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
