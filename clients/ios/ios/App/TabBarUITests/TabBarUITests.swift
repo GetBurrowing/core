@@ -21,7 +21,7 @@ final class TabBarUITests: XCTestCase {
 
     private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance, "-BurrowInjectNavigationFailure", "provisional"] + extra
+        app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
         // The shell loads the bundled fixture once, from viewDidAppear, and
         // WebLoadRecovery (task 01a17d1f) re-issues that load if it fails
         // provisionally, loses its WebContent process, or never commits. So a
