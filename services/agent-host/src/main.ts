@@ -88,6 +88,7 @@ if (import.meta.main) {
   channel.on("agent.stop", (p) => void host.handleStop(p));
   channel.on("agent.logs", (p) => void host.handleLogs(p).catch((e: unknown) => log(`logs failed: ${String(e)}`)));
   channel.on("agent.pane", (p) => void host.handlePane(p).catch((e: unknown) => log(`pane failed: ${String(e)}`)));
+  channel.on("agent.file_read", (p) => void host.handleFileRead(p).catch((e: unknown) => log(`file read failed: ${String(e)}`)));
   channel.on("agent.check_auth", (p) => void host.handleCheckAuth(p));
 
   log(`dialling ${agentHostUrl(coreUrl)} as profile ${profile}`);

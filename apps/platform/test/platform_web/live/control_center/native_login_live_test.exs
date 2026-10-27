@@ -324,7 +324,7 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
       assert Vault.list(scope: {:agent, agent.id}) == []
     end
 
-    test "the only commands core sends the host are lifecycle, logs, the read-only pane and the key check" do
+    test "the only commands core sends the host are lifecycle, logs, the read-only pane, the read-only file read and the key check" do
       source = File.read!(Path.join(File.cwd!(), "lib/platform/agent_host/reconciler.ex"))
 
       pushed =
@@ -347,6 +347,7 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
       assert Enum.sort(Enum.uniq(pushed ++ starts ++ ["agent.start"])) ==
                [
                  "agent.check_auth",
+                 "agent.file_read",
                  "agent.logs",
                  "agent.pane",
                  "agent.restart",

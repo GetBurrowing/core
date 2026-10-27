@@ -5,11 +5,13 @@
  *        agent.stop                   {agent_id}
  *        agent.logs                   {agent_id, lines, ref}
  *        agent.pane                   {agent_id, lines, ref}              read only (pane.ts)
+ *        agent.file_read              {agent_id, key, ref}                one file, redacted (files.ts)
  *        agent.check_auth             {agent_id, ref}                     does its API key work? (auth.ts)
  *   out  host.inventory               {profile, agents: [observation]}   on every join
  *        agent.state                  observation                         on every change
  *        agent.log                    {ref, agent_id, lines}
  *        agent.pane                   {ref, agent_id, lines, hidden}
+ *        agent.file                   {ref, agent_id, content, sha256} | {ref, agent_id, error}
  *        agent.auth                   {ref, agent_id, result}             ok | rejected | unknown
  *
  * An agent whose key a check found `rejected` reads `needs_login` (detail
@@ -35,7 +37,8 @@ import {
   type Observation,
 } from "./agents.ts";
 import { checkApiKey, readAgentEnv, type AuthResult, type Fetch } from "./auth.ts";
-import { isAgentId } from "./ids.ts";
+import { isFileKey, readAgentFileRaw, redactForRead, sha256Hex } from "./files.ts";
+import { isAgentId, userName, workDir } from "./ids.ts";
 import { agentPane } from "./pane.ts";
 import type { Payload } from "./phoenix.ts";
 
@@ -150,6 +153,26 @@ export class Host {
   }
 
   /**
+   * One file of the agent's work dir, for Compare. Read as the agent, redacted
+   * here (a secret value never leaves the machine) and again in core; the hash
+   * is over the full bytes so core can use it as a precondition.
+   */
+  async handleFileRead(payload: Payload): Promise<void> {
+    const { agent_id: agentId, key, ref } = payload;
+    if (!isAgentId(agentId) || typeof ref !== "string") return;
+    if (typeof key !== "string" || !isFileKey(key)) {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, error: "invalid_key" });
+      return;
+    }
+    const r = await readAgentFileRaw(this.deps.runner, { name: userName(agentId), work: workDir(agentId) }, key);
+    if (r.status === "ok") {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, content: redactForRead(key, r.content), sha256: sha256Hex(r.content) });
+    } else {
+      await this.transport.push("agent.file", { ref, agent_id: agentId, error: r.status === "not_found" ? "not_found" : "unreadable" });
+    }
+  }
+
+  /**
    * core's no-reply watchdog asks whether the agent's key still works. The
    * answer goes back first; a rejected key then changes the observed state
    * (needs_login), which is reported as any change is.
@@ -195,5 +218,5 @@ export interface PaneDeps {
 }
 
 function key(o: Observation): string {
-  return JSON.stringify([o.state, o.detail, o.login ?? null, o.files_applied ?? null]);
+  return JSON.stringify([o.state, o.detail, o.login ?? null, o.files_applied ?? null, o.files_drifted ?? null]);
 }
