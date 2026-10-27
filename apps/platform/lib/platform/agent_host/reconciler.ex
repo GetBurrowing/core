@@ -121,6 +121,11 @@ defmodule Platform.AgentHost.Reconciler do
   def request_pane(agent_id, lines, ref),
     do: GenServer.call(server(), {:pane, agent_id, lines, ref})
 
+  @doc "Ask the host for one file of an agent's work dir (redacted by the host), answered under `ref`."
+  @spec request_file(binary(), String.t(), String.t()) :: :ok | {:error, :not_connected}
+  def request_file(agent_id, key, ref),
+    do: GenServer.call(server(), {:file, agent_id, key, ref})
+
   @doc "Ask the host whether an agent's API key still works, answered under `ref`."
   @spec request_auth_check(binary(), String.t()) :: :ok | {:error, :not_connected}
   def request_auth_check(agent_id, ref),
@@ -241,6 +246,14 @@ defmodule Platform.AgentHost.Reconciler do
     {:reply, :ok, state}
   end
 
+  defp do_call({:file, _agent_id, _key, _ref}, _from, %{host: nil} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:file, agent_id, key, ref}, _from, state) do
+    push(state.host, "agent.file_read", %{"agent_id" => agent_id, "key" => key, "ref" => ref})
+    {:reply, :ok, state}
+  end
+
   defp do_call({:check_auth, _agent_id, _ref}, _from, %{host: nil} = state),
     do: {:reply, {:error, :not_connected}, state}
 
@@ -302,6 +315,7 @@ defmodule Platform.AgentHost.Reconciler do
         State.put(agent_id, observed, %{
           detail: string_or_nil(payload["detail"]),
           files_applied: payload["files_applied"],
+          files_drifted: drifted_list(payload["files_drifted"]),
           login_url: login_url(observed, payload["login"]),
           profile: profile
         })
@@ -314,6 +328,9 @@ defmodule Platform.AgentHost.Reconciler do
   end
 
   defp record_observation(_payload, _profile), do: :error
+
+  defp drifted_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp drifted_list(_), do: nil
 
   defp converge_all(host) do
     for entry <- NativeAgents.list(), do: converge_one(host, entry)
@@ -358,7 +375,9 @@ defmodule Platform.AgentHost.Reconciler do
           # The agent's own files (stage 5), written into its work dir as its
           # uid before the unit starts. Read at this moment, so a Restart
           # always carries the latest save.
-          "files" => NativeAgents.start_files(agent)
+          "files" => NativeAgents.start_files(agent),
+          # Drifted keys the owner has resolved; the host overwrites no other.
+          "force_keys" => NativeAgents.force_keys(agent)
         })
 
         State.put(agent.id, :starting, %{detail: nil})

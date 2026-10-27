@@ -237,6 +237,9 @@ defmodule Platform.Agents.Harness.Codex do
 
   # ── minimal deterministic TOML writer ──────────────────────────────
 
+  @doc "Encode a decoded TOML map deterministically (sorted keys)."
+  def encode(map), do: encode_toml(map)
+
   defp encode_toml(map) do
     {scalars, tables} =
       map |> Enum.sort_by(&elem(&1, 0)) |> Enum.split_with(fn {_, v} -> not table?(v) end)

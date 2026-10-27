@@ -1,0 +1,65 @@
+defmodule Platform.Agents.ConfigFiles.Backend.Host do
+  @moduledoc """
+  Federated agents: file operations over `runtime_host:<runtime_id>`
+  (`PlatformWeb.RuntimeHostChannel`), served by the burrow-cli on the agent's
+  machine. The host redacts before it sends; core redacts again in
+  `Platform.Agents.ConfigFiles`. The hash is over the full on-disk bytes.
+  """
+  @behaviour Platform.Agents.ConfigFiles.Backend
+
+  alias Platform.Federation.RuntimeHosts
+
+  @impl true
+  def list(ctx) do
+    with {:ok, %{"entries" => entries}} when is_list(entries) <- ask(ctx, "file.list", %{}) do
+      {:ok,
+       for(
+         %{"path" => path, "sha256" => sha} <- entries,
+         is_binary(path),
+         is_binary(sha),
+         do: %{path: path, sha256: sha, secret?: false}
+       )}
+    else
+      {:ok, _} -> {:error, {:host_error, "malformed reply"}}
+      error -> error
+    end
+  end
+
+  @impl true
+  def read(ctx, path) do
+    case ask(ctx, "file.read", %{"path" => path}) do
+      {:ok, %{"content" => content, "sha256" => sha}}
+      when is_binary(content) and is_binary(sha) ->
+        {:ok, %{content: content, sha256: sha}}
+
+      {:ok, _} ->
+        {:error, {:host_error, "malformed reply"}}
+
+      error ->
+        error
+    end
+  end
+
+  @impl true
+  def write(ctx, path, content, expected) do
+    payload = %{"path" => path, "content" => content, "expected_sha256" => expected}
+
+    case ask(ctx, "file.write", payload) do
+      {:ok, %{"status" => "ok", "sha256" => sha}} when is_binary(sha) -> {:ok, sha}
+      {:ok, %{"status" => "conflict"} = r} -> {:conflict, r["current_sha256"]}
+      {:ok, _} -> {:error, {:host_error, "malformed reply"}}
+      error -> error
+    end
+  end
+
+  @impl true
+  def set_secret(ctx, path, pointer, value) do
+    case ask(ctx, "secret.set", %{"path" => path, "pointer" => pointer, "value" => value}) do
+      {:ok, %{"status" => "ok", "sha256" => sha}} when is_binary(sha) -> {:ok, sha}
+      {:ok, _} -> {:error, {:host_error, "malformed reply"}}
+      error -> error
+    end
+  end
+
+  defp ask(ctx, event, payload), do: RuntimeHosts.request(ctx.runtime.runtime_id, event, payload)
+end

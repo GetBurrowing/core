@@ -395,6 +395,41 @@ defmodule Platform.Agents.NativeAgents do
 
   def pending_file_keys(_files, _observed), do: []
 
+  @doc """
+  Keys the agent changed on disk since the host last wrote them
+  (`files_drifted` in the host's `agent.state`). Empty when unknown.
+  """
+  @spec drifted_keys(Agent.t()) :: [String.t()]
+  def drifted_keys(%Agent{id: id}) do
+    case Platform.AgentHost.status(id) do
+      %{files_drifted: keys} when is_list(keys) -> Enum.filter(keys, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  @doc """
+  The drifted keys an owner has since resolved: their stored version is newer
+  than the one the host last applied (`Config` only lets a drifted key be
+  saved once the owner has seen the disk copy). Sent as `force_keys` in
+  `agent.start`/`agent.restart`; the host overwrites a drifted key only when
+  it is named there.
+  """
+  @spec force_keys(Agent.t()) :: [String.t()]
+  def force_keys(%Agent{id: id} = agent) do
+    applied =
+      case Platform.AgentHost.status(id) do
+        %{files_applied: %{} = applied} -> applied
+        _ -> %{}
+      end
+
+    drifted = drifted_keys(agent)
+
+    for %WorkspaceFile{file_key: key, version: version} <- list_files(agent),
+        key in drifted,
+        Map.get(applied, key) != version,
+        do: key
+  end
+
   @doc "True when a running agent has not picked up a saved file (\"Restart to apply\")."
   @spec restart_to_apply?([WorkspaceFile.t()], map() | nil) :: boolean()
   def restart_to_apply?(files, observed), do: pending_file_keys(files, observed) != []

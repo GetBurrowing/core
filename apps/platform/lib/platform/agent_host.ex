@@ -26,10 +26,15 @@ defmodule Platform.AgentHost do
       harness, core_url, env, files}`, the token minted fresh every time;
       `files` is `[%{key, content, version}]` (`NativeAgents.start_files/1`),
       written into the agent's work dir AS THE AGENT before it launches;
+      `force_keys` names the drifted keys (edited on disk by the agent since the
+      host wrote them) the owner has resolved; the host overwrites no other
+      drifted key (`NativeAgents.force_keys/1`);
     * `agent.stop` `{agent_id}`;
     * `agent.logs` `{agent_id, lines, ref}`;
     * `agent.pane` `{agent_id, lines, ref}`: the agent's recent pane text, for
       the read-only "Recent output" disclosure (stage 6);
+    * `agent.file_read` `{agent_id, key, ref}`: one file of the work dir, redacted,
+      answered by `agent.file` `{ref, content, sha256}` or `{ref, error}`;
     * `agent.check_auth` `{agent_id, ref}`: does the agent's API key still
       work? Asked by the no-reply watchdog (stage 7 round 2,
       `Platform.Chat.ReplyFailure.Watchdog`).
@@ -40,7 +45,9 @@ defmodule Platform.AgentHost do
       files_applied}]}`. The host REPORTS its capability profile; core
       displays it and never branches on it. `files_applied` is
       `%{key => version}` as of the agent's last start, or nil;
-    * `agent.state` `{agent_id, state, detail, files_applied}`;
+    * `agent.state` `{agent_id, state, detail, files_applied, files_drifted}`;
+      `files_drifted` is the keys whose disk copy no longer matches what the host
+      wrote;
     * `agent.log` `{ref, agent_id, lines}`;
     * `agent.pane` `{ref, agent_id, lines, hidden}`: `hidden` is `"login"` (and
       `lines` empty) while the pane shows a login screen;
@@ -215,6 +222,48 @@ defmodule Platform.AgentHost do
 
   @doc false
   def pane_topic(ref), do: "agent_host:pane:" <> ref
+
+  @doc """
+  One file of `agent`'s work dir as the host sees it on disk, asked of the host
+  and waited for: `{:ok, %{content, sha256}}`. The host redacts before it
+  sends and `Platform.Agents.Config` redacts again. The sha256 is over the full
+  on-disk bytes. Used so a conflict can show the disk copy (Compare).
+  """
+  @spec file_read(Agent.t() | binary(), String.t(), keyword()) ::
+          {:ok, %{content: binary(), sha256: String.t()}}
+          | {:error, :not_connected | :timeout | :not_found | :unreadable}
+  def file_read(agent, key, opts \\ [])
+  def file_read(%Agent{id: id}, key, opts), do: file_read(id, key, opts)
+
+  def file_read(agent_id, key, opts) when is_binary(agent_id) do
+    timeout = Keyword.get(opts, :timeout, @logs_timeout_ms)
+    ref = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    topic = file_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with :ok <- Reconciler.request_file(agent_id, key, ref) do
+        receive do
+          {:agent_host_file, ^ref, %{"content" => c, "sha256" => s}}
+          when is_binary(c) and is_binary(s) ->
+            {:ok, %{content: c, sha256: s}}
+
+          {:agent_host_file, ^ref, %{"error" => "not_found"}} ->
+            {:error, :not_found}
+
+          {:agent_host_file, ^ref, _} ->
+            {:error, :unreadable}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  @doc false
+  def file_topic(ref), do: "agent_host:file:" <> ref
 
   @doc """
   Ask the host whether `agent`'s API key still works, and wait for the answer:

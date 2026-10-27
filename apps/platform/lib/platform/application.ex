@@ -153,6 +153,9 @@ defmodule Platform.Application do
          # `{:peer, id}` and its wrapper `{:peer_sup, id}`; it must start
          # before the Supervisor whose children register in it.
          {Registry, keys: :unique, name: Platform.Federation.Peers.Registry},
+         # The burrow-cli hosts joined on `runtime_host:<id>`, one entry per
+         # joined channel process (RuntimeHostChannel); see RuntimeHosts.
+         {Registry, keys: :duplicate, name: Platform.Federation.RuntimeHostRegistry},
          # One wrapper Supervisor per peer under this DynamicSupervisor, so
          # a crash-looping peer exhausts only its own restart budget.
          Platform.Federation.Peers.Supervisor,

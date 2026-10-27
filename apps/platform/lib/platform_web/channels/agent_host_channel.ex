@@ -55,6 +55,18 @@ defmodule PlatformWeb.AgentHostChannel do
     {:reply, :ok, socket}
   end
 
+  # The answer to `agent.file_read`: one file of the agent's work dir, already
+  # redacted by the host and redacted again by `Platform.Agents.Config`.
+  def handle_in("agent.file", %{"ref" => ref} = payload, socket) when is_binary(ref) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      AgentHost.file_topic(ref),
+      {:agent_host_file, ref, Map.take(payload, ["content", "sha256", "error"])}
+    )
+
+    {:reply, :ok, socket}
+  end
+
   # The answer to `agent.check_auth` (stage 7 round 2). Carries no key.
   def handle_in("agent.auth", %{"ref" => ref, "result" => result}, socket)
       when is_binary(ref) and is_binary(result) do

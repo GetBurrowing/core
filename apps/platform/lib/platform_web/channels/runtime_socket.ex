@@ -11,6 +11,7 @@ defmodule PlatformWeb.RuntimeSocket do
   alias Platform.Agents.AgentRuntime
 
   channel "runtime:*", PlatformWeb.RuntimeChannel
+  channel "runtime_host:*", PlatformWeb.RuntimeHostChannel
 
   @impl true
   def connect(%{"runtime_id" => runtime_id, "token" => token}, socket, _connect_info) do
