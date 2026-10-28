@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [iphone, ipad]
+        device: [iphone]
     defaults:
       run:
         working-directory: clients/ios
@@ -110,6 +110,8 @@ jobs:
             -destination "id=$UDID" \
             -resultBundlePath "$OUT/App.xcresult" \
             CODE_SIGNING_ALLOWED=NO AppIdentifierPrefix=UNSIGNED. \
+            -only-testing:AppTests/WebLoadRecoveryTests \
+            -only-testing:TabBarUITests/TabBarUITests/testInjectedDoubleCommitHangRecreatesBridge \
             -skip-testing:AppTests/KeychainTokenStoreTests/testAccessGroupIsTheTeamPrefixedSharedGroup \
             -skip-testing:AppTests/KeychainTokenStoreTests/testOneSessionPerHost \
             -skip-testing:AppTests/KeychainTokenStoreTests/testStoringATokenWritesNothingToTheAppGroupDefaults \

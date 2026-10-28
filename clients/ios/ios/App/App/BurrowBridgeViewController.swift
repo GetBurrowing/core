@@ -131,7 +131,10 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 self?.navTrace?.noteShellLoad("recovery", url: request.url, webView: self?.webView)
                 self?.webView?.load(request)
             }
-            let recreate: (URLRequest) -> Void = { [weak self] request in self?.recreateShell(for: request) }
+            let recreate: (URLRequest) -> Void = { [weak self] request in
+                // MUTATION: keep using the poisoned original view.
+                self?.webView?.load(request)
+            }
             let recovery = webRecovery ?? WebLoadRecovery(config: config, load: load, recreate: recreate)
             recovery.setLoadHandlers(load: load, recreate: recreate)
             recovery.onExhausted = { [weak self] in self?.showWebLoadError() }
