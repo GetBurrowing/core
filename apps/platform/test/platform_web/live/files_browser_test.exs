@@ -1273,4 +1273,35 @@ defmodule PlatformWeb.FilesBrowserTest do
     assert has_element?(full, "[data-role=canvas-personal-star][aria-pressed=false]")
     refute has_element?(browser, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
   end
+
+  test "consecutive cross-kind deletes replace recovery rather than stacking Undo toasts", c do
+    canvas = canvas!(c.design, c.p_design, "Mixed recovery")
+    first = file!(c.project_a, "First.pdf")
+    second = file!(c.project_a, "Second.pdf")
+
+    for target <- [{:canvas, canvas.id}, {:file, first.id}, {:file, second.id}],
+        do: Platform.Files.Stars.set(c.user, target, true)
+
+    {:ok, view, _} = live(c.conn, "/files?tab=starred")
+    render_hook(view, "browser_command", %{kind: "file", id: first.id, action: "delete"})
+    render_hook(view, "browser_confirm_delete", %{})
+    assert has_element?(view, "#files-undo-toast")
+    refute has_element?(view, "#browser-undo-toast")
+    render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "delete"})
+    render_hook(view, "browser_confirm_delete", %{})
+    assert has_element?(view, "#browser-undo-toast")
+    refute has_element?(view, "#files-undo-toast")
+    render_hook(view, "browser_undo", %{})
+    assert has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+    render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "delete"})
+    render_hook(view, "browser_confirm_delete", %{})
+    assert has_element?(view, "#browser-undo-toast")
+    render_hook(view, "browser_command", %{kind: "file", id: second.id, action: "delete"})
+    render_hook(view, "browser_confirm_delete", %{})
+    assert has_element?(view, "#files-undo-toast", "Second.pdf deleted")
+    refute has_element?(view, "#browser-undo-toast")
+    view |> element("[data-role=files-undo-button]") |> render_click()
+    assert has_element?(view, "[data-role=files-item-link][data-item-id='#{second.id}']")
+    refute has_element?(view, "#files-undo-toast")
+  end
 end

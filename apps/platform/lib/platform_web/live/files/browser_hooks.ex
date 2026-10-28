@@ -159,7 +159,11 @@ defmodule PlatformWeb.Files.BrowserHooks do
           {:noreply, socket} =
             FilesLive.confirm_file_delete(socket, socket.assigns.viewer.user, file)
 
-          {:halt, socket |> assign(browser_action: nil, browser_editing: nil) |> refresh()}
+          {:halt,
+           socket
+           |> replace_canvas_recovery(id)
+           |> assign(browser_action: nil, browser_editing: nil)
+           |> refresh()}
         else
           _ -> {:halt, deny(socket)}
         end
@@ -172,6 +176,7 @@ defmodule PlatformWeb.Files.BrowserHooks do
 
             {:halt,
              socket
+             |> replace_file_recovery()
              |> assign(browser_action: nil, browser_editing: nil)
              |> refresh()
              |> assign(:browser_undo, %{target: target, name: item.title, token: token})}
@@ -250,6 +255,24 @@ defmodule PlatformWeb.Files.BrowserHooks do
       _ ->
         {:halt, deny(socket)}
     end
+  end
+
+  # There is one recovery affordance across item kinds. A failed mutation
+  # leaves the previous Undo intact; only successful deletes replace it.
+  defp replace_canvas_recovery(socket, id) do
+    case socket.assigns.undo_toast do
+      %{file: %{id: ^id}} -> assign(socket, :browser_undo, nil)
+      _ -> socket
+    end
+  end
+
+  defp replace_file_recovery(socket) do
+    case socket.assigns.undo_toast do
+      %{timer: timer} -> Process.cancel_timer(timer)
+      _ -> :ok
+    end
+
+    assign(socket, :undo_toast, nil)
   end
 
   defp deny(socket),
