@@ -512,7 +512,7 @@ defmodule Platform.Meetings.Triage do
       task_ids: task_ids,
       meeting_ids: meeting_ids,
       audit_id: nil,
-      remaining: eligible_before,
+      remaining: Repo.aggregate(live_cleanup_query(), :count),
       dry_run: dry_run
     }
 
@@ -575,6 +575,7 @@ defmodule Platform.Meetings.Triage do
           Map.merge(report, %{
             changed: count,
             audit_id: audit.id,
+            pruned_briefing_ids: pruned_briefing_ids,
             remaining: Repo.aggregate(live_cleanup_query(), :count),
             deleted_at: now
           })

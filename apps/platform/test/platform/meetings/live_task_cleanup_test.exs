@@ -185,4 +185,16 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     assert {:error, :invalid_limit} = Triage.junk_live_tasks(limit: 501)
     assert {:error, :actor_and_operation_required} = Triage.junk_live_tasks(dry_run: false)
   end
+
+  test "pre-deployment release adapter runs the same validated cleanup boundary", ctx do
+    live = live!(ctx, "meeting_intent_ack")
+    File.cp!("lib/platform/meetings/triage.ex", "/tmp/meeting-live-cleanup-triage.ex")
+    Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs")
+
+    assert {:ok, %{changed: 1, task_ids: [id]}} =
+             apply(Platform.Meetings.LiveTaskCleanupOneOff, :junk_live_tasks, [apply_opts()])
+
+    assert id == live.id
+    assert length(audits()) == 1
+  end
 end
