@@ -4,7 +4,7 @@ import {installInAppLinks} from "../../js/lib/in_app_links.js"
 function setup(href, kind = "path", attrs = {}) {
   let click
   const doc = {addEventListener: vi.fn((_, fn) => { click = fn }), removeEventListener: vi.fn()}
-  const win = {location: {href: "https://suite.kobo-ai.com/chat/general", origin: "https://suite.kobo-ai.com", assign: vi.fn()}}
+  const win = {location: {href: "https://app.example.test/chat/general", origin: "https://app.example.test", assign: vi.fn()}}
   const anchor = {getAttribute: key => key === "href" ? href : attrs[key], hasAttribute: key => key in attrs}
   const event = {button: 0, target: {closest: selector => kind === "path" ? anchor : null}, preventDefault: vi.fn(), stopPropagation: vi.fn()}
   const socket = {historyRedirect: vi.fn()}
