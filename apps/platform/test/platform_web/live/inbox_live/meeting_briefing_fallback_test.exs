@@ -3,7 +3,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingFallbackTest do
   import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
   alias PlatformWeb.InboxLive.MeetingBriefingComponent
 
-  defp render_state(summary, missing) do
+  def render_state(summary, missing) do
     view = %{
       meeting: %{
         id: Ecto.UUID.generate(),

@@ -24,6 +24,13 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskRecord
 
+  defmodule RepairPushRecorder do
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:repair_push, user_id, payload})
+      :ok
+    end
+  end
+
   # ── Fixtures ──────────────────────────────────────────────────────────────
 
   defp meeting_fixture!(name) do
@@ -428,6 +435,19 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   end
 
   test "exact repair defaults dry, preserves shared identity and receipts, and is idempotent" do
+    old = Application.get_env(:platform, :notifications_module)
+    Application.put_env(:platform, :notifications_module, RepairPushRecorder)
+    :persistent_term.put({RepairPushRecorder, :owner}, self())
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, :notifications_module, old),
+        else: Application.delete_env(:platform, :notifications_module)
+
+      :persistent_term.erase({RepairPushRecorder, :owner})
+    end)
+
+    user = Platform.AccountsFixtures.user_fixture()
     %{meeting: source} = meeting_fixture!("Repair execution")
 
     meeting =
@@ -450,6 +470,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     original =
       Repo.insert!(%MeetingBriefing{
         meeting_id: meeting.id,
+        attendee_user_ids: [user.id],
         receipts: receipts,
         items: %{
           "_content" => %{
@@ -457,6 +478,18 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
             "unfiled_action_items" => []
           }
         }
+      })
+
+    inbox =
+      Repo.insert!(%Platform.Inbox.Item{
+        user_id: user.id,
+        kind: "meeting_briefing",
+        source_type: "meeting_briefing",
+        source_id: original.id,
+        title: "Read briefing",
+        body: "",
+        url: "/inbox/meeting/" <> meeting.id,
+        read_at: DateTime.utc_now()
       })
 
     assert %{
@@ -468,7 +501,9 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
 
     assert Repo.get!(MeetingBriefing, original.id).items == original.items
     assert %{changed: true, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+    refute_receive {:repair_push, _, _}
     repaired = Repo.get!(MeetingBriefing, original.id)
+    assert Repo.get!(Platform.Inbox.Item, inbox.id) == inbox
     assert repaired.id == original.id
     assert repaired.receipts == receipts
     assert repaired.attendee_user_ids == original.attendee_user_ids
