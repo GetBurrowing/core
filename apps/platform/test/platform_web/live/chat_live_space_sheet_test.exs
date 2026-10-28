@@ -290,7 +290,9 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert lv_assigns(view).space_sheet == nil
     end
 
-    test "Canvases in this space opens the canvases drawer; no count at zero", %{conn: conn} do
+    test "Canvases in this space navigates to the scoped browser; no highlight at zero", %{
+      conn: conn
+    } do
       user = user!("canvases")
       channel = space!("channel")
       seat_user(channel, user)
@@ -305,8 +307,7 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert lv_assigns(view).show_canvases == false
       view |> element(@row_canvases) |> render_click()
 
-      assert lv_assigns(view).show_canvases == true
-      assert lv_assigns(view).space_sheet == nil
+      assert_redirect(view, "/files?space=#{channel.id}&type=canvas")
     end
 
     test "Members renders in a channel and a group, not in a DM", %{conn: conn} do
@@ -1471,5 +1472,18 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       _ = render(view)
       assert MapSet.member?(lv_assigns(view).expanded_threads, parent.id)
     end
+  end
+
+  test "space entry includes only the active readable canvas highlight", %{conn: conn} do
+    w = shared_world(conn)
+    render_click(w.view, "canvas_open_mobile", %{"canvas-id" => w.canvas.id})
+    assert lv_assigns(w.view).active_canvas.id == w.canvas.id
+    open_sheet(w.view)
+    w.view |> element(@row_canvases) |> render_click()
+
+    assert_redirect(
+      w.view,
+      "/files?highlight=#{w.canvas.id}&space=#{w.canvas.space_id}&type=canvas"
+    )
   end
 end

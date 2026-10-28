@@ -277,6 +277,13 @@ defmodule Platform.Files.Browser do
     |> cap(limit)
   end
 
+  def of_type(viewer, :file, opts) do
+    limit = Keyword.get(opts, :limit, @type_limit)
+    docs = of_type(viewer, :doc, limit: limit + 1)
+    images = of_type(viewer, :image, limit: limit + 1)
+    sort(docs.items ++ images.items, :recent) |> cap(limit)
+  end
+
   def of_type(viewer, type, opts) when type in [:doc, :image] do
     limit = Keyword.get(opts, :limit, @type_limit)
     ctx = context(viewer)
@@ -447,6 +454,7 @@ defmodule Platform.Files.Browser do
   @doc "Keeps the items of one type; `nil` or `:all` keeps everything."
   @spec filter([Item.t()], item_type() | :all | nil) :: [Item.t()]
   def filter(items, type) when type in [nil, :all], do: items
+  def filter(items, :file), do: Enum.reject(items, &(&1.kind == :canvas))
   def filter(items, type), do: Enum.filter(items, &(&1.type == type))
 
   @doc """

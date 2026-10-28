@@ -29,7 +29,7 @@ defmodule PlatformWeb.FilesLiveCodeLineRatchetTest do
   @app_root Path.expand("../../..", __DIR__)
   @files_live_path Path.join(@app_root, "lib/platform_web/live/files_live.ex")
 
-  @files_live_code_line_count 1306
+  @files_live_code_line_count 1255
 
   @doc_open ~r/^\s*@(module)?doc\s+"""/
 

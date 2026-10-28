@@ -434,6 +434,11 @@ defmodule PlatformWeb.FilesBrowserTest do
       assert html =~ ~s(data-role="files-detail-panel")
 
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
+
       assert_patch(view, ~p"/files/#{ctx.project_a.id}")
       refute has_element?(view, ~s([data-role="files-row"][data-file-id="#{file.id}"]))
 
@@ -987,5 +992,285 @@ defmodule PlatformWeb.FilesBrowserTest do
     @impl true
     def live_pages,
       do: [%{prefix: "games", live_view: __MODULE__, module: :chat, permission: "canvas.read"}]
+  end
+
+  describe "rung 17 personal browser" do
+    test "stars synchronize two mounted sessions without reload and remain personal", c do
+      canvas = canvas!(c.design, c.p_design, "Shared star")
+      {:ok, first, _} = live(c.conn, "/files")
+      {:ok, second, _} = live(c.conn, "/files?tab=starred")
+      other_user = user!("Other personal stars")
+      member!(other_user, c.org_a)
+      join!(c.design, other_user)
+
+      {:ok, other_session, _} =
+        live(
+          init_test_session(build_conn(), current_user_id: other_user.id),
+          "/files?tab=starred"
+        )
+
+      assert has_element?(
+               second,
+               "[data-role=files-browser-empty]",
+               "Star canvases and files to keep them here."
+             )
+
+      refute has_element?(second, "[data-role=files-browser-empty] .hero-folder-open")
+      first |> element("[data-role=browser-star][phx-value-id='#{canvas.id}']") |> render_click()
+      assert has_element?(second, "[data-role=browser-row][data-item-id='#{canvas.id}']")
+      assert has_element?(second, "[data-role=browser-star][aria-pressed=true]")
+      assert has_element?(other_session, "[data-role=files-browser-empty]")
+
+      refute has_element?(
+               other_session,
+               "[data-role=files-item-link][data-item-id='#{canvas.id}']"
+             )
+
+      first |> element("[data-role=browser-star][phx-value-id='#{canvas.id}']") |> render_click()
+      refute has_element?(second, "[data-item-id='#{canvas.id}']")
+      assert Platform.Files.Stars.list_items(c.user).items == []
+    end
+
+    test "Starred keeps star order across edits and URL sort tampering, supports Files filter",
+         c do
+      a = canvas!(c.design, c.p_design, "A older star", Platform.Chat.CanvasDocument.new())
+      b = file!(c.project_a, "B newer star.pdf")
+      :ok = Platform.Files.Stars.set(c.user, {:canvas, a.id}, true)
+      :ok = Platform.Files.Stars.set(c.user, {:file, b.id}, true)
+
+      Repo.update_all(from(s in Platform.Files.Star, where: s.canvas_id == ^a.id),
+        set: [inserted_at: ~U[2026-01-01 00:00:00.000000Z]]
+      )
+
+      {:ok, view, html} = live(c.conn, "/files?tab=starred&sort=name")
+      assert row_ids(html) == [b.id, a.id]
+      refute has_element?(view, "[data-role=files-sort]")
+      render_hook(view, "browser_command", %{kind: "canvas", id: a.id, action: "rename"})
+      view |> form("#browser-rename-#{a.id}", %{title: "0 renamed"}) |> render_submit()
+      assert Repo.get!(Canvas, a.id).title == "0 renamed"
+      assert row_ids(render(view)) == [b.id, a.id]
+      view |> element("[data-role=files-type-chip][data-chip=file]") |> render_click()
+      assert row_ids(render(view)) == [b.id]
+    end
+
+    test "inline rename Enter saves, Escape cancels, forged rename leaves source intact", c do
+      canvas =
+        canvas!(c.design, c.p_design, "Rename original", Platform.Chat.CanvasDocument.new())
+
+      hidden = canvas!(c.foreign_space, c.p_design, "Foreign title")
+      {:ok, view, _} = live(c.conn, "/files")
+      render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "rename"})
+      assert has_element?(view, "#browser-rename-#{canvas.id} input[name=title]")
+      render_hook(view, "browser_cancel_rename", %{})
+      refute has_element?(view, "#browser-rename-#{canvas.id}")
+      assert Repo.get!(Canvas, canvas.id).title == "Rename original"
+      render_hook(view, "browser_command", %{kind: "canvas", id: hidden.id, action: "rename"})
+      render_hook(view, "browser_rename", %{title: "Forged"})
+      render_hook(view, "browser_command", %{})
+      render_hook(view, "browser_move", %{})
+      render_hook(view, "browser_rename", %{})
+      assert Repo.get!(Canvas, hidden.id).title == "Foreign title"
+      render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "rename"})
+      view |> form("#browser-rename-#{canvas.id}", %{title: "Saved title"}) |> render_submit()
+      assert Repo.get!(Canvas, canvas.id).title == "Saved title"
+
+      assert has_element?(
+               view,
+               "[data-role=files-item-link][data-item-id='#{canvas.id}']",
+               "Saved title"
+             )
+    end
+
+    test "Move marks current space, denies cross-org IDs, and updates another mounted browser",
+         c do
+      destination = space!("destination", c.org_a)
+      join!(destination, c.user)
+      canvas = canvas!(c.design, c.p_design, "Moved canvas")
+      {:ok, source, _} = live(c.conn, "/files?space=#{c.design.id}&type=canvas")
+      {:ok, dest, _} = live(c.conn, "/files?space=#{destination.id}&type=canvas")
+      render_hook(source, "browser_command", %{kind: "canvas", id: canvas.id, action: "move"})
+
+      assert has_element?(
+               source,
+               "#browser-action-popover [data-space-id='#{c.design.id}'][aria-current=location]"
+             )
+
+      refute has_element?(source, "#browser-action-popover [data-space-id='#{c.atlas.id}']")
+      render_hook(source, "browser_move", %{space_id: c.atlas.id})
+      assert Repo.get!(Canvas, canvas.id).space_id == c.design.id
+      render_hook(source, "browser_command", %{kind: "canvas", id: canvas.id, action: "move"})
+      render_hook(source, "browser_move", %{space_id: destination.id})
+      refute has_element?(source, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+      assert has_element?(dest, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+      assert Repo.get!(Canvas, canvas.id).space_id == destination.id
+    end
+
+    test "Delete requires confirm and Undo restores the same starred canvas", c do
+      canvas = canvas!(c.design, c.p_design, "Q4 launch plan")
+      :ok = Platform.Files.Stars.set(c.user, {:canvas, canvas.id}, true)
+      {:ok, view, _} = live(c.conn, "/files?tab=starred")
+      render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "delete"})
+
+      assert has_element?(
+               view,
+               "#browser-action-popover [data-role=browser-delete-confirm-copy]",
+               "Delete ‘Q4 launch plan’? People with the link will lose access."
+             )
+
+      assert Repo.get!(Canvas, canvas.id).deleted_at == nil
+      render_hook(view, "browser_close_actions", %{})
+      assert Repo.get!(Canvas, canvas.id).deleted_at == nil
+      render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "delete"})
+
+      view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
+
+      refute has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+      assert Repo.get!(Canvas, canvas.id).deleted_at != nil
+      view |> element("[data-role=browser-undo]") |> render_click()
+      assert Repo.get!(Canvas, canvas.id).deleted_at == nil
+      assert has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+    end
+
+    test "project files hide unsupported Move and attachments expose only Star", c do
+      file = file!(c.project_a, "Owned.pdf")
+      attachment = attachment!(c.design, c.p_design, "Shared.pdf", "application/pdf")
+      {:ok, view, _} = live(c.conn, "/files?space=#{c.design.id}")
+      render_hook(view, "browser_open_actions", %{kind: "space_file", id: attachment.id})
+      assert has_element?(view, "#browser-action-popover [data-action=star]")
+
+      for action <- ~w(rename move delete),
+          do: refute(has_element?(view, "#browser-action-popover [data-action=#{action}]"))
+
+      render_hook(view, "browser_open_actions", %{kind: "file", id: file.id})
+      assert has_element?(view, "#browser-action-popover [data-action=rename]")
+      assert has_element?(view, "#browser-action-popover [data-action=delete]")
+      refute has_element?(view, "#browser-action-popover [data-action=move]")
+    end
+
+    test "scoped chip removes to All and only a readable source gets the highlight", c do
+      canvas = canvas!(c.design, c.p_design, "Scoped source")
+      other = canvas!(c.atlas, c.p_atlas, "Elsewhere")
+
+      {:ok, view, _} =
+        live(c.conn, "/files?space=#{c.design.id}&type=canvas&highlight=#{canvas.id}")
+
+      assert has_element?(view, "[data-role=files-scope-chip]", "In #org-a-design")
+      assert has_element?(view, "#files-browser-scroll[data-highlight='#{canvas.id}']")
+      view |> element("[data-role=files-scope-chip]") |> render_click()
+      assert_patch(view, "/files?tab=browse")
+      refute has_element?(view, "[data-role=files-scope-chip]")
+      refute has_element?(view, "#files-browser-scroll[data-highlight]")
+
+      {:ok, invalid, _} =
+        live(c.conn, "/files?space=#{c.design.id}&type=canvas&highlight=#{other.id}")
+
+      refute has_element?(invalid, "#files-browser-scroll[data-highlight]")
+      assert has_element?(invalid, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+    end
+
+    test "revoked membership clears starred rows and rejects an already-open command", c do
+      private =
+        space!("private", c.org_a) |> Ecto.Changeset.change(kind: "group") |> Repo.update!()
+
+      p = join!(private, c.user)
+      canvas = canvas!(private, p, "Private document")
+      :ok = Platform.Files.Stars.set(c.user, {:canvas, canvas.id}, true)
+      {:ok, view, _} = live(c.conn, "/files?tab=starred")
+      assert has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+      render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "rename"})
+      Repo.delete!(p)
+      render_hook(view, "browser_rename", %{title: "Revoked write"})
+      refute has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+      assert Repo.get!(Canvas, canvas.id).title == "Private document"
+    end
+  end
+
+  test "Files at Browse excludes canvases and keeps documents and images", c do
+    doc = file!(c.project_a, "Brief.pdf")
+    image = file!(c.project_a, "Photo.png", %{content_type: "image/png"})
+    _canvas = canvas!(c.design, c.p_design, "No canvas")
+    {:ok, view, html} = live(c.conn, "/files?tab=browse&type=file")
+    assert Enum.sort(row_ids(html)) == Enum.sort([doc.id, image.id])
+    assert has_element?(view, "[data-chip=file][aria-current=page]")
+  end
+
+  test "masked scope and Move labels never print real space names", c do
+    canvas = canvas!(c.design, c.p_design, "Mask destinations")
+    {:ok, _} = Accounts.put_mask_names(c.user, true)
+    {:ok, view, _} = live(c.conn, "/files?space=#{c.design.id}&type=canvas")
+    assert has_element?(view, "[data-role=files-scope-chip]", "In #workspace-")
+    refute element(view, "[data-role=files-scope-chip]") |> render() =~ "org-a-design"
+    render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "move"})
+
+    assert has_element?(
+             view,
+             "#browser-action-popover [data-role=browser-move-space]",
+             "#workspace-"
+           )
+
+    refute element(view, "#browser-action-popover") |> render() =~ "org-a-design"
+  end
+
+  test "membership removal clears an open menu and starred rows live", c do
+    space =
+      space!("private-live", c.org_a) |> Ecto.Changeset.change(kind: "group") |> Repo.update!()
+
+    p = join!(space, c.user)
+    canvas = canvas!(space, p, "Secret live document")
+    :ok = Platform.Files.Stars.set(c.user, {:canvas, canvas.id}, true)
+    {:ok, view, _} = live(c.conn, "/files?tab=starred")
+    render_hook(view, "browser_open_actions", %{kind: "canvas", id: canvas.id})
+    assert has_element?(view, "#browser-action-popover [data-action=delete]")
+    {:ok, _} = Chat.remove_participant(p)
+    refute has_element?(view, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+    refute has_element?(view, "#browser-action-popover")
+    assert has_element?(view, "[data-role=files-browser-empty]")
+  end
+
+  test "write-denied viewer gets Star only and a forged delete cannot mutate", c do
+    canvas = canvas!(c.design, c.p_design, "Read only")
+
+    Repo.insert!(%Platform.Access.Grant{
+      org_id: c.org_a.id,
+      principal_type: "user",
+      principal_id: c.user.id,
+      permission: "canvas.write",
+      resource_type: "canvas",
+      resource_id: canvas.id,
+      effect: "deny"
+    })
+
+    {:ok, view, _} = live(c.conn, "/files")
+    render_hook(view, "browser_open_actions", %{kind: "canvas", id: canvas.id})
+    assert has_element?(view, "#browser-action-popover [data-action=star]")
+
+    for action <- ~w(rename move delete),
+        do: refute(has_element?(view, "#browser-action-popover [data-action=#{action}]"))
+
+    render_hook(view, "browser_command", %{kind: "canvas", id: canvas.id, action: "delete"})
+    render_hook(view, "browser_confirm_delete", %{})
+    assert Repo.get!(Canvas, canvas.id).deleted_at == nil
+  end
+
+  test "fullscreen header and mounted Starred browser share persistent stars", c do
+    canvas =
+      canvas!(
+        c.design,
+        c.p_design,
+        "Fullscreen personal star",
+        Platform.Chat.CanvasDocument.new()
+      )
+
+    {:ok, browser, _} = live(c.conn, "/files?tab=starred")
+    {:ok, full, _} = live(c.conn, "/canvases/#{canvas.id}")
+    assert has_element?(full, "[data-role=canvas-personal-star][aria-pressed=false]")
+    full |> element("[data-role=canvas-personal-star]") |> render_click()
+    assert has_element?(browser, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
+    assert has_element?(full, "[data-role=canvas-personal-star][aria-pressed=true]")
+    browser |> element("[data-role=browser-star][phx-value-id='#{canvas.id}']") |> render_click()
+    assert has_element?(full, "[data-role=canvas-personal-star][aria-pressed=false]")
+    refute has_element?(browser, "[data-role=files-item-link][data-item-id='#{canvas.id}']")
   end
 end

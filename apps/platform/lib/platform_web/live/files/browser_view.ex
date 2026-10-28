@@ -13,7 +13,7 @@ defmodule PlatformWeb.Files.BrowserView do
 
   alias Platform.Chat.SidebarMask
 
-  @url_keys ~w(project_id tab org space q file type sort)
+  @url_keys ~w(project_id tab org space q file type sort highlight)
 
   @doc "The query keys (plus `project_id`) a browser URL may carry."
   @spec url_keys() :: [String.t()]

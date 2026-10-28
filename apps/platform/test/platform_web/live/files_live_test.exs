@@ -1401,7 +1401,7 @@ defmodule PlatformWeb.FilesLiveTest do
       refute mobile =~ "aria-disabled"
     end
 
-    test "delete click removes the row, closes the pane, and shows the undo toast",
+    test "detail Delete cancels safely, then confirmation removes the row and offers Undo",
          %{conn: conn, project: project} do
       file = seed_file(project, %{name: "doomed.txt"})
 
@@ -1413,14 +1413,29 @@ defmodule PlatformWeb.FilesLiveTest do
       )
       |> render_click()
 
-      html = view |> element("#files-detail-delete-#{file.id}") |> render_click()
+      view |> element("#files-detail-delete-#{file.id}") |> render_click()
+      assert has_element?(view, "#browser-action-popover [data-role=browser-confirm-delete]")
+      assert Files.get_file(file.id) != nil
 
-      # Optimistic: row gone + both detail surfaces closed, no dialog.
+      view
+      |> element("#browser-action-popover button[phx-click=browser_close_actions]")
+      |> render_click()
+
+      assert Files.get_file(file.id) != nil
+      assert has_element?(view, "[data-role=files-detail-panel]")
+      view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      html =
+        view
+        |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+        |> render_click()
+
+      # Confirmed: row gone and both detail surfaces closed.
       refute html =~ "data-file-id=\"#{file.id}\""
       refute html =~ ~s(data-role="files-detail-panel")
       refute html =~ ~s(data-role="files-detail-mobile")
 
-      # The toast IS the confirmation: filename + Undo action.
+      # The recovery toast keeps the filename and Undo action.
       assert html =~ ~s(data-role="files-undo-toast")
       assert html =~ "doomed.txt deleted"
       assert html =~ ~s(data-role="files-undo-button")
@@ -1444,6 +1459,10 @@ defmodule PlatformWeb.FilesLiveTest do
 
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
+      view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
+
       html = view |> element("[data-role='files-undo-button']") |> render_click()
 
       assert html =~ "data-file-id=\"#{file.id}\""
@@ -1466,6 +1485,10 @@ defmodule PlatformWeb.FilesLiveTest do
       |> render_click()
 
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
+
+      view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
 
       # Drive the LV-side timer message directly instead of sleeping 8s.
       send(view.pid, {:clear_undo_toast, file.id})
@@ -1493,12 +1516,21 @@ defmodule PlatformWeb.FilesLiveTest do
       view |> element("#files-detail-delete-#{file_a.id}") |> render_click()
 
       view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
+
+      view
       |> element(
         ~s([data-role="files-row"][data-file-id="#{file_b.id}"] [data-role="files-item-link"])
       )
       |> render_click()
 
-      html = view |> element("#files-detail-delete-#{file_b.id}") |> render_click()
+      view |> element("#files-detail-delete-#{file_b.id}") |> render_click()
+
+      html =
+        view
+        |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+        |> render_click()
 
       # One toast at a time — newest delete wins.
       assert html =~ "second.txt deleted"
@@ -1544,6 +1576,10 @@ defmodule PlatformWeb.FilesLiveTest do
 
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
+      view
+      |> element("#browser-action-popover [data-role=browser-confirm-delete]")
+      |> render_click()
+
       # Simulate the 30-day sweeper purging the row mid-undo —
       # restore_file/2 has no window check, so this is the stale path.
       Files.File |> Repo.get(file.id) |> Repo.delete!()
@@ -1562,22 +1598,25 @@ defmodule PlatformWeb.FilesLiveTest do
     # is unreachable through the router today — the disabled render path
     # is a defensive rail and is unit-tested at the component boundary.
 
-    test "unpermitted state renders disabled-but-visible with aria-disabled + tooltip" do
+    test "unpermitted Delete is absent; a permitted control remains reachable" do
       file = %Files.File{id: Ecto.UUID.generate(), name: "locked.txt"}
 
-      html =
+      denied =
         render_component(&PlatformWeb.Components.FileDeleteUI.delete_file_button/1,
           file: file,
           can_delete: false,
-          id: "test-delete"
+          id: "denied-delete"
         )
 
-      assert html =~ ~s(aria-disabled="true")
-      assert html =~ "opacity-50"
-      assert html =~ "Sign in to delete files"
-      # Persistent controls: still rendered, never hidden.
-      assert html =~ "Delete"
-      assert html =~ "hero-trash"
+      allowed =
+        render_component(&PlatformWeb.Components.FileDeleteUI.delete_file_button/1,
+          file: file,
+          can_delete: true,
+          id: "allowed-delete"
+        )
+
+      assert allowed =~ "Delete"
+      refute denied =~ "<button"
     end
 
     test "permitted state renders without the disabled affordances" do

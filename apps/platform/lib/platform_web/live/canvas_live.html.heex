@@ -150,6 +150,12 @@
               Read only
             </span>
 
+            <PlatformWeb.Files.ItemActions.canvas_star
+              canvas={@canvas}
+              viewer={%{id: @current_user_id}}
+              revision={@canvas_star_version}
+            />
+
             <%!-- `--color-primary` on hover and active only, never as text on
                white. --%>
             <button

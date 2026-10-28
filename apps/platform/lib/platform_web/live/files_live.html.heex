@@ -36,6 +36,10 @@
       </:new_panel>
     </BrowserComponents.browser_header>
     <BrowserComponents.search_field :if={@browser.mode == :search} browser={@browser} />
+    <PlatformWeb.Files.ItemActions.scope_chip
+      browser={@browser}
+      labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+    />
     <BrowserComponents.browser_chips browser={@browser} games={@games?} />
     <BrowserComponents.breadcrumbs
       :if={@browser.mode == :browse}
@@ -172,6 +176,9 @@
 
     <%!-- Scroller + drag-drop target. --%>
     <div
+      id="files-browser-scroll"
+      phx-hook="BrowserScope"
+      data-highlight={PlatformWeb.Files.ItemActions.highlight(@browser)}
       class="flex-1 overflow-y-auto clears-tab-bar"
       phx-drop-target={@uploads.files.ref}
       data-role="file-dropzone"
@@ -218,12 +225,15 @@
         </span>
       </div>
 
-      <.browser_view
+      <PlatformWeb.Files.BrowserScreen.browser_view
         browser={@browser}
         files={@files}
         labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
         layout={BrowserView.browser_layout(@browser, @layout_pref)}
         claims={@supersession_claims}
+        viewer={@viewer}
+        editing={@browser_editing}
+        revision={@browser_revision}
       />
 
       <%!-- Active uploads (visible while files are flying up) --%>
@@ -352,7 +362,9 @@
         <span class="flex-1" aria-hidden="true"></span>
         <.delete_file_button
           file={@selected_file}
-          can_delete={can_delete?(@current_user_id)}
+          can_delete={
+            PlatformWeb.Files.ItemActions.allowed?(@viewer, {:file, @selected_file.id}, :delete)
+          }
           id={"files-detail-delete-" <> @selected_file.id}
         />
       </div>
@@ -454,7 +466,9 @@
         <span class="flex-1" aria-hidden="true"></span>
         <.delete_file_button
           file={@selected_file}
-          can_delete={can_delete?(@current_user_id)}
+          can_delete={
+            PlatformWeb.Files.ItemActions.allowed?(@viewer, {:file, @selected_file.id}, :delete)
+          }
           id={"files-detail-delete-mobile-" <> @selected_file.id}
           data_role="files-detail-delete-mobile"
           class="min-h-11"
@@ -598,4 +612,9 @@
        pinned chrome must never live inside an :if region that can
        toggle (it would remount and lose its announce). --%>
   <.file_undo_toast toast={@undo_toast} />
+  <PlatformWeb.Files.ItemActions.panels
+    state={@browser_action}
+    labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+  />
+  <PlatformWeb.Files.ItemActions.undo toast={@browser_undo} />
 </div>

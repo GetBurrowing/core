@@ -67,6 +67,8 @@ import PushSubscribe from "./push_subscribe"
 import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
 import RouteResume from "./route_resume"
+import BrowserRow from "./browser_row"
+import BrowserScope from "./browser_scope"
 import RowLongPress from "./row_long_press"
 import RowContextMenu from "./row_context_menu"
 import DetailsPanelState from "./details_panel_state"
@@ -154,6 +156,8 @@ export default {
   ReactorPopover,
   RouteResume,
   RowLongPress,
+  BrowserRow,
+  BrowserScope,
   RowContextMenu,
   DetailsPanelState,
   ChatListSettle,

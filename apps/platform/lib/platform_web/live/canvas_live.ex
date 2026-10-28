@@ -145,7 +145,8 @@ defmodule PlatformWeb.CanvasLive do
          |> assign(:canvas_url, canvas_url(canvas.id))
          |> assign(:revision, CanvasDocument.revision(canvas.document))
          |> assign_provenance(canvas, space)
-         |> assign_close_path(space, level)}
+         |> assign_close_path(space, level)
+         |> PlatformWeb.Files.CanvasStarHooks.attach()}
 
       {:error, reason} when reason in [:forbidden, :not_found] ->
         {:ok,

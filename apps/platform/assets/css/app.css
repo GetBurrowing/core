@@ -9341,3 +9341,11 @@ body.screen-share-fullscreen-active {
 #terminal-host[data-dimmed="true"] .xterm-screen {
   opacity: 0.5;
 }
+
+/* Personal stars stay neutral. Controls reveal only on hover-capable desktops. */
+@media (hover: hover) and (pointer: fine) and (min-width: 1024px) {
+  .browser-item-actions { opacity: 0; }
+  [data-item-id]:hover > .browser-item-actions,
+  [data-item-id]:focus-within > .browser-item-actions { opacity: 1; }
+}
+.browser-source-ring { outline: 3px solid var(--color-base-300); outline-offset: -3px; }

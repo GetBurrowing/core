@@ -54,6 +54,16 @@ defmodule PlatformWeb.Files.BrowserViewTest do
     end
   end
 
+  test "scoped source and starred URLs preserve only supported keys" do
+    assert BrowserView.browser_path(%{"space" => "s1", "type" => "canvas"}, %{"highlight" => "c1"}) ==
+             "/files?highlight=c1&space=s1&type=canvas"
+
+    assert BrowserView.browser_path(
+             %{"tab" => "starred", "type" => "file", "foreign" => "x"},
+             %{}
+           ) == "/files?tab=starred&type=file"
+  end
+
   describe "browser_layout/2" do
     test "a stored choice wins; Images defaults to grid; everything else to list" do
       assert BrowserView.browser_layout(%{type: :image}, :list) == :list
