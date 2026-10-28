@@ -6964,31 +6964,84 @@ defmodule Platform.Chat do
   defp after_attention_added(%Space{} = space, %Message{} = message, writer, added, targets) do
     added_ids = Enum.map(added, & &1.participant_id)
 
-    {:ok, _decisions} =
-      Platform.Chat.AttentionRouter.route_attention(message, added_ids, writer)
+    attention_side_effect(message, added_ids, "routing handoff", fn ->
+      case Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+             attention_side_effect(message, added_ids, "routing worker", fn ->
+               # The worker may wait for a busy router; the LiveView never does.
+               # A timed-out request can still dispatch, so do not retry it.
+               {:ok, _decisions} =
+                 Platform.Chat.AttentionRouter.route_attention(
+                   message,
+                   added_ids,
+                   writer,
+                   :infinity
+                 )
+             end)
+           end) do
+        {:ok, _pid} ->
+          Logger.info(
+            "[Chat] add_message_attention phase=handoff message=#{message.id} " <>
+              "space=#{message.space_id} recipients=#{Enum.join(added_ids, ",")} outcome=accepted"
+          )
+
+        {:error, reason} ->
+          raise "attention routing handoff failed: #{inspect(reason)}"
+      end
+    end)
 
     added_set = MapSet.new(added_ids)
 
-    targets
-    |> Enum.filter(&(&1.participant_type == "user" and MapSet.member?(added_set, &1.id)))
-    |> emit_chat_mention_inbox(
-      message,
-      space,
-      mention_inbox_title(writer.display_name, message, space)
+    attention_side_effect(message, added_ids, "inbox", fn ->
+      targets
+      |> Enum.filter(&(&1.participant_type == "user" and MapSet.member?(added_set, &1.id)))
+      |> emit_chat_mention_inbox(
+        message,
+        space,
+        mention_inbox_title(writer.display_name, message, space)
+      )
+    end)
+
+    attention_side_effect(message, added_ids, "broadcast", fn ->
+      message = %{message | attention: list_message_attention(message.id)}
+      ChatPubSub.broadcast(space.id, {:message_attention_changed, message})
+    end)
+
+    :ok
+  end
+
+  defp attention_side_effect(message, recipient_ids, operation, fun) do
+    fun.()
+  rescue
+    # Keep supervised sandbox ownership handling explicit for the repo audit.
+    error in DBConnection.OwnershipError ->
+      log_attention_failure(message, recipient_ids, operation, :error, error, __STACKTRACE__)
+
+    error ->
+      log_attention_failure(message, recipient_ids, operation, :error, error, __STACKTRACE__)
+  catch
+    kind, reason ->
+      log_attention_failure(message, recipient_ids, operation, kind, reason, __STACKTRACE__)
+  end
+
+  defp log_attention_failure(message, recipient_ids, operation, kind, reason, _stacktrace) do
+    # Exception messages and exit tuples can contain the entire GenServer request,
+    # including message content. Log only the failure category and exception module.
+    category = if is_exception(reason), do: inspect(reason.__struct__), else: inspect(kind)
+
+    Logger.error(
+      "[Chat] add_message_attention #{operation} failed phase=failure " <>
+        "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(recipient_ids, ",")}: " <>
+        "kind=#{kind} category=#{category} cause=#{attention_failure_cause(kind, reason)}"
     )
 
-    message = %{message | attention: list_message_attention(message.id)}
-    ChatPubSub.broadcast(space.id, {:message_attention_changed, message})
     :ok
-  rescue
-    error ->
-      Logger.error(
-        "[Chat] add_message_attention side effects failed for message #{inspect(message.id)}: " <>
-          Exception.format(:error, error, __STACKTRACE__)
-      )
-
-      :ok
   end
+
+  defp attention_failure_cause(:exit, {cause, {GenServer, :call, _request}})
+       when cause in [:timeout, :noproc, :normal, :shutdown],
+       do: cause
+
+  defp attention_failure_cause(_kind, _reason), do: :unspecified
 
   @doc """
   The agent attention state of a space, for the Agents sheet:
