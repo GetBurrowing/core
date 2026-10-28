@@ -331,7 +331,14 @@ defmodule PlatformWeb.ChatLiveCanvasScopeLeakTest do
       # through, including `Canvas.Server.do_persist/5`, which is why it is
       # public. Using it directly keeps this test on the topic contract instead
       # of on `update_canvas/2`'s authorization.
-      renamed_own = %{own | title: "Active Renamed #{unique()}"}
+      # Publication reloads canonical ownership and metadata to quarantine
+      # delayed pre-move writers. Persist the fixture exactly as a real write
+      # does; retain the independent positive control on the delivered title.
+      renamed_own =
+        own
+        |> Ecto.Changeset.change(title: "Active Renamed #{unique()}")
+        |> Repo.update!()
+
       Chat.publish_canvas_updated(renamed_own)
       _ = render(ctx.view)
 
@@ -343,7 +350,11 @@ defmodule PlatformWeb.ChatLiveCanvasScopeLeakTest do
                "below would be passing for the wrong reason"
 
       # THE LEAK ASSERTION.
-      renamed_foreign = %{foreign | title: "Background Renamed #{unique()}"}
+      renamed_foreign =
+        foreign
+        |> Ecto.Changeset.change(title: "Background Renamed #{unique()}")
+        |> Repo.update!()
+
       Chat.publish_canvas_updated(renamed_foreign)
       _ = render(ctx.view)
 

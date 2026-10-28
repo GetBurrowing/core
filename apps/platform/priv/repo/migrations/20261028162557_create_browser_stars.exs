@@ -1,4 +1,10 @@
 defmodule Platform.Repo.Migrations.CreateBrowserStars do
+  @moduledoc """
+  Task 01a1557a-bb37-7000-a547-871db596464b: stores personal browser stars
+  separately from shared targets with one-target, uniqueness and FK cleanup
+  constraints. Adds a monotonic canvas ownership epoch so old subscriptions
+  cannot revive when a canvas moves away and back to its original space.
+  """
   use Ecto.Migration
 
   def change do
