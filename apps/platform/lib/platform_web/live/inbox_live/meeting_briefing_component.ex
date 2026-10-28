@@ -216,6 +216,12 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
         </p>
       </header>
 
+      <p
+        :for={part <- Map.get(@view, :missing_prerequisites, [])}
+        class="mt-3 text-sm text-base-content/60"
+        data-role="meeting-briefing-missing-part"
+      >{Copy.missing_part(part)}</p>
+
       <section class="mt-6" data-role="meeting-briefing-summary">
         <h3 class={heading_class()}>{Copy.heading(:summary)}</h3>
         <p

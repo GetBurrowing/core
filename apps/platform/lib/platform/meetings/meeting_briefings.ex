@@ -237,6 +237,7 @@ defmodule Platform.Meetings.MeetingBriefings do
           not MapSet.member?(filed_candidate_ids, c.id),
           do: content_entry(c)
         ),
+      "missing_prerequisites" => readiness(meeting).missing,
       "transcript_url" => "/meetings/" <> meeting.slug
     }
   end
@@ -638,6 +639,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     %{
       meeting: meeting,
       summary: briefing.summary,
+      missing_prerequisites: content["missing_prerequisites"] || [],
       transcript_url: content["transcript_url"] || "/meetings/" <> meeting.slug,
       open_questions: content["open_questions"] || [],
       unfiled_action_items: content["unfiled_action_items"] || [],

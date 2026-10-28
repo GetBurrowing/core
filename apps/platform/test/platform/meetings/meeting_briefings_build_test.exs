@@ -395,4 +395,34 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     assert Enum.sort(Enum.map(rebuilt.items["_content"]["unfiled_action_items"], & &1["id"])) ==
              Enum.sort([candidate.id, unrelated.id])
   end
+
+  test "release repair selector stays in parity and preserves receipts and unrelated items" do
+    Code.require_file("priv/scripts/repair_meeting_briefing.exs")
+    %{meeting: meeting} = meeting_fixture!("Repair parity")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+
+    for intent <- ["action_items", "open_question"],
+        disposition <- [:accepted, :rejected, :timed_out, nil] do
+      content_candidate!(meeting, intent, disposition)
+    end
+
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+    replacement = MeetingBriefingRepair.replacement(briefing, meeting)
+
+    assert replacement.items["_content"] ==
+             Map.delete(briefing.items["_content"], "missing_prerequisites")
+
+    assert Map.delete(replacement.items, "_content") == Map.delete(briefing.items, "_content")
+
+    assert MeetingBriefingRepair.replacement(%{briefing | items: replacement.items}, meeting) ==
+             replacement
+
+    assert_raise ArgumentError, fn ->
+      MeetingBriefingRepair.run(Ecto.UUID.generate(), apply: true)
+    end
+
+    refute Map.has_key?(replacement, :receipts)
+    refute Map.has_key?(replacement, :attendee_user_ids)
+    refute Map.has_key?(replacement, :id)
+  end
 end
