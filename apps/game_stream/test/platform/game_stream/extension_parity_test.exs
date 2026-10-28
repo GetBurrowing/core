@@ -395,8 +395,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # `attachment_ids` property and the prose describing it, so both
     # tool-definition digests move. Names and bundles are unchanged. Measured
     # by CI on the task branch (c7c3379ce), PR #1320.
-    @main_tool_digest_off "17f33483eff7d5eaf25085daa3ea9e82718f12d326b6d8635f8d134172299039"
-    @main_tool_digest_on "0acc5874f6d3d0a7c7bc8b066a231f9c7987e8a7f9f083746b5f026afeea0fda"
+    # Re-pinned by task 01a1830b stage 4: meeting triage action_items prose
+    # now requires accepted candidate_ids and stable provenance on replay.
+    # Tool names, parameter shapes and kind digests are unchanged. Moon full
+    # Play measured these at 9b254a93a; fresh main 1f0f4486b retained old pins.
+    @main_tool_digest_off "dff665299e4c24d012ac05ec49397723e76e3aff604f1e5cc78f405dbc4117f3"
+    @main_tool_digest_on "c2cc67cfd4d3d15ae18852e2ca34bd3bc97cc974fc7ba091679cc340c9b5b14f"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
