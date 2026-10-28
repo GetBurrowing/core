@@ -2559,7 +2559,7 @@ defmodule Platform.MeetingsTest do
       {:ok, transcript} =
         Meetings.create_transcript(%{
           room_id: "space-#{Ecto.UUID.generate()}",
-          status: "processing"
+          status: "recording"
         })
 
       {:ok, _} =
@@ -2570,7 +2570,10 @@ defmodule Platform.MeetingsTest do
           "end_time" => 1000
         })
 
-      transcript
+      # Append while recording, then enter processing explicitly. Appending to
+      # an already processing transcript now schedules a real resummary worker
+      # (task 01a1830b), which would race these failure-reason unit assertions.
+      transcript |> Ecto.Changeset.change(status: "processing") |> Repo.update!()
     end
 
     test "a transcript that failed and then succeeded carries no failure_reason" do

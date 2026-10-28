@@ -16,7 +16,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   ## What it renders
 
   `MeetingBriefings.view/2` is the only read. Sections, in order, each
-  hidden when empty: Summary (or "Summary is being written"), Open (with
+  hidden when empty: Summary (or "Summary unavailable"), Open (with
   Revert / Ask for tasks), Resolved ("Reverted by Ada · 14:05"), Open
   questions, Action items not filed, and the Transcript link. Every word
   comes from `PlatformWeb.InboxLive.MeetingBriefingCopy`.
@@ -216,16 +216,24 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
         </p>
       </header>
 
+      <p
+        :for={part <- Enum.reject(Map.get(@view, :missing_prerequisites, []), &(&1 == "summary"))}
+        class="mt-3 text-sm text-subtle"
+        data-role="meeting-briefing-missing-part"
+      >
+        {Copy.missing_part(part)}
+      </p>
+
       <section class="mt-6" data-role="meeting-briefing-summary">
         <h3 class={heading_class()}>{Copy.heading(:summary)}</h3>
         <p
-          :if={present?(@view.summary)}
+          :if={summary_available?(@view)}
           class="whitespace-pre-line text-sm text-base-content"
           data-role="meeting-briefing-summary-text"
           phx-no-format
         >{String.trim(@view.summary)}</p>
         <p
-          :if={!present?(@view.summary)}
+          :if={!summary_available?(@view)}
           class="text-sm text-subtle"
           data-role="meeting-briefing-summary-pending"
         >
@@ -466,4 +474,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   defp btn_ghost, do: @btn_ghost
   defp field, do: @field
   defp link, do: @link
+
+  defp summary_available?(view),
+    do: present?(view.summary) and "summary" not in Map.get(view, :missing_prerequisites, [])
 end

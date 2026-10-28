@@ -1407,7 +1407,17 @@ defmodule Platform.Responsibilities.Router do
             "agent=#{agent_slug(agent)}"
         )
 
-        invoke_handle_output(responsibility, parsed, trigger_meta)
+        output_meta =
+          if responsibility.key == "meetings.summarize",
+            do:
+              Map.put(
+                trigger_meta,
+                :summary_input_hash,
+                get_in(context, [:meeting_transcript, :summary_input_hash])
+              ),
+            else: trigger_meta
+
+        invoke_handle_output(responsibility, parsed, output_meta)
 
         safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
 

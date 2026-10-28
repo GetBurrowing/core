@@ -319,6 +319,29 @@ defmodule Platform.Meetings.Summarizer do
   """
   @doc since: "task 019f2566 stage 2"
   def run_summary_legacy(id, space_id, segments) do
+    do_run_summary_legacy(id, space_id, segments, legacy_input_hash(id, segments))
+  end
+
+  defp legacy_input_hash(id, segments) do
+    case Meetings.get_transcript(id) do
+      nil -> nil
+      transcript -> Platform.Meetings.Transcript.summary_fingerprint(transcript, segments)
+    end
+  rescue
+    DBConnection.OwnershipError ->
+      case try_borrow_sandbox() do
+        :ok ->
+          case Meetings.get_transcript(id) do
+            nil -> nil
+            transcript -> Platform.Meetings.Transcript.summary_fingerprint(transcript, segments)
+          end
+
+        :no_sandbox ->
+          nil
+      end
+  end
+
+  defp do_run_summary_legacy(id, space_id, segments, input_hash) do
     Logger.info(
       "[Summarizer] Generating summary for transcript #{id} (#{length(segments)} segments)"
     )
@@ -349,7 +372,7 @@ defmodule Platform.Meetings.Summarizer do
           "[Summarizer] Summary generated for transcript #{id} (#{String.length(summary_text)} chars)"
         )
 
-        case Meetings.complete_transcript(id, summary_text) do
+        case Meetings.complete_transcript(id, summary_text, input_hash) do
           {:ok, _transcript} ->
             if is_binary(space_id) do
               Meetings.post_summary_to_space(space_id, id, summary_text)
@@ -361,19 +384,19 @@ defmodule Platform.Meetings.Summarizer do
 
           {:error, reason} ->
             Logger.error("[Summarizer] Failed to complete transcript #{id}: #{inspect(reason)}")
-            safe_fail_transcript(id, {:complete_failed, reason})
+            safe_fail_transcript(id, {:complete_failed, reason}, input_hash)
             {:error, {:complete_failed, reason}}
         end
 
       {:error, reason} ->
         Logger.error("[Summarizer] LLM call failed for transcript #{id}: #{inspect(reason)}")
-        safe_fail_transcript(id, {:llm_failed, reason})
+        safe_fail_transcript(id, {:llm_failed, reason}, input_hash)
         {:error, {:llm_failed, reason}}
     end
   rescue
     e ->
       Logger.error("[Summarizer] Unexpected error for transcript #{id}: #{Exception.message(e)}")
-      safe_fail_transcript(id, {:unexpected, Exception.message(e)})
+      safe_fail_transcript(id, {:unexpected, Exception.message(e)}, input_hash)
       {:error, {:unexpected, e}}
   end
 
@@ -399,13 +422,13 @@ defmodule Platform.Meetings.Summarizer do
   # `Meetings.fail_transcript/3` so the row itself records WHY. Without
   # it a populated transcript ends at `failed` with a NULL summary and
   # the reason exists only in a log line nobody greps.
-  defp safe_fail_transcript(id, reason) do
-    Meetings.fail_transcript(id, nil, reason)
+  defp safe_fail_transcript(id, reason, input_hash) do
+    Meetings.fail_summary_input(id, input_hash, reason)
   rescue
     DBConnection.OwnershipError ->
       case try_borrow_sandbox() do
         :ok ->
-          Meetings.fail_transcript(id, nil, reason)
+          Meetings.fail_summary_input(id, input_hash, reason)
 
         :no_sandbox ->
           Logger.debug(
@@ -497,15 +520,16 @@ defmodule Platform.Meetings.Summarizer do
   # the empty row where it is and let the populated sibling be
   # summarised by the path that selects it
   # (`Meetings.get_summarizable_transcript_for_room/1`, stage 1).
-  defp complete_silent_transcript(%{id: id, room_id: room_id}) when is_binary(room_id) do
+  defp complete_silent_transcript(%{id: id, room_id: room_id} = transcript)
+       when is_binary(room_id) do
     if Meetings.room_has_segments?(room_id) do
       refuse_empty_summary(id, room_id)
     else
-      do_complete_silent_transcript(id)
+      do_complete_silent_transcript(transcript)
     end
   end
 
-  defp complete_silent_transcript(%{id: id}), do: do_complete_silent_transcript(id)
+  defp complete_silent_transcript(%{} = transcript), do: do_complete_silent_transcript(transcript)
 
   defp refuse_empty_summary(id, room_id) do
     populated_ids =
@@ -523,8 +547,12 @@ defmodule Platform.Meetings.Summarizer do
     {:error, :room_has_populated_transcript}
   end
 
-  defp do_complete_silent_transcript(id) do
-    case Meetings.complete_transcript(id, @empty_transcript_summary) do
+  defp do_complete_silent_transcript(%{id: id} = transcript) do
+    case Meetings.complete_transcript(
+           id,
+           @empty_transcript_summary,
+           Platform.Meetings.Transcript.summary_fingerprint(transcript)
+         ) do
       {:ok, _} ->
         Logger.info("[Summarizer] Empty transcript #{id} marked complete (no summary posted)")
         {:ok, :empty}

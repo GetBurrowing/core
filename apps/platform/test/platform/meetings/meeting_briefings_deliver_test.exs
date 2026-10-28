@@ -1,13 +1,8 @@
 defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
   @moduledoc """
-  `Platform.Meetings.MeetingBriefings.deliver/1` and its three triggers (task
-  01a1694a stage 2): one Inbox row per attendee on conclusion, one push per
-  attendee per meeting, and later merges (summary, triage filings) that
-  never push again.
-
-  Push is observed through a Recorder double injected via
-  `:notifications_module` (the real `fan_out_to_user/3` short-circuits in
-  :test env); `async: false` because that is app env.
+  Durable readiness and bounded fallback delivery: no Inbox row on conclusion,
+  one row and push after committed summary/full filing (or deadline), and no
+  repeated push from callbacks, concurrent retries, or recovery sweeps.
   """
 
   use Platform.DataCase, async: false
@@ -16,7 +11,6 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Meetings
   alias Platform.Meetings.Meeting
@@ -150,157 +144,300 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
       )
   end
 
-  # ── Conclusion ────────────────────────────────────────────────────────────
-
-  test "end_meeting/1 with two attendees: one briefing, one Inbox row and one push each" do
-    ctx = live_meeting_with_attendees!()
-    non_attendee = user!()
-
-    file!(ctx, "Rotate the staging credentials")
-    refute_received {:notif, _, _}, "a live meeting must not deliver"
-
-    assert {:ok, %Meeting{status: "ended"} = ended} = Meetings.end_meeting(ctx.meeting)
-
-    assert briefing_count(ended) == 1
-
-    for user <- [ctx.a, ctx.b] do
-      assert [%Item{} = row] = rows_for(user)
-      assert row.source_type == "meeting_briefing"
-      assert row.title == ended.name
-      assert row.url == "/inbox/meeting/" <> ended.id
-      assert is_nil(row.read_at) and is_nil(row.dismissed_at)
-
-      user_id = user.id
-      assert_received {:notif, ^user_id, payload}
-      assert payload.kind == "meeting_briefing"
-      assert payload.url == "/inbox/meeting/" <> ended.id
-      assert payload.body == ended.name <> " · 1 item"
-      refute_received {:notif, ^user_id, _}
-    end
-
-    # The non-attendee got nothing, asserted alongside the two who did.
-    assert rows_for(non_attendee) == []
-    non_attendee_id = non_attendee.id
-    refute_received {:notif, ^non_attendee_id, _}
-  end
-
-  test "re-running deliver/1 writes no extra rows and sends no second push" do
-    ctx = live_meeting_with_attendees!()
+  defp ended!(ctx) do
     {:ok, ended} = Meetings.end_meeting(ctx.meeting)
-
-    a_id = ctx.a.id
-    b_id = ctx.b.id
-    assert_received {:notif, ^a_id, _}
-    assert_received {:notif, ^b_id, _}
-
-    assert {:ok, %{created: 0, updated: 2}} = MeetingBriefings.deliver(ended)
-    assert {:ok, %{created: 0, updated: 2}} = MeetingBriefings.deliver(ended)
-
-    refute_received {:notif, _, _}
-    assert briefing_count(ended) == 1
-    assert length(rows_for(ctx.a)) == 1
-    assert length(rows_for(ctx.b)) == 1
+    ended
   end
 
-  test "a task filed after conclusion re-marks the row unread, with no push" do
-    ctx = live_meeting_with_attendees!()
-    {:ok, _ended} = Meetings.end_meeting(ctx.meeting)
-    assert_received {:notif, _, _}
-    assert_received {:notif, _, _}
-
-    [row] = rows_for(ctx.a)
-    {:ok, _} = Inbox.mark_dismissed(row.id, ctx.a.id)
-    assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, row.id)
-
-    # A refresh that adds nothing leaves the dismissal alone.
-    {:ok, %{updated: 2}} = MeetingBriefings.deliver(ctx.meeting)
-    assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, row.id)
-
-    # Triage with the meeting named is the third trigger.
-    file!(ctx, "Draft the rollback runbook")
-
-    relisted = Repo.get!(Item, row.id)
-    assert is_nil(relisted.dismissed_at) and is_nil(relisted.read_at)
-    assert rows_for(ctx.a) |> length() == 1
-    refute_received {:notif, _, _}
-  end
-
-  test "complete_transcript/2 merges the summary with no push" do
-    ctx = live_meeting_with_attendees!()
+  defp ready!(meeting, attrs \\ []) do
+    transcript =
+      Repo.insert!(%Transcript{
+        meeting_id: meeting.id,
+        space_id: meeting.chat_space_id,
+        room_id: meeting.livekit_room_name,
+        status: "complete",
+        summary: "Accepted summary",
+        started_at: DateTime.add(meeting.ended_at, -10),
+        completed_at: DateTime.utc_now(),
+        segments: [%{"id" => Ecto.UUID.generate(), "text" => "Agreed work"}]
+      })
 
     transcript =
-      %Transcript{}
-      |> Transcript.changeset(%{
-        room_id: "space-#{ctx.meeting.chat_space_id}",
-        space_id: ctx.meeting.chat_space_id,
-        status: "processing"
-      })
-      |> Repo.insert!()
+      transcript
+      |> Ecto.Changeset.change(summary_input_hash: Transcript.summary_fingerprint(transcript))
+      |> Repo.update!()
 
-    {:ok, ended} = Meetings.end_meeting(ctx.meeting)
-    assert_received {:notif, _, _}
-    assert_received {:notif, _, _}
+    {:ok, snapshot, _} = Platform.Meetings.Completion.snapshot(meeting)
+    run = Repo.get_by!(Platform.Meetings.CompletionRun, meeting_id: meeting.id)
+    hash = Platform.Meetings.Completion.snapshot_hash(run, snapshot)
 
-    assert Repo.get_by!(MeetingBriefing, meeting_id: ended.id).summary == nil
+    run =
+      run
+      |> Ecto.Changeset.change(
+        Keyword.merge(
+          [
+            capture_finished_at: DateTime.utc_now(),
+            snapshot: snapshot,
+            snapshot_hash: hash,
+            transcript_id: transcript.id,
+            status: "filed"
+          ],
+          attrs
+        )
+      )
+      |> Repo.update!()
 
-    assert {:ok, _} =
-             Meetings.complete_transcript(transcript.id, "We agreed on the bucket policy.")
+    {run, transcript}
+  end
 
-    briefing = Repo.get_by!(MeetingBriefing, meeting_id: ended.id)
-    assert briefing.summary == "We agreed on the bucket policy."
-    assert briefing.transcript_id == transcript.id
+  test "end alone and a partial filing pass create no briefing, Inbox row or push" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    assert briefing_count(ended) == 0
+    assert rows_for(ctx.a) == []
+    refute_received {:notif, _, _}
+    ready!(ended, status: "triage_pending", item_results: %{"one" => %{"status" => "processed"}})
+    assert {:ok, :pending} = MeetingBriefings.deliver(ended)
+    assert briefing_count(ended) == 0
     refute_received {:notif, _, _}
   end
 
-  test "one of two participants leaving creates no briefing" do
+  test "summary and full filed ledger deliver once to attendees only; retries never push" do
     ctx = live_meeting_with_attendees!()
+    outsider = user!()
+    file!(ctx, "Rotate the staging credentials")
+    ended = ended!(ctx)
+    ready!(ended)
+    assert {:ok, %{created: 2, updated: 0}} = MeetingBriefings.deliver(ended)
 
-    assert {:ok, %Participant{left_at: %DateTime{}}} = Meetings.participant_left(ctx.room, "A")
+    for user <- [ctx.a, ctx.b] do
+      id = user.id
+      assert [%Item{source_type: "meeting_briefing"}] = rows_for(user)
+      assert_received {:notif, ^id, payload}
+      assert payload.body == ended.name <> " · 1 item"
+    end
 
-    assert briefing_count(ctx.meeting) == 0
-    assert rows_for(ctx.a) == [] and rows_for(ctx.b) == []
+    assert rows_for(outsider) == []
+    assert {:ok, %{created: 0, updated: 2}} = MeetingBriefings.deliver(ended)
     refute_received {:notif, _, _}
-
-    # Positive control: conclusion does deliver, to both — A left early but
-    # attended.
-    {:ok, ended} = Meetings.end_meeting(ctx.meeting)
-    assert briefing_count(ended) == 1
-    assert length(rows_for(ctx.a)) == 1
+    assert Repo.get_by!(MeetingBriefing, meeting_id: ended.id).summary == "Accepted summary"
   end
 
-  test "a raising deliver/1 still lets end_meeting/1 return {:ok, meeting}" do
+  test "filed run without summary stays pending until the summary is committed" do
     ctx = live_meeting_with_attendees!()
-
-    # A briefing row whose `items` is a JSON array cannot load into the
-    # schema's `:map` field, so `build/1` raises when it reads the row.
-    Repo.query!(
-      """
-      INSERT INTO meeting_briefings (id, meeting_id, attendee_user_ids, items, receipts, inserted_at, updated_at)
-      VALUES ($1, $2, '{}', '[1]'::jsonb, '{}'::jsonb, now(), now())
-      """,
-      [Ecto.UUID.dump!(Ecto.UUID.generate()), Ecto.UUID.dump!(ctx.meeting.id)]
-    )
-
-    assert {:ok, %Meeting{status: "ended"} = ended} = Meetings.end_meeting(ctx.meeting)
-    assert Repo.get!(Meeting, ctx.meeting.id).status == "ended"
+    ended = ended!(ctx)
+    {_run, transcript} = ready!(ended)
+    transcript |> Ecto.Changeset.change(summary: nil) |> Repo.update!()
+    assert {:ok, :pending} = MeetingBriefings.deliver(ended)
     assert rows_for(ctx.a) == []
 
-    # Positive control: deliver/1 on this meeting really does raise, so the
-    # `{:ok, _}` above is end_meeting/1 surviving it, not a quiet no-op.
-    raised =
-      try do
-        MeetingBriefings.deliver(ended)
-        nil
-      rescue
-        error -> error
-      end
+    {:ok, _} =
+      Meetings.complete_transcript(
+        transcript.id,
+        "Final summary",
+        Transcript.summary_fingerprint(transcript)
+      )
 
-    assert is_exception(raised)
+    assert length(rows_for(ctx.a)) == 1
+    assert_received {:notif, _, _}
+    assert_received {:notif, _, _}
+    MeetingBriefings.refresh_for_transcript(transcript)
+    refute_received {:notif, _, _}
   end
 
-  test "deliver/1 on a meeting that is not ended writes nothing" do
-    ctx = live_meeting_with_attendees!()
+  test "deadline sweeper recovers ended meetings without runs and filed runs missing summary" do
+    for mode <- [:no_run, :filed] do
+      ctx = live_meeting_with_attendees!()
+      ended = ended!(ctx)
 
+      if mode == :no_run do
+        Repo.delete_all(
+          from(r in Platform.Meetings.CompletionRun, where: r.meeting_id == ^ended.id)
+        )
+      else
+        {_run, transcript} = ready!(ended)
+        transcript |> Ecto.Changeset.change(summary: nil) |> Repo.update!()
+      end
+
+      before = DateTime.add(DateTime.utc_now(), -1190)
+      ended = ended |> Ecto.Changeset.change(ended_at: before) |> Repo.update!()
+      assert {:ok, :pending} = MeetingBriefings.deliver(ended)
+
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+      Platform.Meetings.Completion.sweep()
+      assert length(rows_for(ctx.a)) == 1
+      assert_received {:notif, _, _}
+      assert_received {:notif, _, _}
+      Platform.Meetings.Completion.sweep()
+      refute_received {:notif, _, _}
+    end
+  end
+
+  test "late summary after timeout merges complete content without another row or push" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    {_run, transcript} = ready!(ended)
+    transcript |> Ecto.Changeset.change(summary: nil) |> Repo.update!()
+
+    ended =
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+    assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
+    [original] = rows_for(ctx.a)
+    assert_received {:notif, _, _}
+    assert_received {:notif, _, _}
+
+    assert {:ok, _} =
+             Meetings.complete_transcript(
+               transcript.id,
+               "Late final summary",
+               Transcript.summary_fingerprint(transcript)
+             )
+
+    assert [current] = rows_for(ctx.a)
+    assert current.id == original.id
+    assert Repo.get_by!(MeetingBriefing, meeting_id: ended.id).summary == "Late final summary"
+    refute_received {:notif, _, _}
+  end
+
+  test "synthesis prerequisite survives reload and rejects callbacks from prior snapshot or reopen" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    {run, transcript} = ready!(ended)
+
+    assert :ok =
+             Platform.Meetings.Completion.synthesis_changed(
+               ended.id,
+               run.id,
+               run.snapshot_hash,
+               "pending"
+             )
+
+    assert {:ok, :pending} = MeetingBriefings.deliver(Repo.get!(Meeting, ended.id))
+    assert rows_for(ctx.a) == []
+
+    assert {:error, :stale_snapshot} =
+             Platform.Meetings.Completion.synthesis_changed(ended.id, run.id, "old", "complete")
+
+    assert :ok =
+             Platform.Meetings.Completion.synthesis_changed(
+               ended.id,
+               run.id,
+               run.snapshot_hash,
+               "complete"
+             )
+
+    assert length(rows_for(ctx.a)) == 1
+    assert_received {:notif, _, _}
+    assert_received {:notif, _, _}
+
+    transcript
+    |> Ecto.Changeset.change(
+      segments: transcript.segments ++ [%{"id" => Ecto.UUID.generate(), "text" => "Late"}]
+    )
+    |> Repo.update!()
+
+    assert {:error, :stale_snapshot} =
+             Platform.Meetings.Completion.synthesis_changed(
+               ended.id,
+               run.id,
+               run.snapshot_hash,
+               "complete"
+             )
+
+    ended |> Ecto.Changeset.change(status: "live") |> Repo.update!()
+    Platform.Meetings.Completion.reopened(ended.id)
+
+    assert {:error, :stale_snapshot} =
+             Platform.Meetings.Completion.synthesis_changed(
+               ended.id,
+               run.id,
+               run.snapshot_hash,
+               "complete"
+             )
+
+    refute_received {:notif, _, _}
+  end
+
+  test "shared-space transcript cannot refresh another meeting or supply its summary" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    ready!(ended)
+    {:ok, other} = Meetings.create_meeting(%{project_id: ctx.project.id, name: "Other"})
+
+    foreign =
+      Repo.insert!(%Transcript{
+        meeting_id: other.id,
+        space_id: ended.chat_space_id,
+        room_id: ended.livekit_room_name,
+        status: "complete",
+        summary: "FOREIGN",
+        completed_at: DateTime.utc_now()
+      })
+
+    MeetingBriefings.refresh_for_transcript(foreign)
+    assert rows_for(ctx.a) == []
+    MeetingBriefings.deliver(ended)
+    assert Repo.get_by!(MeetingBriefing, meeting_id: ended.id).summary == "Accepted summary"
+  end
+
+  test "concurrent ready callbacks and sweeps arbitrate a single row and push per attendee" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    ready!(ended)
+
+    1..4
+    |> Task.async_stream(fn _ -> MeetingBriefings.deliver(ended) end, ordered: false)
+    |> Enum.each(fn {:ok, {:ok, counts}} -> assert counts.created in [0, 2] end)
+
+    for user <- [ctx.a, ctx.b] do
+      id = user.id
+      assert length(rows_for(user)) == 1
+      assert_received {:notif, ^id, _}
+      refute_received {:notif, ^id, _}
+    end
+  end
+
+  test "a ready delivery called inside a filing transaction waits until commit" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    ready!(ended)
+
+    Repo.transaction(fn ->
+      assert {:ok, :pending} = MeetingBriefings.deliver(ended)
+      assert rows_for(ctx.a) == []
+      refute_received {:notif, _, _}
+    end)
+
+    assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
+    assert_received {:notif, _, _}
+    assert_received {:notif, _, _}
+  end
+
+  test "historical summaries without producer provenance wait for bounded fallback" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    {_run, transcript} = ready!(ended)
+    transcript |> Ecto.Changeset.change(summary_input_hash: nil) |> Repo.update!()
+    assert {:ok, :pending} = MeetingBriefings.deliver(ended)
+    assert "summary" in MeetingBriefings.readiness(ended).missing
+
+    ended =
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+    assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
+  end
+
+  test "live meetings never deliver" do
+    assert MeetingBriefings.refresh_for_transcript(%Transcript{}) == :ok
+    ctx = live_meeting_with_attendees!()
     assert MeetingBriefings.deliver(ctx.meeting) == {:error, :not_concluded}
     assert briefing_count(ctx.meeting) == 0
     refute_received {:notif, _, _}
