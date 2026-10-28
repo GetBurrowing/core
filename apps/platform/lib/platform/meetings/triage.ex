@@ -449,8 +449,8 @@ defmodule Platform.Meetings.Triage do
         result = Repo.transaction(fn -> junk_live_batch(opts, limit, dry_run) end)
 
         case result do
-          {:ok, %{changed: changed, meeting_ids: meeting_ids} = report} when changed > 0 ->
-            Enum.each(meeting_ids, &refresh_meeting_briefing/1)
+          {:ok, %{changed: changed} = report} when changed > 0 ->
+            notify_live_cleanup_briefings(report.pruned_briefing_ids)
             broadcast_batch_deleted(nil, report.task_ids, changed, report.deleted_at)
             {:ok, report}
 
@@ -526,6 +526,7 @@ defmodule Platform.Meetings.Triage do
       task_ids: task_ids,
       meeting_ids: meeting_ids,
       audit_id: nil,
+      pruned_briefing_ids: [],
       remaining: Repo.aggregate(live_cleanup_query(), :count),
       dry_run: dry_run
     }
@@ -598,6 +599,27 @@ defmodule Platform.Meetings.Triage do
           Repo.rollback({:audit_failed, error})
       end
     end
+  end
+
+  # Refresh existing consumers only. Cleanup must not create historical
+  # briefings or send new meeting push notifications as deliver/1 would.
+  defp notify_live_cleanup_briefings(ids) do
+    Repo.all(from(b in Platform.Meetings.MeetingBriefing, where: b.id in ^ids))
+    |> Enum.each(fn briefing ->
+      Enum.each(briefing.attendee_user_ids || [], fn user_id ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          Platform.Inbox.topic(user_id),
+          {:inbox_changed, user_id}
+        )
+      end)
+
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Platform.Meetings.MeetingBriefings.topic(briefing.id),
+        {:meeting_briefing_changed, briefing.id}
+      )
+    end)
   end
 
   # M5b (task 019f6e2c) stage 5: kanban live-refresh hook. Emit ONE

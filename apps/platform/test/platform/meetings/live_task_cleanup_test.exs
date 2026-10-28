@@ -99,6 +99,8 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
         receipts: %{"old" => %{"verb" => "reverted"}}
       })
 
+    Platform.Meetings.MeetingBriefings.subscribe(briefing.id)
+
     assert {:ok, %{selected: 1, changed: 0, eligible_before: 2}} =
              Triage.junk_live_tasks(limit: 1)
 
@@ -114,6 +116,8 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     assert Enum.sort(first ++ second) == Enum.sort([ack.id, sweep.id])
     assert {:ok, %{changed: 0}} = Triage.junk_live_tasks(apply_opts())
     assert length(audits()) == 2
+    assert_receive {:meeting_briefing_changed, briefing_id}
+    assert briefing_id == briefing.id
     refreshed = Repo.get!(Platform.Meetings.MeetingBriefing, briefing.id)
     refute Map.has_key?(refreshed.items, "ack")
     assert Map.has_key?(refreshed.items, "officer")
@@ -193,6 +197,11 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
 
     Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs", cleanup_apply: true)
     assert Repo.get!(Task, live.id).deleted_at
+
+    refute Repo.exists?(
+             from(b in Platform.Meetings.MeetingBriefing, where: b.meeting_id == ^ctx.meeting.id)
+           )
+
     assert [%{metadata: %{"task_ids" => [id]}}] = audits()
     assert id == live.id
   end

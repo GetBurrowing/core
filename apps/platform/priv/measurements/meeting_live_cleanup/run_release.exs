@@ -8,7 +8,7 @@ functions = [
   :junk_live_tasks,
   :live_cleanup_query,
   :junk_live_batch,
-  :refresh_meeting_briefing,
+  :notify_live_cleanup_briefings,
   :broadcast_batch_deleted
 ]
 
