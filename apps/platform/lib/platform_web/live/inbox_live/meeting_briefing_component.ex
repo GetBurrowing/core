@@ -16,7 +16,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   ## What it renders
 
   `MeetingBriefings.view/2` is the only read. Sections, in order, each
-  hidden when empty: Summary (or "Summary is being written"), Open (with
+  hidden when empty: Summary (or "Summary unavailable"), Open (with
   Revert / Ask for tasks), Resolved ("Reverted by Ada · 14:05"), Open
   questions, Action items not filed, and the Transcript link. Every word
   comes from `PlatformWeb.InboxLive.MeetingBriefingCopy`.
@@ -217,8 +217,8 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       </header>
 
       <p
-        :for={part <- Map.get(@view, :missing_prerequisites, [])}
-        class="mt-3 text-sm text-base-content/60"
+        :for={part <- Map.get(@view, :missing_prerequisites, []), part != "summary"}
+        class="mt-3 text-sm text-subtle"
         data-role="meeting-briefing-missing-part"
       >{Copy.missing_part(part)}</p>
 

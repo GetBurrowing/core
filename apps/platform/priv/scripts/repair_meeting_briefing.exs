@@ -116,10 +116,18 @@ defmodule MeetingBriefingRepair do
 
   defp counts(items) do
     c = items["_content"] || %{}
+    entries = (c["open_questions"] || []) ++ (c["unfiled_action_items"] || [])
+    ids = Enum.map(entries, & &1["id"])
+
+    dispositions =
+      Repo.all(from(c in MeetingCandidate, where: c.id in ^ids, select: c.disposition))
 
     %{
       questions: length(c["open_questions"] || []),
-      unfiled_actions: length(c["unfiled_action_items"] || [])
+      unfiled_actions: length(c["unfiled_action_items"] || []),
+      accepted: Enum.count(dispositions, &(&1 == :accepted)),
+      rejected: Enum.count(dispositions, &(&1 == :rejected)),
+      other: Enum.count(dispositions, &(&1 not in [:accepted, :rejected]))
     }
   end
 

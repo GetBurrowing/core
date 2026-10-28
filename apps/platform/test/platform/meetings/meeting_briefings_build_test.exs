@@ -425,4 +425,55 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     refute Map.has_key?(replacement, :attendee_user_ids)
     refute Map.has_key?(replacement, :id)
   end
+
+  test "exact repair defaults dry, preserves shared identity and receipts, and is idempotent" do
+    Code.require_file("priv/scripts/repair_meeting_briefing.exs")
+    %{meeting: source} = meeting_fixture!("Repair execution")
+
+    meeting =
+      Repo.insert!(%Meeting{
+        id: "01a182f9-2143-7000-a92f-2cf62a92cefc",
+        project_id: source.project_id,
+        chat_space_id: source.chat_space_id,
+        slug: "authorized-repair",
+        livekit_room_name: Ecto.UUID.generate(),
+        name: "Repair fixture",
+        status: "ended",
+        started_at: ago(60),
+        ended_at: ago(30)
+      })
+
+    accepted = content_candidate!(meeting, "open_question", :accepted)
+    rejected = content_candidate!(meeting, "open_question", :rejected)
+    receipts = %{"existing" => %{"verb" => "confirmed", "by" => Ecto.UUID.generate()}}
+
+    original =
+      Repo.insert!(%MeetingBriefing{
+        meeting_id: meeting.id,
+        receipts: receipts,
+        items: %{
+          "_content" => %{
+            "open_questions" => [%{"id" => rejected.id}],
+            "unfiled_action_items" => []
+          }
+        }
+      })
+
+    assert %{
+             changed: true,
+             applied: false,
+             before: %{rejected: 1},
+             after: %{accepted: 1, rejected: 0}
+           } = MeetingBriefingRepair.run(meeting.id)
+
+    assert Repo.get!(MeetingBriefing, original.id).items == original.items
+    assert %{changed: true, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+    repaired = Repo.get!(MeetingBriefing, original.id)
+    assert repaired.id == original.id
+    assert repaired.receipts == receipts
+    assert repaired.attendee_user_ids == original.attendee_user_ids
+    assert [%{"id" => id}] = repaired.items["_content"]["open_questions"]
+    assert id == accepted.id
+    assert %{changed: false, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+  end
 end
