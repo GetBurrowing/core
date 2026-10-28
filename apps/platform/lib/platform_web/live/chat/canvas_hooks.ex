@@ -236,6 +236,18 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @doc "Remove a canvas from the socket's local list (paired with `{:canvas_deleted, canvas}` broadcasts)."
   @spec remove(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
   def remove(socket, canvas) do
+    if Map.has_key?(socket.assigns[:canvases_by_id] || %{}, canvas.id),
+      do: clear_canvas_engagement(socket, canvas)
+
+    socket =
+      Enum.reduce(socket.assigns[:canvas_rooms] || %{}, socket, fn
+        {{canvas_id, _node_id} = key, entry}, acc when canvas_id == canvas.id ->
+          Enum.reduce(entry.hooks, acc, &untrack_room(&2, key, &1))
+
+        _, acc ->
+          acc
+      end)
+
     # Use safe assigns access — a {:canvas_deleted, _} broadcast can race with
     # mount and arrive before :canvases / :canvases_by_id are initialized.
     canvases =
@@ -1062,9 +1074,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp rejoin_room(socket, {canvas_id, node_id} = key, entry) do
     rooms = socket.assigns.canvas_rooms
 
-    with {:ok, actor} <- room_actor(socket),
+    with {:ok, _canvas, level} <- room_canvas(socket, canvas_id),
+         {:ok, actor} <- room_actor(socket),
          {:ok, snap} <- CanvasRoom.join(canvas_id, node_id, self(), actor) do
-      entry = %{entry | pid: snap.room_pid, ref: Process.monitor(snap.room_pid)}
+      entry = %{
+        entry
+        | pid: snap.room_pid,
+          ref: Process.monitor(snap.room_pid),
+          writable: level == :member
+      }
 
       socket
       |> assign(:canvas_rooms, Map.put(rooms, key, entry))

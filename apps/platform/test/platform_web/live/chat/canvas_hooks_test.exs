@@ -1,5 +1,5 @@
 defmodule PlatformWeb.ChatLive.CanvasHooksTest do
-  use ExUnit.Case, async: true
+  use Platform.DataCase, async: true
 
   alias Phoenix.LiveView.Socket
   alias Platform.Chat.PubSub, as: ChatPubSub

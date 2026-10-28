@@ -142,6 +142,13 @@ defmodule Platform.Chat.Canvas.Server do
     end
   end
 
+  @doc "Move ownership, serialized with patches; reauthorize caller and both spaces."
+  def move(canvas_id, actor, destination_id) do
+    with {:ok, _pid} <- start_server(canvas_id) do
+      GenServer.call(via(canvas_id), {:move, actor, destination_id})
+    end
+  end
+
   @doc "Return a snapshot of the current document + revision."
   @spec describe(binary()) ::
           {:ok, %{document: map(), revision: pos_integer()}} | {:error, term()}
@@ -210,6 +217,17 @@ defmodule Platform.Chat.Canvas.Server do
   end
 
   @impl true
+  def handle_call({:move, actor, destination_id}, _from, state) do
+    case Platform.Files.CanvasMove.perform(actor, state.canvas_id, destination_id) do
+      {:ok, canvas} ->
+        {:reply, {:ok, canvas}, %{state | space_id: canvas.space_id, embed_refs: %{}}}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
   def handle_call(
         {:apply_patches, operations, base_revision, written_by_attribution},
         _from,
@@ -230,7 +248,8 @@ defmodule Platform.Chat.Canvas.Server do
     # `WithClauseError` here instead of being reshaped into `{:error, _}`.
     # The one `{:error, _}` arm below is the scripted-embed stamp's, which is
     # a genuine refusal and not a rebase outcome (task 01a1316b-677a).
-    with {:ok, new_document, new_revision} <- apply_with_rebase(state, operations, base_revision),
+    with :ok <- Platform.Files.CanvasMove.authorize_patch(state.canvas_id, written_by_attribution),
+         {:ok, new_document, new_revision} <- apply_with_rebase(state, operations, base_revision),
          # Task 01a1316b-677a: every embed's `prototype_ref` is (re)stamped
          # here, before the write is persisted or broadcast, at the same
          # revision. A refusal (`prototypes_disabled`, ...) is an
@@ -250,7 +269,7 @@ defmodule Platform.Chat.Canvas.Server do
       {:conflict, payload} ->
         {:reply, {:conflict, payload}, state}
 
-      {:error, %{code: _} = error} ->
+      {:error, error} ->
         {:reply, {:error, error}, state}
     end
   end

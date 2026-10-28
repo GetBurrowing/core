@@ -5816,21 +5816,7 @@ defmodule Platform.Chat do
   can fire the same broadcast/telemetry as `update_canvas/2`. UI relies on
   the space-topic broadcast to refresh stream-rendered canvas messages.
   """
-  def publish_canvas_updated(canvas) do
-    :telemetry.execute(
-      [:platform, :chat, :canvas_updated],
-      %{system_time: System.system_time()},
-      %{
-        canvas_id: canvas.id,
-        space_id: canvas.space_id,
-        document_kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
-        title: canvas.title
-      }
-    )
-
-    ChatPubSub.broadcast(canvas.space_id, {:canvas_updated, canvas})
-    ChatPubSub.broadcast_canvas(canvas.id, {:canvas_updated, canvas})
-  end
+  defdelegate publish_canvas_updated(canvas), to: Platform.Chat.Canvas.Broadcasts, as: :updated
 
   defp default_canvas_message(attrs) do
     title = Map.get(attrs, "title") || "Untitled Canvas"

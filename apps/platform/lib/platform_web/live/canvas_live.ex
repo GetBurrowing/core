@@ -130,6 +130,7 @@ defmodule PlatformWeb.CanvasLive do
 
     case CanvasAccess.fetch_for_viewer(canvas_id, viewer, opts) do
       {:ok, canvas, level} ->
+        if connected?(socket), do: Chat.PubSub.subscribe_canvas(canvas.id)
         # One read of the parent space feeds both the crumb and the close
         # destination. It was already loaded for the crumb; the exit reuses it
         # rather than issuing a second query for the same row.
@@ -173,6 +174,25 @@ defmodule PlatformWeb.CanvasLive do
     # parity, so their events still reach us; they resolve to nothing here.
     {:noreply, socket}
   end
+
+  @impl true
+  def handle_info({:canvas_deleted, %{id: id}}, socket) do
+    if socket.assigns[:canvas] && socket.assigns.canvas.id == id do
+      # A deletion or ownership move retires this subscribed generation. Clear
+      # the document before navigating; the fresh mount reauthorizes the URL.
+      Chat.PubSub.unsubscribe_canvas(id)
+
+      {:noreply,
+       socket
+       |> assign(:canvas, nil)
+       |> assign(:load_error, :not_found)
+       |> push_navigate(to: ~p"/canvases/#{id}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   # ── Denial context (stage 4) ──────────────────────────────────────────────
 

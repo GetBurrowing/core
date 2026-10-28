@@ -350,6 +350,98 @@ defmodule Platform.Files.Browser do
     file_item(file, %{projects_by_id: %{file.project_id => %{org_id: org_id}}})
   end
 
+  @doc "Personal stars, newest-starred first; inaccessible targets are omitted."
+  defdelegate starred(actor, opts \\ []), to: Platform.Files.Stars, as: :list_items
+
+  @doc "Resolve one browser target against the viewer's current readable locations."
+  def fetch_source(viewer, target, opts \\ [])
+
+  def fetch_source(viewer, {kind, id}, opts) when kind in [:file, :canvas, :space_file] do
+    if Platform.UUID.valid?(id) do
+      resolve_source(
+        context(viewer),
+        viewer,
+        kind,
+        id,
+        Keyword.get(opts, :include_deleted, false)
+      )
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def fetch_source(_viewer, _target, _opts), do: {:error, :not_found}
+
+  defp resolve_source(ctx, viewer, :file, id, include_deleted) do
+    case Platform.Repo.get(Files.File, id) do
+      %Files.File{} = file ->
+        project = Map.get(ctx.projects_by_id, file.project_id)
+
+        if project && is_nil(project.archived_at) && (include_deleted || is_nil(file.deleted_at)) &&
+             Platform.Access.check(viewer.access_scope, "files.read", {:project, file.project_id}) ==
+               :ok,
+           do: {:ok, file},
+           else: {:error, :not_found}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp resolve_source(ctx, viewer, :canvas, id, include_deleted) do
+    with {:ok, canvas, _level} <-
+           Chat.CanvasAccess.fetch_for_viewer(id, viewer.user,
+             audit: false,
+             access_scope: viewer.access_scope
+           ),
+         true <- Map.has_key?(ctx.spaces_by_id, canvas.space_id),
+         true <- include_deleted || is_nil(canvas.deleted_at) do
+      {:ok, canvas}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp resolve_source(ctx, viewer, :space_file, id, _include_deleted) do
+    with %Chat.Attachment{state: "ready"} = attachment <- Platform.Repo.get(Chat.Attachment, id),
+         true <- Map.has_key?(ctx.spaces_by_id, attachment.space_id),
+         %Chat.Attachment{} <-
+           Chat.get_visible_attachment_for_principal(id, {:user, viewer.user.id}) do
+      {:ok, attachment}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc "One freshly authorized row in the same shape as the browser listings."
+  def fetch_item(viewer, target) do
+    with {:ok, source} <- fetch_source(viewer, target) do
+      ctx = context(viewer)
+
+      case target do
+        {:file, _} ->
+          {:ok, file_item(source, ctx)}
+
+        {:space_file, _} ->
+          {:ok,
+           space_file_item(
+             Map.put(source, :author, nil),
+             Map.fetch!(ctx.spaces_by_id, source.space_id)
+           )}
+
+        {:canvas, id} ->
+          case Chat.list_browser_canvases([source.space_id],
+                 ids: [id],
+                 access_scope: viewer.access_scope
+               )
+               |> canvas_items(ctx) do
+            [item] -> {:ok, item}
+            _ -> {:error, :not_found}
+          end
+      end
+    end
+  end
+
   # ── Pure helpers ──────────────────────────────────────────────────────────
 
   @doc "Keeps the items of one type; `nil` or `:all` keeps everything."

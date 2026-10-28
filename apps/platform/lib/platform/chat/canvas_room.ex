@@ -236,6 +236,7 @@ defmodule Platform.Chat.CanvasRoom do
     @moduledoc false
     @enforce_keys [:canvas_id, :node_id]
     defstruct canvas_id: nil,
+              topic: nil,
               node_id: nil,
               room_id: nil,
               data: nil,
@@ -534,6 +535,7 @@ defmodule Platform.Chat.CanvasRoom do
       {:ok, room_id, data, seq} ->
         state = %State{
           canvas_id: canvas_id,
+          topic: ChatPubSub.canvas_room_topic(canvas_id, node_id),
           node_id: node_id,
           room_id: room_id,
           data: data,
@@ -624,9 +626,8 @@ defmodule Platform.Chat.CanvasRoom do
   def handle_cast({:ephemeral, actor, channel, payload}, state) do
     case take_token(state, {:ephemeral, actor.id}, @ephemeral_rate_per_s, @ephemeral_burst) do
       {:ok, state} ->
-        ChatPubSub.broadcast_canvas_room(
-          state.canvas_id,
-          state.node_id,
+        ChatPubSub.broadcast_canvas_room_topic(
+          state.topic,
           {:canvas_room_ephemeral, state.canvas_id, state.node_id, channel, payload, actor.id}
         )
 
@@ -1064,9 +1065,8 @@ defmodule Platform.Chat.CanvasRoom do
 
     entry = %{seq: seq, op: logged_op, actor: actor, at: DateTime.utc_now()}
 
-    ChatPubSub.broadcast_canvas_room(
-      state.canvas_id,
-      state.node_id,
+    ChatPubSub.broadcast_canvas_room_topic(
+      state.topic,
       {:canvas_room_diff, state.canvas_id, state.node_id, seq, Map.delete(diff, "result"),
        actor.id}
     )
@@ -1119,9 +1119,8 @@ defmodule Platform.Chat.CanvasRoom do
   end
 
   defp fire_timer(name, msg, state) do
-    ChatPubSub.broadcast_canvas_room(
-      state.canvas_id,
-      state.node_id,
+    ChatPubSub.broadcast_canvas_room_topic(
+      state.topic,
       {:canvas_room_timer, state.canvas_id, state.node_id, name, msg}
     )
 
@@ -1238,9 +1237,8 @@ defmodule Platform.Chat.CanvasRoom do
   defp broadcast_presence(state) do
     list = presence(state)
 
-    ChatPubSub.broadcast_canvas_room(
-      state.canvas_id,
-      state.node_id,
+    ChatPubSub.broadcast_canvas_room_topic(
+      state.topic,
       {:canvas_room_presence, state.canvas_id, state.node_id, list}
     )
 

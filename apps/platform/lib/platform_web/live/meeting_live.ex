@@ -4949,6 +4949,18 @@ defmodule PlatformWeb.MeetingLive do
   # component moduledoc). It is cleared by a self-scheduled message so
   # the highlight decays on its own rather than persisting for the rest
   # of the call.
+  def handle_info({:canvas_deleted, %{id: id}}, socket) do
+    canvases = Enum.reject(socket.assigns[:meeting_canvases] || [], &(&1.id == id))
+    socket = assign(socket, :meeting_canvases, canvases)
+
+    socket =
+      if socket.assigns[:meeting_canvas] && socket.assigns.meeting_canvas.id == id,
+        do: socket |> assign(:meeting_canvas, nil) |> assign(:selected_canvas_id, nil),
+        else: socket
+
+    {:noreply, socket}
+  end
+
   def handle_info({:canvas_updated, canvas}, socket) do
     # Refresh the picker's copy first, and only for a canvas already in
     # the list — an update for a canvas this LV never loaded belongs to
