@@ -773,8 +773,17 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
       # cannot. `candidate_correct_open` re-arms too, so this case reads
       # 30 after the second press whether or not `correct/3` re-arms at
       # all. The two cases above are the guard; this one is the journey.
-      present_agent!(ctx.meeting, ctx.scribe)
-      present_agent!(ctx.meeting, ctx.designer)
+      room = present_agent!(ctx.meeting, ctx.scribe)
+
+      %Meetings.Participant{}
+      |> Meetings.Participant.changeset(%{
+        room_id: room.id,
+        agent_id: ctx.designer.id,
+        display_name: ctx.designer.name,
+        joined_at: DateTime.utc_now()
+      })
+      |> Repo.insert!()
+
       candidate = armed!(ctx.meeting, ctx.scribe)
       view = open_meeting(ctx.conn, ctx.meeting)
 
