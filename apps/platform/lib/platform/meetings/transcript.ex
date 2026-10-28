@@ -68,9 +68,12 @@ defmodule Platform.Meetings.Transcript do
 
   @doc "Fingerprint the producer input, including the reopen generation. Capture before dispatch."
   def summary_fingerprint(transcript, segments \\ nil) do
+    captured_segments = segments || Map.get(transcript, :segments) || []
+    normalized = captured_segments |> Jason.encode!() |> Jason.decode!()
+
     input =
       {transcript.id, Map.get(transcript, :meeting_id), Map.get(transcript, :summary_epoch, 0),
-       segments || Map.get(transcript, :segments) || []}
+       normalized}
 
     :crypto.hash(:sha256, :erlang.term_to_binary(input)) |> Base.encode16()
   end

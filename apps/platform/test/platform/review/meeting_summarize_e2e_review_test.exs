@@ -287,6 +287,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
       # Downstream persistence: handle_output fired and marked complete.
       reloaded = Meetings.get_transcript(transcript.id)
       assert reloaded.status == "complete"
+      assert Platform.Meetings.Transcript.summary_current?(reloaded)
       assert String.length(reloaded.summary) > 100
       assert reloaded.summary =~ "Overview"
     end

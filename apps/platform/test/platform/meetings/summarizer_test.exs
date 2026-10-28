@@ -102,13 +102,15 @@ defmodule Platform.Meetings.SummarizerTest do
     previous = Application.get_env(:platform, :meetings_summary)
     on_exit(fn -> Application.put_env(:platform, :meetings_summary, previous) end)
 
-    {:ok, listener} =
-      Bandit.start_link(
-        plug: {Platform.Meetings.SummarizerTest.InputFencePlug, owner: self()},
-        port: 0
+    listener =
+      start_supervised!(
+        {Bandit,
+         plug: {Platform.Meetings.SummarizerTest.InputFencePlug, owner: self()},
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false}
       )
 
-    on_exit(fn -> if Process.alive?(listener), do: GenServer.stop(listener) end)
     {:ok, {_address, port}} = ThousandIsland.listener_info(listener)
 
     Application.put_env(:platform, :meetings_summary, %{
