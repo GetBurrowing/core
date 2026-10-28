@@ -2240,6 +2240,59 @@ defmodule PlatformWeb.InboxLiveTest do
       refute has_element?(daily_lv, selector <> " [data-action=revert]")
     end
 
+    test "repeated daily references keep distinct DOM ids and one shared receipt", %{conn: conn} do
+      ctx = concluded_meeting!()
+
+      insights =
+        for _ <- 1..2 do
+          insight =
+            Platform.InsightFixtures.insight!(
+              addressee: ctx.a,
+              action_type: "task",
+              body: "Already filed meeting work"
+            )
+
+          insight |> Ecto.Changeset.change(artefact_ref: "task:" <> ctx.t1.id) |> Repo.update!()
+        end
+
+      date = PlatformWeb.Components.BriefingRow.today(nil)
+
+      daily =
+        Repo.insert!(%Platform.Memory.Briefing{
+          user_id: ctx.a.id,
+          digest_date: date,
+          items: Map.new(insights, &{Platform.Memory.Insights.BriefingCard.node_key(&1), &1.id})
+        })
+
+      {:ok, _, :created} = Platform.Inbox.upsert_briefing_item(daily, %{total: 2, calls: 2})
+      {:ok, view, _} = live(auth(conn, ctx.a), "/inbox/briefing/" <> Date.to_iso8601(date))
+
+      ids =
+        render(view)
+        |> Floki.parse_document!()
+        |> Floki.find("[data-role=meeting-briefing-card]")
+        |> Floki.attribute("id")
+
+      assert length(ids) == 2
+      assert Enum.uniq(ids) == ids
+      [first, second] = ids
+      view |> element("##{first} [data-action=ask]") |> render_click()
+      assert has_element?(view, "##{first} [data-role=meeting-briefing-ask-form]")
+      refute has_element?(view, "##{second} [data-role=meeting-briefing-ask-form]")
+      view |> element("##{second} [data-action=revert]") |> render_click()
+
+      Platform.AsyncAssertions.assert_eventually(fn ->
+        render(view)
+        |> Floki.parse_document!()
+        |> Floki.find("[data-role=meeting-briefing-resolved-card]")
+        |> length() == 2
+      end)
+
+      assert map_size(
+               Repo.get_by!(Platform.Meetings.MeetingBriefing, meeting_id: ctx.meeting.id).receipts
+             ) == 1
+    end
+
     test "an attendee's row shows the meeting and its receipt line", %{conn: conn} do
       ctx = concluded_meeting!()
       {:ok, lv, _html} = live(auth(conn, ctx.a), "/inbox?f=briefing")

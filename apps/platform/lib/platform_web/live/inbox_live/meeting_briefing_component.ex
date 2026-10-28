@@ -173,7 +173,10 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       assign(
         assigns,
         :item,
-        Enum.find(assigns.view.open ++ assigns.view.resolved, &(&1.key == key))
+        case Enum.find(assigns.view.open ++ assigns.view.resolved, &(&1.key == key)) do
+          nil -> nil
+          item -> Map.put(item, :dom_key, assigns.id <> "-" <> item.key)
+        end
       )
 
     ~H"""
@@ -300,7 +303,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   defp open_card(assigns) do
     ~H"""
     <article
-      id={"meeting-briefing-item-" <> @item.key}
+      id={"meeting-briefing-item-" <> dom_key(@item)}
       class="rounded-xl border border-edge bg-base-100 px-4 py-3.5"
       data-role="meeting-briefing-card"
       data-key={@item.key}
@@ -338,7 +341,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
       <form
         :if={@asking?}
-        id={"meeting-briefing-ask-" <> @item.key}
+        id={"meeting-briefing-ask-" <> dom_key(@item)}
         phx-submit="act"
         phx-target={@myself}
         class="mt-3"
@@ -346,11 +349,14 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       >
         <input type="hidden" name="key" value={@item.key} />
         <input type="hidden" name="verb" value="ask" />
-        <label class="mb-1 block text-xs text-subtle" for={"meeting-briefing-question-" <> @item.key}>
+        <label
+          class="mb-1 block text-xs text-subtle"
+          for={"meeting-briefing-question-" <> dom_key(@item)}
+        >
           Your question, posted in the meeting's chat
         </label>
         <textarea
-          id={"meeting-briefing-question-" <> @item.key}
+          id={"meeting-briefing-question-" <> dom_key(@item)}
           name="question"
           rows="2"
           class={field()}
@@ -404,7 +410,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
     ~H"""
     <article
-      id={"meeting-briefing-item-" <> @item.key}
+      id={"meeting-briefing-item-" <> dom_key(@item)}
       class="rounded-xl border border-edge bg-base-100 px-4 py-3.5"
       data-role="meeting-briefing-resolved-card"
       data-key={@item.key}
@@ -445,6 +451,10 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   end
 
   defp present?(text), do: is_binary(text) and String.trim(text) != ""
+
+  # A daily briefing may reference one shared task more than once. The
+  # server key stays canonical; only DOM ids belong to this component instance.
+  defp dom_key(item), do: Map.get(item, :dom_key, item.key)
 
   defp heading_class, do: "mb-2 text-xs font-bold uppercase tracking-wider text-subtle"
 
