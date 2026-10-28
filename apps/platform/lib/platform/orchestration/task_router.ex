@@ -428,6 +428,7 @@ defmodule Platform.Orchestration.TaskRouter do
     Process.flag(:trap_exit, true)
 
     Tasks.subscribe_board()
+    send(self(), :reassess_dependency_waits)
     ReviewRequests.subscribe_for_task(task_id)
 
     execution_space_id =
@@ -1309,6 +1310,37 @@ defmodule Platform.Orchestration.TaskRouter do
     {:noreply, state}
   end
 
+  def handle_info(:reassess_dependency_waits, state) do
+    Platform.Orchestration.BlockerReassessment.reassess(state.task_id)
+
+    Process.send_after(
+      self(),
+      :reassess_dependency_waits,
+      Platform.Orchestration.BlockerReassessment.interval_ms()
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:dependency_completed, dependency_id}, state) do
+    Platform.Orchestration.BlockerReassessment.dependency_completed(state.task_id, dependency_id)
+    {:noreply, state}
+  end
+
+  def handle_info({:blocker_verification_requested, request}, state) do
+    if request.task_id == state.task_id do
+      # This is a scoped capability probe, not a stage dispatch. Preserve the
+      # existing worker and human-hold guards; consumers use the request token.
+      PlatformWeb.Endpoint.broadcast(
+        "runtime:#{request.runtime_id}",
+        "blocker_verification_requested",
+        request
+      )
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info({:runtime_event, event}, %State{task_id: task_id} = state)
       when event.task_id == task_id do
     {:noreply, apply_runtime_event(state, event)}
@@ -1533,6 +1565,12 @@ defmodule Platform.Orchestration.TaskRouter do
 
   # Ignore unrelated board events
   def handle_info({:plan_updated, _plan}, state), do: {:noreply, state}
+
+  def handle_info({:task_updated, %{id: dependency_id, status: "done"}}, state) do
+    Platform.Orchestration.BlockerReassessment.dependency_completed(state.task_id, dependency_id)
+    {:noreply, state}
+  end
+
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 

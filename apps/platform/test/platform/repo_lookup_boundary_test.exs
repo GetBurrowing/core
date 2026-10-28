@@ -539,6 +539,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      :safe_internal,
      "`metadata.memory_entry_id` comes off the telemetry event `Org.Wiki` emits with the PK it just inserted"},
     # ── Orchestration ──────────────────────────────────────────────────
+    {"platform/orchestration/blocker_reassessment.ex", :get, "Platform.Tasks.Project", 2,
+     :safe_internal,
+     "both ids are project_id foreign keys read from persisted Tasks.Task structs; validate_spec requires the owning task project_id to be binary and valid_reference?/2 pattern-matches a persisted non-nil dependency project_id before these lookups"},
+    {"platform/orchestration/blocker_reassessment.ex", :platform_uuid_guard, "-", 3,
+     :safe_internal,
+     "current_task/2 guards the external task_id and stage_id with Platform.UUID.valid?/1 before task/plan reads; valid_reference?/2 guards the typed external dependency task_id before Tasks.get_task_record/1"},
     {"platform/orchestration/context_assembler.ex", :get, "TaskSchema", 1, :safe_internal,
      "`load_parent_plan_entry/1` uses `parent_id` read off the `%Task{}` it already loaded"},
     {"platform/orchestration/execution_space.ex", :get_by, "Participant", 1, :safe_internal,

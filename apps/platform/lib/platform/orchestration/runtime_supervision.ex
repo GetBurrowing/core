@@ -75,17 +75,21 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   }
 
   @doc "Record a normalized runtime execution event and update the active lease."
-  def record_event(attrs) when is_map(attrs) do
+  def record_event(attrs, opts \\ []) when is_map(attrs) do
     attrs = normalize_attrs(attrs)
     maybe_log_owner_unknown_breadcrumb(attrs)
 
     with :ok <- validate_phase(attrs.phase),
          :ok <- validate_event_type(attrs.event_type),
-         {:ok, task} <- fetch_task(attrs.task_id) do
+         {:ok, task} <- fetch_task(attrs.task_id),
+         {:ok, attrs} <- normalize_dependency_block(attrs) do
       case Repo.get_by(RuntimeEvent, idempotency_key: attrs.idempotency_key) do
         %RuntimeEvent{} = event ->
           event = Repo.preload(event, :lease)
-          broadcast_and_mirror(event, event.lease, attrs, duplicate: true)
+
+          unless Keyword.get(opts, :defer_broadcast, false),
+            do: broadcast_and_mirror(event, event.lease, attrs, duplicate: true)
+
           {:ok, event}
 
         nil ->
@@ -113,7 +117,10 @@ defmodule Platform.Orchestration.RuntimeSupervision do
           |> case do
             {:ok, %{event: %RuntimeEvent{} = event, lease: lease}} ->
               event = Repo.preload(event, :lease)
-              broadcast_and_mirror(event, lease, attrs)
+
+              unless Keyword.get(opts, :defer_broadcast, false),
+                do: broadcast_and_mirror(event, lease, attrs)
+
               maybe_reconcile_late_ack(task, attrs)
               {:ok, event}
 
@@ -126,6 +133,16 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       end
     end
   end
+
+  @doc "Broadcast a newly recorded event after its enclosing transaction commits."
+  def broadcast_recorded_event(event) do
+    broadcast_and_mirror(event, event.lease, %{execution_space_id: nil, task_id: event.task_id})
+  end
+
+  defp normalize_dependency_block(%{event_type: "execution.blocked"} = attrs),
+    do: Platform.Orchestration.BlockerReassessment.normalize_block(attrs)
+
+  defp normalize_dependency_block(attrs), do: {:ok, attrs}
 
   # Task 01a0e7ac stage 2. A NEW `execution.acked` row may be the late ack of
   # a dispatch the no-ack alarm already blocked; `LateAckReconcile` decides.
@@ -419,8 +436,21 @@ defmodule Platform.Orchestration.RuntimeSupervision do
         lease =
           current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id, attrs.stage_id)
 
-        persist_lease(repo, lease, status, attrs)
+        if (status == "active" and ExecutionLease.dependency_wait(lease)) &&
+             not (attrs.event_type == "execution.unblocked" and
+                    verified_dependency_release?(lease, attrs)) do
+          {:error, :dependency_verification_required}
+        else
+          persist_lease(repo, lease, status, attrs)
+        end
     end
+  end
+
+  defp verified_dependency_release?(lease, attrs) do
+    wait = ExecutionLease.dependency_wait(lease)
+
+    wait["state"] == "verified" and wait["revision"] == attrs.payload["hold_revision"] and
+      wait["verified_runtime"] == attrs.runtime_id
   end
 
   defp current_active_lease(repo, task_id, phase, runtime_id, stage_id) do

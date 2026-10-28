@@ -765,7 +765,9 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # (voice_ask_agent, voice_ask_poll); scheduler T6 adds none.
     # (+2 voice_ask -> 147)
     # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
-    @t6_baseline_tool_count 149
+    # +2 owning-runtime dependency verification tools (task 01a18305 stage 2);
+    # these do not add a historian scheduler tool or change T6 triggers.
+    @t6_baseline_tool_count 151
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

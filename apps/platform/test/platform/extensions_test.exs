@@ -993,6 +993,33 @@ defmodule Platform.ExtensionsTest do
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
 
+      # Task 01a18305 stage 2 adds owning-runtime dependency verification.
+      # Pin the additions while retaining the frozen oracle for all old fields.
+      {dependency, defs} =
+        Enum.split_with(defs, &(&1.name in ["blocker_recheck", "blocker_verify"]))
+
+      assert Enum.map(dependency, &{&1.name, &1.bundle}) == [
+               {"blocker_recheck", "task"},
+               {"blocker_verify", "task"}
+             ]
+
+      optional_wait = %{
+        wait_kind: %{type: "string", enum: ["human", "dependency"], required: false},
+        dependencies: %{type: "array", items: %{type: "object"}, required: false},
+        required_capability: %{type: "string", required: false},
+        verifier: %{type: "string", enum: ["owning_runtime"], required: false}
+      }
+
+      defs =
+        Enum.map(defs, fn
+          %{name: "report_blocker"} = tool ->
+            assert Map.take(tool.parameters, Map.keys(optional_wait)) == optional_wait
+            %{tool | parameters: Map.drop(tool.parameters, Map.keys(optional_wait))}
+
+          tool ->
+            tool
+        end)
+
       # Task 01a17f00 stage 2 adds authenticated completion tools. Pin these
       # explicitly while preserving the frozen byte oracle for existing tools.
       {completion, defs} =

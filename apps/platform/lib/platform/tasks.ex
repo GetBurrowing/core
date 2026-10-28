@@ -2093,6 +2093,7 @@ defmodule Platform.Tasks do
   # and unguarded entry points so a successful guarded write emits exactly what
   # an unguarded one does.
   defp after_status_transition(%Task{} = updated, new_status, pointer_attrs) do
+    if new_status == "done", do: broadcast_board({:dependency_completed, updated.id})
     maybe_dispatch_teardown(updated, new_status)
     # `maybe_apply_phase_assignee/1` is what used to broadcast on a
     # pointer change; folding its write into the status changeset
