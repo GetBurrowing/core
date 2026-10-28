@@ -1264,8 +1264,15 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
 
       for a <- anchors do
         assert LazyHTML.attribute(a, "phx-click") == []
-        assert LazyHTML.attribute(a, "target") == ["_blank"]
-        assert LazyHTML.attribute(a, "rel") == ["noopener noreferrer"]
+
+        # Same-install (path-relative) rows open in the app; the rest are external.
+        if LazyHTML.attribute(a, "href") |> hd() |> String.starts_with?("/") do
+          assert LazyHTML.attribute(a, "target") == []
+          assert LazyHTML.attribute(a, "data-in-app-link") == ["path"]
+        else
+          assert LazyHTML.attribute(a, "target") == ["_blank"]
+          assert LazyHTML.attribute(a, "rel") == ["noopener noreferrer"]
+        end
       end
 
       w.view

@@ -246,8 +246,9 @@ defmodule Platform.Chat.AttachmentLinksTest do
       assert render.("[clip](/chat/attachments/#{id})", [path]) == ""
       assert render.("/chat/attachments/#{id}", [path]) == ""
 
-      assert render.("watch #{url} now", [path]) =~ ~s(href="#{url}")
-      assert render.("Three cuts.\n#{url}", []) =~ ~s(href="#{url}")
+      # Same-install links are rendered path-relative.
+      assert render.("watch #{url} now", [path]) =~ ~s(href="#{path}")
+      assert render.("Three cuts.\n#{url}", []) =~ ~s(href="#{path}")
     end
   end
 end

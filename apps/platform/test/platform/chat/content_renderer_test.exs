@@ -165,7 +165,7 @@ defmodule Platform.Chat.ContentRendererTest do
       result = render("see #{origin()}/canvases/#{id} for the plan")
 
       assert result =~ ~s[data-in-app-link="canvas"]
-      assert result =~ ~s[href="#{origin()}/canvases/#{id}"]
+      assert result =~ ~s[href="/canvases/#{id}"]
       refute result =~ ~s[target="_blank"]
     end
 
@@ -208,7 +208,7 @@ defmodule Platform.Chat.ContentRendererTest do
       refute result =~ "font-mono"
     end
 
-    test "alias look-alikes and non-in-app alias paths stay external and absolute" do
+    test "alias look-alikes stay external and absolute" do
       id = Ecto.UUID.generate()
 
       for url <- [
@@ -221,15 +221,51 @@ defmodule Platform.Chat.ContentRendererTest do
         refute result =~ "data-in-app-link", url
         refute result =~ ~s[href="/canvases/], url
       end
-
-      result = render("https://alias.example.com/chat/some-space")
-      assert result =~ ~s[target="_blank"]
-      assert result =~ ~s[href="https://alias.example.com/chat/some-space"]
     end
 
-    test "the endpoint's own host keeps its absolute href" do
+    test "the endpoint's own host is made path-relative" do
       id = Ecto.UUID.generate()
-      assert render("#{origin()}/canvases/#{id}") =~ ~s[href="#{origin()}/canvases/#{id}"]
+      result = render("#{origin()}/canvases/#{id}")
+      assert result =~ ~s[href="/canvases/#{id}"]
+      refute result =~ ~s[href="#{origin()}]
+    end
+
+    # Every same-install link opens inside the app, whatever its path.
+    test "same-install links of any path: no target, path-relative, data-in-app-link" do
+      id = Ecto.UUID.generate()
+
+      for {input, href} <- [
+            {"#{origin()}/tasks/#{id}", "/tasks/#{id}"},
+            {"#{origin()}/chat/some-space?x=1#top", "/chat/some-space?x=1#top"},
+            {"https://alias.example.com/chat/some-space", "/chat/some-space"},
+            {"[task](/tasks/#{id})", "/tasks/#{id}"},
+            {"[space](/chat/#{id})", "/chat/#{id}"}
+          ] do
+        result = render(input)
+        assert result =~ ~s[data-in-app-link="path"], input
+        assert result =~ ~s[href="#{href}"], input
+        refute result =~ "target=", input
+        refute result =~ ~s[href="http], input
+      end
+    end
+
+    test "external links keep target=_blank rel=noopener noreferrer" do
+      for url <- [
+            "https://github.com/GetBurrowing/core/pull/1",
+            "https://example.test/tasks/x",
+            "//evil.example/tasks/x",
+            "https://alias.example.com@evil.example/tasks/x"
+          ] do
+        result = render("[x](#{url})")
+        assert result =~ ~s[target="_blank" rel="noopener noreferrer"], url
+        refute result =~ "data-in-app-link", url
+      end
+    end
+
+    test "a blocked href stays inert with its current target=_blank behaviour" do
+      result = render("[click](javascript:alert(1))")
+      assert result =~ ~s[target="_blank" rel="noopener noreferrer" href="#blocked:]
+      refute result =~ "data-in-app-link"
     end
 
     test "blocked hrefs are never classified as in-app" do

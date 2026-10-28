@@ -278,9 +278,8 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </span>
         </button>
         <a
-          href={@url}
-          target="_blank"
-          rel="noopener noreferrer"
+          href={Platform.Chat.LinkTargets.open_href(@url)}
+          {Platform.Chat.LinkTargets.open_attrs(@url)}
           class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field max-sm:hidden"
           aria-label="Open this version in a new tab"
           title="Open"
@@ -323,9 +322,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </button>
           <a
             :if={not @can_pin?}
-            href={Prototypes.url(@view.prototype.id, @view.latest)}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={
+              Platform.Chat.LinkTargets.open_href(Prototypes.url(@view.prototype.id, @view.latest))
+            }
+            {Platform.Chat.LinkTargets.open_attrs(Prototypes.url(@view.prototype.id, @view.latest))}
             class="btn btn-sm rounded-field"
           >
             View v{@view.latest}
