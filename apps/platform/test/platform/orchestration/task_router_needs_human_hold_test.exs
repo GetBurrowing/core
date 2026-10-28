@@ -171,6 +171,85 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
   end
 
   describe "dispatch" do
+    test "legacy human hold survives block -> ack -> dependency done until explicit unblock",
+         ctx do
+      {:ok, dependency} =
+        Tasks.create_task(%{project_id: ctx.task.project_id, title: "Headline capability"})
+
+      {:ok, _task} = Tasks.add_dependency(ctx.task, dependency.id)
+      pid = boot_and_drain!(ctx)
+      hold = file_blocker!(ctx, true, 13 * 60)
+      :ok = sync_router(ctx.task.id)
+
+      # Match the episode ordering: receipt AFTER blocking cannot mean progress
+      # or release, even after the informational lease horizon has passed.
+      {:ok, acked} =
+        Orchestration.record_runtime_event(%{
+          "task_id" => ctx.task.id,
+          "phase" => "execution",
+          "runtime_id" => ctx.runtime_id,
+          "event_type" => "execution.acked",
+          "occurred_at" => minutes_ago(13 * 60 - 1),
+          "payload" => %{
+            "stage_id" => ctx.stage.id,
+            "subagent_id" => "headline-fixture-worker"
+          }
+        })
+
+      assert acked.lease_id == hold.id
+      :ok = sync_router(ctx.task.id)
+      {:ok, _dependency} = Tasks.update_task(dependency, %{status: "done"})
+      :ok = sync_router(ctx.task.id)
+      send(pid, :dispatch)
+      :ok = sync_router(ctx.task.id)
+
+      assert Repo.get!(ExecutionLease, hold.id).status == "blocked"
+      assert Repo.get!(ExecutionLease, hold.id).last_progress_at == nil
+      assert DateTime.compare(hold.expires_at, DateTime.utc_now()) == :lt
+
+      assert RuntimeSupervision.needs_human_hold(ctx.task.id, ctx.stage.id, ctx.runtime_id).id ==
+               hold.id
+
+      assert TaskRouter.current_status(ctx.task.id).status == :waiting_human
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+
+      # Dependency completion is evidence to assess, not permission. Only the
+      # owning runtime's explicit verified release changes this legacy hold.
+      release = %{
+        "task_id" => ctx.task.id,
+        "phase" => "execution",
+        "runtime_id" => ctx.runtime_id,
+        "event_type" => "execution.unblocked",
+        "idempotency_key" => "verified-headline-#{ctx.task.id}",
+        "payload" => %{
+          "stage_id" => ctx.stage.id,
+          "description" => "Installed headline capability verified by fixture",
+          "dependency_task_id" => dependency.id,
+          "evidence_ref" => "fixture:headline-review-1"
+        }
+      }
+
+      {:ok, released} = Orchestration.record_runtime_event(release)
+
+      assert released.lease_id == hold.id
+      assert Repo.get!(ExecutionLease, hold.id).status == "active"
+      refute RuntimeSupervision.needs_human_hold(ctx.task.id, ctx.stage.id, ctx.runtime_id)
+
+      # The old receipt is deliberately beyond the live-worker window, just
+      # like the episode. Only now may the router send a replacement worker.
+      :ok = sync_router(ctx.task.id)
+      send(pid, :dispatch)
+      :ok = sync_router(ctx.task.id)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      :ok = ack!(ctx)
+
+      {:ok, duplicate} = Orchestration.record_runtime_event(release)
+      assert duplicate.id == released.id
+      send(pid, :dispatch)
+      :ok = sync_router(ctx.task.id)
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
+    end
+
     test "a held stage is NOT re-dispatched, however the dispatch is injected", ctx do
       pid = boot_and_drain!(ctx)
 

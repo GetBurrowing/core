@@ -37,6 +37,77 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert Enum.any?(messages, &String.contains?(&1.content, "started execution"))
   end
 
+  test "ack and completed dependency preserve the same expired-horizon human hold" do
+    task = create_task!()
+    stage_id = Ecto.UUID.generate()
+    runtime_id = "headline-runtime"
+
+    {:ok, dependency} =
+      Tasks.create_task(%{project_id: task.project_id, title: "Headline contract"})
+
+    {:ok, _task} = Tasks.add_dependency(task, dependency.id)
+    blocked_at = DateTime.add(DateTime.utc_now(), -13 * 60 * 60, :second)
+
+    attrs = %{
+      "task_id" => task.id,
+      "phase" => "execution",
+      "runtime_id" => runtime_id,
+      "payload" => %{"stage_id" => stage_id}
+    }
+
+    assert {:ok, blocked} =
+             RuntimeSupervision.record_event(
+               Map.merge(attrs, %{
+                 "event_type" => "execution.blocked",
+                 "occurred_at" => blocked_at,
+                 "payload" => %{
+                   "stage_id" => stage_id,
+                   "needs_human" => true,
+                   "dependency_task_id" => dependency.id,
+                   "description" => "Headline capability not verified"
+                 }
+               })
+             )
+
+    assert {:ok, ack} =
+             RuntimeSupervision.record_event(Map.put(attrs, "event_type", "execution.acked"))
+
+    assert ack.lease_id == blocked.lease_id
+    assert {:ok, _dependency} = Tasks.update_task(dependency, %{status: "done"})
+    hold = RuntimeSupervision.needs_human_hold(task.id, stage_id, runtime_id)
+    assert hold.id == blocked.lease_id
+    assert hold.status == "blocked"
+    assert hold.metadata["needs_human"] == true
+    assert hold.last_progress_at == nil
+    assert DateTime.compare(hold.expires_at, DateTime.utc_now()) == :lt
+
+    assert Platform.Repo.aggregate(
+             from(l in Platform.Orchestration.ExecutionLease,
+               where: l.task_id == ^task.id
+             ),
+             :count
+           ) == 1
+
+    release =
+      attrs
+      |> Map.put("event_type", "execution.unblocked")
+      |> Map.put("idempotency_key", "headline-verified-#{task.id}")
+
+    assert {:ok, unblocked} = RuntimeSupervision.record_event(release)
+    assert {:ok, duplicate} = RuntimeSupervision.record_event(release)
+    assert duplicate.id == unblocked.id
+    assert unblocked.lease_id == hold.id
+    refute RuntimeSupervision.needs_human_hold(task.id, stage_id, runtime_id)
+    assert Platform.Repo.get!(Platform.Orchestration.ExecutionLease, hold.id).status == "active"
+
+    assert Platform.Repo.aggregate(
+             from(l in Platform.Orchestration.ExecutionLease,
+               where: l.task_id == ^task.id
+             ),
+             :count
+           ) == 1
+  end
+
   test "record_event/1 marks blockers and preserves a single active lease" do
     task = create_task!()
 
