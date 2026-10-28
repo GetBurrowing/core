@@ -157,3 +157,112 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         target?.webViewWebContentProcessDidTerminate?(webView)
     }
 }
+
+/// Observe Capacitor without changing its serving queue or response bytes.
+/// `stop` is cancellation, not the normal success callback: terminal events
+/// include finish/error so every start can be accounted for in webload.log.
+final class WebLoadSchemeTrace: NSObject, WKURLSchemeHandler {
+    private let target: WKURLSchemeHandler
+    private var tasks: [ObjectIdentifier: TaskTrace] = [:]
+    private var sequence = 0
+
+    init(target: WKURLSchemeHandler) { self.target = target }
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        sequence += 1
+        let key = ObjectIdentifier(urlSchemeTask)
+        let task = TaskTrace(target: urlSchemeTask, id: sequence) { [weak self] in
+            self?.tasks.removeValue(forKey: key)
+        }
+        tasks[key] = task
+        task.log("start")
+        target.webView(webView, start: task)
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
+        guard let task = tasks[ObjectIdentifier(urlSchemeTask)] else { return }
+        target.webView(webView, stop: task)
+        task.end("cancel")
+    }
+
+    private final class TaskTrace: NSObject, WKURLSchemeTask {
+        let target: WKURLSchemeTask
+        let id: Int
+        let began = ProcessInfo.processInfo.systemUptime
+        let completed: () -> Void
+        var ended = false
+        var request: URLRequest { target.request }
+
+        init(target: WKURLSchemeTask, id: Int, completed: @escaping () -> Void) {
+            self.target = target
+            self.id = id
+            self.completed = completed
+        }
+
+        func log(_ event: String) {
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
+            WebLoadLog.logger.notice("scheme-\(event, privacy: .public) handler=\(String(describing: ObjectIdentifier(self)), privacy: .public) request=\(self.id) url=\(WebLoadLog.describe(self.request.url), privacy: .public) elapsedMs=\(elapsed) main=\(Thread.isMainThread)")
+        }
+
+        func end(_ event: String) {
+            guard !ended else { return }
+            ended = true
+            log("stop reason=\(event)")
+            completed()
+        }
+
+        func didReceive(_ response: URLResponse) { target.didReceive(response) }
+        func didReceive(_ data: Data) { target.didReceive(data) }
+        func didFinish() {
+            target.didFinish()
+            end("finish")
+        }
+        func didFailWithError(_ error: Error) {
+            target.didFailWithError(error)
+            end("error \(WebLoadLog.describe(error))")
+        }
+    }
+}
+
+/// Monotonic main-queue sampling starts before Capacitor's bootstrap load.
+/// Periodic summaries prove the sampler stayed alive even when no drift was
+/// above the threshold. Keep sampling through the entire launch/retry window.
+final class WebLoadHeartbeat {
+    static let shared = WebLoadHeartbeat()
+    private var timer: DispatchSourceTimer?
+    private var previous = 0.0
+    private var began = 0.0
+    private var samples = 0
+    private var maxDrift = 0.0
+
+    func start() {
+        guard timer == nil else { return }
+        began = ProcessInfo.processInfo.systemUptime
+        previous = began
+        WebLoadLog.logger.notice("heartbeat-start intervalMs=100 thresholdMs=250 durationSeconds=120")
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        self.timer = timer
+        timer.schedule(deadline: .now() + 0.1, repeating: 0.1, leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in self?.tick() }
+        timer.resume()
+    }
+
+    private func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let drift = max(0, now - previous - 0.1)
+        previous = now
+        samples += 1
+        maxDrift = max(maxDrift, drift)
+        if drift > 0.25 {
+            WebLoadLog.logger.notice("heartbeat-stall driftMs=\(Int(drift * 1000)) elapsedMs=\(Int((now - self.began) * 1000))")
+        }
+        if samples % 10 == 0 {
+            WebLoadLog.logger.notice("heartbeat samples=\(self.samples) maxDriftMs=\(Int(self.maxDrift * 1000)) elapsedMs=\(Int((now - self.began) * 1000))")
+        }
+        if now - began >= 120 {
+            timer?.cancel()
+            timer = nil
+            WebLoadLog.logger.notice("heartbeat-stop samples=\(self.samples) maxDriftMs=\(Int(self.maxDrift * 1000))")
+        }
+    }
+}

@@ -95,6 +95,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
 
     // MARK: Capacitor hooks
 
+    override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
+        WebLoadHeartbeat.shared.start()
+        if let handler = configuration.urlSchemeHandler(forURLScheme: "capacitor") {
+            configuration.setURLSchemeHandler(nil, forURLScheme: "capacitor")
+            configuration.setURLSchemeHandler(WebLoadSchemeTrace(target: handler), forURLScheme: "capacitor")
+        }
+        return super.webView(with: frame, configuration: configuration)
+    }
+
     override func capacitorDidLoad() {
         plugin.shell = self
         bridge?.registerPluginInstance(plugin)
