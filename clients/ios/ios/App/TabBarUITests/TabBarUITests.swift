@@ -70,6 +70,13 @@ final class TabBarUITests: XCTestCase {
         return app
     }
 
+    override func tearDown() {
+        if (testRun?.failureCount ?? 0) > 0 {
+            note("transition-failure-hierarchy", XCUIApplication().debugDescription)
+        }
+        super.tearDown()
+    }
+
     private func shot(_ name: String) {
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
@@ -222,6 +229,21 @@ final class TabBarUITests: XCTestCase {
         // per-item font (rung 26 rule zero: no UITabBarAppearance on 26+).
         XCTAssertTrue(drawn.contains("fonts=Public Sans 11 w550"), drawn)
     }
+
+    /// Repeated visibility changes exercise the same real button taps and
+    /// hidden/rendered assertions as the contract, without extra sleeps.
+    private func repeatedVisibility(_ appearance: String) {
+        let (app, bar) = start(appearance)
+        for iteration in 1...3 {
+            hideAndShow(appearance, app, bar)
+            rendered(["hidden=false"], app)
+            bar.buttons["native-tab-chat"].tap()
+            XCTAssertTrue(app.webViews.staticTexts["\(iteration). chat reselect=true"].waitForExistence(timeout: 5))
+        }
+    }
+
+    func testRepeatedVisibilityLight() { repeatedVisibility("light") }
+    func testRepeatedVisibilityDark() { repeatedVisibility("dark") }
 
     /// Stage 2: the full contract on the fixture, light.
     func testContractLight() {

@@ -197,7 +197,7 @@
           document.getElementById("glass").textContent =
             "glass: hosting=" + report.hosting + " effect=" + report.glass_effect + " class=" + report.glass_class +
             " floating=" + report.floating + " platter=" + report.platter + " bar=" + report.bar + " os=" + report.os;
-          document.getElementById("native").textContent = report.tree;
+          document.getElementById("native").textContent = "transition: " + report.transition + "\n" + report.tree;
         };
       })();
     </script>

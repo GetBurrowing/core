@@ -349,6 +349,16 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(host.bar.items?.compactMap(\.badgeValue), [])
     }
 
+    #if DEBUG
+        func testRenderedProbeReadsActualHiddenState() {
+            let bar = UITabBar()
+            bar.isHidden = false
+            XCTAssertTrue(NativeTabBarProbe.rendered(bar: bar, keys: []).contains("hidden=false "))
+            bar.isHidden = true
+            XCTAssertTrue(NativeTabBarProbe.rendered(bar: bar, keys: []).contains("hidden=true "))
+        }
+    #endif
+
     func testHeightAboveTheSafeArea() {
         XCTAssertEqual(NativeTabBarFactory.heightAboveSafeArea(barHeight: 96, safeAreaBottom: 34), 62)
         XCTAssertEqual(NativeTabBarFactory.heightAboveSafeArea(barHeight: 20, safeAreaBottom: 34), 0)
