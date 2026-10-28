@@ -416,6 +416,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         observeBackdrop()
         for delay in [0.15, 0.7, 1.6] { scheduleBackdropSample(after: delay) }
         #if DEBUG
+            WebLoadLog.event("tabbar-transition request visible=\(tabBarState.shown) items=\(tabBarState.items.joined(separator: ","))")
             reportTabBarFixture()
         #endif
     }
@@ -568,9 +569,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 var report = NativeTabBarProbe.report(bar: host.bar, root: root)
                 report["hosting"] = "standalone"
+                let transition =
+                    "requested=\(self?.tabBarState.shown.description ?? "unknown") hidden=\(host.bar.isHidden) animations=\(host.bar.layer.animationKeys() ?? []) model=\(host.bar.frame) presentation=\(String(describing: host.bar.layer.presentation()?.frame))"
+                report["transition"] = transition
+                WebLoadLog.event("tabbar-transition report \(transition)")
                 report["rendered"] = NativeTabBarProbe.rendered(bar: host.bar, keys: host.renderedKeys)
                 guard let data = try? JSONSerialization.data(withJSONObject: report), let json = String(data: data, encoding: .utf8) else { return }
-                self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))")
+                self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))") { _, error in
+                    WebLoadLog.event("tabbar-transition report-delivery error=\(error.map { WebLoadLog.describe($0) } ?? "none")")
+                }
             }
         }
     #endif

@@ -433,6 +433,11 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     private func setShown(_ shown: Bool) {
         guard shown != shownTarget else { return }
         shownTarget = shown
+        #if DEBUG
+            if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                WebLoadLog.event("tabbar-transition animation-start shown=\(shown) hidden=\(bar.isHidden)")
+            }
+        #endif
         let offset = CGAffineTransform(translationX: 0, y: max(bar.bounds.height, 100))
         if shown {
             if bar.isHidden {
@@ -441,11 +446,22 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
             }
             UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
                 self.bar.transform = .identity
+            } completion: { finished in
+                #if DEBUG
+                    if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                        WebLoadLog.event("tabbar-transition show-completion finished=\(finished) target=\(self.shownTarget) hidden=\(self.bar.isHidden)")
+                    }
+                #endif
             }
         } else {
             UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
                 self.bar.transform = offset
-            } completion: { _ in
+            } completion: { finished in
+                #if DEBUG
+                    if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                        WebLoadLog.event("tabbar-transition hide-completion finished=\(finished) target=\(self.shownTarget) hidden=\(self.bar.isHidden)")
+                    }
+                #endif
                 guard !self.shownTarget else { return }
                 self.bar.isHidden = true
                 self.bar.transform = .identity

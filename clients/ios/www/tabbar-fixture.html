@@ -59,6 +59,7 @@
         <button data-state='{"more_dot":false}'>Dot off</button>
         <button data-state='{"visible":false}'>Hide bar</button>
         <button data-state='{"visible":true}'>Show bar</button>
+        <button id="interrupt-visibility">Hide then show</button>
         <button data-state='{"items":["more","meetings","tasks","voice","chat"]}'>Reorder</button>
         <button data-state='{"items":["chat","games","voice","tasks","meetings","more"]}'>Unknown key</button>
         <button data-state='{"items":[],"selected":"chat"}'>Empty items</button>
@@ -159,6 +160,21 @@
           });
         });
 
+        // Interrupt the real native animation: the promise acknowledges the
+        // state request, not animation completion. No timer drives this case.
+        document.getElementById("interrupt-visibility").addEventListener("click", function () {
+          var target = plugin();
+          if (!target || typeof target.tabBarState !== "function") return;
+          target.tabBarState({ visible: false })
+            .then(function () { return target.tabBarState({ visible: true }); })
+            .then(function () {
+              var line = document.createElement("p");
+              line.textContent = "interrupted: hide then show acknowledged";
+              document.body.appendChild(line);
+            })
+            .catch(function () {});
+        });
+
         window.addEventListener("burrowNativeTab", function (event) {
           var detail = event.detail || {};
           var item = document.createElement("li");
@@ -197,7 +213,7 @@
           document.getElementById("glass").textContent =
             "glass: hosting=" + report.hosting + " effect=" + report.glass_effect + " class=" + report.glass_class +
             " floating=" + report.floating + " platter=" + report.platter + " bar=" + report.bar + " os=" + report.os;
-          document.getElementById("native").textContent = report.tree;
+          document.getElementById("native").textContent = "transition: " + report.transition + "\n" + report.tree;
         };
       })();
     </script>
