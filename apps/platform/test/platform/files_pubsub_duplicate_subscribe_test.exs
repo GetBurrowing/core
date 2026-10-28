@@ -18,8 +18,8 @@ defmodule Platform.FilesPubSubDuplicateSubscribeTest do
   # If this file reds, do not relax it: something either restored the false
   # idempotence claim, or a dependency upgrade changed the registry's `keys:`
   # mode — in which case the guard subscriptions those four sites describe
-  # (`maybe_subscribe_project/2`'s MapSet check, FilesLive's
-  # `:subscribed_project_id`) need re-reading before the docs are rewritten.
+  # (`maybe_subscribe_project/2`'s MapSet check and BrowserHooks'
+  # `:browser_topics` set) need re-reading before the docs are rewritten.
   #
   # The double-delivery case is the property. The single-subscribe control
   # below is what makes it non-vacuous: without it, two `assert_receive`s

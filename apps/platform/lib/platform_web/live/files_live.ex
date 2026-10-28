@@ -92,8 +92,9 @@ defmodule PlatformWeb.FilesLive do
 
   ## PubSub
 
-  `mount/3` subscribes to `Platform.Files.project_topic/1` for the
-  selected project. `Platform.Files.Ingester` broadcasts
+  `BrowserHooks` owns the user's private star topic and every currently
+  readable project/space topic. Leaving a project node clears detail state,
+  while keeping its updates available to Recents and Starred. `Platform.Files.Ingester` broadcasts
   `{:file_ingested, file_id}` (and `{:file_ingest_failed, …}`) when a
   run resolves; the LV re-fetches the row and updates the stream so
   the "Ingesting…" pill flips to "Ready" without a refresh. The
@@ -230,7 +231,6 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:semantic_search_state, :idle)
      |> assign(:show_upload_sheet, false)
      |> assign(:undo_toast, nil)
-     |> assign(:subscribed_project_id, nil)
      |> assign(:upload_batch, empty_upload_batch())
      # Default CHECKED: most uploads are working material an agent should
      # be able to read. Checked does not force "attempt" — it just means
@@ -1225,10 +1225,9 @@ defmodule PlatformWeb.FilesLive do
   defp leave_project(%{assigns: %{selected_project_id: nil}} = socket), do: socket
 
   defp leave_project(socket) do
-    # Drop the subscription so PubSub events for a project the viewer left
-    # stop arriving.
+    # BrowserHooks owns subscriptions for every readable project. Leaving
+    # this node clears its detail state, never its global browser updates.
     socket
-    |> maybe_unsubscribe()
     |> assign(:selected_project_id, nil)
     |> assign(:selected_project, nil)
     |> assign(:files, [])
@@ -1290,8 +1289,6 @@ defmodule PlatformWeb.FilesLive do
       project = Platform.Repo.preload(project, :org)
 
       socket
-      |> maybe_unsubscribe()
-      |> subscribe(project_id)
       |> assign(:selected_project_id, project_id)
       |> assign(:selected_project, project)
       |> assign(:files, list_files(project_id))
@@ -1322,21 +1319,6 @@ defmodule PlatformWeb.FilesLive do
       other ->
         other
     end
-  end
-
-  defp subscribe(socket, project_id) do
-    if connected?(socket) do
-      :ok = Files.subscribe_project(project_id)
-    end
-
-    assign(socket, :subscribed_project_id, project_id)
-  end
-
-  defp maybe_unsubscribe(%{assigns: %{subscribed_project_id: nil}} = socket), do: socket
-
-  defp maybe_unsubscribe(%{assigns: %{subscribed_project_id: project_id}} = socket) do
-    Phoenix.PubSub.unsubscribe(Platform.PubSub, Files.project_topic(project_id))
-    assign(socket, :subscribed_project_id, nil)
   end
 
   defp list_files(project_id), do: Files.list_files_for_project(project_id, limit: 200)

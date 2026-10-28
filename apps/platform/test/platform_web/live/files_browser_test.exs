@@ -1304,4 +1304,54 @@ defmodule PlatformWeb.FilesBrowserTest do
     assert has_element?(view, "[data-role=files-item-link][data-item-id='#{second.id}']")
     refute has_element?(view, "#files-undo-toast")
   end
+
+  test "project navigation preserves external mutations in Recents and Starred", c do
+    file = file!(c.project_a, "Before navigation.pdf")
+    :ok = Platform.Files.Stars.set(c.user, {:file, file.id}, true)
+    {:ok, view, _} = live(c.conn, "/files/#{c.project_a.id}")
+
+    assert has_element?(
+             view,
+             "[data-role=files-item-link][data-item-id='#{file.id}']",
+             "Before navigation.pdf"
+           )
+
+    view |> element("[data-role=files-tab-recents]") |> render_click()
+    assert_patch(view, "/files")
+
+    assert {:ok, _} =
+             Platform.Files.BrowserActions.execute(c.user, {:file, file.id}, :rename, %{
+               title: "Recents live.pdf"
+             })
+
+    assert has_element?(
+             view,
+             "[data-role=files-item-link][data-item-id='#{file.id}']",
+             "Recents live.pdf"
+           )
+
+    render_patch(view, "/files/#{c.project_a.id}")
+    view |> element("[data-role=files-tab-starred]") |> render_click()
+
+    assert {:ok, _} =
+             Platform.Files.BrowserActions.execute(c.user, {:file, file.id}, :rename, %{
+               title: "Starred live.pdf"
+             })
+
+    assert has_element?(
+             view,
+             "[data-role=files-item-link][data-item-id='#{file.id}']",
+             "Starred live.pdf"
+           )
+
+    assert {:ok, _} = Platform.Files.BrowserActions.execute(c.user, {:file, file.id}, :delete)
+    refute has_element?(view, "[data-role=files-item-link][data-item-id='#{file.id}']")
+    assert {:ok, _} = Platform.Files.BrowserActions.execute(c.user, {:file, file.id}, :undo)
+
+    assert has_element?(
+             view,
+             "[data-role=files-item-link][data-item-id='#{file.id}']",
+             "Starred live.pdf"
+           )
+  end
 end

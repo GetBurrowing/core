@@ -1339,10 +1339,10 @@ defmodule Platform.Files do
   registration and every later broadcast on the topic is delivered twice.
 
   The caller's obligation is therefore to track what it has subscribed and
-  guard the subscribe. `PlatformWeb.FilesLive` is the shape to copy: it holds
-  the current topic in the `:subscribed_project_id` assign and releases it via
-  `maybe_unsubscribe/1` before subscribing to the next project
-  (apps/platform/lib/platform_web/live/files_live.ex:805).
+  guard the subscribe. `PlatformWeb.Files.BrowserHooks` tracks the complete
+  readable topic set in `:browser_topics` and applies its MapSet differences.
+  It is the browser's sole project-topic owner: entering or leaving a project
+  node changes detail state, not the global Recents/Starred subscriptions.
 
   ASYMMETRY — do NOT reflexively pair every subscribe with an unsubscribe.
   One `Registry.unregister/2` takes that pid's count for the key to 0, not to
