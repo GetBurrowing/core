@@ -722,6 +722,14 @@ defmodule Platform.Memory.Insights.Briefings do
     end
   end
 
+  defp ensure_unfiled(id, verb) when verb in ["apply", "file", "edit_apply"] do
+    if BriefingCard.filed_task_id(Insights.get(id)),
+      do: {:error, :already_handled},
+      else: :ok
+  end
+
+  defp ensure_unfiled(_id, _verb), do: :ok
+
   defp run_verb("answer", id, scope, params) do
     with {:ok, acted} <- Actions.answer(id, scope, params["answer"]) do
       {:ok, %{insight: acted, ref: acted.artefact_ref, undo: %{"verb" => "unanswer"}}}
@@ -748,14 +756,6 @@ defmodule Platform.Memory.Insights.Briefings do
        }}
     end
   end
-
-  defp ensure_unfiled(id, verb) when verb in ["apply", "file", "edit_apply"] do
-    if BriefingCard.filed_task_id(Insights.get(id)),
-      do: {:error, :already_handled},
-      else: :ok
-  end
-
-  defp ensure_unfiled(_id, _verb), do: :ok
 
   defp run_verb("apply", id, scope, _params) do
     with {:ok, acted} <- Actions.act(id, scope), do: {:ok, acted_outcome(acted)}

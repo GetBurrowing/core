@@ -2235,8 +2235,8 @@ defmodule PlatformWeb.InboxLiveTest do
 
       daily_lv |> element(selector <> " [data-action=revert]") |> render_click()
       assert %DateTime{} = Repo.get!(TaskRecord, ctx.t1.id).deleted_at
-      assert render(meeting_lv) =~ "Reverted by"
-      assert render(daily_lv) =~ "Reverted by"
+      Platform.AsyncAssertions.assert_eventually(fn -> render(meeting_lv) =~ "Reverted by" end)
+      Platform.AsyncAssertions.assert_eventually(fn -> render(daily_lv) =~ "Reverted by" end)
       refute has_element?(daily_lv, selector <> " [data-action=revert]")
     end
 

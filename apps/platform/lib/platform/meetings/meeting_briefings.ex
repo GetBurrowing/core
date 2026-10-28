@@ -496,10 +496,11 @@ defmodule Platform.Meetings.MeetingBriefings do
       returned by `Platform.Meetings.meeting_tasks_query/1` (not deleted,
       still this meeting's under THE rule) and is still `"backlog"`.
     * `actions` is `[]` once resolved; otherwise
-      `[:revert, :confirm, :ask]` when revertible, else `[:confirm, :ask]`.
+      `[:revert, :ask]` for a revertible task, `[:ask]` for other filed tasks,
+      and `[:confirm, :ask]` for non-task changes.
 
-  `scope` is the viewer's; nothing here depends on it today, and it is part
-  of the signature so a per-viewer rule never has to change every caller.
+  `scope` is the viewer's and controls whether Revert is offered. The action
+  re-checks task access and current revertibility inside its transaction.
   """
   @spec view(MeetingBriefing.t(), Scope.t() | nil) :: map()
   def view(%MeetingBriefing{} = briefing, scope) do
@@ -616,7 +617,10 @@ defmodule Platform.Meetings.MeetingBriefings do
     else
       meeting
       |> Meetings.meeting_tasks_query()
-      |> where([task: t], t.id in ^ids and t.status == "backlog")
+      |> where(
+        [task: t],
+        t.id in ^ids and t.status == "backlog" and t.project_id == ^meeting.project_id
+      )
       |> select([task: t], t.id)
       |> Repo.all()
       |> MapSet.new()

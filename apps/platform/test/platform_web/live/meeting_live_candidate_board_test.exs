@@ -535,7 +535,8 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "file the pricing objection",
           state: :acting,
           classified_intent: "action_item",
-          task_id: Ecto.UUID.generate()
+          task_id: Ecto.UUID.generate(),
+          outcome_kind: :task
         })
 
       failed_mint =
