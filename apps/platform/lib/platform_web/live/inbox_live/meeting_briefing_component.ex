@@ -178,11 +178,21 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
     ~H"""
     <div id={@id} data-role="meeting-briefing-task" data-meeting-id={@meeting_id}>
-      <.open_card :if={@item && is_nil(@item.receipt)} item={@item} myself={@myself}
-        asking?={MapSet.member?(@asking, @item.key)} blank?={MapSet.member?(@blank, @item.key)}
-        error={Map.get(@errors, @item.key)} />
-      <.resolved_card :if={@item && @item.receipt} item={@item} time_zone={@time_zone}
-        notice={Map.get(@notices, @item.key)} transcript_url={@view.transcript_url} />
+      <.open_card
+        :if={@item && is_nil(@item.receipt)}
+        item={@item}
+        myself={@myself}
+        asking?={MapSet.member?(@asking, @item.key)}
+        blank?={MapSet.member?(@blank, @item.key)}
+        error={Map.get(@errors, @item.key)}
+      />
+      <.resolved_card
+        :if={@item && @item.receipt}
+        item={@item}
+        time_zone={@time_zone}
+        notice={Map.get(@notices, @item.key)}
+        transcript_url={@view.transcript_url}
+      />
       <p :if={is_nil(@item)} class="text-sm text-subtle">This task is unavailable.</p>
     </div>
     """
@@ -303,7 +313,13 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
         {@item.title}
       </h4>
 
-      <p :if={@item.availability} class="mt-1 text-sm text-subtle" data-role="meeting-task-availability">{@item.availability}</p>
+      <p
+        :if={@item.availability}
+        class="mt-1 text-sm text-subtle"
+        data-role="meeting-task-availability"
+      >
+        {@item.availability}
+      </p>
       <div class="mt-3 flex flex-wrap items-center gap-2" data-role="meeting-briefing-actions">
         <button
           :for={action <- @item.actions}

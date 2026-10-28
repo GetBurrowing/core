@@ -489,8 +489,11 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
         </span>
       </p>
 
-      <p :if={Map.get(@candidate, :outcome_kind) != :artifact}
-        class="text-sm text-subtle" data-role="meeting-candidate-evidence">
+      <p
+        :if={Map.get(@candidate, :outcome_kind) != :artifact}
+        class="text-sm text-subtle"
+        data-role="meeting-candidate-evidence"
+      >
         Candidate evidence · Follow-up work is reviewed after the meeting.
       </p>
       <.review_row :if={review?(@candidate)} candidate={@candidate} />

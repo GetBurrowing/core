@@ -356,6 +356,35 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
     end
   end
 
+  test "moved and deleted filed tasks remain honest references without filing or revert controls" do
+    ctx = concluded!()
+    {:ok, destination} = Tasks.create_project(%{name: "Moved destination", org_id: acme_org_id()})
+
+    Repo.get!(TaskRecord, ctx.t1.id)
+    |> Ecto.Changeset.change(project_id: destination.id)
+    |> Repo.update!()
+
+    Repo.get!(TaskRecord, ctx.t2.id)
+    |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
+    assert item(view, key(ctx.t1)).actions == [:ask]
+    assert item(view, key(ctx.t1)).availability == "This task moved to another project."
+    assert item(view, key(ctx.t2)).actions == [:ask]
+    assert item(view, key(ctx.t2)).availability == "This task was removed."
+
+    assert {:error, :not_revertible} =
+             MeetingBriefings.act(ctx.briefing, key(ctx.t1), :revert, scope(ctx.a), %{})
+
+    assert MeetingBriefings.card_for_task(ctx.t1.id, ctx.a.id) == %{
+             meeting_id: ctx.meeting.id,
+             key: key(ctx.t1)
+           }
+
+    assert MeetingBriefings.card_for_task(ctx.t1.id, user!().id) == nil
+  end
+
   # ── Ask ───────────────────────────────────────────────────────────────────
 
   describe "act/5 :ask" do

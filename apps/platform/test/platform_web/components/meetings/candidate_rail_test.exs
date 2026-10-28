@@ -2014,7 +2014,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
                "Not an action"
     end
 
-    test "the flip names the DESTINATION, and it flips with outcome_kind" do
+    test "neither task evidence nor canvas controls offer a task conversion" do
       a = agent("Octavius")
       task_card = armed_for(a.id, 24, %{outcome_kind: :task})
       artifact_card = armed_for(a.id, 18, %{outcome_kind: :artifact})
@@ -2031,12 +2031,6 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       assert flip.(task_html, task_card) == ""
       assert flip.(artifact_html, artifact_card) == ""
-
-      # THE PAIR IS NOT VACUOUS: the two expectations are literally
-      # different strings, and they are different in the direction the
-      # card's own `outcome_kind` predicts. A component that ignored
-      # `outcome_kind` would give one answer twice.
-      assert flip.(task_html, task_card) == flip.(artifact_html, artifact_card)
     end
 
     test "the training line says what happens to the choice, muted and under the choices" do
