@@ -59,6 +59,7 @@
         <button data-state='{"more_dot":false}'>Dot off</button>
         <button data-state='{"visible":false}'>Hide bar</button>
         <button data-state='{"visible":true}'>Show bar</button>
+        <button id="interrupt-visibility">Hide then show</button>
         <button data-state='{"items":["more","meetings","tasks","voice","chat"]}'>Reorder</button>
         <button data-state='{"items":["chat","games","voice","tasks","meetings","more"]}'>Unknown key</button>
         <button data-state='{"items":[],"selected":"chat"}'>Empty items</button>
@@ -157,6 +158,16 @@
             var state = withInk(JSON.parse(button.getAttribute("data-state")), button.getAttribute("data-ink"));
             target.tabBarState(state).catch(function () {});
           });
+        });
+
+        // Interrupt the real native animation: the promise acknowledges the
+        // state request, not animation completion. No timer drives this case.
+        document.getElementById("interrupt-visibility").addEventListener("click", function () {
+          var target = plugin();
+          if (!target || typeof target.tabBarState !== "function") return;
+          target.tabBarState({ visible: false })
+            .then(function () { return target.tabBarState({ visible: true }); })
+            .catch(function () {});
         });
 
         window.addEventListener("burrowNativeTab", function (event) {

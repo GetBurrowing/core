@@ -128,13 +128,21 @@ final class TabBarUITests: XCTestCase {
         line("rendered: keys=", fragments, app)
     }
 
+    /// Hidden means UIKit has removed the bar from accessibility, not that
+    /// a disappearing container happens to have no activation point. Querying
+    /// exists then isHittable races the hide completion (01a18187).
     private func gone(_ bar: XCUIElement, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if !(bar.exists && bar.isHittable) { return true }
-            usleep(250_000)
+        bar.waitForNonExistence(timeout: timeout)
+    }
+
+    /// Wait on the controls a user taps, within the existing show budget.
+    /// A UITabBar container can exist while its buttons are still sliding in.
+    private func ready(_ bar: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate { _, _ in
+            let buttons = bar.buttons.allElementsBoundByIndex
+            return buttons.count == self.five.count && buttons.allSatisfy(\.isHittable)
         }
-        return false
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: timeout) == .completed
     }
 
     private func labels(_ bar: XCUIElement) -> [String] {
@@ -155,13 +163,12 @@ final class TabBarUITests: XCTestCase {
     private func start(_ appearance: String) -> (XCUIApplication, XCUIElement) {
         let app = launch(appearance)
         let bar = app.tabBars["native-tab-bar"]
-        XCTAssertFalse(bar.exists && bar.isHittable, "no bar before the first state")
+        XCTAssertFalse(bar.exists, "no bar before the first state")
         line("rendered: ", ["waiting"], app)
         shot("stage2-\(appearance)-0-before-state")
 
         send("Chat, dot on", app)
-        XCTAssertTrue(bar.waitForExistence(timeout: 10))
-        XCTAssertTrue(bar.isHittable)
+        XCTAssertTrue(ready(bar, timeout: 10), "all native tab buttons must be hittable")
         assertLabels(bar, five)
         rendered(["keys=chat,voice,tasks,meetings,more", "selected=chat", "badges=more ", "hidden=false"], app)
         // Document-start script: the attribute and a real height.
@@ -179,8 +186,7 @@ final class TabBarUITests: XCTestCase {
         rendered(["hidden=true"], app)
         shot("stage2-\(appearance)-2-hidden")
         send("Show bar", app)
-        XCTAssertTrue(bar.waitForExistence(timeout: 5))
-        XCTAssertTrue(bar.isHittable)
+        XCTAssertTrue(ready(bar, timeout: 5), "all native tab buttons must be hittable after showing")
     }
 
     private func fixture(_ appearance: String) {
@@ -247,6 +253,31 @@ final class TabBarUITests: XCTestCase {
     func testRepeatedVisibilityLight() { repeatedVisibility("light") }
     func testRepeatedVisibilityDark() { repeatedVisibility("dark") }
 
+    /// The fixture submits these states back-to-back, without waiting for
+    /// animation completion. A late hide must not win over the latest show;
+    /// repeating the same state must keep its settled visibility.
+    private func interruptedVisibility(_ appearance: String) {
+        let (app, bar) = start(appearance)
+        send("Hide then show", app)
+        rendered(["hidden=false"], app)
+        XCTAssertTrue(ready(bar, timeout: 5))
+        send("Show bar", app)
+        XCTAssertTrue(ready(bar, timeout: 5))
+        send("Hide bar", app)
+        XCTAssertTrue(gone(bar, timeout: 5))
+        send("Hide bar", app)
+        rendered(["hidden=true"], app)
+        XCTAssertFalse(bar.exists)
+        send("Show bar", app)
+        XCTAssertTrue(ready(bar, timeout: 5))
+        bar.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(event("chat reselect=true", app).waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
+    func testInterruptedVisibilityLight() { interruptedVisibility("light") }
+    func testInterruptedVisibilityDark() { interruptedVisibility("dark") }
+
     /// Stage 2: the full contract on the fixture, light.
     func testContractLight() {
         let (app, bar) = start("light")
@@ -300,12 +331,13 @@ final class TabBarUITests: XCTestCase {
         XCTAssertTrue(app.webViews.staticTexts["mode: silent"].waitForExistence(timeout: 10))
         XCTAssertTrue(gone(bar, timeout: 10), "a document with no state hides the bar")
         send("Chat, dot on", app)
-        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(ready(bar, timeout: 5))
         app.webViews.links["Stateful page"].tap()
         XCTAssertTrue(app.webViews.staticTexts["mode: auto"].waitForExistence(timeout: 10))
         rendered(["selected=tasks", "hidden=false"], app)
         sleep(5)
-        XCTAssertTrue(bar.exists && bar.isHittable, "a document that sends a state keeps the bar")
+        XCTAssertEqual(bar.buttons.count, five.count, "a document that sends a state keeps the bar")
+        XCTAssertTrue(bar.buttons.allElementsBoundByIndex.allSatisfy(\.isHittable))
         line("doc: attr=true height=", [], app)
         app.terminate()
     }
