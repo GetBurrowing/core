@@ -5,7 +5,7 @@ defmodule Platform.Social.TransportParityTest do
   `apps/game_stream/test/security/transport_capability_parity_test.exs`; the
   HTTP and WS helpers are that file's, copied.
 
-    * A runtime granted `social` sees exactly the eighteen `social_*` tools on the
+    * A runtime granted `social` sees exactly the nineteen `social_*` tools on the
       MCP `tools/list` (`POST /mcp`) AND in the runtime channel's
       `capabilities` push, each description carrying the human-approves
       sentence.
@@ -30,10 +30,10 @@ defmodule Platform.Social.TransportParityTest do
 
   # Social 4/7's six, Social 5/7's social_clip_list and social_clip_render,
   # Social 6/7's social_task_request, and Clip Studio 1/9's social_clip_submit
-  # and five clip job tools, Social authoring 2/11's two idea tools, and
+  # and six clip job tools, Social authoring 2/11's two idea tools, and
   # 7/11's social_idea_note_add. Sorted.
-  @eighteen ~w(social_clip_job_claim social_clip_job_complete social_clip_job_fail
-              social_clip_job_list social_clip_job_progress social_clip_list
+  @nineteen ~w(social_clip_job_claim social_clip_job_complete social_clip_job_fail
+              social_clip_job_list social_clip_job_progress social_clip_job_source social_clip_list
               social_clip_propose social_clip_render social_clip_submit social_draft_create
               social_draft_update social_idea_create social_idea_list social_idea_note_add
               social_post_list social_profile_get social_profile_list social_task_request)
@@ -63,7 +63,7 @@ defmodule Platform.Social.TransportParityTest do
     %{owner: owner, org: org}
   end
 
-  test "exactly the eighteen tools on both transports", ctx do
+  test "exactly the nineteen tools on both transports", ctx do
     {runtime, token} = runtime_for(ctx, @granted)
     {_socket, capabilities} = join_runtime(runtime, token)
 
@@ -75,11 +75,11 @@ defmodule Platform.Social.TransportParityTest do
     ws_social =
       capabilities |> ws_tool_names() |> Enum.filter(&String.starts_with?(&1, "social_"))
 
-    assert http_social == @eighteen
-    assert ws_social == @eighteen
+    assert http_social == @nineteen
+    assert ws_social == @nineteen
     assert http |> Map.keys() |> Enum.sort() == ws_tool_names(capabilities)
 
-    for name <- @eighteen do
+    for name <- @nineteen do
       assert http[name]["description"] =~ @sentence
       ws_tool = Enum.find(capabilities.tools, &(&1.name == name))
       assert ws_tool.description =~ @sentence
@@ -98,7 +98,7 @@ defmodule Platform.Social.TransportParityTest do
     {runtime, token} = runtime_for(ctx, ["social"])
 
     assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
-             @eighteen
+             @nineteen
 
     assert Platform.Access.can?(Platform.Access.Scope.for_runtime(runtime), "social.use")
     {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, %{})
@@ -107,7 +107,7 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, nil)
 
     assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
-             @eighteen
+             @nineteen
 
     {:ok, _} =
       Platform.Tenancy.mark_membership_external(%{user_id: ctx.owner.id, org_id: ctx.org.id})
@@ -136,8 +136,8 @@ defmodule Platform.Social.TransportParityTest do
       (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
       |> Enum.filter(&social?/1)
 
-    # eighteen names, once per transport
-    assert length(names) == 36
+    # nineteen names, once per transport
+    assert length(names) == 38
     assert Enum.filter(names, &(&1 =~ "publish" or &1 =~ "approve")) == []
   end
 

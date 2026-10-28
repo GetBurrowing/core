@@ -16,7 +16,7 @@ defmodule Platform.Social.Tools do
   ## No publish, no approve
 
   Writes go through `Platform.Social.AgentDrafts`, whose ceiling is
-  `needs_approval`. The five `social_clip_job_*` tools (Clip Studio 1/9)
+  `needs_approval`. The six `social_clip_job_*` tools
   work the job list in `Platform.Social.ClipJobs`; the claimer is always
   the calling agent, never an argument. `social_clip_submit` lands a clip as
   review pending; no tool writes a review field, and the submitting agent
@@ -53,7 +53,7 @@ defmodule Platform.Social.Tools do
 
   # Clip Studio 1/9: the clip job tools.
   @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_progress
-                social_clip_job_complete social_clip_job_fail)
+                social_clip_job_complete social_clip_job_fail social_clip_job_source)
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
@@ -286,6 +286,26 @@ defmodule Platform.Social.Tools do
 
   defp job_tool("social_clip_job_claim", args, scope, agent) do
     scope |> ClipJobs.claim(args["job_id"], agent.id) |> job_reply()
+  end
+
+  defp job_tool("social_clip_job_source", args, scope, agent) do
+    case ClipJobs.source_download(scope, args["job_id"], agent.id) do
+      {:ok, source} -> {:ok, source}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp job_tool(
+         "social_clip_job_progress",
+         %{"picks" => picks, "progress" => progress} = args,
+         scope,
+         agent
+       )
+       when is_number(progress) and progress >= 0 and progress <= 1 do
+    case ClipJobs.plan_episode(scope, args["job_id"], agent.id, picks) do
+      {:ok, jobs} -> {:ok, %{jobs: Enum.map(jobs, &job_json/1)}}
+      error -> {:error, error_envelope(error)}
+    end
   end
 
   defp job_tool("social_clip_job_progress", args, scope, agent) do
@@ -671,6 +691,15 @@ defmodule Platform.Social.Tools do
       "the file must be a video in Burrow Files in the profile's project",
       true,
       "Upload it with file_add using project_id = the profile's project, and pass that file_id."
+    )
+  end
+
+  defp error_envelope({:error, :source_unavailable}) do
+    err(
+      :source_unavailable,
+      "the episode source is not a storage-ready video in the job's current project",
+      false,
+      "Fail the episode job with social_clip_job_fail; do not copy files manually or use another project's file."
     )
   end
 

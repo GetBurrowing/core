@@ -89,6 +89,80 @@ defmodule Platform.Social.ClipReviewFeed do
     end
   end
 
+  @headline_errors ~w(HEADLINE_CLI_UNSUPPORTED HEADLINE_REQUEST_UNSUPPORTED HEADLINE_VOICE_MISSING
+    HEADLINE_BASE_MISSING HEADLINE_BASE_STALE HEADLINE_SPAN_INVALID HEADLINE_SPAN_STALE
+    HEADLINE_CANDIDATE_MISSING HEADLINE_EMPTY HEADLINE_UNBACKED HEADLINE_OUTPUT_UNSUPPORTED
+    HEADLINE_OVERLAY_DISABLED HEADLINE_RENDER_APPROVAL_REQUIRED HEADLINE_REVIEW_NOT_APPLIED
+    HEADLINE_APPLIED_MISMATCH HEADLINE_PRIVACY_EXPORT_REFUSED HEADLINE_PREPARE_FAILED
+    HEADLINE_RENDER_MISSING)
+
+  @doc "Recent automatic episode outcomes, including failures before any candidate exists."
+  def episode_jobs(org_id, profile_id) do
+    case Social.get_profile(org_id, profile_id) do
+      %Profile{id: id} ->
+        parents =
+          Repo.all(
+            from(j in ClipJob,
+              where: j.profile_id == ^id and j.kind == "episode",
+              order_by: [desc: j.inserted_at, desc: j.id],
+              limit: 20
+            )
+          )
+
+        ids = Enum.flat_map(parents, &(&1.payload["child_job_ids"] || []))
+        children = Repo.all(from(j in ClipJob, where: j.profile_id == ^id and j.id in ^ids))
+        by_id = Map.new(children, &{&1.id, &1})
+
+        Enum.map(parents, fn job ->
+          child_rows =
+            (job.payload["child_job_ids"] || [])
+            |> Enum.flat_map(fn id -> if by_id[id], do: [episode_row(by_id[id])], else: [] end)
+
+          job |> episode_row() |> Map.put(:children, child_rows)
+        end)
+
+      nil ->
+        []
+    end
+  end
+
+  defp episode_row(job) do
+    %{
+      id: job.id,
+      status: job.status,
+      uploaded_at: Calendar.strftime(job.inserted_at, "%b %d, %H:%M UTC"),
+      progress: job.progress,
+      step: episode_step(job),
+      code: episode_error(job.error)
+    }
+  end
+
+  # Never render runner error prose, source filenames, URLs or generated private
+  # headlines. Only persisted protocol outcomes and this closed code set cross UI.
+  defp episode_error(error) when is_binary(error) do
+    code = error |> String.split(":", parts: 2) |> hd()
+
+    if code in @headline_errors or
+         code in ~w(RUNNER_UNAVAILABLE RUNNER_TIMEOUT EPISODE_INCOMPLETE),
+       do: code,
+       else: "RENDER_FAILED"
+  end
+
+  defp episode_error(_), do: "RENDER_FAILED"
+
+  defp episode_step(%{status: "queued"}), do: "Waiting for runner"
+  defp episode_step(%{status: "claimed"}), do: "Runner connected"
+  defp episode_step(%{status: "failed"}), do: "Failed"
+
+  defp episode_step(%{status: "done", kind: "episode", result: %{"outcome" => "no_picks"}}),
+    do: "No picks found"
+
+  defp episode_step(%{status: "done", kind: "episode"}), do: "Clips ready for review"
+  defp episode_step(%{status: "done"}), do: "Ready for review"
+  defp episode_step(%{kind: "episode", payload: %{"pick_plan" => _}}), do: "Rendering picks"
+  defp episode_step(%{kind: "episode"}), do: "Processing episode"
+  defp episode_step(_), do: "Generating headline and rendering"
+
   @doc "Latest headline attempt, scoped to this profile; errors expose stable codes only."
   def headline_attempt(org_id, profile_id, clip_id) do
     with {:ok, _} <- fetch_clip(org_id, profile_id, clip_id) do
@@ -109,13 +183,6 @@ defmodule Platform.Social.ClipReviewFeed do
       _ -> nil
     end
   end
-
-  @headline_errors ~w(HEADLINE_CLI_UNSUPPORTED HEADLINE_REQUEST_UNSUPPORTED HEADLINE_VOICE_MISSING
-    HEADLINE_BASE_MISSING HEADLINE_BASE_STALE HEADLINE_SPAN_INVALID HEADLINE_SPAN_STALE
-    HEADLINE_CANDIDATE_MISSING HEADLINE_EMPTY HEADLINE_UNBACKED HEADLINE_OUTPUT_UNSUPPORTED
-    HEADLINE_OVERLAY_DISABLED HEADLINE_RENDER_APPROVAL_REQUIRED HEADLINE_REVIEW_NOT_APPLIED
-    HEADLINE_APPLIED_MISMATCH HEADLINE_PRIVACY_EXPORT_REFUSED HEADLINE_PREPARE_FAILED
-    HEADLINE_RENDER_MISSING)
 
   defp headline_error(error) when is_binary(error) do
     code = error |> String.split(":", parts: 2) |> hd()

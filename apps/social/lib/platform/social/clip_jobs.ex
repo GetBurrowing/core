@@ -55,7 +55,7 @@ defmodule Platform.Social.ClipJobs do
 
   @base_profile "how-to-computer"
   @result_keys ~w(file_id title caption speaker episode_code platforms duration_s width height
-                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id)
+                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id headline_applied)
   @meta_keys ~w(title caption speaker episode_code)
 
   @type error :: {:error, atom() | tuple() | Ecto.Changeset.t()}
@@ -68,6 +68,66 @@ defmodule Platform.Social.ClipJobs do
   @spec clip_user_profile(Profile.t() | Ecto.UUID.t()) :: String.t()
   def clip_user_profile(%Profile{id: id}), do: clip_user_profile(id)
   def clip_user_profile(id) when is_binary(id), do: "burrow-" <> id
+
+  @doc """
+  Internal discovery path: queues a source episode without a human identity or
+  clip/trim. Both ids are re-read under a transaction; source eligibility is
+  checked against the persisted pipeline and tenant project. Never exposed as
+  a tool or used to bypass the manual enqueue approver checks.
+  """
+  def enqueue_episode(pipeline_id, source_file_id) do
+    Repo.transaction(fn ->
+      pipeline = Repo.get(Platform.Social.EpisodePipeline, pipeline_id)
+      profile = pipeline && Repo.get(Profile, pipeline.profile_id)
+
+      source = Platform.Files.get_file(source_file_id)
+
+      project = profile && Repo.get(Platform.Tasks.Project, profile.project_id)
+
+      unless pipeline && profile && source && project && project.org_id == profile.org_id &&
+               is_nil(project.archived_at) &&
+               Platform.Social.EpisodeDiscovery.eligible?(source, profile, pipeline) do
+        Repo.rollback(:ineligible_episode)
+      end
+
+      payload = %{
+        "kind" => "episode",
+        "source_file_id" => source.id,
+        "episode" => %{"source_file_id" => source.id},
+        "profile_id" => profile.id,
+        "project_id" => profile.project_id,
+        "pipeline_id" => pipeline.id,
+        "pipeline_version" => pipeline.version,
+        "clip_user_profile" => clip_user_profile(profile),
+        "look" => ClipLook.effective(profile.show_look)
+      }
+
+      %ClipJob{}
+      |> ClipJob.enqueue_changeset(%{
+        profile_id: profile.id,
+        kind: "episode",
+        source_file_id: source.id,
+        episode_pipeline_id: pipeline.id,
+        payload: payload
+      })
+      |> Repo.insert(
+        on_conflict: :nothing,
+        conflict_target: [:profile_id, :source_file_id, :episode_pipeline_id]
+      )
+      |> case do
+        {:ok, _} ->
+          Repo.get_by!(ClipJob,
+            profile_id: profile.id,
+            source_file_id: source.id,
+            episode_pipeline_id: pipeline.id
+          )
+
+        {:error, error} ->
+          Repo.rollback(error)
+      end
+    end)
+    |> notify_job()
+  end
 
   # ── Human side ───────────────────────────────────────────────────────
 
@@ -411,7 +471,7 @@ defmodule Platform.Social.ClipJobs do
         set: [status: "claimed", claimed_by_agent_id: agent_id, claimed_at: now, updated_at: now]
       )
       |> case do
-        {1, [job]} -> {:ok, job}
+        {1, [job]} -> notify_job({:ok, job})
         {0, _} -> {:error, :already_claimed}
       end
     end
@@ -440,6 +500,135 @@ defmodule Platform.Social.ClipJobs do
   defp check_progress(_, _), do: {:error, :invalid_progress}
 
   @doc """
+  Short-lived source download for the claimer of an open automatic episode
+  job. The source is taken from the durable job identity, never caller attrs.
+  Re-check readiness/provenance and project ownership before minting a Files
+  signed URL; do not persist or log the returned bearer URL.
+  """
+  @spec source_download(Social.scope(), term(), Ecto.UUID.t()) :: {:ok, map()} | error()
+  def source_download(scope, job_id, agent_id) do
+    locked(scope, job_id, agent_id, fn job, profile ->
+      source = checked_episode_source!(job, profile)
+
+      expires_at = DateTime.add(DateTime.utc_now(), 900, :second)
+      url = ok_or_rollback(Platform.Files.SignedUrl.url(source, expires_at: expires_at))
+
+      %{
+        file_id: source.id,
+        project_id: profile.project_id,
+        url: url,
+        expires_at: expires_at,
+        content_type: source.content_type,
+        byte_size: source.byte_size
+      }
+    end)
+  end
+
+  defp checked_episode_source!(job, profile) do
+    source = job.source_file_id && Platform.Files.get_file(job.source_file_id)
+
+    pipeline =
+      job.episode_pipeline_id &&
+        Repo.get(Platform.Social.EpisodePipeline, job.episode_pipeline_id)
+
+    project = profile.project_id && Repo.get(Platform.Tasks.Project, profile.project_id)
+
+    unless job.kind == "episode" && source && pipeline && project &&
+             project.org_id == profile.org_id && is_nil(project.archived_at) &&
+             Platform.Social.EpisodeDiscovery.eligible?(source, profile, pipeline) do
+      Repo.rollback(:source_unavailable)
+    end
+
+    source
+  end
+
+  @doc "Persist a content-free pick plan under the episode lock; replays return the same child ids."
+  def plan_episode(scope, job_id, agent_id, picks) do
+    locked(scope, job_id, agent_id, fn job, profile ->
+      unless job.kind == "episode", do: Repo.rollback(:not_an_episode)
+      checked_episode_source!(job, profile)
+      unless is_list(picks) and length(picks) <= 100, do: Repo.rollback(:invalid_picks)
+
+      picks =
+        Enum.map(picks, fn raw ->
+          pick = normalize(raw)
+
+          unless is_binary(pick["candidate_id"]) and byte_size(pick["candidate_id"]) in 1..200 and
+                   check_range(pick["in_s"], pick["out_s"]) == :ok,
+                 do: Repo.rollback(:invalid_picks)
+
+          Map.take(pick, ~w(candidate_id in_s out_s))
+        end)
+
+      unless length(Enum.uniq_by(picks, & &1["candidate_id"])) == length(picks),
+        do: Repo.rollback(:invalid_picks)
+
+      case job.payload["pick_plan"] do
+        nil ->
+          children =
+            Enum.map(picks, fn pick ->
+              source = %{"source_file_id" => job.source_file_id}
+
+              clip =
+                %Clip{profile_id: profile.id}
+                |> Clip.changeset(source)
+                |> Changeset.put_change(:status, "candidate")
+                |> Changeset.put_change(:rev, 1)
+                |> Changeset.put_change(:look, ClipLook.effective(profile.show_look))
+                |> Changeset.put_change(:requested_start_s, pick["in_s"] * 1.0)
+                |> Changeset.put_change(:requested_end_s, pick["out_s"] * 1.0)
+                |> insert_or_rollback()
+
+              pay =
+                payload(
+                  "new_clip",
+                  profile,
+                  clip,
+                  clip.look,
+                  pick["in_s"] * 1.0,
+                  pick["out_s"] * 1.0,
+                  nil,
+                  1
+                )
+                |> Map.merge(%{
+                  "episode_job_id" => job.id,
+                  "candidate_id" => pick["candidate_id"],
+                  "source_id" => job.source_file_id,
+                  "headline" => %{"consumer" => "episode"}
+                })
+
+              insert_job!(profile, clip, "new_clip", pay, nil)
+            end)
+
+          job
+          |> Changeset.change(status: "running", progress: 0.4)
+          |> Changeset.change(
+            payload:
+              Map.merge(job.payload, %{
+                "pick_plan" => picks,
+                "child_job_ids" => Enum.map(children, & &1.id)
+              })
+          )
+          |> insert_or_rollback(:update)
+
+          children
+
+        ^picks ->
+          episode_children(job)
+
+        _ ->
+          Repo.rollback(:pick_plan_changed)
+      end
+    end)
+  end
+
+  defp episode_children(job) do
+    ids = job.payload["child_job_ids"] || []
+    rows = Repo.all(from(j in ClipJob, where: j.id in ^ids)) |> Map.new(&{&1.id, &1})
+    Enum.map(ids, &Map.fetch!(rows, &1))
+  end
+
+  @doc """
   The claimer completes the job with `result` (only `result_keys/0` are
   read). For `new_clip` and `rerender` the file must be a video in the
   profile's project; the clip (locked FOR UPDATE) becomes rendered with that
@@ -456,6 +645,14 @@ defmodule Platform.Social.ClipJobs do
 
     locked(scope, job_id, agent_id, fn job, profile ->
       clip = complete_clip(job, profile, agent_id, result)
+
+      result =
+        if job.kind == "episode" do
+          count = length(job.payload["child_job_ids"] || [])
+          %{"pick_count" => count, "outcome" => if(count == 0, do: "no_picks", else: "rendered")}
+        else
+          result
+        end
 
       job =
         job
@@ -474,10 +671,22 @@ defmodule Platform.Social.ClipJobs do
     end
   end
 
+  defp complete_clip(%ClipJob{kind: "episode"} = job, _profile, _agent_id, _result) do
+    unless is_list(job.payload["pick_plan"]), do: Repo.rollback(:episode_not_planned)
+
+    unless Enum.all?(episode_children(job), &(&1.status == "done")),
+      do: Repo.rollback(:episode_incomplete)
+
+    nil
+  end
+
   defp complete_clip(%ClipJob{kind: "save_default"}, _profile, _agent_id, _result), do: nil
 
   defp complete_clip(%ClipJob{kind: kind} = job, profile, agent_id, result)
        when kind in ["new_clip", "rerender"] do
+    if job.payload["episode_job_id"] && result["headline_applied"] != true,
+      do: Repo.rollback(:headline_not_applied)
+
     file = ok_or_rollback(AgentDrafts.check_clip_file(result["file_id"], profile))
     ok_or_rollback(AgentDrafts.check_title(Map.take(result, ["title"])))
     platforms = ok_or_rollback(check_platforms(result, profile))
@@ -586,6 +795,14 @@ defmodule Platform.Social.ClipJobs do
         |> ClipJob.finish_changeset(:failed, message)
         |> insert_or_rollback(:update)
       end)
+      |> case do
+        {:ok, job} = result ->
+          Platform.Social.EpisodePipeline.child_failed(job)
+          result
+
+        other ->
+          other
+      end
     end
   end
 
@@ -641,8 +858,34 @@ defmodule Platform.Social.ClipJobs do
           true -> fun.(job, Repo.get!(Profile, job.profile_id))
         end
       end)
+      |> case do
+        {:ok, _} = result ->
+          broadcast_job(Repo.get!(ClipJob, id))
+          result
+
+        other ->
+          other
+      end
     end
   end
+
+  @doc false
+  def broadcast_job(%ClipJob{} = job) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      Social.clips_topic(job.profile_id),
+      {:social_clip_job, %{id: job.id, profile_id: job.profile_id}}
+    )
+
+    :ok
+  end
+
+  defp notify_job({:ok, %ClipJob{} = job} = result) do
+    broadcast_job(job)
+    result
+  end
+
+  defp notify_job(result), do: result
 
   defp insert_or_rollback(changeset, action \\ :insert) do
     case apply(Repo, action, [changeset]) do
