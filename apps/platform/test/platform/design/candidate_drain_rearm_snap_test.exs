@@ -274,6 +274,7 @@ defmodule Platform.Design.CandidateDrainRearmSnapTest do
       id: Ecto.UUID.generate(),
       evidence_quote: "we should rotate the staging secrets",
       state: :shaping,
+      outcome_kind: :artifact,
       classified_intent: "action_items",
       transcript_chunk_ids: [Ecto.UUID.generate()],
       acts_at: DateTime.add(@now, secs, :second),
