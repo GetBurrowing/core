@@ -1,4 +1,7 @@
 defmodule Platform.Repo.Migrations.FenceMeetingSummaryInput do
+  @moduledoc """
+  Task 01a1830b: fence transcript summary producers and completion generations so stale summaries and callbacks cannot satisfy current briefing readiness.
+  """
   use Ecto.Migration
 
   def change do
