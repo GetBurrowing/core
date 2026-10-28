@@ -78,6 +78,7 @@ defmodule PlatformWeb.SocialClipsReview do
      assign(socket,
        queue: [],
        jobs: [],
+       episode_jobs: [],
        accounts: [],
        clip: nil,
        byline: %{source_label: nil, agent_name: nil},
@@ -112,19 +113,11 @@ defmodule PlatformWeb.SocialClipsReview do
   def update(%{landed_expire: clip_id}, socket),
     do: {:ok, assign(socket, :landed, MapSet.delete(socket.assigns.landed, clip_id))}
 
+  def update(%{job_event: true}, socket),
+    do: {:ok, socket |> refresh_job_state() |> schedule_jobs_refresh()}
+
   def update(%{refresh_jobs: true}, socket) do
-    socket = assign(socket, :jobs_timer?, false)
-
-    socket =
-      case socket.assigns do
-        %{profile: %Profile{} = p} ->
-          assign(socket, :jobs, ClipReviewFeed.rendering(p.org_id, p.id))
-
-        _ ->
-          socket
-      end
-
-    {:ok, socket |> headline_state() |> schedule_jobs_refresh()}
+    {:ok, socket |> assign(:jobs_timer?, false) |> refresh_job_state() |> schedule_jobs_refresh()}
   end
 
   def update(assigns, socket) do
@@ -144,6 +137,21 @@ defmodule PlatformWeb.SocialClipsReview do
       |> schedule_jobs_refresh()
 
     {:ok, socket}
+  end
+
+  defp refresh_job_state(socket) do
+    socket =
+      case socket.assigns do
+        %{profile: %Profile{} = p} ->
+          socket
+          |> assign(:jobs, ClipReviewFeed.rendering(p.org_id, p.id))
+          |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(p.org_id, p.id))
+
+        _ ->
+          socket
+      end
+
+    headline_state(socket)
   end
 
   # ── Events ───────────────────────────────────────────────────────────
@@ -442,7 +450,9 @@ defmodule PlatformWeb.SocialClipsReview do
         true -> socket
       end
 
-    assign(socket, :jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    socket
+    |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
   end
 
   defp clip_event(socket, _clip), do: socket
@@ -491,9 +501,22 @@ defmodule PlatformWeb.SocialClipsReview do
       else: socket
   end
 
-  # 1/9 does not broadcast job progress: while jobs are open, re-read them
-  # every 5s; one timer at a time, none once the queue is empty.
-  defp schedule_jobs_refresh(%{assigns: %{jobs: [_ | _], jobs_timer?: false}} = socket) do
+  # Broadcasts deliver new jobs even from an initially empty bay. Poll only
+  # while work remains open, as a fallback after missed notifications.
+  defp schedule_jobs_refresh(%{assigns: %{jobs_timer?: false}} = socket) do
+    open? =
+      socket.assigns.jobs != [] or
+        Enum.any?(socket.assigns.episode_jobs, fn job ->
+          job.status in ["queued", "claimed", "running"] or
+            Enum.any?(job.children, &(&1.status in ["queued", "claimed", "running"]))
+        end)
+
+    if open?, do: schedule_job_timer(socket), else: socket
+  end
+
+  defp schedule_jobs_refresh(socket), do: socket
+
+  defp schedule_job_timer(socket) do
     send_update_after(
       self(),
       __MODULE__,
@@ -503,8 +526,6 @@ defmodule PlatformWeb.SocialClipsReview do
 
     assign(socket, :jobs_timer?, true)
   end
-
-  defp schedule_jobs_refresh(socket), do: socket
 
   # A write: refused with no write unless the fresh approver check passed.
   defp save(%{assigns: %{can_decide?: false}} = socket, _attrs), do: socket
@@ -575,6 +596,7 @@ defmodule PlatformWeb.SocialClipsReview do
     socket
     |> assign(:queue, queue)
     |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
     |> assign(:accounts, Social.list_accounts(profile.org_id, profile_id: profile.id))
     |> assign(:clip, clip)
     |> assign(:selected_id, clip && clip.id)
@@ -589,7 +611,15 @@ defmodule PlatformWeb.SocialClipsReview do
   end
 
   defp load(socket),
-    do: assign(socket, queue: [], jobs: [], accounts: [], clip: nil, can_decide?: false)
+    do:
+      assign(socket,
+        queue: [],
+        jobs: [],
+        episode_jobs: [],
+        accounts: [],
+        clip: nil,
+        can_decide?: false
+      )
 
   # Shares the selected immutable version with the sibling version picker.
   # Re-read on promotion; queueing/failure never changes the playable clip.
@@ -674,6 +704,7 @@ defmodule PlatformWeb.SocialClipsReview do
     >
       <div id="social-clips-review-keys" phx-hook="ClipReview" data-role="clips-review-keys">
         <.subhead view={@view} count={length(@queue)} jobs={@jobs} myself={@myself} />
+        <.episode_outcomes :if={@view == "review"} jobs={@episode_jobs} />
 
         <div
           :if={@view == "review"}
@@ -1482,6 +1513,79 @@ defmodule PlatformWeb.SocialClipsReview do
         </p>
       </div>
     </aside>
+    """
+  end
+
+  attr :jobs, :list, required: true
+
+  defp episode_outcomes(assigns) do
+    ~H"""
+    <section
+      :if={@jobs != []}
+      aria-label="Automatic episodes"
+      data-role="episode-jobs"
+      class="mb-4 rounded-box border border-base-300 bg-base-100 p-4 text-base-content"
+    >
+      <h3 class="text-sm font-semibold">Automatic episodes</h3>
+      <p class="mt-1 text-xs text-subtle">
+        New episodes run automatically. Finished clips appear in Review.
+      </p>
+      <ul class="mt-3 space-y-3">
+        <li :for={job <- @jobs} data-role="episode-job" data-job-id={job.id} data-status={job.status}>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="font-semibold">
+              Episode <span class="font-normal text-subtle">· {job.uploaded_at}</span>
+            </span>
+            <span
+              class={if job.status == "failed", do: "text-error", else: "text-subtle"}
+              role={if job.status == "failed", do: "alert", else: "status"}
+            >
+              {job.step}<span :if={job.status == "failed"}> ({job.code})</span>
+            </span>
+            <span
+              :if={job.progress && job.status in ["claimed", "running"]}
+              class="text-xs tabular-nums text-subtle"
+            >
+              {round(job.progress * 100)}%
+            </span>
+          </div>
+          <progress
+            :if={job.status in ["claimed", "running"] && job.progress}
+            class="progress progress-primary mt-1 h-1 w-full max-w-sm"
+            value={job.progress}
+            max="1"
+            aria-label="Episode progress"
+          >
+          </progress>
+          <p :if={job.status == "failed"} class="mt-1 text-xs text-subtle">
+            Episode incomplete. Completed clips remain available for review. Check the clip runner.
+          </p>
+          <ul :if={job.children != []} class="mt-2 space-y-1 border-l border-base-300 pl-3">
+            <li
+              :for={{child, index} <- Enum.with_index(job.children, 1)}
+              data-role="episode-child-job"
+              data-job-id={child.id}
+              data-status={child.status}
+              class="flex flex-wrap gap-2 text-xs"
+            >
+              <span>Clip {index}</span>
+              <span
+                class={if child.status == "failed", do: "text-error", else: "text-subtle"}
+                role={if child.status == "failed", do: "alert", else: "status"}
+              >
+                {child.step}<span :if={child.status == "failed"}> ({child.code})</span>
+              </span>
+              <span
+                :if={child.progress && child.status in ["claimed", "running"]}
+                class="tabular-nums text-subtle"
+              >
+                {round(child.progress * 100)}%
+              </span>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </section>
     """
   end
 

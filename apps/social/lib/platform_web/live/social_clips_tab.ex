@@ -83,6 +83,14 @@ defmodule PlatformWeb.SocialClipsTab do
     end
   end
 
+  def handle_info({:social_clip_job, %{profile_id: profile_id}}, socket) do
+    if socket.assigns.profile && socket.assigns.profile.id == profile_id do
+      send_update(PlatformWeb.SocialClipsReview, id: "social-clips-review", job_event: true)
+    end
+
+    {:noreply, socket}
+  end
+
   # The Review bay's segmented control.
   def handle_info({:clips_view, view}, socket) when view in @clips_views,
     do: {:noreply, assign(socket, :clips_view, view)}

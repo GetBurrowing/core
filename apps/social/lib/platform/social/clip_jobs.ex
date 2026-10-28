@@ -126,6 +126,7 @@ defmodule Platform.Social.ClipJobs do
           Repo.rollback(error)
       end
     end)
+    |> notify_job()
   end
 
   # ── Human side ───────────────────────────────────────────────────────
@@ -470,7 +471,7 @@ defmodule Platform.Social.ClipJobs do
         set: [status: "claimed", claimed_by_agent_id: agent_id, claimed_at: now, updated_at: now]
       )
       |> case do
-        {1, [job]} -> {:ok, job}
+        {1, [job]} -> notify_job({:ok, job})
         {0, _} -> {:error, :already_claimed}
       end
     end
@@ -794,6 +795,14 @@ defmodule Platform.Social.ClipJobs do
         |> ClipJob.finish_changeset(:failed, message)
         |> insert_or_rollback(:update)
       end)
+      |> case do
+        {:ok, job} = result ->
+          Platform.Social.EpisodePipeline.child_failed(job)
+          result
+
+        other ->
+          other
+      end
     end
   end
 
@@ -849,8 +858,34 @@ defmodule Platform.Social.ClipJobs do
           true -> fun.(job, Repo.get!(Profile, job.profile_id))
         end
       end)
+      |> case do
+        {:ok, _} = result ->
+          broadcast_job(Repo.get!(ClipJob, id))
+          result
+
+        other ->
+          other
+      end
     end
   end
+
+  @doc false
+  def broadcast_job(%ClipJob{} = job) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      Social.clips_topic(job.profile_id),
+      {:social_clip_job, %{id: job.id, profile_id: job.profile_id}}
+    )
+
+    :ok
+  end
+
+  defp notify_job({:ok, %ClipJob{} = job} = result) do
+    broadcast_job(job)
+    result
+  end
+
+  defp notify_job(result), do: result
 
   defp insert_or_rollback(changeset, action \\ :insert) do
     case apply(Repo, action, [changeset]) do

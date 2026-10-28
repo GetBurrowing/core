@@ -156,6 +156,7 @@ defmodule Platform.Social.EpisodeDiscovery do
   def handle_call(:sweep, _from, state), do: {:reply, reconcile(state), state}
 
   defp reconcile(state) do
+    EpisodePipeline.reconcile_jobs()
     results = sweep(state.profile_ids || configured_profile_ids())
 
     if Enum.any?(results, &match?({:error, _}, &1)),
