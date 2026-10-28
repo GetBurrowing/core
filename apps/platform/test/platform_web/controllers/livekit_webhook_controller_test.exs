@@ -441,7 +441,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
     # Task 01a1694a stage 2: conclusion delivers the meeting briefing — ONE
     # briefing row and ONE Inbox row per attendee — and a replayed
     # room_finished (LiveKit retries webhooks) adds nothing.
-    test "room_finished delivers one meeting briefing, and a replay adds nothing", %{conn: conn} do
+    test "room_finished defers briefing until deadline, and replay adds nothing", %{conn: conn} do
       import Ecto.Query, only: [from: 2]
 
       {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook Brief #{unique_room_id()}"})
@@ -481,7 +481,26 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert json_response(post(conn, @livekit_webhook_path, payload), 200)
       assert json_response(post(build_conn(), @livekit_webhook_path, payload), 200)
 
-      assert Meetings.get_meeting(live.id).status == "ended"
+      ended = Meetings.get_meeting(live.id)
+      assert ended.status == "ended"
+
+      assert Platform.Repo.all(
+               from(b in Platform.Meetings.MeetingBriefing, where: b.meeting_id == ^live.id)
+             ) == []
+
+      assert Platform.Repo.all(
+               from(i in Platform.Inbox.Item,
+                 where: i.user_id == ^attendee.id and i.kind == "meeting_briefing"
+               )
+             ) == []
+
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Platform.Repo.update!()
+
+      Meetings.Completion.sweep()
+      assert json_response(post(build_conn(), @livekit_webhook_path, payload), 200)
+      Meetings.Completion.sweep()
 
       briefings =
         Platform.Repo.all(
