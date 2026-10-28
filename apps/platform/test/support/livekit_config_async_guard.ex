@@ -30,6 +30,8 @@ defmodule Platform.LivekitConfigAsyncGuard do
     |> Enum.sort_by(&{&1.file, &1.line, &1.module})
   end
 
+  defp collect({:quote, _, _}, _, modules), do: modules
+
   defp collect({:defmodule, meta, [name, [do: body]]}, file, modules) do
     name = resolve(name, %{})
 
@@ -43,7 +45,7 @@ defmodule Platform.LivekitConfigAsyncGuard do
     }
 
     info = walk(body, initial)
-    Map.put(modules, name, info)
+    collect(body, file, Map.put(modules, name, info))
   end
 
   defp collect(ast, file, modules) when is_tuple(ast) do
@@ -91,6 +93,16 @@ defmodule Platform.LivekitConfigAsyncGuard do
         else: info
 
     walk(args, info)
+  end
+
+  defp walk({function, meta, args} = ast, info)
+       when function in [:put_env, :delete_env, :put_all_env] and is_list(args) do
+    info =
+      if MapSet.member?(info.calls, Application) and mutation?(function, args),
+        do: %{info | writes: [meta[:line] | info.writes]},
+        else: info
+
+    walk_children(ast, info)
   end
 
   defp walk(ast, info) when is_tuple(ast), do: walk_children(ast, info)

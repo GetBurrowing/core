@@ -20,7 +20,8 @@ defmodule Platform.Regression.LivekitConfigAsyncGuardTest do
         {"multiline", "Application.put_env(\n :platform,\n :livekit,\n [])"},
         {"delete", "Application.delete_env(:platform, :livekit)"},
         {"aliased", "alias Application, as: App\n App.put_env(:platform, :livekit, [])"},
-        {"bulk", "Application.put_all_env(platform: [livekit: []])"}
+        {"bulk", "Application.put_all_env(platform: [livekit: []])"},
+        {"imported", "import Application\n put_env(:platform, :livekit, [])"}
       ] do
     test "rejects #{label} asynchronous writes" do
       source =
