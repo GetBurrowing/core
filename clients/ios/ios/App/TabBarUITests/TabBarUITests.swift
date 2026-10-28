@@ -132,7 +132,12 @@ final class TabBarUITests: XCTestCase {
     /// a disappearing container happens to have no activation point. Querying
     /// exists then isHittable races the hide completion (01a18187).
     private func gone(_ bar: XCUIElement, timeout: TimeInterval) -> Bool {
-        bar.waitForNonExistence(timeout: timeout)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !(bar.exists && bar.isHittable) { return true }
+            usleep(250_000)
+        }
+        return false
     }
 
     /// Wait on the controls a user taps, within the existing show budget.
