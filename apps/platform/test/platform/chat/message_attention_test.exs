@@ -590,6 +590,43 @@ defmodule Platform.Chat.MessageAttentionTest do
   # ── Humans (D4) ────────────────────────────────────────────────────────────
 
   describe "adding a human" do
+    test "a mode-all human-only add logs the human decision without dispatching an agent" do
+      space = channel!(%{agent_attention_policy: "on_mention", agents_awake: true})
+      alice = member!(space, user!("Alice"))
+      bob_user = user!("Bob")
+      bob = member!(space, bob_user, %{attention_mode: "all"})
+      {_agent, zip} = agent!(space, "Zip")
+      message = post!(space, alice, "human-only attention sentinel")
+      :ok = Chat.PubSub.subscribe(space.id)
+
+      log =
+        with_info_log(fn ->
+          assert {:ok, %{added: [_]}} =
+                   add_attention_and_settle(actor(alice), space.id, message.id, [bob_user.id])
+        end)
+
+      bob_id = bob.id
+      zip_id = zip.id
+      assert_receive {:attention_needed, %{participant_id: ^bob_id, reason: :mention}}
+      refute_receive {:attention_needed, %{participant_id: ^zip_id}}, 100
+      refute_received {:agent_chat_called, _, _}
+      assert [%MessageAttention{participant_id: ^bob_id}] = rows(message.id)
+      assert [%Item{source_id: message_id}] = inbox_rows(bob_user.id)
+      assert message_id == message.id
+      assert log =~ "message=#{message.id} requested=#{bob.id}"
+      assert log =~ "outcome=selected decisions=#{bob.id}:mention skipped_reason=none"
+      refute log =~ "#{zip.id}:mention"
+      refute log =~ message.content
+
+      # Positive control: the same agent dispatch instrument must see an explicit add.
+      positive = post!(space, alice, "agent dispatch control")
+
+      assert {:ok, %{added: [_]}} =
+               add_attention_and_settle(actor(alice), space.id, positive.id, [zip.participant_id])
+
+      assert_receive {:attention_needed, %{participant_id: ^zip_id, reason: :mention}}
+    end
+
     test "one chat_mention Inbox row, a :mention decision whatever the mode, no agent dispatch" do
       space = channel!(%{name: "Design Crit"})
       alice = member!(space, user!("Alice"))
