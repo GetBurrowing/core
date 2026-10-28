@@ -11,6 +11,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.CompletionRun
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingBriefings
@@ -239,6 +240,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         meeting_id: meeting.id,
         state: :heard,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "open_question",
         evidence_quote: "who owns the bucket policy?"
       })
@@ -249,6 +251,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         state: :closed,
         closed_reason: :retracted,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "open_question",
         evidence_quote: "never mind that"
       })
@@ -259,6 +262,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         state: :closed,
         closed_reason: :dismissed,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "action_items",
         evidence_quote: "someone should check the quotas"
       })
@@ -281,5 +285,103 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     assert Enum.map(content["unfiled_action_items"], & &1["id"]) == [unfiled.id]
     assert briefing.summary == "We agreed on the bucket policy."
     assert is_binary(briefing.transcript_id)
+  end
+
+  defp content_candidate!(meeting, intent, disposition, attrs \\ %{}) do
+    Repo.insert!(
+      struct!(
+        MeetingCandidate,
+        Map.merge(
+          %{
+            meeting_id: meeting.id,
+            state: :closed,
+            closed_reason: :done,
+            classified_intent: intent,
+            disposition: disposition,
+            evidence_quote: "#{intent} #{inspect(disposition)}"
+          },
+          attrs
+        )
+      )
+    )
+  end
+
+  test "content admits only accepted verdicts and still excludes withdrawn accepted candidates" do
+    %{meeting: meeting} = meeting_fixture!("Officer verdicts")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+
+    accepted =
+      for intent <- ["open_question", "action_items"] do
+        kept = content_candidate!(meeting, intent, :accepted)
+
+        for disposition <- [:rejected, :timed_out, nil] do
+          content_candidate!(meeting, intent, disposition)
+        end
+
+        for reason <- [:retracted, :duplicate, :vetoed] do
+          content_candidate!(meeting, intent, :accepted, %{closed_reason: reason})
+        end
+
+        kept
+      end
+
+    [question, action] = accepted
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+
+    assert briefing.items["_content"]["open_questions"] ==
+             [%{"id" => question.id, "text" => question.evidence_quote}]
+
+    assert briefing.items["_content"]["unfiled_action_items"] ==
+             [%{"id" => action.id, "text" => action.evidence_quote}]
+  end
+
+  test "completion ledger reconciles a filed action by stable identity without a task backlink" do
+    %{meeting: meeting, project: project, canvas: canvas} = meeting_fixture!("Filed identity")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+    candidate = content_candidate!(meeting, "action_items", :accepted)
+
+    unrelated =
+      content_candidate!(meeting, "action_items", :accepted, %{
+        evidence_quote: candidate.evidence_quote,
+        canvas_id: canvas.id
+      })
+
+    task = file!(canvas, project, "Normalized action title")
+
+    canvas
+    |> Ecto.Changeset.change(
+      document: %{
+        "type" => "stack",
+        "children" => [
+          %{
+            "type" => "checklist_item",
+            "id" => "stable-action",
+            "props" => %{"candidate_id" => candidate.id}
+          }
+        ]
+      }
+    )
+    |> Repo.update!()
+
+    Repo.insert!(%CompletionRun{
+      meeting_id: meeting.id,
+      canvas_id: canvas.id,
+      status: "filed",
+      item_results: %{"stable-action" => %{"status" => "processed", "task_ids" => [task.id]}}
+    })
+
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+    assert is_nil(Repo.get!(MeetingCandidate, candidate.id).task_id)
+    assert refs_by_kind(briefing)["task"] == ["task:" <> task.id]
+
+    assert Enum.map(briefing.items["_content"]["unfiled_action_items"], & &1["id"]) ==
+             [unrelated.id]
+
+    # A ledger reference to a deleted task cannot hide an unfiled action.
+    task |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+    {:ok, rebuilt, _} = MeetingBriefings.build(meeting)
+
+    assert Enum.sort(Enum.map(rebuilt.items["_content"]["unfiled_action_items"], & &1["id"])) ==
+             Enum.sort([candidate.id, unrelated.id])
   end
 end

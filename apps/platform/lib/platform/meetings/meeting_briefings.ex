@@ -20,8 +20,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   **Content** — rebuilt on every run and stored under the reserved key
   `"_content"`, which is not an item:
 
-    * `"open_questions"` — candidates classified `open_question`;
-    * `"unfiled_action_items"` — candidates classified `action_items` that
+    * `"open_questions"` — accepted candidates classified `open_question`;
+    * `"unfiled_action_items"` — accepted candidates classified `action_items` that
       never got a task;
     * `"transcript_url"` — `/meetings/<slug>`.
 
@@ -78,6 +78,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   alias Platform.Chat.Canvas
   alias Platform.Inbox
   alias Platform.Meetings
+  alias Platform.Meetings.CompletionRun
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingCandidate
@@ -223,6 +224,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       from(c in MeetingCandidate,
         where: c.meeting_id == ^meeting.id,
         where: c.classified_intent in ["open_question", "action_items"],
+        where: c.disposition == :accepted,
         where: is_nil(c.closed_reason) or c.closed_reason not in ^@withdrawn_reasons,
         order_by: [asc: c.inserted_at, asc: c.id],
         select: %{
@@ -234,13 +236,70 @@ defmodule Platform.Meetings.MeetingBriefings do
       )
       |> Repo.all()
 
+    filed_candidate_ids = filed_candidate_ids(meeting, candidates)
+
     %{
       "open_questions" => for(%{intent: "open_question"} = c <- candidates, do: content_entry(c)),
       "unfiled_action_items" =>
-        for(%{intent: "action_items", task_id: nil} = c <- candidates, do: content_entry(c)),
+        for(
+          %{intent: "action_items", task_id: nil} = c <- candidates,
+          not MapSet.member?(filed_candidate_ids, c.id),
+          do: content_entry(c)
+        ),
       "transcript_url" => "/meetings/" <> meeting.slug
     }
   end
+
+  # Only identity can reconcile a candidate with a final checklist item. A
+  # shared canvas or similar title is not evidence that this action was filed.
+  # Keep the task query canonical, including its soft-deletion/access scope.
+  defp filed_candidate_ids(meeting, candidates) do
+    tasks =
+      meeting
+      |> Meetings.meeting_tasks_query()
+      |> select([task: t], %{id: t.id, metadata: t.metadata})
+      |> Repo.all()
+
+    task_ids = MapSet.new(tasks, & &1.id)
+    direct_ids = Enum.map(tasks, & &1.metadata["candidate_id"])
+
+    ledger_ids =
+      case Repo.get_by(CompletionRun, meeting_id: meeting.id) do
+        nil ->
+          []
+
+        run ->
+          canvas = if run.canvas_id, do: Repo.get(Canvas, run.canvas_id)
+
+          nodes =
+            if canvas && is_nil(canvas.deleted_at), do: checklist_nodes(canvas.document), else: []
+
+          for node <- nodes,
+              entry = (run.item_results || %{})[node["id"]],
+              is_map(entry),
+              entry["status"] == "processed",
+              Enum.any?(
+                (entry["task_ids"] || []) ++ (entry["existing_task_ids"] || []),
+                &MapSet.member?(task_ids, &1)
+              ),
+              candidate <- candidates,
+              node["candidate_id"] == candidate.id or
+                get_in(node, ["props", "candidate_id"]) == candidate.id or
+                node["id"] == candidate.id,
+              do: candidate.id
+      end
+
+    MapSet.new(direct_ids ++ ledger_ids)
+  end
+
+  defp checklist_nodes(%{"type" => "checklist_item"} = node),
+    do: [node | checklist_nodes(Map.get(node, "children", []))]
+
+  defp checklist_nodes(map) when is_map(map),
+    do: Enum.flat_map(Map.values(map), &checklist_nodes/1)
+
+  defp checklist_nodes(list) when is_list(list), do: Enum.flat_map(list, &checklist_nodes/1)
+  defp checklist_nodes(_), do: []
 
   defp content_entry(candidate), do: %{"id" => candidate.id, "text" => candidate.quote || ""}
 
