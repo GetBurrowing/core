@@ -237,8 +237,10 @@ final class TabBarUITests: XCTestCase {
         for iteration in 1...3 {
             hideAndShow(appearance, app, bar)
             rendered(["hidden=false"], app)
-            bar.buttons["native-tab-chat"].tap()
-            XCTAssertTrue(app.webViews.staticTexts["\(iteration). chat reselect=true"].waitForExistence(timeout: 5))
+            bar.buttons.element(boundBy: 0).tap()
+            let events = app.webViews.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "chat reselect=true"))
+            let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in events.count == iteration }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 5), .completed, "each tap must deliver a new event")
         }
     }
 
