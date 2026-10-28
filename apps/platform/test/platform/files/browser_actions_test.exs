@@ -245,7 +245,7 @@ defmodule Platform.Files.BrowserActionsTest do
              BrowserActions.execute(c.user, {:canvas, c.canvas.id}, :move, %{space_id: c.dest.id})
 
     assert_receive {:canvas_deleted, _}
-    assert_receive {:canvas_created, _}
+    assert_receive {:canvas_arrived, _}
     Chat.publish_canvas_updated(c.canvas)
     assert_receive {:canvas_updated, %{space_id: destination}}
     assert destination == c.dest.id
@@ -452,6 +452,32 @@ defmodule Platform.Files.BrowserActionsTest do
     assert length(Browser.starred(c.user).items) == 1
     assert Browser.starred(c.other).items == []
     assert Repo.aggregate(Star, :count) == 2
+  end
+
+  test "destination arrival carries no document and rechecks each receiver's fresh scope", c do
+    join!(c.dest, c.other)
+    ChatPubSub.subscribe(c.dest.id)
+
+    assert {:ok, _} =
+             BrowserActions.execute(c.user, {:canvas, c.canvas.id}, :move, %{space_id: c.dest.id})
+
+    assert_receive {:canvas_arrived, payload}
+    assert Enum.sort(Map.keys(payload)) == [:id, :space_id]
+    assert {:ok, %{id: id}} = Platform.Files.CanvasMove.fetch_arrival(c.other, payload)
+    assert id == c.canvas.id
+    {:ok, stale} = BrowserActions.viewer(c.other)
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: c.other,
+        permission: "canvas.read",
+        resource: c.canvas
+      })
+
+    assert {:error, :not_found} = Platform.Files.CanvasMove.fetch_arrival(stale, payload)
+
+    assert {:error, :not_found} =
+             Platform.Files.CanvasMove.fetch_arrival(c.user, %{payload | space_id: c.source.id})
   end
 
   test "database refuses multiple targets for one star", c do

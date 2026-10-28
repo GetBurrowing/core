@@ -112,6 +112,18 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
+    {"platform/files/browser.ex", :get, "Chat.Attachment", 1, :safe_internal,
+     "resolve_source/5 is reached only after fetch_source/3 passes Platform.UUID.valid?/1 on the raw target id; an invalid id returns not_found before Repo.get"},
+    {"platform/files/browser.ex", :get, "Files.File", 1, :safe_internal,
+     "resolve_source/5 is reached only after fetch_source/3 passes Platform.UUID.valid?/1 on the raw target id; a valid UUID is then checked against the viewer's current projects"},
+    {"platform/files/browser.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "fetch_source/3's Platform.UUID.valid?/1 gate rejects forged LiveView target IDs before resolving a file, attachment or canvas; invalid target returns not_found"},
+    {"platform/files/browser_actions.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "viewer/1 guards a supplied actor id before Accounts.get_user, and authorize_move/3 guards the destination id before comparing it to freshly queried writable spaces"},
+    {"platform/files/canvas_move.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "actor/1 validates an attribution's user or participant UUID before Chat.get_participant; identity-less calls retain the server's documented trusted-primitive contract"},
+
     # ── Mix tasks ──────────────────────────────────────────────────────
     {"mix/tasks/platform/backfill_stack_deploy_cascade.ex", :get, "Stack", 1, :safe_internal,
      "stack_id is either selected by the task's own `distinct: s.id` query or handed in as `--stack-id`; a Mix task raising lands in the operator's terminal, not on a request path"},
@@ -1019,6 +1031,10 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Canonical publication is keyed by id from a loaded %Canvas{} and locks
+    # that same row, ordering its delivery before any ownership move.
+    "platform/chat/canvas/broadcasts.ex" => 1,
+
     # 0 → 3 for task 01a114a8 stage 1's attribution ladder in
     # `ToolCallLedger`: stage -> task, plan -> task and execution space ->
     # task. Triaged by hand: each `where:` pins an id that arrives as a tool

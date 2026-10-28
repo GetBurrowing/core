@@ -126,7 +126,7 @@ defmodule PlatformWeb.CanvasLive do
 
     # `audit: false` on the connected mount — see the moduledoc. The
     # disconnected render already recorded this arrival.
-    opts = [audit: not connected?(socket)]
+    opts = [audit: not connected?(socket), access_scope: socket.assigns[:access_scope]]
 
     case CanvasAccess.fetch_for_viewer(canvas_id, viewer, opts) do
       {:ok, canvas, level} ->

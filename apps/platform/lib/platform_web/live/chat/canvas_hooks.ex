@@ -326,7 +326,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   policy question, not a refactor. Recorded so the next person does not have
   to rediscover it.
 
-  Both halves are unauthorized:
+  Ownership moves are the exception: a canvas with a nonzero location epoch
+  is always refetched through the viewer's current grant before it is returned.
+  Old-space readers cannot reopen one through this previously unchecked event.
+
+  For unmoved canvases both halves remain the existing unauthorized path:
 
     * `Chat.get_canvas/1` is the documented UNAUTHORIZED primitive — it
       resolves any live canvas by id, in any space, in any org.
@@ -349,6 +353,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   def find(socket, canvas_id) do
     canvas =
       Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+
+    canvas =
+      case Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
+        {:ok, canvas} -> canvas
+        _ -> nil
+      end
 
     case {canvas, socket.assigns[:access_scope]} do
       {nil, _} ->
@@ -1416,16 +1426,32 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # close, and it would only half work: `MessagesHooks` would still refuse to
   # reinsert the message row, so the canvas pane would update while the inline
   # card in the stream stayed frozen. Half-live is worse than not-live.
+  defp handle_info({:canvas_arrived, location}, socket) do
+    socket =
+      with true <- MessagesHooks.same_active_space?(socket, location),
+           {:ok, canvas} <- Platform.Files.CanvasMove.fetch_arrival(viewer(socket), location) do
+        put(socket, canvas)
+      else
+        {:error, _} -> remove(socket, location)
+        _ -> socket
+      end
+
+    {:halt, socket}
+  end
+
   defp handle_info({:canvas_created, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       {:halt, put(socket, canvas)}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
   defp handle_info({:canvas_updated, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       socket = put(socket, canvas)
 
       socket =
@@ -1437,7 +1463,8 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
       {:halt, socket}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
@@ -1451,10 +1478,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # merges it into both `@canvases_by_id` and `@canvases`, and the Live Canvases
   # panel renders that second list with no message row involved.
   defp handle_info({:canvas_restored, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       {:halt, put(socket, canvas)}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
@@ -1487,17 +1516,23 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
           socket
 
         %{} = existing ->
-          case CanvasServer.describe(canvas_id) do
-            {:ok, %{document: document}} ->
-              put(socket, %{existing | document: document, updated_at: DateTime.utc_now()})
+          case Platform.Files.CanvasMove.read_event(viewer(socket), existing) do
+            {:ok, existing} ->
+              case CanvasServer.describe(canvas_id) do
+                {:ok, %{document: document}} ->
+                  put(socket, %{existing | document: document, updated_at: DateTime.utc_now()})
+
+                _ ->
+                  # GenServer gone — fall back to a DB read, accepting that this
+                  # may briefly show the pre-patch document until persist lands.
+                  case Chat.get_canvas(canvas_id) do
+                    %{} = canvas -> put(socket, canvas)
+                    _ -> socket
+                  end
+              end
 
             _ ->
-              # GenServer gone — fall back to a DB read, accepting that this
-              # may briefly show the pre-patch document until persist lands.
-              case Chat.get_canvas(canvas_id) do
-                %{} = canvas -> put(socket, canvas)
-                _ -> socket
-              end
+              remove(socket, existing)
           end
       end
 

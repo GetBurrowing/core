@@ -4892,41 +4892,54 @@ defmodule PlatformWeb.MeetingLive do
   # happens to be idle, because "they were not doing anything" is a guess
   # about a person, not a fact about the system. It never moves you; you
   # move yourself.
+  def handle_info({:canvas_arrived, location}, socket) do
+    case Platform.Files.CanvasMove.fetch_arrival(socket.assigns[:current_user_record], location) do
+      {:ok, canvas} -> handle_info({:canvas_created, canvas}, socket)
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_info({:canvas_created, canvas}, socket) do
-    %{assigns: %{meeting: meeting, meeting_canvas: current}} = socket
-
-    cond do
-      is_nil(meeting) ->
-        {:noreply, socket}
-
-      canvas.space_id != meeting.chat_space_id ->
-        {:noreply, socket}
-
-      true ->
-        socket = assign(socket, :meeting_canvases, append_canvas(socket, canvas))
+    case Platform.Files.CanvasMove.read_event(socket.assigns[:current_user_record], canvas) do
+      {:ok, canvas} ->
+        %{assigns: %{meeting: meeting, meeting_canvas: current}} = socket
 
         cond do
-          # A viewer who chose a canvas keeps it. The new one is in the
-          # picker wearing a dot; switching is their decision to make.
-          # No `mark_canvas_seen/2` here, deliberately — the missing
-          # baseline IS the dot.
-          is_binary(socket.assigns[:selected_canvas_id]) ->
+          is_nil(meeting) ->
             {:noreply, socket}
 
-          # No explicit pick: today's latch-onto-newest behaviour is
-          # unchanged. The canvas becomes the one on screen, so it is
-          # seen by definition and must not also be dotted.
-          is_nil(current) ->
-            {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
+          canvas.space_id != meeting.chat_space_id ->
+            {:noreply, socket}
 
-          newer?(canvas, current) ->
-            {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
-
-          # Older than what we already show, and nobody picked: it stays
-          # off screen, so it is news like any other.
           true ->
-            {:noreply, socket}
+            socket = assign(socket, :meeting_canvases, append_canvas(socket, canvas))
+
+            cond do
+              # A viewer who chose a canvas keeps it. The new one is in the
+              # picker wearing a dot; switching is their decision to make.
+              # No `mark_canvas_seen/2` here, deliberately — the missing
+              # baseline IS the dot.
+              is_binary(socket.assigns[:selected_canvas_id]) ->
+                {:noreply, socket}
+
+              # No explicit pick: today's latch-onto-newest behaviour is
+              # unchanged. The canvas becomes the one on screen, so it is
+              # seen by definition and must not also be dotted.
+              is_nil(current) ->
+                {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
+
+              newer?(canvas, current) ->
+                {:noreply, socket |> assign(:meeting_canvas, canvas) |> mark_canvas_seen(canvas)}
+
+              # Older than what we already show, and nobody picked: it stays
+              # off screen, so it is news like any other.
+              true ->
+                {:noreply, socket}
+            end
         end
+
+      _ ->
+        handle_info({:canvas_deleted, canvas}, socket)
     end
   end
 
@@ -4962,35 +4975,45 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def handle_info({:canvas_updated, canvas}, socket) do
-    # Refresh the picker's copy first, and only for a canvas already in
-    # the list — an update for a canvas this LV never loaded belongs to
-    # another space and must not be pulled into this meeting's picker.
-    # This keeps a renamed canvas's picker row current without touching
-    # which canvas is RENDERED, which the clause below still owns.
-    socket =
-      if Enum.any?(socket.assigns[:meeting_canvases] || [], &(&1.id == canvas.id)) do
-        assign(socket, :meeting_canvases, append_canvas(socket, canvas))
-      else
-        socket
-      end
+    case Platform.Files.CanvasMove.read_event(socket.assigns[:current_user_record], canvas) do
+      {:ok, canvas} ->
+        # Refresh the picker's copy first, and only for a canvas already in
+        # the list — an update for a canvas this LV never loaded belongs to
+        # another space and must not be pulled into this meeting's picker.
+        # This keeps a renamed canvas's picker row current without touching
+        # which canvas is RENDERED, which the clause below still owns.
+        socket =
+          if Enum.any?(socket.assigns[:meeting_canvases] || [], &(&1.id == canvas.id)) do
+            assign(socket, :meeting_canvases, append_canvas(socket, canvas))
+          else
+            socket
+          end
 
-    case canvas_tile_canvas(socket.assigns) do
-      %{id: id} when id == canvas.id ->
-        Process.send_after(self(), {:clear_canvas_tile_changed, canvas.id}, @canvas_changed_ms)
+        case canvas_tile_canvas(socket.assigns) do
+          %{id: id} when id == canvas.id ->
+            Process.send_after(
+              self(),
+              {:clear_canvas_tile_changed, canvas.id},
+              @canvas_changed_ms
+            )
 
-        {:noreply,
-         socket
-         |> assign(:meeting_canvas, canvas)
-         |> assign(:canvas_tile_changed?, true)
-         # In view means seen: advance the baseline to the revision that
-         # just landed so this edit never becomes a dot on the canvas
-         # the viewer is watching it happen on. An update to any OTHER
-         # canvas takes the clause below, leaves its baseline behind,
-         # and therefore raises the dot in the picker.
-         |> mark_canvas_seen(canvas)}
+            {:noreply,
+             socket
+             |> assign(:meeting_canvas, canvas)
+             |> assign(:canvas_tile_changed?, true)
+             # In view means seen: advance the baseline to the revision that
+             # just landed so this edit never becomes a dot on the canvas
+             # the viewer is watching it happen on. An update to any OTHER
+             # canvas takes the clause below, leaves its baseline behind,
+             # and therefore raises the dot in the picker.
+             |> mark_canvas_seen(canvas)}
+
+          _ ->
+            {:noreply, socket}
+        end
 
       _ ->
-        {:noreply, socket}
+        handle_info({:canvas_deleted, canvas}, socket)
     end
   end
 

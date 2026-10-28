@@ -54,7 +54,10 @@ defmodule Platform.Files.CanvasMove do
             {:canvas_deleted, removed}
           )
 
-          ChatPubSub.broadcast(moved.space_id, {:canvas_created, moved})
+          ChatPubSub.broadcast(
+            moved.space_id,
+            {:canvas_arrived, %{id: moved.id, space_id: moved.space_id}}
+          )
         end
 
         {:ok, moved}
@@ -63,6 +66,39 @@ defmodule Platform.Files.CanvasMove do
         error
     end
   end
+
+  # Arrival is an invalidation, never a document delivery. A destination
+  # member's personal read deny still applies after a different user moves it.
+  def fetch_arrival(actor, %{id: id, space_id: space_id}) do
+    with {:ok, viewer} <- BrowserActions.viewer(actor),
+         {:ok, %{space_id: ^space_id} = canvas} <-
+           Platform.Files.Browser.fetch_source(viewer, {:canvas, id}) do
+      {:ok, canvas}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc false
+  def read_event(actor, %Canvas{} = canvas) do
+    # A queued pre-move payload still says epoch zero. Read current ownership
+    # before trusting that payload, or it could revive a removed old-space row.
+    case Chat.get_canvas(canvas.id) do
+      %{location_epoch: epoch} when epoch > 0 ->
+        fetch_arrival(actor, Map.take(canvas, [:id, :space_id]))
+
+      %Canvas{} ->
+        {:ok, canvas}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  def read_event(actor, %{location_epoch: epoch} = canvas) when epoch > 0,
+    do: fetch_arrival(actor, Map.take(canvas, [:id, :space_id]))
+
+  def read_event(_actor, canvas), do: {:ok, canvas}
 
   defp stop_rooms(canvas_id) do
     Registry.select(Platform.Chat.Registry, [
