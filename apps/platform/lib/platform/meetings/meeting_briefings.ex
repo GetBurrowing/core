@@ -432,6 +432,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   end
 
   @doc "Refresh only the meeting owning this transcript, using capture-time legacy bounds."
+  def refresh_for_transcript(%Transcript{space_id: nil}), do: :ok
+
   def refresh_for_transcript(%Transcript{} = transcript) do
     query =
       from(m in Meeting, where: m.status == "ended" and m.chat_space_id == ^transcript.space_id)

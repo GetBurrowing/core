@@ -379,6 +379,7 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
   end
 
   test "live meetings never deliver" do
+    assert MeetingBriefings.refresh_for_transcript(%Transcript{}) == :ok
     ctx = live_meeting_with_attendees!()
     assert MeetingBriefings.deliver(ctx.meeting) == {:error, :not_concluded}
     assert briefing_count(ctx.meeting) == 0
