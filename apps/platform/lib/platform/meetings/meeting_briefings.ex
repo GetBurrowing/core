@@ -283,9 +283,7 @@ defmodule Platform.Meetings.MeetingBriefings do
                 &MapSet.member?(task_ids, &1)
               ),
               candidate <- candidates,
-              node["candidate_id"] == candidate.id or
-                get_in(node, ["props", "candidate_id"]) == candidate.id or
-                node["id"] == candidate.id,
+              node["id"] == candidate.id,
               do: candidate.id
       end
 

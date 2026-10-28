@@ -349,25 +349,26 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     task = file!(canvas, project, "Normalized action title")
 
     canvas
-    |> Ecto.Changeset.change(
+    |> Chat.Canvas.changeset(%{
       document: %{
         "type" => "stack",
+        "id" => "final-actions",
         "children" => [
           %{
             "type" => "checklist_item",
-            "id" => "stable-action",
-            "props" => %{"candidate_id" => candidate.id}
+            "id" => candidate.id,
+            "props" => %{"label" => "Normalized action title"}
           }
         ]
       }
-    )
+    })
     |> Repo.update!()
 
     Repo.insert!(%CompletionRun{
       meeting_id: meeting.id,
       canvas_id: canvas.id,
       status: "filed",
-      item_results: %{"stable-action" => %{"status" => "processed", "task_ids" => [task.id]}}
+      item_results: %{candidate.id => %{"status" => "processed", "task_ids" => [task.id]}}
     })
 
     {:ok, briefing, _} = MeetingBriefings.build(meeting)
