@@ -12,7 +12,8 @@ defmodule Platform.MeetingsTest do
       `{:error, :not_found}` for missing / already-deleted / malformed
       inputs (so the cleanup handler is naturally idempotent).
   """
-  use Platform.DataCase, async: true
+  # LiveKit credentials are application-global; serialize setup, overrides and cleanup.
+  use Platform.DataCase, async: false
 
   alias Platform.Agents.Agent
   alias Platform.Chat
@@ -995,9 +996,8 @@ defmodule Platform.MeetingsTest do
 
     # The resolver never mints a LiveKit token — it only verifies the
     # HMAC + does a slug lookup — so it does not depend on the
-    # `Application.put_env(:platform, :livekit, ...)` global. That means
-    # this describe can stay in the `async: true` module without
-    # racing other tests that mutate the livekit config.
+    # `Application.put_env(:platform, :livekit, ...)` global. This describe
+    # needs no config override; the module is serialized for the JWT tests.
 
     defp create_project! do
       org_id = Platform.TenancyFixtures.acme_org_id()
@@ -1583,8 +1583,7 @@ defmodule Platform.MeetingsTest do
     # table names Ecto queried FROM THIS PROCESS (or a `Task` it spawned,
     # which carries it in `$callers`). The handler runs in the emitting
     # process, so the `:caller` discriminator discards every query the rest
-    # of the concurrently-running suite is issuing — which is what makes this
-    # safe under `async: true`.
+    # of the suite is issuing, keeping the measurement scoped to this test.
     defp capture_repo_sources(fun) do
       handler_id =
         Platform.TelemetryHelpers.attach_scoped(@query_event, :caller, self(), tag: :repo_query)
@@ -1639,7 +1638,7 @@ defmodule Platform.MeetingsTest do
   # :none), which calls `mint_guest_join_bundle/2` under the hood.
   #
   # We pin only the failure branches here — those don't require
-  # LiveKit env, so they're safe under `async: true`.
+  # LiveKit env, so they need no config override.
   describe "mint_guest_join_bundle/2 (task 019f498d stage 2)" do
     alias Platform.Meetings.Meeting
     alias Platform.Tasks
