@@ -10,6 +10,7 @@ defmodule Platform.Meetings.CompletionRun do
     field(:status, :string, default: "waiting")
     field(:snapshot, :map, default: %{})
     field(:snapshot_hash, :string)
+    field(:generation, :integer, default: 0)
     field(:item_results, :map, default: %{})
     field(:synthesis, :map, default: %{})
     field(:last_error, :string)

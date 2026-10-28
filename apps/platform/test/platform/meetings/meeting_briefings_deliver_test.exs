@@ -169,7 +169,7 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
 
     {:ok, snapshot, _} = Platform.Meetings.Completion.snapshot(meeting)
     run = Repo.get_by!(Platform.Meetings.CompletionRun, meeting_id: meeting.id)
-    hash = :crypto.hash(:sha256, :erlang.term_to_binary(snapshot)) |> Base.encode16()
+    hash = Platform.Meetings.Completion.snapshot_hash(run, snapshot)
 
     run =
       run

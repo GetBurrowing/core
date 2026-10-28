@@ -315,8 +315,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       case snapshot do
         {:ok, snap, _} ->
           run && run.capture_finished_at &&
-            run.snapshot_hash ==
-              :crypto.hash(:sha256, :erlang.term_to_binary(snap)) |> Base.encode16()
+            run.snapshot_hash == Platform.Meetings.Completion.snapshot_hash(run, snap)
 
         _ ->
           false
@@ -377,6 +376,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     # arbitrates pushes; push only AFTER the transaction which writes the row.
     {:ok, outcome} =
       Repo.transaction(fn ->
+        Meetings.lock_transcript_space(Repo.get(Meeting, id))
         Repo.one(from(r in CompletionRun, where: r.meeting_id == ^id, lock: "FOR UPDATE"))
         meeting = Repo.one(from(m in Meeting, where: m.id == ^id, lock: "FOR UPDATE"))
 

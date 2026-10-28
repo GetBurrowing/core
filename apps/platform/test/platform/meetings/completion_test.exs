@@ -233,6 +233,34 @@ defmodule Platform.Meetings.CompletionTest do
     refute Transcript.summary_current?(Meetings.get_transcript(transcript.id))
   end
 
+  test "meeting reopen fences old completion callbacks even if the transcript has not changed",
+       ctx do
+    {meeting, original_run, _} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    old_args = params(meeting, original_run, canvas)
+    {:ok, live} = Meetings.resume_meeting(meeting)
+    {:ok, ended} = Meetings.end_meeting(live)
+    Completion.capture_finished_for_space(ended.chat_space_id)
+    refreshed = run!(ended)
+    assert refreshed.generation == original_run.generation + 1
+    refute refreshed.snapshot_hash == original_run.snapshot_hash
+    assert {:error, :run_mismatch} = Completion.scribe_complete(ctx.scribe.id, old_args)
+    refute Platform.Meetings.MeetingBriefings.readiness(ended).ready?
+    args = params(ended, refreshed, canvas)
+    assert {:ok, %{status: "triage_dispatched"}} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    assert {:ok, %{status: "filed"}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+
+    assert Platform.Meetings.MeetingBriefings.readiness(ended).ready?
+  end
+
+  test "summary and append entry points preserve malformed-id miss behavior" do
+    assert {:error, :not_found} = Meetings.append_segment("malformed", %{"text" => "Ignored"})
+    assert {:error, :not_found} = Meetings.complete_transcript("malformed", "Ignored", "old")
+    assert {:error, :not_found} = Meetings.fail_summary_input("malformed", "old", :ignored)
+  end
+
   test "end before transcription waits for capture fence and final transcript", %{
     meeting: meeting
   } do

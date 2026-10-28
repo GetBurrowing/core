@@ -84,6 +84,7 @@ defmodule Platform.Meetings.Completion do
 
   def reopened(meeting_id) do
     Repo.update_all(from(r in CompletionRun, where: r.meeting_id == ^meeting_id),
+      inc: [generation: 1],
       set: [
         capture_finished_at: nil,
         dispatched_at: nil,
@@ -214,7 +215,7 @@ defmodule Platform.Meetings.Completion do
                Repo.one(from(m in Meeting, where: m.id == ^meeting_id, lock: "FOR UPDATE")),
              true <- run.id == run_id and run.snapshot_hash == snapshot_hash,
              {:ok, current, _} <- snapshot(meeting),
-             true <- hash(current) == snapshot_hash do
+             true <- snapshot_hash(run, current) == snapshot_hash do
           save(run, synthesis: %{"snapshot_hash" => snapshot_hash, "status" => status})
           :ok
         else
@@ -257,7 +258,9 @@ defmodule Platform.Meetings.Completion do
                  (run.id == params["run_id"] and run.transcript_id == params["transcript_id"] and
                     run.snapshot_hash == params["snapshot_hash"]) || {:error, :run_mismatch},
                {:ok, snapshot, _} <- snapshot(meeting),
-               true <- hash(snapshot) == run.snapshot_hash || {:error, :transcript_changed} do
+               true <-
+                 snapshot_hash(run, snapshot) == run.snapshot_hash ||
+                   {:error, :transcript_changed} do
             fun.(run, meeting, canvas)
           end
         end)
@@ -357,11 +360,11 @@ defmodule Platform.Meetings.Completion do
     case if(run.capture_finished_at, do: snapshot(meeting), else: {:error, :capture_active}) do
       {:ok, snap, transcript} ->
         run =
-          if hash(snap) != run.snapshot_hash,
+          if snapshot_hash(run, snap) != run.snapshot_hash,
             do:
               save(run,
                 snapshot: snap,
-                snapshot_hash: hash(snap),
+                snapshot_hash: snapshot_hash(run, snap),
                 transcript_id: transcript.id,
                 status: "scribe_pending",
                 dispatched_at: nil
@@ -528,8 +531,10 @@ defmodule Platform.Meetings.Completion do
 
   defp save(run, attrs), do: run |> Ecto.Changeset.change(attrs) |> Repo.update!()
 
-  defp hash(snapshot),
-    do: :crypto.hash(:sha256, :erlang.term_to_binary(snapshot)) |> Base.encode16()
+  @doc "Callback identity includes the persisted reopen generation, even when speech is unchanged."
+  def snapshot_hash(run, snapshot),
+    do:
+      :crypto.hash(:sha256, :erlang.term_to_binary({run.generation, snapshot})) |> Base.encode16()
 
   defp result(run),
     do:

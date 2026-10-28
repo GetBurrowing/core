@@ -5453,6 +5453,7 @@ defmodule Platform.Meetings do
   @spec reopen_transcript(Transcript.t()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def reopen_transcript(%Transcript{id: id}) do
     Repo.transaction(fn ->
+      lock_transcript_space(get_transcript(id))
       transcript = Repo.one!(from(t in Transcript, where: t.id == ^id, lock: "FOR UPDATE"))
 
       transcript
@@ -5701,6 +5702,12 @@ defmodule Platform.Meetings do
   """
   @spec append_segment(String.t(), map()) :: {:ok, Transcript.t()} | {:error, term()}
   def append_segment(transcript_id, segment) when is_map(segment) do
+    if Platform.UUID.valid?(transcript_id),
+      do: do_append_segment(transcript_id, segment),
+      else: {:error, :not_found}
+  end
+
+  defp do_append_segment(transcript_id, segment) do
     segment =
       segment
       |> Map.put_new("id", Platform.Types.UUIDv7.generate())
@@ -5710,6 +5717,8 @@ defmodule Platform.Meetings do
     # producer may overwrite the other's snapshot between read and write.
     result =
       Repo.transaction(fn ->
+        lock_transcript_space(get_transcript(transcript_id))
+
         case Repo.one(from(t in Transcript, where: t.id == ^transcript_id, lock: "FOR UPDATE")) do
           nil ->
             Repo.rollback(:not_found)
@@ -5900,8 +5909,16 @@ defmodule Platform.Meetings do
 
   @doc "Complete only the input fingerprint captured by the summary producer before dispatch."
   def complete_transcript(transcript_id, summary, input_hash) when is_binary(summary) do
+    if Platform.UUID.valid?(transcript_id),
+      do: do_complete_transcript(transcript_id, summary, input_hash),
+      else: {:error, :not_found}
+  end
+
+  defp do_complete_transcript(transcript_id, summary, input_hash) do
     result =
       Repo.transaction(fn ->
+        lock_transcript_space(get_transcript(transcript_id))
+
         case Repo.one(from(t in Transcript, where: t.id == ^transcript_id, lock: "FOR UPDATE")) do
           nil ->
             Repo.rollback(:not_found)
@@ -5941,7 +5958,14 @@ defmodule Platform.Meetings do
 
   @doc "Fence summary failure callbacks against newer input or an already completed summary."
   def fail_summary_input(id, input_hash, reason) do
+    if Platform.UUID.valid?(id),
+      do: do_fail_summary_input(id, input_hash, reason),
+      else: {:error, :not_found}
+  end
+
+  defp do_fail_summary_input(id, input_hash, reason) do
     Repo.transaction(fn ->
+      lock_transcript_space(get_transcript(id))
       transcript = Repo.one(from(t in Transcript, where: t.id == ^id, lock: "FOR UPDATE"))
 
       cond do
@@ -5960,6 +5984,19 @@ defmodule Platform.Meetings do
       end
     end)
   end
+
+  @doc false
+  def lock_transcript_space(%Meeting{chat_space_id: space_id}),
+    do: lock_transcript_space(space_id)
+
+  def lock_transcript_space(%{space_id: space_id}), do: lock_transcript_space(space_id)
+
+  def lock_transcript_space(space_id) when is_binary(space_id) do
+    Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["meeting-summary:" <> space_id])
+    :ok
+  end
+
+  def lock_transcript_space(_), do: :ok
 
   # A completed transcript carries the summary the meeting's briefing shows
   # (task 01a1694a stage 2). Rescued: the transcript is complete either way.
