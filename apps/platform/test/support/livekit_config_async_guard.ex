@@ -62,6 +62,14 @@ defmodule Platform.LivekitConfigAsyncGuard do
   defp walk({:quote, _, _}, info), do: info
   defp walk({:defmodule, _, _}, info), do: info
 
+  defp walk({:alias, _, [{{:., _, [prefix, :{}]}, _, names}]}, info) do
+    Enum.reduce(names, info, fn name, acc ->
+      root = resolve(prefix, acc.aliases)
+      suffix = resolve(name, %{})
+      if root && suffix, do: put_alias(acc, Module.concat(root, suffix), nil), else: acc
+    end)
+  end
+
   defp walk({:alias, _, [target, opts]}, info) when is_list(opts) do
     put_alias(info, target, opts[:as])
   end
@@ -111,9 +119,14 @@ defmodule Platform.LivekitConfigAsyncGuard do
   defp walk_children(ast, info), do: ast |> Tuple.to_list() |> walk(info)
 
   defp put_alias(info, target, as) do
-    module = resolve(target, info.aliases)
-    key = if as, do: resolve(as, %{}), else: Module.concat([List.last(Module.split(module))])
-    %{info | aliases: Map.put(info.aliases, key, module)}
+    case resolve(target, info.aliases) do
+      nil ->
+        info
+
+      module ->
+        key = if as, do: resolve(as, %{}), else: Module.concat([List.last(Module.split(module))])
+        %{info | aliases: Map.put(info.aliases, key, module)}
+    end
   end
 
   defp resolve({:__aliases__, _, parts}, aliases) do
