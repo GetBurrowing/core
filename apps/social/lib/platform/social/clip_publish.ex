@@ -1,6 +1,9 @@
 defmodule Platform.Social.ClipPublish do
   @moduledoc """
   The server-side undo window of Clip Studio 2/9 (task 01a16662). A human's
+  Posts retain their explicit `clip_render_id`, media and text from approval;
+  sweeps, retries and undo never resolve the clip's latest render.
+
   `Platform.Social.ClipDecisions.approve_clip/5` writes one approved post per
   selected account with `publish_after` = the decision time + `window_ms/0`
   (8s). Nothing publishes before then; inside the window

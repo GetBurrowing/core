@@ -7,6 +7,19 @@ defmodule Platform.SocialFixtures do
 
   alias Platform.Repo
 
+  def render_id!(clip) do
+    import Ecto.Query
+
+    Repo.one!(
+      from(r in Platform.Social.ClipRender,
+        where: r.clip_id == ^clip.id and r.file_id == ^clip.render_file_id,
+        order_by: [desc: r.rev],
+        limit: 1,
+        select: r.id
+      )
+    )
+  end
+
   def unique, do: System.unique_integer([:positive])
 
   @doc "A changeset's errors as `%{field => [message]}`."

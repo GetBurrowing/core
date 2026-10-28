@@ -33,6 +33,61 @@ defmodule Platform.Social.ClipJobToolsTest do
 
   defp tool(name, args, ctx), do: Tools.execute(name, args, ctx)
 
+  test "fix transport preserves typed base identity and safe applied facts", w do
+    {clip, job} = enqueue!(w)
+    {:ok, _} = ClipJobs.claim(w.scope, job.id, w.agent.id)
+
+    {:ok, _} =
+      ClipJobs.complete(w.scope, job.id, w.agent.id, %{
+        file_id: w.f1.id,
+        actual_in_s: 120.0,
+        actual_out_s: 162.0,
+        candidate_id: "base-candidate"
+      })
+
+    base = Repo.get_by!(ClipRender, clip_id: clip.id, rev: 1)
+
+    {:ok, fix} =
+      ClipJobs.enqueue_fix(w.org_id, clip.id, w.approver.id, %{
+        base_render_id: base.id,
+        operation: "nudge",
+        edge: "end",
+        delta_s: -1
+      })
+
+    assert {:ok, %{jobs: [listed]}} =
+             tool(
+               "social_clip_job_list",
+               %{"profile_id" => w.profile.id, "status" => "queued"},
+               w.ctx
+             )
+
+    assert listed.payload["base_render_id"] == base.id
+    assert listed.payload["fix"]["operation"] == "nudge"
+    {:ok, _} = tool("social_clip_job_claim", %{"job_id" => fix.id}, w.ctx)
+
+    assert {:ok, %{job: done}} =
+             tool(
+               "social_clip_job_complete",
+               %{
+                 "job_id" => fix.id,
+                 "file_id" => w.f1.id,
+                 "actual_in_s" => 120.0,
+                 "actual_out_s" => 160.9,
+                 "candidate_id" => "base-candidate",
+                 "transcript" => "must drop"
+               },
+               w.ctx
+             )
+
+    assert done.result["actual_out_s"] == 160.9
+    refute Map.has_key?(done.result, "transcript")
+    rendered = Repo.get_by!(ClipRender, clip_id: clip.id, rev: 2)
+    assert rendered.requested_end_s == 161.0
+    assert rendered.actual_end_s == 160.9
+    assert rendered.candidate_id == "base-candidate"
+  end
+
   defp enqueue!(w, org_id \\ nil, profile \\ nil, approver \\ nil) do
     {:ok, %{clip: clip, job: job}} =
       ClipJobs.enqueue_new_clip(

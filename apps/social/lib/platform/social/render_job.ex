@@ -20,7 +20,7 @@ defmodule Platform.Social.RenderJob do
        (`ingest_intent: "human_only"`: video has no extractor);
    10. in one transaction set `render_file_id`, `duration_s`, `width`,
        `height`, `byte_size`, `rendered_at`, status `rendered`, and review
-       `pending` unless the clip is already approved (Clip Studio 1/9).
+       `pending` and append an immutable version snapshot.
 
   The tmp dir is always removed. A Files row written before a later failure
   is deleted again, so a failed clip leaves no orphan.
@@ -33,7 +33,18 @@ defmodule Platform.Social.RenderJob do
   import Ecto.Query
 
   alias Platform.Repo
-  alias Platform.Social.{Account, Brand, Clip, MediaRules, Profile, Renderer, Segmenter, Source}
+
+  alias Platform.Social.{
+    Account,
+    Brand,
+    Clip,
+    ClipVersions,
+    MediaRules,
+    Profile,
+    Renderer,
+    Segmenter,
+    Source
+  }
 
   @expected_card_s 2.0
 
@@ -227,9 +238,14 @@ defmodule Platform.Social.RenderJob do
     }
 
     case Renderer.impl().render(input) do
-      {:ok, rendered} -> {:ok, rendered}
-      {:error, message} -> {:error, message}
-      other -> {:error, "the renderer returned #{inspect(other)}"}
+      {:ok, rendered} ->
+        {:ok, Map.put(rendered, :render_look, %{"brand" => brand, "crop_x" => input.crop_x})}
+
+      {:error, message} ->
+        {:error, message}
+
+      other ->
+        {:error, "the renderer returned #{inspect(other)}"}
     end
   end
 
@@ -289,23 +305,35 @@ defmodule Platform.Social.RenderJob do
   defp finish(clip, file, rendered) do
     result =
       Repo.transaction(fn ->
-        clip
-        |> Clip.render_changeset(%{
-          status: "rendered",
-          render_file_id: file.id,
-          duration_s: rendered.duration_s,
-          width: rendered.width,
-          height: rendered.height,
-          byte_size: rendered.byte_size,
-          rendered_at: DateTime.utc_now(),
-          error: nil
-        })
-        |> to_review(clip)
-        |> Repo.update()
-        |> case do
-          {:ok, clip} -> clip
-          {:error, cs} -> Repo.rollback(cs)
-        end
+        ClipVersions.append!(
+          clip.id,
+          file,
+          %{
+            duration_s: rendered.duration_s,
+            width: rendered.width,
+            height: rendered.height,
+            byte_size: rendered.byte_size,
+            rendered_at: DateTime.utc_now(),
+            error: nil
+          },
+          %{
+            requested_start_s: clip.requested_start_s,
+            requested_end_s: clip.requested_end_s,
+            actual_start_s: clip.start_s,
+            actual_end_s: clip.end_s,
+            look: rendered.render_look,
+            headline: clip.title,
+            caption: clip.caption,
+            source: %{
+              "source_url" => clip.source_url,
+              "source_file_id" => clip.source_file_id,
+              "transcript_file_id" => clip.transcript_file_id,
+              "crop_x" => clip.crop_x
+            },
+            provenance: %{"kind" => "render_queue", "attempt" => clip.attempts},
+            completion_key: "render_queue:#{clip.id}:#{clip.attempts}:#{clip.render_started_at}"
+          }
+        )
       end)
 
     case result do
@@ -319,11 +347,6 @@ defmodule Platform.Social.RenderJob do
         {:error, "could not record the render: #{inspect(reason)}"}
     end
   end
-
-  # Clip Studio 1/9: a new render goes to review as pending, unless the clip
-  # is already approved (a forced re-render of an approved clip stays so).
-  defp to_review(changeset, %Clip{review_status: "approved"}), do: changeset
-  defp to_review(changeset, _clip), do: Clip.review_changeset(changeset, :reset_pending)
 
   defp fmt(x), do: :erlang.float_to_binary(x * 1.0, decimals: 1)
 end

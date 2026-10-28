@@ -371,7 +371,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_render",
         description:
-          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Burrow Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. A rendered clip enters review as pending (a forced re-render of an approved clip stays approved). Attach the render_file_id to a draft with social_draft_create. " <>
+          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Burrow Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. A rendered clip enters review as pending (every successful render resets review to pending). Attach the render_file_id to a draft with social_draft_create. " <>
             @human_approves,
         parameters: %{
           clip_id: %{type: "string", required: true, description: "The clip id."},
@@ -396,7 +396,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_list",
         description:
-          "List a profile's clips with their render state (status, error, render_file_id, duration_s, width, height) and their review state (review_status, review_note, reviewed_at, rev, look). review_note is how a reviewer's rejection reason reaches the renderer: read it before re-rendering a rejected clip. " <>
+          "List a profile's clips with their render state (status, error, render_file_id, duration_s, width, height), review state (review_status, review_note, reviewed_at, rev, look), and up to ten recent versions, newest first. Each version has a stable version id, playable Files file_id, requested_start_s/requested_end_s and actual_start_s/actual_end_s (tool-applied bounds), text, look and output measurements. Unknown historical inputs are null, marked snapshot_status historical_unknown. review_note is how a reviewer's rejection reason reaches the renderer: read it before re-rendering a rejected clip. " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -414,11 +414,13 @@ defmodule Platform.Social.ToolDefinitions do
           limit: %{type: "integer", required: false, description: "Page size (default 50)."},
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
-        returns: "%{clips: [#{@clip_row}], total, has_more, limit, offset}",
+        returns:
+          "%{clips: [#{@clip_row} + versions: [%{id, clip_id, rev, file_id, requested_start_s, requested_end_s, actual_start_s, actual_end_s, headline, caption, caption_fixes, candidate_id, alternate_id, source, look, duration_s, width, height, byte_size, provenance, snapshot_status}]], total, has_more, limit, offset}",
         limitations:
           "not_found for a profile outside your org. invalid_review_status unless review_status is pending, approved or rejected. Oldest first. " <>
             @privacy_null,
-        when_to_use: "To follow a render, or to find a rendered clip's render_file_id."
+        when_to_use:
+          "To follow a render or read its recent versions (newest first, up to ten), each with a stable version id and playable Files file_id. Unknown historical inputs are null; snapshot_status marks historical_unknown."
       },
       %{
         name: "social_task_request",
@@ -587,6 +589,33 @@ defmodule Platform.Social.ToolDefinitions do
             type: "number",
             required: false,
             description: "Height in pixels, used only when the server cannot probe the file."
+          },
+          actual_in_s: %{
+            type: "number",
+            required: false,
+            description:
+              "Actual tool-applied source start after review --apply snaps boundaries; omit if unknown."
+          },
+          actual_out_s: %{
+            type: "number",
+            required: false,
+            description: "Actual tool-applied source end after snapping; omit if unknown."
+          },
+          caption_fixes: %{
+            type: "object",
+            required: false,
+            description:
+              "Caption-word corrections applied to this render, keyed by word identity."
+          },
+          candidate_id: %{
+            type: "string",
+            required: false,
+            description: "Selected tool candidate identity; omit if unknown."
+          },
+          alternate_id: %{
+            type: "string",
+            required: false,
+            description: "Selected alternate cut identity; omit if unknown."
           }
         },
         returns: "%{job: #{@job_row}, clip: #{@clip_row} | nil}",

@@ -79,6 +79,8 @@ defmodule Platform.Social.Post do
     # `Platform.Social.Publishing`. `external_id` stays the vendor's post id;
     # `platform_post_id` is the platform's own id for it.
     belongs_to(:clip, Platform.Social.Clip)
+    # Immutable approval selection; never cast from an agent or post editor.
+    belongs_to(:clip_render, Platform.Social.ClipRender)
     field(:platform_post_id, :string)
     field(:publish_after, :utc_datetime_usec)
     field(:publish_attempts, :integer, default: 0)

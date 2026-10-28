@@ -1,0 +1,529 @@
+--- /dev/null
++++ b/clip-agent/src/clip_agent/headline.py
+@@ -0,0 +1,194 @@
++"""Versioned local headline boundary for automated picks and review regeneration.
++
++Generation belongs to hooks.generate_variants; this module never calls a model
++or changes approval state. Requests/receipts are local files, never MCP payloads.
++"""
++from __future__ import annotations
++
++import math
++import re
++from dataclasses import dataclass
++from pathlib import Path
++
++CONTRACT_VERSION = 1
++_SAFE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
++
++
++def _safe_id(value) -> bool:
++    return isinstance(value, str) and _SAFE_ID.fullmatch(value) is not None
++
++
++class HeadlineError(ValueError):
++    """Only a stable code crosses the local runner boundary."""
++
++    def __init__(self, code: str):
++        self.code = code
++        super().__init__(code)
++
++
++@dataclass(frozen=True)
++class HeadlineRequest:
++    consumer: str
++    candidate_id: str
++    source_id: str
++    start: float
++    end: float
++    voice_revision: str
++    voice_direction: str
++    base_render_id: str | None
++    requested_headline: str | None
++
++    @classmethod
++    def parse(cls, data: dict, *, privacy: str, capabilities: dict) -> HeadlineRequest:
++        if not isinstance(capabilities, dict) or capabilities.get("headline_review") != CONTRACT_VERSION:
++            raise HeadlineError("HEADLINE_CLI_UNSUPPORTED")
++        if not isinstance(data, dict) or data.get("version") != CONTRACT_VERSION:
++            raise HeadlineError("HEADLINE_REQUEST_UNSUPPORTED")
++        if privacy != "cloud" and data.get("export_text", False):
++            raise HeadlineError("HEADLINE_PRIVACY_EXPORT_REFUSED")
++        consumer = data.get("consumer")
++        if consumer not in ("episode", "regenerate", "edit"):
++            raise HeadlineError("HEADLINE_CONSUMER_UNSUPPORTED")
++        voice = data.get("voice")
++        if not isinstance(voice, dict) or not all(
++            isinstance(voice.get(k), str) and voice[k].strip()
++            for k in ("revision", "direction")
++        ):
++            raise HeadlineError("HEADLINE_VOICE_MISSING")
++        if not _safe_id(voice["revision"]):
++            raise HeadlineError("HEADLINE_REQUEST_UNSUPPORTED")
++        source = data.get("source")
++        if (not isinstance(source, dict) or not _safe_id(data.get("candidate_id"))
++                or not _safe_id(source.get("id"))):
++            raise HeadlineError("HEADLINE_SOURCE_MISSING")
++        start, end = source.get("start"), source.get("end")
++        if not all(type(n) in (int, float) and math.isfinite(n) for n in (start, end)):
++            raise HeadlineError("HEADLINE_SPAN_INVALID")
++        if not 0 <= start < end:
++            raise HeadlineError("HEADLINE_SPAN_INVALID")
++        base = data.get("base_render_id")
++        if (consumer != "episode" and not _safe_id(base)) or (base is not None and not _safe_id(base)):
++            raise HeadlineError("HEADLINE_BASE_MISSING")
++        title = data.get("requested_headline")
++        if consumer == "edit":
++            if not isinstance(title, str) or not title.strip():
++                raise HeadlineError("HEADLINE_EMPTY")
++            title = " ".join(title.split())
++        elif title is not None:
++            raise HeadlineError("HEADLINE_REQUEST_UNSUPPORTED")
++        return cls(consumer, data["candidate_id"], source["id"], float(start), float(end),
++                   voice["revision"], voice["direction"], base, title)
++
++    def receipt(self, *, headline: str, backed: bool, applied: bool, privacy: str,
++                export_text: bool = False) -> dict:
++        if not isinstance(headline, str) or not headline.strip():
++            raise HeadlineError("HEADLINE_EMPTY")
++        if not backed:
++            raise HeadlineError("HEADLINE_UNBACKED")
++        if self.requested_headline is not None and headline != self.requested_headline:
++            raise HeadlineError("HEADLINE_APPLIED_MISMATCH")
++        if privacy != "cloud" and export_text:
++            raise HeadlineError("HEADLINE_PRIVACY_EXPORT_REFUSED")
++        result = {
++            "version": CONTRACT_VERSION, "candidate_id": self.candidate_id,
++            "source_id": self.source_id, "start": self.start, "end": self.end,
++            "voice_revision": self.voice_revision, "base_render_id": self.base_render_id,
++            "status": "applied" if applied else "prepared", "backed": True,
++        }
++        if privacy == "cloud" and export_text:
++            result["requested_headline"] = self.requested_headline
++            result["applied_headline"] = headline if applied else None
++        return result
++
++
++def prepare_review(project_dir: Path, manifest, config, request: HeadlineRequest, *, runlog=None) -> dict:
++    """Prepare one supported review entry; caller must apply, then finalize.
++
++    Uses the existing hook policy, evidence checks and rotation. No internal
++    state is written; only review.toml is prepared. Prior unapplied edits fail
++    closed through write_review_file instead of being overwritten.
++    """
++    from . import hooks, review
++    from .learn import db
++    from .manifest import atomic_write_text
++
++    c = next((c for c in manifest.candidates if c.id == request.candidate_id), None)
++    if c is None:
++        raise HeadlineError("HEADLINE_CANDIDATE_MISSING")
++    if (abs(c.effective_start - request.start) > 0.001
++            or abs(c.effective_end - request.end) > 0.001):
++        raise HeadlineError("HEADLINE_SPAN_STALE")
++    if not config.captions.hook_title:
++        raise HeadlineError("HEADLINE_OVERLAY_DISABLED")
++    if not hooks.is_approved(c, manifest):
++        raise HeadlineError("HEADLINE_RENDER_APPROVAL_REQUIRED")
++    words = hooks.saved_words(project_dir, manifest)
++    text = hooks.clip_text(project_dir, manifest, c, words=words)
++    names = hooks.episode_names(project_dir, manifest, words=words)
++    original = hooks.clip_original(c, words)
++    headline = request.requested_headline
++    if headline is None:
++        cfg = config.model_copy(deep=True)
++        cfg.selection.title_hint += "\nShow voice direction (provisional where incomplete): " + request.voice_direction
++        conn = db.connect(config.show.name)
++        try:
++            mix = db.recent_hook_types(conn)
++        finally:
++            conn.close()
++        # Existing selection variants may fill n without an AI call. A regenerate
++        # request needs a fresh draft through the SAME policy, not that shortcut.
++        candidate = c.model_copy(deep=True)
++        candidate.titles = []
++        result = hooks.generate_variants(cfg, candidate, text, n=1, mix=mix,
++                                        runlog=runlog, names=names, original=original)
++        if not result.variants:
++            raise HeadlineError("HEADLINE_OUTPUT_UNSUPPORTED")
++        headline = result.variants[0].title
++    if not isinstance(headline, str) or not headline.strip():
++        raise HeadlineError("HEADLINE_EMPTY")
++    headline = " ".join(headline.split())
++    if hooks.check_variant(headline, "", "selection", text, names=names, original=original).problem:
++        raise HeadlineError("HEADLINE_UNBACKED")
++    path = review.write_review_file(project_dir, manifest, words=words, config=config)
++    content = path.read_text()
++    chunks = re.split(r"(?m)(?=^\[\[clip\]\]\s*$)", content)
++    for i, chunk in enumerate(chunks):
++        import tomllib
++        rows = tomllib.loads(chunk).get("clip", [])
++        if rows and rows[0].get("id") == c.id:
++            chunks[i] = chunk.replace("[[clip]]\n", "[[clip]]\nheadline = " + review._toml_str(headline) + "\n", 1)
++            break
++    else:
++        raise HeadlineError("HEADLINE_OUTPUT_UNSUPPORTED")
++    atomic_write_text(path, "".join(chunks), mode=0o600)
++    return request.receipt(headline=headline, backed=True, applied=False,
++                           privacy=config.effective_privacy_mode)
++
++
++def verify_applied(project_dir: Path, manifest, config, request: HeadlineRequest) -> dict:
++    """Content-free verification against persisted tool state after review --apply.
++
++    This verifies application, not render completion or permission to publish.
++    """
++    import tomllib
++
++    from . import hooks, review
++
++    c = next((c for c in manifest.candidates if c.id == request.candidate_id), None)
++    if c is None:
++        raise HeadlineError("HEADLINE_CANDIDATE_MISSING")
++    if not review._fully_applied(project_dir / review.REVIEW_NAME, manifest):
++        raise HeadlineError("HEADLINE_REVIEW_NOT_APPLIED")
++    entries = tomllib.loads((project_dir / review.REVIEW_NAME).read_text()).get("clip", [])
++    entry = next((e for e in entries if e.get("id") == c.id), {})
++    expected = entry.get("headline")
++    if not isinstance(expected, str) or not expected.strip():
++        raise HeadlineError("HEADLINE_OUTPUT_UNSUPPORTED")
++    words = hooks.saved_words(project_dir, manifest)
++    actual = review.hook_title_for(c, config, words=words)
++    if actual != expected or not c.approval or c.status not in ("approved", "rendered"):
++        raise HeadlineError("HEADLINE_APPLIED_MISMATCH")
++    if (abs(c.effective_start - request.start) > 0.001
++            or abs(c.effective_end - request.end) > 0.001):
++        raise HeadlineError("HEADLINE_SPAN_STALE")
++    return request.receipt(headline=actual, backed=True, applied=True, privacy=config.effective_privacy_mode)
+--- a/clip-agent/src/clip_agent/review.py
++++ b/clip-agent/src/clip_agent/review.py
+@@ -101,7 +101,7 @@
+
+ _DECISIONS = ("pending", "approve", "reject")
+ BASE_KEYS = ("edl", "captions", "packaging")   # what an entry showed: approval needs them to match
+-_KEYS = ("id", "title", "decision", "start", "end", "transcript", "crop", "note", "revert", *BASE_KEYS)
++_KEYS = ("id", "title", "headline", "decision", "start", "end", "transcript", "crop", "note", "revert", *BASE_KEYS)
+ NO_EDL = "none"            # the ``edl`` base of a clip that has no edit list
+ META_KEY = "_meta"         # bookkeeping stored next to the EDL in Candidate.edl (not hashed)
+ TEASER_CAPPED = "teaser_capped"   # the one approval derivation (see the module docstring)
+@@ -802,6 +802,7 @@
+         errors.append(f'{where}: decision must be "approve", "reject" or "pending" (got {decision!r})')
+     plan["decision"] = decision
+
++    # headline explicitly replaces title variants and is checked on the delivered span.
+     # A changed title is the reviewer's packaging edit: applied, never ignored.
+     title = entry.get("title", cand.title)
+     if not isinstance(title, str):
+@@ -814,6 +815,12 @@
+                           "title when the clip has no title variants)")
+             title = cand.title
+     plan["title"] = title
++    headline = entry.get("headline")
++    if "headline" in entry:
++        if not isinstance(headline, str) or not headline.strip():
++            errors.append(f"{where}: HEADLINE_EMPTY")
++        else:
++            plan["headline"] = " ".join(headline.split())
+
+     start = entry.get("start", cand.effective_start)
+     end = entry.get("end", cand.effective_end)
+@@ -949,7 +956,7 @@
+         unseen, derived = (_unseen(cand, plan["base"], words, plan["revert"], config, source_fp) if verify_seen
+                            else ([], None))
+         old = (cand.effective_start, cand.effective_end, cand.transcript_override, cand.crop_override,
+-               cand.edl_hash, cand.title)
++               cand.edl_hash, cand.title, tuple(cand.titles))
+         stale_edits = False
+         if "bounds" in plan:
+             new_start, new_end = plan["bounds"]
+@@ -968,8 +975,16 @@
+         cand.crop_override = plan["crop"]
+         cand.note = plan["note"]
+         cand.title = plan["title"]
++        if "headline" in plan:
++            from .headline import HeadlineError
++            if not words:
++                raise HeadlineError("HEADLINE_TRANSCRIPT_MISSING")
++            cand.title = plan["headline"]
++            cand.titles = [plan["headline"]]
++            if hook_title_text(cand, words) != plan["headline"]:
++                raise HeadlineError("HEADLINE_UNBACKED")
+         new = (cand.effective_start, cand.effective_end, cand.transcript_override, cand.crop_override,
+-               cand.edl_hash, cand.title)
++               cand.edl_hash, cand.title, tuple(cand.titles))
+         if new != old:
+             invalidated.append(cand.id)
+             cand.render_fingerprint = None   # its final/ outputs must be re-rendered
+--- a/clip-agent/src/clip_agent/cli.py
++++ b/clip-agent/src/clip_agent/cli.py
+@@ -2487,7 +2487,7 @@
+     """
+     from .provenance import install_info as _install_info
+
+-    return {**_install_info(), "content_free": CONTENT_FREE_VERSION}
++    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1}
+
+
+ @cli.command("version")
+@@ -2592,6 +2592,51 @@
+ @cli.group(cls=_HooksGroup)
+ def hooks() -> None:
+     """Quote-backed hook-title variants (clip hooks PROJECT) and posting records (clip hooks mark-posted)."""
++
++
++@hooks.command("prepare-review")
++@click.option("--check-applied", is_flag=True, help="Verify the applied review headline; never generate or edit.")
++@click.argument("project")
++@click.option("--request", "request_path", required=True, type=click.Path(exists=True, dir_okay=False))
++@_PROFILE_OPT
++@_CONFIG_OPT
++@_CONTENT_FREE_OPT
++@_friendly_errors
++def hooks_prepare_review(project, request_path, profile, config_path, check_applied) -> None:
++    """Prepare an exact quote-backed headline in review.toml (contract v1).
++
++    Request/voice/text remain local. Emits only a content-free receipt, even in
++    cloud mode. Does not apply review, finalize, approve a Burrow post or publish.
++    Run review --apply and finalize --regenerate afterwards.
++    """
++    from . import headline, pipeline, privacy
++    from . import hooks as hooks_mod
++    from .manifest import load_manifest
++    from .runlog import RunLog
++
++    try:
++        current = _load(config_path, profile)
++        project_dir = pipeline.find_project_dir(current, project)
++        manifest = load_manifest(project_dir)
++        config = current if profile else hooks_mod.project_config(manifest, current)
++        req = headline.HeadlineRequest.parse(json.loads(Path(request_path).read_text()),
++                                            privacy=config.effective_privacy_mode,
++                                            capabilities={"headline_review": 1})
++        if not check_applied and req.requested_headline is None and config.effective_privacy_mode == "local":
++            _preflight_local_model(config)
++        sweep_expired_logs(config, project_dirs=[project_dir])
++        with privacy.network_guard(config):
++            if check_applied:
++                receipt = headline.verify_applied(project_dir, manifest, config, req)
++            else:
++                receipt = headline.prepare_review(project_dir, manifest, config, req,
++                                                   runlog=RunLog(project_dir, config))
++        click.echo(json.dumps(receipt, sort_keys=True))
++    except headline.HeadlineError as exc:
++        raise AppError(exc.code) from None
++    except Exception:
++        # No transcript-derived provider errors, paths or request text cross the boundary.
++        raise AppError("HEADLINE_PREPARE_FAILED") from None
+
+
+ @hooks.command("generate")
+--- /dev/null
++++ b/clip-agent/tests/test_headline_contract.py
+@@ -0,0 +1,207 @@
++import json
++import tomllib
++
++import pytest
++
++from clip_agent import headline, hooks, review
++from clip_agent.config import Config
++from clip_agent.manifest import Candidate, ProjectManifest, SourceInfo
++from clip_agent.models import Word
++
++
++def payload(consumer="episode"):
++    return {"version": 1, "consumer": consumer, "candidate_id": "abc123",
++            "source": {"id": "source-fixture", "start": 0, "end": 20},
++            "voice": {"revision": "fixture-rev-8", "direction": "Entertainment, comedy, positivity; incomplete."},
++            "base_render_id": None if consumer == "episode" else "render-fixture-1"}
++
++
++def parse(data):
++    return headline.HeadlineRequest.parse(data, privacy="local", capabilities={"headline_review": 1})
++
++
++@pytest.mark.parametrize("consumer", ["episode", "regenerate"])
++def test_consumers_share_local_receipt_without_text(consumer):
++    req = parse(payload(consumer))
++    receipt = req.receipt(headline="We shipped the app", backed=True, applied=True, privacy="local")
++    assert receipt == {"version": 1, "candidate_id": "abc123", "source_id": "source-fixture",
++                       "start": 0, "end": 20, "voice_revision": "fixture-rev-8",
++                       "base_render_id": None if consumer == "episode" else "render-fixture-1",
++                       "status": "applied", "backed": True}
++    assert "shipped" not in json.dumps(receipt)
++
++
++@pytest.mark.parametrize("change,code", [
++    ({"voice": None}, "HEADLINE_VOICE_MISSING"),
++    ({"source": {"id": "s", "start": 0, "end": float("nan")}}, "HEADLINE_SPAN_INVALID"),
++    ({"version": 2}, "HEADLINE_REQUEST_UNSUPPORTED"),
++    ({"export_text": True}, "HEADLINE_PRIVACY_EXPORT_REFUSED"),
++    ({"consumer": "regenerate", "base_render_id": None}, "HEADLINE_BASE_MISSING"),
++    ({"source": {"id": "private transcript sentence", "start": 0, "end": 20}}, "HEADLINE_SOURCE_MISSING"),
++    ({"voice": {"revision": "private transcript sentence", "direction": "comedy"}}, "HEADLINE_REQUEST_UNSUPPORTED"),
++    ({"base_render_id": {"text": "private"}}, "HEADLINE_BASE_MISSING"),
++])
++def test_failures_are_content_free(change, code):
++    with pytest.raises(headline.HeadlineError, match=code):
++        parse(payload() | change)
++
++
++def test_unsupported_cli_fails_before_generation():
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_CLI_UNSUPPORTED"):
++        headline.HeadlineRequest.parse(payload(), privacy="local", capabilities={})
++
++
++@pytest.mark.parametrize("title,backed,code", [("", True, "HEADLINE_EMPTY"),
++                                               ("unbacked", False, "HEADLINE_UNBACKED")])
++def test_unsupported_output_is_failure(title, backed, code):
++    with pytest.raises(headline.HeadlineError, match=code):
++        parse(payload()).receipt(headline=title, backed=backed, applied=True, privacy="local")
++
++
++@pytest.fixture
++def project(tmp_path, monkeypatch):
++    cfg = Config()
++    cfg.captions.hook_title = True
++    words = [Word(t, i, i + 0.9) for i, t in enumerate(
++        "We shipped the app and the team celebrated We shipped the app and the team celebrated".split())]
++    c = Candidate(id="abc123", rank=1, start=0, end=20, title="Old packaging",
++                  titles=["We shipped the app"], status="approved", render_fingerprint="old-render")
++    m = ProjectManifest(name="fixture", source=SourceInfo(path="/fixture.mp4", probe={"duration": 20}),
++                        config_resolved=cfg.model_dump(mode="json"), candidates=[c])
++    monkeypatch.setattr(hooks, "saved_words", lambda *a: words)
++    return tmp_path, m, cfg, words
++
++
++def test_explicit_headline_replaces_variant_and_approval_uses_new_packaging(project):
++    path, m, cfg, words = project
++    data = payload("edit") | {"requested_headline": "The team celebrated"}
++    prepared = headline.prepare_review(path, m, cfg, parse(data))
++    assert prepared["status"] == "prepared"
++    entry = tomllib.loads((path / "review.toml").read_text())["clip"][0]
++    assert entry["headline"] == "The team celebrated"
++    assert m.candidates[0].titles == ["We shipped the app"]  # no internal mutation
++    updated, invalidated, _ = review.apply_review(path, m, words, config=cfg)
++    c = updated.candidates[0]
++    assert c.title == "The team celebrated"
++    assert review.hook_title_for(c, cfg, words=words) == "The team celebrated"
++    assert invalidated == ["abc123"] and c.render_fingerprint is None
++    assert c.status == "approved"
++    assert c.approval["packaging"] == review.revision_record(c, source_fp=m.source.fingerprint, words=words, config=cfg)["packaging"]
++    assert headline.verify_applied(path, updated, cfg, parse(data))["status"] == "applied"
++
++
++def test_prepared_is_not_applied(project):
++    path, m, cfg, words = project
++    req = parse(payload("edit") | {"requested_headline": "The team celebrated"})
++    headline.prepare_review(path, m, cfg, req)
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_REVIEW_NOT_APPLIED"):
++        headline.verify_applied(path, m, cfg, req)
++
++
++def test_dropping_headline_never_verifies_applied(project):
++    path, m, cfg, words = project
++    req = parse(payload("edit") | {"requested_headline": "The team celebrated"})
++    headline.prepare_review(path, m, cfg, req)
++    f = path / "review.toml"
++    f.write_text(f.read_text().replace('headline = "The team celebrated"\n', ""))
++    updated, _, _ = review.apply_review(path, m, words, config=cfg)
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_OUTPUT_UNSUPPORTED"):
++        headline.verify_applied(path, updated, cfg, req)
++
++
++def test_unbacked_edit_does_not_write_or_apply(project):
++    path, m, cfg, words = project
++    data = payload("edit") | {"requested_headline": "Bananas cost 999 dollars"}
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_UNBACKED"):
++        headline.prepare_review(path, m, cfg, parse(data))
++    assert not (path / "review.toml").exists()
++    assert m.candidates[0].render_fingerprint == "old-render"
++
++
++def test_generate_reuses_hook_policy_and_voice_and_never_reports_applied(project, monkeypatch):
++    path, m, cfg, words = project
++    calls = []
++    from clip_agent.learn import db
++    monkeypatch.setattr(db, "connect", lambda *a: type("Conn", (), {"close": lambda self: None})())
++    monkeypatch.setattr(db, "recent_hook_types", lambda c: {})
++    def generate(config, candidate, text, **kwargs):
++        calls.append((config, candidate, text))
++        return hooks.HookResult(candidate.id, [hooks.Variant("The team celebrated", "other", "The team celebrated", "brain")])
++    monkeypatch.setattr(hooks, "generate_variants", generate)
++    receipt = headline.prepare_review(path, m, cfg, parse(payload("regenerate")))
++    assert receipt["status"] == "prepared"
++    assert len(calls) == 1 and calls[0][1].titles == []
++    assert "Entertainment, comedy, positivity; incomplete." in calls[0][0].selection.title_hint
++    assert "Entertainment" not in cfg.selection.title_hint
++    assert tomllib.loads((path / "review.toml").read_text())["clip"][0]["headline"] == "The team celebrated"
++
++
++def test_missing_voice_precedes_provider_call(project, monkeypatch):
++    monkeypatch.setattr(hooks, "generate_variants", lambda *a, **k: pytest.fail("provider called"))
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_VOICE_MISSING"):
++        parse(payload() | {"voice": {}})
++
++
++def test_review_rejects_injected_unbacked_headline_without_mutating_manifest(project):
++    path, m, cfg, words = project
++    review.write_review_file(path, m, words=words, config=cfg)
++    f = path / "review.toml"
++    f.write_text(f.read_text().replace("[[clip]]\n", '[[clip]]\nheadline = "999 bananas"\n', 1))
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_UNBACKED"):
++        review.apply_review(path, m, words, config=cfg)
++    assert m.candidates[0].titles == ["We shipped the app"]
++    assert m.candidates[0].render_fingerprint == "old-render"
++
++
++def test_prior_unapplied_review_edits_are_preserved(project):
++    path, m, cfg, words = project
++    review.write_review_file(path, m, words=words, config=cfg)
++    f = path / "review.toml"
++    before = f.read_bytes()
++    with pytest.raises(RuntimeError, match="hasn't been applied"):
++        headline.prepare_review(path, m, cfg, parse(payload("edit") | {"requested_headline": "The team celebrated"}))
++    assert f.read_bytes() == before
++
++
++def test_exact_manual_request_cannot_claim_different_applied_title():
++    req = parse(payload("edit") | {"requested_headline": "The team celebrated"})
++    with pytest.raises(headline.HeadlineError, match="HEADLINE_APPLIED_MISMATCH"):
++        req.receipt(headline="We shipped the app", backed=True, applied=True, privacy="local")
++
++
++def test_cli_reports_capability_and_content_free_errors(tmp_path, monkeypatch):
++    from click.testing import CliRunner
++
++    from clip_agent import cli
++    monkeypatch.setenv("CLIP_NO_CONTENT", "1")
++    runner = CliRunner()
++    result = runner.invoke(cli.cli, ["version", "--json"])
++    assert result.exit_code == 0
++    assert json.loads(result.output)["headline_review"] == 1
++    request = tmp_path / "private-request.json"
++    request.write_text(json.dumps(payload()))
++    # A failed project/config resolution never leaks provider/request text.
++    monkeypatch.setattr(cli, "_load", lambda *a: (_ for _ in ()).throw(ValueError("PRIVATE TRANSCRIPT")))
++    result = runner.invoke(cli.cli, ["hooks", "prepare-review", "fixture", "--request", str(request)])
++    assert result.exit_code != 0
++    assert "HEADLINE_PREPARE_FAILED" in result.output
++    assert "PRIVATE TRANSCRIPT" not in result.output
++
++
++def test_public_cli_prepares_edit_without_text_export(project, monkeypatch):
++    from click.testing import CliRunner
++
++    from clip_agent import cli, manifest, pipeline
++    path, m, cfg, words = project
++    request = path / "request.json"
++    request.write_text(json.dumps(payload("edit") | {"requested_headline": "The team celebrated"}))
++    monkeypatch.setenv("CLIP_NO_CONTENT", "1")
++    monkeypatch.setattr(cli, "_load", lambda *a: cfg)
++    monkeypatch.setattr(pipeline, "find_project_dir", lambda *a: path)
++    monkeypatch.setattr(manifest, "load_manifest", lambda *a: m)
++    result = CliRunner().invoke(cli.cli, ["hooks", "prepare-review", "fixture", "--request", str(request)])
++    assert result.exit_code == 0, result.output
++    receipt = json.loads(result.output)
++    assert receipt["status"] == "prepared" and receipt["candidate_id"] == "abc123"
++    assert "celebrated" not in result.output and "shipped" not in result.output
++    assert tomllib.loads((path / "review.toml").read_text())["clip"][0]["headline"] == "The team celebrated"

@@ -54,7 +54,17 @@ defmodule PlatformWeb.SocialClipsReview do
   use PlatformWeb, :live_component
 
   alias Platform.Social
-  alias Platform.Social.{Approvals, Clip, ClipDecisions, ClipPublish, ClipReviewFeed, Profile}
+
+  alias Platform.Social.{
+    Approvals,
+    Clip,
+    ClipDecisions,
+    ClipPublish,
+    ClipReviewFeed,
+    ClipJobs,
+    ClipVersions,
+    Profile
+  }
 
   @views ~w(review library)
   @info_toast_ms 3_200
@@ -79,6 +89,9 @@ defmodule PlatformWeb.SocialClipsReview do
        note: "",
        toast: nil,
        landed: MapSet.new(),
+       selected_render: nil,
+       headline_attempt: nil,
+       headline_error: nil,
        jobs_timer?: false
      )}
   end
@@ -111,7 +124,7 @@ defmodule PlatformWeb.SocialClipsReview do
           socket
       end
 
-    {:ok, schedule_jobs_refresh(socket)}
+    {:ok, socket |> headline_state() |> schedule_jobs_refresh()}
   end
 
   def update(assigns, socket) do
@@ -185,6 +198,34 @@ defmodule PlatformWeb.SocialClipsReview do
     |> then(&{:noreply, assign(&1, :editing_title?, false)})
   end
 
+  def handle_event("rerender_headline", params, socket) do
+    socket = authorize(socket)
+
+    if socket.assigns.can_decide? and socket.assigns.clip do
+      %{profile: profile, clip: clip, user_id: user_id} = socket.assigns
+
+      # Never replace the browser's base with the newest version: stale forms must fail.
+      case ClipJobs.enqueue_fix(profile.org_id, clip.id, user_id, %{
+             "base_render_id" => params["base_render_id"],
+             "operation" => "edit_headline",
+             "headline" => params["headline"]
+           }) do
+        {:ok, _job} ->
+          {:noreply,
+           socket
+           |> assign(:headline_error, nil)
+           |> headline_state()
+           |> load()
+           |> schedule_jobs_refresh()}
+
+        {:error, reason} ->
+          {:noreply, assign(socket, :headline_error, headline_message(reason))}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("save_caption", params, socket) do
     caption = params["caption"] || params["value"]
     {:noreply, socket |> authorize() |> save(%{"caption" => caption})}
@@ -220,7 +261,7 @@ defmodule PlatformWeb.SocialClipsReview do
   # approver check → fetch_clip → the clip's ticked platforms resolved to
   # this profile's live accounts (params never name an account) →
   # ClipDecisions.approve_clip/5. An empty selection writes nothing.
-  def handle_event("approve", %{"id" => id}, socket) do
+  def handle_event("approve", %{"id" => id, "render_id" => render_id}, socket) do
     socket = authorize(socket)
 
     with true <- socket.assigns.can_decide?,
@@ -229,7 +270,8 @@ defmodule PlatformWeb.SocialClipsReview do
          [_ | _] = accounts <- ticked_accounts(profile, clip),
          {:ok, %{clip: decided, posts: posts}} <-
            ClipDecisions.approve_clip(profile.org_id, clip.id, user_id, %{
-             "account_ids" => Enum.map(accounts, & &1.id)
+             "account_ids" => Enum.map(accounts, & &1.id),
+             "render_id" => render_id
            }) do
       platforms = accounts |> Enum.map(& &1.platform) |> Enum.uniq()
       until = posts |> Enum.map(& &1.publish_after) |> Enum.reject(&is_nil/1) |> deadline()
@@ -240,6 +282,7 @@ defmodule PlatformWeb.SocialClipsReview do
        |> put_toast(%{
          kind: :approved,
          clip_id: decided.id,
+         render_id: decided.reviewed_render_id,
          lead: "Approved",
          text:
            "publishing to #{platforms |> Enum.map(&Approvals.platform_label/1) |> join_and()}",
@@ -290,12 +333,14 @@ defmodule PlatformWeb.SocialClipsReview do
 
   # approver check → ClipDecisions.undo_clip_decision/4. A closed window (or
   # any refusal) just closes the toast; nothing else changes.
-  def handle_event("undo", %{"id" => id}, socket) do
+  def handle_event("undo", %{"id" => id} = params, socket) do
     socket = authorize(socket)
     %{profile: profile, user_id: user_id} = socket.assigns
 
     if socket.assigns.can_decide? do
-      case ClipDecisions.undo_clip_decision(profile.org_id, id, user_id) do
+      opts = if params["render_id"], do: [render_id: params["render_id"]], else: []
+
+      case ClipDecisions.undo_clip_decision(profile.org_id, id, user_id, opts) do
         {:ok, %Clip{} = clip} ->
           socket =
             socket
@@ -442,7 +487,7 @@ defmodule PlatformWeb.SocialClipsReview do
     socket = assign(socket, :queue, queue)
 
     if socket.assigns.clip && socket.assigns.clip.id == clip.id,
-      do: assign(socket, :clip, clip),
+      do: socket |> assign(:clip, clip) |> headline_state(),
       else: socket
   end
 
@@ -495,7 +540,22 @@ defmodule PlatformWeb.SocialClipsReview do
     socket
     |> assign(clip: clip, selected_id: clip.id, editing_title?: false, note: "")
     |> assign(:byline, ClipReviewFeed.byline(socket.assigns.profile.org_id, clip))
+    |> assign(:headline_error, nil)
+    |> headline_state()
     |> push_event("clips:url", url_params(socket.assigns.view, clip))
+  end
+
+  defp render_id(clip) do
+    import Ecto.Query
+
+    Platform.Repo.one(
+      from(r in Platform.Social.ClipRender,
+        where: r.clip_id == ^clip.id and r.rev == ^clip.rev,
+        order_by: [desc: r.rev],
+        limit: 1,
+        select: r.id
+      )
+    )
   end
 
   defp reviewable?(%Clip{review_status: "pending", render_file_id: id}) when not is_nil(id),
@@ -524,11 +584,39 @@ defmodule PlatformWeb.SocialClipsReview do
         do: s,
         else: assign(s, editing_title?: false, note: "")
     end)
+    |> headline_state()
     |> authorize()
   end
 
   defp load(socket),
     do: assign(socket, queue: [], jobs: [], accounts: [], clip: nil, can_decide?: false)
+
+  # Shares the selected immutable version with the sibling version picker.
+  # Re-read on promotion; queueing/failure never changes the playable clip.
+  defp headline_state(%{assigns: %{clip: %Clip{} = clip, profile: profile}} = socket) do
+    selected =
+      case ClipVersions.recent(profile.org_id, profile.id, clip.id) do
+        {:ok, versions} -> Enum.find(versions, &(&1.rev == clip.rev))
+        _ -> nil
+      end
+
+    assign(socket,
+      selected_render: selected,
+      headline_attempt: ClipReviewFeed.headline_attempt(profile.org_id, profile.id, clip.id)
+    )
+  end
+
+  defp headline_state(socket), do: assign(socket, selected_render: nil, headline_attempt: nil)
+
+  defp headline_message(:stale_version),
+    do: "A newer version is ready. Reload it before changing the headline."
+
+  defp headline_message(:job_in_flight), do: "A render is already running. Wait for it to finish."
+
+  defp headline_message(:invalid_headline),
+    do: "Enter a headline of 1–200 characters on one line."
+
+  defp headline_message(_), do: "This version cannot be changed. Reload and try again."
 
   defp byline(_profile, nil), do: %{source_label: nil, agent_name: nil}
   defp byline(profile, clip), do: ClipReviewFeed.byline(profile.org_id, clip)
@@ -615,6 +703,9 @@ defmodule PlatformWeb.SocialClipsReview do
               note={@note}
               can_decide?={@can_decide?}
               editing_title?={@editing_title?}
+              selected_render={@selected_render}
+              headline_attempt={@headline_attempt}
+              headline_error={@headline_error}
               myself={@myself}
             />
           <% else %>
@@ -678,6 +769,7 @@ defmodule PlatformWeb.SocialClipsReview do
         class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
         disabled={@ticked == []}
         phx-click="approve"
+        phx-value-render_id={render_id(@clip)}
         phx-value-id={@clip.id}
         phx-target={@myself}
         data-role="clips-pbar-approve"
@@ -734,6 +826,7 @@ defmodule PlatformWeb.SocialClipsReview do
         type="button"
         class="btn btn-sm shrink-0 gap-2 rounded-full border-0 bg-base-300 font-semibold text-primary"
         phx-click="undo"
+        phx-value-render_id={Map.get(@toast, :render_id)}
         phx-value-id={@toast.clip_id}
         phx-target={@myself}
         data-role="clip-toast-undo"
@@ -1121,11 +1214,20 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :editing_title?, :boolean, required: true
   attr :myself, :any, required: true
 
+  attr :selected_render, :any, default: nil
+  attr :headline_attempt, :any, default: nil
+  attr :headline_error, :any, default: nil
+
   defp details(assigns) do
     assigns =
       assigns
       |> assign(:agent, assigns.byline.agent_name)
       |> assign(:caption, assigns.clip.caption || "")
+      |> assign(
+        :headline_pending?,
+        assigns.headline_attempt != nil and
+          assigns.headline_attempt.status in ~w(queued claimed running)
+      )
 
     ~H"""
     <aside
@@ -1213,6 +1315,62 @@ defmodule PlatformWeb.SocialClipsReview do
           </button>
         </div>
       </div>
+
+      <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
+        <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
+          <input type="hidden" name="base_render_id" value={@selected_render && @selected_render.id} />
+          <label for="clip-headline" class="text-xs font-semibold text-base-content">Headline</label>
+          <input
+            id="clip-headline"
+            name="headline"
+            type="text"
+            maxlength="200"
+            value={(@selected_render && @selected_render.headline) || ""}
+            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+            aria-describedby="clip-headline-help"
+            class="input input-bordered mt-1 w-full bg-base-100 text-sm"
+            data-role="clip-headline-input"
+          />
+          <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
+            Headlines are generated automatically. Enter new text to render another version.
+            Local generated text stays on the clip runner.
+          </p>
+          <button
+            type="submit"
+            class="btn btn-primary btn-sm mt-2 min-h-11"
+            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+            phx-disable-with="Rendering…"
+            data-role="clip-headline-render"
+          >
+            {if @headline_pending?, do: "Rendering…", else: "Render headline"}
+          </button>
+        </form>
+        <p
+          :if={@headline_pending?}
+          role="status"
+          class="text-xs text-subtle"
+          data-role="clip-headline-pending"
+        >
+          Rendering a new version. You can keep playing this one.
+        </p>
+        <p
+          :if={@headline_error}
+          role="alert"
+          class="text-xs text-error"
+          data-role="clip-headline-error"
+        >
+          {@headline_error}
+        </p>
+        <p
+          :if={@headline_attempt && @headline_attempt.status == "failed"}
+          role="alert"
+          class="text-xs text-error"
+          data-role="clip-headline-failure"
+        >
+          Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
+          Check the clip runner, then enter a headline and try again.
+        </p>
+      </section>
 
       <form phx-change="save_caption" phx-target={@myself}>
         <div class="mb-1 flex items-center justify-between text-xs">
@@ -1311,6 +1469,7 @@ defmodule PlatformWeb.SocialClipsReview do
             class="btn btn-primary flex-1 rounded-full"
             disabled={@ticked == []}
             phx-click="approve"
+            phx-value-render_id={render_id(@clip)}
             phx-value-id={@clip.id}
             phx-target={@myself}
             data-role="clip-approve"

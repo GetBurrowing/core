@@ -84,6 +84,11 @@ defmodule Platform.Social.RenderQueueTest do
     assert rendered.byte_size > 0
     assert rendered.attempts == 1
     assert rendered.platforms == ["tiktok", "x"]
+    {:ok, [version]} = Platform.Social.ClipVersions.recent(world.scope, world.profile.id, clip.id)
+    assert version.file_id == rendered.render_file_id
+    assert {version.requested_start_s, version.requested_end_s} == {4.3, 15.2}
+    assert {version.actual_start_s, version.actual_end_s} == {4.0, 16.0}
+    assert version.provenance["kind"] == "render_queue"
   end
 
   test "concurrency 1: B does not start until A finishes; a raise ends C failed, queue alive",
@@ -229,6 +234,29 @@ defmodule Platform.Social.RenderQueueTest do
 
   # Clip Studio 1/9: a Burrow render goes to review.
   describe "review state on render" do
+    test "a failed forced render preserves the previous version and its bytes", world do
+      clip = file_clip!(world, 4.0, 12.0)
+      {:ok, _} = Social.render_clip(world.scope, clip.id)
+      original = await_status(clip.id, "rendered")
+      assert idle?()
+      file = Platform.Files.get_file(original.render_file_id)
+      {:ok, before_stream} = Platform.Files.Storage.get(file.storage_key)
+      before_bytes = before_stream |> Enum.to_list() |> IO.iodata_to_binary()
+
+      Fake.fail_next("cannot encode")
+      {:ok, _} = Social.render_clip(world.scope, clip.id, force: true)
+      failed = await_status(clip.id, "failed")
+      assert failed.render_file_id == original.render_file_id
+      assert failed.rev == 1
+
+      assert {:ok, [version]} =
+               Platform.Social.ClipVersions.recent(world.scope, world.profile.id, clip.id)
+
+      assert version.file_id == file.id
+      {:ok, after_stream} = Platform.Files.Storage.get(file.storage_key)
+      assert after_stream |> Enum.to_list() |> IO.iodata_to_binary() == before_bytes
+    end
+
     test "a Burrow render success sets review_status pending", world do
       clip = file_clip!(world, 4.0, 12.0)
       assert Repo.get!(Clip, clip.id).review_status == nil
@@ -240,12 +268,12 @@ defmodule Platform.Social.RenderQueueTest do
       assert Repo.get!(Clip, clip.id).review_status == "pending"
     end
 
-    test "a forced re-render of an approved clip stays approved", world do
+    test "a forced re-render appends a version and resets approval", world do
       clip = file_clip!(world, 4.0, 12.0)
       {:ok, _} = Social.render_clip(world.scope, clip.id)
       rendered = await_status(clip.id, "rendered")
 
-      {:ok, approved} =
+      {:ok, _approved} =
         rendered
         |> Clip.review_changeset({:approve, world.approver.id})
         |> Repo.update()
@@ -254,9 +282,19 @@ defmodule Platform.Social.RenderQueueTest do
       await_status(clip.id, "rendered")
 
       reloaded = Repo.get!(Clip, clip.id)
-      assert reloaded.review_status == "approved"
-      assert reloaded.reviewed_by_user_id == world.approver.id
-      assert reloaded.reviewed_at == approved.reviewed_at
+      assert reloaded.review_status == "pending"
+      assert reloaded.reviewed_by_user_id == nil
+      assert reloaded.reviewed_at == nil
+      assert reloaded.rev == 2
+
+      {:ok, [latest, first]} =
+        Platform.Social.ClipVersions.recent(world.scope, world.profile.id, clip.id)
+
+      assert latest.file_id == reloaded.render_file_id
+      assert first.file_id == rendered.render_file_id
+      assert Platform.Files.get_file(first.file_id)
+      assert first.actual_start_s == 4.0
+      assert first.actual_end_s == 12.0
     end
 
     test "a re-render of a rejected clip returns it to pending with the note cleared", world do

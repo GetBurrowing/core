@@ -51,11 +51,11 @@ defmodule Platform.Social.ClipJobs do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{AgentDrafts, Clip, ClipJob, ClipLook, ClipRender, Profile}
+  alias Platform.Social.{AgentDrafts, Clip, ClipJob, ClipLook, ClipVersions, Profile}
 
   @base_profile "how-to-computer"
   @result_keys ~w(file_id title caption speaker episode_code platforms duration_s width height
-                  source_label)
+                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id)
   @meta_keys ~w(title caption speaker episode_code)
 
   @type error :: {:error, atom() | tuple() | Ecto.Changeset.t()}
@@ -70,6 +70,65 @@ defmodule Platform.Social.ClipJobs do
   def clip_user_profile(id) when is_binary(id), do: "burrow-" <> id
 
   # ── Human side ───────────────────────────────────────────────────────
+
+  @doc "Queues a typed text fix against the current immutable render, without changing playback."
+  def enqueue_fix(org_id, clip_id, user_id, attrs) do
+    attrs = normalize(attrs)
+
+    with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found},
+         {:ok, profile} <- human_profile(org_id, found.profile_id, user_id) do
+      Repo.transaction(fn ->
+        clip = Repo.one!(from(c in Clip, where: c.id == ^found.id, lock: "FOR UPDATE"))
+
+        base =
+          ok_or_rollback(ClipVersions.get(org_id, profile.id, clip.id, attrs["base_render_id"]))
+
+        if base.rev != clip.rev, do: Repo.rollback(:stale_version)
+
+        unless is_binary(base.file_id) && Platform.Files.get_file(base.file_id),
+          do: Repo.rollback(:version_unplayable)
+
+        fix = ok_or_rollback(Platform.Social.ClipFixes.validate(base, attrs))
+        look = ClipLook.effective(base.look)
+
+        payload =
+          payload("rerender", profile, clip, look, fix["in_s"], fix["out_s"], nil, clip.rev + 1)
+          |> Map.merge(%{
+            "base_render_id" => base.id,
+            "candidate_id" => base.candidate_id,
+            "title" => base.headline,
+            "caption" => base.caption,
+            "episode" => base.source || %{},
+            "fix" => fix,
+            "caption_fixes" => caption_fix_history(base.caption_fixes, fix["caption_fixes"])
+          })
+          |> maybe_headline(fix)
+          |> Map.merge(%{
+            "source_id" => base.source["source_file_id"] || clip.id
+          })
+
+        insert_job!(profile, clip, "rerender", payload, user_id)
+      end)
+    end
+  end
+
+  defp maybe_headline(payload, %{"headline" => headline}),
+    do: payload |> Map.put("headline", headline) |> Map.delete("fix")
+
+  defp maybe_headline(payload, _fix), do: payload
+
+  defp caption_fix_history(previous, nil), do: previous
+
+  defp caption_fix_history(previous, correction) do
+    edits =
+      case previous do
+        %{"edits" => edits} when is_list(edits) -> edits
+        previous when is_map(previous) -> [previous]
+        _ -> []
+      end
+
+    %{"edits" => edits ++ [correction]}
+  end
 
   @doc """
   Queues a new clip from an episode: `attrs` has `source_url` OR
@@ -432,8 +491,11 @@ defmodule Platform.Social.ClipJobs do
       end
 
     payload = job.payload || %{}
+
+    if payload["base_render_id"] && payload["expected_rev"] != clip.rev + 1,
+      do: Repo.rollback(:stale_version)
+
     look = payload["look"] || clip.look
-    rev = if kind == "rerender", do: clip.rev + 1, else: clip.rev
     meta = AgentDrafts.clip_file_meta(file, result)
 
     render_attrs =
@@ -447,13 +509,31 @@ defmodule Platform.Social.ClipJobs do
     render_attrs =
       if platforms, do: Map.put(render_attrs, "platforms", platforms), else: render_attrs
 
+    effective_result =
+      if payload["fix"] || payload["headline"],
+        do:
+          Map.merge(
+            Map.take(payload, ~w(title caption)),
+            Map.reject(result, fn {_k, v} -> is_nil(v) end)
+          ),
+        else: result
+
+    # Only user-authored input may cross the local headline privacy boundary.
+    effective_result =
+      case payload["headline"] do
+        %{"consumer" => "edit", "requested_headline" => text} ->
+          Map.put(effective_result, "title", text)
+
+        _ ->
+          effective_result
+      end
+
     changes =
-      result
+      effective_result
       |> Map.take(@meta_keys)
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
       |> Map.merge(%{
-        rev: rev,
         look: look,
         trim_in_s: payload["in_s"],
         trim_out_s: payload["out_s"],
@@ -463,28 +543,26 @@ defmodule Platform.Social.ClipJobs do
         if kind == "new_clip", do: Map.put(c, :submitted_by_agent_id, agent_id), else: c
       end)
 
-    clip =
-      clip
-      |> Clip.render_changeset(render_attrs)
-      |> Changeset.change(changes)
-      |> Changeset.validate_length(:title, max: 200)
-      |> Changeset.validate_length(:episode_code, max: 32)
-      |> Clip.review_changeset(:reset_pending)
-      |> insert_or_rollback(:update)
+    attrs =
+      render_attrs
+      |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
+      |> Map.merge(changes)
 
-    %ClipRender{}
-    |> ClipRender.changeset(%{
-      clip_id: clip.id,
-      rev: rev,
-      file_id: file.id,
-      look: look,
-      trim_in_s: payload["in_s"],
-      trim_out_s: payload["out_s"],
-      submitted_by_agent_id: agent_id
+    ClipVersions.append!(clip.id, file, attrs, %{
+      requested_start_s: payload["in_s"],
+      requested_end_s: payload["out_s"],
+      actual_start_s: result["actual_in_s"],
+      actual_end_s: result["actual_out_s"],
+      headline: effective_result["title"],
+      caption: effective_result["caption"],
+      caption_fixes: result["caption_fixes"] || payload["caption_fixes"],
+      candidate_id: result["candidate_id"] || payload["candidate_id"],
+      alternate_id: result["alternate_id"] || payload["alternate_id"],
+      submitted_by_agent_id: agent_id,
+      source: payload["episode"],
+      provenance: %{"kind" => "clip_job", "job_id" => job.id, "job_kind" => kind},
+      completion_key: "clip_job:" <> job.id
     })
-    |> insert_or_rollback()
-
-    clip
   end
 
   defp check_platforms(%{"platforms" => nil}, _profile), do: {:ok, nil}

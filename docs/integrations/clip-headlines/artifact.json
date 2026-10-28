@@ -1,0 +1,76 @@
+{
+  "artifact_version": "headline-review/1",
+  "upstream_repository": "JackEFoster/htc-clip-tool",
+  "upstream_commit": "58960577337d5682761e1538ff4365d4ba0b4e18",
+  "patch_file": "htc-headline-review-v1.patch",
+  "patch_sha256": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
+  "required_capability": {
+    "headline_review": 1
+  },
+  "canonical_runner": "burrow-clip-runner",
+  "runner_helper_version_at_contract_definition": "0.3.0",
+  "runner_helper_sha256": "c5a44bfc2399f819e98d63faf18742288bd4b5b2f9e7d9b0da989eb6f5b4f359",
+  "runner_integration": {
+    "helper_version": "0.4.0",
+    "helper_sha256": "00b45c259e9c27f01d3ddad54511a413397def0f9112c6b207296c0ff6d4224f",
+    "skill_slug": "burrow-clip-runner",
+    "fake_test_count": 83,
+    "request_contract": "headline-review/1",
+    "new_clip": "automatic episode generation",
+    "human_edit": "payload.headline.consumer=edit and requested_headline",
+    "regenerate": "payload.fix.operation=regenerate_headline",
+    "voice": "private context.headline_voice={revision,direction}",
+    "base": "payload.base_render_id == private context.base_render_id",
+    "receipt": "local state.json only; never generated text through MCP",
+    "skill_update_utc": "2026-10-27"
+  },
+  "real_renderer_fixture": {
+    "cli_version": "0.9.0",
+    "before_video_sha256": "6888f0ced252ffd4a662c5720c6a89031a21960a28c5e56ca8c4d5015ebda9aa",
+    "after_video_sha256": "46f5b93e99c74d62cdb3cf6ebd30be1c062b2d6ea16243c78c0ae5229de4923f",
+    "transcript_and_candidate": "seeded fixture",
+    "rendering": "unmocked installed compatible CLI subprocesses and ffmpeg",
+    "headline_pixels_changed": true,
+    "lower_caption_pixels_unchanged": true,
+    "live_model_tested": false,
+    "production_claim_or_upload_tested": false
+  },
+  "validation": {
+    "social_rig": {
+      "runtime": "this Codex runtime; isolated OTP28.1 / Elixir1.20.4 / PostgreSQL16.15",
+      "source_sha": "61690d6d40b75c65d0038deb844c57defe1b35c0",
+      "command": "cd apps/social && MIX_ENV=test mix test --seed 0",
+      "passed": 1273,
+      "failed": 0,
+      "elixir_source_changed_in_stage": false
+    },
+    "canonical_runner": {
+      "passed": 83,
+      "failed": 0,
+      "helper_sha256": "00b45c259e9c27f01d3ddad54511a413397def0f9112c6b207296c0ff6d4224f"
+    },
+    "upstream_contract_review_hooks": {
+      "passed": 125,
+      "failed": 0
+    },
+    "upstream_full": {
+      "passed": 3404,
+      "failed": 2,
+      "skipped": 23,
+      "baseline_failures": [
+        "tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+        "tests/test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message"
+      ],
+      "baseline_confirmation": "Both reproduced on unmodified 58960577337d5682761e1538ff4365d4ba0b4e18 in stage1; unchanged in stage2. Full suite is not green."
+    },
+    "mutation_probes": {
+      "request_forwarding": "killed: unchanged independent requested_headline literal raises KeyError when field deleted; restored green",
+      "review_headline_field": "killed: unchanged entry[headline] == The team celebrated raises KeyError when field deleted; restored green"
+    },
+    "lint": [
+      "Ruff E9,F,I for canonical helper/tests/render harness",
+      "Upstream configured Ruff across src and tests",
+      "git diff --check"
+    ]
+  }
+}

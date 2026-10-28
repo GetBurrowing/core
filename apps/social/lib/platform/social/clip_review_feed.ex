@@ -89,6 +89,41 @@ defmodule Platform.Social.ClipReviewFeed do
     end
   end
 
+  @doc "Latest headline attempt, scoped to this profile; errors expose stable codes only."
+  def headline_attempt(org_id, profile_id, clip_id) do
+    with {:ok, _} <- fetch_clip(org_id, profile_id, clip_id) do
+      from(j in ClipJob,
+        where: j.profile_id == ^profile_id and j.clip_id == ^clip_id,
+        order_by: [desc: j.inserted_at, desc: j.id]
+      )
+      |> Repo.all()
+      |> Enum.find(fn j ->
+        j.payload["headline"] != nil or
+          get_in(j.payload, ["fix", "operation"]) == "regenerate_headline"
+      end)
+      |> case do
+        nil -> nil
+        job -> %{id: job.id, status: job.status, code: headline_error(job.error)}
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  @headline_errors ~w(HEADLINE_CLI_UNSUPPORTED HEADLINE_REQUEST_UNSUPPORTED HEADLINE_VOICE_MISSING
+    HEADLINE_BASE_MISSING HEADLINE_BASE_STALE HEADLINE_SPAN_INVALID HEADLINE_SPAN_STALE
+    HEADLINE_CANDIDATE_MISSING HEADLINE_EMPTY HEADLINE_UNBACKED HEADLINE_OUTPUT_UNSUPPORTED
+    HEADLINE_OVERLAY_DISABLED HEADLINE_RENDER_APPROVAL_REQUIRED HEADLINE_REVIEW_NOT_APPLIED
+    HEADLINE_APPLIED_MISMATCH HEADLINE_PRIVACY_EXPORT_REFUSED HEADLINE_PREPARE_FAILED
+    HEADLINE_RENDER_MISSING)
+
+  defp headline_error(error) when is_binary(error) do
+    code = error |> String.split(":", parts: 2) |> hd()
+    if code in @headline_errors, do: code, else: "RENDER_FAILED"
+  end
+
+  defp headline_error(_), do: "RENDER_FAILED"
+
   defp render_row({%ClipJob{} = job, clip}) do
     payload = job.payload || %{}
 

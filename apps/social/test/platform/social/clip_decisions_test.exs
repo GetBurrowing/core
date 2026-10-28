@@ -26,12 +26,12 @@ defmodule Platform.Social.ClipDecisionsTest do
     RateLimit.reset()
     world = render_world!()
     start_supervised!({ClipPublish, name: @publisher, interval_ms: :infinity, boot_sweep: false})
-    %{w: world, clip: pending_clip!(world), t0: DateTime.utc_now()}
+    %{w: world, clip: pending_clip!(world, "first-render-v1"), t0: DateTime.utc_now()}
   end
 
   # An externally rendered clip, review pending, submitted by the world's agent.
-  defp pending_clip!(w) do
-    file = stored_file!(w.project, "rendered clip #{unique()}", "clip.mp4", "video/mp4")
+  defp pending_clip!(w, bytes \\ "rendered clip #{unique()}") do
+    file = stored_file!(w.project, bytes, "clip.mp4", "video/mp4")
 
     {:ok, clip} =
       AgentDrafts.submit_clip(
@@ -56,7 +56,7 @@ defmodule Platform.Social.ClipDecisionsTest do
       ctx.w.org_id,
       ctx.clip.id,
       user_id,
-      %{"account_ids" => account_ids},
+      %{"render_id" => render_id!(ctx.clip), "account_ids" => account_ids},
       Keyword.merge([now: ctx.t0, publish_server: @publisher], opts)
     )
   end
@@ -80,6 +80,181 @@ defmodule Platform.Social.ClipDecisionsTest do
     assert Fake.calls(:publish) == []
   end
 
+  # The selected version differs from the current clip in every publish fact.
+  # Literal expectations below must fail if approval ignores render_id.
+  test "chosen v1 stays bound through v2 latest and v3 before publish", ctx do
+    v1_id = render_id!(ctx.clip)
+    v1_file = ctx.clip.render_file_id
+    v2_file = stored_file!(ctx.w.project, "v2 bytes", "v2.mp4", "video/mp4")
+
+    {:ok, _} =
+      Repo.transaction(fn ->
+        Platform.Social.ClipVersions.append!(
+          ctx.clip.id,
+          v2_file,
+          %{
+            title: "Second headline",
+            caption: "Second caption",
+            duration_s: 18.0,
+            width: 720,
+            height: 1280
+          },
+          %{headline: "Second headline", caption: "Second caption", completion_key: "test-v2"}
+        )
+      end)
+
+    assert {:ok, %{clip: approved, posts: [post]}} =
+             Social.approve_clip(
+               ctx.w.org_id,
+               ctx.clip.id,
+               ctx.w.approver.id,
+               %{"render_id" => v1_id, "account_ids" => [ctx.w.tiktok.id]},
+               now: ctx.t0,
+               publish_server: @publisher
+             )
+
+    assert approved.reviewed_render_id == v1_id
+    assert post.clip_render_id == v1_id
+    assert post.media_file_ids == [v1_file]
+    assert post.body =~ "Agent caption"
+    refute post.body =~ "Second caption"
+    assert Repo.get!(Platform.Social.Idea, post.idea_id).title == "Agent title"
+    assert post.media_meta[v1_file] == %{"duration_s" => 30.0, "width" => 1080, "height" => 1920}
+
+    v3_file = stored_file!(ctx.w.project, "v3 bytes", "v3.mp4", "video/mp4")
+
+    {:ok, _} =
+      Repo.transaction(fn ->
+        Platform.Social.ClipVersions.append!(
+          ctx.clip.id,
+          v3_file,
+          %{
+            title: "Third headline",
+            caption: "Third caption",
+            duration_s: 9.0,
+            width: 540,
+            height: 960
+          },
+          %{headline: "Third headline", caption: "Third caption", completion_key: "test-v3"}
+        )
+      end)
+
+    assert length(ClipPublish.sweep_now(@publisher, at(ctx, 8_000))) == 1
+    [{:publish, [_, request], _}] = Fake.calls(:publish)
+
+    assert [%{url: signed_url, duration_s: 30.0, content_type: "video/mp4", byte_size: 15}] =
+             request.media
+
+    assert {:ok, ^v1_file} =
+             signed_url |> String.split("/") |> List.last() |> Platform.Files.SignedUrl.verify()
+
+    assert request.body =~ "Agent caption"
+    assert Repo.get!(Post, post.id).clip_render_id == v1_id
+    assert Repo.get!(Clip, ctx.clip.id).reviewed_render_id == nil
+    assert Platform.Files.get_file(v1_file)
+  end
+
+  test "undo after a new render cancels only its selected approval and preserves newer review",
+       ctx do
+    v1 = render_id!(ctx.clip)
+    assert {:ok, %{posts: [old_post]}} = approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id])
+    file = stored_file!(ctx.w.project, "new render", "new.mp4", "video/mp4")
+
+    {:ok, current} =
+      Repo.transaction(fn ->
+        Platform.Social.ClipVersions.append!(
+          ctx.clip.id,
+          file,
+          %{title: "New cut", caption: "New caption", duration_s: 20.0},
+          %{headline: "New cut", caption: "New caption", completion_key: "undo-v2"}
+        )
+      end)
+
+    v2 = render_id!(current)
+    other_approver = make_approver!(ctx.w.org_id, ctx.w.profile, user!())
+
+    assert {:ok, %{posts: [new_post]}} =
+             Social.approve_clip(
+               ctx.w.org_id,
+               ctx.clip.id,
+               ctx.w.approver.id,
+               %{"render_id" => v2, "account_ids" => [ctx.w.tiktok.id]},
+               now: ctx.t0,
+               publish_server: @publisher
+             )
+
+    assert {:error, :not_reviewer} =
+             Social.undo_clip_decision(ctx.w.org_id, ctx.clip.id, other_approver.id,
+               now: ctx.t0,
+               render_id: v1
+             )
+
+    assert {:ok, clip} =
+             Social.undo_clip_decision(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id,
+               now: ctx.t0,
+               render_id: v1
+             )
+
+    assert Repo.get(Post, old_post.id) == nil
+    assert Repo.get!(Post, new_post.id).clip_render_id == v2
+
+    assert {clip.render_file_id, clip.review_status, clip.reviewed_render_id} ==
+             {file.id, "approved", v2}
+
+    assert {:error, :window_closed} =
+             Social.undo_clip_decision(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id,
+               now: at(ctx, 8_000),
+               render_id: v2
+             )
+
+    assert {:ok, _} =
+             Social.undo_clip_decision(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id,
+               now: ctx.t0,
+               render_id: v2
+             )
+
+    assert Repo.get(Post, new_post.id) == nil
+  end
+
+  test "missing malformed foreign and deleted render identities write nothing", ctx do
+    other_clip = pending_clip!(ctx.w)
+    other = render_world!()
+    foreign = pending_clip!(other)
+    original = render_id!(ctx.clip)
+
+    for id <- [nil, "broken", Ecto.UUID.generate(), render_id!(other_clip), render_id!(foreign)] do
+      before = post_count()
+      attrs = %{"render_id" => id, "account_ids" => [ctx.w.tiktok.id]}
+
+      assert {:error, :render_not_found} =
+               Social.approve_clip(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id, attrs,
+                 publish_server: @publisher
+               )
+
+      assert_untouched(ctx, before)
+    end
+
+    file = Platform.Files.get_file(ctx.clip.render_file_id)
+    Repo.update!(Ecto.Changeset.change(file, deleted_at: DateTime.utc_now()))
+    before = post_count()
+
+    assert {:error, :render_not_found} =
+             Social.approve_clip(
+               ctx.w.org_id,
+               ctx.clip.id,
+               ctx.w.approver.id,
+               %{"render_id" => original, "account_ids" => [ctx.w.tiktok.id]},
+               publish_server: @publisher
+             )
+
+    assert_untouched(ctx, before)
+  end
+
+  test "version identity cannot be injected through editable post attrs", ctx do
+    cs = Post.changeset(%Post{}, %{"body" => "body", "clip_render_id" => render_id!(ctx.clip)})
+    assert Ecto.Changeset.get_field(cs, :clip_render_id) == nil
+  end
+
   describe "approve_clip/5" do
     test "approve with 2 accounts writes 2 approved posts with clip_id and no approval card",
          ctx do
@@ -89,6 +264,7 @@ defmodule Platform.Social.ClipDecisionsTest do
                  ctx.clip.id,
                  ctx.w.approver.id,
                  %{
+                   "render_id" => render_id!(ctx.clip),
                    "account_ids" => both(ctx),
                    "title" => "Human title",
                    "caption" => "Watch this"
@@ -314,7 +490,7 @@ defmodule Platform.Social.ClipDecisionsTest do
           ctx.w.org_id,
           ctx.clip.id,
           ctx.w.approver.id,
-          %{"account_ids" => both(ctx)},
+          %{"render_id" => render_id!(ctx.clip), "account_ids" => both(ctx)},
           now: t1,
           publish_server: @publisher
         )

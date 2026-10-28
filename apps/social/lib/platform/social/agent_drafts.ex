@@ -67,7 +67,7 @@ defmodule Platform.Social.AgentDrafts do
     Clip,
     ClipLook,
     ClipMedia,
-    ClipRender,
+    ClipVersions,
     Cover,
     Idea,
     Ideas,
@@ -431,25 +431,23 @@ defmodule Platform.Social.AgentDrafts do
         })
 
       Repo.transaction(fn ->
-        with {:ok, clip} <-
-               %Clip{profile_id: profile.id}
-               |> Clip.submit_changeset(fields)
-               |> Changeset.put_change(:submitted_by_agent_id, agent_id)
-               |> Repo.insert(),
-             {:ok, _render} <-
-               %ClipRender{}
-               |> ClipRender.changeset(%{
-                 clip_id: clip.id,
-                 rev: 1,
-                 file_id: file.id,
-                 look: look,
-                 submitted_by_agent_id: agent_id
-               })
-               |> Repo.insert() do
-          clip
-        else
-          {:error, changeset} -> Repo.rollback(changeset)
-        end
+        clip =
+          %Clip{profile_id: profile.id}
+          |> Clip.submit_changeset(fields)
+          |> Changeset.put_change(:submitted_by_agent_id, agent_id)
+          |> Repo.insert()
+          |> case do
+            {:ok, clip} -> clip
+            {:error, cs} -> Repo.rollback(cs)
+          end
+
+        ClipVersions.append!(clip.id, file, %{}, %{
+          headline: clip.title,
+          caption: clip.caption,
+          source: %{"origin" => "external", "source_label" => clip.source_label},
+          provenance: %{"kind" => "external_submit"},
+          completion_key: "external_submit:" <> clip.id
+        })
       end)
       |> case do
         {:ok, clip} ->

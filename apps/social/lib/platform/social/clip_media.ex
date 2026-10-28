@@ -6,15 +6,16 @@ defmodule Platform.Social.ClipMedia do
   `media_meta` (member 2's column) where `Platform.Social.MediaRules` reads
   them at publish.
 
-  `meta_for/2` answers only for files that are a RENDERED clip's
-  `render_file_id` in the given profile; any other file id is simply absent
-  from the map (its facts stay unknown, as before).
+  `meta_for/2` resolves the profile's immutable render snapshots, including
+  older playable versions. A legacy current row supplies facts only when no
+  snapshot exists. Unknown snapshot facts stay unknown; current clip edits
+  cannot rewrite the measurements of an already rendered file.
   """
 
   import Ecto.Query
 
   alias Platform.Repo
-  alias Platform.Social.Clip
+  alias Platform.Social.{Clip, ClipRender}
 
   @doc "`%{file_id => %{\"duration_s\", \"width\", \"height\"}}` for the profile's rendered clips."
   @spec meta_for(Ecto.UUID.t() | nil, [Ecto.UUID.t()] | nil) :: %{String.t() => map()}
@@ -31,12 +32,27 @@ defmodule Platform.Social.ClipMedia do
         end
       end)
 
-    from(c in Clip,
-      where: c.profile_id == ^profile_id and c.status == "rendered" and c.render_file_id in ^ids,
-      select: {c.render_file_id, c.duration_s, c.width, c.height}
-    )
-    |> Repo.all()
-    |> Map.new(fn {file_id, duration_s, width, height} ->
+    # Legacy current rows can supply facts only when no immutable version
+    # exists. Snapshots win for current AND older files, including unknowns.
+    current =
+      from(c in Clip,
+        where:
+          c.profile_id == ^profile_id and c.status == "rendered" and c.render_file_id in ^ids,
+        select: {c.render_file_id, c.duration_s, c.width, c.height}
+      )
+      |> Repo.all()
+
+    versions =
+      from(r in ClipRender,
+        join: c in Clip,
+        on: c.id == r.clip_id,
+        where: c.profile_id == ^profile_id and r.file_id in ^ids,
+        order_by: [asc: r.rev],
+        select: {r.file_id, r.duration_s, r.width, r.height}
+      )
+      |> Repo.all()
+
+    Map.new(current ++ versions, fn {file_id, duration_s, width, height} ->
       {file_id, %{"duration_s" => duration_s, "width" => width, "height" => height}}
     end)
   end
