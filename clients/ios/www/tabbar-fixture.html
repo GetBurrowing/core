@@ -167,6 +167,11 @@
           if (!target || typeof target.tabBarState !== "function") return;
           target.tabBarState({ visible: false })
             .then(function () { return target.tabBarState({ visible: true }); })
+            .then(function () {
+              var line = document.createElement("p");
+              line.textContent = "interrupted: hide then show acknowledged";
+              document.body.appendChild(line);
+            })
             .catch(function () {});
         });
 

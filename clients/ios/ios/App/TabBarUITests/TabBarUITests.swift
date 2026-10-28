@@ -259,6 +259,7 @@ final class TabBarUITests: XCTestCase {
     private func interruptedVisibility(_ appearance: String) {
         let (app, bar) = start(appearance)
         send("Hide then show", app)
+        line("interrupted: ", ["hide then show acknowledged"], app)
         rendered(["hidden=false"], app)
         XCTAssertTrue(ready(bar, timeout: 5))
         send("Show bar", app)
