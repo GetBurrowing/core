@@ -104,6 +104,18 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
     {view, html}
   end
 
+  test "chat task links render for in-app navigation without a target", %{conn: conn} do
+    user = user!("internal-task-link")
+    channel = space!("channel")
+    participant = seat_user(channel, user)
+    task_id = Ecto.UUID.generate()
+    post!(channel, participant, "[Open task](/tasks/#{task_id})")
+    {view, _html} = open_as(conn, user, channel)
+
+    assert has_element?(view, "a[href='/tasks/#{task_id}'][data-in-app-link='path']", "Open task")
+    refute has_element?(view, "a[href='/tasks/#{task_id}'][target]")
+  end
+
   defp lv_assigns(view), do: :sys.get_state(view.pid).socket.assigns
 
   # The title opens on the All segment (stage 4); most tests here work on the
