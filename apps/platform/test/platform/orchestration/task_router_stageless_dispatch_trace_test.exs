@@ -211,7 +211,7 @@ defmodule Platform.Orchestration.TaskRouterStagelessDispatchTraceTest do
       put_watchdog_ms(60_000)
 
       %{task: task} = fixture = planning_task(project)
-      %{pid: pid} = start_router!(fixture)
+      %{pid: pid, runtime_id: owner} = start_router!(fixture)
 
       # The boot dispatch is not reliable for a `planning` task (same reason the
       # stage 1 test drives one explicitly), and the debounce means the frame
@@ -228,7 +228,7 @@ defmodule Platform.Orchestration.TaskRouterStagelessDispatchTraceTest do
           )
 
       # Something came back for this task.
-      send(pid, {:runtime_event, heartbeat_event(task.id)})
+      send(pid, {:runtime_event, %{heartbeat_event(task.id) | runtime_id: owner}})
       barrier(task)
 
       # Now let the timer land.

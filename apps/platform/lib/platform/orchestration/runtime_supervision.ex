@@ -64,6 +64,9 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     # integer, "dispatch_runtime_id" => binary, "delivered_online" => boolean,
     # "reported_by" => "task_router", "description" => binary}.
     "execution.dispatch_unanswered" => nil,
+    "execution.dispatch_attempt" => nil,
+    "execution.dispatch_result" => nil,
+    "execution.dispatch_suppressed" => nil,
     "execution.started" => "active",
     "execution.heartbeat" => "active",
     "execution.progress" => "active",
@@ -76,25 +79,35 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
   @doc "Record a normalized runtime execution event and update the active lease."
   def record_event(attrs, opts \\ []) when is_map(attrs) do
-    attrs = normalize_attrs(attrs)
+    attrs = attrs |> normalize_attrs() |> associate_dispatch()
+    enclosing_transaction? = Repo.in_transaction?()
     maybe_log_owner_unknown_breadcrumb(attrs)
 
     with :ok <- validate_phase(attrs.phase),
          :ok <- validate_event_type(attrs.event_type),
          {:ok, task} <- fetch_task(attrs.task_id),
          {:ok, attrs} <- normalize_dependency_block(attrs) do
-      case Repo.get_by(RuntimeEvent, idempotency_key: attrs.idempotency_key) do
+      case existing_event(attrs) do
         %RuntimeEvent{} = event ->
-          event = Repo.preload(event, :lease)
+          if replay_matches?(event, attrs) do
+            event = Repo.preload(event, :lease)
 
-          unless Keyword.get(opts, :defer_broadcast, false),
-            do: broadcast_and_mirror(event, event.lease, attrs, duplicate: true)
+            unless Keyword.get(opts, :defer_broadcast, false),
+              do: broadcast_and_mirror(event, event.lease, attrs, duplicate: true)
 
-          {:ok, event}
+            {:ok, event}
+          else
+            {:error, :idempotency_conflict}
+          end
 
         nil ->
           Multi.new()
-          |> Multi.run(:lease, fn repo, _changes -> upsert_lease(repo, attrs) end)
+          |> Multi.run(:lease, fn repo, _changes ->
+            # Dependency verification already holds the lease row inside its
+            # enclosing transaction. Do not invert its lease -> task lock order.
+            unless enclosing_transaction?, do: lock_task!(attrs.task_id)
+            upsert_lease(repo, attrs)
+          end)
           |> Multi.insert(:event, fn %{lease: lease} ->
             # RuntimeEvent has no stage_id column; the stage_id is
             # preserved on the linked ExecutionLease (via upsert_lease)
@@ -107,7 +120,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
               event_type: attrs.event_type,
               occurred_at: attrs.occurred_at,
               idempotency_key: attrs.idempotency_key,
-              payload: attrs.payload,
+              payload: lifecycle_payload(attrs, lease),
               invoked_by_user_id: attrs.invoked_by_user_id,
               owner_org_id: attrs.owner_org_id,
               owner_attribution_status: attrs.owner_attribution_status
@@ -125,7 +138,15 @@ defmodule Platform.Orchestration.RuntimeSupervision do
               {:ok, event}
 
             {:error, :event, changeset, _changes} ->
-              {:error, changeset}
+              case existing_event(attrs) do
+                %RuntimeEvent{} = existing ->
+                  if replay_matches?(existing, attrs),
+                    do: {:ok, Repo.preload(existing, :lease)},
+                    else: {:error, :idempotency_conflict}
+
+                _ ->
+                  {:error, changeset}
+              end
 
             {:error, :lease, reason, _changes} ->
               {:error, reason}
@@ -134,10 +155,53 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     end
   end
 
+  defp existing_event(attrs),
+    do: Repo.get_by(RuntimeEvent, idempotency_key: attrs.idempotency_key)
+
+  defp replay_matches?(event, attrs) do
+    event.task_id == attrs.task_id and event.runtime_id == attrs.runtime_id and
+      event.event_type == attrs.event_type and event.phase == attrs.phase and
+      event.payload["stage_id"] == attrs.stage_id and
+      (attrs.event_type != "execution.started" or
+         (event.payload["runtime_worker_ref"] == attrs.runtime_worker_ref and
+            event.payload["correlation_id"] == attrs.payload["correlation_id"]))
+  end
+
   @doc "Broadcast a newly recorded event after its enclosing transaction commits."
   def broadcast_recorded_event(event) do
     broadcast_and_mirror(event, event.lease, %{execution_space_id: nil, task_id: event.task_id})
   end
+
+  defp associate_dispatch(%{stage_id: stage_id} = attrs) when is_binary(stage_id) do
+    if attrs.event_type in ~w(execution.acked execution.started execution.heartbeat execution.progress execution.blocked execution.unblocked execution.finished execution.failed execution.abandoned) do
+      case latest_dispatch(attrs.task_id, stage_id, attrs.runtime_id) do
+        %{occurred_at: sent_at, payload: payload} ->
+          if DateTime.compare(attrs.occurred_at, sent_at) != :lt do
+            source =
+              if is_binary(attrs.payload["correlation_id"]),
+                do: "runtime_echo",
+                else: "inferred_current_stage"
+
+            %{
+              attrs
+              | payload:
+                  attrs.payload
+                  |> Map.put_new("correlation_id", payload["correlation_id"])
+                  |> Map.put("correlation_source", source)
+            }
+          else
+            attrs
+          end
+
+        _ ->
+          attrs
+      end
+    else
+      attrs
+    end
+  end
+
+  defp associate_dispatch(attrs), do: attrs
 
   defp normalize_dependency_block(%{event_type: "execution.blocked"} = attrs),
     do: Platform.Orchestration.BlockerReassessment.normalize_block(attrs)
@@ -348,7 +412,10 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     event_type = Map.get(attrs, :event_type) || Map.get(attrs, "event_type")
     task_id = Map.get(attrs, :task_id) || Map.get(attrs, "task_id")
     payload = Map.get(attrs, :payload) || Map.get(attrs, "payload") || %{}
-    worker_ref = Map.get(attrs, :runtime_worker_ref) || Map.get(attrs, "runtime_worker_ref")
+
+    worker_ref =
+      Map.get(attrs, :runtime_worker_ref) || Map.get(attrs, "runtime_worker_ref") ||
+        Map.get(payload, "runtime_worker_ref") || Map.get(payload, "subagent_id")
 
     # Stage-scoped lease keying (task 019f6791). The `report_blocker` MCP tool
     # (and every other runtime-event surface today) puts `stage_id` inside the
@@ -357,6 +424,10 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     stage_id =
       Map.get(attrs, :stage_id) || Map.get(attrs, "stage_id") ||
         Map.get(payload, "stage_id") || Map.get(payload, :stage_id)
+
+    # Normalize both supported ingress forms into the persisted envelope.
+    # Replay and restart reconciliation must not lose a top-level stage id.
+    payload = if is_binary(stage_id), do: Map.put(payload, "stage_id", stage_id), else: payload
 
     occurred_at =
       parse_datetime(Map.get(attrs, :occurred_at) || Map.get(attrs, "occurred_at")) ||
@@ -404,7 +475,11 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       event_type: event_type,
       occurred_at: occurred_at,
       idempotency_key: idempotency_key,
-      payload: payload,
+      payload:
+        if(event_type == "execution.started" and is_binary(worker_ref),
+          do: Map.put(payload, "runtime_worker_ref", worker_ref),
+          else: payload
+        ),
       runtime_worker_ref: worker_ref,
       invoked_by_user_id: invoked_by_user_id,
       owner_org_id: owner_org_id,
@@ -436,14 +511,479 @@ defmodule Platform.Orchestration.RuntimeSupervision do
         lease =
           current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id, attrs.stage_id)
 
-        if (status == "active" and ExecutionLease.dependency_wait(lease)) &&
-             not (attrs.event_type == "execution.unblocked" and
-                    verified_dependency_release?(lease, attrs)) do
-          {:error, :dependency_verification_required}
-        else
-          persist_lease(repo, lease, status, attrs)
+        cond do
+          needs_human_hold?(lease) and attrs.event_type == "execution.blocked" and
+              (attrs.payload["needs_human"] in [false, "false"] or
+                 (lease.metadata["wait_kind"] == "human" and
+                    attrs.payload["wait_kind"] == "dependency")) ->
+            # A new blocker report may update a reason; it cannot answer a
+            # human ruling or bypass the explicitly attributed unblock path.
+            {:error, :human_action_required}
+
+          dispatch_event_stale?(attrs) and attrs.event_type == "execution.started" ->
+            {:error, :stale_worker}
+
+          dispatch_event_stale?(attrs) ->
+            {:ok, lease}
+
+          attrs.event_type == "execution.started" and is_binary(attrs.payload["correlation_id"]) and
+              not is_binary(attrs.runtime_worker_ref) ->
+            {:error, :worker_reference_required}
+
+          duplicate_worker_start?(attrs) ->
+            {:error, :worker_already_started}
+
+          needs_human_hold?(lease) and attrs.event_type != "execution.unblocked" and
+            (is_nil(ExecutionLease.dependency_wait(lease)) or
+               status in ~w(finished failed abandoned)) and status != "blocked" ->
+            # Runtime activity/turn completion is evidence, never a human ruling.
+            {:ok, lease}
+
+          stale_worker_event?(lease, attrs) ->
+            {:ok, lease}
+
+          (status == "active" and ExecutionLease.dependency_wait(lease)) &&
+              not (attrs.event_type == "execution.unblocked" and
+                       verified_dependency_release?(lease, attrs)) ->
+            {:error, :dependency_verification_required}
+
+          true ->
+            persist_lease(repo, lease, status, attrs)
         end
     end
+  end
+
+  defp worker_started?(attempt) do
+    correlation = attempt.payload["correlation_id"]
+
+    Repo.exists?(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^attempt.task_id and
+            e.runtime_id == ^attempt.payload["addressed_runtime"] and
+            e.event_type == "execution.started" and
+            e.payload["correlation_id"] == ^correlation and
+            fragment("COALESCE(?->>'worker_event_applied', 'true') <> 'false'", e.payload)
+      )
+    )
+  end
+
+  defp duplicate_worker_start?(
+         %{event_type: "execution.started", payload: %{"correlation_id" => correlation}} = attrs
+       ) do
+    Repo.exists?(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^attrs.task_id and
+            e.runtime_id == ^attrs.runtime_id and e.event_type == "execution.started" and
+            e.payload["correlation_id"] == ^correlation and
+            fragment("COALESCE(?->>'worker_event_applied', 'true') <> 'false'", e.payload) and
+            fragment("COALESCE(?->>'runtime_worker_ref', '')", e.payload) !=
+              ^(attrs.runtime_worker_ref || "")
+      )
+    )
+  end
+
+  defp duplicate_worker_start?(_attrs), do: false
+
+  defp dispatch_event_stale?(%{event_type: type})
+       when type in ~w(execution.dispatch_attempt execution.dispatch_result execution.dispatch_suppressed execution.alarm_silenced),
+       do: false
+
+  defp dispatch_event_stale?(attrs) do
+    case latest_stage_dispatch(attrs.task_id, attrs.stage_id) do
+      nil ->
+        false
+
+      attempt ->
+        correlation = attrs.payload["correlation_id"]
+        # A backdated block is still a durable hold, not a worker liveness
+        # claim. Legacy blockers are never silently dropped for missing tokens.
+        if attrs.event_type in ~w(execution.blocked execution.unblocked) and is_nil(correlation) do
+          false
+        else
+          attempt.payload["addressed_runtime"] != attrs.runtime_id or
+            (is_binary(correlation) and correlation != attempt.payload["correlation_id"]) or
+            DateTime.compare(attrs.occurred_at, attempt.occurred_at) == :lt
+        end
+    end
+  end
+
+  defp lifecycle_payload(attrs, lease) do
+    payload =
+      if dispatch_event_stale?(attrs) do
+        Map.put(attrs.payload, "worker_event_applied", false)
+      else
+        if attrs.event_type in ~w(execution.finished execution.failed execution.abandoned assignment.rejected) do
+          applied = not needs_human_hold?(lease) and not stale_worker_event?(lease, attrs)
+          Map.put(attrs.payload, "worker_event_applied", applied)
+        else
+          if attrs.event_type in ~w(execution.started execution.progress execution.heartbeat execution.acked),
+            do: Map.put(attrs.payload, "worker_event_applied", true),
+            else: attrs.payload
+        end
+      end
+
+    case {attrs.event_type, lease} do
+      {"execution.blocked", %ExecutionLease{} = hold} ->
+        Map.put(payload, "hold_revision", hold_revision(hold))
+
+      _ ->
+        payload
+    end
+  end
+
+  # A delayed terminal from a former turn must not close the replacement worker.
+  defp stale_worker_event?(nil, _attrs), do: false
+
+  defp stale_worker_event?(%ExecutionLease{} = lease, attrs) do
+    terminal? =
+      attrs.event_type in ~w(execution.finished execution.failed execution.abandoned assignment.rejected)
+
+    terminal? and
+      ((is_binary(lease.runtime_worker_ref) and
+          attrs.runtime_worker_ref != lease.runtime_worker_ref) or
+         DateTime.compare(attrs.occurred_at, lease.last_progress_at || lease.started_at) == :lt)
+  end
+
+  defp stale_worker_event?(_lease, _attrs), do: false
+
+  @doc "Stage/runtime/worker fence shared by live router event handling. Missing legacy identity is unknown."
+  def event_matches_worker?(event, stage_id, runtime_id) do
+    payload = event.payload || %{}
+    event_stage = payload["stage_id"] || (event.lease && Map.get(event.lease, :stage_id))
+    worker = payload["runtime_worker_ref"] || payload["subagent_id"]
+    lease = event.lease
+
+    owner_matches =
+      event.runtime_id == runtime_id or
+        (event.event_type == "execution.blocked" and event.runtime_id == self_filed_runtime_id())
+
+    owner_matches and (is_nil(event_stage) or event_stage == stage_id) and
+      payload["worker_event_applied"] != false and not ack_after_terminal?(event) and
+      not dispatch_event_stale?(%{
+        task_id: event.task_id,
+        stage_id: event_stage,
+        runtime_id: event.runtime_id,
+        occurred_at: event.occurred_at,
+        event_type: event.event_type,
+        payload: payload
+      }) and
+      not (not is_nil(lease) and
+             stale_worker_event?(lease, %{
+               event_type: event.event_type,
+               runtime_worker_ref: worker,
+               occurred_at: event.occurred_at
+             }))
+  end
+
+  defp ack_after_terminal?(
+         %{event_type: "execution.acked", payload: %{"correlation_id" => correlation}} = event
+       ) do
+    Repo.exists?(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^event.task_id and
+            e.runtime_id == ^event.runtime_id and e.payload["correlation_id"] == ^correlation and
+            e.event_type in ["execution.finished", "execution.failed", "execution.abandoned"] and
+            e.payload["worker_event_applied"] == true
+      )
+    )
+  end
+
+  defp ack_after_terminal?(_event), do: false
+
+  @doc "True only for a measured end of the latest correlated dispatch, never from silence."
+  def dispatch_turn_ended?(task_id, stage_id, runtime_id) do
+    case latest_dispatch(task_id, stage_id, runtime_id) do
+      nil -> false
+      attempt -> not dispatch_open?(attempt)
+    end
+  end
+
+  # The task row serializes durable dispatch reservations with lifecycle writes.
+  # It is not a new worker queue: a reservation names one worker token even
+  # across bounded transport retries. Missing receipt/turn-end stays unknown;
+  # the existing watchdog resolves it. Runtimes must await accepted started
+  # admission for their worker reference before doing work for that token.
+  defp lock_task!(task_id) do
+    Repo.one!(from(t in Platform.Tasks.Task, where: t.id == ^task_id, lock: "FOR UPDATE"))
+  end
+
+  @doc "Reserve a correlated dispatch before sending, surviving router/node restarts."
+  def reserve_dispatch(task_id, stage_id, runtime_id, now \\ DateTime.utc_now(), opts \\ []) do
+    Repo.transaction(fn ->
+      task = lock_task!(task_id)
+      plan = Tasks.current_plan(task_id)
+
+      unless plan && Enum.any?(plan.stages, &(&1.id == stage_id and &1.status == "running")) do
+        Repo.rollback(:stale_stage)
+      end
+
+      if needs_human_hold(task_id, stage_id, runtime_id), do: Repo.rollback(:human_hold)
+      prior_attempt = latest_stage_dispatch(task_id, stage_id)
+
+      reassigned? =
+        not is_nil(prior_attempt) and prior_attempt.payload["addressed_runtime"] != runtime_id and
+          match?({:ok, %{id: ^runtime_id}}, Platform.Orchestration.PhaseRuntime.resolve(task))
+
+      previous = if reassigned?, do: nil, else: prior_attempt
+
+      if previous && dispatch_open?(previous) do
+        # A bounded transport retry reuses the same worker token. A release
+        # from a hold, or any measured worker start, keeps the strict fence.
+        if Keyword.get(opts, :transport_retry, false) and
+             previous.payload["addressed_runtime"] == runtime_id and
+             is_nil(previous.payload["hold_id"]) and not worker_started?(previous) do
+          {:reserved, previous}
+        else
+          {:in_flight, previous.payload["correlation_id"]}
+        end
+      else
+        correlation = Ecto.UUID.generate()
+        lease = current_lease_for_stage(task_id, stage_id)
+
+        revision =
+          if lease &&
+               (lease.metadata["hold_revision"] || lease.metadata["wait_kind"] == "dependency"),
+             do: hold_revision(lease),
+             else: nil
+
+        payload = %{
+          "stage_id" => stage_id,
+          "correlation_id" => correlation,
+          "addressed_runtime" => runtime_id,
+          "core_build" => Platform.BuildInfo.commit(),
+          "hold_revision" => revision,
+          "hold_id" => lease && lease.id,
+          "supersedes_correlation_id" =>
+            if(reassigned?, do: prior_attempt.payload["correlation_id"], else: nil),
+          "superseded_worker_state" =>
+            if(reassigned?, do: "ownership_revoked_lifecycle_unknown", else: nil),
+          "transport_send" => "reserved",
+          "runtime_receipt" => "unknown",
+          "worker_start" => "unknown",
+          "terminal" => "unknown"
+        }
+
+        {:ok, event} =
+          record_event(
+            %{
+              task_id: task_id,
+              stage_id: stage_id,
+              runtime_id: self_filed_runtime_id(),
+              phase: Tasks.current_phase(task),
+              event_type: "execution.dispatch_attempt",
+              occurred_at: now,
+              idempotency_key: "dispatch:" <> correlation,
+              payload: payload
+            },
+            defer_broadcast: true
+          )
+
+        {:reserved, event}
+      end
+    end)
+  end
+
+  defp latest_stage_dispatch(_task_id, nil), do: nil
+
+  defp latest_stage_dispatch(task_id, stage_id) do
+    query =
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.runtime_id == ^@self_filed_runtime_id and
+            e.event_type == "execution.dispatch_attempt" and e.payload["stage_id"] == ^stage_id,
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+
+    Repo.one(query)
+  end
+
+  defp latest_dispatch(task_id, stage_id, runtime_id) do
+    Repo.one(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.runtime_id == ^@self_filed_runtime_id and
+            e.payload["addressed_runtime"] == ^runtime_id and
+            e.event_type == "execution.dispatch_attempt" and e.payload["stage_id"] == ^stage_id,
+        order_by: [desc: e.inserted_at],
+        limit: 1
+      )
+    )
+  end
+
+  defp dispatch_open?(attempt) do
+    correlation = attempt.payload["correlation_id"]
+    # A confirmed transport failure sent no frame; retry may reserve a new attempt.
+    closed =
+      Repo.exists?(
+        from(e in RuntimeEvent,
+          where:
+            e.task_id == ^attempt.task_id and
+              e.inserted_at >= ^attempt.inserted_at and
+              ((e.runtime_id == ^@self_filed_runtime_id and
+                  e.event_type == "execution.dispatch_result" and
+                  e.payload["correlation_id"] == ^correlation and
+                  e.payload["transport_send"] == "failed" and
+                  not exists(
+                    from(sent in RuntimeEvent,
+                      where:
+                        sent.task_id == ^attempt.task_id and
+                          sent.runtime_id == ^@self_filed_runtime_id and
+                          sent.payload["correlation_id"] == ^correlation and
+                          sent.event_type == "execution.dispatch_result" and
+                          sent.payload["transport_send"] == "accepted"
+                    )
+                  )) or
+                 (e.runtime_id == ^attempt.payload["addressed_runtime"] and
+                    e.event_type in [
+                      "execution.finished",
+                      "execution.failed",
+                      "execution.abandoned",
+                      "execution.blocked",
+                      "execution.unblocked"
+                    ] and
+                    e.payload["stage_id"] == ^attempt.payload["stage_id"] and
+                    (e.event_type == "execution.blocked" or e.occurred_at >= ^attempt.occurred_at) and
+                    (e.event_type in ["execution.unblocked", "execution.blocked"] or
+                       (e.payload["correlation_id"] == ^correlation and
+                          e.payload["worker_event_applied"] == true))))
+        )
+      )
+
+    released_at = last_human_release_at(attempt.task_id, attempt.payload["stage_id"])
+
+    human_released =
+      not is_nil(released_at) and DateTime.compare(released_at, attempt.occurred_at) != :lt
+
+    stage =
+      Repo.one(
+        from(s in Platform.Tasks.Stage,
+          where: s.id == ^attempt.payload["stage_id"],
+          select: s.started_at
+        )
+      )
+
+    restarted = not is_nil(stage) and DateTime.compare(stage, attempt.occurred_at) == :gt
+    not (closed or human_released or restarted)
+  end
+
+  @doc "Original reservation time for bounded watchdog reconstruction; nil means historical coverage unknown."
+  def dispatch_started_at(task_id, stage_id, runtime_id) do
+    case latest_dispatch(task_id, stage_id, runtime_id) do
+      nil -> nil
+      attempt -> if dispatch_open?(attempt), do: attempt.occurred_at, else: nil
+    end
+  end
+
+  @doc "Durable activity for the current worker token, used only to restore a lost watchdog row."
+  def dispatch_activity(task_id, stage_id, runtime_id) do
+    case latest_dispatch(task_id, stage_id, runtime_id) do
+      nil ->
+        {nil, nil}
+
+      attempt ->
+        correlation = attempt.payload["correlation_id"]
+
+        Repo.one(
+          from(e in RuntimeEvent,
+            where:
+              e.task_id == ^task_id and e.runtime_id == ^runtime_id and
+                e.payload["correlation_id"] == ^correlation and
+                e.occurred_at >= ^attempt.occurred_at and
+                e.event_type in [
+                  "execution.acked",
+                  "execution.started",
+                  "execution.heartbeat",
+                  "execution.progress"
+                ] and
+                fragment("COALESCE(?->>'worker_event_applied', 'true') <> 'false'", e.payload),
+            select:
+              {filter(max(e.occurred_at), e.event_type == "execution.acked"),
+               filter(max(e.occurred_at), e.event_type != "execution.acked")}
+          )
+        )
+    end
+  end
+
+  @doc "Record transport acceptance separately from runtime receipt; never claim delivery from presence."
+  def dispatch_result(attempt, result, online) do
+    payload =
+      Map.merge(attempt.payload, %{
+        "transport_send" => if(result == :ok, do: "accepted", else: "failed"),
+        "transport_result" => if(result == :ok, do: "pubsub_accepted", else: "send_failed"),
+        "socket_online_at_send" => online
+      })
+
+    record_event(%{
+      task_id: attempt.task_id,
+      runtime_id: attempt.runtime_id,
+      phase: attempt.phase,
+      event_type: "execution.dispatch_result",
+      idempotency_key: attempt.id <> ":send:" <> Ecto.UUID.generate(),
+      payload: payload
+    })
+  end
+
+  @doc "Persist the reminder send and its result under a lease lock; failures retry without a success stamp."
+  def deliver_hold_notice(lease_id, interval_ms, deliver, now \\ DateTime.utc_now()) do
+    Repo.transaction(fn ->
+      lease = Repo.one!(from(l in ExecutionLease, where: l.id == ^lease_id, lock: "FOR UPDATE"))
+      metadata = lease.metadata || %{}
+      revision = hold_revision(lease)
+      same_generation? = metadata["human_notice_revision"] == revision
+      last = if same_generation?, do: parse_datetime(metadata["human_notice_sent_at"]), else: nil
+
+      retry =
+        if same_generation?, do: parse_datetime(metadata["human_notice_retry_at"]), else: nil
+
+      cond do
+        not needs_human_hold?(lease) ->
+          :released
+
+        retry && DateTime.compare(now, retry) == :lt ->
+          :not_due
+
+        last && DateTime.diff(now, last, :millisecond) < interval_ms ->
+          :not_due
+
+        true ->
+          result =
+            try do
+              deliver.(lease)
+            rescue
+              _ -> {:error, :delivery_exception}
+            catch
+              :exit, _ -> {:error, :delivery_exit}
+            end
+
+          success? = match?({:ok, _}, result)
+
+          update =
+            if success?,
+              do: %{
+                "human_notice_sent_at" => DateTime.to_iso8601(now),
+                "human_notice_retry_at" => nil,
+                "human_notice_result" => "sent",
+                "human_notice_revision" => revision
+              },
+              else: %{
+                "human_notice_retry_at" => DateTime.to_iso8601(DateTime.add(now, 60, :second)),
+                "human_notice_result" => "failed",
+                "human_notice_revision" => revision,
+                "human_notice_sent_at" =>
+                  if(same_generation?, do: metadata["human_notice_sent_at"], else: nil)
+              }
+
+          lease
+          |> ExecutionLease.changeset(%{metadata: Map.merge(metadata, update)})
+          |> Repo.update!()
+
+          if success?, do: :sent, else: {:delivery_failed, result}
+      end
+    end)
   end
 
   defp verified_dependency_release?(lease, attrs) do
@@ -485,7 +1025,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       last_progress_at: progress_at(attrs.event_type, attrs.occurred_at),
       expires_at: expires_at(attrs, status),
       block_reason: block_reason(status, attrs),
-      metadata: attrs.payload || %{},
+      metadata: lease_metadata(nil, status, attrs),
       # ADR 0040 — owner identity captured at lease creation. Subsequent
       # event-driven updates (the other persist_lease/4 clause) deliberately
       # do NOT overwrite these fields: the lease was created with an owner
@@ -507,10 +1047,51 @@ defmodule Platform.Orchestration.RuntimeSupervision do
         progress_at(attrs.event_type, attrs.occurred_at) || lease.last_progress_at,
       expires_at: expires_at(attrs, status),
       block_reason: block_reason(status, attrs),
-      metadata: Map.merge(lease.metadata || %{}, attrs.payload || %{})
+      metadata: lease_metadata(lease, status, attrs)
     })
     |> repo.update()
   end
+
+  defp lease_metadata(lease, status, attrs) do
+    prior = if lease, do: lease.metadata || %{}, else: %{}
+    metadata = Map.merge(prior, attrs.payload || %{})
+
+    if status == "blocked" do
+      dependency_revision =
+        case {metadata["wait_kind"], metadata["dependency_wait"]} do
+          {"dependency", %{"revision" => revision}} when is_binary(revision) -> revision
+          _ -> nil
+        end
+
+      prior_revision =
+        if lease && lease.status == "blocked", do: prior["hold_revision"], else: nil
+
+      revision = dependency_revision || prior_revision || Ecto.UUID.generate()
+
+      blocked_at =
+        if prior_revision == revision && prior["blocked_at"],
+          do: prior["blocked_at"],
+          else: DateTime.to_iso8601(attrs.occurred_at)
+
+      metadata |> Map.put("hold_revision", revision) |> Map.put("blocked_at", blocked_at)
+    else
+      metadata
+    end
+  end
+
+  @doc "Stable current hold generation, including legacy leases without a revision."
+  def hold_revision(lease) do
+    metadata = lease.metadata || %{}
+
+    case {metadata["wait_kind"], metadata["dependency_wait"]} do
+      {"dependency", %{"revision" => revision}} when is_binary(revision) -> revision
+      _ -> metadata["hold_revision"] || lease.id
+    end
+  end
+
+  @doc "Recorded block time; legacy rows fall back to the lease's original start time."
+  def blocked_at(lease),
+    do: parse_datetime((lease.metadata || %{})["blocked_at"]) || lease.started_at
 
   defp heartbeat_at("active", attrs), do: attrs.occurred_at
   defp heartbeat_at("blocked", attrs), do: attrs.occurred_at

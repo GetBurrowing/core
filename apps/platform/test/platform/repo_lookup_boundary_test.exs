@@ -1558,7 +1558,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # and a `stage.id` off a `%Stage{}` loaded from the plan — inside a guard
     # that rescues and fails open. No boundary caller exists; one would need
     # `Platform.UUID.valid?/1`.
-    "platform/orchestration/runtime_supervision.ex" => 6,
+    # 6 -> 10: dispatch_activity aggregates only persisted events for the current
+    # internal worker token; latest dispatch reads are scoped to router task/stage ids loaded
+    # from the approved plan; dispatch_open?/1 reads a stage_id stamped by
+    # reserve_dispatch/4 from that same plan (not caller prose). Task/lease
+    # row locks use ids from persisted structs, never a boundary UUID string.
+    "platform/orchestration/runtime_supervision.ex" => 10,
     # 0 -> 1 for task 01a136c1 stage 1: `open_stack_deployer_blocked_event?/1`
     # (the unstamped-member sweep's open-blocker check) takes the latest
     # stack_deployer `execution.blocked` time with `select: max(...)`. Triaged

@@ -2141,6 +2141,62 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  test "execution ingress preserves dispatch correlation and authenticated runtime for duplicate turn-end",
+       ctx do
+    alias Platform.Orchestration.RuntimeSupervision
+
+    {:ok, socket} =
+      connect(PlatformWeb.RuntimeSocket, %{
+        "runtime_id" => ctx.runtime.runtime_id,
+        "token" => ctx.raw_token
+      })
+
+    {:ok, _, socket} = subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+    {:ok, project} = Tasks.create_project(%{name: "Correlated lifecycle"})
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Lifecycle"})
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "running"})
+
+    {:ok, {:reserved, attempt}} =
+      RuntimeSupervision.reserve_dispatch(task.id, stage.id, ctx.runtime.runtime_id)
+
+    correlation = attempt.payload["correlation_id"]
+    runtime_id = ctx.runtime.runtime_id
+    key = "channel-turn-end-#{task.id}"
+
+    params = %{
+      "task_id" => task.id,
+      "runtime_id" => "forged-runtime",
+      "event_type" => "execution.finished",
+      "idempotency_key" => key,
+      "payload" => %{"stage_id" => stage.id, "correlation_id" => correlation}
+    }
+
+    for _ <- 1..2 do
+      push(socket, "execution_event", params)
+
+      assert_receive %Phoenix.Socket.Message{
+        event: "execution_event_ack",
+        payload: %{
+          idempotency_key: ^key,
+          correlation_id: ^correlation,
+          runtime_id: ^runtime_id,
+          status: "ok"
+        }
+      }
+    end
+
+    assert Repo.aggregate(
+             from(e in Platform.Orchestration.RuntimeEvent, where: e.idempotency_key == ^key),
+             :count
+           ) == 1
+
+    assert {:ok, {:reserved, _}} =
+             RuntimeSupervision.reserve_dispatch(task.id, stage.id, runtime_id)
+  end
+
   describe "usage_event" do
     # Regression: a runtime sent `space_id: "higgins"` (a slug). Ecto's
     # `cast/4` waves non-UUID binaries through for `:binary_id`, so the

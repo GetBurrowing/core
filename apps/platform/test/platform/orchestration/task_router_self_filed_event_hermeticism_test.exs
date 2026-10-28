@@ -215,7 +215,7 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
     # which is exactly assertion (a); re-writing it here would be a second copy
     # of the same measurement.
 
-    test "an ordinary foreign runtime event still stamps liveness and clears a stall", %{
+    test "only the owning runtime event stamps liveness and clears a stall", %{
       project: project
     } do
       # (b). The two new clauses match on `event_type` only, so the risk is not
@@ -230,14 +230,17 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
       event = foreign_event(task.id, "execution.heartbeat")
       send(pid, {:runtime_event, event})
 
+      assert TaskRouter.current_status(task.id).status == :stalled
+      owner_event = %{event | runtime_id: owner}
+      send(pid, {:runtime_event, owner_event})
       status = TaskRouter.current_status(task.id)
 
       assert status.status == :running,
-             "foreign runtime liveness must still reset a stalled router — the hermeticism " <>
+             "owning runtime liveness must reset a stalled router — the hermeticism " <>
                "clauses are scoped to the router's own two dispatch-trace types"
 
       assert status.last_runtime_event_at == event.occurred_at,
-             "foreign liveness must still be stamped"
+             "owning liveness must still be stamped"
     end
   end
 

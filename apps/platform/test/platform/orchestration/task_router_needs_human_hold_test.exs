@@ -327,6 +327,7 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
       hold = file_blocker!(ctx, true, 7 * 60)
       :ok = sync_router(ctx.task.id)
 
+      expire_reminder_cadence!(hold.id)
       send(pid, {:awaiting_human_reminder, hold.id})
       :ok = sync_router(ctx.task.id)
 
@@ -554,6 +555,7 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
       assert awaiting_notices(ctx.task.id) == 1
 
       # Under the horizon this tick found no hold and fired `:dispatch`.
+      expire_reminder_cadence!(hold.id)
       send(pid, {:awaiting_human_reminder, hold.id})
       :ok = sync_router(ctx.task.id)
 
@@ -731,6 +733,133 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
     })
   end
 
+  test "a new human hold reusing the same lease gets immediate visibility", ctx do
+    _pid = boot_and_drain!(ctx)
+    first = file_blocker!(ctx, true)
+    :ok = sync_router(ctx.task.id)
+    assert awaiting_notices(ctx.task.id) == 1
+
+    {:ok, _} =
+      RuntimeSupervision.record_event(%{
+        task_id: ctx.task.id,
+        runtime_id: ctx.runtime_id,
+        event_type: "execution.unblocked",
+        payload: %{"stage_id" => ctx.stage.id, "reason" => "first hold resolved"}
+      })
+
+    :ok = sync_router(ctx.task.id)
+    second = file_blocker!(ctx, true)
+    :ok = sync_router(ctx.task.id)
+    assert second.id == first.id
+    refute second.metadata["hold_revision"] == first.metadata["hold_revision"]
+    assert awaiting_notices(ctx.task.id) == 2
+  end
+
+  test "restart restores measured ack and progress deadlines instead of resetting or shortening them",
+       ctx do
+    old = DateTime.add(DateTime.utc_now(), -3600, :second)
+    ctx.stage |> Ecto.Changeset.change(started_at: old) |> Repo.update!()
+
+    {:ok, {:reserved, _}} =
+      RuntimeSupervision.reserve_dispatch(ctx.task.id, ctx.stage.id, ctx.runtime_id, old)
+
+    acked_at = DateTime.add(old, 3300, :second)
+    progressed_at = DateTime.add(old, 3540, :second)
+
+    for {type, time} <- [{"execution.acked", acked_at}, {"execution.progress", progressed_at}] do
+      {:ok, _} =
+        RuntimeSupervision.record_event(%{
+          task_id: ctx.task.id,
+          runtime_id: ctx.runtime_id,
+          event_type: type,
+          occurred_at: time,
+          payload: %{"stage_id" => ctx.stage.id, "subagent_id" => "measured-worker"}
+        })
+    end
+
+    {:ok, pid} = TaskRouter.start_link(task_id: ctx.task.id, assignee: ctx.assignee)
+    :ok = sync_router(ctx.task.id)
+    lease = LeaseManager.get(ctx.task.id)
+    assert lease.dispatched_at == old
+    assert lease.ack_at == acked_at
+    assert lease.last_progress_at == progressed_at
+    assert lease.no_ack_at == nil
+
+    assert lease.safety_net_at ==
+             DateTime.add(progressed_at, coding_safety_net_ms(), :millisecond)
+
+    GenServer.stop(pid, :normal)
+    {:ok, _} = TaskRouter.start_link(task_id: ctx.task.id, assignee: ctx.assignee)
+    :ok = sync_router(ctx.task.id)
+    assert LeaseManager.get(ctx.task.id).safety_net_at == lease.safety_net_at
+  end
+
+  test "restart before receipt retains one dispatch and its original watchdog deadline", ctx do
+    pid = boot_and_drain!(ctx)
+    # The runtime can start its owning turn before its receipt ack arrives.
+    {:ok, _} =
+      RuntimeSupervision.record_event(%{
+        task_id: ctx.task.id,
+        runtime_id: ctx.runtime_id,
+        event_type: "execution.started",
+        runtime_worker_ref: "worker-before-ack",
+        payload: %{"stage_id" => ctx.stage.id}
+      })
+
+    :ok = sync_router(ctx.task.id)
+    initial = LeaseManager.get(ctx.task.id).dispatched_at
+    GenServer.stop(pid, :normal)
+    {:ok, replacement} = TaskRouter.start_link(task_id: ctx.task.id, assignee: ctx.assignee)
+    :ok = sync_router(ctx.task.id)
+    refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 0
+    assert LeaseManager.get(ctx.task.id).dispatched_at == initial
+    for _ <- 1..3, do: send(replacement, :dispatch)
+    :ok = sync_router(ctx.task.id)
+    refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 0
+
+    attempts =
+      Repo.all(from(e in Platform.Orchestration.RuntimeEvent, where: e.task_id == ^ctx.task.id))
+
+    assert Enum.count(attempts, &(&1.event_type == "execution.dispatch_attempt")) == 1
+  end
+
+  test "restart after persisted unblock recovers one dispatch when notification was lost", ctx do
+    pid = boot_and_drain!(ctx)
+    hold = file_blocker!(ctx, true)
+    :ok = sync_router(ctx.task.id)
+    assert awaiting_notices(ctx.task.id) == 1
+    GenServer.stop(pid, :normal)
+    {:ok, pid2} = TaskRouter.start_link(task_id: ctx.task.id, assignee: ctx.assignee)
+    :ok = sync_router(ctx.task.id)
+    assert awaiting_notices(ctx.task.id) == 1
+    refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 0
+
+    assert {:ok, released} =
+             RuntimeSupervision.record_event(
+               %{
+                 task_id: ctx.task.id,
+                 stage_id: ctx.stage.id,
+                 runtime_id: ctx.runtime_id,
+                 event_type: "execution.unblocked",
+                 idempotency_key: "verified-release-#{ctx.task.id}",
+                 payload: %{"stage_id" => ctx.stage.id, "reason" => "installed fixture verified"}
+               },
+               defer_broadcast: true
+             )
+
+    assert released.lease_id == hold.id
+    GenServer.stop(pid2, :normal)
+    {:ok, pid3} = TaskRouter.start_link(task_id: ctx.task.id, assignee: ctx.assignee)
+    :ok = sync_router(ctx.task.id)
+    assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 0
+    # The persisted release may be replayed after restart, but it cannot
+    # authorize another send once a newer dispatch reservation exists.
+    send(pid3, {:runtime_event, released})
+    send(pid3, :dispatch)
+    :ok = sync_router(ctx.task.id)
+    refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 0
+  end
+
   defp file_blocker!(ctx, needs_human, age_minutes \\ @blocker_age_minutes) do
     {:ok, _event} =
       Platform.Orchestration.record_runtime_event(%{
@@ -754,6 +883,21 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
         limit: 1
       )
     )
+  end
+
+  defp expire_reminder_cadence!(lease_id) do
+    lease = Repo.get!(ExecutionLease, lease_id)
+
+    lease
+    |> Ecto.Changeset.change(
+      metadata:
+        Map.put(
+          lease.metadata,
+          "human_notice_sent_at",
+          DateTime.utc_now() |> DateTime.add(-3601, :second) |> DateTime.to_iso8601()
+        )
+    )
+    |> Repo.update!()
   end
 
   defp minutes_ago(minutes), do: DateTime.add(DateTime.utc_now(), -minutes * 60, :second)

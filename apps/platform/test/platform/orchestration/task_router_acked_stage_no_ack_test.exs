@@ -316,6 +316,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert %{ack_at: nil, no_ack_at: %DateTime{}} = LeaseManager.get(task.id)
 
       :ok = ack_via_tool!(task, stage, assignee)
+      original_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       space = ExecutionSpace.find_by_task_id(task.id)
 
@@ -358,18 +359,17 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert lease, "the re-dispatch must have armed a fresh lease"
       assert lease.stage_id == stage.id, "same stage — no boundary was crossed"
 
-      assert lease.ack_at == nil,
-             "THE DEFECT: the fresh lease forgets the ack that the durable row still remembers"
+      assert lease.ack_at == original_ack_at,
+             "the rehydrated lease must restore the measured durable receipt, not invent a new ack"
 
-      assert lease.no_ack_at, "and re-opens a five-minute countdown against a working agent"
+      assert lease.no_ack_at == nil,
+             "a restored receipt must not re-open a countdown against the working agent"
 
-      # Five minutes later. STAGE 2 OBSERVED THE ALARM FIRE HERE — it produced
-      # the `execution.no_ack_timeout` broadcast and a `needs_human: true`
-      # blocker against an agent that had acked this exact stage. Stage 3's
-      # guard in `maybe_fire_no_ack/3` consults the durable ack row and suppresses
-      # it. Removing the guard turns this assertion red again (verified).
-      expire_no_ack_deadline!(task.id)
-      :ok = refute_alarm_and_assert_restamped!(pid, task.id)
+      # The repair now restores the receipt before arming timers, closing the
+      # false-alarm window instead of waiting for the late durable-ack guard.
+      # Genuine unacked-stage controls below still require the alarm to fire.
+      :ok = refute_alarm!(pid, task.id)
+      assert LeaseManager.get(task.id).ack_at == original_ack_at
 
       assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
              "the durable ack for this exact stage is what suppressed the alarm"
