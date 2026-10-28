@@ -17,3 +17,13 @@ export function applyCtrl(text) {
   if (code >= 0x40 && code <= 0x5f) return String.fromCharCode(code - 0x40)
   return text
 }
+
+/**
+ * Keeps focus in the terminal when a key-row button is pressed. A button that
+ * takes focus blurs xterm's textarea, and a phone closes its keyboard on that
+ * blur, so Ctrl then b would never reach the terminal. Bound to pointerdown and
+ * mousedown; the click that follows still activates the key.
+ */
+export function holdFocus(e) {
+  if (e.target?.closest?.("[data-terminal-key]")) e.preventDefault()
+}
