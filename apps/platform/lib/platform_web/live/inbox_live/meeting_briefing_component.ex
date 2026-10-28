@@ -17,7 +17,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
   `MeetingBriefings.view/2` is the only read. Sections, in order, each
   hidden when empty: Summary (or "Summary is being written"), Open (with
-  Revert / Looks right / Ask), Resolved ("Reverted by Ada · 14:05"), Open
+  Revert / Ask for tasks), Resolved ("Reverted by Ada · 14:05"), Open
   questions, Action items not filed, and the Transcript link. Every word
   comes from `PlatformWeb.InboxLive.MeetingBriefingCopy`.
 
@@ -75,7 +75,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   def update(assigns, socket) do
     {:ok,
      socket
-     |> assign(Map.take(assigns, [:id, :meeting_id, :user_id, :time_zone]))
+     |> assign(Map.take(assigns, [:id, :meeting_id, :user_id, :time_zone, :item_key]))
      |> load()}
   end
 
@@ -164,6 +164,26 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
     ~H"""
     <div id={@id} class="py-10 text-center text-sm text-subtle" data-role="meeting-briefing-not-found">
       {Copy.not_found()}
+    </div>
+    """
+  end
+
+  def render(%{item_key: key} = assigns) when is_binary(key) do
+    assigns =
+      assign(
+        assigns,
+        :item,
+        Enum.find(assigns.view.open ++ assigns.view.resolved, &(&1.key == key))
+      )
+
+    ~H"""
+    <div id={@id} data-role="meeting-briefing-task" data-meeting-id={@meeting_id}>
+      <.open_card :if={@item && is_nil(@item.receipt)} item={@item} myself={@myself}
+        asking?={MapSet.member?(@asking, @item.key)} blank?={MapSet.member?(@blank, @item.key)}
+        error={Map.get(@errors, @item.key)} />
+      <.resolved_card :if={@item && @item.receipt} item={@item} time_zone={@time_zone}
+        notice={Map.get(@notices, @item.key)} transcript_url={@view.transcript_url} />
+      <p :if={is_nil(@item)} class="text-sm text-subtle">This task is unavailable.</p>
     </div>
     """
   end
@@ -283,6 +303,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
         {@item.title}
       </h4>
 
+      <p :if={@item.availability} class="mt-1 text-sm text-subtle" data-role="meeting-task-availability">{@item.availability}</p>
       <div class="mt-3 flex flex-wrap items-center gap-2" data-role="meeting-briefing-actions">
         <button
           :for={action <- @item.actions}

@@ -106,6 +106,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
             transcript_chunk_id: Ecto.UUID.generate(),
             transcript_chunk_ids: [Ecto.UUID.generate()],
             state: :heard,
+            outcome_kind: :artifact,
             acts_at: nil
           },
           attrs
@@ -807,6 +808,29 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       assert card(html, acting)
              |> LazyHTML.query("[data-role='meeting-candidate-approve']")
              |> Enum.empty?()
+    end
+
+    test "a task candidate is evidence only, including a forged graduation click", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      candidate =
+        candidate!(meeting, %{
+          outcome_kind: :task,
+          state: :shaping,
+          classified_intent: "action_items",
+          evidence_quote: "We should investigate this",
+          acts_at: DateTime.add(DateTime.utc_now(), 20, :second)
+        })
+
+      {view, _} = mount_board(conn, meeting)
+      selector = "[data-candidate-id='#{candidate.id}']"
+      assert has_element?(view, selector <> " [data-role=meeting-candidate-evidence]")
+      refute has_element?(view, selector <> " [data-role=meeting-candidate-approve]")
+      refute has_element?(view, selector <> " [data-role=meeting-candidate-countdown]")
+      render_click(view, "approve_candidate", %{"candidate_id" => candidate.id})
+      assert Repo.reload!(candidate).task_id == nil
+      assert Repo.reload!(candidate).disposition == nil
     end
 
     test "Go ahead and Not now write DIFFERENT rows", %{conn: conn, meeting: meeting} do

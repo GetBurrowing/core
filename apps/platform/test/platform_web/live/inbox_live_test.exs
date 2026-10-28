@@ -2167,6 +2167,79 @@ defmodule PlatformWeb.InboxLiveTest do
 
     defp detail_path(%Meeting{id: id}), do: "/inbox/meeting/" <> id
 
+    test "filed task actions are Revert / Ask on both actual Inbox routes", %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t1)
+      selector = ~s([data-role="meeting-briefing-card"][data-key="#{k}"])
+      {:ok, meeting_lv, _} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      assert has_element?(meeting_lv, "[data-role=meeting-briefing-detail]")
+
+      assert meeting_lv
+             |> element(selector <> " [data-role=meeting-briefing-actions]")
+             |> render()
+             |> strip_tags() =~ "Revert"
+
+      refute has_element?(meeting_lv, selector <> " [data-action=confirm]")
+
+      insight =
+        Platform.InsightFixtures.insight!(
+          addressee: ctx.a,
+          action_type: "task",
+          body: "Already filed meeting work"
+        )
+
+      insight |> Ecto.Changeset.change(artefact_ref: "task:" <> ctx.t1.id) |> Repo.update!()
+
+      unfiled =
+        Platform.InsightFixtures.insight!(
+          addressee: ctx.a,
+          action_type: "task",
+          body: "Unfiled suggestion"
+        )
+
+      date = PlatformWeb.Components.BriefingRow.today(nil)
+
+      daily =
+        Repo.insert!(%Platform.Memory.Briefing{
+          user_id: ctx.a.id,
+          digest_date: date,
+          items: %{
+            Platform.Memory.Insights.BriefingCard.node_key(insight.id) => insight.id,
+            Platform.Memory.Insights.BriefingCard.node_key(unfiled.id) => unfiled.id
+          }
+        })
+
+      {:ok, _, :created} = Platform.Inbox.upsert_briefing_item(daily, %{total: 2, calls: 2})
+      {:ok, daily_lv, _} = live(auth(conn, ctx.a), "/inbox/briefing/" <> Date.to_iso8601(date))
+      assert has_element?(daily_lv, "[data-role=meeting-briefing-task]")
+      assert has_element?(daily_lv, selector <> " [data-action=revert]")
+      assert has_element?(daily_lv, selector <> " [data-action=ask]")
+      refute daily_lv |> element(selector) |> render() =~ "File task"
+      refute daily_lv |> element(selector) |> render() =~ "Looks right"
+
+      assert has_element?(
+               daily_lv,
+               "#briefing-item-" <>
+                 Platform.Memory.Insights.BriefingCard.node_key(unfiled.id) <>
+                 " [data-role=briefing-file]"
+             )
+
+      assert {:error, :already_handled} =
+               Platform.Memory.Insights.Briefings.handle(
+                 daily,
+                 Platform.Memory.Insights.BriefingCard.node_key(insight.id),
+                 "file",
+                 Scope.for_user(ctx.a),
+                 %{}
+               )
+
+      daily_lv |> element(selector <> " [data-action=revert]") |> render_click()
+      assert %DateTime{} = Repo.get!(TaskRecord, ctx.t1.id).deleted_at
+      assert render(meeting_lv) =~ "Reverted by"
+      assert render(daily_lv) =~ "Reverted by"
+      refute has_element?(daily_lv, selector <> " [data-action=revert]")
+    end
+
     test "an attendee's row shows the meeting and its receipt line", %{conn: conn} do
       ctx = concluded_meeting!()
       {:ok, lv, _html} = live(auth(conn, ctx.a), "/inbox?f=briefing")

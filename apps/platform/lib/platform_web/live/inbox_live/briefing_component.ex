@@ -377,6 +377,7 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
   defp ui(assigns) do
     Map.take(assigns, [
       :myself,
+      :user_id,
       :open_form,
       :errors,
       :blank,
@@ -413,8 +414,14 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
       </h3>
       <ul role="list" class="space-y-3">
         <li :for={item <- @items}>
-          <.done_card :if={@section == :done} item={item} ui={@ui} />
-          <.open_card :if={@section != :done} item={item} ui={@ui} />
+          <.live_component :if={item.meeting_card}
+            module={PlatformWeb.InboxLive.MeetingBriefingComponent}
+            id={"daily-meeting-" <> item.key} meeting_id={item.meeting_card.meeting_id}
+            item_key={item.meeting_card.key} user_id={@ui.user_id} time_zone={nil} />
+          <p :if={item.filed_task_id && is_nil(item.meeting_card) && @section != :done} class="text-sm text-subtle"
+            data-role="briefing-filed-unavailable">Filed task · Open the task for its current status.</p>
+          <.done_card :if={is_nil(item.meeting_card) and @section == :done} item={item} ui={@ui} />
+          <.open_card :if={is_nil(item.filed_task_id) and @section != :done} item={item} ui={@ui} />
         </li>
       </ul>
     </section>

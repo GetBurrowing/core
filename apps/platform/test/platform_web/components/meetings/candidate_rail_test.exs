@@ -59,6 +59,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
         classified_intent: "action_item",
         transcript_chunk_ids: [Ecto.UUID.generate()],
         acts_at: nil,
+        outcome_kind: :artifact,
         inserted_at: @now
       },
       attrs
@@ -883,11 +884,10 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       html = rail([card])
 
-      # Positive control first: the foot has to be on the page at all.
-      assert Enum.any?(foot(html, card))
-      assert present?(node(html, card), @sentence)
-
-      assert sentence(html, card) == "Creating a task in"
+      refute Enum.any?(foot(html, card))
+      refute present?(node(html, card), @sentence)
+      assert present?(node(html, card), "[data-role='meeting-candidate-evidence']")
+      refute present?(node(html, card), "[data-role='meeting-candidate-approve']")
     end
 
     test "a card aimed at an ARTIFACT says canvas, never the stored word" do
@@ -920,9 +920,9 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       html = rail([tasked, canvassed])
 
-      assert Enum.any?(foot(html, tasked))
+      refute Enum.any?(foot(html, tasked))
       assert Enum.any?(foot(html, canvassed))
-      assert present?(node(html, tasked), @sentence)
+      refute present?(node(html, tasked), @sentence)
       assert present?(node(html, canvassed), @sentence)
 
       assert sentence(html, tasked) != sentence(html, canvassed)

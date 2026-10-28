@@ -184,7 +184,7 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
       # The other task is still open for B, with all three actions.
       other = item(view, key(ctx.t2))
       assert other in view.open
-      assert other.actions == [:revert, :confirm, :ask]
+      assert other.actions == [:revert, :ask]
       assert view.counts == %{total: 2, open: 1, resolved: 1}
 
       # B acts on its STALE copy: refused, with the fresh row.
@@ -235,7 +235,7 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
       MeetingBriefings.subscribe(ctx.briefing.id)
 
       assert {:ok, _} =
-               MeetingBriefings.act(ctx.briefing, key(ctx.t1), :confirm, scope(ctx.a), %{})
+               MeetingBriefings.act(ctx.briefing, key(ctx.t1), :revert, scope(ctx.a), %{})
 
       a_id = ctx.a.id
       b_id = ctx.b.id
@@ -272,7 +272,7 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
 
       # Positive control: the attendee's real key works.
       assert {:ok, _} =
-               MeetingBriefings.act(ctx.briefing, key(ctx.t1), :confirm, scope(ctx.a), %{})
+               MeetingBriefings.act(ctx.briefing, key(ctx.t1), :revert, scope(ctx.a), %{})
     end
 
     test "an attendee who is a guest of the meeting's org gets :not_found" do
@@ -294,13 +294,13 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
                MeetingBriefings.act(ctx.briefing, key(ctx.t1), :confirm, scope(guest), %{})
     end
 
-    test "an ack-done task is not revertible; its actions are Looks right and Ask" do
+    test "an ack-done task is not revertible; its only action is Ask" do
       ctx = concluded!(ack_done: true)
       k = key(ctx.done)
 
       view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
       assert item(view, k).revertible? == false
-      assert item(view, k).actions == [:confirm, :ask]
+      assert item(view, k).actions == [:ask]
 
       assert {:error, :not_revertible} =
                MeetingBriefings.act(ctx.briefing, k, :revert, scope(ctx.a), %{})
@@ -422,7 +422,7 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
     ctx = concluded!()
     k = key(ctx.t1)
 
-    assert {:ok, briefing} = MeetingBriefings.act(ctx.briefing, k, :confirm, scope(ctx.a), %{})
+    assert {:ok, briefing} = MeetingBriefings.act(ctx.briefing, k, :revert, scope(ctx.a), %{})
 
     Repo.get!(User, ctx.a.id)
     |> Ecto.Changeset.change(archived_at: DateTime.utc_now())
