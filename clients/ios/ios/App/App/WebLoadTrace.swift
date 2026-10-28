@@ -201,7 +201,9 @@ final class WebLoadSchemeTrace: NSObject, WKURLSchemeHandler {
 
         func log(_ event: String) {
             let elapsed = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
-            WebLoadLog.logger.notice("scheme-\(event, privacy: .public) handler=\(String(describing: ObjectIdentifier(self)), privacy: .public) request=\(self.id) url=\(WebLoadLog.describe(self.request.url), privacy: .public) elapsedMs=\(elapsed) main=\(Thread.isMainThread)")
+            WebLoadLog.logger.notice(
+                "scheme-\(event, privacy: .public) handler=\(String(describing: ObjectIdentifier(self)), privacy: .public) request=\(self.id) url=\(WebLoadLog.describe(self.request.url), privacy: .public) elapsedMs=\(elapsed) main=\(Thread.isMainThread)"
+            )
         }
 
         func end(_ event: String) {
