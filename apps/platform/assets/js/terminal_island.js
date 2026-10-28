@@ -17,7 +17,7 @@ import { Socket } from "phoenix"
 import { supportsX25519 } from "./terminal/crypto.js"
 import { THEME } from "./terminal/palette.js"
 import { TerminalSession, toArrayBuffer } from "./terminal/session.js"
-import { KEY_BYTES, applyCtrl } from "./terminal/keys.js"
+import { KEY_BYTES, applyCtrl, holdFocus } from "./terminal/keys.js"
 import { needsConfirm, confirmText } from "./terminal/paste.js"
 
 const FONT = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace'
@@ -197,6 +197,8 @@ async function mount(ctx) {
     term?.focus()
   }
   root.addEventListener("click", onKey)
+  root.addEventListener("pointerdown", holdFocus)
+  root.addEventListener("mousedown", holdFocus)
 
   ctx.handleEvent("terminal:set_mode", async ({ mode }) => {
     const ok = await session.setMode(mode)
@@ -210,6 +212,8 @@ async function mount(ctx) {
       observer?.disconnect()
       host.removeEventListener("paste", onPaste, true)
       root.removeEventListener("click", onKey)
+      root.removeEventListener("pointerdown", holdFocus)
+      root.removeEventListener("mousedown", holdFocus)
       session.detach()
       term?.dispose()
     },

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { confirmText, countLines, needsConfirm } from "../../js/terminal/paste.js"
-import { KEY_BYTES, applyCtrl } from "../../js/terminal/keys.js"
+import { KEY_BYTES, applyCtrl, holdFocus } from "../../js/terminal/keys.js"
 
 describe("paste confirm counts lines in the user's clipboard", () => {
   it("counts lines, treating a trailing break as an ending", () => {
@@ -37,5 +37,23 @@ describe("phone key row", () => {
     expect(applyCtrl("d")).toBe("\x04")
     expect(applyCtrl("1")).toBe("1")
     expect(applyCtrl("ab")).toBe("ab")
+  })
+
+  it("pressing a key button keeps focus in the terminal; other presses are untouched", () => {
+    const press = (target) => {
+      const e = { target, prevented: false, preventDefault() { this.prevented = true } }
+      holdFocus(e)
+      return e.prevented
+    }
+    const inKey = { closest: (sel) => (sel === "[data-terminal-key]" ? {} : null) }
+    const outside = { closest: () => null }
+    expect(press(inKey)).toBe(true)
+    expect(press(outside)).toBe(false)
+    expect(press({})).toBe(false)
+    expect(press(null)).toBe(false)
+  })
+
+  it("Ctrl then b sends the tmux prefix byte", () => {
+    expect(applyCtrl("b")).toBe("\x02")
   })
 })
