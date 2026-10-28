@@ -397,8 +397,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # by CI on the task branch (c7c3379ce), PR #1320.
     # Re-pinned by task 01a1830b stage 4: meeting triage action_items prose
     # now requires accepted candidate_ids and stable provenance on replay.
-    # Tool names, parameter shapes and kind digests are unchanged. Moon full
-    # Play measured these at 9b254a93a; fresh main 1f0f4486b retained old pins.
+    # Tool names, parameter shapes and kind digests are unchanged. The full
+    # Play rig measured these at 9b254a93a; main 1f0f4486b retained old pins.
     @main_tool_digest_off "dff665299e4c24d012ac05ec49397723e76e3aff604f1e5cc78f405dbc4117f3"
     @main_tool_digest_on "c2cc67cfd4d3d15ae18852e2ca34bd3bc97cc974fc7ba091679cc340c9b5b14f"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
