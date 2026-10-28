@@ -263,7 +263,8 @@ defmodule Platform.Meetings.Triage do
   # something. Rescued: the filing already happened and must not be reported
   # as failed because the briefing could not be refreshed.
   defp refresh_meeting_briefing(meeting_id) when is_binary(meeting_id) do
-    with true <- Platform.UUID.valid?(meeting_id),
+    with false <- Repo.in_transaction?(),
+         true <- Platform.UUID.valid?(meeting_id),
          %Platform.Meetings.Meeting{} = meeting <-
            Repo.get(Platform.Meetings.Meeting, meeting_id) do
       Platform.Meetings.MeetingBriefings.deliver(meeting)
@@ -937,18 +938,9 @@ defmodule Platform.Meetings.Triage do
   # reconciler that guesses is the fuzzy gate again, one layer up, and
   # it would be wrong in both directions exactly as that gate is.
   #
-  # ## What this does NOT yet close
-  #
-  # Nothing in `lib/` produces an action item carrying `:candidate_id`.
-  # The scribe-completion canvas the triage-officer parses records
-  # `owner`, `project_hint`, `priority`, `due_hint` and
-  # `source_transcript_id` per checklist item — no candidate id and no
-  # transcript CHUNK id, and `meeting_candidates` has no `dedupe_key`
-  # column to join on either (the classifier's `dedupe_key` is a
-  # SHA-256 of the raw chunk text, held only in the meeting-lifetime
-  # intent queue). Until the producer emits the id, this pass reconciles
-  # nothing and the collision above stands. That is a gap in the
-  # producer, not a reason to match on text here.
+  # Completion.triage_item derives candidate_id from validated candidate_ids.
+  # Singular validated provenance reconciles the live candidate; final ledger
+  # provenance also accounts for many candidates without title similarity.
 
   # Built once per batch, and ONLY when the caller named a meeting —
   # `file_tasks_from_canvas/2` is also called for canvases with no

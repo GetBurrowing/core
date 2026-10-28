@@ -110,6 +110,35 @@ defmodule Platform.Meetings.CompletionTest do
     {ended, run!(meeting), seg}
   end
 
+  test "empty and all-excluded filing passes trigger briefing only after committed final ledger",
+       ctx do
+    {meeting, run, seg} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
+    Completion.scribe_complete(ctx.scribe.id, args)
+    assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
+
+    for items <- [
+          [
+            %{
+              "item_id" => "conflict",
+              "decision" => "exclude",
+              "source_segment_ids" => [seg["id"]]
+            }
+          ],
+          []
+        ] do
+      assert {:ok, %{status: "filed"}} =
+               Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", items))
+
+      assert Repo.get_by!(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id).summary ==
+               "Agreed callback repair"
+
+      assert run!(meeting).status == "filed"
+    end
+  end
+
   test "end before transcription waits for capture fence and final transcript", %{
     meeting: meeting
   } do

@@ -1457,30 +1457,12 @@ defmodule Platform.Meetings do
           {:meeting_ended, updated}
         )
 
-        deliver_meeting_briefing(updated)
         Platform.Meetings.Completion.resume(updated.id)
         ok
 
       error ->
         error
     end
-  end
-
-  # Conclusion is the trigger for the after-action briefing (task 01a1694a
-  # stage 2): `end_meeting/1` is the only live→ended transition, so this runs
-  # once per meeting and never when one person leaves. Synchronous — the work
-  # is DB-only — and rescued, because a briefing failure must never fail the
-  # `room_finished` webhook that ended the meeting.
-  defp deliver_meeting_briefing(%Meeting{} = meeting) do
-    Platform.Meetings.MeetingBriefings.deliver(meeting)
-  rescue
-    error ->
-      Logger.warning(
-        "[Meetings] meeting briefing for #{meeting.id} not delivered: " <>
-          Exception.message(error)
-      )
-
-      :error
   end
 
   @doc """

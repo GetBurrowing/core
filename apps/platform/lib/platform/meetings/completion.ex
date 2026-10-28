@@ -16,7 +16,9 @@ defmodule Platform.Meetings.Completion do
         conflict_target: :meeting_id
       )
 
-      locked(meeting.id, fn run -> advance(run, meeting) end)
+      outcome = locked(meeting.id, fn run -> advance(run, meeting) end)
+      refresh_briefing(meeting)
+      outcome
     else
       _ -> {:error, :meeting_not_ended}
     end
@@ -94,7 +96,7 @@ defmodule Platform.Meetings.Completion do
   end
 
   def sweep do
-    Repo.all(from(r in CompletionRun, where: r.status != "filed", select: r.meeting_id))
+    Repo.all(from(m in Meeting, where: m.status == "ended", select: m.id))
     |> Enum.each(&resume/1)
 
     :ok
@@ -187,6 +189,36 @@ defmodule Platform.Meetings.Completion do
     end)
   end
 
+  @doc "Register or complete an optional synthesis prerequisite for a specific captured snapshot."
+  def synthesis_changed(meeting_id, run_id, snapshot_hash, status)
+      when status in ["pending", "complete"] do
+    outcome =
+      locked(meeting_id, fn run ->
+        with %Meeting{status: "ended"} = meeting <-
+               Repo.one(from(m in Meeting, where: m.id == ^meeting_id, lock: "FOR UPDATE")),
+             true <- run.id == run_id and run.snapshot_hash == snapshot_hash,
+             {:ok, current, _} <- snapshot(meeting),
+             true <- hash(current) == snapshot_hash do
+          save(run, synthesis: %{"snapshot_hash" => snapshot_hash, "status" => status})
+          :ok
+        else
+          _ -> {:error, :stale_snapshot}
+        end
+      end)
+
+    if outcome == :ok, do: refresh_briefing(Repo.get!(Meeting, meeting_id))
+    outcome
+  end
+
+  defp refresh_briefing(meeting) do
+    Platform.Meetings.MeetingBriefings.deliver(meeting)
+  rescue
+    error ->
+      require Logger
+      Logger.warning("Meeting briefing retry failed: #{Exception.message(error)}")
+      :ok
+  end
+
   defp callback(agent_id, role, params, fun) do
     with true <-
            (is_binary(agent_id) and Platform.Roles.agent_id_for_role(role) == agent_id) ||
@@ -199,19 +231,23 @@ defmodule Platform.Meetings.Completion do
          %Meeting{status: "ended"} = meeting <- Repo.get(Meeting, params["meeting_id"]),
          %Canvas{deleted_at: nil} = canvas <- Repo.get(Canvas, params["canvas_id"]),
          true <- canvas.space_id == meeting.chat_space_id || {:error, :foreign_canvas} do
-      locked(meeting.id, fn run ->
-        current = Repo.one!(from(m in Meeting, where: m.id == ^meeting.id, lock: "FOR UPDATE"))
+      outcome =
+        locked(meeting.id, fn run ->
+          current = Repo.one!(from(m in Meeting, where: m.id == ^meeting.id, lock: "FOR UPDATE"))
 
-        with true <- current.status == "ended" || {:error, :meeting_not_finalized},
-             true <- not is_nil(run.capture_finished_at) || {:error, :capture_active},
-             true <-
-               (run.id == params["run_id"] and run.transcript_id == params["transcript_id"] and
-                  run.snapshot_hash == params["snapshot_hash"]) || {:error, :run_mismatch},
-             {:ok, snapshot, _} <- snapshot(meeting),
-             true <- hash(snapshot) == run.snapshot_hash || {:error, :transcript_changed} do
-          fun.(run, meeting, canvas)
-        end
-      end)
+          with true <- current.status == "ended" || {:error, :meeting_not_finalized},
+               true <- not is_nil(run.capture_finished_at) || {:error, :capture_active},
+               true <-
+                 (run.id == params["run_id"] and run.transcript_id == params["transcript_id"] and
+                    run.snapshot_hash == params["snapshot_hash"]) || {:error, :run_mismatch},
+               {:ok, snapshot, _} <- snapshot(meeting),
+               true <- hash(snapshot) == run.snapshot_hash || {:error, :transcript_changed} do
+            fun.(run, meeting, canvas)
+          end
+        end)
+
+      refresh_briefing(meeting)
+      outcome
     else
       {:error, _} = error -> error
       _ -> {:error, :meeting_not_finalized}
@@ -347,7 +383,8 @@ defmodule Platform.Meetings.Completion do
     end
   end
 
-  defp snapshot(meeting) do
+  @doc "Current bounded, owned transcript snapshot, shared with briefing readiness."
+  def snapshot(meeting) do
     room = Repo.get_by(Room, space_id: meeting.chat_space_id)
 
     transcripts =
@@ -393,12 +430,12 @@ defmodule Platform.Meetings.Completion do
     end
   end
 
-  defp belongs_to_meeting?(%Transcript{meeting_id: id}, %Meeting{id: id}) when not is_nil(id),
+  def belongs_to_meeting?(%Transcript{meeting_id: id}, %Meeting{id: id}) when not is_nil(id),
     do: true
 
-  defp belongs_to_meeting?(%Transcript{meeting_id: id}, _) when not is_nil(id), do: false
+  def belongs_to_meeting?(%Transcript{meeting_id: id}, _) when not is_nil(id), do: false
 
-  defp belongs_to_meeting?(transcript, meeting) do
+  def belongs_to_meeting?(transcript, meeting) do
     started_at = transcript.started_at || transcript.inserted_at
 
     not is_nil(meeting.started_at) and DateTime.compare(started_at, meeting.started_at) != :lt and

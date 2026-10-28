@@ -11,6 +11,7 @@ defmodule Platform.Meetings.CompletionRun do
     field(:snapshot, :map, default: %{})
     field(:snapshot_hash, :string)
     field(:item_results, :map, default: %{})
+    field(:synthesis, :map, default: %{})
     field(:last_error, :string)
     field(:dispatched_at, :utc_datetime_usec)
     field(:capture_finished_at, :utc_datetime_usec)
