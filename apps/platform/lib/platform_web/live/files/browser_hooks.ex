@@ -18,6 +18,7 @@ defmodule PlatformWeb.Files.BrowserHooks do
       browser_topics: MapSet.new()
     )
     |> subscriptions()
+    |> PlatformWeb.Files.CanvasPresence.attach()
     |> attach_hook(:browser_commands, :handle_event, &event/3)
     |> attach_hook(:browser_changes, :handle_info, &info/2)
     |> attach_hook(:browser_starred, :handle_params, &params/3)
@@ -85,15 +86,28 @@ defmodule PlatformWeb.Files.BrowserHooks do
       )
       |> subscriptions()
 
-    if params["tab"] == "starred",
-      do: starred(socket, params),
-      else: FilesLive.apply_browser_params(socket, params)
+    socket =
+      if params["tab"] == "starred",
+        do: starred(socket, params),
+        else: FilesLive.apply_browser_params(socket, params)
+
+    PlatformWeb.Files.CanvasPresence.sync(socket)
   end
 
   defp subscriptions(socket) do
+    space_ids = socket.assigns.browser.items |> Enum.map(& &1.space_id) |> Enum.reject(&is_nil/1)
+    sync_topics(socket, space_ids)
+  end
+
+  @doc "Own project invalidations and only displayed, freshly authorized space topics."
+  def sync_topics(socket, space_ids) do
     if connected?(socket) do
       tree = socket.assigns.tree
-      spaces = Enum.flat_map(tree.orgs, & &1.spaces) ++ tree.other.spaces
+
+      spaces =
+        (Enum.flat_map(tree.orgs, & &1.spaces) ++ tree.other.spaces)
+        |> Enum.filter(&(&1.id in space_ids))
+
       projects = Enum.flat_map(tree.orgs, & &1.projects) ++ tree.other.projects
 
       topics =
@@ -325,7 +339,8 @@ defmodule PlatformWeb.Files.BrowserHooks do
               :file_restored,
               :file_ingested,
               :participant_left,
-              :participant_joined
+              :participant_joined,
+              :roster_changed
             ],
        do: {:halt, refresh(socket)}
 

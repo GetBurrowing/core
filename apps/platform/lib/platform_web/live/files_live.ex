@@ -93,7 +93,7 @@ defmodule PlatformWeb.FilesLive do
   ## PubSub
 
   `BrowserHooks` owns the user's private star topic and every currently
-  readable project/space topic. Leaving a project node clears detail state,
+  readable project topic and the displayed authorized space topics. Leaving a project node clears detail state,
   while keeping its updates available to Recents and Starred. `Platform.Files.Ingester` broadcasts
   `{:file_ingested, file_id}` (and `{:file_ingest_failed, …}`) when a
   run resolves; the LV re-fetches the row and updates the stream so

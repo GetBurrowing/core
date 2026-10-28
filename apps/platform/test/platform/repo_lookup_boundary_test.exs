@@ -112,6 +112,8 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
     {"platform/files/browser.ex", :get, "Chat.Attachment", 1, :safe_internal,
      "resolve_source/5 is reached only after fetch_source/3 passes Platform.UUID.valid?/1 on the raw target id; an invalid id returns not_found before Repo.get"},

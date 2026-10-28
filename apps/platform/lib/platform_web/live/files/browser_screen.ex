@@ -12,6 +12,9 @@ defmodule PlatformWeb.Files.BrowserScreen do
   attr :editing, :any, default: nil
   attr :revision, :integer, default: 0
 
+  attr :previews, :map, default: %{}
+  attr :presence, :map, default: %{}
+
   # The toolbar and the rows. A project node builds its rows from `@files`
   # (which PubSub keeps current), so a badge flip re-renders here; every
   # other view reads the items `handle_params/3` loaded.
@@ -62,6 +65,8 @@ defmodule PlatformWeb.Files.BrowserScreen do
           viewer={@viewer}
           editing={@editing}
           revision={@revision}
+          previews={@previews}
+          presence={@presence}
           labels={@labels}
           show_location={@show_location}
         />

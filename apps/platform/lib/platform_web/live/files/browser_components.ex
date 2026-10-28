@@ -671,6 +671,9 @@ defmodule PlatformWeb.Files.BrowserComponents do
   attr :editing, :any, default: nil
   attr :revision, :integer, default: 0
 
+  attr :previews, :map, default: %{}
+  attr :presence, :map, default: %{}
+
   def item_grid(assigns) do
     assigns = assign_from(assigns)
 
@@ -699,8 +702,13 @@ defmodule PlatformWeb.Files.BrowserComponents do
           class="flex min-w-0 flex-col active:bg-base-200 focus-visible-ring"
         >
           <.game_thumb :if={item.type == :game} item={item} />
+          <PlatformWeb.Files.CanvasCard.thumbnail
+            :if={item.type == :canvas}
+            preview={Map.get(@previews, item.id)}
+            presence={Map.get(@presence, item.id)}
+          />
           <span
-            :if={item.type != :game}
+            :if={item.type not in [:game, :canvas]}
             class="flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-base-200 text-base-content"
           >
             <img
@@ -726,6 +734,13 @@ defmodule PlatformWeb.Files.BrowserComponents do
           class="relative z-20 px-3 pt-2"
         />
         <PlatformWeb.Files.ItemActions.affordances item={item} viewer={@viewer} revision={@revision} />
+        <span
+          :if={item.type == :canvas}
+          data-role="canvas-card-edited"
+          class="px-3 pb-1 text-[13px] text-subtle"
+        >
+          Edited {card_age(item.at)}<span :if={get_in(@previews, [item.id, :editor])}> by {get_in(@previews, [item.id, :editor])}</span>
+        </span>
         <%!-- Tiles show the copy marker always, and author and age as
              width allows, on a second line under the location (stage 5). --%>
         <.location_line
@@ -739,6 +754,19 @@ defmodule PlatformWeb.Files.BrowserComponents do
       </li>
     </ul>
     """
+  end
+
+  defp card_age(nil), do: "recently"
+
+  defp card_age(at) do
+    seconds = max(DateTime.diff(DateTime.utc_now(), at), 0)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3600 -> "#{div(seconds, 60)}m ago"
+      seconds < 86_400 -> "#{div(seconds, 3600)}h ago"
+      true -> "#{div(seconds, 86_400)}d ago"
+    end
   end
 
   # ── Shared row parts ─────────────────────────────────────────────────────

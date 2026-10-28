@@ -357,6 +357,9 @@ defmodule Platform.Files.Browser do
     file_item(file, %{projects_by_id: %{file.project_id => %{org_id: org_id}}})
   end
 
+  @doc "Batch passive previews for displayed authorized canvas items."
+  defdelegate canvas_previews(viewer, items), to: Platform.Files.CanvasPreview, as: :batch
+
   @doc "Personal stars, newest-starred first; inaccessible targets are omitted."
   defdelegate starred(actor, opts \\ []), to: Platform.Files.Stars, as: :list_items
 

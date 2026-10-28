@@ -146,7 +146,8 @@ defmodule PlatformWeb.CanvasLive do
          |> assign(:revision, CanvasDocument.revision(canvas.document))
          |> assign_provenance(canvas, space)
          |> assign_close_path(space, level)
-         |> PlatformWeb.Files.CanvasStarHooks.attach()}
+         |> PlatformWeb.Files.CanvasStarHooks.attach()
+         |> PlatformWeb.Files.CanvasEngagement.attach()}
 
       {:error, reason} when reason in [:forbidden, :not_found] ->
         {:ok,
@@ -194,6 +195,8 @@ defmodule PlatformWeb.CanvasLive do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  defdelegate on_access_changed(socket), to: PlatformWeb.Files.CanvasEngagement, as: :refresh
 
   # ── Denial context (stage 4) ──────────────────────────────────────────────
 
