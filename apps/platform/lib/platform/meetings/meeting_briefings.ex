@@ -585,6 +585,9 @@ defmodule Platform.Meetings.MeetingBriefings do
       %{deleted_at: %DateTime{}} ->
         "This task was removed."
 
+      %{} when is_nil(meeting.project_id) ->
+        "This meeting no longer has a project."
+
       %{project_id: project_id} when project_id != meeting.project_id ->
         "This task moved to another project."
 
@@ -606,6 +609,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   # The task ids among `items` that are revertible right now: still this
   # meeting's under `Meetings.meeting_tasks_query/1` AND still backlog. ONE
   # query for the whole briefing.
+  defp revertible_task_ids(%Meeting{project_id: nil}, _items), do: MapSet.new()
+
   defp revertible_task_ids(%Meeting{} = meeting, items) do
     ids =
       for {_key, %{"kind" => "task", "ref" => "task:" <> id}} <- items,

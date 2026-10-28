@@ -383,6 +383,17 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
            }
 
     assert MeetingBriefings.card_for_task(ctx.t1.id, user!().id) == nil
+
+    # A quickmeet can have no project, or lose its project later. A
+    # historical task reference must render rather than comparing a UUID to nil.
+    ctx.meeting |> Ecto.Changeset.change(project_id: nil) |> Repo.update!()
+    projectless_view = MeetingBriefings.view(Repo.reload!(ctx.briefing), scope(ctx.a))
+    assert item(projectless_view, key(ctx.t1)).actions == [:ask]
+
+    assert item(projectless_view, key(ctx.t1)).availability ==
+             "This meeting no longer has a project."
+
+    assert item(projectless_view, key(ctx.t2)).availability == "This task was removed."
   end
 
   # ── Ask ───────────────────────────────────────────────────────────────────
