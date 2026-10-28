@@ -410,130 +410,6 @@ defmodule Platform.Meetings.CompletionTest do
 
     assert recovered_id == run.id
   end
-end
-
-defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
-  use ExUnit.Case, async: false
-  import Ecto.Query
-  alias Platform.{Repo, Roles}
-  alias Platform.Meetings.{Completion, CompletionTest}
-  alias Ecto.Adapters.SQL.Sandbox
-
-  @tag timeout: 60_000
-  test "simultaneous filing on distinct PostgreSQL connections returns one task" do
-    Sandbox.mode(Repo, :auto)
-    :ok = Sandbox.checkout(Repo, sandbox: false)
-    previous = Map.new(~w(meeting_scribe triage_officer), &{&1, Roles.agent_id_for_role(&1)})
-    ctx = CompletionTest.fixture!()
-
-    owned_audit =
-      from(e in Platform.Audit.Event,
-        where: fragment("?->>'meeting_id'", e.metadata) == ^ctx.meeting.id
-      )
-
-    resources =
-      Enum.map([ctx.scribe, ctx.triage], fn agent ->
-        agent = Repo.get!(Platform.Agents.Agent, agent.id)
-        runtime = Repo.get!(Platform.Agents.AgentRuntime, agent.runtime_id)
-        {agent.id, runtime.id, runtime.owner_user_id}
-      end)
-
-    try do
-      {meeting, run, segment} = CompletionTest.ready!(ctx.meeting)
-      canvas = CompletionTest.canvas!(meeting.chat_space_id, ctx.scribe)
-      args = CompletionTest.params(meeting, run, canvas)
-      assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
-      {:ok, _server} = Platform.Chat.Canvas.Server.start_server(canvas.id)
-      Platform.Chat.Canvas.Server.describe(canvas.id)
-
-      args =
-        Map.put(args, "action_items", [
-          %{
-            "item_id" => "repair-completion",
-            "title" => "Repair concurrent meeting completion",
-            "description" => "Repair the completion callback agreed in the cited segment.",
-            "source_segment_ids" => [segment["id"]]
-          }
-        ])
-
-      parent = self()
-
-      workers =
-        for _ <- 1..2 do
-          Elixir.Task.async(fn ->
-            :ok = Sandbox.checkout(Repo, sandbox: false)
-
-            try do
-              [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
-              send(parent, {:ready, self(), backend})
-
-              receive do
-                :file -> Completion.triage_file(ctx.triage.id, args)
-              end
-            after
-              Sandbox.checkin(Repo)
-            end
-          end)
-        end
-
-      assert_receive {:ready, first, backend_a}, 5_000
-      assert_receive {:ready, second, backend_b}, 5_000
-      refute backend_a == backend_b
-      send(first, :file)
-      send(second, :file)
-      results = Enum.map(workers, &Elixir.Task.await(&1, 30_000))
-      assert [{:ok, %{task_ids: [task_id]}}, {:ok, %{task_ids: [task_id]}}] = results
-
-      assert Repo.aggregate(
-               from(t in Platform.Tasks.Task,
-                 where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id
-               ),
-               :count
-             ) == 1
-
-      assert Repo.aggregate(
-               from(e in owned_audit,
-                 where: e.event_type in ["meetings.triage.dispatch", "meetings.tasks_created"]
-               ),
-               :count
-             ) == 2
-
-      Platform.Chat.Canvas.Server.stop(canvas.id)
-    after
-      for {role, agent_id} <- previous do
-        :ok = Roles.unassign_role(role)
-        if agent_id, do: Roles.assign_role(role, agent_id)
-      end
-
-      # These connections intentionally bypass sandbox rollback. Their telemetry
-      # audit rows must be removed with the fixture, not leak into later modules.
-      Repo.delete_all(owned_audit)
-      assert Repo.aggregate(owned_audit, :count) == 0
-
-      Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
-      Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
-
-      Repo.delete_all(
-        from(t in Platform.Meetings.Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)
-      )
-
-      Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^ctx.meeting.chat_space_id))
-      Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^ctx.project.id))
-
-      for {agent_id, runtime_id, user_id} <- resources do
-        Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id),
-          set: [runtime_id: nil]
-        )
-
-        Repo.delete_all(from(r in Platform.Agents.AgentRuntime, where: r.id == ^runtime_id))
-        Repo.delete_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id))
-        Repo.delete_all(from(u in Platform.Accounts.User, where: u.id == ^user_id))
-      end
-
-      Sandbox.checkin(Repo)
-      Sandbox.mode(Repo, :manual)
-    end
-  end
 
   defp accepted_action!(meeting, disposition \\ :accepted) do
     Repo.insert!(%Platform.Meetings.MeetingCandidate{
@@ -678,5 +554,129 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
 
     {:ok, brief, _} = Platform.Meetings.MeetingBriefings.build(meeting)
     assert Enum.map(brief.items["_content"]["unfiled_action_items"], & &1["id"]) == [candidate.id]
+  end
+end
+
+defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
+  use ExUnit.Case, async: false
+  import Ecto.Query
+  alias Platform.{Repo, Roles}
+  alias Platform.Meetings.{Completion, CompletionTest}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @tag timeout: 60_000
+  test "simultaneous filing on distinct PostgreSQL connections returns one task" do
+    Sandbox.mode(Repo, :auto)
+    :ok = Sandbox.checkout(Repo, sandbox: false)
+    previous = Map.new(~w(meeting_scribe triage_officer), &{&1, Roles.agent_id_for_role(&1)})
+    ctx = CompletionTest.fixture!()
+
+    owned_audit =
+      from(e in Platform.Audit.Event,
+        where: fragment("?->>'meeting_id'", e.metadata) == ^ctx.meeting.id
+      )
+
+    resources =
+      Enum.map([ctx.scribe, ctx.triage], fn agent ->
+        agent = Repo.get!(Platform.Agents.Agent, agent.id)
+        runtime = Repo.get!(Platform.Agents.AgentRuntime, agent.runtime_id)
+        {agent.id, runtime.id, runtime.owner_user_id}
+      end)
+
+    try do
+      {meeting, run, segment} = CompletionTest.ready!(ctx.meeting)
+      canvas = CompletionTest.canvas!(meeting.chat_space_id, ctx.scribe)
+      args = CompletionTest.params(meeting, run, canvas)
+      assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+      {:ok, _server} = Platform.Chat.Canvas.Server.start_server(canvas.id)
+      Platform.Chat.Canvas.Server.describe(canvas.id)
+
+      args =
+        Map.put(args, "action_items", [
+          %{
+            "item_id" => "repair-completion",
+            "title" => "Repair concurrent meeting completion",
+            "description" => "Repair the completion callback agreed in the cited segment.",
+            "source_segment_ids" => [segment["id"]]
+          }
+        ])
+
+      parent = self()
+
+      workers =
+        for _ <- 1..2 do
+          Elixir.Task.async(fn ->
+            :ok = Sandbox.checkout(Repo, sandbox: false)
+
+            try do
+              [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+              send(parent, {:ready, self(), backend})
+
+              receive do
+                :file -> Completion.triage_file(ctx.triage.id, args)
+              end
+            after
+              Sandbox.checkin(Repo)
+            end
+          end)
+        end
+
+      assert_receive {:ready, first, backend_a}, 5_000
+      assert_receive {:ready, second, backend_b}, 5_000
+      refute backend_a == backend_b
+      send(first, :file)
+      send(second, :file)
+      results = Enum.map(workers, &Elixir.Task.await(&1, 30_000))
+      assert [{:ok, %{task_ids: [task_id]}}, {:ok, %{task_ids: [task_id]}}] = results
+
+      assert Repo.aggregate(
+               from(t in Platform.Tasks.Task,
+                 where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(e in owned_audit,
+                 where: e.event_type in ["meetings.triage.dispatch", "meetings.tasks_created"]
+               ),
+               :count
+             ) == 2
+
+      Platform.Chat.Canvas.Server.stop(canvas.id)
+    after
+      for {role, agent_id} <- previous do
+        :ok = Roles.unassign_role(role)
+        if agent_id, do: Roles.assign_role(role, agent_id)
+      end
+
+      # These connections intentionally bypass sandbox rollback. Their telemetry
+      # audit rows must be removed with the fixture, not leak into later modules.
+      Repo.delete_all(owned_audit)
+      assert Repo.aggregate(owned_audit, :count) == 0
+
+      Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
+      Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
+
+      Repo.delete_all(
+        from(t in Platform.Meetings.Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)
+      )
+
+      Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^ctx.meeting.chat_space_id))
+      Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^ctx.project.id))
+
+      for {agent_id, runtime_id, user_id} <- resources do
+        Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id),
+          set: [runtime_id: nil]
+        )
+
+        Repo.delete_all(from(r in Platform.Agents.AgentRuntime, where: r.id == ^runtime_id))
+        Repo.delete_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id))
+        Repo.delete_all(from(u in Platform.Accounts.User, where: u.id == ^user_id))
+      end
+
+      Sandbox.checkin(Repo)
+      Sandbox.mode(Repo, :manual)
+    end
   end
 end
