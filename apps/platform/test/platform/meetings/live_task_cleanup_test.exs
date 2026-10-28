@@ -197,4 +197,17 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     assert id == live.id
     assert length(audits()) == 1
   end
+
+  test "source-only history is selectable but a named candidate pointing elsewhere is a conflict",
+       ctx do
+    orphan = task!(ctx, %{"source" => "meetings.candidate"})
+    assert {:ok, %{changed: 1, task_ids: [id]}} = Triage.junk_live_tasks(apply_opts())
+    assert id == orphan.id
+    live = live!(ctx, "countdown")
+    conflicting = task!(ctx, live.metadata)
+    assert {:error, {:conflicting_live_provenance, ids}} = Triage.junk_live_tasks(apply_opts())
+    assert conflicting.id in ids
+    assert is_nil(Repo.get!(Task, live.id).deleted_at)
+    assert is_nil(Repo.get!(Task, conflicting.id).deleted_at)
+  end
 end

@@ -478,8 +478,15 @@ defmodule Platform.Meetings.Triage do
     eligible_before = Repo.aggregate(query, :count)
     tasks = Repo.all(from(t in query, limit: ^limit, lock: "FOR UPDATE"))
     task_ids = Enum.map(tasks, & &1.id)
-    candidates = Repo.all(from(c in MeetingCandidate, where: c.task_id in ^task_ids))
+
+    named_ids =
+      tasks |> Enum.map(& &1.metadata["candidate_id"]) |> Enum.filter(&Platform.UUID.valid?/1)
+
+    candidates =
+      Repo.all(from(c in MeetingCandidate, where: c.task_id in ^task_ids or c.id in ^named_ids))
+
     backlinks = Enum.group_by(candidates, & &1.task_id)
+    named_candidates = Map.new(candidates, &{&1.id, &1})
 
     conflicts =
       Enum.filter(tasks, fn task ->
@@ -487,8 +494,15 @@ defmodule Platform.Meetings.Triage do
         source = metadata["source"]
         links = Map.get(backlinks, task.id, [])
 
+        named = named_candidates[metadata["candidate_id"]]
+
+        named_conflict =
+          named &&
+            ((not is_nil(named.task_id) and named.task_id != task.id) or
+               (not is_nil(metadata["meeting_id"]) and metadata["meeting_id"] != named.meeting_id))
+
         source not in [nil, "meetings.candidate"] or
-          not is_nil(metadata["source_canvas_id"]) or
+          not is_nil(metadata["source_canvas_id"]) or named_conflict == true or
           Enum.any?(links, fn candidate ->
             (not is_nil(metadata["candidate_id"]) and metadata["candidate_id"] != candidate.id) or
               (not is_nil(metadata["meeting_id"]) and
