@@ -31,7 +31,7 @@ podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-
 podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-run.exs")'
 # Repeat bounded apply until remaining=0, then repeat once to prove
 # changed=0/audit_id=null with no duplicate audit.
-podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-run.exs", cleanup_apply: true, cleanup_actor_id: "ACTOR_UUID", cleanup_operation_id: "OPERATION_ID")'
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_string(File.read!("/tmp/meeting-live-cleanup-run.exs"), cleanup_apply: true, cleanup_actor_id: "ACTOR_UUID", cleanup_operation_id: "OPERATION_ID")'
 podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'
 ```
 
