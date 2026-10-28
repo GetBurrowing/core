@@ -1,0 +1,113 @@
+{
+  "task_id": "01a17f00-832c-7000-b480-64ab6d710532",
+  "validated_source_sha": "8e906366a60468d20884a7929ca18d9627b596db",
+  "scope": "authorized production one-off; pre-cutover snapshot",
+  "operation_id": "01a17f00-live-task-cleanup-20261028",
+  "boundary_validation": {
+    "focused_passed": 35,
+    "seed": 992060,
+    "selector_probe_sha": "66bd88830e31",
+    "selector_probe_exit": 2,
+    "selector_probe_observation": "mixed fixture expected 2 eligible rows, broadened selector observed 4; 4 of 5 tests passed"
+  },
+  "before": {
+    "candidate_source_total": 109,
+    "candidate_source_not_deleted": 107,
+    "ack_stamped_total": 73,
+    "protected_count": 0,
+    "protected_digest": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "apply": {
+    "eligible_before": 107,
+    "selected": 107,
+    "changed": 107,
+    "remaining": 0,
+    "deleted_at": "2026-10-28T02:24:47.757325Z",
+    "audit_id": 1384466
+  },
+  "pruned_briefing_count": 1,
+  "repeat": {
+    "changed": 0,
+    "remaining": 0,
+    "audit_id": null
+  },
+  "after": {
+    "MEETING_CLEANUP_VERIFY": {
+      "protected": {
+        "columns": [
+          "protected_count",
+          "protected_digest"
+        ],
+        "rows": [
+          [
+            0,
+            "d41d8cd98f00b204e9800998ecf8427e"
+          ]
+        ]
+      },
+      "sources": {
+        "columns": [
+          "source",
+          "total",
+          "not_deleted",
+          "ack"
+        ],
+        "rows": [
+          [
+            "meetings.candidate",
+            109,
+            0,
+            73
+          ]
+        ]
+      },
+      "live_selector_survivors": 0
+    },
+    "MEETING_CLEANUP_AUDIT_VERIFY": {
+      "columns": [
+        "audit_ids",
+        "audited_tasks",
+        "deleted_tasks",
+        "protected_tasks_in_audit",
+        "retained_candidate_backlinks",
+        "remaining_briefing_refs"
+      ],
+      "rows": [
+        [
+          [
+            1384466
+          ],
+          107,
+          107,
+          0,
+          107,
+          0
+        ]
+      ]
+    }
+  },
+  "full_platform_validation": {
+    "source_sha": "8e906366a60468d20884a7929ca18d9627b596db",
+    "passed": 25648,
+    "doctests": 52,
+    "tests": 25596,
+    "skipped": 3,
+    "excluded": 13,
+    "seed": 881649,
+    "exit_code": 0
+  },
+  "lint_validation": {
+    "source_sha": "8e906366a60468d20884a7929ca18d9627b596db",
+    "result": "ok",
+    "checks": [
+      "format check",
+      "dev compile warnings as errors",
+      "test compile warnings as errors"
+    ]
+  },
+  "limitations": [
+    "Protected production inventory was empty; populated officer/manual preservation is established by the mixed-provenance fixtures.",
+    "Old live code can mint until deployment. Deployer must rerun bounded cleanup and verify zero survivors after cutover."
+  ],
+  "last_pre_cutover_read_only_verification_utc": "2026-10-28T02:44:00Z (approximate; after final validation)"
+}
