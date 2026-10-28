@@ -5451,16 +5451,21 @@ defmodule Platform.Meetings do
   (`event_type = "platform.meetings.transcription_failed"`).
   """
   @spec reopen_transcript(Transcript.t()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
-  def reopen_transcript(%Transcript{} = transcript) do
-    transcript
-    |> Transcript.changeset(%{status: "recording", completed_at: nil})
-    # `put_change/3` rather than a `failure_reason: nil` key in the attrs map
-    # above, mirroring `complete_transcript/2`: the clearing is the point, and
-    # a nil value threaded through `cast/3` is exactly the sort of thing that
-    # silently no-ops. Stated here, it also survives a later refactor of the
-    # attrs.
-    |> Ecto.Changeset.put_change(:failure_reason, nil)
-    |> Repo.update()
+  def reopen_transcript(%Transcript{id: id}) do
+    Repo.transaction(fn ->
+      transcript = Repo.one!(from(t in Transcript, where: t.id == ^id, lock: "FOR UPDATE"))
+
+      transcript
+      |> Ecto.Changeset.change(
+        status: "recording",
+        completed_at: nil,
+        summary_input_hash: nil,
+        summary_epoch: transcript.summary_epoch + 1,
+        router_dispatched_at: nil,
+        failure_reason: nil
+      )
+      |> Repo.update!()
+    end)
   end
 
   @doc """
@@ -5696,82 +5701,64 @@ defmodule Platform.Meetings do
   """
   @spec append_segment(String.t(), map()) :: {:ok, Transcript.t()} | {:error, term()}
   def append_segment(transcript_id, segment) when is_map(segment) do
-    case get_transcript(transcript_id) do
-      nil ->
-        {:error, :not_found}
+    segment =
+      segment
+      |> Map.put_new("id", Platform.Types.UUIDv7.generate())
+      |> Map.put_new("spoken_at", DateTime.to_iso8601(DateTime.utc_now()))
 
-      transcript ->
-        # Mint the segment id and the append instant BEFORE persisting, so
-        # the stored JSONB map, the `transcript_chunk` broadcast and the
-        # `meeting_transcript` frame below all name the same segment
-        # (task 01a06672). Additive keys on a string-keyed map: the
-        # classifier, summarizer, archive and press card read `text` /
-        # `participant_identity` and ignore what they do not know, and
-        # `search_vector` reads only the text.
-        segment =
-          segment
-          |> Map.put_new("id", Platform.Types.UUIDv7.generate())
-          |> Map.put_new("spoken_at", DateTime.to_iso8601(DateTime.utc_now()))
-          |> enrich_speaker_name(transcript)
+    # Serialize appends with summary completion: neither an append nor a stale
+    # producer may overwrite the other's snapshot between read and write.
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(from(t in Transcript, where: t.id == ^transcript_id, lock: "FOR UPDATE")) do
+          nil ->
+            Repo.rollback(:not_found)
 
-        updated_segments = (transcript.segments || []) ++ [segment]
+          transcript ->
+            segment = enrich_speaker_name(segment, transcript)
 
-        # room_started can arrive just before the meeting's live transition.
-        # Bind an empty, unowned capture when its first actual segment arrives;
-        # never reassign a populated transcript from an earlier session.
-        owner =
-          if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
-            do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
+            owner =
+              if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
+                do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
 
-        changes = %{segments: updated_segments}
-        changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
+            refresh? = transcript.status in ["complete", "processing", "failed"]
+            changes = %{segments: (transcript.segments || []) ++ [segment]}
+            changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
 
-        transcript
-        |> Ecto.Changeset.change(changes)
-        |> Repo.update()
-        |> tap(fn
-          {:ok, updated} ->
-            # Fire-and-forget: publish the chunk on the canonical
-            # `meeting:transcript_chunk` topic (+ per-room mirror) so
-            # the Meeting Producer's classifier can react.
-            #
-            # `meeting_id` is resolved HERE, from the transcript's
-            # `space_id`, and is nil only when the space genuinely has
-            # no meeting. Until task 019f70b8 stage 3 this field was
-            # hardcoded nil with a comment saying the classifier would
-            # enrich it — nothing ever did, which was harmless while a
-            # room-keyed fallback queue existed. Stage 3 retired that
-            # queue and made the intent queue meeting-keyed, so a nil
-            # here now means the intent has nowhere to go.
-            Platform.Meetings.PubSub.broadcast_transcript_chunk(
-              updated.room_id,
-              %{
-                room_id: updated.room_id,
-                transcript_id: updated.id,
-                space_id: updated.space_id,
-                segment: segment,
-                # Bounded by the transcript's own start (task 01a04e9e):
-                # a meeting that ended before this transcript began is
-                # not what anyone is talking about now.
-                meeting_id: meeting_id_for_space(updated.space_id, updated.started_at)
-              }
-            )
+            changes =
+              if refresh?,
+                do:
+                  Map.merge(changes, %{
+                    status: "processing",
+                    summary_input_hash: nil,
+                    completed_at: nil,
+                    router_dispatched_at: nil,
+                    failure_reason: nil
+                  }),
+                else: changes
 
-            # Task 01a06672: hand the FINAL segment to the brain runtime of
-            # every agent currently seated in the room. A direct call from
-            # the one persist point, so both callers (the meeting-agent
-            # controller and the LiveKit webhook) are covered; not a
-            # `meeting:transcript_chunk` subscriber. Nothing here touches
-            # the intent pipeline: agent-authored segments already stay
-            # out of the classifier via `IntentClassifier` guard 1
-            # (`%{reason: :agent_speaker}`, see that module's moduledoc),
-            # and this delivery is history, not classification.
-            _ = deliver_transcript_segment(updated, segment)
-            Platform.Meetings.Completion.transcript_changed(updated)
+            updated = transcript |> Ecto.Changeset.change(changes) |> Repo.update!()
+            {updated, segment, refresh?}
+        end
+      end)
 
-          _error ->
-            :ok
-        end)
+    case result do
+      {:ok, {updated, segment, refresh?}} ->
+        Platform.Meetings.PubSub.broadcast_transcript_chunk(updated.room_id, %{
+          room_id: updated.room_id,
+          transcript_id: updated.id,
+          space_id: updated.space_id,
+          segment: segment,
+          meeting_id: meeting_id_for_space(updated.space_id, updated.started_at)
+        })
+
+        _ = deliver_transcript_segment(updated, segment)
+        Platform.Meetings.Completion.transcript_changed(updated)
+        if refresh?, do: Platform.Meetings.Summarizer.summarize_async(updated)
+        {:ok, updated}
+
+      error ->
+        error
     end
   end
 
@@ -5908,36 +5895,70 @@ defmodule Platform.Meetings do
   """
   @spec complete_transcript(String.t(), String.t()) ::
           {:ok, Transcript.t()} | {:error, term()}
-  def complete_transcript(transcript_id, summary) when is_binary(summary) do
-    case get_transcript(transcript_id) do
-      nil ->
-        {:error, :not_found}
+  def complete_transcript(transcript_id, summary),
+    do: complete_transcript(transcript_id, summary, nil)
 
-      transcript ->
-        result =
-          transcript
-          |> Transcript.changeset(%{
-            status: "complete",
-            summary: summary,
-            completed_at: DateTime.utc_now()
-          })
-          # `put_change/3` rather than a `failure_reason: nil` key in the attrs
-          # map above: the clearing is the point of this call, and a nil value
-          # threaded through `cast/3` is exactly the sort of thing that silently
-          # no-ops. Stated here, it also survives a later refactor of the attrs.
-          |> Ecto.Changeset.put_change(:failure_reason, nil)
-          |> Repo.update()
+  @doc "Complete only the input fingerprint captured by the summary producer before dispatch."
+  def complete_transcript(transcript_id, summary, input_hash) when is_binary(summary) do
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(from(t in Transcript, where: t.id == ^transcript_id, lock: "FOR UPDATE")) do
+          nil ->
+            Repo.rollback(:not_found)
 
-        case result do
-          {:ok, updated} ->
-            Platform.Meetings.Completion.transcript_changed(updated)
-            refresh_meeting_briefing(updated)
-            {:ok, updated}
+          transcript ->
+            cond do
+              is_binary(input_hash) and input_hash != Transcript.summary_fingerprint(transcript) ->
+                Repo.rollback(:stale_summary)
 
-          error ->
-            error
+              is_nil(input_hash) and not is_nil(transcript.summary_input_hash) ->
+                Repo.rollback(:summary_provenance_required)
+
+              true ->
+                transcript
+                |> Ecto.Changeset.change(
+                  status: "complete",
+                  summary: summary,
+                  summary_input_hash: input_hash,
+                  completed_at: DateTime.utc_now(),
+                  failure_reason: nil
+                )
+                |> Repo.update!()
+            end
         end
+      end)
+
+    case result do
+      {:ok, updated} ->
+        Platform.Meetings.Completion.transcript_changed(updated)
+        refresh_meeting_briefing(updated)
+        {:ok, updated}
+
+      error ->
+        error
     end
+  end
+
+  @doc "Fence summary failure callbacks against newer input or an already completed summary."
+  def fail_summary_input(id, input_hash, reason) do
+    Repo.transaction(fn ->
+      transcript = Repo.one(from(t in Transcript, where: t.id == ^id, lock: "FOR UPDATE"))
+
+      cond do
+        is_nil(transcript) ->
+          Repo.rollback(:not_found)
+
+        not is_binary(input_hash) or input_hash != Transcript.summary_fingerprint(transcript) or
+            Transcript.summary_current?(transcript) ->
+          Repo.rollback(:stale_summary)
+
+        true ->
+          case fail_transcript(id, nil, reason) do
+            {:ok, failed} -> failed
+            {:error, error} -> Repo.rollback(error)
+          end
+      end
+    end)
   end
 
   # A completed transcript carries the summary the meeting's briefing shows

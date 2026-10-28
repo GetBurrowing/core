@@ -23,6 +23,8 @@ defmodule Platform.Meetings.Transcript do
     field(:meeting_id, :binary_id)
     field(:segments, {:array, :map}, default: [])
     field(:summary, :string)
+    field(:summary_input_hash, :string)
+    field(:summary_epoch, :integer, default: 0)
     field(:status, :string, default: "recording")
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
@@ -62,6 +64,20 @@ defmodule Platform.Meetings.Transcript do
     field(:search_vector, Platform.Types.TSVector, read_after_writes: true)
 
     timestamps(type: :utc_datetime_usec)
+  end
+
+  @doc "Fingerprint the producer input, including the reopen generation. Capture before dispatch."
+  def summary_fingerprint(transcript, segments \\ nil) do
+    input =
+      {transcript.id, Map.get(transcript, :meeting_id), Map.get(transcript, :summary_epoch, 0),
+       segments || Map.get(transcript, :segments) || []}
+
+    :crypto.hash(:sha256, :erlang.term_to_binary(input)) |> Base.encode16()
+  end
+
+  def summary_current?(transcript) do
+    transcript.status == "complete" and is_binary(transcript.summary_input_hash) and
+      transcript.summary_input_hash == summary_fingerprint(transcript)
   end
 
   @required_fields ~w(room_id)a

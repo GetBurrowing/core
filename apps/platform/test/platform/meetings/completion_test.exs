@@ -99,6 +99,11 @@ defmodule Platform.Meetings.CompletionTest do
     }
   end
 
+  defp complete_current!(id, summary) do
+    input = Meetings.get_transcript(id)
+    Meetings.complete_transcript(id, summary, Transcript.summary_fingerprint(input))
+  end
+
   def ready!(meeting) do
     seg =
       segment("We agreed to repair the completion callback and verify the replay behavior.", 1)
@@ -106,7 +111,7 @@ defmodule Platform.Meetings.CompletionTest do
     transcript = transcript!(meeting, [seg])
     {:ok, ended} = Meetings.end_meeting(meeting)
     Completion.capture_finished_for_space(meeting.chat_space_id)
-    {:ok, _} = Meetings.complete_transcript(transcript.id, "Agreed callback repair")
+    {:ok, _} = complete_current!(transcript.id, "Agreed callback repair")
     {ended, run!(meeting), seg}
   end
 
@@ -153,13 +158,88 @@ defmodule Platform.Meetings.CompletionTest do
              "Agreed callback repair"
   end
 
+  test "late appended speech blocks briefing until a fresh producer summary and full filing",
+       ctx do
+    {meeting, original_run, _} = ready!(ctx.meeting)
+    original = Meetings.get_transcript(original_run.transcript_id)
+    old_hash = original.summary_input_hash
+
+    {:ok, changed} =
+      Meetings.append_segment(original.id, %{
+        "text" => "Late decision absent from the old summary",
+        "start_time" => 90
+      })
+
+    assert changed.status == "processing"
+    refute Platform.Meetings.MeetingBriefings.readiness(meeting).ready?
+
+    assert {:error, :stale_summary} =
+             Meetings.complete_transcript(original.id, "Stale summary", old_hash)
+
+    assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
+
+    {:ok, _} =
+      Meetings.complete_transcript(
+        original.id,
+        "Summary including late decision",
+        Transcript.summary_fingerprint(changed)
+      )
+
+    run = run!(meeting)
+    refute run.snapshot_hash == original_run.snapshot_hash
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    assert {:ok, %{status: "triage_dispatched"}} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    assert {:ok, %{status: "filed"}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+
+    assert Platform.Meetings.MeetingBriefings.readiness(meeting).ready?
+
+    assert Repo.get_by!(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id).summary ==
+             "Summary including late decision"
+  end
+
+  test "reordered summary success/failure callbacks and callbacks before reopen cannot overwrite current input",
+       ctx do
+    transcript = transcript!(ctx.meeting, [segment("Original", 1)])
+    old_hash = Transcript.summary_fingerprint(transcript)
+
+    {:ok, changed} =
+      Meetings.append_segment(transcript.id, %{"text" => "New speech", "start_time" => 2})
+
+    current_hash = Transcript.summary_fingerprint(changed)
+    assert {:ok, _} = Meetings.complete_transcript(transcript.id, "Current summary", current_hash)
+
+    assert {:error, :stale_summary} =
+             Meetings.complete_transcript(transcript.id, "Old summary", old_hash)
+
+    assert {:error, :stale_summary} =
+             Meetings.fail_summary_input(transcript.id, old_hash, :old_failure)
+
+    assert {:error, :stale_summary} =
+             Meetings.fail_summary_input(transcript.id, current_hash, :late_failure)
+
+    assert {:error, :summary_provenance_required} =
+             Meetings.complete_transcript(transcript.id, "Unversioned callback")
+
+    assert Meetings.get_transcript(transcript.id).summary == "Current summary"
+    {:ok, reopened} = Meetings.reopen_transcript(Meetings.get_transcript(transcript.id))
+    refute Transcript.summary_fingerprint(reopened) == current_hash
+
+    assert {:error, :stale_summary} =
+             Meetings.complete_transcript(transcript.id, "Before reopen", current_hash)
+
+    refute Transcript.summary_current?(Meetings.get_transcript(transcript.id))
+  end
+
   test "end before transcription waits for capture fence and final transcript", %{
     meeting: meeting
   } do
     transcript = transcript!(meeting, [segment("We need a follow-up.", 1)])
     {:ok, _} = Meetings.end_meeting(meeting)
     assert run!(meeting).status == "waiting"
-    {:ok, _} = Meetings.complete_transcript(transcript.id, "Follow-up")
+    {:ok, _} = complete_current!(transcript.id, "Follow-up")
     assert run!(meeting).status == "waiting"
 
     refute_receive %Phoenix.Socket.Broadcast{
@@ -179,7 +259,7 @@ defmodule Platform.Meetings.CompletionTest do
     meeting: meeting
   } do
     transcript = transcript!(meeting, [segment("File the real action.", 1)])
-    {:ok, _} = Meetings.complete_transcript(transcript.id, "Action")
+    {:ok, _} = complete_current!(transcript.id, "Action")
     assert Repo.get_by(CompletionRun, meeting_id: meeting.id) == nil
 
     refute_receive %Phoenix.Socket.Broadcast{
@@ -195,7 +275,7 @@ defmodule Platform.Meetings.CompletionTest do
 
   test "a recording transcript remains unfinished even after the room fence", %{meeting: meeting} do
     old = transcript!(meeting, [segment("Earlier segment", 1)])
-    {:ok, _} = Meetings.complete_transcript(old.id, "Earlier")
+    {:ok, _} = complete_current!(old.id, "Earlier")
     transcript!(meeting, [segment("Still being recorded", 2)], "recording")
     {:ok, _} = Meetings.end_meeting(meeting)
     Completion.capture_finished_for_space(meeting.chat_space_id)
@@ -213,11 +293,11 @@ defmodule Platform.Meetings.CompletionTest do
     second_seg = segment("Second recording decision", 2)
     first = transcript!(ctx.meeting, [first_seg])
     second = transcript!(ctx.meeting, [second_seg])
-    {:ok, _} = Meetings.complete_transcript(first.id, "First")
+    {:ok, _} = complete_current!(first.id, "First")
     {:ok, _} = Meetings.end_meeting(ctx.meeting)
     Completion.capture_finished_for_space(ctx.meeting.chat_space_id)
     assert run!(ctx.meeting).status == "waiting"
-    {:ok, _} = Meetings.complete_transcript(second.id, "Second")
+    {:ok, _} = complete_current!(second.id, "Second")
     run = run!(ctx.meeting)
     assert Enum.map(run.snapshot["segments"], & &1["id"]) == [first_seg["id"], second_seg["id"]]
     canvas = canvas!(ctx.meeting.chat_space_id, ctx.scribe)
@@ -279,6 +359,7 @@ defmodule Platform.Meetings.CompletionTest do
         "start_time" => 4
       })
 
+    complete_current!(run.transcript_id, "Summary including the late final clarification")
     refreshed = run!(meeting)
     assert refreshed.canvas_id == canvas.id
     assert refreshed.status == "scribe_dispatched"

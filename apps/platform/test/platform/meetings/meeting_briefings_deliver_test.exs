@@ -162,6 +162,11 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
         segments: [%{"id" => Ecto.UUID.generate(), "text" => "Agreed work"}]
       })
 
+    transcript =
+      transcript
+      |> Ecto.Changeset.change(summary_input_hash: Transcript.summary_fingerprint(transcript))
+      |> Repo.update!()
+
     {:ok, snapshot, _} = Platform.Meetings.Completion.snapshot(meeting)
     run = Repo.get_by!(Platform.Meetings.CompletionRun, meeting_id: meeting.id)
     hash = :crypto.hash(:sha256, :erlang.term_to_binary(snapshot)) |> Base.encode16()
@@ -225,7 +230,14 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
     transcript |> Ecto.Changeset.change(summary: nil) |> Repo.update!()
     assert {:ok, :pending} = MeetingBriefings.deliver(ended)
     assert rows_for(ctx.a) == []
-    {:ok, _} = Meetings.complete_transcript(transcript.id, "Final summary")
+
+    {:ok, _} =
+      Meetings.complete_transcript(
+        transcript.id,
+        "Final summary",
+        Transcript.summary_fingerprint(transcript)
+      )
+
     assert length(rows_for(ctx.a)) == 1
     assert_received {:notif, _, _}
     assert_received {:notif, _, _}
@@ -376,6 +388,22 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
     assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
     assert_received {:notif, _, _}
     assert_received {:notif, _, _}
+  end
+
+  test "historical summaries without producer provenance wait for bounded fallback" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    {_run, transcript} = ready!(ended)
+    transcript |> Ecto.Changeset.change(summary_input_hash: nil) |> Repo.update!()
+    assert {:ok, :pending} = MeetingBriefings.deliver(ended)
+    assert "summary" in MeetingBriefings.readiness(ended).missing
+
+    ended =
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+    assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
   end
 
   test "live meetings never deliver" do

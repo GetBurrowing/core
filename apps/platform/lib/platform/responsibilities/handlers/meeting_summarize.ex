@@ -275,6 +275,9 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
     transcript_id = transcript_id_from(trigger_meta)
     space_id = space_id_from(trigger_meta)
 
+    input_hash =
+      Map.get(trigger_meta, :summary_input_hash) || Map.get(trigger_meta, "summary_input_hash")
+
     cond do
       is_nil(transcript_id) ->
         Logger.warning(
@@ -287,7 +290,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
       true ->
         case extract_summary(parsed) do
           {:ok, summary_text} ->
-            persist_summary(transcript_id, space_id, summary_text)
+            persist_summary(transcript_id, space_id, summary_text, input_hash)
 
           {:error, reason} ->
             Logger.warning(
@@ -295,7 +298,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
                 "reason=#{inspect(reason)}"
             )
 
-            _ = safe_fail(transcript_id)
+            _ = safe_fail(transcript_id, input_hash, :invalid_summary_output)
             {:error, reason}
         end
     end
@@ -437,8 +440,8 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   defp extract_summary({:error, reason}), do: {:error, {:dispatch_failed, reason}}
   defp extract_summary(_), do: {:error, :invalid_output_shape}
 
-  defp persist_summary(transcript_id, space_id, summary_text) do
-    case Meetings.complete_transcript(transcript_id, summary_text) do
+  defp persist_summary(transcript_id, space_id, summary_text, input_hash) do
+    case Meetings.complete_transcript(transcript_id, summary_text, input_hash) do
       {:ok, _transcript} ->
         Logger.info(
           "[meetings.summarize] persisted transcript_id=#{transcript_id} " <>
@@ -474,7 +477,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
             "transcript_id=#{transcript_id} reason=#{inspect(reason)}"
         )
 
-        _ = safe_fail(transcript_id, {:complete_failed, reason})
+        _ = safe_fail(transcript_id, input_hash, {:complete_failed, reason})
         {:error, {:complete_failed, reason}}
     end
   end
@@ -483,10 +486,8 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   # `Meetings.fail_transcript/3`, not only in the Logger.warning below.
   # A failed transcript with a NULL summary and a NULL failure_reason is
   # unreadable on every surface a human actually visits.
-  defp safe_fail(transcript_id, reason \\ nil)
-
-  defp safe_fail(transcript_id, reason) when is_binary(transcript_id) do
-    Meetings.fail_transcript(transcript_id, nil, reason)
+  defp safe_fail(transcript_id, input_hash, reason) when is_binary(transcript_id) do
+    Meetings.fail_summary_input(transcript_id, input_hash, reason)
   rescue
     error ->
       Logger.warning(
@@ -497,7 +498,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
       {:error, {:fail_raised, Exception.message(error)}}
   end
 
-  defp safe_fail(_, _), do: :ok
+  defp safe_fail(_, _, _), do: :ok
 
   # ── trigger-meta accessors ────────────────────────────────────────────────
 

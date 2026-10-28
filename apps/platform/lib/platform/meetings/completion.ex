@@ -92,6 +92,22 @@ defmodule Platform.Meetings.Completion do
       ]
     )
 
+    if meeting = Repo.get(Meeting, meeting_id) do
+      ids =
+        Repo.all(
+          from(t in Transcript,
+            where: t.space_id == ^meeting.chat_space_id and t.status != "complete"
+          )
+        )
+        |> Enum.filter(&belongs_to_meeting?(&1, meeting))
+        |> Enum.map(& &1.id)
+
+      Repo.update_all(from(t in Transcript, where: t.id in ^ids),
+        inc: [summary_epoch: 1],
+        set: [summary_input_hash: nil, router_dispatched_at: nil]
+      )
+    end
+
     :ok
   end
 

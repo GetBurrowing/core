@@ -327,7 +327,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     summary? =
       current? && transcripts != [] &&
         Enum.all?(transcripts, fn t ->
-          t.status == "complete" && is_binary(t.summary) && String.trim(t.summary) != ""
+          Transcript.summary_current?(t) && is_binary(t.summary) && String.trim(t.summary) != ""
         end)
 
     triage? = current? && run.status == "filed"

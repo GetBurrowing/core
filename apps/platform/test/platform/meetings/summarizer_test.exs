@@ -1,3 +1,34 @@
+defmodule Platform.Meetings.SummarizerTest.InputFencePlug do
+  @behaviour Plug
+  def init(opts), do: opts
+
+  def call(conn, opts) do
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+    send(Keyword.fetch!(opts, :owner), {:summary_input, self(), body})
+
+    receive do
+      {:finish_summary, text} ->
+        payload =
+          Jason.encode!(%{
+            "choices" => [
+              %{
+                "index" => 0,
+                "finish_reason" => "stop",
+                "message" => %{"role" => "assistant", "content" => text}
+              }
+            ],
+            "usage" => %{"prompt_tokens" => 1, "completion_tokens" => 1, "total_tokens" => 2}
+          })
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, payload)
+    after
+      5000 -> Plug.Conn.send_resp(conn, 504, "test producer timed out")
+    end
+  end
+end
+
 defmodule Platform.Meetings.SummarizerTest.SlowOllamaPlug do
   @moduledoc """
   A real HTTP endpoint speaking the Ollama OpenAI-compatible chat shape that
@@ -65,6 +96,56 @@ defmodule Platform.Meetings.SummarizerTest do
 
     {:ok, transcript} = Meetings.create_transcript(attrs)
     transcript
+  end
+
+  test "legacy producer stamps captured input and rejects its response after newer summary wins" do
+    previous = Application.get_env(:platform, :meetings_summary)
+    on_exit(fn -> Application.put_env(:platform, :meetings_summary, previous) end)
+
+    {:ok, listener} =
+      Bandit.start_link(
+        plug: {Platform.Meetings.SummarizerTest.InputFencePlug, owner: self()},
+        port: 0
+      )
+
+    on_exit(fn -> if Process.alive?(listener), do: GenServer.stop(listener) end)
+    {:ok, {_address, port}} = ThousandIsland.listener_info(listener)
+
+    Application.put_env(:platform, :meetings_summary, %{
+      provider: :ollama,
+      model: "test",
+      base_url: "http://127.0.0.1:#{port}"
+    })
+
+    transcript =
+      create_transcript!(%{space_id: nil, status: "processing", segments: sample_segments()})
+
+    old =
+      Task.async(fn -> Summarizer.run_summary_legacy(transcript.id, nil, transcript.segments) end)
+
+    assert_receive {:summary_input, old_request, original_body}, 5000
+    assert original_body =~ "roadmap"
+
+    {:ok, changed} =
+      Meetings.append_segment(transcript.id, %{
+        "text" => "A new final decision",
+        "start_time" => 9000
+      })
+
+    assert_receive {:summary_input, new_request, new_body}, 5000
+    assert new_body =~ "new final decision"
+    send(new_request, {:finish_summary, "New final summary"})
+
+    assert_eventually(fn ->
+      Meetings.get_transcript(transcript.id).summary == "New final summary"
+    end)
+
+    current = Meetings.get_transcript(transcript.id)
+    assert current.summary_input_hash == Platform.Meetings.Transcript.summary_fingerprint(changed)
+    send(old_request, {:finish_summary, "Old stale summary"})
+    assert {:error, {:complete_failed, :stale_summary}} = Task.await(old, 5000)
+    assert Meetings.get_transcript(transcript.id).summary == "New final summary"
+    assert Platform.Meetings.Transcript.summary_current?(Meetings.get_transcript(transcript.id))
   end
 
   # A real meeting room (participants key off the room UUID, while a
