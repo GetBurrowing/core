@@ -486,7 +486,10 @@ defmodule PlatformWeb.Files.BrowserComponents do
           <span class="inline-flex size-11 shrink-0 items-center justify-center rounded-box border border-edge bg-base-200 text-base-content">
             <.icon name={node_icon(node.kind)} class="size-5" />
           </span>
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
+          <span
+            data-role="files-node-title"
+            class="min-w-0 flex-1 truncate text-sm font-medium text-base-content"
+          >
             {node.label}
           </span>
           <.icon name="hero-chevron-right" class="size-4 shrink-0 text-subtle" />
@@ -525,7 +528,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
       <li
         :for={item <- @browser.items}
         data-role={if Map.has_key?(@file_rows, item.id), do: "files-row", else: "browser-row"}
-        id={"browser-" <> Atom.to_string(item.kind) <> "-" <> item.id}
+        id={"browser-#{item.kind}-#{item.id}"}
         phx-hook="BrowserRow"
         data-long-press-event="browser_open_actions"
         data-long-press-kind={item.kind}
@@ -556,6 +559,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
           </span>
           <span
             :if={@editing != {item.kind, item.id}}
+            data-role="files-row-title"
             class="min-w-0 flex-1 truncate lg:pr-16 text-[15px] font-semibold text-base-content col-start-2 row-start-1 self-end group-data-[location=false]:self-center"
           >
             {title(item)}
@@ -678,7 +682,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
       <li
         :for={item <- @browser.items}
         data-role="browser-tile"
-        id={"browser-" <> Atom.to_string(item.kind) <> "-" <> item.id}
+        id={"browser-#{item.kind}-#{item.id}"}
         phx-hook="BrowserRow"
         data-long-press-event="browser_open_actions"
         data-long-press-kind={item.kind}
@@ -710,6 +714,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
           </span>
           <span
             :if={@editing != {item.kind, item.id}}
+            data-role="files-grid-title"
             class="line-clamp-2 px-3 pt-2 lg:pr-16 text-[15px] font-semibold text-base-content"
           >
             {title(item)}

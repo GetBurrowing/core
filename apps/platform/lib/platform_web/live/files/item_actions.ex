@@ -22,7 +22,7 @@ defmodule PlatformWeb.Files.ItemActions do
       <.link
         patch={BrowserView.browser_path(%{"tab" => "browse"}, %{})}
         data-role="files-scope-chip"
-        class="inline-flex min-h-8 max-w-full items-center gap-2 rounded-full border border-base-300 px-3 text-[13px] text-base-content focus-visible-ring"
+        class="inline-flex min-h-8 max-w-full items-center gap-2 rounded-full border border-edge px-3 text-[13px] text-base-content focus-visible-ring"
       >
         <span class="truncate">
           In {Map.get(@labels.spaces, elem(@browser.node, 1).id, @labels.unknown_space)}
@@ -137,7 +137,7 @@ defmodule PlatformWeb.Files.ItemActions do
         phx-mounted={Phoenix.LiveView.JS.focus()}
         maxlength="255"
         required
-        class="input input-sm w-full border-base-300 bg-base-100 text-[15px] text-base-content"
+        class="input input-sm w-full border-edge bg-base-100 text-[15px] text-base-content"
       />
       <button class="sr-only" type="submit">Save title</button>
     </.form>
@@ -170,7 +170,7 @@ defmodule PlatformWeb.Files.ItemActions do
       phx-click-away="browser_close_actions"
       phx-window-keydown="browser_close_actions"
       phx-key="Escape"
-      class="fixed right-6 top-28 z-50 hidden max-h-[75vh] w-80 overflow-y-auto rounded-box border border-base-300 bg-base-100 p-2 shadow-lg lg:block"
+      class="fixed right-6 top-28 z-50 hidden max-h-[75vh] w-80 overflow-y-auto rounded-box border border-edge bg-base-100 p-2 shadow-lg lg:block"
     >
       <.body state={@state} labels={@labels} suffix="desktop" />
     </div>
@@ -249,7 +249,7 @@ defmodule PlatformWeb.Files.ItemActions do
       id="browser-undo-toast"
       role="status"
       aria-live="polite"
-      class="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)] z-50 mx-auto flex w-fit max-w-[calc(100vw-2rem)] items-center gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-2 text-base-content shadow-lg"
+      class="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)] z-50 mx-auto flex w-fit max-w-[calc(100vw-2rem)] items-center gap-3 rounded-box border border-edge bg-base-100 px-4 py-2 text-base-content shadow-lg"
     >
       <span class="truncate">{@toast.name} deleted</span><button
         type="button"
