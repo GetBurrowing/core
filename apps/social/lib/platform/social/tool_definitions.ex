@@ -482,7 +482,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_job_list",
         description:
-          "List a profile's Clip Studio jobs (new_clip, rerender, save_default), each with the payload a clip runner needs. Humans enqueue jobs in Burrow; no tool creates one. " <>
+          "List a profile's Clip Studio jobs (episode, new_clip, rerender, save_default), each with the payload a clip runner needs. Humans enqueue jobs in Burrow; no tool creates one. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -535,18 +535,38 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_job_progress",
         description:
-          "Report progress on a job you claimed; the job becomes running. " <>
+          "Report progress on a job you claimed; the job becomes running. With picks, atomically register an episode's stable pick plan and return its child jobs. Generated headline text must stay local. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
           job_id: %{type: "string", required: true, description: "The job id."},
           progress: %{type: "number", required: true, description: "Fraction done, 0 to 1."},
+          picks: %{
+            type: "array",
+            schema: %{
+              type: "array",
+              maxItems: 100,
+              items: %{
+                type: "object",
+                required: ["candidate_id", "in_s", "out_s"],
+                additionalProperties: false,
+                properties: %{
+                  candidate_id: %{type: "string", minLength: 1, maxLength: 200},
+                  in_s: %{type: "number", minimum: 0},
+                  out_s: %{type: "number", minimum: 0}
+                }
+              }
+            },
+            required: false,
+            description:
+              "Episode claimer only: stable content-free pick plan, each {candidate_id, in_s, out_s}. Persisted atomically; replay returns the same child jobs. No headline/transcript text."
+          },
           eta_s: %{
             type: "number",
             required: false,
             description: "Estimated seconds left (>= 0)."
           }
         },
-        returns: "%{job: #{@job_row}}",
+        returns: "%{job: #{@job_row}}; with picks: %{jobs: [#{@job_row}]}",
         limitations: @job_errors <> " " <> @privacy_null,
         when_to_use: "While `clip` runs, so the studio's render queue shows progress."
       },
@@ -556,6 +576,12 @@ defmodule Platform.Social.ToolDefinitions do
           "Complete a job you claimed with the rendered video and its metadata (the social_clip_submit arguments). For new_clip and rerender the clip gets the new file and a new rev and returns to review as pending; save_default writes no clip. " <>
             @runner_contract <> " " <> @review_only <> " " <> @human_approves,
         parameters: %{
+          headline_applied: %{
+            type: "boolean",
+            required: false,
+            description:
+              "For automatic episode children: true only after headline-review/1 verification and a fresh finalized render. Never export generated headline text."
+          },
           job_id: %{type: "string", required: true, description: "The job id."},
           file_id: %{
             type: "string",

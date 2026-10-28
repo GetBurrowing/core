@@ -295,6 +295,19 @@ defmodule Platform.Social.Tools do
     end
   end
 
+  defp job_tool(
+         "social_clip_job_progress",
+         %{"picks" => picks, "progress" => progress} = args,
+         scope,
+         agent
+       )
+       when is_number(progress) and progress >= 0 and progress <= 1 do
+    case ClipJobs.plan_episode(scope, args["job_id"], agent.id, picks) do
+      {:ok, jobs} -> {:ok, %{jobs: Enum.map(jobs, &job_json/1)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
   defp job_tool("social_clip_job_progress", args, scope, agent) do
     scope
     |> ClipJobs.progress(args["job_id"], agent.id, args["progress"], args["eta_s"])

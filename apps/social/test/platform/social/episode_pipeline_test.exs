@@ -72,6 +72,11 @@ defmodule Platform.Social.EpisodePipelineTest do
     {:ok, _} = ClipJobs.claim(c.w.scope, c.job.id, c.w.agent.id)
     {:ok, _} = Files.delete_file(c.w.approver, c.source)
     assert {:error, %{code: :source_unavailable}} = download(c.job, c.ctx)
+
+    assert {:error, :source_unavailable} =
+             ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, [
+               %{"candidate_id" => "one", "in_s" => 1, "out_s" => 2}
+             ])
   end
 
   test "source readiness and project ownership are rechecked after claim", c do
@@ -129,5 +134,101 @@ defmodule Platform.Social.EpisodePipelineTest do
 
     {:ok, _} = ClipJobs.claim(c.w.scope, manual.id, c.w.agent.id)
     assert {:error, %{code: :source_unavailable}} = download(manual, c.ctx)
+  end
+
+  test "stable picks queue once and automatic renders retain explicit approval versions", c do
+    {:ok, _} = ClipJobs.claim(c.w.scope, c.job.id, c.w.agent.id)
+
+    picks = [
+      %{"candidate_id" => "cut-one", "in_s" => 1, "out_s" => 8},
+      %{"candidate_id" => "cut-two", "in_s" => 10, "out_s" => 19}
+    ]
+
+    assert {:error, %{code: :invalid_progress}} =
+             Tools.execute(
+               "social_clip_job_progress",
+               %{"job_id" => c.job.id, "progress" => 2, "picks" => picks},
+               c.ctx
+             )
+
+    assert {:ok, %{jobs: tool_children}} =
+             Tools.execute(
+               "social_clip_job_progress",
+               %{"job_id" => c.job.id, "progress" => 0.4, "picks" => picks},
+               c.ctx
+             )
+
+    assert {:ok, children} = ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, picks)
+    assert Enum.map(tool_children, & &1.id) == Enum.map(children, & &1.id)
+    assert length(children) == 2
+    assert {:ok, replay} = ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, picks)
+    assert Enum.map(replay, & &1.id) == Enum.map(children, & &1.id)
+
+    assert {:error, :pick_plan_changed} =
+             ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, [])
+
+    assert {:error, :episode_incomplete} =
+             ClipJobs.complete(c.w.scope, c.job.id, c.w.agent.id, %{})
+
+    for child <- children do
+      assert is_nil(child.requested_by_user_id)
+      assert child.payload["episode_job_id"] == c.job.id
+      assert {:ok, _} = ClipJobs.claim(c.w.scope, child.id, c.w.agent.id)
+      file = stored_file!(c.w.project, "automatic render #{child.id}", "clip.mp4", "video/mp4")
+
+      assert {:error, :headline_not_applied} =
+               ClipJobs.complete(c.w.scope, child.id, c.w.agent.id, %{"file_id" => file.id})
+
+      assert {:ok, %{clip: clip}} =
+               ClipJobs.complete(c.w.scope, child.id, c.w.agent.id, %{
+                 "file_id" => file.id,
+                 "headline_applied" => true
+               })
+
+      assert clip.status == "rendered"
+      assert clip.review_status == "pending"
+      render = Repo.get_by!(Platform.Social.ClipRender, clip_id: clip.id, rev: clip.rev)
+      assert render.file_id == file.id
+      assert render.source["source_file_id"] == c.source.id
+
+      assert {:error, _} =
+               Platform.Social.approve_clip(c.w.org_id, clip.id, c.w.outsider.id, %{
+                 "render_id" => render.id,
+                 "account_ids" => [c.w.tiktok.id]
+               })
+
+      assert {:ok, _} =
+               Platform.Social.approve_clip(c.w.org_id, clip.id, c.w.approver.id, %{
+                 "render_id" => render.id,
+                 "account_ids" => [c.w.tiktok.id]
+               })
+    end
+
+    assert {:ok, %{job: %{status: "done"}, clip: nil}} =
+             ClipJobs.complete(c.w.scope, c.job.id, c.w.agent.id, %{})
+  end
+
+  test "pick planning rejects invalid ranges, duplicates, other agents and foreign jobs", c do
+    {:ok, _} = ClipJobs.claim(c.w.scope, c.job.id, c.w.agent.id)
+    pick = %{"candidate_id" => "one", "in_s" => 1, "out_s" => 2}
+
+    assert {:error, :invalid_picks} =
+             ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, [Map.put(pick, "out_s", 0)])
+
+    assert {:error, :invalid_picks} =
+             ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, [pick, pick])
+
+    assert {:error, :not_claimer} =
+             ClipJobs.plan_episode(c.w.scope, c.job.id, Ecto.UUID.generate(), [pick])
+
+    other = render_world!()
+
+    assert {:error, :not_found} =
+             ClipJobs.plan_episode(other.scope, c.job.id, other.agent.id, [pick])
+
+    assert {:ok, []} = ClipJobs.plan_episode(c.w.scope, c.job.id, c.w.agent.id, [])
+
+    assert {:ok, %{job: %{status: "done", result: %{"outcome" => "no_picks", "pick_count" => 0}}}} =
+             ClipJobs.complete(c.w.scope, c.job.id, c.w.agent.id, %{})
   end
 end

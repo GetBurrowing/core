@@ -68,8 +68,24 @@ defmodule Platform.Social.ToolDefinitionsTest do
       assert is_boolean(meta.required), "#{tool.name}.#{param}"
       assert is_binary(meta.description) and meta.description != "", "#{tool.name}.#{param}"
 
-      if meta.type == "array",
-        do: assert(meta.schema == %{type: "array", items: %{type: "string"}})
+      if meta.type == "array" do
+        if param == :picks do
+          assert tool.name == "social_clip_job_progress"
+          assert meta.schema.type == "array"
+          assert meta.schema.maxItems == 100
+          assert meta.schema.items.type == "object"
+          assert meta.schema.items.required == ["candidate_id", "in_s", "out_s"]
+          assert meta.schema.items.additionalProperties == false
+
+          assert Map.keys(meta.schema.items.properties) |> Enum.sort() == [
+                   :candidate_id,
+                   :in_s,
+                   :out_s
+                 ]
+        else
+          assert meta.schema == %{type: "array", items: %{type: "string"}}
+        end
+      end
     end
   end
 

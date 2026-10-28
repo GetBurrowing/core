@@ -69,18 +69,20 @@ defmodule Platform.Social.EpisodeDiscovery do
 
       with %Profile{} <- profile,
            {:ok, pipeline} <- activate(profile, now) do
-        Repo.all(
-          from(f in SourceFile,
-            left_join: j in ClipJob,
-            on: j.source_file_id == f.id and j.episode_pipeline_id == ^pipeline.id,
-            where:
-              f.project_id == ^profile.project_id and f.inserted_at >= ^pipeline.activated_at and
-                is_nil(f.deleted_at) and not is_nil(f.content_hash) and
-                not is_nil(f.uploaded_by_user_id) and like(f.content_type, "video/%") and
-                is_nil(j.id),
-            order_by: [asc: f.inserted_at, asc: f.id]
+        seen =
+          Repo.all(
+            from(j in ClipJob,
+              where: j.episode_pipeline_id == ^pipeline.id,
+              select: j.source_file_id
+            )
           )
+          |> MapSet.new()
+
+        Platform.Files.list_recent_files_for_projects([profile.project_id],
+          since: pipeline.activated_at,
+          limit: nil
         )
+        |> Enum.reject(&MapSet.member?(seen, &1.id))
         |> Enum.filter(&eligible?(&1, profile, pipeline))
         |> Enum.map(&ClipJobs.enqueue_episode(pipeline.id, &1.id))
       else
@@ -93,8 +95,7 @@ defmodule Platform.Social.EpisodeDiscovery do
   def eligible?(%SourceFile{} = file, %Profile{} = profile, %EpisodePipeline{} = pipeline) do
     pipeline.profile_id == profile.id and pipeline.version == @version and
       profile.project_id == file.project_id and file.org_id in [nil, profile.org_id] and
-      is_nil(file.deleted_at) and is_binary(file.content_hash) and file.content_hash != "" and
-      is_binary(file.storage_key) and file.storage_key != "" and file.byte_size > 0 and
+      Platform.Files.finalized_upload?(file) and
       is_binary(file.uploaded_by_user_id) and String.starts_with?(file.content_type, "video/") and
       DateTime.compare(file.inserted_at, pipeline.activated_at) != :lt and
       not asset?(file.id, profile)

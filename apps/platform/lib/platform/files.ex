@@ -315,6 +315,15 @@ defmodule Platform.Files do
     |> Repo.preload(preload)
   end
 
+  @doc "True for a finalized, non-deleted upload with storage identity; reservations are false."
+  def finalized_upload?(%File{} = file) do
+    is_nil(file.deleted_at) and is_binary(file.content_hash) and file.content_hash != "" and
+      is_binary(file.storage_key) and file.storage_key != "" and is_integer(file.byte_size) and
+      file.byte_size > 0
+  end
+
+  def finalized_upload?(_), do: false
+
   @doc """
   Lists live files across `project_ids`, most recently changed first
   (`updated_at` desc), with `:uploaded_by_user` preloaded for its display

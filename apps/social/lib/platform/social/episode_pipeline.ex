@@ -4,6 +4,11 @@ defmodule Platform.Social.EpisodePipeline do
   The first sweep records a cutoff once per configured profile and pipeline
   version. Restarts retain it, so missed uploads are recovered without replaying
   the historical catalog. A new version must be explicitly activated.
+
+  The episode's pick plan and child identities are persisted under the parent
+  ClipJobs row lock. Children use the canonical headline-review/1 runner and
+  immutable version completion; the parent completes only after its children.
+  Generated headline text remains local to the runner.
   """
   use Ecto.Schema
   import Ecto.Changeset
