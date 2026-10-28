@@ -271,10 +271,16 @@ describe("a refusal is final for the page load", () => {
       schedule: (fn, ms) => (clock.at(ms, fn), () => {}),
     })
     await session.start()
-    clock.advance(60 * 1000)
-    await tick()
-    clock.advance(60 * 1000)
-    await tick()
+    // A retry awaits its token and a real X25519 key pair (WebCrypto) before it
+    // joins, so one tick does not settle it: wait for a new channel to exist and
+    // for every channel made so far to have left.
+    const retried = async () => {
+      const before = made.length
+      clock.advance(60 * 1000)
+      await until(() => made.length > before && made.every((c) => c.left))
+    }
+    await retried()
+    await retried()
     expect(made.length).toBeGreaterThan(1)
     expect(made.every((c) => c.left)).toBe(true)
     // every channel joined exactly once: its own rejoin loop never ran
