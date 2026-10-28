@@ -276,4 +276,22 @@ defmodule PlatformWeb.Files.CanvasPresenceTest do
     assert socket.assigns.canvas_people == %{}
     assert socket.assigns.canvas_card_timers == %{}
   end
+
+  test "authorized fullscreen updates keep document and revision metadata together", c do
+    conn = build_conn() |> init_test_session(current_user_id: c.user.id)
+    {:ok, view, _} = live(conn, "/canvases/#{c.canvas.id}")
+
+    document =
+      c.canvas.document
+      |> Map.put("revision", 2)
+      |> put_in(["root", "props", "value"], "Updated document body")
+
+    fresh =
+      Repo.update!(Ecto.Changeset.change(c.canvas, document: document, title: "Updated title"))
+
+    send(view.pid, {:canvas_updated, fresh})
+    assert has_element?(view, "[data-role=canvas-revision-stamp]", "rev 2")
+    assert has_element?(view, "[data-role=canvas-body]", "Updated document body")
+    assert :sys.get_state(view.pid).socket.assigns.page_title == "Updated title"
+  end
 end

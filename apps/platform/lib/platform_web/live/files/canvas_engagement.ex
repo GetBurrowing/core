@@ -21,8 +21,16 @@ defmodule PlatformWeb.Files.CanvasEngagement do
              audit: false,
              access_scope: socket.assigns[:access_scope]
            ) do
-      {:ok, fresh, _} -> socket |> assign(:canvas, fresh) |> clear() |> track()
-      _ -> socket |> clear() |> assign(:canvas, nil) |> assign(:load_error, :not_found)
+      {:ok, fresh, _} ->
+        socket
+        |> assign(:canvas, fresh)
+        |> assign(:revision, Platform.Chat.CanvasDocument.revision(fresh.document))
+        |> assign(:page_title, fresh.title || "Canvas")
+        |> clear()
+        |> track()
+
+      _ ->
+        socket |> clear() |> assign(:canvas, nil) |> assign(:load_error, :not_found)
     end
   end
 
