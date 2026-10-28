@@ -33,7 +33,7 @@ quoted =
 
 Code.compile_quoted(quoted)
 
-apply? = System.get_env("MEETING_CLEANUP_APPLY") == "true"
+apply? = Keyword.get(binding(), :cleanup_apply, false) == true
 
 opts = [
   dry_run: not apply?,

@@ -28,7 +28,7 @@ ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eva
 ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-run.exs")'\'''
 # Authorized audited apply; repeat until remaining=0, then repeat once to
 # demonstrate changed=0/audit_id=null. No second audit for an empty batch.
-ssh rocks@192.168.1.200 'podman exec -e MEETING_CLEANUP_APPLY=true core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-run.exs")'\'''
+ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-run.exs", cleanup_apply: true)'\'''
 ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'\'''
 ```
 

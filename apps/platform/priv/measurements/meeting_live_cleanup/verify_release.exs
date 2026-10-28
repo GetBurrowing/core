@@ -20,3 +20,21 @@ IO.puts("MEETING_CLEANUP_VERIFY " <> Jason.encode!(%{
   protected: %{columns: result.columns, rows: result.rows},
   sources: %{columns: sources.columns, rows: sources.rows},
   live_selector_survivors: hd(hd(survivors.rows))}))
+changed = Platform.Repo.query!("""
+WITH changed AS (
+ SELECT DISTINCT jsonb_array_elements_text(metadata->'task_ids') AS id
+ FROM audit_events WHERE event_type = 'meetings.live_tasks.junked'
+ AND resource_id = '01a17f00-live-task-cleanup-20261028'
+)
+SELECT (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]') FROM audit_events
+ WHERE event_type = 'meetings.live_tasks.junked'
+ AND resource_id = '01a17f00-live-task-cleanup-20261028') AS audit_ids,
+ count(*) AS audited_tasks,
+ count(*) FILTER (WHERE t.deleted_at IS NOT NULL) AS deleted_tasks,
+ count(*) FILTER (WHERE t.metadata->>'source' = 'meetings.triage' OR t.metadata->>'source_canvas_id' IS NOT NULL) AS protected_tasks_in_audit,
+ (SELECT count(*) FROM meeting_candidates c JOIN changed x ON c.task_id::text = x.id) AS retained_candidate_backlinks,
+ (SELECT count(*) FROM meeting_briefings b, jsonb_each(b.items) e
+  WHERE e.value->>'ref' IN (SELECT 'task:' || id FROM changed)) AS remaining_briefing_refs
+FROM changed x JOIN tasks t ON t.id::text = x.id
+""")
+IO.puts("MEETING_CLEANUP_AUDIT_VERIFY " <> Jason.encode!(%{columns: changed.columns, rows: changed.rows}))

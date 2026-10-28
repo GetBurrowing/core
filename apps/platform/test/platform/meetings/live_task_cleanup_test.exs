@@ -191,11 +191,10 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     File.cp!("lib/platform/meetings/triage.ex", "/tmp/meeting-live-cleanup-triage.ex")
     Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs")
 
-    assert {:ok, %{changed: 1, task_ids: [id]}} =
-             apply(Platform.Meetings.LiveTaskCleanupOneOff, :junk_live_tasks, [apply_opts()])
-
+    Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs", cleanup_apply: true)
+    assert Repo.get!(Task, live.id).deleted_at
+    assert [%{metadata: %{"task_ids" => [id]}}] = audits()
     assert id == live.id
-    assert length(audits()) == 1
   end
 
   test "source-only history is selectable but a named candidate pointing elsewhere is a conflict",
