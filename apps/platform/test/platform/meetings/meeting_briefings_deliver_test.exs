@@ -276,6 +276,35 @@ defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
     end
   end
 
+  test "late summary after timeout merges complete content without another row or push" do
+    ctx = live_meeting_with_attendees!()
+    ended = ended!(ctx)
+    {_run, transcript} = ready!(ended)
+    transcript |> Ecto.Changeset.change(summary: nil) |> Repo.update!()
+
+    ended =
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+    assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
+    [original] = rows_for(ctx.a)
+    assert_received {:notif, _, _}
+    assert_received {:notif, _, _}
+
+    assert {:ok, _} =
+             Meetings.complete_transcript(
+               transcript.id,
+               "Late final summary",
+               Transcript.summary_fingerprint(transcript)
+             )
+
+    assert [current] = rows_for(ctx.a)
+    assert current.id == original.id
+    assert Repo.get_by!(MeetingBriefing, meeting_id: ended.id).summary == "Late final summary"
+    refute_received {:notif, _, _}
+  end
+
   test "synthesis prerequisite survives reload and rejects callbacks from prior snapshot or reopen" do
     ctx = live_meeting_with_attendees!()
     ended = ended!(ctx)
