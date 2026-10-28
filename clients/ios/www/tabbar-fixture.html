@@ -166,6 +166,30 @@
           document.getElementById("events").appendChild(item);
         });
 
+        // DEBUG: the shell re-issued a failed load and this page is the result
+        // (task 01a17d1f stage 2). Absent on a normal launch.
+        window.burrowFixtureRecovered = function (count) {
+          var line = document.getElementById("recovery");
+          if (!line) {
+            line = document.createElement("p");
+            line.id = "recovery";
+            document.body.appendChild(line);
+          }
+          line.textContent = "recovery: " + count;
+        };
+
+        // A recreated controller must complete a real native round trip.
+        window.burrowFixtureRecreated = function () {
+          var target = plugin();
+          if (!target || typeof target.tabBarState !== "function") return;
+          target.tabBarState(withInk({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "chat", more_dot: false, visible: true }, "auto"))
+            .then(function () {
+              var line = document.createElement("p");
+              line.textContent = "recreated: 1; bridge: tabBarState round trip passed";
+              document.body.appendChild(line);
+            });
+        };
+
         // DEBUG probe from BurrowBridgeViewController.reportTabBarFixture.
         window.burrowFixtureNative = function (report) {
           docLine();

@@ -19,23 +19,53 @@ final class TabBarUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ appearance: String, extra: [String] = []) -> XCUIApplication {
+    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30, requireRecreatedBridge: Bool = false)
+        -> XCUIApplication
+    {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
-        // The shell loads the bundled fixture once, from viewDidAppear. On a
-        // cold runner simulator the first launches of a run sometimes come up
-        // with an empty web view that never loads (the failure hierarchy is a
-        // BurrowBridgeViewController over an empty UIScrollView; the same
-        // build passes on the next launch). Waiting longer on that launch
-        // does not help, so relaunch on a missing fixture and only fail when
-        // every attempt shows nothing.
+        // The shell loads the bundled fixture once, from viewDidAppear, and
+        // WebLoadRecovery (task 01a17d1f) re-issues that load if it fails
+        // provisionally, loses its WebContent process, or never commits. So a
+        // normal launch shows the fixture the first time. One relaunch is
+        // still allowed, but a relaunch is a regression signal, not something
+        // normal: read it from the `fixture-launch:` line (relaunches=1) and
+        // from webload.log, do not tolerate it. If the fixture is still
+        // missing after the allowed attempts the test fails.
+        //
+        // The blank first launch (run 40538916731): on a cold runner the
+        // fixture committed (~16 s after the view appeared) but did not finish
+        // loading, so no text rendered inside the wait. No failure or
+        // termination was logged and the no-commit watchdog was already
+        // disarmed. WebLoadRecovery now re-issues a page that commits and does
+        // not finish.
         var shown = false
-        for _ in 0 ..< 4 where !shown {
+        var attempts = 0
+        for _ in 0..<maxAttempts where !shown {
+            attempts += 1
             app.launch()
-            shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: 30)
+            if requireRecreatedBridge {
+                let ready = NSPredicate { _, _ in
+                    app.webViews.staticTexts["Tab bar fixture"].exists
+                        && app.webViews.staticTexts["plugin: tabBarState present"].exists
+                        && app.webViews.staticTexts["recreated: 1; bridge: tabBarState round trip passed"].exists
+                        && app.tabBars["native-tab-bar"].isHittable
+                }
+                shown = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: shownTimeout) == .completed
+            } else {
+                shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: shownTimeout)
+            }
             if !shown { app.terminate() }
         }
-        XCTAssertTrue(shown, "the tab bar fixture never rendered in 4 launches")
+        // One greppable line per test (task 01a17d1f): how many launches the
+        // fixture needed.
+        let line = "fixture-launch: test=\(name) attempts=\(attempts) relaunches=\(attempts - 1)"
+        print(line)
+        let attachment = XCTAttachment(string: line)
+        attachment.name = "fixture-launch"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(shown, "the tab bar fixture never rendered in \(maxAttempts) launches")
         XCTAssertTrue(app.webViews.staticTexts["plugin: tabBarState present"].waitForExistence(timeout: 10))
         return app
     }
@@ -287,8 +317,36 @@ final class TabBarUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Task 01a17d1f stage 2: the app recovers a failed first load itself. One
+    /// launch, no relaunch, the fixture within 20 s; the page says it came from
+    /// a re-issue (`recovery: 1`), which a launch that never failed cannot show.
+    func testInjectedProvisionalFailureRecovers() {
+        let app = launch("light", extra: ["-BurrowInjectNavigationFailure", "provisional"], maxAttempts: 1, shownTimeout: 20)
+        XCTAssertTrue(app.webViews.staticTexts["recovery: 1"].waitForExistence(timeout: 10))
+        app.terminate()
+    }
+
+    /// The simulated content-process termination after the first commit: the
+    /// shell re-issues the fixture load (a bare reload would not have to).
+    func testInjectedTerminationReloads() {
+        let app = launch("light", extra: ["-BurrowInjectNavigationFailure", "terminate"], maxAttempts: 1, shownTimeout: 20)
+        XCTAssertTrue(app.webViews.staticTexts["recovery: 1"].waitForExistence(timeout: 20))
+        app.terminate()
+    }
+
     /// Stage 1: the glass probe, light and dark; task 01a174e8 stage 2's
     /// restyle on the same launch.
+    /// The original view is poisoned across reissues. Only a new Capacitor
+    /// bridge can render the page and finish the native promise within 20 s.
+    func testInjectedDoubleCommitHangRecreatesBridge() {
+        let app = launch(
+            "light", extra: ["-BurrowInjectNavigationFailure", "double-commit"], maxAttempts: 1,
+            shownTimeout: 20, requireRecreatedBridge: true)
+        XCTAssertTrue(app.webViews.staticTexts["recreated: 1; bridge: tabBarState round trip passed"].exists)
+        assertLabels(app.tabBars["native-tab-bar"], five)
+        shot("recreated-bridge")
+    }
+
     func testFixtureLight() { fixture("light") }
     func testFixtureDark() { fixture("dark") }
 
@@ -597,10 +655,12 @@ struct Raster {
         let h = cg.height
         var data = [UInt8](repeating: 0, count: w * h * 4)
         let drawn = data.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) -> Bool in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return false }
+            guard
+                let context = CGContext(
+                    data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                    space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                )
+            else { return false }
             context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
             return true
         }
@@ -633,7 +693,8 @@ struct Raster {
 /// shows up as a large `drawn_vs_sent`; for unselected items that value is
 /// then measured with the drawn ink (`measured_against: drawn`).
 enum TabContrast {
-    static let method = "sent ink (with its alpha) composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; an unselected item whose drawn ink is not the sent one (iOS 26 vibrant ink) is measured with the drawn ink, opaque; label >= 4.5, glyph >= 3"
+    static let method =
+        "sent ink (with its alpha) composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; an unselected item whose drawn ink is not the sent one (iOS 26 vibrant ink) is measured with the drawn ink, opaque; label >= 4.5, glyph >= 3"
 
     static func linear(_ c: Double) -> Double { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
 
