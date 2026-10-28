@@ -32,7 +32,16 @@ defmodule Platform.LivekitConfigAsyncGuard do
 
   defp collect({:defmodule, meta, [name, [do: body]]}, file, modules) do
     name = resolve(name, %{})
-    initial = %{file: file, line: meta[:line], async: false, aliases: %{}, calls: MapSet.new(), writes: []}
+
+    initial = %{
+      file: file,
+      line: meta[:line],
+      async: false,
+      aliases: %{},
+      calls: MapSet.new(),
+      writes: []
+    }
+
     info = walk(body, initial)
     Map.put(modules, name, info)
   end
@@ -59,7 +68,12 @@ defmodule Platform.LivekitConfigAsyncGuard do
 
   defp walk({:use, _, [_target | opts]} = ast, info) do
     options = List.flatten(opts)
-    info = if Keyword.has_key?(options, :async), do: %{info | async: options[:async] != false}, else: info
+
+    info =
+      if Keyword.has_key?(options, :async),
+        do: %{info | async: options[:async] != false},
+        else: info
+
     walk_children(ast, info)
   end
 
@@ -70,7 +84,12 @@ defmodule Platform.LivekitConfigAsyncGuard do
   defp walk({{:., _, [target, function]}, meta, args}, info) when is_list(args) do
     module = resolve(target, info.aliases)
     info = %{info | calls: MapSet.put(info.calls, module)}
-    info = if module == Application and mutation?(function, args), do: %{info | writes: [meta[:line] | info.writes]}, else: info
+
+    info =
+      if module == Application and mutation?(function, args),
+        do: %{info | writes: [meta[:line] | info.writes]},
+        else: info
+
     walk(args, info)
   end
 
@@ -94,16 +113,25 @@ defmodule Platform.LivekitConfigAsyncGuard do
   defp resolve(atom, _) when is_atom(atom), do: atom
   defp resolve(_, _), do: nil
 
-  defp mutation?(function, [:platform, :livekit | _]) when function in [:put_env, :delete_env], do: true
+  defp mutation?(function, [:platform, :livekit | _]) when function in [:put_env, :delete_env],
+    do: true
+
   defp mutation?(:put_all_env, [entries | _]) when is_list(entries) do
-    entries |> Keyword.get(:platform, []) |> then(&(is_list(&1) and Keyword.has_key?(&1, :livekit)))
+    entries
+    |> Keyword.get(:platform, [])
+    |> then(&(is_list(&1) and Keyword.has_key?(&1, :livekit)))
   end
+
   defp mutation?(_, _), do: false
 
   defp propagate(modules, writers) do
-    next = Enum.reduce(modules, writers, fn {name, info}, acc ->
-      if Enum.any?(info.calls, &MapSet.member?(writers, &1)), do: MapSet.put(acc, name), else: acc
-    end)
+    next =
+      Enum.reduce(modules, writers, fn {name, info}, acc ->
+        if Enum.any?(info.calls, &MapSet.member?(writers, &1)),
+          do: MapSet.put(acc, name),
+          else: acc
+      end)
+
     if MapSet.equal?(next, writers), do: writers, else: propagate(modules, next)
   end
 end
