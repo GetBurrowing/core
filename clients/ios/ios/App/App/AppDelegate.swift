@@ -10,6 +10,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        #if DEBUG
+            SchemeTraceHooks.install()
+            LaunchHeartbeat.shared.start()
+        #endif
         // Set before launch finishes so a notification that launched the app
         // is delivered to the router.
         let center = UNUserNotificationCenter.current()

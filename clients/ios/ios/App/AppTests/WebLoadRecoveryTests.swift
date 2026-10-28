@@ -1,3 +1,4 @@
+import WebKit
 import XCTest
 
 @testable import App
@@ -309,3 +310,103 @@ final class WebLoadRecoveryTests: XCTestCase {
         XCTAssertEqual(reported, [1])
     }
 }
+
+#if DEBUG
+    final class LaunchHeartbeatStateTests: XCTestCase {
+        func testBlockedMainHasOnePendingPulseAndReportsBeforeItResumes() {
+            var state = LaunchHeartbeatState(now: 0)
+            guard let pulse = state.tick(now: 0.1).pulse else {
+                XCTFail("missing pulse")
+                return
+            }
+            XCTAssertNil(state.tick(now: 0.2).pulse)
+            let stalled = state.tick(now: 0.4)
+            XCTAssertNil(stalled.pulse)
+            XCTAssertEqual(stalled.mainDrift ?? -1, 0.3, accuracy: 0.0001)
+            XCTAssertNil(state.tick(now: 0.5).mainDrift, "do not log the same stall at 10 Hz")
+            XCTAssertEqual(state.acknowledge(pulse.id, now: 0.6) ?? -1, 0.5, accuracy: 0.0001)
+            XCTAssertNotNil(state.tick(now: 0.7).pulse)
+        }
+
+        func testDelayedSamplerDoesNotGetLabelledAsMainStarvation() {
+            var state = LaunchHeartbeatState(now: 0)
+            guard let pulse = state.tick(now: 0.1).pulse else {
+                XCTFail("missing pulse")
+                return
+            }
+            XCTAssertNil(state.acknowledge(pulse.id, now: 0.101))
+            let late = state.tick(now: 0.6)
+            XCTAssertEqual(late.samplerDrift ?? -1, 0.4, accuracy: 0.0001)
+            XCTAssertNil(late.mainDrift)
+            XCTAssertNotNil(late.pulse)
+        }
+
+        func testThresholdIsStrictlyOver250Milliseconds() {
+            var state = LaunchHeartbeatState(now: 0)
+            guard let pulse = state.tick(now: 0).pulse else {
+                XCTFail("missing pulse")
+                return
+            }
+            XCTAssertNil(state.acknowledge(pulse.id, now: 0.25))
+            guard let next = state.tick(now: 1).pulse else {
+                XCTFail("missing next pulse")
+                return
+            }
+            XCTAssertNotNil(state.acknowledge(next.id, now: 1.251))
+        }
+    }
+
+    final class SchemeTaskTraceTests: XCTestCase {
+        @MainActor
+        private final class FakeTask: NSObject, WKURLSchemeTask {
+            let request: URLRequest
+            var events: [String] = []
+            init(_ request: URLRequest) { self.request = request }
+            func didReceive(_ response: URLResponse) { events.append("response") }
+            func didReceive(_ data: Data) { events.append("data:\(data.count)") }
+            func didFinish() { events.append("finish") }
+            func didFailWithError(_ error: Error) { events.append("fail") }
+        }
+
+        @MainActor
+        func testProxyForwardsRequestAndCallbacksAndLogsTerminalAfterForwarding() {
+            var request = URLRequest(url: URL(string: "capacitor://localhost/fixture.html?secret=hidden")!)
+            request.httpMethod = "POST"
+            request.httpBody = Data([1, 2])
+            let original = FakeTask(request)
+            var lines: [String] = []
+            var ended = 0
+            let proxy = TracedSchemeTask(
+                task: original, id: "test", now: { 1 }, log: { lines.append($0) },
+                onEnd: {
+                    XCTAssertEqual(original.events.last, "finish")
+                    ended += 1
+                })
+            XCTAssertEqual(proxy.request, request)
+            proxy.didReceive(URLResponse(url: request.url!, mimeType: "text/html", expectedContentLength: 2, textEncodingName: nil))
+            proxy.didReceive(Data([1, 2]))
+            proxy.didFinish()
+            XCTAssertEqual(original.events, ["response", "data:2", "finish"])
+            XCTAssertEqual(ended, 1)
+            XCTAssertTrue(lines.last?.contains("end outcome=finished") == true)
+            XCTAssertTrue(lines.allSatisfy { !$0.contains("secret") && !$0.contains("localhost") })
+        }
+
+        @MainActor
+        func testFailureStillReachesWebKitAndEndsTheTrace() {
+            let original = FakeTask(URLRequest(url: URL(string: "capacitor://localhost/missing")!))
+            var lines: [String] = []
+            var ended = 0
+            let proxy = TracedSchemeTask(
+                task: original, id: "test", log: { lines.append($0) },
+                onEnd: {
+                    XCTAssertEqual(original.events.last, "fail")
+                    ended += 1
+                })
+            proxy.didFailWithError(URLError(.fileDoesNotExist))
+            XCTAssertEqual(original.events, ["fail"])
+            XCTAssertEqual(ended, 1)
+            XCTAssertTrue(lines.last?.contains("end outcome=failed") == true)
+        }
+    }
+#endif
