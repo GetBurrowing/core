@@ -426,6 +426,11 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
     previous = Map.new(~w(meeting_scribe triage_officer), &{&1, Roles.agent_id_for_role(&1)})
     ctx = CompletionTest.fixture!()
 
+    owned_audit =
+      from(e in Platform.Audit.Event,
+        where: fragment("?->>'meeting_id'", e.metadata) == ^ctx.meeting.id
+      )
+
     resources =
       Enum.map([ctx.scribe, ctx.triage], fn agent ->
         agent = Repo.get!(Platform.Agents.Agent, agent.id)
@@ -486,12 +491,24 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
                :count
              ) == 1
 
+      assert Repo.aggregate(
+               from(e in owned_audit,
+                 where: e.event_type in ["meetings.triage.dispatch", "meetings.tasks_created"]
+               ),
+               :count
+             ) == 2
+
       Platform.Chat.Canvas.Server.stop(canvas.id)
     after
       for {role, agent_id} <- previous do
         :ok = Roles.unassign_role(role)
         if agent_id, do: Roles.assign_role(role, agent_id)
       end
+
+      # These connections intentionally bypass sandbox rollback. Their telemetry
+      # audit rows must be removed with the fixture, not leak into later modules.
+      Repo.delete_all(owned_audit)
+      assert Repo.aggregate(owned_audit, :count) == 0
 
       Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
       Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
