@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.BindClipApprovalRender do
+  @moduledoc """
+  Task 01a17e37: Binds clip approval and published posts to the specific render selected by the human approver.
+  """
+
   use Ecto.Migration
 
   def change do

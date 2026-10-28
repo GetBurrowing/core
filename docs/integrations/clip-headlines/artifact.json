@@ -14,7 +14,6 @@
     "helper_version": "0.4.0",
     "helper_sha256": "00b45c259e9c27f01d3ddad54511a413397def0f9112c6b207296c0ff6d4224f",
     "skill_slug": "burrow-clip-runner",
-    "skill_id": "01a1679e-a21f-7000-a752-99ae62a783da",
     "fake_test_count": 83,
     "request_contract": "headline-review/1",
     "new_clip": "automatic episode generation",
@@ -40,7 +39,7 @@
     "social_rig": {
       "runtime": "this Codex runtime; isolated OTP28.1 / Elixir1.20.4 / PostgreSQL16.15",
       "source_sha": "61690d6d40b75c65d0038deb844c57defe1b35c0",
-      "command": "cd apps/social && /home/jordan/openai/rig/run mix test --seed 0",
+      "command": "cd apps/social && MIX_ENV=test mix test --seed 0",
       "passed": 1273,
       "failed": 0,
       "elixir_source_changed_in_stage": false

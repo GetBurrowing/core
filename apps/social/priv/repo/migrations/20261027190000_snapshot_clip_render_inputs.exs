@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.SnapshotClipRenderInputs do
+  @moduledoc """
+  Task 01a17e37: Preserves immutable clip render inputs and output metadata so historical versions remain accurate.
+  """
+
   use Ecto.Migration
 
   def up do
