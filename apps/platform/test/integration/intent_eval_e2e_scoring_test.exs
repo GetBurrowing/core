@@ -1,68 +1,5 @@
 defmodule Platform.Integration.IntentEvalE2EScoringTest do
-  @moduledoc """
-  The end-to-end arm of the intent eval (task `01a06575` stage 4).
-
-  `Platform.Meetings.IntentEval.Harness` scores a labelled corpus at
-  `IntentClassifier.decide/1` — a provider call, a parse and an evidence
-  check — and stops there. This drives the SAME labelled rows all the way
-  to a row in `tasks`.
-
-  ## Why this file and not another Harness slice
-
-  When production had 280 `meeting_candidates` and zero `task_id`s, the
-  offline harness was reporting `0.975` f1 on `off_topic` and `59/60`
-  firing on control. Both numbers were true. Neither could move, in
-  either direction, in response to the defect — a `state != :acting`
-  predicate in `Candidates.claim_due/2`, seven stages downstream of
-  anything `decide/1` touches. An instrument that cannot respond to the
-  failure is not a weak test of the pipeline; it is a strong test of
-  something else.
-
-  So the acceptance condition here is deliberately the crudest one
-  available: **a labelled utterance, appended to a real transcript,
-  producing a real row in `tasks`.** Not a queue status, not a
-  `candidate.task_id` being non-nil — the 280 production rows would have
-  passed several assertions of that shape.
-
-  ## The model is stubbed, and that is the design
-
-  The stub answers with each row's GOLD label
-  (`IntentEval.E2E.stub_content/1`), so this arm cannot and does not
-  measure classification accuracy — `Harness` does that, and it needs an
-  endpoint. What this measures is: given a correct classification, does
-  the platform produce the deliverable? Every gate between those two
-  points is live, including `IntentFrames`, which can veto a correct
-  classification after the fact and does so here.
-
-  ## Both directions are scored
-
-  A routable intent must mint a task. An `off_topic` row must NOT. The
-  second half is not padding: until task 01a06575 stage 5 an `off_topic`
-  candidate was ARMED at mirror time, before any dispatch decision for
-  it existed, and the only thing that stopped it graduating was the
-  dispatcher closing the row a second or two later. The held-cursor case
-  below is that race lost — one routable utterance in front, holding the
-  meeting's serial cursor across its handler's model round-trip, and one
-  piece of small talk queued behind it.
-
-  ## The ack, and why this file was blind without it
-
-  A reviewer proved this run could not see the stage-2 defect it was
-  written for: reverting `Candidates.claim_due/2` to
-  `state not in [:closed, :acting]` reddened the stage test files and
-  left THIS report byte-identical and green. Cause: nothing here ever
-  issued an `intent_ack`, so every positive sat at `:shaping`
-  (`dispatched -> :shaping`, `acked -> :acting`) when the sweeper ran
-  and the `:acting` predicate was never on the path. `run_row/2` now
-  acks `:working` before it sweeps, which is what the recipient agent
-  does in production within a second or two.
-
-  ## The counts are pinned
-
-  `graduated > 0` was the acceptance condition, and 1 of 38 satisfies
-  it. The exact counts are asserted instead — see the test — because a
-  number nobody can regress past measures nothing.
-  """
+  @moduledoc "Gold-label transcript replay must preserve candidate evidence without filing live tasks."
 
   use Platform.DataCase, async: false
 
@@ -155,9 +92,9 @@ defmodule Platform.Integration.IntentEvalE2EScoringTest do
 
   # ── The run ────────────────────────────────────────────────────────────────
 
-  describe "the labelled corpus, driven to a row in `tasks`" do
+  describe "the labelled corpus during a live meeting" do
     @tag timeout: 600_000
-    test "every routable intent mints a task and every decline does not", %{
+    test "neither actionable utterances nor declines file tasks before final triage", %{
       classifier_pid: classifier_pid
     } do
       rows = load_slice!(@slice)
@@ -171,61 +108,16 @@ defmodule Platform.Integration.IntentEvalE2EScoringTest do
       # only report on success reports nothing on the day it matters.
       IO.puts("\n" <> E2E.report(@slice, summary) <> "\n")
 
-      # ── The acceptance condition ────────────────────────────────────
-      #
-      # PINNED, not floored. `graduated > 0` was the assertion until
-      # task 01a06575 stage 5, and it is satisfied by 1 of 38 — a
-      # regression that loses thirty of the thirty-one working rows
-      # publishes this report and passes. A number nobody can regress
-      # past is not a measurement; it is a smoke test wearing one.
-      #
-      # These are measured, not aspirational, and they are expected to
-      # MOVE — the frame gate, the prompt and the corpus all belong to
-      # other tickets. Updating them is a normal part of changing one of
-      # those, PROVIDED the new number is understood. What must never
-      # happen is a silent slide.
-      #
-      #   31/38  positives that reach a `tasks` row.
-      #   7      positives that do not: 6 cancelled by IntentFrames'
-      #          `:frame_delegation` and 1 by `:frame_retraction` (both
-      #          measured and deliberately unfixed — see the frame-gate
-      #          tests below), of which 2 never reach the model at all
-      #          because the content gate drops them first.
-      #   10/10  declines that mint nothing.
-      assert summary["graduated"] == 31,
-             "graduated moved from 31 to #{summary["graduated"]} of " <>
-               "#{summary["positives"]} positives. If this is intended, update the " <>
-               "number and say why in the commit. Where the rest stopped: " <>
-               inspect(summary["stopped_at"])
-
+      # Task creation is now intentionally deferred to final triage. Keep
+      # the classifier/frame facts pinned while requiring zero live filings.
+      assert summary["graduated"] == 0
+      assert summary["spurious_tasks"] == 0
       assert summary["positives"] == 38
       assert summary["declines"] == 10
-
-      # Small talk must not become work.
-      assert summary["spurious_tasks"] == 0,
-             "#{summary["spurious_tasks"]} off_topic rows minted a task. " <>
-               "Small talk became work: " <> inspect(summary["stopped_at"])
-
-      # Declines are scored, not assumed.
       assert summary["correctly_declined"] == 10
-      assert summary["correctly_declined"] == summary["declines"]
-
-      # The two-sided verdict, and the gate cost that explains the gap
-      # between it and 48. Pinned together so a change that moves one
-      # without the other cannot be read as noise.
-      assert summary["correct"] == 41
       assert summary["demoted"] == 7
       assert summary["frame_cancelled"] == 7
-
-      # And the shape of the failure, not just its size: every
-      # non-graduating row is accounted for by a name. `no_candidate`
-      # rows are the content gate's, which never reach the model.
-      assert summary["stopped_at"] == %{
-               "dispatch_failed/closed" => 15,
-               "skipped:no_content/no_candidate" => 2
-             },
-             "the non-graduating rows stopped somewhere new: " <>
-               inspect(summary["stopped_at"])
+      assert Enum.all?(results, &is_nil(&1["task_id"]))
     end
   end
 
@@ -295,20 +187,11 @@ defmodule Platform.Integration.IntentEvalE2EScoringTest do
 
       fired = CandidateSweeper.sweep(now: now)
 
-      # CONTROL. The same sweep, at the same instant, in the same
-      # meeting, DID fire the routable card in front. Without this the
-      # assertion below is satisfied by a sweeper that claimed nothing
-      # at all — a green result for a broken rail, which is the exact
-      # shape of failure this whole stage exists to stop publishing.
       routable = await_candidate_for_intent(routable_row.id)
-
-      assert routable.id in Enum.map(fired, & &1.id),
-             "the sweep claimed nothing for the routable card either — this run " <>
-               "proves nothing about the small talk"
-
-      assert Repo.get!(MeetingCandidate, routable.id).task_id,
-             "the routable card did not mint a task, so `no task` below is not " <>
-               "a fact about off_topic"
+      assert routable.classified_intent == "action_items"
+      assert is_nil(routable.acts_at)
+      assert is_nil(Repo.get!(MeetingCandidate, routable.id).task_id)
+      assert fired == []
 
       # Still held: the handler never answered, so the small talk was
       # never dispatched, never declined, and never closed by anybody.

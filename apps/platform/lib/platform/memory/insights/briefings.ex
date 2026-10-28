@@ -443,6 +443,12 @@ defmodule Platform.Memory.Insights.Briefings do
       key: key,
       insight: insight,
       kind: kind,
+      filed_task_id: BriefingCard.filed_task_id(insight),
+      meeting_card:
+        Platform.Meetings.MeetingBriefings.card_for_task(
+          BriefingCard.filed_task_id(insight),
+          Actions.scope_actor_id(scope)
+        ),
       section: section,
       receipt: view_receipt,
       project: project(kind, insight, view_receipt),
@@ -622,7 +628,8 @@ defmodule Platform.Memory.Insights.Briefings do
          :ok <- owner(briefing, scope),
          insight_id when is_binary(insight_id) <-
            insight_id(briefing, key) || {:error, :not_found},
-         {:ok, verb} <- known_verb(verb) do
+         {:ok, verb} <- known_verb(verb),
+         :ok <- ensure_unfiled(insight_id, verb) do
       prev = Map.get(briefing.receipts || %{}, key)
 
       in_transaction(briefing, fn ->
@@ -714,6 +721,14 @@ defmodule Platform.Memory.Insights.Briefings do
         error
     end
   end
+
+  defp ensure_unfiled(id, verb) when verb in ["apply", "file", "edit_apply"] do
+    if BriefingCard.filed_task_id(Insights.get(id)),
+      do: {:error, :already_handled},
+      else: :ok
+  end
+
+  defp ensure_unfiled(_id, _verb), do: :ok
 
   defp run_verb("answer", id, scope, params) do
     with {:ok, acted} <- Actions.answer(id, scope, params["answer"]) do

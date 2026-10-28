@@ -520,6 +520,9 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       assert count(html, ~s([data-component="call-rail"] [data-pane-tab="canvas"])) == 1
       assert count(html, ~s([data-component="call-rail"] [data-section="humans"])) == 0
       assert html =~ "Someone should write the migration guide"
+      assert html =~ "Candidate evidence"
+      assert count(html, "[data-role=meeting-candidate-approve]") == 0
+      assert count(html, "[data-role=meeting-candidate-countdown]") == 0
     end
   end
 

@@ -7193,7 +7193,7 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  defp apply_candidate_approve(socket, candidate) do
+  defp apply_candidate_approve(socket, %{outcome_kind: :artifact} = candidate) do
     case Candidates.graduate(candidate) do
       {:ok, _graduated} ->
         socket
@@ -7206,6 +7206,8 @@ defmodule PlatformWeb.MeetingLive do
         |> assign_candidate_board(candidate.meeting_id)
     end
   end
+
+  defp apply_candidate_approve(socket, _candidate), do: socket
 
   defp apply_candidate_decline(socket, candidate) do
     note = decline_note(socket.assigns[:display_name])

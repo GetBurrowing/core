@@ -496,13 +496,14 @@ defmodule Platform.Meetings.MeetingBriefings do
       returned by `Platform.Meetings.meeting_tasks_query/1` (not deleted,
       still this meeting's under THE rule) and is still `"backlog"`.
     * `actions` is `[]` once resolved; otherwise
-      `[:revert, :confirm, :ask]` when revertible, else `[:confirm, :ask]`.
+      `[:revert, :ask]` for a revertible task, `[:ask]` for other filed tasks,
+      and `[:confirm, :ask]` for non-task changes.
 
-  `scope` is the viewer's; nothing here depends on it today, and it is part
-  of the signature so a per-viewer rule never has to change every caller.
+  `scope` is the viewer's and controls whether Revert is offered. The action
+  re-checks task access and current revertibility inside its transaction.
   """
   @spec view(MeetingBriefing.t(), Scope.t() | nil) :: map()
-  def view(%MeetingBriefing{} = briefing, _scope) do
+  def view(%MeetingBriefing{} = briefing, scope) do
     briefing = Repo.preload(briefing, :meeting)
     meeting = briefing.meeting
     receipts = briefing.receipts || %{}
@@ -521,7 +522,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       items
       |> Enum.map(fn {key, item} ->
         receipt = receipt_view(receipts[key], names)
-        revertible? = item_revertible?(item, revertible)
+        revertible? = item_revertible?(item, revertible) and task_write_allowed?(item, scope)
 
         %{
           key: key,
@@ -530,7 +531,8 @@ defmodule Platform.Meetings.MeetingBriefings do
           ref: item["ref"],
           receipt: receipt,
           revertible?: revertible?,
-          actions: actions(receipt, revertible?)
+          availability: task_availability(item, meeting),
+          actions: actions(receipt, revertible?, item["kind"])
         }
       end)
       |> Enum.sort_by(&{&1.kind != "task", &1.title || "", &1.key})
@@ -549,9 +551,10 @@ defmodule Platform.Meetings.MeetingBriefings do
     }
   end
 
-  defp actions(nil, true), do: [:revert, :confirm, :ask]
-  defp actions(nil, false), do: [:confirm, :ask]
-  defp actions(_receipt, _revertible?), do: []
+  defp actions(nil, true, "task"), do: [:revert, :ask]
+  defp actions(nil, false, "task"), do: [:ask]
+  defp actions(nil, _revertible?, _kind), do: [:confirm, :ask]
+  defp actions(_receipt, _revertible?, _kind), do: []
 
   defp receipt_view(nil, _names), do: nil
 
@@ -572,6 +575,29 @@ defmodule Platform.Meetings.MeetingBriefings do
   defp display_name(%{email: email}) when is_binary(email), do: email
   defp display_name(_), do: "Someone"
 
+  defp task_write_allowed?(%{"ref" => "task:" <> id}, %Scope{} = scope),
+    do: match?({:ok, _}, authorize_task_write(scope, id))
+
+  defp task_write_allowed?(_item, _scope), do: false
+
+  defp task_availability(%{"kind" => "task", "ref" => "task:" <> id}, meeting) do
+    case Platform.UUID.valid?(id) && Repo.get(Platform.Tasks.Task, id) do
+      %{deleted_at: %DateTime{}} ->
+        "This task was removed."
+
+      %{project_id: project_id} when project_id != meeting.project_id ->
+        "This task moved to another project."
+
+      %{status: status} ->
+        "Filed task · " <> status
+
+      _ ->
+        "This task is unavailable."
+    end
+  end
+
+  defp task_availability(_item, _meeting), do: nil
+
   defp item_revertible?(%{"kind" => "task", "ref" => "task:" <> id}, revertible),
     do: MapSet.member?(revertible, id)
 
@@ -591,12 +617,45 @@ defmodule Platform.Meetings.MeetingBriefings do
     else
       meeting
       |> Meetings.meeting_tasks_query()
-      |> where([task: t], t.id in ^ids and t.status == "backlog")
+      |> where(
+        [task: t],
+        t.id in ^ids and t.status == "backlog" and t.project_id == ^meeting.project_id
+      )
       |> select([task: t], t.id)
       |> Repo.all()
       |> MapSet.new()
     end
   end
+
+  @doc "Resolve a durable task reference to its shared attendee-only briefing card."
+  def card_for_task(task_id, user_id) when is_binary(task_id) and is_binary(user_id) do
+    ref = "task:" <> task_id
+
+    from(b in MeetingBriefing,
+      where: ^user_id in b.attendee_user_ids,
+      where:
+        fragment(
+          "EXISTS (SELECT 1 FROM jsonb_each(?) AS entry WHERE entry.value->>'kind' = 'task' AND entry.value->>'ref' = ?)",
+          b.items,
+          ^ref
+        )
+    )
+    |> Repo.all()
+    |> Enum.find_value(fn briefing ->
+      case Enum.find(briefing.items || %{}, fn {_key, item} ->
+             is_map(item) and item["kind"] == "task" and item["ref"] == ref
+           end) do
+        {key, _item} ->
+          if get_for_attendee(briefing.meeting_id, user_id),
+            do: %{meeting_id: briefing.meeting_id, key: key}
+
+        nil ->
+          nil
+      end
+    end)
+  end
+
+  def card_for_task(_task_id, _user_id), do: nil
 
   # ── Acting ────────────────────────────────────────────────────────────────
 

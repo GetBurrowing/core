@@ -631,3 +631,5 @@ config :platform, :native_reply_watchdog_ms, false
 # `:chat_async_fault` env (a list of segment atoms, e.g. [:history_backfill]).
 # Never set in prod, so a prod build has no fault path.
 config :platform, :chat_async_fault_injection, true
+
+config :platform, :start_meeting_completion_sweeper, false

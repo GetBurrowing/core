@@ -50,7 +50,6 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Archive
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Triage
   alias Platform.Repo
@@ -129,22 +128,20 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
   # The LIVE CARD path, exactly as `CandidateSweeper.fire/1` and
   # `MeetingLive`'s `approve_candidate` reach it. No metadata is written by
   # hand: `provenance_metadata/1` decides what lands on the row.
-  defp graduate!(%Meeting{} = meeting, quote) do
-    {:ok, candidate} =
-      Candidates.create(%{
-        meeting_id: meeting.id,
-        evidence_quote: quote,
-        state: :heard,
-        outcome_kind: :task,
-        acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+  # Historical live-minted task fixture; live code must no longer create it.
+  defp graduate!(meeting, quote) do
+    {:ok, task} =
+      Platform.Tasks.create_task(%{
+        project_id: meeting.project_id,
+        title: quote,
+        metadata: %{
+          "source" => "meetings.candidate",
+          "meeting_id" => meeting.id,
+          "candidate_id" => Ecto.UUID.generate()
+        }
       })
 
-    {:ok, graduated} = Candidates.graduate(candidate)
-
-    assert is_binary(graduated.task_id),
-           "graduate/2 must mint a task, or every count below is about nothing"
-
-    Repo.get!(TaskRecord, graduated.task_id)
+    task
   end
 
   # The POST-MEETING TRIAGE path.

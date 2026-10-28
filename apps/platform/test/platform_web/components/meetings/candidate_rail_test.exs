@@ -59,6 +59,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
         classified_intent: "action_item",
         transcript_chunk_ids: [Ecto.UUID.generate()],
         acts_at: nil,
+        outcome_kind: :artifact,
         inserted_at: @now
       },
       attrs
@@ -883,11 +884,10 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       html = rail([card])
 
-      # Positive control first: the foot has to be on the page at all.
-      assert Enum.any?(foot(html, card))
-      assert present?(node(html, card), @sentence)
-
-      assert sentence(html, card) == "Creating a task in"
+      refute Enum.any?(foot(html, card))
+      refute present?(node(html, card), @sentence)
+      assert present?(node(html, card), "[data-role='meeting-candidate-evidence']")
+      refute present?(node(html, card), "[data-role='meeting-candidate-approve']")
     end
 
     test "a card aimed at an ARTIFACT says canvas, never the stored word" do
@@ -920,9 +920,9 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       html = rail([tasked, canvassed])
 
-      assert Enum.any?(foot(html, tasked))
+      refute Enum.any?(foot(html, tasked))
       assert Enum.any?(foot(html, canvassed))
-      assert present?(node(html, tasked), @sentence)
+      refute present?(node(html, tasked), @sentence)
       assert present?(node(html, canvassed), @sentence)
 
       assert sentence(html, tasked) != sentence(html, canvassed)
@@ -954,7 +954,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     end
 
     test "a DISARMED card carries no sentence at all" do
-      armed_card = armed_kind(24, :task)
+      armed_card = armed_kind(24, :artifact)
       disarmed = candidate(%{acts_at: nil, outcome_kind: :task})
 
       html = rail([armed_card, disarmed])
@@ -1898,7 +1898,6 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       expected = [
         {"meeting-candidate-correction-reassign", "candidate_correct_reassign"},
-        {"meeting-candidate-correction-flip", "candidate_correct_flip"},
         {"meeting-candidate-correction-none", "candidate_correct_none"}
       ]
 
@@ -1970,7 +1969,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       refute html =~ "Hand to Octavius"
     end
 
-    test "a ONE-AGENT room offers no reassign and still offers the other two choices" do
+    test "a ONE-AGENT canvas room offers only Not an action" do
       assigned = agent("Octavius")
       card = armed_for(assigned.id, 24)
 
@@ -1985,13 +1984,13 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       # emit nothing, not an option with no name.
       assert node(html, card)
              |> LazyHTML.query("ul.candidate-correction__list li")
-             |> Enum.count() == 2
+             |> Enum.count() == 1
 
       # The panel is STILL THERE and the two working choices with it. A
       # drawer that vanished in a one-agent room would take the flip and
       # `Not an action` away with the list that had nothing in it.
       assert Enum.any?(panel(html, card))
-      assert present?(node(html, card), "[data-role='meeting-candidate-correction-flip']")
+      refute present?(node(html, card), "[data-role='meeting-candidate-correction-flip']")
       assert present?(node(html, card), "[data-role='meeting-candidate-correction-none']")
 
       # An EMPTY roster is the same answer, and it is a different input:
@@ -2015,7 +2014,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
                "Not an action"
     end
 
-    test "the flip names the DESTINATION, and it flips with outcome_kind" do
+    test "neither task evidence nor canvas controls offer a task conversion" do
       a = agent("Octavius")
       task_card = armed_for(a.id, 24, %{outcome_kind: :task})
       artifact_card = armed_for(a.id, 18, %{outcome_kind: :artifact})
@@ -2030,14 +2029,8 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
         text_of(node(html, card), "[data-role='meeting-candidate-correction-flip']")
       end
 
-      assert flip.(task_html, task_card) == "Make it a canvas instead"
-      assert flip.(artifact_html, artifact_card) == "Make it a task instead"
-
-      # THE PAIR IS NOT VACUOUS: the two expectations are literally
-      # different strings, and they are different in the direction the
-      # card's own `outcome_kind` predicts. A component that ignored
-      # `outcome_kind` would give one answer twice.
-      refute flip.(task_html, task_card) == flip.(artifact_html, artifact_card)
+      assert flip.(task_html, task_card) == ""
+      assert flip.(artifact_html, artifact_card) == ""
     end
 
     test "the training line says what happens to the choice, muted and under the choices" do
@@ -2085,7 +2078,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
             "[data-role='meeting-candidate-correction-none']"
         )
 
-      assert length(Enum.to_list(choices)) == 3
+      assert length(Enum.to_list(choices)) == 2
 
       class_lists = LazyHTML.attribute(choices, "class")
 

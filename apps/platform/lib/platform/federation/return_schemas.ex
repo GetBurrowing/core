@@ -35,7 +35,7 @@ defmodule Platform.Federation.ReturnSchemas do
 
   @tools ~w(task_list task_get plan_get stage_list validation_list execution_lease_list
             runtime_event_list federation_status space_get_messages principal_search
-            intent_ack meeting_say burrow_run_describe)
+            intent_ack meeting_say meeting_scribe_complete meeting_triage_file burrow_run_describe)
 
   @doc "Names of the tools that carry a `returns_schema`."
   @spec tools() :: [String.t()]
@@ -154,6 +154,26 @@ defmodule Platform.Federation.ReturnSchemas do
         ),
       "subagent_id" => nullable(string()),
       "acked_at" => nullable(datetime())
+    })
+  end
+
+  def for_tool("meeting_scribe_complete") do
+    closed(%{
+      "meeting_id" => string(),
+      "run_id" => string(),
+      "status" => string(),
+      "canvas_id" => nullable(string()),
+      "task_ids" => array(string())
+    })
+  end
+
+  def for_tool("meeting_triage_file") do
+    closed(%{
+      "meeting_id" => string(),
+      "run_id" => string(),
+      "status" => string(),
+      "canvas_id" => nullable(string()),
+      "task_ids" => array(string())
     })
   end
 

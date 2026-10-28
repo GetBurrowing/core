@@ -157,9 +157,10 @@ defmodule Platform.Meetings.CandidateUndoTest do
     } do
       candidate = armed!(meeting)
 
-      {:ok, graduated} = Candidates.graduate(candidate)
+      :ok = Candidates.complete_by_ack(candidate)
+      graduated = reload!(candidate)
       assert graduated.disposition == :accepted
-      assert not is_nil(graduated.task_id)
+      assert is_nil(graduated.task_id)
 
       assert {:error, :already_fired} = Candidates.reopen(candidate)
 
@@ -259,7 +260,7 @@ defmodule Platform.Meetings.CandidateUndoTest do
 
       row = reload!(candidate)
       assert row.state == :shaping
-      assert %DateTime{} = row.acts_at
+      assert is_nil(row.acts_at)
     end
 
     test "an id that names nothing" do

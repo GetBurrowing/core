@@ -1111,6 +1111,7 @@ defmodule Platform.Meetings do
           {:meeting_resumed, updated}
         )
 
+        Platform.Meetings.Completion.reopened(updated.id)
         ok
 
       error ->
@@ -1457,6 +1458,7 @@ defmodule Platform.Meetings do
         )
 
         deliver_meeting_briefing(updated)
+        Platform.Meetings.Completion.resume(updated.id)
         ok
 
       error ->
@@ -4963,8 +4965,17 @@ defmodule Platform.Meetings do
   """
   @spec create_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def create_transcript(attrs) do
+    attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+    started_at = Map.get(attrs, "started_at") || DateTime.utc_now()
+    owner = transcript_meeting_at(attrs["space_id"], started_at)
+
+    attrs =
+      attrs
+      |> Map.put("started_at", started_at)
+      |> Map.put("meeting_id", if(owner, do: owner.id))
+
     %Transcript{}
-    |> Transcript.changeset(Map.put_new(attrs, :started_at, DateTime.utc_now()))
+    |> Transcript.changeset(attrs)
     |> Repo.insert()
   end
 
@@ -5351,7 +5362,12 @@ defmodule Platform.Meetings do
   saw only the empty shadow. Rejoining after the end is legitimate;
   shadowing the row that holds the content is not.
 
-  So: reuse any row for the room that is not `complete`, preferring the
+  Reuse is bounded to the meeting owning the capture start. A failed or
+  processing row from a prior meeting must never absorb a new meeting's speech.
+  Legacy rows without ownership match only when their start is within the
+  current meeting, never by their eventual summary completion time.
+
+  So: reuse an eligible row for the room that is not `complete`, preferring the
   one with the most segments (ties toward the oldest), and reopen it to
   `recording` when it had already left that state. Only a room with no
   reusable row gets an insert.
@@ -5365,12 +5381,58 @@ defmodule Platform.Meetings do
   """
   @spec ensure_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def ensure_transcript(%{room_id: room_id} = attrs) do
-    case get_reattachable_transcript_for_room(room_id) do
+    started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
+    owner = transcript_meeting_at(Map.get(attrs, :space_id), started_at)
+
+    transcript =
+      room_id
+      |> list_transcripts_for_room()
+      |> Enum.reject(&(&1.status == "complete"))
+      |> Enum.filter(&transcript_owned_by?(&1, owner))
+      |> Enum.min_by(
+        fn t -> {-length(t.segments), DateTime.to_unix(t.inserted_at, :microsecond)} end,
+        fn -> nil end
+      )
+
+    case transcript do
       nil -> create_transcript(attrs)
       %Transcript{status: "recording"} = transcript -> {:ok, transcript}
       %Transcript{} = transcript -> reopen_transcript(transcript)
     end
   end
+
+  defp transcript_meeting_at(nil, _started_at), do: nil
+
+  defp transcript_meeting_at(space_id, started_at) do
+    with true <- Platform.UUID.valid?(space_id),
+         {:ok, capture_start} <- Ecto.Type.cast(:utc_datetime_usec, started_at) do
+      from(m in Meeting,
+        where:
+          m.chat_space_id == ^space_id and m.status in ["live", "ended"] and
+            m.started_at <= ^capture_start and
+            (is_nil(m.ended_at) or m.ended_at >= ^capture_start),
+        order_by: [desc: m.started_at],
+        limit: 1
+      )
+      |> Repo.one()
+    else
+      _ -> nil
+    end
+  end
+
+  defp transcript_owned_by?(%Transcript{meeting_id: id}, %Meeting{id: id})
+       when not is_nil(id),
+       do: true
+
+  defp transcript_owned_by?(%Transcript{meeting_id: nil} = transcript, %Meeting{} = meeting) do
+    started_at = transcript.started_at || transcript.inserted_at
+
+    DateTime.compare(started_at, meeting.started_at) != :lt and
+      (is_nil(meeting.ended_at) or DateTime.compare(started_at, meeting.ended_at) != :gt)
+  end
+
+  defp transcript_owned_by?(%Transcript{meeting_id: nil}, nil), do: true
+  defp transcript_owned_by?(_, _), do: false
 
   @doc """
   The row a rejoin should attach to: the room's non-`complete` row holding
@@ -5672,8 +5734,18 @@ defmodule Platform.Meetings do
 
         updated_segments = (transcript.segments || []) ++ [segment]
 
+        # room_started can arrive just before the meeting's live transition.
+        # Bind an empty, unowned capture when its first actual segment arrives;
+        # never reassign a populated transcript from an earlier session.
+        owner =
+          if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
+            do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
+
+        changes = %{segments: updated_segments}
+        changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
+
         transcript
-        |> Ecto.Changeset.change(segments: updated_segments)
+        |> Ecto.Changeset.change(changes)
         |> Repo.update()
         |> tap(fn
           {:ok, updated} ->
@@ -5713,6 +5785,7 @@ defmodule Platform.Meetings do
             # (`%{reason: :agent_speaker}`, see that module's moduledoc),
             # and this delivery is history, not classification.
             _ = deliver_transcript_segment(updated, segment)
+            Platform.Meetings.Completion.transcript_changed(updated)
 
           _error ->
             :ok
@@ -5834,14 +5907,9 @@ defmodule Platform.Meetings do
   @doc """
   Mark a transcript as complete with the generated summary text.
 
-  On successful update, opportunistically dispatches a `meeting_scribe_completion`
-  attention signal to whichever agent currently holds the `meeting_scribe` role
-  (via `Platform.Federation.dispatch_scribe_attention/2`). Progressive-enhancement
-  contract: the dispatch is best-effort — a nil role assignment is a silent
-  no-op, and every failure path inside the Federation call is swallowed there
-  via telemetry (`[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]`),
-  so this function's `{:ok, transcript} | {:error, term()}` contract to the
-  Summarizer stays unchanged.
+  On success, refreshes the persisted completion run. The scribe is dispatched
+  only after the meeting ends, capture has finished, and the full transcript
+  is ready. Delivery failures remain on that run for retry.
 
   ## The success path CLEARS `failure_reason`
 
@@ -5880,7 +5948,7 @@ defmodule Platform.Meetings do
 
         case result do
           {:ok, updated} ->
-            maybe_dispatch_scribe_attention(updated)
+            Platform.Meetings.Completion.transcript_changed(updated)
             refresh_meeting_briefing(updated)
             {:ok, updated}
 
@@ -5904,53 +5972,33 @@ defmodule Platform.Meetings do
       :error
   end
 
-  # Opportunistic dispatch to the `meeting_scribe` role-assigned agent's linked
-  # runtime. Contract is best-effort: no role assignment = silent no-op; all
-  # dispatch failures are swallowed inside `Federation.dispatch_scribe_attention/2`
-  # via telemetry so `complete_transcript/2`'s callers (Summarizer, backfills,
-  # tests) never see a spurious error.
-  defp maybe_dispatch_scribe_attention(%Transcript{} = transcript) do
-    case Platform.Roles.agent_id_for_role("meeting_scribe") do
-      nil ->
-        :ok
-
-      agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_scribe_attention(agent_id, %{
-          space_id: transcript.space_id,
-          room_id: transcript.room_id,
-          transcript_id: transcript.id,
-          reason: "meeting_scribe_completion"
-        })
-    end
-  end
-
   @doc """
   Hook invoked by the scribe runtime handler after it creates a completion
   canvas for a meeting transcript. Resolves the `triage_officer` role and
   dispatches a `meeting_triage_dispatch` attention signal so the triage agent
   can pick up the canvas and convert action items into tasks.
 
-  Progressive-enhancement contract: nil role assignment is a silent no-op
-  (avoids audit noise for orgs that never assigned a triage_officer). All
-  dispatch failures beyond that are swallowed inside
-  `Federation.dispatch_triage_attention/2` via
-  `[:platform, :meetings, :triage_dispatch, :assignee_unresolvable]` telemetry
-  so the caller sees a clean `:ok` regardless.
+  Dispatch errors are returned to the persisted completion run for retry;
+  a successful delivery does not mark triage filing complete.
   """
-  @spec on_scribe_canvas_created(Transcript.t(), Platform.Chat.Canvas.t()) :: :ok
+  @spec on_scribe_canvas_created(Transcript.t(), Platform.Chat.Canvas.t()) ::
+          :ok | {:error, term()}
   def on_scribe_canvas_created(%Transcript{} = transcript, %Platform.Chat.Canvas{} = canvas) do
     case safe_agent_id_for_role("triage_officer") do
       nil ->
-        :ok
+        {:error, :role_unassigned}
 
       agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_triage_attention(agent_id, %{
-          reason: "meeting_triage_dispatch",
-          space_id: transcript.space_id,
-          room_id: transcript.room_id,
-          transcript_id: transcript.id,
-          canvas_id: canvas.id
-        })
+        Platform.Federation.dispatch_triage_attention(
+          agent_id,
+          Map.merge(Platform.Meetings.Completion.dispatch_payload(transcript.id), %{
+            reason: "meeting_triage_dispatch",
+            space_id: transcript.space_id,
+            room_id: transcript.room_id,
+            transcript_id: transcript.id,
+            canvas_id: canvas.id
+          })
+        )
     end
   end
 

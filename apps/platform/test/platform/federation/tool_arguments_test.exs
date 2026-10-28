@@ -214,7 +214,12 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `voice_ask_poll`'s `ask_id` (task 01a17b10 stage 4). All three are HONEST:
   # `Platform.Meetings.VoiceAsk` reads each under its declared key only and
   # refuses absence; no alias, no context fallback, no absence default.
-  @surveyed_required_count 196
+  # Task01a17f00: 196 -> 207, eleven honest requirements across the two
+  # completion tools. Both require meeting/run/transcript/canvas UUIDs and
+  # snapshot_hash; triage also requires action_items. Completion.callback/4
+  # refuses absent identities/hash, and triage_file/2 refuses absent items;
+  # none is aliased, defaulted, or resolved from caller context.
+  @surveyed_required_count 207
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

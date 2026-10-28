@@ -2084,7 +2084,6 @@ defmodule PlatformWeb.InboxLiveTest do
   describe "the meeting briefing row and detail" do
     alias Platform.Access.Scope
     alias Platform.Meetings
-    alias Platform.Meetings.Candidates
     alias Platform.Meetings.Meeting
     alias Platform.Meetings.MeetingBriefings
     alias Platform.Meetings.Participant
@@ -2102,18 +2101,20 @@ defmodule PlatformWeb.InboxLiveTest do
       user
     end
 
-    defp graduate_task!(%Meeting{} = meeting, quote) do
-      {:ok, candidate} =
-        Candidates.create(%{
-          meeting_id: meeting.id,
-          evidence_quote: quote,
-          state: :heard,
-          outcome_kind: :task,
-          acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+    # Historical live-minted task fixture; live code must no longer create it.
+    defp graduate_task!(meeting, quote) do
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: meeting.project_id,
+          title: quote,
+          metadata: %{
+            "source" => "meetings.candidate",
+            "meeting_id" => meeting.id,
+            "candidate_id" => Ecto.UUID.generate()
+          }
         })
 
-      {:ok, graduated} = Candidates.graduate(candidate)
-      Repo.get!(TaskRecord, graduated.task_id)
+      task
     end
 
     # A meeting A and B attended, with two backlog tasks, concluded through
@@ -2165,6 +2166,132 @@ defmodule PlatformWeb.InboxLiveTest do
     defp mb_key(%TaskRecord{id: id}), do: MeetingBriefings.node_key("task:" <> id)
 
     defp detail_path(%Meeting{id: id}), do: "/inbox/meeting/" <> id
+
+    test "filed task actions are Revert / Ask on both actual Inbox routes", %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t1)
+      selector = ~s([data-role="meeting-briefing-card"][data-key="#{k}"])
+      {:ok, meeting_lv, _} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      assert has_element?(meeting_lv, "[data-role=meeting-briefing-detail]")
+
+      assert meeting_lv
+             |> element(selector <> " [data-role=meeting-briefing-actions]")
+             |> render()
+             |> strip_tags() =~ "Revert"
+
+      refute has_element?(meeting_lv, selector <> " [data-action=confirm]")
+
+      insight =
+        Platform.InsightFixtures.insight!(
+          addressee: ctx.a,
+          action_type: "task",
+          body: "Already filed meeting work"
+        )
+
+      insight |> Ecto.Changeset.change(artefact_ref: "task:" <> ctx.t1.id) |> Repo.update!()
+
+      unfiled =
+        Platform.InsightFixtures.insight!(
+          addressee: ctx.a,
+          action_type: "task",
+          body: "Unfiled suggestion"
+        )
+
+      date = PlatformWeb.Components.BriefingRow.today(nil)
+
+      daily =
+        Repo.insert!(%Platform.Memory.Briefing{
+          user_id: ctx.a.id,
+          digest_date: date,
+          items: %{
+            Platform.Memory.Insights.BriefingCard.node_key(insight.id) => insight.id,
+            Platform.Memory.Insights.BriefingCard.node_key(unfiled.id) => unfiled.id
+          }
+        })
+
+      {:ok, _, :created} = Platform.Inbox.upsert_briefing_item(daily, %{total: 2, calls: 2})
+      {:ok, daily_lv, _} = live(auth(conn, ctx.a), "/inbox/briefing/" <> Date.to_iso8601(date))
+      assert has_element?(daily_lv, "[data-role=meeting-briefing-task]")
+      assert has_element?(daily_lv, selector <> " [data-action=revert]")
+      assert has_element?(daily_lv, selector <> " [data-action=ask]")
+      refute daily_lv |> element(selector) |> render() =~ "File task"
+      refute daily_lv |> element(selector) |> render() =~ "Looks right"
+
+      assert has_element?(
+               daily_lv,
+               "#briefing-item-" <>
+                 Platform.Memory.Insights.BriefingCard.node_key(unfiled.id) <>
+                 " [data-role=briefing-file]"
+             )
+
+      assert {:error, :already_handled} =
+               Platform.Memory.Insights.Briefings.handle(
+                 daily,
+                 Platform.Memory.Insights.BriefingCard.node_key(insight.id),
+                 "file",
+                 Scope.for_user(ctx.a),
+                 %{}
+               )
+
+      daily_lv |> element(selector <> " [data-action=revert]") |> render_click()
+      assert %DateTime{} = Repo.get!(TaskRecord, ctx.t1.id).deleted_at
+      Platform.AsyncAssertions.assert_eventually(fn -> render(meeting_lv) =~ "Reverted by" end)
+      Platform.AsyncAssertions.assert_eventually(fn -> render(daily_lv) =~ "Reverted by" end)
+      refute has_element?(daily_lv, selector <> " [data-action=revert]")
+    end
+
+    test "repeated daily references keep distinct DOM ids and one shared receipt", %{conn: conn} do
+      ctx = concluded_meeting!()
+
+      insights =
+        for _ <- 1..2 do
+          insight =
+            Platform.InsightFixtures.insight!(
+              addressee: ctx.a,
+              action_type: "task",
+              body: "Already filed meeting work"
+            )
+
+          insight |> Ecto.Changeset.change(artefact_ref: "task:" <> ctx.t1.id) |> Repo.update!()
+        end
+
+      date = PlatformWeb.Components.BriefingRow.today(nil)
+
+      daily =
+        Repo.insert!(%Platform.Memory.Briefing{
+          user_id: ctx.a.id,
+          digest_date: date,
+          items: Map.new(insights, &{Platform.Memory.Insights.BriefingCard.node_key(&1), &1.id})
+        })
+
+      {:ok, _, :created} = Platform.Inbox.upsert_briefing_item(daily, %{total: 2, calls: 2})
+      {:ok, view, _} = live(auth(conn, ctx.a), "/inbox/briefing/" <> Date.to_iso8601(date))
+
+      ids =
+        render(view)
+        |> Floki.parse_document!()
+        |> Floki.find("[data-role=meeting-briefing-card]")
+        |> Floki.attribute("id")
+
+      assert length(ids) == 2
+      assert Enum.uniq(ids) == ids
+      [first, second] = ids
+      view |> element("##{first} [data-action=ask]") |> render_click()
+      assert has_element?(view, "##{first} [data-role=meeting-briefing-ask-form]")
+      refute has_element?(view, "##{second} [data-role=meeting-briefing-ask-form]")
+      view |> element("##{second} [data-action=revert]") |> render_click()
+
+      Platform.AsyncAssertions.assert_eventually(fn ->
+        render(view)
+        |> Floki.parse_document!()
+        |> Floki.find("[data-role=meeting-briefing-resolved-card]")
+        |> length() == 2
+      end)
+
+      assert map_size(
+               Repo.get_by!(Platform.Meetings.MeetingBriefing, meeting_id: ctx.meeting.id).receipts
+             ) == 1
+    end
 
     test "an attendee's row shows the meeting and its receipt line", %{conn: conn} do
       ctx = concluded_meeting!()

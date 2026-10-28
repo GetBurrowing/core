@@ -14,10 +14,14 @@ defmodule Platform.Orchestration.TaskAckPreambleTruthfulnessTest do
   What is asserted:
 
   1. Every seeded stage-scoped dispatch row (`dispatch.in_progress`,
-     `dispatch.in_review`, `dispatch.deploying`, `dispatch.scribe_completion`)
+     `dispatch.in_review`, `dispatch.deploying`)
      rendered through `render_template/2` drops the impossibility claim, keeps
      the spawn-first instruction and the pass-the-spawned-id instruction, and
      still carries `subagent_id=` on the ack call line.
+  The stage-less scribe completion prompt instead uses its authenticated
+  meeting callback and canonical run identities, without a task/stage lease
+  (task 01a17f00-832c-7000-b480-64ab6d710532).
+
   2. The same holds on the row-less `HeartbeatScheduler.dispatch_prompt/3`
      path for every phase that carries the preamble.
   3. The `subagent_id` parameter descriptions of `task_ack` and `intent_ack`
@@ -32,7 +36,7 @@ defmodule Platform.Orchestration.TaskAckPreambleTruthfulnessTest do
   alias Platform.Orchestration.PromptTemplate
   alias Platform.Orchestration.PromptTemplates
 
-  @slugs ~w(dispatch.in_progress dispatch.in_review dispatch.deploying dispatch.scribe_completion)
+  @slugs ~w(dispatch.in_progress dispatch.in_review dispatch.deploying)
 
   @old_claim "structurally impossible"
   @spawn_first "Spawn the subagent FIRST"
@@ -78,6 +82,31 @@ defmodule Platform.Orchestration.TaskAckPreambleTruthfulnessTest do
         assert_truthful_preamble!(rendered, ctx.task_id, ctx.stage_id, unquote(slug))
       end
     end
+  end
+
+  test "stage-less scribe completion renders a canonical callback without a task ack", ctx do
+    assert {:ok, rendered} =
+             PromptTemplates.render_template("dispatch.scribe_completion", %{
+               task_id: ctx.task_id,
+               stage_id: ctx.stage_id,
+               federation_preamble: "Meeting callback fixture preamble",
+               meeting_name: "Finalized meeting",
+               space_id: Ecto.UUID.generate(),
+               transcript_id: Ecto.UUID.generate(),
+               room_id: "finalized-room",
+               execution_space_id: Ecto.UUID.generate(),
+               skills_reference: ""
+             })
+
+    refute rendered =~ "task_ack"
+    refute rendered =~ "{{task_id}}"
+    refute rendered =~ "{{stage_id}}"
+    refute rendered =~ ctx.task_id
+    refute rendered =~ ctx.stage_id
+    assert rendered =~ "meeting_scribe_complete"
+
+    for identity <- ~w(meeting_id run_id transcript_id canvas_id snapshot_hash),
+        do: assert(rendered =~ identity)
   end
 
   describe "row-less HeartbeatScheduler.dispatch_prompt/3 fallback" do

@@ -285,8 +285,11 @@ defmodule PlatformWeb.AgentConfigLiveTest do
         )
 
       {:ok, view, _} = live(as(conn, owner), ~p"/control/#{agent.slug}/config")
-      view |> element("#session-strip-restart") |> render_click()
-      assert has_element?(view, "#session-strip-restarting", "Restarting…")
+      # Assert the event response itself: a second LiveView round trip can
+      # arrive after the fast fake restart has already completed.
+      restarting = view |> element("#session-strip-restart") |> render_click()
+      assert present?(restarting, "#session-strip-restarting")
+      assert texts(restarting, "#session-strip-restarting") |> hd() =~ "Restarting…"
 
       html = render_async(view)
       assert present?(html, "#session-strip-restarted")

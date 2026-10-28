@@ -277,11 +277,13 @@ defmodule Platform.Meetings.CandidateDurabilityTest do
       # Control on the delta above: a task IS creatable in this env, so
       # the zero delta means "the artifact branch created none", not
       # "nothing can create a task here".
-      {:ok, task_candidate} =
-        Candidates.create(candidate_attrs(meeting.id, %{outcome_kind: :task}))
+      assert {:ok, task} =
+               Platform.Tasks.create_task(%{
+                 project_id: meeting.project_id,
+                 title: "Positive task control"
+               })
 
-      assert {:ok, task_graduated} = Candidates.graduate(task_candidate)
-      assert task_graduated.task_id
+      assert task.id
       assert Repo.aggregate(Platform.Tasks.Task, :count) == before_tasks + 1
     end
   end

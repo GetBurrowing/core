@@ -1,106 +1,11 @@
 defmodule Platform.Meetings.CandidateSweeper do
   @moduledoc """
-  The server-side countdown: tick, claim every candidate whose deadline
-  has passed, graduate it (task 01a03fba stage 3).
+  Server-side artifact countdowns. Each tick claims due, classified artifact
+  candidates atomically, then creates their canvases. Task candidates never
+  fire: task filing belongs to end-of-meeting triage.
 
-  This exists because the countdown cannot live in the browser. The
-  acceptance criterion is the product lead's: *a closed tab must not stop the card
-  firing with nobody watching*. A `setInterval` in a LiveView hook, or
-  even a `Process.send_after/3` in the LiveView process, both die with
-  the last connected participant — so the meeting whose members all
-  closed their laptops is exactly the meeting where the countdown must
-  still run, and exactly the one where those two mechanisms do not.
-
-  ## Why a polled column and not a timer
-
-  See `Platform.Meetings.Countdown` for the full argument. In short: the
-  intent queue's `ack_timer` holds one deadline, on a `restart: :temporary`
-  GenServer whose ETS dies with it, gating a rail
-  (`Candidates.graduate/2`) that does not use the queue at all. The
-  deadline is therefore `meeting_candidates.acts_at`, and this module is
-  the poller.
-
-  The shape is `Platform.Tenancy.ContainerPurger` /
-  `Platform.Files.Purger` / `Platform.Chat.SpacePurger`: a GenServer,
-  boot-gated on an application flag, that ticks and scans a due-by
-  `*_at` column. There is no Oban and no Quantum in this project.
-
-  ## Firing exactly once
-
-  There is no advisory lock, leader election or `:global` registration
-  anywhere in `lib/`. Every sweeper here is node-local and pushes its
-  idempotence down into the data, and this one has to as well:
-  `Candidates.graduate/2` has no guard of its own, so two sweepers that
-  both cleared a `SELECT` would both reach `mint/1` and produce two
-  tasks for one sentence.
-
-  So this module never selects and then acts. `Candidates.claim_due/2`
-  is a conditional `UPDATE ... WHERE acts_at IS NOT NULL AND acts_at <= now
-  AND state NOT IN ('closed','acting')` with `RETURNING`, and only the
-  rows it returns are fired. The stop button races the same predicate on
-  the same row and Postgres row locking picks a winner. Nothing about
-  correctness depends on there being one sweeper.
-
-  ## The tick is short on purpose
-
-  One second. The countdown is 30 seconds and the visible artefact is a
-  ring, so a minute-scale cadence — right for a daily purge — would make
-  a card fire up to a minute after its ring reached zero, and a ring
-  that sits at zero is exactly the "timer that lies" this ticket is
-  about. The cost is one indexed query per second against a partial
-  index on the armed minority (`meeting_candidates_armed_acts_at_index`).
-
-  ## Reaping the orphan (task 01a06638)
-
-  `Candidates.claim_due/2` passes over a card nothing has classified, so
-  a slow answer is not graduated unvetted. The tail of that rule is a
-  card whose answer NEVER comes: it stays armed and overdue for the life
-  of the row, never firing and never closing. After the claim/fire
-  pipeline each sweep therefore calls `Candidates.reap_unclassified/2`,
-  which closes every armed unclassified card past `acts_at + grace`
-  with reason `:unclassified` and disposition `:timed_out`, and this
-  module logs one line and emits `reap_telemetry_event/0` per row.
-  Operator-visible only — no toast, no banner.
-
-  ### WHY 300s
-
-  The grace must exceed the slowest GENUINE answer, or the reaper is the
-  P1 regression in a new coat: a real classification arriving inside
-  the provider's timeout would find its card already closed. The
-  classifier's default provider is `Platform.Agents.Providers.Ollama`
-  (`Platform.Meetings.IntentClassifier.init/1`, and `Platform.Application`
-  starts it with no override), whose receive timeout is 300_000 ms — the
-  Anthropic, OpenAI and Codex adapters allow 60_000. The bound is
-  therefore pinned to the maximum provider timeout, 300_000 ms after
-  the deadline. The classifier holds a chunk at most `max_hold_ms`
-  (4 s) before the call and does not retry, so the latest genuine answer
-  lands well inside `acts_at + 300s`.
-
-  The pin is a TEST, not a compile-time assertion: Ollama's timeout is
-  read from `Application.get_env/3` at runtime, so it is not a constant
-  this module could compare against at compile time.
-  `CandidateSweeperTest` asserts `default_unclassified_grace_ms/0` is at
-  or above `receive_timeout_ms/0` for every provider module, so a new or
-  slower provider reds that test rather than silently reaping answers.
-
-  ## Configuration
-
-      config :platform, #{__MODULE__},
-        tick_interval_ms: 1_000,
-        batch_size: 100,
-        unclassified_grace_ms: 300_000
-
-  Boot gated on `:start_candidate_sweeper` (defaults to `true`; set to
-  `false` in `config/test.exs` so DataCase-scoped tests start their own
-  per-case instance and no ambient sweeper races the sandbox).
-
-  ## Test seam
-
-  Every `start_link/1` option is forwarded to `init/1`, so a test can
-  pass `tick_interval_ms: 50` and a `:name`, and `sweep/1` is public and
-  synchronous — the timing assertions call it directly rather than
-  sleeping past a cadence. `sweep/1` also takes `:now` and `:grace_ms`
-  for the same reason.
+  Unclassified armed artifact orphans are closed after the provider timeout
+  grace (`default_unclassified_grace_ms/0`), with an audit event and telemetry.
   """
 
   use GenServer
@@ -168,6 +73,8 @@ defmodule Platform.Meetings.CandidateSweeper do
     now
     |> Candidates.claim_due(limit: batch_size)
     |> Enum.flat_map(fn candidate ->
+      # claim_due/2 selects artifact candidates only; graduate/2 also
+      # refuses task candidates, including stale pre-cutover rows.
       case Candidates.fire(candidate) do
         {:ok, fired} ->
           :telemetry.execute(

@@ -58,6 +58,8 @@ defmodule Platform.Federation.PlayToolsTest do
   # 135 with the four access tools (RBAC v2 agent-first Access UI).
   # 137 with `stack_attach_canvas` and `stack_detach_canvas` after
   # `stack_assign_agents` (task 01a1559a stage 2).
+  # 139 with authenticated meeting_scribe_complete/meeting_triage_file at the
+  # start of meetings (task 01a17f00 stage 2).
   @main_tool_names ~w(
     canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions
     canvas_restore send_media react project_list org_list_descendants project_update epic_list
@@ -79,7 +81,8 @@ defmodule Platform.Federation.PlayToolsTest do
     memory_delete memory_rename memory_search org_memory_recently_edited
     org_memory_recently_deleted org_memory_feedback_at_path skill_list skill_get skill_upsert
     attachment_upload_inline attachment_get_inline attachment_upload_start file_list
-    file_get_text file_get_metadata file_search file_add file_delete meeting_create meeting_say
+    file_get_text file_get_metadata file_search file_add file_delete meeting_scribe_complete
+    meeting_triage_file meeting_create meeting_say
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
@@ -168,8 +171,8 @@ defmodule Platform.Federation.PlayToolsTest do
   end
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 137, in order" do
-      assert length(@main_tool_names) == 137
+    test "tool_definitions/0 names equal main's 139, in order" do
+      assert length(@main_tool_names) == 139
       assert catalogue_names() == @main_tool_names
     end
 

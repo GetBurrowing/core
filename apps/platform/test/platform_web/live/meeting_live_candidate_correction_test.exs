@@ -121,14 +121,19 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
             assigned_agent_slug: agent.slug,
             target_role: "meeting_scribe",
             state: :shaping,
-            outcome_kind: :task,
+            outcome_kind: :artifact,
             acts_at: DateTime.add(DateTime.utc_now(), 5, :second)
           },
           overrides
         )
       )
 
+    # A task override represents a pre-cutover row for task-to-artifact correction.
     candidate
+    |> Ecto.Changeset.change(
+      acts_at: Map.get(overrides, :acts_at, DateTime.add(DateTime.utc_now(), 5, :second))
+    )
+    |> Repo.update!()
   end
 
   defp reload!(%MeetingCandidate{id: id}), do: Repo.get!(MeetingCandidate, id)
@@ -252,7 +257,7 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
 
   describe "make it a canvas instead" do
     test "writes one :corrected / :wrong_intent row and flips the outcome", ctx do
-      candidate = armed!(ctx.meeting, ctx.scribe)
+      candidate = armed!(ctx.meeting, ctx.scribe, %{outcome_kind: :task})
       assert candidate.outcome_kind == :task
 
       view = open_meeting(ctx.conn, ctx.meeting)
@@ -507,31 +512,15 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
       assert closed.closed_reason == :dismissed
     end
 
-    test "pressing the rendered flip writes :wrong_intent and flips outcome_kind", ctx do
+    test "task evidence offers no pencil, conversion or countdown", ctx do
       candidate = armed!(ctx.meeting, ctx.scribe, %{outcome_kind: :task})
       view = open_meeting(ctx.conn, ctx.meeting)
-
-      click!(view, pencil_selector(candidate))
-
-      # The label the reader actually pressed, read off the rendered
-      # element rather than assumed — the direction is derived from
-      # `outcome_kind` and a component that ignored it would offer the
-      # wrong sentence while still writing a valid row.
-      assert view
-             |> element(choice_selector("meeting-candidate-correction-flip", candidate))
-             |> render() =~ "Make it a canvas instead"
-
-      click!(view, choice_selector("meeting-candidate-correction-flip", candidate))
-
-      row = only_correction!()
-      assert row.correction == :corrected
-      assert row.reason == :wrong_intent
-      refute is_nil(row.corrected_intent)
-      assert row.corrected_intent != candidate.classified_intent
-
-      flipped = reload!(candidate)
-      assert flipped.outcome_kind == :artifact
-      assert_full_window!(flipped)
+      refute has_element?(view, pencil_selector(candidate))
+      refute has_element?(view, choice_selector("meeting-candidate-correction-flip", candidate))
+      assert has_element?(view, "[data-role=meeting-candidate-evidence]")
+      assert Enum.empty?(countdown_foot(render(view), candidate))
+      assert correction_count() == 0
+      assert reload!(candidate).task_id == nil
     end
 
     test "pressing the rendered reassign hands the card to the agent the BUTTON names", ctx do
@@ -761,18 +750,20 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
       assert moved.assigned_agent_id == ctx.designer.id
     end
 
-    test "a flip repaints the card at the FULL window, not the remainder", ctx do
+    test "a task-to-canvas correction renders only the new canvas timer", ctx do
       candidate = armed!(ctx.meeting, ctx.scribe, %{outcome_kind: :task})
       view = open_meeting(ctx.conn, ctx.meeting)
-
-      before = rendered_remaining(render(view), candidate)
-
+      assert Enum.empty?(countdown_foot(render(view), candidate))
       render_click(view, "candidate_correct_flip", %{"candidate_id" => candidate.id})
-
-      flipped = assert_rendered_full_window!(view, candidate, before)
-
-      assert correction_count() == 1
+      flipped = assert_full_window!(reload!(candidate))
       assert flipped.outcome_kind == :artifact
+      assert flipped.task_id == nil
+      assert DateTime.compare(flipped.acts_at, candidate.acts_at) == :gt
+
+      assert rendered_remaining(render(view), candidate) in (Countdown.countdown_seconds() - 1)..Countdown.countdown_seconds()
+
+      assert rendered_acts_at(render(view), candidate) == DateTime.to_iso8601(flipped.acts_at)
+      assert correction_count() == 1
     end
 
     test "the reader's whole path never shows the window shrink", ctx do
@@ -782,6 +773,17 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
       # cannot. `candidate_correct_open` re-arms too, so this case reads
       # 30 after the second press whether or not `correct/3` re-arms at
       # all. The two cases above are the guard; this one is the journey.
+      room = present_agent!(ctx.meeting, ctx.scribe)
+
+      %Meetings.Participant{}
+      |> Meetings.Participant.changeset(%{
+        room_id: room.id,
+        agent_id: ctx.designer.id,
+        display_name: ctx.designer.name,
+        joined_at: DateTime.utc_now()
+      })
+      |> Repo.insert!()
+
       candidate = armed!(ctx.meeting, ctx.scribe)
       view = open_meeting(ctx.conn, ctx.meeting)
 
@@ -791,12 +793,11 @@ defmodule PlatformWeb.MeetingLiveCandidateCorrectionTest do
       opened = rendered_remaining(render(view), candidate)
       assert opened in (Countdown.countdown_seconds() - 1)..Countdown.countdown_seconds()
 
-      click!(view, choice_selector("meeting-candidate-correction-flip", candidate))
+      click!(view, choice_selector("meeting-candidate-correction-reassign", candidate))
 
-      corrected = rendered_remaining(render(view), candidate)
-
-      assert corrected in (Countdown.countdown_seconds() - 1)..Countdown.countdown_seconds(),
-             "the window must not shrink across the correction, got #{corrected}"
+      assert_full_window!(reload!(candidate))
+      assert reload!(candidate).outcome_kind == :artifact
+      assert reload!(candidate).assigned_agent_id == ctx.designer.id
 
       assert correction_count() == 1
     end

@@ -34,7 +34,6 @@ defmodule Platform.Meetings.MeetingTaskScopeTest do
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Archive
-  alias Platform.Meetings.Candidates
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefings
   alias Platform.Meetings.Triage
@@ -115,19 +114,20 @@ defmodule Platform.Meetings.MeetingTaskScopeTest do
     ended
   end
 
-  defp graduate!(%Meeting{} = meeting, quote) do
-    {:ok, candidate} =
-      Candidates.create(%{
-        meeting_id: meeting.id,
-        evidence_quote: quote,
-        state: :heard,
-        outcome_kind: :task,
-        acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+  # Historical live-minted task fixture; live code must no longer create it.
+  defp graduate!(meeting, quote) do
+    {:ok, task} =
+      Platform.Tasks.create_task(%{
+        project_id: meeting.project_id,
+        title: quote,
+        metadata: %{
+          "source" => "meetings.candidate",
+          "meeting_id" => meeting.id,
+          "candidate_id" => Ecto.UUID.generate()
+        }
       })
 
-    {:ok, graduated} = Candidates.graduate(candidate)
-    assert is_binary(graduated.task_id)
-    Repo.get!(TaskRecord, graduated.task_id)
+    task
   end
 
   defp file!(canvas, project, title) do

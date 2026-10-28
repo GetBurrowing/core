@@ -106,13 +106,15 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
             transcript_chunk_id: Ecto.UUID.generate(),
             transcript_chunk_ids: [Ecto.UUID.generate()],
             state: :heard,
+            outcome_kind: :artifact,
             acts_at: nil
           },
           attrs
         )
       )
 
-    candidate
+    # Historical deadlines remain renderable until their rows are settled.
+    candidate |> Ecto.Changeset.change(acts_at: Map.get(attrs, :acts_at)) |> Repo.update!()
   end
 
   defp mount_board(conn, meeting) do
@@ -533,7 +535,8 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "file the pricing objection",
           state: :acting,
           classified_intent: "action_item",
-          task_id: Ecto.UUID.generate()
+          task_id: Ecto.UUID.generate(),
+          outcome_kind: :task
         })
 
       failed_mint =
@@ -808,6 +811,29 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
              |> Enum.empty?()
     end
 
+    test "a task candidate is evidence only, including a forged graduation click", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      candidate =
+        candidate!(meeting, %{
+          outcome_kind: :task,
+          state: :shaping,
+          classified_intent: "action_items",
+          evidence_quote: "We should investigate this",
+          acts_at: DateTime.add(DateTime.utc_now(), 20, :second)
+        })
+
+      {view, _} = mount_board(conn, meeting)
+      selector = "[data-candidate-id='#{candidate.id}']"
+      assert has_element?(view, selector <> " [data-role=meeting-candidate-evidence]")
+      refute has_element?(view, selector <> " [data-role=meeting-candidate-approve]")
+      refute has_element?(view, selector <> " [data-role=meeting-candidate-countdown]")
+      render_click(view, "approve_candidate", %{"candidate_id" => candidate.id})
+      assert Repo.reload!(candidate).task_id == nil
+      assert Repo.reload!(candidate).disposition == nil
+    end
+
     test "Go ahead and Not now write DIFFERENT rows", %{conn: conn, meeting: meeting} do
       approved =
         candidate!(meeting, %{
@@ -838,9 +864,9 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
 
       # Read out of the DATABASE, because the claim is that a click in
       # a participant's browser minted a deliverable on the server.
-      assert is_binary(approved_row.task_id)
-      assert approved_row.closed_reason == :done
-      assert approved_row.disposition == :accepted
+      assert is_nil(approved_row.task_id)
+      assert is_nil(approved_row.closed_reason)
+      assert is_nil(approved_row.disposition)
 
       # The divergence. A handler that closed on BOTH paths, or
       # graduated on both, passes a single-sided test and fails here.

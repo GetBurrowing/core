@@ -262,6 +262,7 @@ defmodule Platform.Role do
     Platform.Responsibilities.StallRegistry,
     Platform.Meetings.SummarizerSweeper,
     Platform.Meetings.CandidateSweeper,
+    Platform.Meetings.CompletionSweeper,
     Platform.Security.Sweeper,
     Platform.Chat.SpacePurger,
     Platform.Experiments.Signals.MailSubscriber,

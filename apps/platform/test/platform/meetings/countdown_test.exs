@@ -58,7 +58,15 @@ defmodule Platform.Meetings.CountdownTest do
         slug: "countdown-meeting-#{n}"
       })
 
-    meeting
+    {:ok, participant} =
+      Platform.Chat.add_participant(meeting.chat_space_id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Artifact host",
+        joined_at: DateTime.utc_now()
+      })
+
+    meeting |> Ecto.Changeset.change(host_participant_id: participant.id) |> Repo.update!()
   end
 
   defp heard!(meeting, opts) do
@@ -67,6 +75,7 @@ defmodule Platform.Meetings.CountdownTest do
       transcript_chunk_id: Ecto.UUID.generate(),
       evidence_quote: Keyword.get(opts, :text, "somebody should write up the onboarding funnel"),
       speaker: Keyword.get(opts, :speaker, "alice"),
+      outcome_kind: :artifact,
       heard_at: Keyword.fetch!(opts, :at)
     })
   end
@@ -246,7 +255,7 @@ defmodule Platform.Meetings.CountdownTest do
 
   # ── S2: arming ────────────────────────────────────────────────────────────
 
-  describe "arming a candidate" do
+  describe "arming an artifact candidate" do
     setup do: %{meeting: meeting!()}
 
     test "record_heard/1 arms acts_at exactly 30s after the utterance", %{meeting: meeting} do
@@ -311,7 +320,7 @@ defmodule Platform.Meetings.CountdownTest do
                  evidence_quote: "did you catch the game last night",
                  speaker: "bruno",
                  state: :heard,
-                 outcome_kind: :task,
+                 outcome_kind: :artifact,
                  classified_intent: "off_topic",
                  target_role: "null",
                  heard_at: at,
@@ -330,7 +339,7 @@ defmodule Platform.Meetings.CountdownTest do
                  evidence_quote: "we should make the dashboard load faster",
                  speaker: "alice",
                  state: :heard,
-                 outcome_kind: :task,
+                 outcome_kind: :artifact,
                  classified_intent: "action_items",
                  target_role: "null",
                  heard_at: at,
@@ -362,6 +371,7 @@ defmodule Platform.Meetings.CountdownTest do
                  transcript_chunk_id: chunk_id,
                  evidence_quote: "did you catch the game last night",
                  speaker: "bruno",
+                 outcome_kind: :artifact,
                  heard_at: at
                })
 
@@ -382,7 +392,7 @@ defmodule Platform.Meetings.CountdownTest do
                  target_role: "null",
                  state: :heard,
                  queue_status: "queued",
-                 outcome_kind: :task,
+                 outcome_kind: :artifact,
                  heard_at: at,
                  last_utterance_at: at
                })
@@ -424,6 +434,7 @@ defmodule Platform.Meetings.CountdownTest do
                  transcript_chunk_id: chunk_id,
                  evidence_quote: text,
                  speaker: "bruno",
+                 outcome_kind: :artifact,
                  heard_at: at
                })
 
@@ -442,7 +453,7 @@ defmodule Platform.Meetings.CountdownTest do
                  target_role: "meeting_scribe",
                  state: :heard,
                  queue_status: "queued",
-                 outcome_kind: :task,
+                 outcome_kind: :artifact,
                  heard_at: at,
                  last_utterance_at: at
                })
@@ -472,6 +483,7 @@ defmodule Platform.Meetings.CountdownTest do
                  transcript_chunk_id: chunk_id,
                  evidence_quote: "we should make the dashboard load faster",
                  speaker: "alice",
+                 outcome_kind: :artifact,
                  heard_at: at
                })
 
@@ -492,7 +504,7 @@ defmodule Platform.Meetings.CountdownTest do
                  target_role: "null",
                  state: :heard,
                  queue_status: "queued",
-                 outcome_kind: :task,
+                 outcome_kind: :artifact,
                  heard_at: at,
                  last_utterance_at: at
                })
@@ -763,7 +775,7 @@ defmodule Platform.Meetings.CountdownTest do
       # same sweep, on the very same meeting, fired the card nobody
       # stopped. A sweeper that fired nothing at all would fail here.
       assert live_card.id in fired_ids
-      assert reload!(live_card).task_id
+      assert reload!(live_card).canvas_id
     end
 
     test "stopping AFTER the sweeper won is refused, not silently accepted",
@@ -779,7 +791,7 @@ defmodule Platform.Meetings.CountdownTest do
       # `{:ok, _}` here would let the UI claim it prevented a task that
       # actually exists.
       assert {:error, :already_fired} = Candidates.stop(card, Ecto.UUID.generate())
-      assert reload!(card).task_id
+      assert reload!(card).canvas_id
     end
   end
 end

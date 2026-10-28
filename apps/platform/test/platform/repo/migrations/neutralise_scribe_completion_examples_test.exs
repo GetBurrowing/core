@@ -106,14 +106,17 @@ defmodule Platform.Repo.Migrations.NeutraliseScribeCompletionExamplesTest do
       assert migration(:old_description_sha256) == @recorded_description_digest
     end
 
-    test "writes lines and a description the current descriptor carries" do
+    test "writes neutral example lines and preserves its historical description contract" do
       lines = String.split(descriptor().content, "\n")
 
       for new_line <- Map.values(migration(:line_map)) do
         assert new_line in lines, "not a descriptor line: #{inspect(new_line)}"
       end
 
-      assert migration(:new_description) == descriptor().description
+      # The callable completion boundary changed the current description later.
+      # Pin this historical migration's original description independently.
+      assert migration(:new_description) ==
+               "Sent to the scribe agent on `meeting_scribe_completion` attention signals. Instructs the scribe to produce a 5-card meeting summary canvas (Summary / Decisions / Action items / Open questions / Provenance) in the meeting's chat space and hand structured action items off to the triage agent via `dispatch_triage_attention/2`. Codifies the Globex scribe canvas structure proven on the 2026-07-13 meeting."
     end
 
     test "matches nothing in the current descriptor, so a fresh database is untouched" do

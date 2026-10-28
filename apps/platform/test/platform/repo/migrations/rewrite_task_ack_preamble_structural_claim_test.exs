@@ -66,12 +66,21 @@ defmodule Platform.Repo.Migrations.RewriteTaskAckPreambleStructuralClaimTest do
       template = PromptTemplates.get_template_by_slug(slug)
       refute is_nil(template), "#{slug} must be seeded before this test can stale it"
 
-      assert String.contains?(template.content, new_paragraph),
-             "#{slug} seeded row must carry the current spawn paragraph to be staled"
+      # The scribe default is stage-less now; construct the historical deployed
+      # shape explicitly so this historical migration still proves its fourth row.
+      deployed_content =
+        if slug == "dispatch.scribe_completion" do
+          new_paragraph <> "\n\nHistorical scribe meeting body: preserve this text.\n"
+        else
+          assert String.contains?(template.content, new_paragraph),
+                 "#{slug} seeded row must carry the current spawn paragraph to be staled"
+
+          template.content
+        end
 
       stale =
         marker(slug) <>
-          "\n\n" <> String.replace(template.content, new_paragraph, @old_paragraph)
+          "\n\n" <> String.replace(deployed_content, new_paragraph, @old_paragraph)
 
       {:ok, _} = PromptTemplates.update_template(template, %{content: stale})
 

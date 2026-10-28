@@ -308,8 +308,11 @@ defmodule Platform.SkillsTest do
             "jaro_distance",
             "principal_search",
             "project_hint",
-            "similar_open_titles",
-            "file_tasks_from_canvas",
+            "meeting_triage_file",
+            "snapshot_hash",
+            "item_id",
+            "source_segment_ids",
+            "dedup and caps",
             "checklist_item",
             "high|medium|low"
           ] do

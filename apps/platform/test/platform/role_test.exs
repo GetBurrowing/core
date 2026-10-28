@@ -201,6 +201,7 @@ defmodule Platform.RoleTest do
                :meetings_sender_seed,
                Platform.Mail.Inbound.Supervisor,
                Platform.Mail.Outbox,
+               Platform.Meetings.CompletionSweeper,
                :canvas_search_backfill,
                :burrow_docs_seed,
                :default_space_seed,

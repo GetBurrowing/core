@@ -489,6 +489,13 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
         </span>
       </p>
 
+      <p
+        :if={Map.get(@candidate, :outcome_kind) != :artifact}
+        class="text-sm text-subtle"
+        data-role="meeting-candidate-evidence"
+      >
+        Candidate evidence · Follow-up work is reviewed after the meeting.
+      </p>
       <.review_row :if={review?(@candidate)} candidate={@candidate} />
 
       <.countdown_foot
@@ -1228,7 +1235,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
              re-reads is holding. A `phx-value-to="artifact"` would be a
              second copy of the same fact, able to disagree with the first
              after a broadcast repainted the card under the reader. --%>
-        <li>
+        <li :if={Map.get(@candidate, :outcome_kind) != :artifact}>
           <button
             type="button"
             phx-click="candidate_correct_flip"
@@ -1388,7 +1395,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # A card with a nil `acts_at` is disarmed — stopped, or opened while
   # the meeting's automation was off — and there is nothing to count
   # down or stop.
-  defp armed?(%{acts_at: %DateTime{}}), do: true
+  defp armed?(%{outcome_kind: :artifact, acts_at: %DateTime{}}), do: true
   defp armed?(_), do: false
 
   # Review mode is the complement of act mode, but only once there is
@@ -1397,7 +1404,10 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # principal agent is spent on it". Offering `Go ahead` on a shimmering
   # skeleton would be asking a human to approve an utterance nobody has
   # classified.
-  defp review?(candidate), do: not armed?(candidate) and presentation(candidate) == :full
+  defp review?(candidate),
+    do:
+      Map.get(candidate, :outcome_kind) == :artifact and not armed?(candidate) and
+        presentation(candidate) == :full
 
   # Still being worked out — the drawing's dashed card. Keyed on the
   # PRESENTATION rather than on `state`, for the same reason
