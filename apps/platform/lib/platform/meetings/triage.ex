@@ -464,11 +464,11 @@ defmodule Platform.Meetings.Triage do
   # candidate backlinks. Row locks serialize concurrent cleanup operations.
   defp live_cleanup_query do
     from(t in Task,
+      as: :task,
       where: is_nil(t.deleted_at),
       where:
         fragment("?->>'source' = 'meetings.candidate'", t.metadata) or
           exists(from(c in MeetingCandidate, where: c.task_id == parent_as(:task).id)),
-      as: :task,
       order_by: t.id
     )
   end
@@ -526,6 +526,31 @@ defmodule Platform.Meetings.Triage do
           set: [deleted_at: now, updated_at: now]
         )
 
+      # Remove only these task representations; preserve content and receipts.
+      # Row locks in ID order also protect a concurrent briefing rebuild.
+      refs = Enum.map(task_ids, &("task:" <> &1))
+
+      briefings =
+        Repo.all(
+          from(b in Platform.Meetings.MeetingBriefing,
+            where:
+              fragment(
+                "EXISTS (SELECT 1 FROM jsonb_each(?) e WHERE e.value->>'ref' = ANY(?))",
+                b.items,
+                type(^refs, {:array, :string})
+              ),
+            order_by: b.id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      Enum.each(briefings, fn briefing ->
+        items = Map.reject(briefing.items, fn {_key, item} -> item["ref"] in refs end)
+        briefing |> Ecto.Changeset.change(items: items) |> Repo.update!()
+      end)
+
+      pruned_briefing_ids = Enum.map(briefings, & &1.id)
+
       # Do not ignore an audit error: raising/rollback leaves every task intact.
       audit_attrs = %{
         event_type: "meetings.live_tasks.junked",
@@ -538,6 +563,7 @@ defmodule Platform.Meetings.Triage do
           "task_ids" => task_ids,
           "meeting_ids" => meeting_ids,
           "count" => count,
+          "pruned_briefing_ids" => pruned_briefing_ids,
           "operation_id" => Keyword.fetch!(opts, :operation_id),
           "selector" =>
             "meetings.candidate OR candidate task_id backlink; reject officer/conflicting provenance"

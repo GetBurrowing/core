@@ -88,6 +88,17 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
 
     manual = task!(ctx, %{"meeting_id" => ctx.meeting.id})
 
+    briefing =
+      Repo.insert!(%Platform.Meetings.MeetingBriefing{
+        meeting_id: ctx.meeting.id,
+        items: %{
+          "ack" => %{"kind" => "task", "ref" => "task:" <> ack.id},
+          "officer" => %{"kind" => "task", "ref" => "task:" <> officer.id},
+          "_content" => %{"open_questions" => []}
+        },
+        receipts: %{"old" => %{"verb" => "reverted"}}
+      })
+
     assert {:ok, %{selected: 1, changed: 0, eligible_before: 2}} =
              Triage.junk_live_tasks(limit: 1)
 
@@ -103,6 +114,11 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     assert Enum.sort(first ++ second) == Enum.sort([ack.id, sweep.id])
     assert {:ok, %{changed: 0}} = Triage.junk_live_tasks(apply_opts())
     assert length(audits()) == 2
+    refreshed = Repo.get!(Platform.Meetings.MeetingBriefing, briefing.id)
+    refute Map.has_key?(refreshed.items, "ack")
+    assert Map.has_key?(refreshed.items, "officer")
+    assert refreshed.items["_content"] == %{"open_questions" => []}
+    assert refreshed.receipts == briefing.receipts
 
     assert Enum.sort(Enum.flat_map(audits(), & &1.metadata["task_ids"])) ==
              Enum.sort([ack.id, sweep.id])
