@@ -357,6 +357,26 @@ defmodule Platform.Files.Browser do
     file_item(file, %{projects_by_id: %{file.project_id => %{org_id: org_id}}})
   end
 
+  @doc "Displayed game locations, authorized in one metadata-only batch."
+  def game_space_ids(viewer, items) do
+    ids = items |> Enum.filter(&(&1.type == :game)) |> Enum.map(& &1.id)
+
+    if ids == [] do
+      []
+    else
+      ctx = context(viewer)
+
+      Chat.list_browser_canvases(ctx.space_ids,
+        ids: ids,
+        type: :game,
+        limit: @space_limit,
+        access_scope: viewer.access_scope
+      )
+      |> Enum.map(& &1.space_id)
+      |> Enum.uniq()
+    end
+  end
+
   @doc "Batch passive previews for displayed authorized canvas items."
   defdelegate canvas_previews(viewer, items), to: Platform.Files.CanvasPreview, as: :batch
 

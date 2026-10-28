@@ -51,7 +51,8 @@ defmodule PlatformWeb.Files.CanvasPresence do
       end)
 
     {people, timers} = reconcile(people, socket.assigns.canvas_card_timers)
-    socket = PlatformWeb.Files.BrowserHooks.sync_topics(socket, spaces)
+    topics = spaces ++ Browser.game_space_ids(socket.assigns.viewer, socket.assigns.browser.items)
+    socket = PlatformWeb.Files.BrowserHooks.sync_topics(socket, topics)
     assign(socket, canvas_previews: previews, canvas_people: people, canvas_card_timers: timers)
   end
 

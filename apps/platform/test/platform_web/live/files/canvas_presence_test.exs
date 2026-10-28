@@ -135,6 +135,20 @@ defmodule PlatformWeb.Files.CanvasPresenceTest do
     assert CanvasPreview.batch(c.viewer, [fake]) == %{}
     assert CanvasPreview.batch(c.viewer, [%{c.item | id: "not-a-uuid"}]) == %{}
     assert CanvasPreview.batch(c.viewer, [%{c.item | type: :game}]) == %{}
+    assert Browser.game_space_ids(c.viewer, [%{c.item | type: :game}]) == []
+
+    game =
+      Repo.insert!(%Canvas{
+        space_id: c.space.id,
+        title: "Game",
+        document: %{"root" => %{"type" => "game_stream"}}
+      })
+
+    assert Browser.game_space_ids(c.viewer, [%{c.item | id: game.id, type: :game}]) == [
+             c.space.id
+           ]
+
+    assert Browser.game_space_ids(c.viewer, [%{c.item | id: foreign.id, type: :game}]) == []
     Repo.update!(Ecto.Changeset.change(c.canvas, deleted_at: DateTime.utc_now()))
     assert CanvasPreview.batch(c.viewer, [c.item]) == %{}
   end
