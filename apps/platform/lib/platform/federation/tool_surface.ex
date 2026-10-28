@@ -3442,7 +3442,7 @@ defmodule Platform.Federation.ToolSurface do
           type: "array",
           required: true,
           description:
-            "Officer-reviewed items with stable item_id, normalized imperative title, grounded description and transcript segment citations. Exclude duplicates, conflicts and questions."
+            "Officer-reviewed items with stable item_id, normalized imperative title, grounded description, transcript source_segment_ids and candidate_ids (accepted_action_candidates ids from dispatch; [] for novel transcript-only actions). Account for every accepted candidate with an item or explicit exclude/duplicate/conflict decision. Preserve candidate_ids on replay. Exclude duplicates, conflicts and questions."
         })
       else
         parameters

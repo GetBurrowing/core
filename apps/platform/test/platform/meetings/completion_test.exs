@@ -534,4 +534,149 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
       Sandbox.mode(Repo, :manual)
     end
   end
+
+  defp accepted_action!(meeting, disposition \\ :accepted) do
+    Repo.insert!(%Platform.Meetings.MeetingCandidate{
+      meeting_id: meeting.id,
+      state: :closed,
+      closed_reason: :done,
+      disposition: disposition,
+      classified_intent: "action_items",
+      evidence_quote: "I'll repair the callback."
+    })
+  end
+
+  defp provenance_canvas!(ctx) do
+    {:ok, participant} = Chat.add_agent_participant(ctx.meeting.chat_space_id, ctx.scribe.id)
+
+    {:ok, canvas} =
+      Chat.create_canvas(%{
+        "space_id" => ctx.meeting.chat_space_id,
+        "created_by" => participant.id,
+        "title" => "Reviewed final actions",
+        "document" => %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "children" => [
+              %{
+                "id" => "repair-completion",
+                "type" => "checklist_item",
+                "props" => %{"label" => "Repair the callback"}
+              }
+            ]
+          }
+        }
+      })
+
+    canvas
+  end
+
+  test "accepted candidate identity survives supported dispatch and real filing without backlink",
+       ctx do
+    candidate = accepted_action!(ctx.meeting)
+    rejected = accepted_action!(ctx.meeting, :rejected)
+    {meeting, run, seg} = ready!(ctx.meeting)
+    candidate_id = candidate.id
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      payload: %{
+        signal: %{
+          reason: "meeting_scribe_completion",
+          accepted_action_candidates: [%{id: ^candidate_id}]
+        }
+      }
+    }
+
+    payload = Completion.dispatch_payload(run.transcript_id)
+
+    assert payload.accepted_action_candidates ==
+             [%{id: candidate.id, quote: candidate.evidence_quote, canvas_id: nil}]
+
+    assert payload.candidate_provenance_instructions =~ "candidate_ids"
+    refute Enum.any?(payload.accepted_action_candidates, &(&1.id == rejected.id))
+
+    canvas = provenance_canvas!(ctx)
+    args = params(meeting, run, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    item = %{
+      "item_id" => "repair-completion",
+      "candidate_ids" => [candidate.id],
+      "title" => "Repair the callback",
+      "description" => "Implement the agreed callback repair.",
+      "source_segment_ids" => [seg["id"]]
+    }
+
+    assert {:ok, %{task_ids: [task_id]}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", [item]))
+
+    assert run!(meeting).item_results["repair-completion"]["candidate_ids"] == [candidate.id]
+    assert is_nil(Repo.get!(Platform.Meetings.MeetingCandidate, candidate.id).task_id)
+
+    assert {:ok, %{task_ids: [^task_id]}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", [item]))
+
+    assert {:error, :invalid_candidate_provenance} =
+             Completion.triage_file(
+               ctx.triage.id,
+               Map.put(args, "action_items", [Map.put(item, "candidate_ids", [])])
+             )
+
+    {:ok, brief, _} = Platform.Meetings.MeetingBriefings.build(meeting)
+    assert brief.items["_content"]["unfiled_action_items"] == []
+
+    assert brief.items[Platform.Meetings.MeetingBriefings.node_key("task:" <> task_id)]["ref"] ==
+             "task:" <> task_id
+  end
+
+  test "triage refuses absent invalid rejected foreign and uncovered candidate identities", ctx do
+    candidate = accepted_action!(ctx.meeting)
+    rejected = accepted_action!(ctx.meeting, :rejected)
+
+    {:ok, foreign_meeting} =
+      Meetings.create_meeting(%{project_id: ctx.project.id, name: "Other meeting"})
+
+    foreign = accepted_action!(foreign_meeting)
+    {meeting, run, seg} = ready!(ctx.meeting)
+    canvas = provenance_canvas!(ctx)
+    args = params(meeting, run, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    item = %{
+      "item_id" => "repair-completion",
+      "title" => "Repair callback",
+      "description" => "Repair the agreed callback.",
+      "source_segment_ids" => [seg["id"]]
+    }
+
+    for ids <- [nil, [], "not-a-list", [Ecto.UUID.generate()], [rejected.id], [foreign.id]] do
+      input = if is_nil(ids), do: item, else: Map.put(item, "candidate_ids", ids)
+
+      assert {:error, :invalid_candidate_provenance} =
+               Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", [input]))
+    end
+
+    assert {:error, :invalid_candidate_provenance} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+
+    assert run!(meeting).item_results == %{}
+
+    assert {:ok, %{task_ids: []}} =
+             Completion.triage_file(
+               ctx.triage.id,
+               Map.put(args, "action_items", [
+                 %{
+                   "item_id" => "repair-completion",
+                   "candidate_ids" => [candidate.id],
+                   "decision" => "exclude"
+                 }
+               ])
+             )
+
+    {:ok, brief, _} = Platform.Meetings.MeetingBriefings.build(meeting)
+    assert Enum.map(brief.items["_content"]["unfiled_action_items"], & &1["id"]) == [candidate.id]
+  end
 end

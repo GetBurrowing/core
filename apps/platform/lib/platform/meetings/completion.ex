@@ -6,7 +6,7 @@ defmodule Platform.Meetings.Completion do
   """
   import Ecto.Query
   alias Platform.{Repo, Meetings}
-  alias Platform.Meetings.{Meeting, Transcript, Room, CompletionRun, Triage}
+  alias Platform.Meetings.{Meeting, Transcript, Room, CompletionRun, Triage, MeetingCandidate}
   alias Platform.Chat.Canvas
 
   def resume(meeting_id) do
@@ -124,7 +124,8 @@ defmodule Platform.Meetings.Completion do
              run.status in ["triage_pending", "triage_dispatched", "filed"] ||
                {:error, :scribe_incomplete},
            items when is_list(items) <- params["action_items"],
-           :ok <- validate_items(items, run, canvas) do
+           :ok <- validate_items(items, run, canvas),
+           :ok <- validate_candidate_provenance(items, run, meeting) do
         {ledger, errors} =
           Enum.reduce(items, {run.item_results, []}, fn item, {ledger, errors} ->
             key = item["item_id"]
@@ -134,7 +135,10 @@ defmodule Platform.Meetings.Completion do
                 {ledger, errors}
 
               item["decision"] in ["duplicate", "conflict", "exclude"] ->
-                {Map.put(ledger, key, %{"status" => item["decision"]}), errors}
+                {Map.put(ledger, key, %{
+                   "status" => item["decision"],
+                   "candidate_ids" => item["candidate_ids"] || []
+                 }), errors}
 
               true ->
                 case Triage.file_tasks_from_canvas(canvas,
@@ -152,6 +156,7 @@ defmodule Platform.Meetings.Completion do
                   {:ok, %{errors: []} = filed} ->
                     entry = %{
                       "status" => "processed",
+                      "candidate_ids" => item["candidate_ids"] || [],
                       "task_ids" => Enum.map(filed.filed, & &1.id),
                       "existing_task_ids" => Enum.map(filed.skipped, & &1.existing_task_id)
                     }
@@ -230,6 +235,50 @@ defmodule Platform.Meetings.Completion do
     if valid and length(Enum.uniq_by(items, & &1["item_id"])) == length(items),
       do: :ok,
       else: {:error, :ungrounded_action_item}
+  end
+
+  # An officer must explicitly account for accepted actions. Transcript-only
+  # actions use an empty list; guessing identities from title resemblance is
+  # forbidden. Legacy callbacks remain valid when there are no accepted actions.
+  defp validate_candidate_provenance(items, run, meeting) do
+    accepted = MapSet.new(accepted_actions(meeting), & &1.id)
+
+    valid =
+      Enum.all?(items, fn item ->
+        ids = item["candidate_ids"]
+        previous = (run.item_results || %{})[item["item_id"]]
+
+        (is_list(ids) or (is_nil(ids) and MapSet.size(accepted) == 0)) and
+          Enum.all?(ids || [], &MapSet.member?(accepted, &1)) and
+          (is_nil(previous) or Enum.sort(previous["candidate_ids"] || []) == Enum.sort(ids || []))
+      end)
+
+    covered =
+      MapSet.new(
+        Enum.flat_map(items, fn item ->
+          if is_list(item["candidate_ids"]), do: item["candidate_ids"], else: []
+        end) ++
+          Enum.flat_map(run.item_results || %{}, fn {_key, entry} ->
+            entry["candidate_ids"] || []
+          end)
+      )
+
+    if valid and MapSet.subset?(accepted, covered),
+      do: :ok,
+      else: {:error, :invalid_candidate_provenance}
+  end
+
+  defp accepted_actions(meeting) do
+    Repo.all(
+      from(c in MeetingCandidate,
+        where: c.meeting_id == ^meeting.id and c.disposition == :accepted,
+        where: c.classified_intent == "action_items",
+        where:
+          is_nil(c.closed_reason) or c.closed_reason not in [:retracted, :duplicate, :vetoed],
+        order_by: [asc: c.inserted_at, asc: c.id],
+        select: %{id: c.id, quote: c.evidence_quote, canvas_id: c.canvas_id}
+      )
+    )
   end
 
   defp canvas_item_ids(%{"type" => "checklist_item", "id" => id} = node),
@@ -376,7 +425,10 @@ defmodule Platform.Meetings.Completion do
       canvas_id: run.canvas_id,
       snapshot_hash: run.snapshot_hash,
       completion_transcript: run.snapshot["segments"],
-      source_transcript_ids: run.snapshot["source_transcript_ids"]
+      source_transcript_ids: run.snapshot["source_transcript_ids"],
+      accepted_action_candidates: accepted_actions(meeting),
+      candidate_provenance_instructions:
+        "For each accepted_action_candidates entry, preserve its id in the final checklist note and submit that id in candidate_ids on the matching meeting_triage_file action item. Every accepted action must be explicitly accounted for by a filed item or an explicit exclude/duplicate/conflict decision. Use candidate_ids: [] for novel transcript-only follow-ups. Never infer candidate identity from title similarity; preserve item_id on replay."
     }
 
   defp dispatch(run, role, fun, status) do

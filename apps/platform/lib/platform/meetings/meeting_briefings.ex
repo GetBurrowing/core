@@ -236,7 +236,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       )
       |> Repo.all()
 
-    filed_candidate_ids = filed_candidate_ids(meeting, candidates)
+    filed_candidate_ids = filed_candidate_ids(meeting)
 
     %{
       "open_questions" => for(%{intent: "open_question"} = c <- candidates, do: content_entry(c)),
@@ -253,7 +253,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   # Only identity can reconcile a candidate with a final checklist item. A
   # shared canvas or similar title is not evidence that this action was filed.
   # Keep the task query canonical, including its soft-deletion/access scope.
-  defp filed_candidate_ids(meeting, candidates) do
+  defp filed_candidate_ids(meeting) do
     tasks =
       meeting
       |> Meetings.meeting_tasks_query()
@@ -269,35 +269,18 @@ defmodule Platform.Meetings.MeetingBriefings do
           []
 
         run ->
-          canvas = if run.canvas_id, do: Repo.get(Canvas, run.canvas_id)
-
-          nodes =
-            if canvas && is_nil(canvas.deleted_at), do: checklist_nodes(canvas.document), else: []
-
-          for node <- nodes,
-              entry = (run.item_results || %{})[node["id"]],
-              is_map(entry),
+          for {_item_id, entry} <- run.item_results || %{},
               entry["status"] == "processed",
               Enum.any?(
                 (entry["task_ids"] || []) ++ (entry["existing_task_ids"] || []),
                 &MapSet.member?(task_ids, &1)
               ),
-              candidate <- candidates,
-              node["id"] == candidate.id,
-              do: candidate.id
+              candidate_id <- entry["candidate_ids"] || [],
+              do: candidate_id
       end
 
     MapSet.new(direct_ids ++ ledger_ids)
   end
-
-  defp checklist_nodes(%{"type" => "checklist_item"} = node),
-    do: [node | checklist_nodes(Map.get(node, "children", []))]
-
-  defp checklist_nodes(map) when is_map(map),
-    do: Enum.flat_map(Map.values(map), &checklist_nodes/1)
-
-  defp checklist_nodes(list) when is_list(list), do: Enum.flat_map(list, &checklist_nodes/1)
-  defp checklist_nodes(_), do: []
 
   defp content_entry(candidate), do: %{"id" => candidate.id, "text" => candidate.quote || ""}
 

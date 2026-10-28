@@ -372,7 +372,13 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
       meeting_id: meeting.id,
       canvas_id: canvas.id,
       status: "filed",
-      item_results: %{candidate.id => %{"status" => "processed", "task_ids" => [task.id]}}
+      item_results: %{
+        candidate.id => %{
+          "status" => "processed",
+          "candidate_ids" => [candidate.id],
+          "task_ids" => [task.id]
+        }
+      }
     })
 
     {:ok, briefing, _} = MeetingBriefings.build(meeting)
