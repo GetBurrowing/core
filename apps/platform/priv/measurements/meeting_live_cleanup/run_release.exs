@@ -38,8 +38,8 @@ apply? = Keyword.get(binding(), :cleanup_apply, false) == true
 opts = [
   dry_run: not apply?,
   limit: 250,
-  actor_id: "01a13fd8-a480-7000-93a3-7a5c68a769af",
-  operation_id: "01a17f00-live-task-cleanup-20261028"
+  actor_id: Keyword.get(binding(), :cleanup_actor_id),
+  operation_id: Keyword.get(binding(), :cleanup_operation_id)
 ]
 
 case Platform.Meetings.LiveTaskCleanupOneOff.junk_live_tasks(opts) do

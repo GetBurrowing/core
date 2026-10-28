@@ -1,63 +1,62 @@
 # Historical live task cleanup — task 01a17f00-832c-7000-b480-64ab6d710532
 
-This is the explicitly authorized Kobo one-off. It does not use `junk_batch/2`,
-which also removes officer-filed tasks. No hard delete, candidate edit, or task
-status filter is used. Audit failure rolls the batch back. An officer canvas
-stamp or inconsistent candidate provenance refuses the batch rather than
-silently widening the scope. Each batch is bounded to 250 rows (API maximum500).
-The audit stores exact task IDs, actor, operation identity, selector, count and
-pruned briefing IDs. Only corresponding task entries are pruned from meeting
-briefing items; receipts and other content remain.
+This is the explicitly authorized production one-off. It does not use
+`junk_batch/2`, which also removes officer-filed tasks. No hard delete, candidate
+edit, or task status filter is used. Audit failure rolls the batch back. An
+officer canvas stamp or inconsistent candidate provenance refuses the batch.
+Each batch is bounded to 250 rows (API maximum 500). Audits store exact task IDs,
+actor, operation identity, selector, count and pruned briefing IDs. Only selected
+task entries are pruned from existing meeting briefings; receipts and other
+content remain. Existing consumers are notified without creating historical
+briefings or new push notifications.
 
 ## Before deployment
 
-Run these commands from this task's validated worktree, after test/lint evidence.
-They use the tested release adapter because production does not yet contain the
-new API. The adapter compiles a distinct one-off module from selected validated
-functions; it does not replace the running `Triage` module.
+After tests/lint pass, copy the validated `triage.ex`, `run_release.exs` and
+`verify_release.exs` to the authorized runtime. The installation-specific host,
+container, actor, operation identity and exact transport command belong in the
+execution space/journal, not this public repository. Set CLEANUP_CONTAINER on
+that runtime and replace ACTOR_UUID and OPERATION_ID below with the authorized
+run's values.
+
+The tested adapter compiles a distinct one-off module from selected validated
+functions; it does not replace the running application module.
 
 ```sh
-scp apps/platform/lib/platform/meetings/triage.ex rocks@192.168.1.200:/tmp/meeting-live-cleanup-triage.ex
-scp apps/platform/priv/measurements/meeting_live_cleanup/run_release.exs rocks@192.168.1.200:/tmp/meeting-live-cleanup-run.exs
-scp apps/platform/priv/measurements/meeting_live_cleanup/verify_release.exs rocks@192.168.1.200:/tmp/meeting-live-cleanup-verify.exs
-ssh rocks@192.168.1.200 'podman cp /tmp/meeting-live-cleanup-triage.ex core-platform:/tmp/meeting-live-cleanup-triage.ex'
-ssh rocks@192.168.1.200 'podman cp /tmp/meeting-live-cleanup-run.exs core-platform:/tmp/meeting-live-cleanup-run.exs'
-ssh rocks@192.168.1.200 'podman cp /tmp/meeting-live-cleanup-verify.exs core-platform:/tmp/meeting-live-cleanup-verify.exs'
-ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'\'''
-# Dry-run (default); no task content is printed.
-ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-run.exs")'\'''
-# Authorized audited apply; repeat until remaining=0, then repeat once to
-# demonstrate changed=0/audit_id=null. No second audit for an empty batch.
-ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-run.exs", cleanup_apply: true)'\'''
-ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'\'''
+podman cp /tmp/meeting-live-cleanup-triage.ex "$CLEANUP_CONTAINER":/tmp/meeting-live-cleanup-triage.ex
+podman cp /tmp/meeting-live-cleanup-run.exs "$CLEANUP_CONTAINER":/tmp/meeting-live-cleanup-run.exs
+podman cp /tmp/meeting-live-cleanup-verify.exs "$CLEANUP_CONTAINER":/tmp/meeting-live-cleanup-verify.exs
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'
+# Dry-run is the default. No task content is printed.
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-run.exs")'
+# Repeat bounded apply until remaining=0, then repeat once to prove
+# changed=0/audit_id=null with no duplicate audit.
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-run.exs", cleanup_apply: true, cleanup_actor_id: "ACTOR_UUID", cleanup_operation_id: "OPERATION_ID")'
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'Code.eval_file("/tmp/meeting-live-cleanup-verify.exs")'
 ```
 
-`verify_release.exs` produces only counts and a digest of officer task IDs plus
-their deletion state. The initial production measurement had **zero** officer
-source/canvas-stamped tasks: preservation is tested with same-meeting fixtures;
-the production zero does not independently prove preservation of populated
-historical officer rows.
+`verify_release.exs` prints counts and a digest of officer task IDs/deletion
+state. The initial production snapshot had zero officer source/canvas-stamped
+tasks. Preservation is tested with populated same-meeting fixtures; that zero
+cannot prove preservation of populated production officer rows.
 
 ## Required deployer action after cutover
 
-**A pre-cutover zero does not mean cleanup is permanently complete.** Live code
-can still mint until this branch is deployed. After verifying the deployed
-revision, invoke the now-deployed API with the same operation identity, repeating
-bounded batches until `remaining=0`:
+A pre-cutover zero does not mean cleanup is permanently complete: old live code
+can still mint until deployment. Verify the deployed revision, then invoke the
+now-deployed API with the same operation identity. Repeat until `remaining=0`:
 
 ```sh
-ssh rocks@192.168.1.200 'podman exec core-platform bin/platform rpc '\''case Platform.Meetings.Triage.junk_live_tasks(dry_run: false, limit: 250, actor_id: "01a13fd8-a480-7000-93a3-7a5c68a769af", operation_id: "01a17f00-live-task-cleanup-20261028") do {:ok, report} -> IO.puts(Jason.encode!(report)); {:error, reason} -> raise inspect(reason) end'\'''
+podman exec "$CLEANUP_CONTAINER" bin/platform rpc 'case Platform.Meetings.Triage.junk_live_tasks(dry_run: false, limit: 250, actor_id: "ACTOR_UUID", operation_id: "OPERATION_ID") do {:ok, report} -> IO.puts(Jason.encode!(report)); {:error, reason} -> raise inspect(reason) end'
 ```
 
-Then copy/run `verify_release.exs` again and require
-`live_selector_survivors=0`. Report the post-cutover measurement timestamp,
-additional changed count and audit IDs. A provenance conflict or nonzero survivor
-count is a failure to resolve, never evidence of completed cleanup. Compare the
-protected inventory digest/count with the pre-run snapshot; investigate changes.
+Run the verifier again and require `live_selector_survivors=0`. Record the
+post-cutover timestamp, additional changed count and audit IDs. A provenance
+conflict or nonzero survivor count needs resolution; it is not a completed
+cleanup. Compare the protected inventory digest/count with the pre-run snapshot.
 
 ## Falsifier
 
-A fixture or production measurement showing that the selected task IDs include
-an officer/canvas-stamped task, or that live-selector survivors remain after an
-exhausted cutover run, contradicts the cleanup claim. Stop and rederive the
-selector; do not broaden it around a conflict.
+If selected IDs include an officer/canvas-stamped task, or live-selector
+survivors remain after an exhausted cutover run, stop and rederive the selector.
+Do not broaden the selector around a conflict.

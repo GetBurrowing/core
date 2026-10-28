@@ -195,7 +195,12 @@ defmodule Platform.Meetings.LiveTaskCleanupTest do
     File.cp!("lib/platform/meetings/triage.ex", "/tmp/meeting-live-cleanup-triage.ex")
     Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs")
 
-    Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs", cleanup_apply: true)
+    Code.eval_file("priv/measurements/meeting_live_cleanup/run_release.exs",
+      cleanup_apply: true,
+      cleanup_actor_id: apply_opts()[:actor_id],
+      cleanup_operation_id: "cleanup-test"
+    )
+
     assert Repo.get!(Task, live.id).deleted_at
 
     refute Repo.exists?(
