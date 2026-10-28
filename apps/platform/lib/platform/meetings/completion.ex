@@ -146,7 +146,7 @@ defmodule Platform.Meetings.Completion do
                        meeting_id: meeting.id,
                        transcript_id: run.transcript_id,
                        agent_id: agent_id,
-                       action_items: [item],
+                       action_items: [triage_item(item)],
                        extra_metadata: %{
                          "completion_run_id" => run.id,
                          "completion_item_id" => key,
@@ -235,6 +235,17 @@ defmodule Platform.Meetings.Completion do
     if valid and length(Enum.uniq_by(items, & &1["item_id"])) == length(items),
       do: :ok,
       else: {:error, :ungrounded_action_item}
+  end
+
+  defp triage_item(item) do
+    # The validated association is authoritative; do not let a separate,
+    # unvalidated singular identity redirect the existing reconciler.
+    item = Map.delete(item, "candidate_id")
+
+    case item["candidate_ids"] do
+      [id] -> Map.put(item, "candidate_id", id)
+      _ -> item
+    end
   end
 
   # An officer must explicitly account for accepted actions. Transcript-only
