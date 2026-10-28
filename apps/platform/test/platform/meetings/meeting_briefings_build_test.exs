@@ -351,15 +351,19 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     canvas
     |> Chat.Canvas.changeset(%{
       document: %{
-        "type" => "stack",
-        "id" => "final-actions",
-        "children" => [
-          %{
-            "type" => "checklist_item",
-            "id" => candidate.id,
-            "props" => %{"label" => "Normalized action title"}
-          }
-        ]
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "type" => "stack",
+          "id" => "final-actions",
+          "children" => [
+            %{
+              "type" => "checklist_item",
+              "id" => candidate.id,
+              "props" => %{"label" => "Normalized action title"}
+            }
+          ]
+        }
       }
     })
     |> Repo.update!()
