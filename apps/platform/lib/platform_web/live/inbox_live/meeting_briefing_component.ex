@@ -217,7 +217,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       </header>
 
       <p
-        :for={part <- Map.get(@view, :missing_prerequisites, []), part != "summary"}
+        :for={part <- Enum.reject(Map.get(@view, :missing_prerequisites, []), &(&1 == "summary"))}
         class="mt-3 text-sm text-subtle"
         data-role="meeting-briefing-missing-part"
       >{Copy.missing_part(part)}</p>
