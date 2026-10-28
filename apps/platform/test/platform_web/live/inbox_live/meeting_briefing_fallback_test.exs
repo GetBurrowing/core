@@ -12,7 +12,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingFallbackTest do
       },
       summary: summary,
       missing_prerequisites: missing,
-      counts: %{total: 0, open: 0},
+      counts: %{total: if(summary, do: 1, else: 0), open: if(summary, do: 1, else: 0)},
       open:
         if(summary,
           do: [
@@ -53,6 +53,9 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingFallbackTest do
     refute html =~ "Synthesis incomplete"
     assert render_state(nil, ["summary", "synthesis"]) =~ "Synthesis incomplete"
     refute html =~ "Summary is being written"
+    stale = render_state("Outdated summary from a prior snapshot", ["summary"])
+    assert stale =~ "Summary unavailable"
+    refute stale =~ "Outdated summary from a prior snapshot"
   end
 
   test "complete delivery displays summary with no incomplete copy" do

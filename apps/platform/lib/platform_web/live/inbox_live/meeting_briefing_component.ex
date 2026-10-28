@@ -225,13 +225,13 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       <section class="mt-6" data-role="meeting-briefing-summary">
         <h3 class={heading_class()}>{Copy.heading(:summary)}</h3>
         <p
-          :if={present?(@view.summary)}
+          :if={summary_available?(@view)}
           class="whitespace-pre-line text-sm text-base-content"
           data-role="meeting-briefing-summary-text"
           phx-no-format
         >{String.trim(@view.summary)}</p>
         <p
-          :if={!present?(@view.summary)}
+          :if={!summary_available?(@view)}
           class="text-sm text-subtle"
           data-role="meeting-briefing-summary-pending"
         >
@@ -472,4 +472,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   defp btn_ghost, do: @btn_ghost
   defp field, do: @field
   defp link, do: @link
+
+  defp summary_available?(view),
+    do: present?(view.summary) and "summary" not in Map.get(view, :missing_prerequisites, [])
 end
