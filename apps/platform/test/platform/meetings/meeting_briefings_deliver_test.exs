@@ -1,13 +1,8 @@
 defmodule Platform.Meetings.MeetingBriefingsDeliverTest do
   @moduledoc """
-  `Platform.Meetings.MeetingBriefings.deliver/1` and its three triggers (task
-  01a1694a stage 2): one Inbox row per attendee on conclusion, one push per
-  attendee per meeting, and later merges (summary, triage filings) that
-  never push again.
-
-  Push is observed through a Recorder double injected via
-  `:notifications_module` (the real `fan_out_to_user/3` short-circuits in
-  :test env); `async: false` because that is app env.
+  Durable readiness and bounded fallback delivery: no Inbox row on conclusion,
+  one row and push after committed summary/full filing (or deadline), and no
+  repeated push from callbacks, concurrent retries, or recovery sweeps.
   """
 
   use Platform.DataCase, async: false

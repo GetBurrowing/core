@@ -139,6 +139,20 @@ defmodule Platform.Meetings.CompletionTest do
     end
   end
 
+  test "an initially empty full filing pass completes and builds the briefing", ctx do
+    {meeting, run, _seg} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    Completion.scribe_complete(ctx.scribe.id, args)
+    assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
+
+    assert {:ok, %{status: "filed", task_ids: []}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+
+    assert Repo.get_by!(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id).summary ==
+             "Agreed callback repair"
+  end
+
   test "end before transcription waits for capture fence and final transcript", %{
     meeting: meeting
   } do

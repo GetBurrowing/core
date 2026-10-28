@@ -366,6 +366,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   """
   @spec deliver(Meeting.t()) ::
           {:ok, %{created: non_neg_integer(), updated: non_neg_integer()}}
+          | {:ok, :pending}
           | {:error, :not_concluded}
   def deliver(%Meeting{} = meeting) do
     if Repo.in_transaction?(), do: {:ok, :pending}, else: deliver_committed(meeting)
