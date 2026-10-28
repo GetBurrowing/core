@@ -1,3 +1,5 @@
+Code.require_file("priv/scripts/repair_meeting_briefing.exs")
+
 defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   @moduledoc """
   `Platform.Meetings.MeetingBriefings.build/1` (task 01a1694a stage 1): one
@@ -397,7 +399,6 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   end
 
   test "release repair selector stays in parity and preserves receipts and unrelated items" do
-    Code.require_file("priv/scripts/repair_meeting_briefing.exs")
     %{meeting: meeting} = meeting_fixture!("Repair parity")
     meeting = meeting |> go_live!(ago(60)) |> end!()
 
@@ -427,7 +428,6 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   end
 
   test "exact repair defaults dry, preserves shared identity and receipts, and is idempotent" do
-    Code.require_file("priv/scripts/repair_meeting_briefing.exs")
     %{meeting: source} = meeting_fixture!("Repair execution")
 
     meeting =
