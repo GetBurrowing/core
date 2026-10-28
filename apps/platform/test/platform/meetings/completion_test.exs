@@ -716,8 +716,17 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
   alias Platform.Meetings.{Completion, CompletionTest}
   alias Ecto.Adapters.SQL.Sandbox
 
+  defmodule Recorder do
+    def install(pid), do: :persistent_term.put({__MODULE__, :owner}, pid)
+
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:notif, user_id, payload})
+      :ok
+    end
+  end
+
   @tag timeout: 60_000
-  test "simultaneous filing on distinct PostgreSQL connections returns one task" do
+  test "simultaneous filing and delivery on distinct PostgreSQL connections each arbitrate once" do
     Sandbox.mode(Repo, :auto)
     :ok = Sandbox.checkout(Repo, sandbox: false)
     previous = Map.new(~w(meeting_scribe triage_officer), &{&1, Roles.agent_id_for_role(&1)})
@@ -794,6 +803,86 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
                ),
                :count
              ) == 2
+
+      # Filing above and delivery below run on independent, committed connections.
+      # The shared DataCase sandbox cannot exercise PostgreSQL row-lock arbitration.
+      room =
+        Repo.insert!(%Platform.Meetings.Room{
+          space_id: meeting.chat_space_id,
+          livekit_room_name: "race-#{meeting.id}"
+        })
+
+      attendee_ids = Enum.map(resources, fn {_, _, user_id} -> user_id end)
+
+      for user_id <- attendee_ids do
+        Repo.insert!(%Platform.Meetings.Participant{
+          room_id: room.id,
+          user_id: user_id,
+          display_name: "Race attendee",
+          joined_at: DateTime.add(meeting.ended_at, -10)
+        })
+      end
+
+      recorder = Recorder
+      previous_notifications = Application.get_env(:platform, :notifications_module)
+      Application.put_env(:platform, :notifications_module, recorder)
+      recorder.install(self())
+
+      try do
+        deliveries =
+          for _ <- 1..3 do
+            Elixir.Task.async(fn ->
+              :ok = Sandbox.checkout(Repo, sandbox: false)
+
+              try do
+                [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+                send(parent, {:delivery_ready, self(), backend})
+
+                receive do
+                  :deliver -> Platform.Meetings.MeetingBriefings.deliver(meeting)
+                end
+              after
+                Sandbox.checkin(Repo)
+              end
+            end)
+          end
+
+        connections =
+          for _ <- deliveries do
+            assert_receive {:delivery_ready, pid, backend}, 5_000
+            {pid, backend}
+          end
+
+        assert connections |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> length() == 3
+        Enum.each(connections, fn {pid, _} -> send(pid, :deliver) end)
+        results = Enum.map(deliveries, &Elixir.Task.await(&1, 30_000))
+        assert Enum.count(results, &match?({:ok, %{created: 2}}, &1)) == 1
+        assert Enum.count(results, &match?({:ok, %{created: 0}}, &1)) == 2
+
+        for user_id <- attendee_ids do
+          assert Repo.aggregate(
+                   from(i in Platform.Inbox.Item,
+                     where: i.user_id == ^user_id and i.kind == "meeting_briefing"
+                   ),
+                   :count
+                 ) == 1
+
+          assert_received {:notif, ^user_id, _}
+          refute_received {:notif, ^user_id, _}
+        end
+
+        assert {:ok, %{created: 0}} = Platform.Meetings.MeetingBriefings.deliver(meeting)
+        refute_received {:notif, _, _}
+      after
+        if previous_notifications do
+          Application.put_env(:platform, :notifications_module, previous_notifications)
+        else
+          Application.delete_env(:platform, :notifications_module)
+        end
+
+        :persistent_term.erase({recorder, :owner})
+        Repo.delete_all(from(i in Platform.Inbox.Item, where: i.user_id in ^attendee_ids))
+      end
 
       Platform.Chat.Canvas.Server.stop(canvas.id)
     after
