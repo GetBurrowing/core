@@ -109,5 +109,5 @@
     "Protected production inventory was empty; populated officer/manual preservation is established by the mixed-provenance fixtures.",
     "Old live code can mint until deployment. Deployer must rerun bounded cleanup and verify zero survivors after cutover."
   ],
-  "last_pre_cutover_read_only_verification_utc": "2026-10-28T02:44:00Z (approximate; after final validation)"
+  "last_pre_cutover_read_only_verification_utc": "2026-10-28T02:46:42.308690Z"
 }
