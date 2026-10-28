@@ -418,6 +418,147 @@ defmodule Platform.Meetings.Triage do
     end
   end
 
+  @doc """
+  Preview or soft-delete a bounded batch of proven historical live filings.
+
+  A candidate backlink or `meetings.candidate` source is required. Officer
+  canvas provenance, a competing source, or inconsistent candidate/meeting
+  identity is a conflict: the whole batch is refused, never guessed through.
+  Done/cancelled tasks are included. Candidate evidence is retained.
+
+  `:dry_run` defaults to true. Applying requires `:actor_id` and a nonempty
+  `:operation_id`; each changed batch records its exact IDs transactionally.
+  Repeating an operation after it exhausts its scope writes no second audit.
+  """
+  def junk_live_tasks(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 250)
+    dry_run = Keyword.get(opts, :dry_run, true)
+    actor_id = Keyword.get(opts, :actor_id)
+    operation_id = Keyword.get(opts, :operation_id)
+
+    cond do
+      not is_integer(limit) or limit < 1 or limit > 500 ->
+        {:error, :invalid_limit}
+
+      not dry_run and
+          (not Platform.UUID.valid?(actor_id) or not is_binary(operation_id) or
+             String.trim(operation_id) == "") ->
+        {:error, :actor_and_operation_required}
+
+      true ->
+        result = Repo.transaction(fn -> junk_live_batch(opts, limit, dry_run) end)
+
+        case result do
+          {:ok, %{changed: changed, meeting_ids: meeting_ids} = report} when changed > 0 ->
+            Enum.each(meeting_ids, &refresh_meeting_briefing/1)
+            broadcast_batch_deleted(nil, report.task_ids, changed, report.deleted_at)
+            {:ok, report}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  # EXISTS avoids duplicate task rows when historical evidence has several
+  # candidate backlinks. Row locks serialize concurrent cleanup operations.
+  defp live_cleanup_query do
+    from(t in Task,
+      where: is_nil(t.deleted_at),
+      where:
+        fragment("?->>'source' = 'meetings.candidate'", t.metadata) or
+          exists(from(c in MeetingCandidate, where: c.task_id == parent_as(:task).id)),
+      as: :task,
+      order_by: t.id
+    )
+  end
+
+  defp junk_live_batch(opts, limit, dry_run) do
+    query = live_cleanup_query()
+    eligible_before = Repo.aggregate(query, :count)
+    tasks = Repo.all(from(t in query, limit: ^limit, lock: "FOR UPDATE"))
+    task_ids = Enum.map(tasks, & &1.id)
+    candidates = Repo.all(from(c in MeetingCandidate, where: c.task_id in ^task_ids))
+    backlinks = Enum.group_by(candidates, & &1.task_id)
+
+    conflicts =
+      Enum.filter(tasks, fn task ->
+        metadata = task.metadata || %{}
+        source = metadata["source"]
+        links = Map.get(backlinks, task.id, [])
+
+        source not in [nil, "meetings.candidate"] or
+          not is_nil(metadata["source_canvas_id"]) or
+          Enum.any?(links, fn candidate ->
+            (not is_nil(metadata["candidate_id"]) and metadata["candidate_id"] != candidate.id) or
+              (not is_nil(metadata["meeting_id"]) and
+                 metadata["meeting_id"] != candidate.meeting_id)
+          end)
+      end)
+
+    if conflicts != [] do
+      Repo.rollback({:conflicting_live_provenance, Enum.map(conflicts, & &1.id)})
+    end
+
+    meeting_ids =
+      (Enum.map(tasks, & &1.metadata["meeting_id"]) ++ Enum.map(candidates, & &1.meeting_id))
+      |> Enum.filter(&Platform.UUID.valid?/1)
+      |> Enum.uniq()
+
+    report = %{
+      eligible_before: eligible_before,
+      selected: length(task_ids),
+      changed: 0,
+      task_ids: task_ids,
+      meeting_ids: meeting_ids,
+      audit_id: nil,
+      remaining: eligible_before,
+      dry_run: dry_run
+    }
+
+    if dry_run or task_ids == [] do
+      report
+    else
+      now = DateTime.utc_now()
+
+      {count, _} =
+        Repo.update_all(from(t in Task, where: t.id in ^task_ids and is_nil(t.deleted_at)),
+          set: [deleted_at: now, updated_at: now]
+        )
+
+      # Do not ignore an audit error: raising/rollback leaves every task intact.
+      audit_attrs = %{
+        event_type: "meetings.live_tasks.junked",
+        actor_id: Keyword.fetch!(opts, :actor_id),
+        actor_type: Keyword.get(opts, :actor_type, "agent"),
+        resource_type: "meeting_live_cleanup",
+        resource_id: Keyword.fetch!(opts, :operation_id),
+        action: "soft_delete",
+        metadata: %{
+          "task_ids" => task_ids,
+          "meeting_ids" => meeting_ids,
+          "count" => count,
+          "operation_id" => Keyword.fetch!(opts, :operation_id),
+          "selector" =>
+            "meetings.candidate OR candidate task_id backlink; reject officer/conflicting provenance"
+        }
+      }
+
+      case Audit.record(audit_attrs) do
+        {:ok, audit} ->
+          Map.merge(report, %{
+            changed: count,
+            audit_id: audit.id,
+            remaining: Repo.aggregate(live_cleanup_query(), :count),
+            deleted_at: now
+          })
+
+        {:error, error} ->
+          Repo.rollback({:audit_failed, error})
+      end
+    end
+  end
+
   # M5b (task 019f6e2c) stage 5: kanban live-refresh hook. Emit ONE
   # `{:tasks_batch_deleted, ids, meta}` on the `Tasks` board topic per
   # `junk_batch/2` invocation so open TasksLive sockets can drop N cards
