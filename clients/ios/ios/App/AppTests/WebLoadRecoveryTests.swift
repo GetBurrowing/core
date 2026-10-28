@@ -6,8 +6,11 @@ import XCTest
 /// clock.
 final class WebLoadRecoveryTests: XCTestCase {
     private var loads: [URLRequest] = []
-    private var timers: [(delay: TimeInterval, block: () -> Void)] = []
+    private var timers: [(delay: TimeInterval, due: TimeInterval, block: () -> Void)] = []
     private var lines: [String] = []
+    private var recreates: [URLRequest] = []
+    private var clock: TimeInterval = 0
+    private var errors = 0
 
     private let fixture = URLRequest(url: URL(string: "capacitor://localhost/tabbar-fixture.html")!)
     private let other = URLRequest(url: URL(string: "capacitor://localhost/other.html")!)
@@ -16,17 +19,27 @@ final class WebLoadRecoveryTests: XCTestCase {
         loads = []
         timers = []
         lines = []
-        return WebLoadRecovery(
+        recreates = []
+        clock = 0
+        errors = 0
+        let recovery = WebLoadRecovery(
             load: { self.loads.append($0) },
-            schedule: { delay, block in self.timers.append((delay, block)) },
+            recreate: { self.recreates.append($0) },
+            schedule: { delay, block in self.timers.append((delay, self.clock + delay, block)) },
             log: { self.lines.append($0) })
+        recovery.onExhausted = { self.errors += 1 }
+        return recovery
     }
 
-    /// Runs every timer scheduled so far, once, in order.
+    /// Advance past cancelled timers to the next observable recovery event.
     private func fire() {
-        let due = timers
-        timers = []
-        for timer in due { timer.block() }
+        let before = lines.count
+        while let next = timers.indices.min(by: { timers[$0].due < timers[$1].due }) {
+            let timer = timers.remove(at: next)
+            clock = timer.due
+            timer.block()
+            if lines.count != before { return }
+        }
     }
 
     func testProvisionalFailureReissuesTheLoad() {
@@ -122,7 +135,8 @@ final class WebLoadRecoveryTests: XCTestCase {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
         recovery.didCommit(url: fixture.url)
-        XCTAssertEqual(timers.map(\.delay), [WebLoadRecovery.Config().watchdog, WebLoadRecovery.Config().finishBounds[0]])
+        XCTAssertEqual(
+            timers.map(\.delay), [WebLoadRecovery.Config().watchdog, WebLoadRecovery.Config().finishBounds[0], WebLoadRecovery.Config().finishHardCaps[0]])
         fire()  // the finish bound: schedules the backoff (the stale no-commit watchdog does nothing)
         XCTAssertTrue(loads.isEmpty)
         XCTAssertTrue(lines.contains { $0.contains("did not finish") })
@@ -138,12 +152,12 @@ final class WebLoadRecoveryTests: XCTestCase {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
         recovery.didCommit(url: fixture.url)
-        XCTAssertEqual(timers.last?.delay, 10)
+        XCTAssertTrue(timers.contains { $0.delay == 10 })
         fire()  // 10 s: not finished, no progress
         fire()  // backoff: the re-issue
         XCTAssertEqual(loads.count, 1)
         recovery.didCommit(url: fixture.url)
-        XCTAssertEqual(timers.last?.delay, 20, "the re-issue gets a longer bound")
+        XCTAssertTrue(timers.contains { $0.delay == 6 }, "attempt two has a shorter finish bound")
         recovery.didFinish(url: fixture.url)  // lands at 15 s
         fire()
         fire()
@@ -152,17 +166,25 @@ final class WebLoadRecoveryTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.contains("exhausted") })
     }
 
-    func testTheBoundKeepsGrowingToTheLastEntry() {
+    func testSecondHangRecreatesEvenWhenProgressContinues() {
         let recovery = makeRecovery()
         recovery.shellLoad(fixture)
-        var armed: [TimeInterval] = []
-        for _ in 0..<3 {
-            recovery.didCommit(url: fixture.url)
-            armed.append(timers.last?.delay ?? 0)
-            fire()
-            fire()
-        }
-        XCTAssertEqual(armed, [10, 20, 40])
+        recovery.didCommit(url: fixture.url)
+        fire()  // first stalled commit
+        fire()  // first reissue
+        recovery.didCommit(url: fixture.url)
+        recovery.progress(0.3)
+        fire()  // six-second soft bound leaves progress alone
+        XCTAssertTrue(recreates.isEmpty)
+        recovery.progress(0.6)
+        fire()  // eight-second hard cap cannot be extended
+        fire()  // recreate backoff
+        XCTAssertEqual(loads.map(\.url), [fixture.url])
+        XCTAssertEqual(recreates.map(\.url), [fixture.url])
+        XCTAssertTrue(recovery.hasRecreated)
+        XCTAssertEqual(recovery.attempts, 2)
+        XCTAssertLessThanOrEqual(clock, 20)
+        XCTAssertTrue(lines.contains { $0.contains("hard cap") })
     }
 
     func testALoadStillProgressingIsNotReissued() {
@@ -173,7 +195,7 @@ final class WebLoadRecoveryTests: XCTestCase {
         fire()  // the bound passes, but the load moved
         XCTAssertFalse(lines.contains { $0.contains("did not finish") })
         XCTAssertTrue(lines.contains { $0.contains("still progressing") })
-        XCTAssertEqual(timers.last?.delay, 10, "it is checked again")
+        XCTAssertEqual(timers.last?.delay, 10, "the soft bound checks again; the independent hard cap stays armed")
         fire()  // no further progress
         fire()
         XCTAssertEqual(loads.map(\.url), [fixture.url])
@@ -210,7 +232,10 @@ final class WebLoadRecoveryTests: XCTestCase {
             fire()  // the backoff, then the re-issue
             recovery.didCommit(url: fixture.url)  // it commits again, and again never finishes
         }
-        XCTAssertEqual(loads.count, 3)
+        XCTAssertEqual(loads.count, 1)
+        XCTAssertEqual(recreates.count, 1)
+        XCTAssertEqual(errors, 1)
+        XCTAssertTrue(recovery.exhausted)
         XCTAssertTrue(lines.contains { $0.contains("exhausted") })
     }
 

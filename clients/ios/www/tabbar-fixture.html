@@ -178,6 +178,18 @@
           line.textContent = "recovery: " + count;
         };
 
+        // A recreated controller must complete a real native round trip.
+        window.burrowFixtureRecreated = function () {
+          var target = plugin();
+          if (!target || typeof target.tabBarState !== "function") return;
+          target.tabBarState(withInk({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "chat", more_dot: false, visible: true }, "auto"))
+            .then(function () {
+              var line = document.createElement("p");
+              line.textContent = "recreated: 1; bridge: tabBarState round trip passed";
+              document.body.appendChild(line);
+            });
+        };
+
         // DEBUG probe from BurrowBridgeViewController.reportTabBarFixture.
         window.burrowFixtureNative = function (report) {
           docLine();

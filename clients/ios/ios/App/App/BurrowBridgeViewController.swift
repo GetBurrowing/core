@@ -35,6 +35,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var didStart = false
     private var navTrace: WebLoadTracingDelegate?
     private var webRecovery: WebLoadRecovery?
+    /// Kept across a new controller so recreating cannot reset the retry budget.
+    private var recoveryRequest: URLRequest?
+    private var loadErrorLabel: UILabel?
     private var progressObservation: NSKeyValueObservation?
     private var pickerHost: UIViewController?
     private let launcher = InstallLauncher()
@@ -83,6 +86,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// Every shell-issued load goes through here so webload.log records it,
     /// and whether a navigation was already in flight.
     private func loadTraced(_ request: URLRequest, reason: String) {
+        loadErrorLabel?.removeFromSuperview()
+        loadErrorLabel = nil
         navTrace?.noteShellLoad(reason, url: request.url, webView: webView)
         webRecovery?.shellLoad(request)
         webView?.load(request)
@@ -114,13 +119,28 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         webView.allowsBackForwardNavigationGestures = true
         // Trace every navigation event; Capacitor's handler still gets each call.
         if !(webView.navigationDelegate is WebLoadTracingDelegate) {
-            let recovery = WebLoadRecovery(load: { [weak self] request in
+            var config = WebLoadRecovery.Config()
+            #if DEBUG
+                if UserDefaults.standard.string(forKey: "BurrowInjectNavigationFailure") == "double-commit" {
+                    config.finishBounds = [0.25, 0.25, 0.25]
+                    config.finishHardCaps = [1, 1, 1]
+                    config.backoff = [0.05]
+                }
+            #endif
+            let load: (URLRequest) -> Void = { [weak self] request in
                 self?.navTrace?.noteShellLoad("recovery", url: request.url, webView: self?.webView)
                 self?.webView?.load(request)
-            })
+            }
+            let recreate: (URLRequest) -> Void = { [weak self] request in self?.recreateShell(for: request) }
+            let recovery = webRecovery ?? WebLoadRecovery(config: config, load: load, recreate: recreate)
+            recovery.setLoadHandlers(load: load, recreate: recreate)
+            recovery.onExhausted = { [weak self] in self?.showWebLoadError() }
             #if DEBUG
-                recovery.onRecoveredPage = { [weak self] count in
+                recovery.onRecoveredPage = { [weak self, weak recovery] count in
                     self?.webView?.evaluateJavaScript("window.burrowFixtureRecovered && window.burrowFixtureRecovered(\(count))")
+                    if recovery?.hasRecreated == true {
+                        self?.webView?.evaluateJavaScript("window.burrowFixtureRecreated && window.burrowFixtureRecreated()")
+                    }
                 }
             #endif
             webRecovery = recovery
@@ -212,7 +232,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         super.viewDidAppear(animated)
         guard !didStart else { return }
         didStart = true
-        WebLoadLog.logger.notice("viewDidAppear isLoading=\(self.webView?.isLoading ?? false) current=\(WebLoadLog.describe(self.webView?.url), privacy: .public)")
+        WebLoadLog.logger.notice(
+            "viewDidAppear isLoading=\(self.webView?.isLoading ?? false) current=\(WebLoadLog.describe(self.webView?.url), privacy: .public)")
+        if let request = recoveryRequest {
+            recoveryRequest = nil
+            if let host = request.url?.host { addTabBarScript(host: host) }
+            navTrace?.noteShellLoad("recreated-capacitor", url: request.url, webView: webView)
+            webView?.load(request)
+            return
+        }
         #if DEBUG
             DebugVoIPSeam.applyLaunchArgument()
             if startMeetingProbe() { return }
@@ -233,6 +261,59 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         } else {
             presentPicker()
         }
+    }
+
+    /// Replace the controller, letting Capacitor's normal loadView lifecycle
+    /// create its bridge, delegates, script handlers and WKWebView together.
+    private func recreateShell(for request: URLRequest) {
+        guard let window = view.window, window.rootViewController === self else {
+            showWebLoadError()
+            return
+        }
+        WebLoadLog.logger.notice("recovery replacing Capacitor shell")
+        if let activeObservation { NotificationCenter.default.removeObserver(activeObservation) }
+        if let badgesObservation { NotificationCenter.default.removeObserver(badgesObservation) }
+        activeObservation = nil
+        badgesObservation = nil
+        callObservation?.cancel()
+        incomingObservation?.cancel()
+        progressObservation?.invalidate()
+        urlObservation?.invalidate()
+        loadingObservation?.invalidate()
+        backdropObservation?.invalidate()
+        webView?.navigationDelegate = nil
+        webView?.stopLoading()
+        let replacement = BurrowBridgeViewController()
+        replacement.webRecovery = webRecovery
+        replacement.recoveryRequest = request
+        replacement.currentInstall = currentInstall
+        replacement.policy = policy
+        replacement.lastHandoffAt = lastHandoffAt
+        replacement.tabBarState = tabBarState
+        window.rootViewController = replacement
+    }
+
+    private func showWebLoadError() {
+        guard loadErrorLabel == nil else { return }
+        WebLoadLog.logger.notice("recovery showing terminal error")
+        webView?.isHidden = false
+        let label = UILabel()
+        label.text = "Unable to load Burrow. Please reopen the app or switch installs."
+        label.accessibilityIdentifier = "web-load-error"
+        label.textColor = BurrowColor.onSurface.uiColor
+        label.font = .preferredFont(forTextStyle: .body)
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        cover.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: cover.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(equalTo: cover.trailingAnchor, constant: -24),
+        ])
+        cover.isHidden = false
+        view.bringSubviewToFront(cover)
+        loadErrorLabel = label
     }
 
     // MARK: Native in-call screen (stage 4)

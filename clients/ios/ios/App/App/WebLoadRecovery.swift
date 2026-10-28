@@ -24,23 +24,26 @@ final class WebLoadRecovery {
         var backoff: [TimeInterval] = [0.5, 1, 2]
         /// Longest a load may go without committing. A cold runner took 13 s.
         var watchdog: TimeInterval = 25
-        /// Longest a committed page may go without finishing, for the first
-        /// load, then after the first and the second re-issue (the last
-        /// repeats). In run 40538916731 (cold runner) two launches committed
-        /// and never finished while the test waited; the slowest cold
-        /// commit-to-finish that did land took 8.4 s, a warm one 0.1 s. The
-        /// bound grows because a re-issue restarts the load: a slow but
-        /// healthy device must eventually be left to finish.
-        var finishBounds: [TimeInterval] = [10, 20, 40]
+        /// Initial committed load gets ten seconds without progress. A
+        /// reissued/recreated load gets six; a second stalled commit must
+        /// leave time for a fresh Capacitor bridge inside the UI wait.
+        var finishBounds: [TimeInterval] = [10, 6, 6]
+        /// A moving progress value cannot defer recovery indefinitely.
+        var finishHardCaps: [TimeInterval] = [15, 8, 8]
     }
 
     private let config: Config
-    private let load: (URLRequest) -> Void
+    private var load: (URLRequest) -> Void
+    private var recreate: (URLRequest) -> Void
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
     private let log: (String) -> Void
 
     /// Called on didFinish of a page that a re-issue brought up.
     var onRecoveredPage: ((Int) -> Void)?
+    var onExhausted: (() -> Void)?
+    private(set) var hasRecreated = false
+    private(set) var exhausted = false
+    private var committedHangs = 0
 
     private(set) var intended: URLRequest?
     private(set) var attempts = 0
@@ -58,6 +61,7 @@ final class WebLoadRecovery {
     init(
         config: Config = Config(),
         load: @escaping (URLRequest) -> Void,
+        recreate: ((URLRequest) -> Void)? = nil,
         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, block in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: block)
         },
@@ -65,8 +69,15 @@ final class WebLoadRecovery {
     ) {
         self.config = config
         self.load = load
+        self.recreate = recreate ?? load
         self.schedule = schedule
         self.log = log
+    }
+
+    /// A fresh Capacitor controller takes ownership of the same bounded session.
+    func setLoadHandlers(load: @escaping (URLRequest) -> Void, recreate: @escaping (URLRequest) -> Void) {
+        self.load = load
+        self.recreate = recreate
     }
 
     // MARK: Events
@@ -76,6 +87,9 @@ final class WebLoadRecovery {
         epoch += 1
         intended = request
         attempts = 0
+        hasRecreated = false
+        exhausted = false
+        committedHangs = 0
         committed = false
         finished = false
         lastProgress = 0
@@ -92,6 +106,7 @@ final class WebLoadRecovery {
     }
 
     func didCommit(url: URL?) {
+        guard !exhausted else { return }
         if isBootstrapOfAnotherLoad(url) {
             log("recovery ignored commit of the bootstrap page")
             return
@@ -109,6 +124,7 @@ final class WebLoadRecovery {
     }
 
     func didFinish(url: URL? = nil) {
+        guard !exhausted else { return }
         if isBootstrapOfAnotherLoad(url) {
             log("recovery ignored finish of the bootstrap page")
             return
@@ -151,9 +167,12 @@ final class WebLoadRecovery {
     // MARK: Retry
 
     private func scheduleRetry(_ reason: String) {
-        guard attempts < config.maxAttempts else {
+        guard !exhausted else { return }
+        guard !hasRecreated, attempts < config.maxAttempts else {
             epoch += 1
+            exhausted = true
             log("recovery exhausted attempts=\(attempts) reason=\(reason)")
+            onExhausted?()
             return
         }
         epoch += 1
@@ -174,8 +193,14 @@ final class WebLoadRecovery {
         finished = false
         lastProgress = 0
         awaitingRecoveredCommit = true
-        log("recovery reissue attempt=\(attempts) reason=\(reason)")
-        load(intended)
+        if committedHangs >= 2 {
+            hasRecreated = true
+            log("recovery recreate attempt=\(attempts) reason=\(reason)")
+            recreate(intended)
+        } else {
+            log("recovery reissue attempt=\(attempts) reason=\(reason)")
+            load(intended)
+        }
         armWatchdog()
     }
 
@@ -190,6 +215,19 @@ final class WebLoadRecovery {
         let bounds = config.finishBounds
         let bound = bounds.isEmpty ? 10 : bounds[min(attempts, bounds.count - 1)]
         armFinishWatchdog(epoch: epoch, ticks: progressTicks, bound: bound)
+        let caps = config.finishHardCaps
+        let cap = caps.isEmpty ? bound : caps[min(attempts, caps.count - 1)]
+        let captured = epoch
+        schedule(cap) { [weak self] in
+            guard let self, self.epoch == captured, self.committed, !self.finished else { return }
+            self.commitWithoutFinish("hard cap")
+        }
+    }
+
+    private func commitWithoutFinish(_ reason: String) {
+        committedHangs += 1
+        log("recovery committed but did not finish (\(reason))")
+        scheduleRetry("commit without finish")
     }
 
     private func armFinishWatchdog(epoch captured: Int, ticks: Int, bound: TimeInterval) {
@@ -200,8 +238,7 @@ final class WebLoadRecovery {
                 self.armFinishWatchdog(epoch: captured, ticks: self.progressTicks, bound: bound)
                 return
             }
-            self.log("recovery committed but did not finish")
-            self.scheduleRetry("commit without finish")
+            self.commitWithoutFinish("no progress")
         }
     }
 

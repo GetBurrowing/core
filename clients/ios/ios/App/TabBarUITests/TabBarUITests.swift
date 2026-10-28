@@ -19,7 +19,9 @@ final class TabBarUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30) -> XCUIApplication {
+    private func launch(_ appearance: String, extra: [String] = [], maxAttempts: Int = 2, shownTimeout: TimeInterval = 30, requireRecreatedBridge: Bool = false)
+        -> XCUIApplication
+    {
         let app = XCUIApplication()
         app.launchArguments = ["-BurrowTabBarFixture", "YES", "-BurrowTabBarFixtureAppearance", appearance] + extra
         // The shell loads the bundled fixture once, from viewDidAppear, and
@@ -39,10 +41,20 @@ final class TabBarUITests: XCTestCase {
         // not finish.
         var shown = false
         var attempts = 0
-        for _ in 0 ..< maxAttempts where !shown {
+        for _ in 0..<maxAttempts where !shown {
             attempts += 1
             app.launch()
-            shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: shownTimeout)
+            if requireRecreatedBridge {
+                let ready = NSPredicate { _, _ in
+                    app.webViews.staticTexts["Tab bar fixture"].exists
+                        && app.webViews.staticTexts["plugin: tabBarState present"].exists
+                        && app.webViews.staticTexts["recreated: 1; bridge: tabBarState round trip passed"].exists
+                        && app.tabBars["native-tab-bar"].isHittable
+                }
+                shown = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: shownTimeout) == .completed
+            } else {
+                shown = app.webViews.staticTexts["Tab bar fixture"].waitForExistence(timeout: shownTimeout)
+            }
             if !shown { app.terminate() }
         }
         // One greppable line per test (task 01a17d1f): how many launches the
@@ -324,6 +336,17 @@ final class TabBarUITests: XCTestCase {
 
     /// Stage 1: the glass probe, light and dark; task 01a174e8 stage 2's
     /// restyle on the same launch.
+    /// The original view is poisoned across reissues. Only a new Capacitor
+    /// bridge can render the page and finish the native promise within 20 s.
+    func testInjectedDoubleCommitHangRecreatesBridge() {
+        let app = launch(
+            "light", extra: ["-BurrowInjectNavigationFailure", "double-commit"], maxAttempts: 1,
+            shownTimeout: 20, requireRecreatedBridge: true)
+        XCTAssertTrue(app.webViews.staticTexts["recreated: 1; bridge: tabBarState round trip passed"].exists)
+        assertLabels(app.tabBars["native-tab-bar"], five)
+        shot("recreated-bridge")
+    }
+
     func testFixtureLight() { fixture("light") }
     func testFixtureDark() { fixture("dark") }
 
@@ -632,10 +655,12 @@ struct Raster {
         let h = cg.height
         var data = [UInt8](repeating: 0, count: w * h * 4)
         let drawn = data.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) -> Bool in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else { return false }
+            guard
+                let context = CGContext(
+                    data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                    space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                )
+            else { return false }
             context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
             return true
         }
@@ -668,7 +693,8 @@ struct Raster {
 /// shows up as a large `drawn_vs_sent`; for unselected items that value is
 /// then measured with the drawn ink (`measured_against: drawn`).
 enum TabContrast {
-    static let method = "sent ink (with its alpha) composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; an unselected item whose drawn ink is not the sent one (iOS 26 vibrant ink) is measured with the drawn ink, opaque; label >= 4.5, glyph >= 3"
+    static let method =
+        "sent ink (with its alpha) composited over each glass pixel in the region (2pt pad); value = 5th percentile of the WCAG 2.x ratios; an unselected item whose drawn ink is not the sent one (iOS 26 vibrant ink) is measured with the drawn ink, opaque; label >= 4.5, glyph >= 3"
 
     static func linear(_ c: Double) -> Double { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
 

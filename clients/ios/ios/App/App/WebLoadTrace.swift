@@ -39,6 +39,10 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         /// failure of the first fixture load, for the recovery UI tests.
         private let injection = UserDefaults.standard.string(forKey: "BurrowInjectNavigationFailure")
         private var injected = false
+        /// Sticky per controller: reissuing on this poisoned view must not
+        /// satisfy the recreate proof. A fresh Capacitor controller opts out.
+        private let injectCommittedHang: Bool
+        private var committedHangInjected = false
 
         private func isFixture(_ url: URL?) -> Bool { url?.path.hasSuffix("/tabbar-fixture.html") ?? false }
     #endif
@@ -46,6 +50,9 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     init(target: WKNavigationDelegate?, recovery: WebLoadRecovery) {
         self.target = target
         self.recovery = recovery
+        #if DEBUG
+            injectCommittedHang = UserDefaults.standard.string(forKey: "BurrowInjectNavigationFailure") == "double-commit" && !recovery.hasRecreated
+        #endif
         super.init()
     }
 
@@ -93,6 +100,12 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
         WebLoadLog.logger.notice("didCommit url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
         recovery.didCommit(url: webView.url)
         #if DEBUG
+            if injectCommittedHang, isFixture(webView.url) {
+                committedHangInjected = true
+                WebLoadLog.logger.notice("injected commit-without-finish on original Capacitor view")
+                webView.isHidden = true
+                DispatchQueue.main.async { webView.stopLoading() }
+            }
             if injection == "terminate", !injected, isFixture(webView.url) {
                 injected = true
                 // SIMULATED: a real WebContent termination cannot be provoked
@@ -108,6 +121,12 @@ final class WebLoadTracingDelegate: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        #if DEBUG
+            if committedHangInjected, isFixture(webView.url) {
+                WebLoadLog.logger.notice("injected finish suppressed on original Capacitor view")
+                return
+            }
+        #endif
         finishOne()
         WebLoadLog.logger.notice("didFinish url=\(WebLoadLog.describe(webView.url), privacy: .public) inFlight=\(self.inFlight)")
         recovery.didFinish(url: webView.url)
