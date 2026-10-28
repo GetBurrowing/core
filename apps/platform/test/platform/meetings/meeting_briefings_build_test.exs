@@ -447,7 +447,17 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
       :persistent_term.erase({RepairPushRecorder, :owner})
     end)
 
-    user = Platform.AccountsFixtures.user_fixture()
+    n = System.unique_integer([:positive])
+
+    user =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        email: "repair-#{n}@example.com",
+        name: "Repair viewer",
+        oidc_sub: "repair-#{n}"
+      })
+      |> Repo.insert!()
+
     %{meeting: source} = meeting_fixture!("Repair execution")
 
     meeting =
