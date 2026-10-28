@@ -451,6 +451,11 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
       {:ok, live} = Meetings.start_meeting(meeting)
 
+      live =
+        live
+        |> Ecto.Changeset.change(started_at: DateTime.add(DateTime.utc_now(), -3600))
+        |> Platform.Repo.update!()
+
       n = System.unique_integer([:positive])
 
       attendee =
@@ -470,7 +475,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
         room_id: room.id,
         user_id: attendee.id,
         display_name: "Attendee",
-        joined_at: DateTime.add(live.started_at, -1, :second)
+        joined_at: DateTime.add(live.started_at, 60, :second)
       })
 
       payload = %{
