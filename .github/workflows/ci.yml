@@ -1495,6 +1495,9 @@ jobs:
               {:ok, img} = Vix.Vips.Operation.black(4, 3)
               IO.puts("vips_op=" <> inspect({Vix.Vips.Image.width(img), Vix.Vips.Image.height(img)}))
               IO.puts("crypto=" <> Base.encode16(:crypto.hash(:sha256, "smoke"), case: :lower))
+              # `eval` starts no applications, and code_mode runs take a
+              # Platform.CodeMode.Permits permit (01a17b0b, #20), so start it here.
+              {:ok, _} = Platform.CodeMode.Permits.start_link()
               IO.puts("code_mode=" <> inspect(Platform.CodeMode.Run.eval("1+1")))
             ')"
           echo "$out"
