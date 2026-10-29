@@ -38,7 +38,7 @@ class BurrowWebChromeClient(
                     request: WebResourceRequest,
                 ): Boolean = route(request.url.toString())
 
-                @Suppress("DEPRECATION")
+                @Suppress("OVERRIDE_DEPRECATION")
                 override fun shouldOverrideUrlLoading(
                     view: WebView,
                     url: String,
