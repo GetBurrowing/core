@@ -83,7 +83,7 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
     test "fans in every meetings handler's specs" do
       specs = MeetingsProvider.register()
 
-      # Nine responsibilities: summariser + intent-classify placeholder
+      # Ten responsibilities: native brief synthesis + summariser + intent-classify placeholder
       # (task 019f2451 stage 3) + action-items + attendance-followup
       # (task 019f2455 stage 3) + the five mid-meeting intent handlers
       # added 2026-07-31.
@@ -92,13 +92,14 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
       # shim fans in with `++`, so a handler whose `register/0` returned
       # two specs under one key would keep the sorted-uniq-looking key
       # list intact and only show up as a count.
-      assert length(specs) == 9
+      assert length(specs) == 10
 
       keys = Enum.map(specs, & &1.key) |> Enum.sort()
 
       assert keys == [
                "meetings.action_items",
                "meetings.attendance_followup",
+               "meetings.brief_synthesis",
                "meetings.brief_worthy",
                "meetings.decision_recorded",
                "meetings.intent_classify",
