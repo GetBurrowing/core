@@ -159,6 +159,9 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:anchor_message_id, :any, required: true)
   attr(:active_space, :any, required: true)
   attr(:current_participant, :any, required: true)
+  attr(:mask_names?, :boolean, required: true)
+  attr(:revealed_section_ids, :any, required: true)
+  attr(:sidebar_sections, :list, required: true)
   attr(:agent_participant_ids, :any, required: true)
   attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
@@ -386,7 +389,9 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         }
         variant={:conversational}
       >
-        <:system_message>— no messages yet in #{@active_space.name} —</:system_message>
+        <:system_message>
+          — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
+        </:system_message>
         <:body>
           This space is quiet. Connect your agent and @ them to plan and work in this space.
         </:body>
