@@ -271,6 +271,7 @@ defmodule Platform.GameStream.Session do
             peak_spectators: 0,
             stats: %{},
             ended_reason: nil,
+            build_ms: nil,
             linger_ms: Map.get(args, :linger_ms, @default_linger_ms),
             host_grace_ms:
               Map.get_lazy(args, :host_grace_ms, fn ->
@@ -328,6 +329,7 @@ defmodule Platform.GameStream.Session do
 
       true ->
         state = state |> host_spoke(from_pid) |> maybe_resume(parsed)
+        state = note_build_ms(state, parsed)
 
         state = %{
           state
@@ -1013,6 +1015,18 @@ defmodule Platform.GameStream.Session do
 
   defp terminal?(state), do: state.state in Protocol.terminal_states()
 
+  # The first time the host leaves `building` for `connecting` or `live`, the
+  # elapsed time it reports is how long the build took. A session that fails
+  # or is stopped while building records none, so a failed build never
+  # becomes "the last build" the Building card compares against.
+  defp note_build_ms(%{state: "building", build_ms: nil} = state, %{state: next} = parsed)
+       when next in ["connecting", "live"] do
+    ms = if is_integer(parsed.elapsed_ms) and parsed.elapsed_ms > 0, do: parsed.elapsed_ms
+    %{state | build_ms: ms || DateTime.diff(DateTime.utc_now(), state.started_at, :millisecond)}
+  end
+
+  defp note_build_ms(state, _parsed), do: state
+
   defp display_detail("ended", "idle", state), do: idle_reason(state.idle_timeout_s)
   defp display_detail(_state_name, detail, _state), do: detail
 
@@ -1105,6 +1119,7 @@ defmodule Platform.GameStream.Session do
       peak_spectators: state.peak_spectators,
       ended_state: state.state,
       ended_reason: state.ended_reason,
+      build_ms: Map.get(state, :build_ms),
       started_at: state.started_at,
       ended_at: DateTime.utc_now()
     }

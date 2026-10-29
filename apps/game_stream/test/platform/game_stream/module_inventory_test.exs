@@ -92,8 +92,8 @@ defmodule Platform.GameStream.ModuleInventoryTest do
 
   # {path under apps/game_stream/lib, call kind, schema alias, count, class, reason}
   @inventory [
-    {"platform/game_stream.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "recent_runs/2 and runs_since/2 (task 01a1557a-efdd stage 3): the node's untyped `task_id` prop is shape-checked before the game_stream_sessions query; a malformed id is [] / 0"},
+    {"platform/game_stream.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "recent_runs/2, runs_since/2 (task 01a1557a-efdd stage 3) and last_build_ms/1 (task 01a17b51 stage 3): the node's untyped `task_id` prop is shape-checked before the game_stream_sessions query; a malformed id is [] / 0 / nil"},
     {"platform/game_stream/review_build.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "fetch_task/1's predicate. `task_id` is the play_session_start MCP argument; the guard folds a malformed id into {:error, :task_not_found} before Tasks.get_task_record/1 runs"},
     {"platform/game_stream/review_build.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,

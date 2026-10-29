@@ -406,6 +406,39 @@ defmodule Platform.GameStreamTest do
       assert_receive {:game_stream, ^id, {:status, %{state: "failed", ended_reason: "boom"}}}
     end
 
+    test "build_ms is the elapsed time at the first connecting, and the card's last build", ctx do
+      id = ctx.session_id
+      rid = ctx.runtime.runtime_id
+      assert GameStream.last_build_ms(ctx.task.id) == nil
+      :ok = GameStream.handle_host_status(rid, frame(id, "building", %{"elapsed_ms" => 40_000}))
+      :ok = GameStream.handle_host_status(rid, frame(id, "connecting", %{"elapsed_ms" => 93_000}))
+      # Only the first move out of building counts.
+      :ok = GameStream.handle_host_status(rid, frame(id, "live", %{"elapsed_ms" => 99_000}))
+      assert {:ok, %{state: "ended"}} = GameStream.stop_session(id, "done")
+      assert %SessionRecord{build_ms: 93_000} = Repo.get!(SessionRecord, id)
+      assert GameStream.last_build_ms(ctx.task.id) == 93_000
+      assert GameStream.last_build_ms("not-a-uuid") == nil
+    end
+
+    test "a session that fails while building records no build_ms, so it is never 'the last build'",
+         ctx do
+      id = ctx.session_id
+      rid = ctx.runtime.runtime_id
+      :ok = GameStream.handle_host_status(rid, frame(id, "building", %{"elapsed_ms" => 5_000}))
+
+      :ok =
+        GameStream.handle_host_status(
+          rid,
+          frame(id, "failed", %{
+            "elapsed_ms" => 61_000,
+            "detail" => "build: Build failed during Cooking: x"
+          })
+        )
+
+      assert %SessionRecord{build_ms: nil, ended_state: "failed"} = Repo.get!(SessionRecord, id)
+      assert GameStream.last_build_ms(ctx.task.id) == nil
+    end
+
     test "stop_session tells the host, ends the session and records it", ctx do
       id = ctx.session_id
       assert {:ok, %{state: "ended", ended_reason: "done"}} = GameStream.stop_session(id, "done")

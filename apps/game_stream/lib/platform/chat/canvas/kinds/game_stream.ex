@@ -234,6 +234,9 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   # real render has no peer yet (opening always watches), so it is nil.
   attr(:roster, :any, default: :lookup)
   attr(:peer_id, :string, default: nil)
+  # The task's last finished build, in ms (task 01a17b51 stage 3). Tests pass
+  # one directly (or nil); a real render asks `Platform.GameStream`.
+  attr(:last_build_ms, :any, default: :lookup)
   # Task 01a1557a-efdd stage 2: `:stage` is the Game view's chrome. The node
   # sits on the page's stage colour with no frame of its own, and its title,
   # branch and sha are hidden (the Game view's top bar names the build). The
@@ -255,6 +258,17 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       end
 
     {panel, detail, elapsed_ms} = initial_view(session_id, status)
+
+    task_id = props["task_id"] || status_field(status, :task_id)
+
+    last_build_ms =
+      case assigns[:last_build_ms] do
+        :lookup -> if panel == "building", do: lookup_last_build(task_id)
+        other -> other
+      end
+
+    step = if panel == "building", do: build_step(detail_of(status))
+    build_failure = if panel == "failed", do: build_failure_step(detail)
 
     roster =
       case assigns.roster do
@@ -279,6 +293,13 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       |> assign(:panel, panel)
       |> assign(:detail, detail)
       |> assign(:elapsed_ms, elapsed_ms || 0)
+      |> assign(:step, step)
+      |> assign(:building_tail, if(step, do: " · " <> step, else: " on the play host…"))
+      |> assign(:last_build_ms, last_build_ms)
+      |> assign(:last_build_min, last_build_ms && max(round(last_build_ms / 60_000), 1))
+      |> assign(:longer?, longer_than_usual?(elapsed_ms, last_build_ms))
+      |> assign(:build_failure, build_failure)
+      |> assign(:task_href, task_id && "/tasks/#{task_id}")
       |> assign(:running?, running?)
       |> assign(:multi?, roster.multi)
       |> assign(:view, view)
@@ -298,6 +319,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       data-latency-warn-ms={@warn_ms}
       data-state={@panel}
       data-elapsed-ms={@elapsed_ms}
+      data-last-build-ms={@last_build_ms}
       data-gs-chrome={@chrome}
       class={[
         "game-stream-frame @container overflow-hidden",
@@ -437,11 +459,17 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         </div>
 
         <div data-gs-panel="building" hidden={@panel != "building"} class={panel_class()}>
-          <p class="text-sm text-white">
-            Building <span class="font-mono text-xs">{@sha7}</span> on the play host…
+          <p data-gs-building-title class="text-sm text-white">
+            Building <span class="font-mono text-xs">{@sha7}</span>{@building_tail}
           </p>
-          <p data-gs-elapsed class="font-mono text-xs text-white/60">
-            {format_elapsed(@elapsed_ms)}
+          <p class="font-mono text-xs text-white/60">
+            Building · <span data-gs-elapsed>{format_elapsed(@elapsed_ms)}</span>
+          </p>
+          <p :if={@last_build_min} data-gs-last-build class="text-xs text-white/60">
+            Last build took {@last_build_min} min
+          </p>
+          <p :if={@last_build_min} data-gs-longer hidden={!@longer?} class="text-xs text-white/60">
+            This is taking longer than usual
           </p>
         </div>
 
@@ -479,9 +507,32 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
 
         <div data-gs-panel="failed" hidden={@panel != "failed"} class={panel_class()}>
           <p data-gs-reason class="text-sm text-error">
-            {@detail || "The build failed on the play host"}
+            {if @build_failure,
+              do: "Build didn't finish",
+              else: @detail || "The build failed on the play host"}
           </p>
-          <button type="button" data-gs-restart class={restart_class()}>
+          <%!-- A build that fails is fixed on the task branch, not from here:
+          no Retry, no Start again (design addendum 2b). --%>
+          <%!-- Always in the markup, hidden unless the failure is a build's: the
+          hook shows them when a later status turns out to be one. --%>
+          <p data-gs-fail-step hidden={!@build_failure} class="text-xs text-white/70">
+            Failed during <span data-gs-fail-step-name>{@build_failure}</span>
+          </p>
+          <a
+            :if={@task_href}
+            data-gs-open-task
+            hidden={!@build_failure}
+            href={@task_href}
+            class={restart_class()}
+          >
+            Open task
+          </a>
+          <button
+            type="button"
+            data-gs-restart
+            hidden={!!@build_failure}
+            class={restart_class()}
+          >
             <span class="hero-arrow-path size-4" aria-hidden="true"></span> Start again
           </button>
         </div>
@@ -840,6 +891,64 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
 
   defp menu_item_class,
     do: "w-full rounded-md px-2 py-1.5 text-left text-sm text-base-content hover:bg-base-200"
+
+  # ── Building (task 01a17b51 stage 3) ───────────────────────────────────
+
+  # The step words the host puts at the start of a building detail. Godot's
+  # "Preparing ..." and "Importing assets" are not steps: they keep today's
+  # "on the play host…" line. Mirrored in assets/js/hooks/lib/game_stream_build.js.
+  @build_steps ~w(Compiling Cooking Staging Packaging Archiving)
+  @build_steps_all ["Editor scripts" | @build_steps]
+
+  @doc "The step word a building detail starts with, or nil."
+  @spec build_step(term()) :: String.t() | nil
+  def build_step(detail) when is_binary(detail) do
+    Enum.find(@build_steps_all, fn word ->
+      detail == word or String.starts_with?(detail, word <> " ") or
+        String.starts_with?(detail, word <> ":")
+    end)
+  end
+
+  def build_step(_), do: nil
+
+  @doc """
+  The step a failed build stopped in, from the host's failure detail
+  (`Build failed during Cooking: ...`, `Build timed out during Cooking`, with
+  or without the host's `build: ` prefix), or nil for any other failure.
+  """
+  @spec build_failure_step(term()) :: String.t() | nil
+  def build_failure_step(detail) when is_binary(detail) do
+    case Regex.run(
+           ~r/^(?:build: )?Build (?:failed|timed out) during (Editor scripts|[A-Z][a-z]+)\b/,
+           detail
+         ) do
+      [_, step] -> step
+      _ -> nil
+    end
+  end
+
+  def build_failure_step(_), do: nil
+
+  @doc "True once the build has run more than twice as long as the last one. Never without a last build."
+  @spec longer_than_usual?(term(), term()) :: boolean()
+  def longer_than_usual?(elapsed_ms, last_ms)
+      when is_integer(elapsed_ms) and is_integer(last_ms) and last_ms > 0,
+      do: elapsed_ms > 2 * last_ms
+
+  def longer_than_usual?(_, _), do: false
+
+  defp status_field({:ok, status}, key) when is_map(status), do: Map.get(status, key)
+  defp status_field(_, _), do: nil
+
+  defp detail_of(status), do: status_field(status, :detail)
+
+  defp lookup_last_build(task_id) when is_binary(task_id) do
+    Platform.GameStream.last_build_ms(task_id)
+  rescue
+    _ -> nil
+  end
+
+  defp lookup_last_build(_), do: nil
 
   defp lookup_status(session_id) when is_binary(session_id) and session_id != "" do
     Platform.GameStream.status(session_id)

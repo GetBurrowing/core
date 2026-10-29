@@ -52,6 +52,7 @@ defmodule Platform.GameStream.SessionRecord do
     field(:roster_variant_slug, :string)
     field(:ended_state, :string)
     field(:ended_reason, :string)
+    field(:build_ms, :integer)
     field(:started_at, :utc_datetime_usec)
     field(:ended_at, :utc_datetime_usec)
 
@@ -61,7 +62,7 @@ defmodule Platform.GameStream.SessionRecord do
   @required ~w(id task_id review_sha branch host_runtime_id ended_state started_at ended_at)a
   @optional ~w(started_by_kind started_by_id experiment_id variant_slug encoder connection_path
                rtt_p50_ms rtt_p95_ms fps_avg ended_reason slot_stats peak_players
-               peak_spectators roster_experiment_id roster_variant_slug)a
+               peak_spectators roster_experiment_id roster_variant_slug build_ms)a
 
   @doc false
   def changeset(record, attrs) do
@@ -72,6 +73,7 @@ defmodule Platform.GameStream.SessionRecord do
     |> validate_inclusion(:ended_state, @ended_states)
     |> validate_number(:peak_players, greater_than_or_equal_to: 0)
     |> validate_number(:peak_spectators, greater_than_or_equal_to: 0)
+    |> validate_number(:build_ms, greater_than_or_equal_to: 0)
     |> check_constraint(:connection_path, name: :game_stream_sessions_connection_path_check)
     |> check_constraint(:ended_state, name: :game_stream_sessions_ended_state_check)
     |> foreign_key_constraint(:task_id)
