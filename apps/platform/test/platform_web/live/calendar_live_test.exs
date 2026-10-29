@@ -89,6 +89,43 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert {:ok, _} = Calendar.get_event(Scope.for_user(other), event.id)
   end
 
+  test "one-day all-day custom recurrence keeps the selected local dates across DST", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, view, _} = live(conn, "/calendar")
+    render_click(view, "new_event")
+
+    view
+    |> form("#calendar-event-form", event: %{all_day: "true", repeat: "custom"})
+    |> render_change()
+
+    view
+    |> form("#calendar-event-form",
+      event: %{
+        title: "Away",
+        all_day: "true",
+        start_date: "2026-11-01",
+        end_date: "2026-11-01",
+        time_zone: "America/Chicago",
+        custom_frequency: "WEEKLY",
+        custom_interval: "2",
+        custom_count: "3",
+        custom_until: "",
+        repeat: "custom",
+        where: "private",
+        visibility: "details"
+      }
+    )
+    |> render_submit()
+
+    [first | _] = Calendar.list_events(scope, ~U[2026-11-01 00:00:00Z], ~U[2026-12-01 00:00:00Z])
+    assert first.start_date == ~D[2026-11-01]
+    assert first.end_date == ~D[2026-11-02]
+    assert DateTime.diff(first.ends_at, first.starts_at, :hour) == 25
+    assert first.recurrence == "FREQ=WEEKLY;INTERVAL=2;COUNT=3"
+  end
+
   test "subscription rotation requires confirmation and revokes the previous link", %{
     conn: conn,
     scope: scope

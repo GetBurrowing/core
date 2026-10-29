@@ -3,8 +3,8 @@
   data-page="calendar"
 >
   <header class="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-3 lg:px-5">
-    <h1 class="mr-auto text-sm font-semibold">Calendar</h1>
-    <button id="calendar-today" phx-click="today" class="btn btn-ghost btn-sm min-h-11">
+    <h1 class="mr-auto hidden text-sm font-semibold lg:block">Calendar</h1>
+    <button id="calendar-today" phx-click="today" class="btn btn-ghost btn-sm ml-auto min-h-11">
       Today
     </button>
     <button
@@ -27,8 +27,8 @@
       >
         <.icon name="hero-chevron-left" class="size-4" />
       </button>
-      <span class="min-w-0 flex-1 text-sm font-semibold">
-        {Calendar.strftime(@anchor, "%B %Y")}
+      <span class="min-w-0 flex-1 text-xl font-semibold">
+        {if @view == "month", do: Calendar.strftime(@anchor, "%B %Y"), else: date_label(@anchor)}
       </span>
       <button
         phx-click="navigate_date"
@@ -56,7 +56,7 @@
     <p class="w-full text-xs text-subtle">Times in {@zone}</p>
   </header>
 
-  <div class="min-h-0 flex-1 overflow-auto p-3 lg:p-5">
+  <div class="clears-tab-bar min-h-0 flex-1 overflow-auto p-3 lg:p-5">
     <section
       :if={@up_next}
       class="mb-4 rounded-xl border border-edge bg-base-100 p-4 lg:bg-base-200"
@@ -82,7 +82,11 @@
             />{@up_next.title}
           </span>
           <span class="font-mono text-xs text-subtle">
-            {time_label(@up_next.starts_at, @zone)} · {scope_label(@up_next, @spaces, @projects)}
+            {if @up_next.all_day, do: "all day", else: time_label(@up_next.starts_at, @zone)} · {scope_label(
+              @up_next,
+              @spaces,
+              @projects
+            )}
           </span>
         </button>
         <.link
@@ -106,20 +110,23 @@
 
     <section class={[@view != "agenda" && "lg:hidden"]} data-role="calendar-agenda">
       <div class="mb-4 grid grid-cols-7 gap-1" aria-label="Week strip">
-        <span
+        <button
           :for={date <- Enum.take(@days, 7)}
+          type="button"
+          phx-click="select_day"
+          phx-value-date={date}
           class={[
             "rounded-lg py-2 text-center text-xs",
             date == @anchor && "bg-base-content text-base-100"
           ]}
         >
           {Calendar.strftime(date, "%a")}<br />{date.day}
-        </span>
+        </button>
       </div>
-      <section :for={date <- @days} class="mb-5">
+      <section :for={date <- agenda_days(@days, @anchor)} class="mb-5">
         <h2 class="mb-2 text-sm font-semibold">{date_label(date)}</h2>
         <div :for={entry <- entries_on(@entries, date, @zone)} class="mb-2 flex items-start gap-2">
-          <span class="w-12 shrink-0 pt-3 font-mono text-xs">
+          <span class="w-14 shrink-0 whitespace-nowrap pt-3 font-mono text-xs">
             {if entry.all_day, do: "all day", else: time_label(entry.starts_at, @zone)}
           </span>
           <button
@@ -162,10 +169,10 @@
             {entry.title}
           </button>
         </div>
-        <div class="relative h-[72rem] bg-base-100">
+        <div class="relative bg-base-100" style={grid_height(@hours)}>
           <span
-            :for={hour <- 0..23}
-            style={"top: #{hour / 24 * 100}%;"}
+            :for={hour <- hour_labels(@hours)}
+            style={hour_top(hour, @hours)}
             class="absolute right-2 font-mono text-[10px] text-subtle"
           >
             {String.pad_leading(to_string(hour), 2, "0")}:00
@@ -173,16 +180,17 @@
         </div>
         <div
           :for={date <- @days}
-          class="relative h-[72rem] min-w-0 border-l border-edge bg-base-100"
+          class="relative min-w-0 border-l border-edge bg-base-100"
+          style={grid_height(@hours)}
         >
           <div
-            :for={hour <- 0..23}
+            :for={hour <- hour_labels(@hours)}
             class="absolute inset-x-0 border-t border-edge"
-            style={"top: #{hour / 24 * 100}%;"}
+            style={hour_top(hour, @hours)}
           >
           </div>
           <button
-            :for={{entry, position} <- day_blocks(@entries, date, @zone)}
+            :for={{entry, position} <- day_blocks(@entries, date, @zone, @hours)}
             id={"week-#{date}-#{entry.kind}-#{entry.id}"}
             style={block_style(position) <> scope_style(entry)}
             phx-click="select"
@@ -209,8 +217,8 @@
             </span>
           </button>
           <div
-            :if={now_style(date, @zone)}
-            style={now_style(date, @zone)}
+            :if={now_style(date, @zone, @hours)}
+            style={now_style(date, @zone, @hours)}
             class="pointer-events-none absolute inset-x-0 z-20 border-t-2 border-base-content"
             data-role="calendar-now"
           >
@@ -298,14 +306,20 @@
           >
             <.input field={@form[:title]} label="Title" required maxlength="300" />
             <.input field={@form[:all_day]} type="checkbox" label="All day" />
-            <div :if={@form[:all_day].value not in [true, "true"]} class="grid grid-cols-2 gap-3">
+            <div
+              :if={@form[:all_day].value not in [true, "true"]}
+              class="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            >
               <.input field={@form[:starts_at]} type="datetime-local" label="Start" /><.input
                 field={@form[:ends_at]}
                 type="datetime-local"
                 label="End"
               />
             </div>
-            <div :if={@form[:all_day].value in [true, "true"]} class="grid grid-cols-2 gap-3">
+            <div
+              :if={@form[:all_day].value in [true, "true"]}
+              class="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            >
               <.input field={@form[:start_date]} type="date" label="All-day start" /><.input
                 field={@form[:end_date]}
                 type="date"
@@ -329,7 +343,7 @@
               :if={@form[:repeat].value == "custom"}
               class="space-y-3 rounded-lg border border-edge p-3"
             >
-              <div class="grid grid-cols-2 gap-3">
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <.input
                   field={@form[:custom_interval]}
                   type="number"
@@ -409,7 +423,10 @@
             >
               Copy link
             </button>
-            <.link href={String.replace(@feed_url, ~r/^https?:/, "webcal:")} class="btn min-h-11">
+            <.link
+              href={{:webcal, String.replace(@feed_url, ~r/^https?:/, "")}}
+              class="btn min-h-11"
+            >
               Add to Apple Calendar
             </.link>
             <p class="text-sm">

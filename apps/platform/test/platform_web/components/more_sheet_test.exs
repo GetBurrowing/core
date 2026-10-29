@@ -241,7 +241,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       put_env(:mail_enabled, false)
       keys = row_keys(render_more_sheet(%{root_user: true}))
       refute "email" in keys
-      assert Enum.take(keys, 2) == ["inbox", "files"]
+      assert Enum.take(keys, 3) == ["inbox", "calendar", "files"]
     end
 
     test "no bar tab, no Admin, no Prompts, no Activity row; no headings" do

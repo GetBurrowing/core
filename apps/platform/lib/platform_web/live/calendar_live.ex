@@ -56,6 +56,13 @@ defmodule PlatformWeb.CalendarLive do
     {:noreply, socket |> assign(:anchor, today) |> reload()}
   end
 
+  def handle_event("select_day", %{"date" => value}, socket) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> {:noreply, socket |> assign(:anchor, date) |> reload()}
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("new", _, socket), do: {:noreply, assign(socket, :sheet, :choose)}
 
   def handle_event("new_event", _, socket) do
@@ -165,12 +172,32 @@ defmodule PlatformWeb.CalendarLive do
     {to, _} = CalendarWindow.day_bounds(last, socket.assigns.zone)
     entries = Events.list_entries(socket.assigns.access_scope, from, to)
     now = DateTime.utc_now()
-    next = Enum.find(entries, &(DateTime.compare(&1.ends_at || &1.starts_at, now) == :gt))
+
+    candidates =
+      Enum.filter(entries, fn entry ->
+        case entry do
+          %{kind: :meeting, meeting: %{status: status}} when status in ["ended", "cancelled"] ->
+            false
+
+          %{kind: :meeting, meeting: %{status: "live"}} ->
+            true
+
+          _ ->
+            DateTime.compare(entry.ends_at || entry.starts_at, now) == :gt
+        end
+      end)
+
+    next = Enum.find(candidates, &(!&1.all_day)) || List.first(candidates)
     spaces = Platform.Chat.list_spaces(scope: socket.assigns.access_scope)
     projects = Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
 
     assign(socket,
       entries: entries,
+      hours:
+        CalendarWindow.hour_window(
+          Enum.reject(entries, & &1.all_day) |> Enum.map(&projection/1),
+          socket.assigns.zone
+        ),
       days: Enum.map(0..(days - 1), &Date.add(first_date, &1)),
       up_next: next,
       spaces: spaces,
@@ -281,6 +308,7 @@ defmodule PlatformWeb.CalendarLive do
     do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%Y-%m-%dT%H:%M")
 
   def date_label(date), do: Calendar.strftime(date, "%A %-d %B")
+  def agenda_days(days, anchor), do: Enum.filter(days, &(Date.compare(&1, anchor) != :lt))
   def time_label(at, zone), do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%H:%M")
 
   def entries_on(entries, date, zone),
@@ -349,7 +377,7 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  def day_blocks(entries, date, zone) do
+  def day_blocks(entries, date, zone, hours \\ {0, 24}) do
     {from, to} = CalendarWindow.day_bounds(date, zone)
 
     entries_on(entries, date, zone)
@@ -365,7 +393,7 @@ defmodule PlatformWeb.CalendarLive do
         scheduled_end_at: last
       }
 
-      case CalendarWindow.place(projection, date, zone, {0, 24}) do
+      case CalendarWindow.place(projection, date, zone, hours) do
         {:ok, placement} -> [{entry, placement}]
         _ -> []
       end
@@ -377,13 +405,24 @@ defmodule PlatformWeb.CalendarLive do
     do:
       "top: #{pos.top}%; height: #{min(pos.height, 100 - pos.top)}%; left: #{pos.left}%; width: #{pos.width}%;"
 
-  def now_style(date, zone) do
+  def now_style(date, zone, {first, last}) do
     now = DateTime.shift_zone!(DateTime.utc_now(), zone)
 
-    if DateTime.to_date(now) == date,
-      do: "top: #{(now.hour * 60 + now.minute) / 1440 * 100}%;",
+    if DateTime.to_date(now) == date and now.hour >= first and now.hour < last,
+      do: "top: #{((now.hour - first) * 60 + now.minute) / ((last - first) * 60) * 100}%;",
       else: nil
   end
+
+  def hour_labels({first, last}), do: Enum.to_list(first..(last - 1))
+  def hour_top(hour, {first, last}), do: "top: #{(hour - first) / (last - first) * 100}%;"
+  def grid_height({first, last}), do: "height: #{(last - first) * 64}px;"
+
+  defp projection(entry),
+    do: %Platform.Meetings.Meeting{
+      status: "scheduled",
+      scheduled_start_at: entry.starts_at,
+      scheduled_end_at: entry.ends_at
+    }
 
   defp shift_month(date, sign) do
     base = Date.beginning_of_month(date)

@@ -514,7 +514,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       # inside its own segment, each announced by an aria-label.
       assert has_element?(
                view,
-               "[data-view='list'][aria-label='Calendar'] .hero-calendar-days"
+               "[data-view='list'][aria-label='Meetings'] .hero-video-camera"
              )
 
       assert has_element?(
