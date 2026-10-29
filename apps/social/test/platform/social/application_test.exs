@@ -25,6 +25,7 @@ defmodule Platform.Social.ApplicationTest do
     refute Platform.Social.ClipPublish in ids
     refute Platform.Social.EpisodeDiscovery in ids
     refute Platform.Social.AnalyticsSync in ids
+    refute Platform.Social.WeeklyNoteSweep in ids
   end
 
   test ":full keeps today's children in today's order" do
@@ -36,7 +37,8 @@ defmodule Platform.Social.ApplicationTest do
              Platform.Social.PublishRetry,
              Platform.Social.ClipPublish,
              Platform.Social.EpisodeDiscovery,
-             Platform.Social.AnalyticsSync
+             Platform.Social.AnalyticsSync,
+             Platform.Social.WeeklyNoteSweep
            ]
   end
 end
