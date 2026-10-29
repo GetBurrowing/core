@@ -188,7 +188,7 @@ defmodule PlatformWeb.CalendarLive do
       end)
 
     next = Enum.find(candidates, &(!&1.all_day)) || List.first(candidates)
-    spaces = Platform.Chat.list_spaces(scope: socket.assigns.access_scope)
+    spaces = Calendar.list_spaces(socket.assigns.access_scope)
     projects = Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
 
     assign(socket,

@@ -147,9 +147,21 @@ defmodule Platform.CalendarTest do
         attrs(%{title: "Private DM appointment", space_id: space.id})
       )
 
-    assert {:ok, _} = Calendar.get_event(Scope.for_user(member), event.id)
+    member_scope = Scope.for_user(member)
+    assert {:ok, _} = Calendar.get_event(member_scope, event.id)
+    assert Calendar.Feed.render(member_scope) =~ "Private DM appointment"
+    assert Enum.any?(Calendar.list_spaces(member_scope), &(&1.id == space.id))
+    refute Enum.any?(Calendar.list_spaces(Scope.for_user(outsider)), &(&1.id == space.id))
     assert {:error, :not_found} = Calendar.get_event(Scope.for_user(outsider), event.id)
     refute Calendar.Feed.render(Scope.for_user(outsider)) =~ "Private DM appointment"
+
+    participant =
+      Repo.get_by!(Platform.Chat.Participant, space_id: space.id, participant_id: member.id)
+
+    assert {:ok, _} = Platform.Chat.remove_participant(participant)
+    assert {:error, :not_found} = Calendar.get_event(member_scope, event.id)
+    refute Calendar.Feed.render(member_scope) =~ "Private DM appointment"
+    refute Enum.any?(Calendar.list_spaces(member_scope), &(&1.id == space.id))
   end
 
   test "all-day dates preserve exclusive end across DST" do

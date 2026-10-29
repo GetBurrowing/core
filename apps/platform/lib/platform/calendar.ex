@@ -212,11 +212,25 @@ defmodule Platform.Calendar do
     end
   end
 
+  def list_spaces(%Scope{actor: %Accounts.User{id: id}} = scope) do
+    member_ids = Platform.Chat.list_member_space_ids(id)
+
+    Platform.Chat.list_spaces(scope: scope)
+    |> Enum.filter(&(&1.id in member_ids and is_binary(&1.name)))
+  end
+
+  def list_spaces(_), do: []
+
   defp visible_query(%Scope{actor: %Accounts.User{id: id}} = scope) do
     projects = member_projects_query(id) |> select([p], p.id)
 
+    member_spaces = Platform.Chat.ExternalScope.member_space_ids(scope)
+
     spaces =
-      Platform.Chat.Space |> Platform.Chat.ExternalScope.scope_spaces(scope) |> select([s], s.id)
+      Platform.Chat.Space
+      |> Platform.Chat.ExternalScope.scope_spaces(scope)
+      |> where([s], s.id in subquery(member_spaces) and is_nil(s.archived_at))
+      |> select([s], s.id)
 
     from(e in Event,
       where:
