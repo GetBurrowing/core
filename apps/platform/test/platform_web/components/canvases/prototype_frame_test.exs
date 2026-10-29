@@ -428,17 +428,179 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
     end
   end
 
+  describe "scripted embed source (task 01a18834 stage 1)" do
+    setup ctx do
+      prev_sync = Application.get_env(:platform, :canvas_persist_sync)
+      Application.put_env(:platform, :canvas_persist_sync, true)
+      on_exit(fn -> Application.put_env(:platform, :canvas_persist_sync, prev_sync) end)
+
+      n = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Scripted #{n}",
+          slug: "scripted-#{n}",
+          kind: "channel",
+          org_id: ctx.org_id
+        })
+
+      editor = user!("Embed Editor")
+
+      {:ok, author} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: editor.id,
+          display_name: editor.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => author.id,
+          "title" => "Scripted",
+          "document" => %{
+            "version" => 1,
+            "revision" => 1,
+            "root" => %{
+              "id" => "root",
+              "type" => "stack",
+              "children" => [
+                %{
+                  "id" => "se",
+                  "type" => "embed",
+                  "props" => %{"srcdoc" => scripted_html(1), "scripts" => true}
+                }
+              ]
+            }
+          }
+        })
+
+      on_exit(fn -> Platform.Chat.Canvas.Server.stop(canvas.id) end)
+
+      for v <- [2, 3] do
+        {:ok, _} =
+          Chat.patch_canvas({:user, editor.id}, canvas, [
+            {:set_props, "se", %{"srcdoc" => scripted_html(v)}}
+          ])
+      end
+
+      %{"prototype_id" => pid, "version" => 3} =
+        scripted_node(canvas.id)["props"]["prototype_ref"]
+
+      {:ok, scanvas: canvas, editor: editor, embed_prototype_id: pid}
+    end
+
+    test "an embed with ref v3 of 3 renders the shared bar: stamp, three rows, fullscreen, open",
+         ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.scanvas.id, "node" => scripted_node(ctx.scanvas.id)}
+        )
+
+      [stamp] = Enum.to_list(find(render(view), ~s([data-role="prototype-version-stamp"])))
+      assert String.trim(LazyHTML.text(stamp)) =~ ~r/\Av3 · /
+      assert has_element?(view, ~s([data-role="prototype-fullscreen"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="prototype-open"][href="/proto/#{ctx.embed_prototype_id}/3/"])
+             )
+
+      assert has_element?(view, ~s([data-role="prototype-title"]), "Scripted embed")
+      refute render(view) =~ "Canvas embed se"
+      refute has_element?(view, ~s([data-role="prototype-pinned-chip"]))
+
+      view |> element(~s([data-role="prototype-version-stamp"])) |> render_click()
+      rows = find(render(view), ~s([data-role="prototype-version-row"])) |> Enum.to_list()
+      assert Enum.flat_map(rows, &LazyHTML.attribute(&1, "data-version")) == ~w(3 2 1)
+
+      # A canvas_embed version names the canvas write's author, not "unknown".
+      [v3_row] = Enum.take(rows, 1)
+      assert LazyHTML.text(v3_row) =~ "Embed Editor"
+    end
+
+    test "Pin v2 patches the srcdoc: the ref becomes v2, nothing new is published", ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{
+            "canvas_id" => ctx.scanvas.id,
+            "node" => scripted_node(ctx.scanvas.id),
+            "viewer" => {:user, ctx.editor.id}
+          }
+        )
+
+      view |> element(~s([data-role="prototype-version-stamp"])) |> render_click()
+      view |> element(~s([data-role="prototype-pin"][phx-value-version="2"])) |> render_click()
+      refute render(view) =~ "Could not pin that version."
+
+      node = scripted_node(ctx.scanvas.id)
+      assert node["props"]["prototype_ref"]["version"] == 2
+      assert node["props"]["srcdoc"] == scripted_html(2)
+      refute Map.has_key?(node["props"], "version")
+      assert version_numbers(ctx.embed_prototype_id) == [1, 2, 3]
+
+      html = render_frame(node, ctx.scanvas.id, {:user, ctx.editor.id})
+      [stamp] = Enum.to_list(find(html, ~s([data-role="prototype-version-stamp"])))
+      assert String.trim(LazyHTML.text(stamp)) =~ ~r/\Av2 · /
+      [chip] = Enum.to_list(find(html, ~s([data-role="prototype-pinned-chip"])))
+      assert LazyHTML.text(chip) =~ "latest v3"
+      [iframe] = Enum.to_list(find(html, "iframe"))
+      assert LazyHTML.attribute(iframe, "src") == ["/proto/#{ctx.embed_prototype_id}/2/"]
+    end
+
+    test "Pin shows for an editor and is hidden (not disabled) with no viewer", ctx do
+      pins = fn viewer ->
+        session = %{"canvas_id" => ctx.scanvas.id, "node" => scripted_node(ctx.scanvas.id)}
+        session = if viewer, do: Map.put(session, "viewer", viewer), else: session
+        {:ok, view, _} = live_isolated(build_conn(), __MODULE__.Host, session: session)
+        view |> element(~s([data-role="prototype-version-stamp"])) |> render_click()
+        assert has_element?(view, ~s([data-role="prototype-version-row"][data-version="1"]))
+        html = render(view)
+        assert Enum.to_list(find(html, ~s([data-role="prototype-version-row"] [disabled]))) == []
+        find(html, ~s([data-role="prototype-pin"])) |> Enum.to_list() |> length()
+      end
+
+      # Positive control: the same list for an editor carries Pin on v1 and v2.
+      assert pins.({:user, ctx.editor.id}) == 2
+      assert pins.(nil) == 0
+    end
+  end
+
+  defp scripted_html(v),
+    do:
+      ~s(<!doctype html><html><body><p id="marker">VERSION=#{v}</p><script>document.title="v#{v}"</script></body></html>)
+
+  defp scripted_node(canvas_id) do
+    {:ok, %{document: doc}} = Platform.Chat.Canvas.Server.describe(canvas_id)
+    Platform.Chat.CanvasDocument.get_node(doc, "se")
+  end
+
+  defp version_numbers(prototype_id),
+    do:
+      Repo.all(from(v in Version, where: v.prototype_id == ^prototype_id, select: v.version))
+      |> Enum.sort()
+
   defmodule Host do
     @moduledoc false
     use Phoenix.LiveView
 
     def mount(_params, session, socket) do
-      {:ok, assign(socket, canvas_id: session["canvas_id"], node: session["node"])}
+      {:ok,
+       assign(socket,
+         canvas_id: session["canvas_id"],
+         node: session["node"],
+         viewer: session["viewer"]
+       )}
     end
 
     def render(assigns) do
       ~H"""
-      <Platform.Chat.Canvas.Renderer.render_node node={@node} canvas_id={@canvas_id} />
+      <Platform.Chat.Canvas.Renderer.render_node
+        node={@node}
+        canvas_id={@canvas_id}
+        viewer={@viewer}
+      />
       """
     end
   end

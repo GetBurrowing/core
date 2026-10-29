@@ -1,7 +1,17 @@
 defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   @moduledoc """
   The rendered body of a `prototype` canvas node (task 01a1316b-4e46 stage 2;
-  `Platform.Chat.Canvas.Kinds.Prototype` renders this and nothing else).
+  `Platform.Chat.Canvas.Kinds.Prototype` renders this and nothing else), and
+  of a `scripts: true` `embed` node with a well-formed `prototype_ref` (task
+  01a18834 stage 1; `Platform.Chat.Canvas.Kinds.Embed` renders this for it).
+
+  ## Sources
+
+  `source/1` is the one place that reads the node: a `prototype` node shows
+  `{prototype_id, version}` from its props (nil version = follow latest); a
+  scripted embed shows `{ref.prototype_id, ref.version}` from its
+  server-stamped `prototype_ref`, so it is "pinned" exactly when its ref is
+  older than the canvas-owned prototype's latest version.
 
   ## Why a LiveComponent
 
@@ -30,6 +40,12 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   with the `viewer` actor the host page threads in, so space membership is
   re-checked on the write. A host that passes no viewer (read-only surfaces)
   shows the list without the Pin buttons.
+
+  A scripted embed has no `version` prop, and `ScriptedEmbeds.stamp/2`
+  replaces any client-sent `prototype_ref` from the srcdoc's sha256. So its
+  pin patches the node's `srcdoc` with the target version's HTML
+  (`Prototypes.embed_html/2`); `Prototypes.publish_embed/1` finds the live
+  version with that sha and re-stamps the ref to it, publishing nothing.
 
   ## Org scoping
 
@@ -64,7 +80,8 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     node = assigns.node
     props = node["props"] || %{}
     canvas_id = assigns[:canvas_id]
-    key = {props["prototype_id"], props["version"], canvas_id}
+    {prototype_id, version} = source(node)
+    key = {prototype_id, version, canvas_id}
 
     socket =
       socket
@@ -99,6 +116,22 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       retention_days: retention_days
     )
   end
+
+  # The one reader of WHICH prototype version a node shows (see "Sources").
+  defp source(%{"type" => "embed", "props" => %{"scripts" => true} = props}) do
+    case props["prototype_ref"] do
+      %{} = ref -> {ref["prototype_id"], ref["version"]}
+      _ -> {nil, nil}
+    end
+  end
+
+  defp source(node) do
+    props = node["props"] || %{}
+    {props["prototype_id"], props["version"]}
+  end
+
+  defp scripted_embed?(node),
+    do: match?(%{"type" => "embed", "props" => %{"scripts" => true}}, node)
 
   defp canvas_org_id(canvas_id) do
     with %{space_id: space_id} <- Chat.get_canvas(canvas_id),
@@ -135,16 +168,28 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     with {:user, _} = actor <- socket.assigns.viewer,
          {version, ""} <- Integer.parse(to_string(raw)),
          true <- live_version?(socket.assigns.view, version),
+         {:ok, props} <- pin_props(socket.assigns.node, socket.assigns.view, version),
          %{} = canvas <- Chat.get_canvas(socket.assigns.canvas_id),
          {:ok, _canvas} <-
-           Chat.patch_canvas(actor, canvas, [
-             {:set_props, socket.assigns.node["id"], %{"version" => version}}
-           ]) do
+           Chat.patch_canvas(actor, canvas, [{:set_props, socket.assigns.node["id"], props}]) do
       # The patch re-renders the host, which hands this component the new node;
       # update/2 then reloads for the pinned version.
       {:noreply, assign(socket, open: nil)}
     else
       _ -> {:noreply, assign(socket, pin_error: "Could not pin that version.")}
+    end
+  end
+
+  # A scripted embed is pinned by its HTML, never a `version` prop (see
+  # "Pin this version").
+  defp pin_props(node, view, version) do
+    if scripted_embed?(node) do
+      case Prototypes.embed_html(view.prototype.id, version) do
+        {:ok, html} -> {:ok, %{"srcdoc" => html}}
+        {:error, _} -> :error
+      end
+    else
+      {:ok, %{"version" => version}}
     end
   end
 
@@ -184,6 +229,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:width, Kind.width(props))
       |> assign(:min_scale, Kind.min_scale(props))
       |> assign(:can_pin?, match?({:user, _}, assigns.viewer) and is_binary(assigns.canvas_id))
+      |> assign(:title, title(assigns.node, view))
 
     ~H"""
     <div
@@ -226,9 +272,9 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         <p
           class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content"
           data-role="prototype-title"
-          title={@view.prototype.name}
+          title={@title}
         >
-          {@view.prototype.name}
+          {@title}
         </p>
         <%!-- By BAR width: from 32rem the full "v1 pinned · latest v4"; from
              24rem only "latest v4" (the stamp beside it already names the
@@ -369,7 +415,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
               src={@url}
               sandbox="allow-scripts"
               referrerpolicy="no-referrer"
-              title={@view.prototype.name}
+              title={@title}
               style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
             >
             </iframe>
@@ -465,6 +511,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     </div>
     """
   end
+
+  # A canvas-owned prototype's stored name is `Canvas embed <node_id>`.
+  defp title(node, view),
+    do: if(scripted_embed?(node), do: "Scripted embed", else: view.prototype.name)
 
   defp stamp_label(%{pinned?: true, shown: shown, latest: latest}),
     do: "Version #{shown}, pinned (latest is v#{latest}), show versions"
