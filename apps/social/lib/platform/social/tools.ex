@@ -1035,6 +1035,8 @@ defmodule Platform.Social.Tools do
       :clip_id,
       :idea_id,
       :platform_post_id,
+      :metrics,
+      :metrics_synced_at,
       :publish_attempts,
       :published_at,
       :approved_at,
