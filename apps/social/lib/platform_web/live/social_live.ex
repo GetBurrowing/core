@@ -193,7 +193,7 @@ defmodule PlatformWeb.SocialLive do
   # else ignored. Each tab then reads its own params (`from_query/2`).
   defp select_from_query(socket, profiles, %{} = query) do
     socket =
-      case Enum.find(profiles, &(&1.id == query["profile"])) do
+      case Enum.find(profiles, &(&1.id == (query["profile"] || query["profile_id"]))) do
         nil -> socket
         profile -> SocialScope.load_profile(socket, profile)
       end

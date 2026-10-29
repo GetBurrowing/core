@@ -19,7 +19,8 @@ defmodule PlatformWeb.SocialResultsTab do
         results_accounts: [],
         results_candidates: [],
         results_expanded: MapSet.new(),
-        results_notice: nil
+        results_notice: nil,
+        weekly_note_query: %{}
       )
 
   @impl true
@@ -117,12 +118,28 @@ defmodule PlatformWeb.SocialResultsTab do
 
   def handle_event(_, _, s), do: {:noreply, load(s)}
   @impl true
+  def from_query(socket, query),
+    do:
+      assign(
+        socket,
+        :weekly_note_query,
+        Map.take(query, ~w(profile profile_id weekly_note_week weekly_note_target))
+      )
+
+  @impl true
   def pane(assigns) do
     ~H"""
     <section
       data-role="social-results"
       class="space-y-6 bg-base-100 text-sm text-base-content [font-family:'Public_Sans',sans-serif]"
     >
+      <.live_component
+        module={PlatformWeb.SocialWeeklyNote}
+        id="social-weekly-notes"
+        user={@user}
+        scope={@scope}
+        query={@weekly_note_query}
+      />
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="join" role="group" aria-label="Results period">
           <button
