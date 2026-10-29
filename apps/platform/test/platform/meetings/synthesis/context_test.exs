@@ -32,6 +32,7 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     {:ok, p} =
       Chat.add_participant(space_id, %{
         participant_type: "user",
+        joined_at: DateTime.utc_now(),
         participant_id: u.id,
         display_name: u.name
       })
