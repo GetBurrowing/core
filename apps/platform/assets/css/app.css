@@ -9356,6 +9356,6 @@ body.screen-share-fullscreen-active {
 @keyframes canvas-card-leave { 0%, 99.3% { opacity: 1; } 100% { opacity: 0; } }
 .canvas-card-agent { outline: 1px solid var(--ag); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) {
-  .canvas-card-presence { transition: none; }
-  .canvas-card-presence[data-leaving="true"] { animation: none; }
+  .canvas-card-presence { transition: none !important; }
+  .canvas-card-presence[data-leaving="true"] { animation: none !important; }
 }
