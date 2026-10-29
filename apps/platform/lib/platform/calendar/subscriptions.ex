@@ -158,7 +158,10 @@ defmodule Platform.Calendar.Subscriptions do
 
       true ->
         native =
-          Platform.Calendar.list_entries(scope, from, to, time_zone: zone || "Etc/UTC")
+          Platform.Calendar.list_entries(scope, from, to,
+            time_zone: zone || "Etc/UTC",
+            meeting_overlap: true
+          )
           |> Enum.reject(fn
             %{kind: :external, transparent: true} ->
               true

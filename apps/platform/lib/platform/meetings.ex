@@ -689,9 +689,25 @@ defmodule Platform.Meetings do
         opts
       )
       when is_binary(user_id) do
-    user
-    |> viewer_listing_query()
-    |> where([m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+    query = viewer_listing_query(user)
+
+    query =
+      if Keyword.get(opts, :overlap, false) do
+        where(
+          query,
+          [m],
+          m.scheduled_start_at < ^to and
+            fragment(
+              "COALESCE(?, ? + interval '30 minutes')",
+              m.scheduled_end_at,
+              m.scheduled_start_at
+            ) > ^from
+        )
+      else
+        where(query, [m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+      end
+
+    query
     |> scope_range_to_project(Keyword.get(opts, :project_id))
     |> order_by([m], asc: m.scheduled_start_at, asc: m.inserted_at)
     |> Repo.all()

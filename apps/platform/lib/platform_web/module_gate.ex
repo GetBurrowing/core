@@ -17,6 +17,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.FilesLive => {:files, nil},
     PlatformWeb.MeetingLive => {:meetings, nil},
     PlatformWeb.CalendarLive => {:calendar, nil},
+    PlatformWeb.BookingSettingsLive => {:calendar, nil},
     PlatformWeb.VoiceLive => {:voice, nil},
     PlatformWeb.EmailLive => {:email, nil},
     PlatformWeb.SkillsLive => {:skills, nil},

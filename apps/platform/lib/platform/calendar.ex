@@ -93,7 +93,9 @@ defmodule Platform.Calendar do
 
     meetings =
       if Access.can?(scope, "calendar.read") and Access.can?(scope, "meetings.join") do
-        Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to)
+        Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to,
+          overlap: Keyword.get(opts, :meeting_overlap, false)
+        )
         |> Enum.reject(fn meeting ->
           meeting.status == "cancelled" and
             (is_nil(meeting.cancelled_at) or
