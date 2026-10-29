@@ -129,6 +129,7 @@ defmodule Platform.Meetings.Synthesis.Context do
       Map.put(s, :reader_ids, Enum.filter(recipient_ids, &Visibility.readable_by?(&1, s)))
     end)
     |> Enum.reject(&(&1.reader_ids == []))
+    |> Enum.sort_by(&{&1.ref, &1.text, Map.get(&1, :required_refs, [])})
   end
 
   @doc "Intersect cited readers with human attendees of the named meetings. Empty citations yield nobody."
