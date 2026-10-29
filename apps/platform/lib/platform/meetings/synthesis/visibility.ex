@@ -24,8 +24,16 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   defp readable?(_user, scope, :task, id),
     do: match?({:ok, _}, Access.task_target(scope, {:task, id}, "tasks.read"))
 
-  defp readable?(user, scope, :canvas, id),
-    do: match?({:ok, _, _}, Chat.CanvasAccess.fetch_for_viewer(id, user, access_scope: scope))
+  defp readable?(user, scope, :canvas, id) do
+    case Chat.CanvasAccess.fetch_for_viewer(id, user, access_scope: scope) do
+      {:ok, %{space_id: space_id, deleted_at: nil}, _level} ->
+        Access.can?(scope, "canvas.read", {:canvas, id}) and
+          not MapSet.member?(Access.restricted_space_ids(scope, [space_id]), space_id)
+
+      _ ->
+        false
+    end
+  end
 
   defp readable?(user, scope, :message, id) do
     case fetch(Chat.Message, id) do

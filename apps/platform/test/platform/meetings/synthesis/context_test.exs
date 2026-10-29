@@ -282,6 +282,8 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
         uidvalidity: 1,
         uid: 1,
         message_id_key: "synthesis-mail",
+        raw: "Subject: Checkout\r\n\r\nRelease Friday",
+        received_at: DateTime.utc_now(),
         subject: "Checkout",
         text_body: "Release Friday",
         chat_message_id: message.id
