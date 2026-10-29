@@ -283,6 +283,14 @@ defmodule PlatformWeb.SettingsLiveTest do
     test "turning it on in Settings masks fresh chat, tasks and files; B is unaffected" do
       {:ok, _} = Platform.Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
 
+      {:ok, empty_channel} =
+        Platform.Chat.create_space(%{
+          name: "Initech",
+          slug: "settings-mask-initech-#{System.unique_integer([:positive])}",
+          kind: "channel",
+          org_id: Tenancy.get_org_by_slug!("initech").id
+        })
+
       for {slug, name} <- [{"initech", "Initech Storefront"}, {"globex", "Globex Onboarding"}] do
         {:ok, _} =
           Tasks.create_project(%{
@@ -299,12 +307,13 @@ defmodule PlatformWeb.SettingsLiveTest do
       {:ok, settings, _} = live(authed(a), "/settings")
       settings |> element("[data-role=settings-mask-names]") |> render_click()
 
-      for path <- ["/chat", "/tasks", "/files?tab=browse"] do
+      for path <- ["/chat", "/chat/#{empty_channel.slug}", "/tasks", "/files?tab=browse"] do
         {:ok, _, masked} = follow(authed(a), path)
         {:ok, _, unmasked} = follow(authed(b), path)
         masked = strip_scope_stylesheet(masked)
 
-        for name <- names, path != "/chat" or name in ["Initech", "Globex"] do
+        for name <- names,
+            not String.starts_with?(path, "/chat") or name in ["Initech", "Globex"] do
           assert_name_anywhere(unmasked, name)
 
           try do
