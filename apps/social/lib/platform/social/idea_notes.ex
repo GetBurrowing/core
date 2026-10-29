@@ -26,10 +26,13 @@ defmodule Platform.Social.IdeaNotes do
   Refusals, each writing nothing: `:not_found` (missing or out-of-scope
   idea), `:not_an_approver` (a human off the profile's approver list),
   `:body_required`, `:body_too_long` (over #{IdeaNote.max_body()}
-  characters). An archived idea still takes notes.
+  characters). An archived idea still takes notes. A transaction owner may
+  pass `broadcast: false` as the fifth argument and broadcast after commit.
   """
   @spec add(Social.scope(), term(), author(), term()) :: {:ok, IdeaNote.t()} | {:error, atom()}
-  def add(scope, idea_id, author, body) do
+  @spec add(Social.scope(), term(), author(), term(), keyword()) ::
+          {:ok, IdeaNote.t()} | {:error, atom()}
+  def add(scope, idea_id, author, body, opts \\ []) do
     with {:ok, body} <- body(body),
          %Idea{} = idea <- Ideas.get(scope, idea_id) || {:error, :not_found},
          :ok <- may_write(idea, author) do
@@ -40,7 +43,7 @@ defmodule Platform.Social.IdeaNotes do
       |> Repo.insert()
       |> case do
         {:ok, note} ->
-          Ideas.broadcast_changed(idea.profile_id)
+          if Keyword.get(opts, :broadcast, true), do: Ideas.broadcast_changed(idea.profile_id)
           {:ok, note}
 
         {:error, %Changeset{}} ->

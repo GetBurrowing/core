@@ -191,4 +191,288 @@ defmodule Platform.Social.ResultsTest do
     assert Results.best_times_count(c.account, now: @now) == 2
     assert Results.best_times_count(c.account, weeks: 7, now: @now) == 1
   end
+
+  defp idea(c, title) do
+    Repo.insert!(%Idea{
+      org_id: c.org,
+      profile_id: c.profile.id,
+      title: title,
+      source_kind: "human",
+      created_by_user_id: user!().id
+    })
+  end
+
+  test "all-history cohort rounds up before eligibility; no replacement or standalone groups",
+       c do
+    old = DateTime.add(@now, -120, :day)
+
+    leaders =
+      for n <- 1..6 do
+        source = idea(c, "Idea #{n}")
+        post(c, %{"likes" => 100 - n}, idea_id: source.id, at: old)
+        source
+      end
+
+    post(c, %{"likes" => 9999}, at: old)
+    unknown = idea(c, "Unknown")
+    post(c, %{}, idea_id: unknown.id, at: old)
+    [first, second | _] = leaders
+
+    assert Enum.map(Results.recycle_candidates([c.profile], now: @now), & &1.idea_id) == [
+             first.id,
+             second.id
+           ]
+
+    post(c, %{"likes" => 0}, idea_id: first.id, at: DateTime.add(@now, -30 * 86400 + 1, :second))
+
+    assert Enum.map(Results.recycle_candidates([c.profile], now: @now), & &1.idea_id) == [
+             second.id
+           ]
+
+    second |> Ecto.Changeset.change(archived_at: @now) |> Repo.update!()
+    assert Results.recycle_candidates([c.profile], now: @now) == []
+    assert Results.recycle_candidates([], now: @now) == []
+  end
+
+  test "exact 30day boundary and stable tie ranking includes measured zero", c do
+    first = idea(c, "First")
+    second = idea(c, "Second")
+    post(c, %{"likes" => 0}, idea_id: first.id, at: DateTime.add(@now, -30, :day))
+    post(c, %{"likes" => 0}, idea_id: second.id, at: DateTime.add(@now, -30, :day))
+
+    assert Enum.map(Results.recycle_candidates([c.profile], now: @now), & &1.idea_id) == [
+             min(first.id, second.id)
+           ]
+  end
+
+  test "recycle creates human Inbox child, bounded reference notes, no posts or source refs", c do
+    source =
+      idea(c, "Recycle me")
+      |> Ecto.Changeset.change(source_kind: "url", source_url: "https://example.com/original")
+      |> Repo.update!()
+
+    original =
+      post(c, %{"likes" => 20},
+        idea_id: source.id,
+        at: DateTime.add(DateTime.utc_now(), -31, :day)
+      )
+
+    original =
+      original |> Ecto.Changeset.change(body: String.duplicate("body ", 1500)) |> Repo.update!()
+
+    user = make_approver!(c.org, c.profile, user!())
+    count = Repo.aggregate(Platform.Social.Post, :count)
+    Phoenix.PubSub.subscribe(Platform.PubSub, Platform.Social.Ideas.posts_topic(c.profile.id))
+    assert {:ok, child} = Results.recycle(c.org, source.id, user.id)
+    assert child.recycled_from_idea_id == source.id
+    assert child.created_by_user_id == user.id and child.created_by_agent_id == nil
+    assert child.source_kind == "human"
+    assert child.profile_id == source.profile_id and child.org_id == source.org_id
+    assert child.source_url == nil and child.clip_id == nil
+    assert Platform.Social.Ideas.stage([]) == "inbox"
+    assert Platform.Social.Ideas.posts(child) == []
+    assert Repo.aggregate(Platform.Social.Post, :count) == count
+    assert Repo.get!(Platform.Social.Post, original.id) == original
+    assert Repo.get!(Idea, source.id) == source
+    [note] = Platform.Social.IdeaNotes.list(child.id)
+    assert note.author_kind == "human" and note.author_id == user.id
+    assert String.length(note.body) == 4000
+
+    for text <- [
+          "reference only",
+          "linkedin",
+          original.id,
+          original.external_url,
+          DateTime.to_iso8601(original.published_at)
+        ],
+        do: assert(note.body =~ text)
+
+    assert_receive {:social_ideas_changed, _}
+    refute_receive {:social_ideas_changed, _}, 30
+    assert Results.recycle_candidates([c.profile]) == []
+    assert {:error, :not_eligible} = Results.recycle(c.org, source.id, user.id)
+
+    assert Repo.aggregate(from(i in Idea, where: i.recycled_from_idea_id == ^source.id), :count) ==
+             1
+
+    refute_receive {:social_ideas_changed, _}, 30
+  end
+
+  test "malformed/cross-org ids and nonapprovers write nothing; parent is never cast", c do
+    source = idea(c, "Scoped")
+    post(c, %{"likes" => 5}, idea_id: source.id, at: DateTime.add(DateTime.utc_now(), -31, :day))
+    user = make_approver!(c.org, c.profile, user!())
+    count = Repo.aggregate(Idea, :count)
+    assert {:error, :not_found} = Results.recycle(org_id!(), source.id, user.id)
+    assert {:error, :not_found} = Results.recycle(c.org, "broken", user.id)
+    assert {:error, :not_an_approver} = Results.recycle(c.org, source.id, user!().id)
+    assert Repo.aggregate(Idea, :count) == count
+
+    {:ok, ordinary} =
+      Platform.Social.Ideas.create(
+        c.org,
+        c.profile.id,
+        %{title: "Injected parent", recycled_from_idea_id: source.id},
+        {:user, user.id}
+      )
+
+    assert ordinary.recycled_from_idea_id == nil
+  end
+
+  defp unboxed(fun) do
+    Task.async(fn -> Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fun) end) |> Task.await(30_000)
+  end
+
+  defp committed_recycle_world do
+    w =
+      unboxed(fn ->
+        org = org_id!()
+        {profile, account} = social_account!(org, "linkedin")
+        user = make_approver!(org, profile, user!())
+        c = %{org: org, profile: profile, account: account}
+
+        {:ok, source} =
+          Platform.Social.Ideas.create(
+            org,
+            profile.id,
+            %{title: "Concurrent #{unique()}"},
+            {:user, user.id}
+          )
+
+        # Real independent PostgreSQL connections need committed fixtures.
+        at = DateTime.add(DateTime.utc_now(), -31, :day)
+
+        for n <- 1..2 do
+          Repo.insert!(%Platform.Social.Post{
+            account_id: account.id,
+            idea_id: source.id,
+            status: "published",
+            approved_by_user_id: user.id,
+            approved_at: at,
+            body: "Original #{n}",
+            published_at: at,
+            metrics_synced_at: at,
+            metrics: %{"likes" => 10}
+          })
+        end
+
+        Map.merge(c, %{source: source, user: user})
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Repo.delete_all(from(i in Idea, where: i.recycled_from_idea_id == ^w.source.id))
+        Repo.delete_all(from(p in Platform.Social.Profile, where: p.id == ^w.profile.id))
+        Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^w.profile.space_id))
+        Repo.delete_all(from(u in Platform.Accounts.User, where: u.id == ^w.user.id))
+        Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^w.org))
+      end)
+    end)
+
+    w
+  end
+
+  test "independent concurrent requests yield one child and one note per original version" do
+    w = committed_recycle_world()
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.one!(from(i in Idea, where: i.id == ^w.source.id, lock: "FOR UPDATE"))
+            send(parent, :source_locked)
+
+            receive do
+              :release -> :ok
+            after
+              5000 -> raise "lock barrier timeout"
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :source_locked, 5000
+
+    tasks =
+      for _ <- 1..2 do
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :go -> Results.recycle(w.org, w.source.id, w.user.id)
+            end
+          end)
+        end)
+      end
+
+    for _ <- 1..2 do
+      assert_receive {:ready, pid}, 5000
+      send(pid, :go)
+    end
+
+    # Both requests reach a real row lock held on a third connection.
+    for task <- tasks, do: assert(Task.yield(task, 100) == nil)
+    send(holder.pid, :release)
+    assert {:ok, :ok} = Task.await(holder)
+    results = Enum.map(tasks, &Task.await(&1, 10000))
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :not_eligible})) == 1
+
+    unboxed(fn ->
+      [child] = Repo.all(from(i in Idea, where: i.recycled_from_idea_id == ^w.source.id))
+      assert length(Platform.Social.IdeaNotes.list(child.id)) == 2
+
+      assert Repo.aggregate(
+               from(p in Platform.Social.Post, where: p.account_id == ^w.account.id),
+               :count
+             ) == 2
+
+      # The index protects all writers, independently of Results' row lock.
+      changeset =
+        %Idea{org_id: w.org, profile_id: w.profile.id, recycled_from_idea_id: w.source.id}
+        |> Idea.changeset(%{title: "Duplicate", source_kind: "human"}, {:user, w.user.id})
+
+      assert {:error, invalid} = Repo.insert(changeset)
+      assert "has already been taken" in errors_on(invalid).recycled_from_idea_id
+    end)
+  end
+
+  test "note insertion failure rolls back child and all notes without broadcasting" do
+    w = committed_recycle_world()
+    Phoenix.PubSub.subscribe(Platform.PubSub, Platform.Social.Ideas.posts_topic(w.profile.id))
+    # A real DB failure after the child exists verifies atomic rollback.
+    unboxed(fn ->
+      Repo.query!(
+        "CREATE FUNCTION results_test_note_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.author_id = '#{w.user.id}'::uuid AND position('Original 2' in NEW.body) > 0 THEN RAISE EXCEPTION 'results note failure'; END IF; RETURN NEW; END $$"
+      )
+
+      Repo.query!(
+        "CREATE TRIGGER results_test_note_failure BEFORE INSERT ON social_idea_notes FOR EACH ROW EXECUTE FUNCTION results_test_note_failure()"
+      )
+    end)
+
+    try do
+      unboxed(fn ->
+        assert_raise Postgrex.Error, ~r/results note failure/, fn ->
+          Results.recycle(w.org, w.source.id, w.user.id)
+        end
+
+        assert Repo.aggregate(
+                 from(i in Idea, where: i.recycled_from_idea_id == ^w.source.id),
+                 :count
+               ) == 0
+
+        assert Results.recycle_candidates([w.profile]) != []
+      end)
+
+      refute_receive {:social_ideas_changed, _}, 50
+    after
+      unboxed(fn ->
+        Repo.query!("DROP TRIGGER results_test_note_failure ON social_idea_notes")
+        Repo.query!("DROP FUNCTION results_test_note_failure()")
+      end)
+    end
+  end
 end

@@ -6,7 +6,8 @@ defmodule Platform.Social.Results do
   """
   import Ecto.Query
   alias Platform.Repo
-  alias Platform.Social.{Account, Post, Profile}
+  alias Platform.Social
+  alias Platform.Social.{Account, Idea, IdeaNotes, Ideas, Post, Profile}
 
   @metrics ~w(views likes comments shares saves reach)a
   @engagement ~w(likes comments shares saves)a
@@ -47,6 +48,134 @@ defmodule Platform.Social.Results do
       }
     end)
     |> Enum.sort_by(&{-(Map.get(&1, :engagement) || -1), &1.key})
+  end
+
+  @doc """
+  All-history measured idea cohort, ranked before eligibility filtering. Take
+  ceil(20% of measured groups), then exclude archived sources, sources whose
+  latest publication is less than 30 elapsed days old, and parents with a child.
+  Ineligible leaders are not replaced. Standalone posts never enter the cohort.
+  """
+  def recycle_candidates(profiles, opts \\ []) do
+    ids = Enum.map(profiles, fn %Profile{id: id} -> id end)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    groups =
+      from(p in Post,
+        join: i in assoc(p, :idea),
+        where: i.profile_id in ^ids and p.status == "published" and p.published_at <= ^now,
+        preload: [:idea, account: :profile]
+      )
+      |> Repo.all()
+      |> Enum.group_by(& &1.idea_id)
+      |> Enum.flat_map(fn {id, posts} ->
+        case sum_known(Enum.map(posts, &engagement/1)) do
+          nil ->
+            []
+
+          total ->
+            latest =
+              Enum.max_by(posts, &DateTime.to_unix(&1.published_at, :microsecond)).published_at
+
+            [
+              %{
+                idea_id: id,
+                title: hd(posts).idea.title,
+                profile_id: hd(posts).idea.profile_id,
+                engagement: total,
+                published_at: latest,
+                idea: hd(posts).idea
+              }
+            ]
+        end
+      end)
+      |> Enum.sort_by(&{-&1.engagement, &1.idea_id})
+
+    top = Enum.take(groups, div(length(groups) + 4, 5))
+    top_ids = Enum.map(top, & &1.idea_id)
+
+    parents =
+      Repo.all(
+        from(i in Idea,
+          where: i.recycled_from_idea_id in ^top_ids,
+          select: i.recycled_from_idea_id
+        )
+      )
+      |> MapSet.new()
+
+    cutoff = DateTime.add(now, -30, :day)
+
+    Enum.filter(top, fn row ->
+      is_nil(row.idea.archived_at) and DateTime.compare(row.published_at, cutoff) != :gt and
+        not MapSet.member?(parents, row.idea_id)
+    end)
+    |> Enum.map(&Map.delete(&1, :idea))
+  end
+
+  @doc "Creates a fresh Inbox idea and reference notes; no posts are copied."
+  def recycle(scope, idea_id, user_id) do
+    with %Idea{} = source <- Ideas.get(scope, idea_id) || {:error, :not_found} do
+      Repo.transaction(fn ->
+        # Serialize requests for the same parent, then re-read authorization and eligibility.
+        unless Repo.one(from(i in Idea, where: i.id == ^source.id, lock: "FOR UPDATE")),
+          do: Repo.rollback(:not_found)
+
+        with %Idea{} = source <- Ideas.get(scope, source.id) || {:error, :not_found},
+             %Profile{} = profile <-
+               Social.get_profile(scope, source.profile_id) || {:error, :not_found},
+             :ok <- Social.approver_check(profile.org_id, profile, user_id),
+             true <-
+               Enum.any?(recycle_candidates([profile]), &(&1.idea_id == source.id)) ||
+                 {:error, :not_eligible},
+             {:ok, child} <-
+               Ideas.create(
+                 scope,
+                 profile.id,
+                 %{title: source.title, brief: source.brief, source_kind: "human"},
+                 {:user, user_id},
+                 broadcast: false
+               ),
+             {:ok, child} <-
+               child
+               |> Ecto.Changeset.change(recycled_from_idea_id: source.id)
+               |> Ecto.Changeset.unique_constraint(:recycled_from_idea_id)
+               |> Ecto.Changeset.foreign_key_constraint(:recycled_from_idea_id)
+               |> Repo.update() do
+          source
+          |> Ideas.posts()
+          |> Enum.filter(&(&1.status == "published"))
+          |> Repo.preload(:account)
+          |> Enum.each(fn post ->
+            case IdeaNotes.add(scope, child.id, {:human, user_id}, reference_note(post),
+                   broadcast: false
+                 ) do
+              {:ok, _} -> :ok
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
+
+          child
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, child} ->
+          Ideas.broadcast_changed(child.profile_id)
+          {:ok, child}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp reference_note(post) do
+    header =
+      "Original published version (reference only)\nPlatform: #{post.account.platform}\nPublished: #{DateTime.to_iso8601(post.published_at)}\nPost: #{post.id}\nLive URL: #{post.external_url || "unavailable"}\n\n"
+
+    # Bound the whole note, including metadata, to IdeaNotes' 4000-character limit.
+    String.slice(header <> (post.body || ""), 0, 4000)
   end
 
   @doc "Account-only 3-hour buckets, or nil until ten usable measured posts."

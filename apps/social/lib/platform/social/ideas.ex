@@ -102,13 +102,18 @@ defmodule Platform.Social.Ideas do
   (`{:user, id}` or `{:agent, id}`). `attrs` (string or atom keys):
   `title` (required, at most 200), `brief`, `source_kind` (default `agent`
   for an agent, `human` for a user) and the optional refs `clip_id`,
-  `task_id`, `meeting_id`, `message_id` and `source_url`. Every ref must
-  belong to the profile's org (a clip to the profile itself), else a
+  `task_id`, `meeting_id`, `message_id` and `source_url`.
+  `broadcast: false` may be passed as the fifth argument by a transaction
+  owner that broadcasts only after commit.
+
+  Refs must belong to the profile's org (a clip to the profile itself), else a
   changeset error on that field; a `source_url` must be http or https.
   """
   @spec create(Social.scope(), term(), map(), creator()) ::
           {:ok, Idea.t()} | {:error, :not_found | Changeset.t()}
-  def create(scope, profile_id, attrs, creator) do
+  @spec create(Social.scope(), term(), map(), creator(), keyword()) ::
+          {:ok, Idea.t()} | {:error, :not_found | Changeset.t()}
+  def create(scope, profile_id, attrs, creator, opts \\ []) do
     attrs = normalize(attrs)
 
     case Social.get_profile(scope, profile_id) do
@@ -119,7 +124,9 @@ defmodule Platform.Social.Ideas do
         |> Idea.changeset(attrs, creator)
         |> validate_refs(scope, profile)
         |> Repo.insert()
-        |> broadcast_written()
+        |> then(fn result ->
+          if Keyword.get(opts, :broadcast, true), do: broadcast_written(result), else: result
+        end)
 
       nil ->
         {:error, :not_found}

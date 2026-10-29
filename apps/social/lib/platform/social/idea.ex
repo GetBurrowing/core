@@ -30,6 +30,8 @@ defmodule Platform.Social.Idea do
     field(:brief, :string)
     field(:source_kind, :string)
 
+    belongs_to(:recycled_from_idea, __MODULE__)
+
     belongs_to(:clip, Platform.Social.Clip)
     belongs_to(:task, Platform.Tasks.Task)
     belongs_to(:meeting, Platform.Meetings.Meeting)
@@ -71,6 +73,8 @@ defmodule Platform.Social.Idea do
     |> check_constraint(:source_kind, name: :social_ideas_source_kind_check)
     |> check_constraint(:created_by_user_id, name: :social_ideas_one_creator_check)
     |> unique_constraint(:clip_id, name: :social_ideas_one_per_clip)
+    |> unique_constraint(:recycled_from_idea_id)
+    |> foreign_key_constraint(:recycled_from_idea_id)
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:profile_id)
     |> foreign_key_constraint(:clip_id)
