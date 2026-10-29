@@ -59,6 +59,7 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.MailDraftGenerator,
     Platform.Experiments.Surfaces.PlannerStageBudget,
     Platform.Experiments.Surfaces.ChatContextSummary,
+    Platform.Experiments.Surfaces.MeetingBriefSynthesis,
     # Task 01a0e8b5: which program decides a meeting open_question. The
     # control is today's intent prompt; nothing is seeded, so production
     # stays on it until an experiment row says otherwise.

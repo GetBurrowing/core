@@ -122,6 +122,13 @@ defmodule Platform.Meetings.CompletionTest do
     args = params(meeting, run, canvas)
     assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
     Completion.scribe_complete(ctx.scribe.id, args)
+
+    assert run!(meeting).synthesis == %{
+             "snapshot_hash" => run.snapshot_hash,
+             "status" => "pending"
+           }
+
+    assert "synthesis" in Platform.Meetings.MeetingBriefings.readiness(meeting).missing
     assert is_nil(Repo.get_by(Platform.Meetings.MeetingBriefing, meeting_id: meeting.id))
 
     for items <- [
@@ -141,6 +148,7 @@ defmodule Platform.Meetings.CompletionTest do
                "Agreed callback repair"
 
       assert run!(meeting).status == "filed"
+      assert run!(meeting).synthesis["status"] == "complete"
     end
   end
 

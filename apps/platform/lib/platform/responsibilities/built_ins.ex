@@ -47,6 +47,7 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.Dreaming,
       Handlers.ProposeLongTerm,
       Handlers.MeetingSummarize,
+      Handlers.MeetingBriefSynthesis,
       Handlers.IntentClassify,
       Handlers.MeetingActionItems,
       Handlers.MeetingAttendanceFollowup,

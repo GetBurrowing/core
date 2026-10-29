@@ -137,6 +137,8 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
     # the no-row list below.
     "experiments.label_signal",
     "meetings.attendance_followup",
+    # Native tool-free synthesis renders the DB template itself.
+    "meetings.brief_synthesis",
     "meetings.intent_classify",
     "memory.daily_summary",
     "memory.dreaming",
