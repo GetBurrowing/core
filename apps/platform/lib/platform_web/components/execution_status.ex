@@ -52,7 +52,7 @@ defmodule PlatformWeb.ExecutionStatus do
       data-role="execution-header"
       data-state={@status.state}
       class={[
-        "execution-header rounded border border-base-300 bg-base-100 p-3 space-y-2",
+        "execution-header rounded border border-edge bg-base-100 p-3 space-y-2",
         @status.state != :running && "execution-rule",
         "execution-rule-#{@status.state}"
       ]}

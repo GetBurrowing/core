@@ -16,11 +16,28 @@ defmodule PlatformWeb.ExecutionActivityTest do
     {:ok, project} =
       Tasks.create_project(%{name: "Activity board #{System.unique_integer([:positive])}"})
 
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "owner-#{Ecto.UUID.generate()}",
+        owner_user_id: user.id,
+        display_name: "Status owner"
+      })
+
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        slug: "status-#{Ecto.UUID.generate()}",
+        name: "Status owner",
+        status: "active",
+        runtime_id: runtime.id
+      })
+
     task =
       Repo.insert!(%Tasks.Task{
         project_id: project.id,
         title: "Episode status",
-        status: "in_progress"
+        status: "in_progress",
+        assignee_id: agent.id,
+        assignee_type: "agent"
       })
 
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
@@ -40,7 +57,7 @@ defmodule PlatformWeb.ExecutionActivityTest do
         task_id: task.id,
         stage_id: stage.id,
         phase: "execution",
-        runtime_id: "owner",
+        runtime_id: runtime.runtime_id,
         status: "blocked",
         runtime_worker_ref: "worker",
         started_at: now,

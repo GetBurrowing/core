@@ -111,7 +111,9 @@ defmodule Platform.Orchestration.ExecutionStatus do
       current =
         Enum.find(leases[task.id] || [], fn l ->
           stage && l.stage_id == stage.id &&
-            ((owner && l.runtime_id == owner) || (is_nil(owner_id) && owner_type != "user"))
+            ((owner && l.runtime_id == owner) ||
+               (is_nil(owner_id) && owner_type != "user" &&
+                  RuntimeSupervision.needs_human_hold?(l)))
         end)
 
       latest =

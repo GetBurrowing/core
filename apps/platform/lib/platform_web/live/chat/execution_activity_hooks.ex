@@ -14,7 +14,10 @@ defmodule PlatformWeb.ChatLive.ExecutionActivityHooks do
     |> assign(:chat_execution_activity, nil)
     |> refresh()
     |> attach_hook(:execution_activity, :handle_info, &info/2)
+    |> PlatformWeb.ChatLive.PresenceHooks.attach()
   end
+
+  def assign_space(socket, space), do: socket |> assign(:active_space, space) |> refresh()
 
   def refresh(socket) do
     task_id =

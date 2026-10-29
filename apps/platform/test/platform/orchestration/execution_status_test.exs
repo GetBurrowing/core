@@ -6,8 +6,36 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
   setup do
     {:ok, p} = Tasks.create_project(%{name: "Activity #{System.unique_integer([:positive])}"})
 
+    user =
+      Repo.insert!(%Platform.Accounts.User{
+        email: "owner#{Ecto.UUID.generate()}@example.com",
+        name: "Owner",
+        oidc_sub: Ecto.UUID.generate()
+      })
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "owner-#{Ecto.UUID.generate()}",
+        owner_user_id: user.id,
+        display_name: "Status owner"
+      })
+
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        slug: "status-#{Ecto.UUID.generate()}",
+        name: "Status owner",
+        status: "active",
+        runtime_id: runtime.id
+      })
+
     task =
-      Repo.insert!(%Tasks.Task{project_id: p.id, title: "Current task", status: "in_progress"})
+      Repo.insert!(%Tasks.Task{
+        project_id: p.id,
+        title: "Current task",
+        status: "in_progress",
+        assignee_id: agent.id,
+        assignee_type: "agent"
+      })
 
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
 
@@ -15,7 +43,7 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
       Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "running"})
 
     now = ~U[2026-10-29 01:00:00.000000Z]
-    %{task: task, stage: stage, now: now}
+    %{task: task, stage: stage, now: now, runtime: runtime}
   end
 
   defp lease(ctx, attrs \\ %{}) do
@@ -27,7 +55,7 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
             task_id: ctx.task.id,
             stage_id: ctx.stage.id,
             phase: "execution",
-            runtime_id: "owner",
+            runtime_id: ctx.runtime.runtime_id,
             status: "active",
             runtime_worker_ref: "worker1",
             started_at: ctx.now,
@@ -48,7 +76,7 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
       task_id: c.task.id,
       lease_id: l.id,
       phase: "execution",
-      runtime_id: "owner",
+      runtime_id: c.runtime.runtime_id,
       event_type: "execution.acked",
       occurred_at: c.now,
       idempotency_key: Ecto.UUID.generate(),
@@ -126,6 +154,12 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
     assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :unknown
   end
 
+  test "unassigned active lease does not prove ownership", c do
+    lease(c)
+    task = Repo.update!(Ecto.Changeset.change(c.task, assignee_id: nil, assignee_type: nil))
+    assert ExecutionStatus.load([task], c.now)[task.id].state == :unknown
+  end
+
   test "matching terminal wins over recent lease progress", c do
     l = lease(c)
 
@@ -133,7 +167,7 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
       task_id: c.task.id,
       lease_id: l.id,
       phase: "execution",
-      runtime_id: "owner",
+      runtime_id: c.runtime.runtime_id,
       event_type: "execution.finished",
       occurred_at: c.now,
       idempotency_key: Ecto.UUID.generate(),
