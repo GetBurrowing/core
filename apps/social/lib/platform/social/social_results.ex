@@ -115,7 +115,7 @@ defmodule Platform.Social.Results do
   @doc """
   Creates a fresh Inbox idea and reference notes; no posts are copied.
   `profiles: authorized_profiles` selects the same cohort shown by the caller's
-  brand filter. Every supplied Profile is freshly re-read through scope; an
+  brand filter. Every supplied Profile is freshly re-read through the caller's current visibility; source writes remain in scope. An
   inaccessible/malformed cohort or a source outside it is not_found. Without
   options the cohort is all profiles visible through scope (All brands).
   """
@@ -130,7 +130,7 @@ defmodule Platform.Social.Results do
              %Profile{} = profile <-
                Social.get_profile(scope, source.profile_id) || {:error, :not_found},
              :ok <- Social.approver_check(profile.org_id, profile, user_id),
-             {:ok, profiles} <- recycle_cohort(scope, profile, opts),
+             {:ok, profiles} <- recycle_cohort(scope, profile, opts, user_id),
              true <-
                Enum.any?(recycle_candidates(profiles), &(&1.idea_id == source.id)) ||
                  {:error, :not_eligible},
@@ -177,13 +177,24 @@ defmodule Platform.Social.Results do
     end
   end
 
-  defp recycle_cohort(scope, source_profile, opts) do
+  defp recycle_cohort(scope, source_profile, opts, user_id) do
     profiles = Keyword.get_lazy(opts, :profiles, fn -> Social.list_profiles(scope) end)
+
+    # The write stays in the source's scope. An explicit All brands cohort
+    # may span the caller's other org memberships, never the caller's input
+    # org ids: resolve every member from fresh user visibility instead.
+    visible =
+      case Platform.Accounts.get_user(user_id) do
+        %Platform.Accounts.User{archived_at: nil} = user -> Social.list_profiles_for_user(user)
+        _ -> []
+      end
+
+    visible = Map.new(visible, &{&1.id, &1})
 
     if is_list(profiles) do
       fresh =
         Enum.map(profiles, fn
-          %Profile{id: id} -> Social.get_profile(scope, id)
+          %Profile{id: id} -> Map.get(visible, id)
           _ -> nil
         end)
 
