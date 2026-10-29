@@ -40,6 +40,7 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits
+from render_identity_scan import identity_scan_text
 
 from burrow_install import envcompat, registry
 from burrow_install.__main__ import main
@@ -674,7 +675,7 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
     def test_renders_hold_no_literal_of_ours(self):
         for path in (MAC, MAC_LITE):
             m = manifest_from(path)
-            text = all_text(mac_build(m))
+            text = identity_scan_text(mac_build(m))
             images = {svc.image for svc in plan(m).services.values()}
             for image in sorted(images, key=len, reverse=True):
                 text = text.replace(image, "<image>")

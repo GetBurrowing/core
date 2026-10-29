@@ -42,6 +42,7 @@ sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits, planted_term
 from migrate_embed import cut_migrate_script
+from render_identity_scan import identity_scan_text
 
 from burrow_install import envcompat, registry
 from burrow_install.__main__ import main
@@ -491,7 +492,7 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
                 self.assertEqual(m["models"]["endpoints"], [])
                 rendered = build(m)
                 self.assertNotIn("models.json", rendered.files)
-                text = all_text(rendered)
+                text = identity_scan_text(rendered)
                 # The image namespace is the manifest's own input (task
                 # 01a14b9e), so image refs are searched like everything else.
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
