@@ -16,7 +16,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefSynthesis do
         feature: "meetings",
         trigger_kind: "event_topic",
         trigger_config: %{
-          "topic" => "meeting:triage_filed",
+          "topic" => "platform.meetings.synthesis_only",
           "event_match" => "meeting_triage_filed"
         },
         scope: "per_meeting",

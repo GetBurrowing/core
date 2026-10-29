@@ -19,7 +19,13 @@ defmodule Platform.Meetings.Synthesis do
             run(meeting_id, run.id, run.snapshot_hash)
           else
             case Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-                   run(meeting_id, run.id, run.snapshot_hash)
+                   try do
+                     run(meeting_id, run.id, run.snapshot_hash)
+                   rescue
+                     # An async test can end its sandbox owner while this
+                     # supervised child is starting or releasing the gate.
+                     DBConnection.OwnershipError -> :ok
+                   end
                  end) do
               {:ok, _pid} ->
                 :ok
