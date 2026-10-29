@@ -395,6 +395,44 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
   defp event(view, name, attrs),
     do: view |> with_target("#social-clips-library") |> render_hook(name, attrs)
 
+  test "card and detail show independent compact platform views, omit missing and retain zero", %{
+    conn: conn,
+    w: w
+  } do
+    clip = clip!(w, "Measured platforms", %{}, review_status: "approved")
+
+    yt =
+      Social.list_accounts(w.org_id, profile_id: w.profile.id)
+      |> Enum.find(&(&1.platform == "youtube"))
+
+    posts =
+      for {account, metrics} <- [
+            {w.ig, %{"views" => 12400}},
+            {w.tiktok, %{"views" => 27}},
+            {yt, %{}}
+          ] do
+        post!(w, clip, account, "published",
+          published_at: DateTime.utc_now(),
+          metrics: metrics,
+          external_url: "https://example.com/post"
+        )
+      end
+
+    zero = clip!(w, "Zero views", %{}, review_status: "approved")
+    post!(w, zero, w.ig, "published", metrics: %{"views" => 0})
+    view = open(conn, w.approver, w.profile)
+    assert has_element?(view, "#library-clip-#{clip.id}", "12.4k views")
+    assert has_element?(view, "#library-clip-#{clip.id}", "27 views")
+    assert has_element?(view, "#library-clip-#{zero.id}", "0 views")
+    detail(view, clip)
+    [ig, tt, yt] = posts
+    assert has_element?(view, "#library-detail [data-post-id='#{ig.id}']", "12.4k views")
+    assert has_element?(view, "#library-detail [data-post-id='#{tt.id}']", "27 views")
+    assert has_element?(view, "#library-detail [data-post-id='#{yt.id}']", "Published")
+    refute has_element?(view, "#library-detail [data-post-id='#{yt.id}']", "views")
+    assert has_element?(view, "#library-detail a", "View post")
+  end
+
   test "detail preserves mixed-platform facts and retries only the failed post", %{
     conn: conn,
     w: w

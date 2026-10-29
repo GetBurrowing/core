@@ -104,3 +104,6 @@ config :social, :composer,
 if config_env() == :test do
   config :social, :episode_discovery, interval_ms: :infinity, boot_sweep: false
 end
+
+# Analytics has no timer, boot query or network outside production.
+config :social, :analytics_sync, start: config_env() == :prod

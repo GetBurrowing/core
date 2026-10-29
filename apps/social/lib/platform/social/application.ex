@@ -33,7 +33,8 @@ defmodule Platform.Social.Application do
     Platform.Social.RenderQueue,
     Platform.Social.PublishRetry,
     Platform.Social.ClipPublish,
-    Platform.Social.EpisodeDiscovery
+    Platform.Social.EpisodeDiscovery,
+    Platform.Social.AnalyticsSync
   ]
 
   @impl true
@@ -77,7 +78,8 @@ defmodule Platform.Social.Application do
       # picks up anything a restart left due.
       Platform.Social.ClipPublish,
       # Task 01a17e37: durable source-level episode discovery.
-      Platform.Social.EpisodeDiscovery
+      Platform.Social.EpisodeDiscovery,
+      Platform.Social.AnalyticsSync
     ]
     |> Platform.Role.select(role, @web)
   end

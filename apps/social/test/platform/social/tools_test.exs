@@ -335,12 +335,16 @@ defmodule Platform.Social.ToolsTest do
       assert {bare.clip_id, bare.platform_post_id, bare.publish_attempts, bare.published_at} ==
                {nil, nil, 0, nil}
 
+      assert bare.metrics == %{}
+      assert bare.metrics_synced_at == nil
       at = DateTime.utc_now()
 
       Repo.update_all(from(p in Post, where: p.id == ^ctx.post.id),
         set: [
           clip_id: ctx.clip.id,
           platform_post_id: "urn:li:share:1",
+          metrics: %{"views" => 12400, "likes" => 12},
+          metrics_synced_at: at,
           publish_attempts: 2,
           published_at: at
         ]
@@ -348,6 +352,9 @@ defmodule Platform.Social.ToolsTest do
 
       assert {:ok, %{posts: [p]}} =
                call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert p.metrics == %{"views" => 12400, "likes" => 12}
+      assert p.metrics_synced_at == at
 
       assert {p.clip_id, p.platform_post_id, p.publish_attempts, p.published_at} ==
                {ctx.clip.id, "urn:li:share:1", 2, at}

@@ -14,6 +14,19 @@ defmodule Platform.Social.ClipLibraryTest do
   alias Platform.Social.{AgentDrafts, Clip, ClipLibrary, ClipPublish, Post, RateLimit}
   alias Platform.Social.Publisher.Fake
 
+  test "published status exposes only its own measured views" do
+    for {metrics, expected} <- [{%{}, nil}, {%{"views" => 0}, 0}, {%{"views" => 12400}, 12400}] do
+      post = %Post{
+        status: "published",
+        metrics: metrics,
+        account: %Platform.Social.Account{platform: "instagram"}
+      }
+
+      assert ClipLibrary.platform_status(post).views == expected
+      assert ClipLibrary.platform_status(%{post | status: "failed"}).views == nil
+    end
+  end
+
   setup do
     Fake.reset()
     RateLimit.reset()

@@ -215,7 +215,9 @@ defmodule PlatformWeb.SocialClipsLibrary do
     [
       label,
       time(entry.at),
-      if(entry.state == :published and entry.views != nil, do: "#{entry.views} views"),
+      if(entry.state == :published and entry.views != nil,
+        do: "#{Platform.Social.MetricCount.format(entry.views)} views"
+      ),
       if(entry.state == :failed, do: "#{entry.attempts} attempts"),
       if(entry.state == :queued, do: "publishes when the undo window closes")
     ]
@@ -399,7 +401,14 @@ defmodule PlatformWeb.SocialClipsLibrary do
           ]
 
         entries ->
-          Enum.map(entries, &{label, platform_label(&1.state), &1.state})
+          Enum.map(entries, fn entry ->
+            status = platform_label(entry.state)
+
+            views =
+              if entry.state == :published, do: Platform.Social.MetricCount.format(entry.views)
+
+            {label, if(views, do: "#{status} · #{views} views", else: status), entry.state}
+          end)
       end
     end)
   end

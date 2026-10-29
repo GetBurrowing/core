@@ -21,7 +21,7 @@ defmodule Platform.Social.ClipLibrary do
       never invented.
     * `scheduled`: `scheduled` with `scheduled_at` in the future (`at`).
     * `published`: `at` = `published_at`, `url` = `external_url`; `views`
-      stays nil until analytics exist.
+      comes from the post metrics when measured.
     * `failed`: status `failed`, or approved with a `refused_reason` (the
       refusal's sentence is the `error`); `attempts` = `publish_attempts`.
 
@@ -58,31 +58,11 @@ defmodule Platform.Social.ClipLibrary do
   applied, as the prototype's `drawMenu` does: each count equals the
   `total` that selecting that option would give.
 
-  ## Phase-2 analytics hook (spec only; NOT built, `views` stays nil)
+  ## Per-post analytics
 
-  From https://zernio.com/openapi.json, read 2026-10-22:
-
-    * `GET /v1/analytics?postId=<Zernio post id or external id>`: one
-      post's status, publishedAt and analytics {impressions, reach, likes,
-      comments, shares, saves, clicks, views, follows, igReelsAvgWatchTime
-      ms, igReelsVideoViewTotalTime ms, reelsSkipRate, completionRate,
-      profileViews}, plus platformAnalytics[] {platform, platformPostId,
-      accountId, platformPostUrl, syncStatus, analytics{..., engagementRate,
-      lastUpdated}}. May answer 202 (sync pending) or 424.
-    * `GET /v1/analytics/delta?cursor=`: the recommended sync, a cursor feed
-      of changed snapshots {postId, accountId, profileId, platform,
-      platformPostId, publishedAt, syncedAt, isDeleted, metrics{impressions,
-      reach, likes, comments, shares, saves, sends, clicks, views, follows,
-      igReelsAvgWatchTime, igReelsVideoViewTotalTime, reposts,
-      reelsSkipRate, completionRate, profileViews, websiteClicks,
-      impressionSources, audienceTypes, audienceCountries}}.
-    * `GET /v1/analytics/post-timeline?postId=`: daily rows per platform
-      (adds replays and retentionCurve); needs the Analytics add-on.
-    * `GET /v1/analytics/youtube/video-retention?videoId=<platformPostId>&accountId=`:
-      the retention curve and durationSeconds.
-    * Join: `social_posts.external_id` = Zernio postId, and
-      `social_posts.platform_post_id` = platformPostId. The asset is
-      `social_posts.clip_id`.
+  Published entries expose stored `metrics["views"]`, including zero.
+  Missing measurements remain nil. AnalyticsSync scopes measurements to
+  the org, account and platform post; counts are never rolled up.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -106,7 +86,7 @@ defmodule Platform.Social.ClipLibrary do
           pct: nil,
           at: DateTime.t() | nil,
           url: String.t() | nil,
-          views: nil,
+          views: non_neg_integer() | nil,
           error: String.t() | nil,
           attempts: non_neg_integer(),
           reconnect: %{account_id: Ecto.UUID.t(), platform: String.t() | nil} | nil
@@ -129,7 +109,7 @@ defmodule Platform.Social.ClipLibrary do
       pct: nil,
       at: at,
       url: url,
-      views: nil,
+      views: if(state == :published, do: Map.get(post.metrics || %{}, "views")),
       error: error,
       attempts: post.publish_attempts || 0,
       reconnect: if(state == :failed, do: %{account_id: post.account_id, platform: platform})
