@@ -14,7 +14,7 @@ defmodule PlatformWeb.ExecutionStatus do
       data-role="execution-status"
       data-state={@status.state}
       class={[
-        "execution-status inline-flex min-w-0 max-w-full items-center gap-1.5 text-sm font-medium shrink-0 whitespace-nowrap",
+        "execution-status inline-flex flex-wrap min-w-0 max-w-full items-center gap-1.5 text-sm font-medium shrink-0 whitespace-nowrap",
         @class
       ]}
     >
@@ -28,7 +28,7 @@ defmodule PlatformWeb.ExecutionStatus do
       >
       </span>
       <span class={[
-        "min-w-0 truncate",
+        "min-w-0 max-w-[calc(100%-1rem)] whitespace-normal",
         @status.state == :human && "execution-human-chip rounded px-1.5 py-0.5"
       ]}>
         {@status.label}
