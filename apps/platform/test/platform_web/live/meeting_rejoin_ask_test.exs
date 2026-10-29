@@ -183,7 +183,7 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
       conn = put_connect_params(conn, %{"timezone" => "Etc/UTC"})
       {:ok, view, html} = live(conn, "/meetings")
 
-      selector = ~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])
+      selector = ~s([data-role="workspace-meeting"][data-meeting-id="#{meeting.id}"])
       assert statuses(html, selector) != []
       assert Enum.uniq(statuses(html, selector)) == ["ended"]
 

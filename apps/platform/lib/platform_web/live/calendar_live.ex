@@ -337,6 +337,7 @@ defmodule PlatformWeb.CalendarLive do
   def scope_label(%{event: %{project_id: id}}, _, projects) when not is_nil(id),
     do: (Enum.find(projects, &(&1.id == id)) || %{name: "Project"}).name
 
+  def scope_label(%{event: %{visibility: "busy"}}, _, _), do: "Busy"
   def scope_label(_, _, _), do: "Only you"
 
   def where_options(spaces, projects),
