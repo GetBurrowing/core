@@ -171,6 +171,33 @@ defmodule Platform.Social.ResultsTest do
     assert progress.week_end == ~U[2026-11-02 05:00:00Z]
   end
 
+  test "weekly progress includes now but excludes future publications in the same local week",
+       c do
+    c.profile |> Ecto.Changeset.change(timezone: "America/Denver") |> Repo.update!()
+    account = c.account |> Ecto.Changeset.change(weekly_goal: 5) |> Repo.update!()
+    c = %{c | account: account}
+    now = ~U[2026-11-02 20:00:00.000000Z]
+
+    for at <- [
+          ~U[2026-11-02 07:00:00.000000Z],
+          ~U[2026-11-02 19:59:59.000000Z],
+          now
+        ],
+        do: post(c, %{}, at: at)
+
+    assert Results.weekly_progress(account, now: now).published == 3
+    post(c, %{}, at: DateTime.add(now, 1, :microsecond))
+    post(c, %{}, at: DateTime.add(now, 1, :hour))
+    post(c, %{}, at: ~U[2026-11-02 06:59:59.000000Z])
+    post(c, %{}, status: "scheduled", at: now, scheduled_at: now)
+
+    progress = Results.weekly_progress(account, now: now)
+    assert progress.published == 3
+    assert progress.goal == 5
+    assert progress.week_start == ~U[2026-11-02 07:00:00Z]
+    assert progress.week_end == ~U[2026-11-09 07:00:00Z]
+  end
+
   test "all-brands aggregation preserves brand and partial measurements; exact eight-week sample",
        c do
     {profile, account} = social_account!(c.org, "x")

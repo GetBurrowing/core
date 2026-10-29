@@ -246,7 +246,7 @@ defmodule Platform.Social.Results do
   @doc "The exact usable sample count used by best_times/2, including below ten."
   def best_times_count(%Account{} = account, opts \\ []), do: time_sample(account, opts).count
 
-  @doc "Published progress for the profile-local Monday week; nil without a goal."
+  @doc "Published progress through now for the profile-local Monday week; nil without a goal."
   def weekly_progress(%Account{weekly_goal: nil}, _opts), do: nil
 
   def weekly_progress(%Account{} = account, opts) do
@@ -262,7 +262,8 @@ defmodule Platform.Social.Results do
         from(p in Post,
           where:
             p.account_id == ^account.id and
-              p.status == "published" and p.published_at >= ^start and p.published_at < ^finish
+              p.status == "published" and p.published_at >= ^start and p.published_at < ^finish and
+              p.published_at <= ^now
         ),
         :count
       )
