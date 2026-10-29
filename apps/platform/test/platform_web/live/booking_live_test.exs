@@ -183,8 +183,10 @@ defmodule PlatformWeb.BookingLiveTest do
 
     refute has_element?(view, "#public-booking-form input[type='email'][required]")
     render_submit(view, "book", %{"guest" => %{"name" => "Island guest"}})
+
     assert render(view) =~
              Elixir.Calendar.strftime(link.start_date, "%b %d, %Y") <> " at 00:00"
+
     [receipt] = BookingLinks.receipts(scope)
     assert DateTime.compare(receipt.starts_at, slot.starts_at) == :eq
   end
