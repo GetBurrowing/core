@@ -102,7 +102,7 @@ defmodule PlatformWeb.SocialClipRemoval do
           ⋯ Manage clip
         </summary>
         <div class="mt-2 space-y-2">
-          <p class="text-xs text-base-content/70">Remove unwanted entries from Review and Library.</p>
+          <p class="text-xs text-subtle">Remove unwanted entries from Review and Library.</p>
           <button
             type="button"
             class="btn btn-error btn-outline btn-sm"

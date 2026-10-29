@@ -20,7 +20,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
   def render(assigns) do
     ~H"""
     <div id="social-clips-library" data-role="clips-library" class="space-y-3">
-      <p :if={@items == []} class="p-4 text-sm text-base-content/70">No clips in Library.</p>
+      <p :if={@items == []} class="p-4 text-sm text-subtle">No clips in Library.</p>
       <article
         :for={item <- @items}
         id={"library-clip-#{item.clip.id}"}
