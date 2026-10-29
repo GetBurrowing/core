@@ -241,8 +241,8 @@ defmodule PlatformWeb.SocialClipsLibrary do
               type="search"
               value={@filters["q"] || ""}
               phx-debounce="200"
-              placeholder="Search title, caption, transcript"
-              aria-label="Search title, caption, transcript"
+              placeholder="Search title, caption"
+              aria-label="Search title, caption"
               class="min-w-0 w-full bg-transparent text-sm"
             />
           </label>

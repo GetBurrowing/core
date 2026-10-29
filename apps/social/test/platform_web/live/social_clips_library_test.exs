@@ -84,7 +84,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     other = clip!(w, "Garden")
     view = open(conn, w.approver, w.profile)
     count(view, "3 of 3 clips")
-    assert has_element?(view, "#library-search[placeholder='Search title, caption, transcript']")
+    assert has_element?(view, "#library-search[placeholder='Search title, caption']")
     # LiveSocket merges button.value into a click payload. A field named value
     # is overwritten by the button's empty native value in a real browser.
     assert has_element?(view, "[data-role=library-filter-option][phx-value-option='In review']")
