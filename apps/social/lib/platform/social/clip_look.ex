@@ -21,7 +21,9 @@ defmodule Platform.Social.ClipLook do
   Read from htc-clip-tool 5896057 (clip 0.9.0):
   `clip-agent/src/clip_agent/config.py` `CaptionConfig`, `ReframeConfig`,
   `AudioConfig`; `captions.py` `HOOK_TITLE_FONT`; and
-  `profiles/how-to-computer.toml`, which extends `podcast`.
+  `profiles/how-to-computer.toml`, which extends `podcast`. MusicConfig is verified
+  from upstream 82ef513; older installs with the same 0.9.0 version lack it, so the
+  canonical runner checks the music.enabled configuration contract before use.
 
   | studio key    | clip profile key | translation |
   |---------------|------------------|-------------|
@@ -39,8 +41,11 @@ defmodule Platform.Social.ClipLook do
   | title.box     | NO EQUIVALENT | captions.bg_box is for captions, not the hook title |
   | title.twoLine | NO EQUIVALENT | |
   | outro         | NO EQUIVALENT | no end card or outro key in clip 0.9.0 |
-  | music         | NO EQUIVALENT | |
-  | level         | NO EQUIVALENT | audio.target_lufs is delivery loudness, not a music level; do not map it |
+  | music_track.file_id | music.path | project-owned Files id resolved privately by the runner into a disposable local download |
+  | music_track.gain_db | music.level_db | -60..0 dB background gain, independent of speech loudness |
+  | music_track.muted | music.enabled | inverted; retains selected asset and gain while muted |
+  | music (legacy boolean) | NO EQUIVALENT | kept only to read historical looks; never implies an audio asset |
+  | level (legacy) | NO EQUIVALENT | historical field only; audio.target_lufs is speech delivery loudness, never music gain |
   | reframe       | reframe.mode | shots -> shots, splits -> split, fit -> fit |
   | cutaways      | NO EQUIVALENT | |
   """
@@ -111,6 +116,7 @@ defmodule Platform.Social.ClipLook do
       Enum.flat_map(look, fn
         {"cap", cap} -> section("cap", cap, &cap_error/2)
         {"title", title} -> section("title", title, &title_error/2)
+        {"music_track", track} -> section("music_track", track, &music_error/2)
         {key, value} -> List.wrap(top_error(key, value))
       end)
 
@@ -163,6 +169,17 @@ defmodule Platform.Social.ClipLook do
     do: unless(num?(v) and v >= 0 and v <= 600, do: "secs must be 0..600")
 
   defp title_error(k, _), do: "#{k} is not a look key"
+
+  defp music_error("file_id", nil), do: nil
+
+  defp music_error("file_id", v),
+    do: unless(Platform.UUID.valid?(v), do: "file_id must be a UUID or nil")
+
+  defp music_error("gain_db", v),
+    do: unless(num?(v) and v >= -60 and v <= 0, do: "gain_db must be -60..0")
+
+  defp music_error("muted", v), do: bool_error("muted", v)
+  defp music_error(k, _), do: "#{k} is not a music key"
 
   defp top_error(k, v) when k in ~w(outro music cutaways), do: bool_error(k, v)
 
@@ -248,6 +265,12 @@ defmodule Platform.Social.ClipLook do
       {k, v} -> [{Enum.join(prefix ++ [k], "."), v}]
     end)
   end
+
+  # Music is resolved as a complete asset contract in ClipJobs.payload, never
+  # imported into a persistent show profile with a disposable local path.
+  defp translate("music_track.file_id", _), do: {:mapped, []}
+  defp translate("music_track.gain_db", _), do: {:mapped, []}
+  defp translate("music_track.muted", _), do: {:mapped, []}
 
   defp translate("cap.style", v), do: {:mapped, [{"captions.style", v}]}
 

@@ -289,7 +289,7 @@ defmodule Platform.Social.Tools do
   end
 
   defp job_tool("social_clip_job_source", args, scope, agent) do
-    case ClipJobs.source_download(scope, args["job_id"], agent.id) do
+    case ClipJobs.source_download(scope, args["job_id"], agent.id, args["asset"] || "episode") do
       {:ok, source} -> {:ok, source}
       error -> {:error, error_envelope(error)}
     end
@@ -691,6 +691,15 @@ defmodule Platform.Social.Tools do
       "the file must be a video in Burrow Files in the profile's project",
       true,
       "Upload it with file_add using project_id = the profile's project, and pass that file_id."
+    )
+  end
+
+  defp error_envelope({:error, :music_unavailable}) do
+    err(
+      :music_unavailable,
+      "the selected music is not available in the job's project",
+      false,
+      "Fail this job safely. A human can select or upload project audio and rerender."
     )
   end
 

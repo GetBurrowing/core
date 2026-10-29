@@ -381,6 +381,7 @@ defmodule Platform.Social.ClipJobs do
           |> insert_or_rollback(:update)
 
         full = ClipLook.effective(look)
+        ok_or_rollback(Platform.Social.ClipMusic.payload(profile, full))
         delta = ClipLook.delta(full, ClipLook.default())
 
         payload =
@@ -484,10 +485,15 @@ defmodule Platform.Social.ClipJobs do
 
   defp payload(kind, profile, clip, look, in_s, out_s, review_note, expected_rev) do
     delta = ClipLook.delta(look, ClipLook.effective(profile.show_look))
+    music = ok_or_rollback(Platform.Social.ClipMusic.payload(profile, look))
 
     profile
     |> base_payload(kind, clip, look, in_s, out_s, review_note, expected_rev)
-    |> Map.merge(%{"look_delta" => delta, "clip_overrides" => ClipLook.to_clip_overrides(delta)})
+    |> Map.merge(%{
+      "look_delta" => delta,
+      "clip_overrides" => ClipLook.to_clip_overrides(delta),
+      "music" => music
+    })
   end
 
   defp base_payload(profile, kind, clip, look, in_s, out_s, review_note, expected_rev) do
@@ -587,15 +593,28 @@ defmodule Platform.Social.ClipJobs do
   defp check_progress(_, _), do: {:error, :invalid_progress}
 
   @doc """
-  Short-lived source download for the claimer of an open automatic episode
-  job. The source is taken from the durable job identity, never caller attrs.
+  Short-lived download for the claimer of an open job. The default episode
+  source and optional selected music asset are taken from durable job identity, never caller attrs.
   Re-check readiness/provenance and project ownership before minting a Files
   signed URL; do not persist or log the returned bearer URL.
   """
-  @spec source_download(Social.scope(), term(), Ecto.UUID.t()) :: {:ok, map()} | error()
-  def source_download(scope, job_id, agent_id) do
+  @spec source_download(Social.scope(), term(), Ecto.UUID.t(), String.t()) ::
+          {:ok, map()} | error()
+  def source_download(scope, job_id, agent_id, asset \\ "episode") do
     locked(scope, job_id, agent_id, fn job, profile ->
-      source = checked_episode_source!(job, profile)
+      source =
+        case asset do
+          "episode" ->
+            checked_episode_source!(job, profile)
+
+          "music" ->
+            music = job.payload["music"] || %{}
+            unless music["enabled"] == true, do: Repo.rollback(:music_unavailable)
+            ok_or_rollback(Platform.Social.ClipMusic.resolve(profile, music["file_id"]))
+
+          _ ->
+            Repo.rollback(:music_unavailable)
+        end
 
       expires_at = DateTime.add(DateTime.utc_now(), 900, :second)
       url = ok_or_rollback(Platform.Files.SignedUrl.url(source, expires_at: expires_at))

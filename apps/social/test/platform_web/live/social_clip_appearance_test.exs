@@ -150,4 +150,76 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
              :count
            ) == 2
   end
+
+  test "music picker, mute/gain draft, preview and completion keep exact immutable settings", %{
+    conn: conn,
+    w: w
+  } do
+    song =
+      stored_file!(w.project, "RIFF0000WAVEunique #{unique()}", "Project song.wav", "audio/wav")
+
+    child = open(conn, w)
+    assert has_element?(child, "#clip-music-song option[value='#{song.id}']", "Project song.wav")
+    refute has_element?(child, "[data-role='music-preview']")
+
+    child
+    |> element("[data-role='music-settings']")
+    |> render_change(%{"file_id" => song.id, "gain_db" => "-27", "muted" => "false"})
+
+    assert has_element?(child, "audio[data-role='music-preview'][src='/files/blob/#{song.id}']")
+    assert has_element?(child, "[data-role='music-gain']", "-27")
+    assert has_element?(child, "[data-role='clip-approve'][disabled]")
+
+    child
+    |> element("[data-role='music-settings']")
+    |> render_change(%{"file_id" => song.id, "gain_db" => "-27", "muted" => "true"})
+
+    assert has_element?(child, "#clip-music-gain[value='-27.0']")
+
+    child
+    |> element("[data-role='music-settings']")
+    |> render_change(%{"file_id" => song.id, "gain_db" => "-27", "muted" => "false"})
+
+    preview(child, w.base.id)
+    j = job(w)
+    assert j.payload["music"] == %{"file_id" => song.id, "enabled" => true, "level_db" => -27.0}
+    assert j.payload["base_render_id"] == w.base.id
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+    {:ok, _} = ClipJobs.claim(w.scope, j.id, w.agent.id)
+    file = stored_file!(w.project, "new music video #{unique()}", "music.mp4", "video/mp4")
+    {:ok, _} = ClipJobs.complete(w.scope, j.id, w.agent.id, %{file_id: file.id})
+    render(child)
+    assert has_element?(child, "[data-role='music-applied']", "-27")
+    refute has_element?(child, "[data-role='caption-dirty']")
+    assert has_element?(child, "video[src='/files/blob/#{file.id}']")
+  end
+
+  test "empty audio, None and foreign selection never fabricate a song", %{conn: conn, w: w} do
+    child = open(conn, w)
+    assert has_element?(child, "[data-role='music-empty']")
+    assert has_element?(child, "#clip-music-song option[value='']", "None")
+    other = render_world!()
+
+    foreign =
+      stored_file!(
+        other.project,
+        "RIFF0000WAVEprivate #{unique()}",
+        "Private song.wav",
+        "audio/wav"
+      )
+
+    refute render(child) =~ foreign.id
+
+    child
+    |> element("[data-role='music-settings']")
+    |> render_change(%{"file_id" => foreign.id, "gain_db" => "-18", "muted" => "false"})
+
+    assert has_element?(child, "[data-role='caption-error']", "unavailable")
+    refute render(child) =~ "Private song.wav"
+
+    assert Repo.aggregate(
+             from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"),
+             :count
+           ) == 0
+  end
 end
