@@ -166,6 +166,34 @@ defmodule PlatformWeb.CalendarLiveTest do
     end
   end
 
+  test "overlapping recurrence occurrences have distinct DOM identities", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now()
+    today = DateTime.to_date(now)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Long recurring event",
+        starts_at: DateTime.add(now, -86_400),
+        ends_at: DateTime.add(now, 86_400),
+        recurrence: "FREQ=DAILY;COUNT=3"
+      })
+
+    {:ok, view, _} = live(conn, "/calendar?view=agenda")
+    html = render_click(view, "select_day", %{"date" => Date.to_iso8601(today)})
+
+    ids =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[id^='agenda-#{today}-event-']")
+      |> LazyHTML.attribute("id")
+
+    assert length(ids) == 2
+    assert length(Enum.uniq(ids)) == 2
+  end
+
   test "shared arithmetic lays overlapping native events in separate lanes and clips midnight" do
     first = %{
       kind: :event,

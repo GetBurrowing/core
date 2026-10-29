@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.CreateCalendar do
+  @moduledoc """
+  Add native calendar events and hashed per-user aggregate feed tokens.
+  Authorized by Calendar task 01a16991-b7ae-7000-923f-54cd0b8cd7f7, stage 1.
+  """
   use Ecto.Migration
 
   def up do

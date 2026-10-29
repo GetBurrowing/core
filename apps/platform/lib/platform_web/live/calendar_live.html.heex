@@ -130,7 +130,7 @@
             {if entry.all_day, do: "all day", else: time_label(entry.starts_at, @zone)}
           </span>
           <button
-            id={"agenda-#{date}-#{entry.kind}-#{entry.id}"}
+            id={"agenda-#{date}-#{entry.kind}-#{entry.id}-#{DateTime.to_unix(entry.starts_at, :microsecond)}"}
             phx-click="select"
             phx-value-kind={entry.kind}
             phx-value-id={entry.id}
@@ -173,7 +173,7 @@
           <span
             :for={hour <- hour_labels(@hours)}
             style={hour_top(hour, @hours)}
-            class="absolute right-2 font-mono text-[10px] text-subtle"
+            class="absolute right-2 font-mono text-xs text-subtle"
           >
             {String.pad_leading(to_string(hour), 2, "0")}:00
           </span>
@@ -191,18 +191,17 @@
           </div>
           <button
             :for={{entry, position} <- day_blocks(@entries, date, @zone, @hours)}
-            id={"week-#{date}-#{entry.kind}-#{entry.id}"}
+            id={"week-#{date}-#{entry.kind}-#{entry.id}-#{DateTime.to_unix(entry.starts_at, :microsecond)}"}
             style={block_style(position) <> scope_style(entry)}
             phx-click="select"
             phx-value-kind={entry.kind}
             phx-value-id={entry.id}
-            style={scope_style(entry)}
             class="absolute z-10 overflow-hidden rounded-md border-l-[3px] border-primary bg-base-200 px-1.5 text-left"
           >
-            <span class="block truncate font-mono text-[10px]">
-              {time_label(entry.starts_at, @zone)}
+            <span class="block truncate font-mono text-xs leading-none">
+              {time_label(entry.starts_at, @zone)} · {scope_label(entry, @spaces, @projects)}
             </span>
-            <span class="flex items-center gap-1 text-[15px]">
+            <span class="flex items-center gap-1 text-[15px] leading-tight">
               <.icon
                 :if={entry.kind == :meeting}
                 name="hero-video-camera"
@@ -211,9 +210,6 @@
               <span class={["truncate", cancelled?(entry) && "line-through"]}>
                 {entry.title}
               </span>
-            </span>
-            <span class="block truncate text-[10px] text-subtle">
-              {scope_label(entry, @spaces, @projects)}
             </span>
           </button>
           <div
@@ -236,14 +232,14 @@
           <h2 class="mb-3 text-xs font-semibold">{Calendar.strftime(date, "%a %-d")}</h2>
           <button
             :for={entry <- entries_on(@entries, date, @zone)}
-            id={"grid-#{date}-#{entry.kind}-#{entry.id}"}
+            id={"grid-#{date}-#{entry.kind}-#{entry.id}-#{DateTime.to_unix(entry.starts_at, :microsecond)}"}
             phx-click="select"
             phx-value-kind={entry.kind}
             phx-value-id={entry.id}
             style={scope_style(entry)}
             class="mb-2 block w-full min-w-0 rounded-md border-l-[3px] border-primary bg-base-200 p-2 text-left"
           >
-            <span class="block font-mono text-[11px]">
+            <span class="block font-mono text-xs">
               {if entry.all_day, do: "all day", else: time_label(entry.starts_at, @zone)}
             </span>
             <span class="flex items-center gap-1 text-[15px]">

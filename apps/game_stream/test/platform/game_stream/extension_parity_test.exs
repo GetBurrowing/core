@@ -430,6 +430,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :context,
       :prompts,
       :experiments,
+      # Native Calendar destination, task 01a16991 stage 2.
+      :calendar,
       :meetings,
       # The More-sheet-only Changelog (task 01a1557a-807f stage 2, `:sheet`).
       :changelog,

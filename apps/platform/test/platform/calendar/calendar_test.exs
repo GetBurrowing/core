@@ -60,6 +60,54 @@ defmodule Platform.CalendarTest do
     assert {:error, :not_found} = Calendar.feed_scope("malformed")
   end
 
+  test "project events keep the membership boundary for root-org members" do
+    root_member = user()
+    tenant_member = user()
+    root_id = Platform.TenancyFixtures.acme_org_id()
+    tenant_id = Platform.TenancyFixtures.tenant_org_id("initech")
+
+    for {member, org_id} <- [{root_member, root_id}, {tenant_member, tenant_id}] do
+      Repo.insert!(%Platform.Tenancy.OrgMembership{
+        user_id: member.id,
+        org_id: org_id,
+        role: "member"
+      })
+    end
+
+    n = System.unique_integer([:positive])
+
+    root_project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Root calendar",
+        slug: "root-calendar-#{n}",
+        org_id: root_id
+      })
+
+    tenant_project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Tenant calendar",
+        slug: "tenant-calendar-#{n}",
+        org_id: tenant_id
+      })
+
+    root_scope = Scope.for_user(root_member)
+    tenant_scope = Scope.for_user(tenant_member)
+    assert {:ok, own} = Calendar.create_event(root_scope, attrs(%{project_id: root_project.id}))
+
+    assert {:ok, foreign} =
+             Calendar.create_event(tenant_scope, attrs(%{project_id: tenant_project.id}))
+
+    assert {:error, :forbidden} =
+             Calendar.create_event(root_scope, attrs(%{project_id: tenant_project.id}))
+
+    ids =
+      Calendar.list_events(root_scope, ~U[2026-10-01 00:00:00Z], ~U[2026-11-01 00:00:00Z])
+      |> Enum.map(& &1.id)
+
+    assert own.id in ids
+    refute foreign.id in ids
+  end
+
   test "all-day dates preserve exclusive end across DST" do
     owner = Scope.for_user(user())
 

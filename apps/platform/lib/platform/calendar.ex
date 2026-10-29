@@ -203,13 +203,9 @@ defmodule Platform.Calendar do
 
       project ->
         if Platform.UUID.valid?(project) and
-             Repo.exists?(
-               from(p in Platform.Tasks.Project,
-                 where:
-                   p.id == ^project and
-                     p.org_id in subquery(Tenancy.viewer_org_ids_query(scope.actor.id))
-               )
-             ), do: :ok, else: {:error, :forbidden}
+             Repo.exists?(member_projects_query(scope.actor.id) |> where([p], p.id == ^project)),
+           do: :ok,
+           else: {:error, :forbidden}
 
       true ->
         :ok
@@ -217,11 +213,7 @@ defmodule Platform.Calendar do
   end
 
   defp visible_query(%Scope{actor: %Accounts.User{id: id}} = scope) do
-    projects =
-      from(p in Platform.Tasks.Project,
-        where: p.org_id in subquery(Tenancy.viewer_org_ids_query(id)),
-        select: p.id
-      )
+    projects = member_projects_query(id) |> select([p], p.id)
 
     spaces =
       Platform.Chat.Space |> Platform.Chat.ExternalScope.scope_spaces(scope) |> select([s], s.id)
@@ -233,6 +225,13 @@ defmodule Platform.Calendar do
   end
 
   defp visible_query(_), do: from(e in Event, where: false)
+
+  # Preserve Calendar's membership-only project boundary, including for root
+  # members, while composing the shared org predicate instead of copying it.
+  defp member_projects_query(user_id) do
+    ids = Tenancy.viewer_org_ids_query(user_id) |> Repo.all()
+    Platform.Tasks.Project |> Tenancy.scope({:orgs, ids})
+  end
 
   defp redact(%Event{owner_id: id} = event, %Scope{actor: %{id: id}}), do: event
 

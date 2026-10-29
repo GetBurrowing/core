@@ -3658,6 +3658,8 @@
           <div
             :for={meeting <- @grouped_meetings[key]}
             id={"workspace-meeting-#{meeting.id}"}
+            data-role="workspace-meeting"
+            data-meeting-id={meeting.id}
             class="mb-2 flex min-w-0 items-center gap-3 rounded-xl border border-edge bg-base-100 p-3 lg:bg-base-200"
           >
             <.icon name="hero-video-camera" class="size-5 shrink-0" />
@@ -3820,7 +3822,7 @@
             >
               <span class="hero-video-camera size-12 text-subtle"></span>
               <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-meetings-heading">
-                No meetings yet.
+                No meetings yet
               </h2>
             </div>
 

@@ -248,7 +248,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # ids arrive twice; `Enum.uniq/1` in `rendered_ids/2` makes that a set.
   defp index_ids(conn, user, opts \\ []) do
     {_view, html} = index_html(conn, user, opts)
-    {rendered_ids(html, ~s([data-role="calendar-event"])), html}
+    {rendered_ids(html, ~s([data-role="workspace-meeting"])), html}
   end
 
   defp archive_ids(conn, user, opts \\ []) do
@@ -717,6 +717,15 @@ defmodule Platform.Security.MeetingSlugScopeTest do
              "positive control: the same page DOES draw that meeting for its own org"
 
       assert insider_html =~ foreign.name
+
+      # The explicit compatibility calendar must retain the same boundary.
+      for {actor, visible, denied} <- [{viewer, own, foreign}, {insider, foreign, own}] do
+        {:ok, _view, grid_html} = live(index_conn(conn, actor, []), ~p"/meetings?view=calendar")
+        grid_ids = rendered_ids(grid_html, ~s([data-role="calendar-event"]))
+        assert visible.id in grid_ids
+        refute denied.id in grid_ids
+        refute grid_html =~ denied.name
+      end
     end
 
     test "a viewer with no memberships gets an empty index, not everyone's", %{conn: conn} do
@@ -1100,7 +1109,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       after_foreign = render(view)
 
       refute after_foreign =~ foreign.name
-      refute foreign.id in rendered_ids(after_foreign, ~s([data-role="calendar-event"]))
+      refute foreign.id in rendered_ids(after_foreign, ~s([data-role="workspace-meeting"]))
 
       # POSITIVE CONTROL, and it is the important half: the same message for
       # a meeting the viewer MAY see must appear, or the refutation above
@@ -1110,7 +1119,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       after_own = render(view)
 
       assert after_own =~ own.name
-      assert own.id in rendered_ids(after_own, ~s([data-role="calendar-event"]))
+      assert own.id in rendered_ids(after_own, ~s([data-role="workspace-meeting"]))
       refute after_own =~ foreign.name
 
       # ── Why this test also reads the ASSIGN ───────────────────────────

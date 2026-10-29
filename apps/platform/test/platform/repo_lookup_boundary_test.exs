@@ -112,6 +112,15 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    # Calendar task 01a16991: boundary UUIDs are checked before typed lookups.
+    {"platform/calendar.ex", :get, "Platform.Chat.Space", 1, :must_cast,
+     "authorize_scope/2 checks the form's space_id with Platform.UUID.valid?/1 before Repo.get and then requires chat.write plus SpaceAccess membership"},
+    {"platform/calendar.ex", :get_by, "Event", 1, :must_cast,
+     "owned_event/2 guards the LiveView event id with Platform.UUID.valid?/1 before its owner-constrained Repo.get_by"},
+    {"platform/calendar.ex", :get_by, "FeedToken", 1, :safe_internal,
+     "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
+    {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
@@ -1044,6 +1053,8 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # get_event/2 validates the boundary event UUID before its visible-query read.
+    "platform/calendar.ex" => 1,
     "platform/orchestration/blocker_reassessment.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.
