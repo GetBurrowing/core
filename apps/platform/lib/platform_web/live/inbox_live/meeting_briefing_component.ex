@@ -21,6 +21,17 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   questions, Action items not filed, and the Transcript link. Every word
   comes from `PlatformWeb.InboxLive.MeetingBriefingCopy`.
 
+  ## Synthesis findings (task 01a16974 stage 5)
+
+  An item of kind `"finding"` renders its label ("Alignment needed",
+  "Possible duplicate", "Contradicts a decision", "Related work"), its
+  body, and its citations as links, with Seek alignment / Looks right /
+  Not a conflict (Revert first when `view/2` offers it). The citations are
+  exactly those `view/2` gives, which drops a finding whose citations the
+  viewer cannot all read, so nothing here filters again. Resolved, it
+  reads "Aligned by <name>" / "Dismissed by <name>" from the finding's
+  shared receipt, which every briefing carrying it shows.
+
   ## Every button goes through `MeetingBriefings.act/5`
 
   With a Scope rebuilt from the user row on EVERY click (`scope/1`), never
@@ -122,13 +133,13 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   end
 
   def handle_event("act", %{"key" => key, "verb" => verb} = params, socket)
-      when verb in ~w(revert confirm ask) do
+      when verb in ~w(revert confirm ask align dismiss) do
     case socket.assigns[:briefing] do
       %MeetingBriefing{} = briefing ->
         verb = String.to_existing_atom(verb)
         params = Map.take(params, ["question"])
         result = MeetingBriefings.act(briefing, key, verb, scope(socket), params)
-        {:noreply, after_act(socket, key, result)}
+        {:noreply, after_act(socket, key, verb, result)}
 
       _ ->
         {:noreply, socket}
@@ -137,25 +148,25 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
   def handle_event("act", _params, socket), do: {:noreply, socket}
 
-  defp after_act(socket, key, {:ok, briefing}) do
+  defp after_act(socket, key, _verb, {:ok, briefing}) do
     socket
     |> update(:errors, &Map.delete(&1, key))
     |> update(:blank, &MapSet.delete(&1, key))
     |> assign_view(briefing)
   end
 
-  defp after_act(socket, key, {:error, :already_resolved, %MeetingBriefing{} = briefing}) do
+  defp after_act(socket, key, _verb, {:error, :already_resolved, %MeetingBriefing{} = briefing}) do
     socket = assign_view(socket, briefing)
     by = Enum.find(socket.assigns.view.resolved, &(&1.key == key))
     name = by && by.receipt && by.receipt.by_name
     update(socket, :notices, &Map.put(&1, key, Copy.already_handled(name)))
   end
 
-  defp after_act(socket, key, {:error, :blank}),
+  defp after_act(socket, key, _verb, {:error, :blank}),
     do: socket |> update(:blank, &MapSet.put(&1, key)) |> update(:asking, &MapSet.put(&1, key))
 
-  defp after_act(socket, key, {:error, reason}),
-    do: update(socket, :errors, &Map.put(&1, key, Copy.error_text(reason)))
+  defp after_act(socket, key, verb, {:error, reason}),
+    do: update(socket, :errors, &Map.put(&1, key, Copy.error_text(reason, verb)))
 
   # ── Render ────────────────────────────────────────────────────────────
 
@@ -317,10 +328,18 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       data-key={@item.key}
       data-kind={@item.kind}
     >
-      <p class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle">
+      <.finding :if={@item[:finding]} finding={@item.finding} dom_key={dom_key(@item)} />
+      <p
+        :if={!@item[:finding]}
+        class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle"
+      >
         {Copy.kind_tag(@item.kind)}
       </p>
-      <h4 class="text-base font-semibold text-base-content" data-role="meeting-briefing-card-title">
+      <h4
+        :if={!@item[:finding]}
+        class="text-base font-semibold text-base-content"
+        data-role="meeting-briefing-card-title"
+      >
         {@item.title}
       </h4>
 
@@ -335,7 +354,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
         <button
           :for={action <- @item.actions}
           type="button"
-          class={button_class(action)}
+          class={button_class(action, @item.kind)}
           phx-click={if(action == :ask, do: "ask_open", else: "act")}
           phx-value-key={@item.key}
           phx-value-verb={action}
@@ -424,10 +443,14 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       data-key={@item.key}
       data-kind={@item.kind}
     >
-      <p class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle">
+      <.finding :if={@item[:finding]} finding={@item.finding} dom_key={dom_key(@item)} />
+      <p
+        :if={!@item[:finding]}
+        class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle"
+      >
         {Copy.kind_tag(@item.kind)}
       </p>
-      <p class="text-sm font-semibold text-base-content">{@item.title}</p>
+      <p :if={!@item[:finding]} class="text-sm font-semibold text-base-content">{@item.title}</p>
       <p class="mt-1 text-sm text-subtle" data-role="meeting-briefing-receipt">
         <span class="font-semibold text-base-content" data-role="meeting-briefing-receipt-lead">
           {@lead}
@@ -458,6 +481,74 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
     """
   end
 
+  attr(:finding, :map, required: true)
+  attr(:dom_key, :string, required: true)
+
+  # A synthesis finding (task 01a16974 stage 5): its label, its body, and
+  # its citations. Every citation here is one the viewer can read:
+  # `MeetingBriefings.view/2` drops the whole item otherwise. A citation
+  # links only to an internal path; anything else is plain text.
+  defp finding(assigns) do
+    ~H"""
+    <p
+      class="mb-1 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-subtle"
+      data-role="meeting-briefing-finding-label"
+      data-finding-kind={@finding.kind}
+    >
+      <span class={[finding_icon(@finding.kind), "size-4 shrink-0"]} aria-hidden="true"></span>
+      {Copy.finding_label(@finding.kind)}
+    </p>
+    <p
+      class="whitespace-pre-line text-base font-semibold text-base-content"
+      data-role="meeting-briefing-finding-body"
+      phx-no-format
+    >{@finding.body}</p>
+    <div :if={@finding.citations != []} class="mt-2" data-role="meeting-briefing-citations">
+      <p
+        class="text-xs font-medium uppercase tracking-wide text-subtle"
+        id={"meeting-briefing-citations-" <> @dom_key}
+      >
+        {Copy.citations_heading()}
+      </p>
+      <ul
+        role="list"
+        class="mt-1 space-y-1 text-sm"
+        aria-labelledby={"meeting-briefing-citations-" <> @dom_key}
+      >
+        <li
+          :for={citation <- @finding.citations}
+          data-role="meeting-briefing-citation"
+          data-ref={citation.ref}
+        >
+          <.link
+            :if={internal_path?(citation.url)}
+            navigate={citation.url}
+            class={["inline-flex min-h-11 items-center lg:min-h-0", link()]}
+            data-role="meeting-briefing-citation-link"
+          >
+            {citation_title(citation)}
+          </.link>
+          <span :if={!internal_path?(citation.url)} class="text-base-content">
+            {citation_title(citation)}
+          </span>
+        </li>
+      </ul>
+    </div>
+    """
+  end
+
+  defp finding_icon("conflicts_with"), do: "hero-arrows-right-left"
+  defp finding_icon("duplicates"), do: "hero-document-duplicate"
+  defp finding_icon("contradicts"), do: "hero-exclamation-triangle"
+  defp finding_icon(_), do: "hero-link"
+
+  defp citation_title(%{title: title}) when is_binary(title) and title != "", do: title
+  defp citation_title(_citation), do: "Source"
+
+  # Only a same-origin path: never `//host`, a scheme, or a model-written url.
+  defp internal_path?("/" <> rest), do: not String.starts_with?(rest, ["/", "\\"])
+  defp internal_path?(_url), do: false
+
   defp present?(text), do: is_binary(text) and String.trim(text) != ""
 
   # A daily briefing may reference one shared task more than once. The
@@ -466,9 +557,12 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
 
   defp heading_class, do: "mb-2 text-xs font-bold uppercase tracking-wider text-subtle"
 
-  defp button_class(:revert), do: @btn_secondary
-  defp button_class(:confirm), do: @btn_primary
-  defp button_class(_), do: @btn_ghost
+  # A finding's lead action is Seek alignment; Looks right is secondary.
+  defp button_class(:align, "finding"), do: @btn_primary
+  defp button_class(:confirm, "finding"), do: @btn_secondary
+  defp button_class(:revert, _kind), do: @btn_secondary
+  defp button_class(:confirm, _kind), do: @btn_primary
+  defp button_class(_action, _kind), do: @btn_ghost
 
   defp btn_secondary, do: @btn_secondary
   defp btn_ghost, do: @btn_ghost

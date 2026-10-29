@@ -47,7 +47,10 @@ defmodule PlatformWeb.Components.MeetingBriefingRow do
       (default zero);
     * `:ended_at` — when the meeting ended;
     * `:time_zone` — the viewer's IANA zone;
-    * `:selected` — whether this row's briefing is open in the pane.
+    * `:selected` — whether this row's briefing is open in the pane;
+    * `:open_finding_kinds` — the kinds of the synthesis findings open in
+      the viewer's `view/2` (task 01a16974 stage 5), for the row's finding
+      hint. Only findings the viewer can see reach here.
   """
   @spec assigns_for(Item.t(), keyword()) :: map()
   def assigns_for(%Item{} = item, opts \\ []) do
@@ -64,6 +67,7 @@ defmodule PlatformWeb.Components.MeetingBriefingRow do
       time: Copy.ended(Keyword.get(opts, :ended_at), Keyword.get(opts, :time_zone)),
       unread?: is_nil(item.read_at),
       selected?: Keyword.get(opts, :selected, false) == true,
+      finding: Copy.row_finding(Keyword.get(opts, :open_finding_kinds) || []),
       counts: counts
     }
   end
@@ -139,6 +143,15 @@ defmodule PlatformWeb.Components.MeetingBriefingRow do
 
           <span class="mt-0.5 block text-sm text-subtle" data-role="inbox-meeting-briefing-summary">
             {@row.summary}
+          </span>
+
+          <span
+            :if={@row[:finding]}
+            class="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-base-content"
+            data-role="inbox-meeting-briefing-finding"
+          >
+            <.icon name="hero-arrows-right-left" class="size-3.5 shrink-0 text-interactive" />
+            {@row.finding}
           </span>
 
           <span class="mt-1 block text-xs text-subtle" data-role="inbox-meeting-briefing-time">

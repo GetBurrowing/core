@@ -191,6 +191,48 @@ defmodule Platform.Meetings.SynthesisFindings do
 
   def record_outcome_signal(_finding), do: :ok
 
+  @doc """
+  Where a stored citation links to in the Inbox (task 01a16974 stage 5):
+  `"/tasks/<id>"`, `"/canvases/<id>"`, a chat message's space
+  `"/chat/<slug>"`, and a meeting's page `"/meetings/<slug>"` for a
+  `meeting_briefing` or `meeting_candidate` ref. nil for any other kind
+  (memory, journal, mail), a malformed ref, or a source that is gone; the
+  Inbox then shows the citation's title as plain text.
+
+  Resolution only: it does NOT check readability. Callers pass citations
+  `MeetingBriefings.view/2` already filtered for the viewer.
+  """
+  @spec citation_url(term()) :: String.t() | nil
+  def citation_url("task:" <> id), do: if(Platform.UUID.valid?(id), do: "/tasks/" <> id)
+  def citation_url("canvas:" <> id), do: if(Platform.UUID.valid?(id), do: "/canvases/" <> id)
+
+  def citation_url("message:" <> id) do
+    with %{space_id: space_id} <- Platform.Chat.get_message(id),
+         %{slug: slug} when is_binary(slug) and slug != "" <- Platform.Chat.get_space(space_id) do
+      "/chat/" <> slug
+    else
+      _ -> nil
+    end
+  end
+
+  def citation_url("meeting_briefing:" <> id), do: meeting_url(id)
+
+  def citation_url("meeting_candidate:" <> id) do
+    case Platform.Meetings.Candidates.get(id) do
+      %{meeting_id: meeting_id} -> meeting_url(meeting_id)
+      _ -> nil
+    end
+  end
+
+  def citation_url(_ref), do: nil
+
+  defp meeting_url(id) do
+    case Platform.Meetings.get_meeting(id) do
+      %{slug: slug} when is_binary(slug) and slug != "" -> "/meetings/" <> slug
+      _ -> nil
+    end
+  end
+
   @doc false
   # Lock the finding row inside the caller's transaction (MeetingBriefings.act/5).
   @spec lock(binary()) :: SynthesisFinding.t() | nil

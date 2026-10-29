@@ -176,10 +176,82 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     assert Visibility.readable_by?(c.allowed.id, {:task, task.id})
   end
 
-  test "another briefing requires attendance even for a participant", c do
+  # Task 01a16974 stage 5: a meeting's outcomes are readable by a reader of
+  # its chat space, attendance not required, so a cross-meeting conflict
+  # between disjoint attendee sets reaches someone (stage 6 case 0a0c-7008).
+  defp accepted_candidate_id(meeting) do
+    briefing = Repo.get_by!(MeetingBriefing, meeting_id: meeting.id)
+    [%{"id" => id}] = briefing.items["_content"]["open_questions"]
+    id
+  end
+
+  test "a reader of another meeting's space reads its outcomes without attending", c do
+    # c.denied attended nothing here; joining the space makes them a reader.
+    refute Visibility.readable_by?(c.denied.id, {:meeting_briefing, c.meeting.id})
     join!(c.meeting.chat_space_id, c.denied)
     assert Visibility.readable_by?(c.allowed.id, {:meeting_briefing, c.meeting.id})
-    refute Visibility.readable_by?(c.denied.id, {:meeting_briefing, c.meeting.id})
+    assert Visibility.readable_by?(c.denied.id, {:meeting_briefing, c.meeting.id})
+
+    candidate = accepted_candidate_id(c.meeting)
+    assert Visibility.readable_by?(c.denied.id, {:meeting_candidate, candidate})
+  end
+
+  test "a finding citing two meetings' outcomes reaches an attendee of one who reads both", c do
+    r = user!()
+    {a, _} = meeting!([r])
+    {b, _} = meeting!([c.allowed])
+    # R attended A only but reads B's space; c.allowed attended B only and
+    # does not read A's space, so is not a recipient.
+    join!(b.chat_space_id, r)
+
+    sources =
+      Context.filter_sources(
+        [
+          %{
+            ref: {:meeting_candidate, accepted_candidate_id(a)},
+            text: "Drop Stripe; move billing to Paddle",
+            meeting_ids: [a.id],
+            transcript_derived?: false
+          },
+          %{
+            ref: {:meeting_candidate, accepted_candidate_id(b)},
+            text: "Ship billing on Stripe by Friday",
+            meeting_ids: [b.id],
+            transcript_derived?: false
+          }
+        ],
+        [r.id, c.allowed.id]
+      )
+
+    assert length(sources) == 2
+    assert Context.recipients_for(sources, [a, b]) == [r.id]
+  end
+
+  test "a non-reader of the space and an org guest still cannot read its outcomes", c do
+    outsider = user!()
+    guest = user!(true)
+    join!(c.meeting.chat_space_id, guest)
+    candidate = accepted_candidate_id(c.meeting)
+
+    # Positive control: a space reader can.
+    assert Visibility.readable_by?(c.allowed.id, {:meeting_briefing, c.meeting.id})
+    assert Visibility.readable_by?(c.allowed.id, {:meeting_candidate, candidate})
+
+    for u <- [outsider, guest] do
+      refute Visibility.readable_by?(u.id, {:meeting_briefing, c.meeting.id})
+      refute Visibility.readable_by?(u.id, {:meeting_candidate, candidate})
+    end
+
+    # An explicit chat deny on the space removes a participant reader.
+    {:ok, _} =
+      Grants.deny(%{
+        principal: c.allowed,
+        permission: "chat.read",
+        resource: {:space, c.meeting.chat_space_id}
+      })
+
+    refute Visibility.readable_by?(c.allowed.id, {:meeting_briefing, c.meeting.id})
+    refute Visibility.readable_by?(c.denied.id, {:meeting_briefing, Ecto.UUID.generate()})
   end
 
   test "gather discards sources no candidate can read and applies candid floor", c do

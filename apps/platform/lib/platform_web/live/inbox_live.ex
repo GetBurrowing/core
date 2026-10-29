@@ -993,8 +993,11 @@ defmodule PlatformWeb.InboxLive do
       for item <- items do
         briefing = Map.get(briefings, item.source_id)
 
+        view = briefing && MeetingBriefings.view(briefing, scope)
+
         MeetingBriefingRow.assigns_for(item,
-          counts: briefing && MeetingBriefings.view(briefing, scope).counts,
+          counts: view && view.counts,
+          open_finding_kinds: open_finding_kinds(view),
           ended_at: briefing && briefing.meeting.ended_at,
           time_zone: zone,
           selected: is_binary(selected) and MeetingBriefingRow.meeting_id(item.url) == selected
@@ -1005,6 +1008,13 @@ defmodule PlatformWeb.InboxLive do
     |> assign(:meeting_briefing_rows, rows)
     |> update(:briefing_count, &(&1 + length(rows)))
   end
+
+  # The kinds of the open findings the viewer can see (view/2 has already
+  # dropped every finding they may not), for the row's finding hint.
+  defp open_finding_kinds(%{open: open}),
+    do: for(%{finding: %{kind: kind}} <- open, do: kind)
+
+  defp open_finding_kinds(_view), do: []
 
   defp load_meeting_briefings(user_id, items) when is_binary(user_id) and items != [],
     do: MeetingBriefings.list_for_attendee(Enum.map(items, & &1.source_id), user_id)

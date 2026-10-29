@@ -2,7 +2,6 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   @moduledoc "Permission checks for synthesis citations. Unknown sources fail closed."
   import Ecto.Query
   alias Platform.{Access, Accounts, Chat, Meetings, Repo}
-  alias Platform.Meetings.MeetingBriefings
 
   @doc "Resolve the referenced row and check the recipient's current permissions."
   def readable_by?(user_id, %{ref: ref} = source) do
@@ -122,15 +121,20 @@ defmodule Platform.Meetings.Synthesis.Visibility do
     end
   end
 
+  # A meeting's outcomes (briefing summary, accepted candidates) are readable
+  # by whoever can read the meeting's chat space right now: a participant
+  # with `chat.read` on it, the space not restricted for them, and not an
+  # org guest. Attendance is NOT required (task 01a16974 stage 5): a reader
+  # of meeting B's space who attended only meeting A must be able to see a
+  # finding that cites B's accepted action item, or a cross-meeting conflict
+  # between disjoint attendee sets reaches nobody. Recipients stay bounded
+  # by `Context.recipients_for/2`, which intersects readers with the human
+  # attendees of the meetings the finding names.
   defp readable?(user, scope, :meeting_briefing, meeting_id) do
-    case MeetingBriefings.get_for_attendee(meeting_id, user.id) do
-      %{meeting: meeting} ->
+    case Meetings.get_meeting(meeting_id) do
+      %{chat_space_id: space_id} = meeting when is_binary(space_id) ->
         not Meetings.meeting_org_guest?(meeting, user.id) and
-          Access.can?(scope, "chat.read", {:space, meeting.chat_space_id}) and
-          not MapSet.member?(
-            Access.restricted_space_ids(scope, [meeting.chat_space_id]),
-            meeting.chat_space_id
-          )
+          space_readable?(user, scope, space_id)
 
       _ ->
         false

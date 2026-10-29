@@ -846,7 +846,12 @@ defmodule Platform.Meetings.MeetingBriefings do
       meeting_ids: finding.meeting_ids || [],
       citations:
         Enum.map(finding.citations || [], fn c ->
-          %{source_kind: c["source_kind"], ref: c["ref"], title: c["title"], url: c["url"]}
+          %{
+            source_kind: c["source_kind"],
+            ref: c["ref"],
+            title: c["title"],
+            url: c["url"] || SynthesisFindings.citation_url(c["ref"])
+          }
         end),
       revert_ref: revert_ref
     }
