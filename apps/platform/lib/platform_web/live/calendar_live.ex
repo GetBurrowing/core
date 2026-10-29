@@ -360,8 +360,8 @@ defmodule PlatformWeb.CalendarLive do
         %{meeting: meeting} -> meeting.project_id || meeting.id
       end
 
-    slot =
-      Enum.at(~w(teal green amber orange blue purple pink red cyan lime), :erlang.phash2(id, 10))
+    slots = Platform.Agents.ColorPalette.ids()
+    slot = Enum.at(slots, :erlang.phash2(id, length(slots)))
 
     "border-left-color: var(--ag-#{slot});"
   end
