@@ -14,7 +14,8 @@ defmodule PlatformWeb.MeetingLiveTest do
   `data-intent-panel-host="true"` marker survives on the wrapping
   `<div>` for the future intent-panel migration's greppable hook.
   """
-  use PlatformWeb.ConnCase, async: true
+  # LiveKit credentials are application-global; serialize setup, overrides and cleanup.
+  use PlatformWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
   import Ecto.Query, only: [from: 2]
@@ -3065,7 +3066,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # The EXTERNAL branch of this same empty state is asserted in
     # `meeting_live_index_external_test.exs` — reaching `/meetings` as an
     # external user needs the configured meet host, which is process-global
-    # config and cannot be set from this `async: true` module.
+    # config. Keep that external-host setup isolated in its dedicated module.
 
     test "a one-meeting index is a finished page: the row draws and the empty state does not",
          %{conn: conn, project: project} do
@@ -9689,9 +9690,8 @@ defmodule PlatformWeb.MeetingLiveTest do
   # and the shell-side chrome-visible regression check.
   #
   # `Application.put_env(:platform, :livekit, …)` mutates process-global config;
-  # the file is `async: true` so this is technically racy, but the existing
-  # `describe` blocks earlier in this file use the same pattern with `on_exit`
-  # cleanup. Follow suit — refactoring the file to :async false is out of scope.
+  # the module is `async: false` so these overrides and their `on_exit`
+  # restoration cannot overlap other test modules.
 
   defp put_guest_livekit_env do
     original = Application.get_env(:platform, :livekit, [])
