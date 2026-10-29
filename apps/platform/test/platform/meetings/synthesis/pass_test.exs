@@ -21,8 +21,10 @@ defmodule Platform.Meetings.Synthesis.PassTest do
       send(Application.fetch_env!(:platform, :synthesis_test_pid), {:provider, content, opts})
       if Application.get_env(:platform, :synthesis_test_mode) == :raise, do: raise("stub failure")
 
+      payload = Jason.decode!(content)
+
       summaries =
-        Jason.decode!(content)
+        payload["sources"]
         |> Enum.filter(&String.starts_with?(&1["ref"], "meeting_briefing:"))
 
       refs = Enum.map(summaries, & &1["ref"])
@@ -31,15 +33,21 @@ defmodule Platform.Meetings.Synthesis.PassTest do
         case Application.get_env(:platform, :synthesis_test_mode) do
           :unknown -> ["meeting_briefing:unknown" | refs]
           :one_side -> Enum.take(refs, 1)
+          :unrelated -> Enum.reject(refs, &(&1 == "meeting_briefing:" <> payload["meeting_id"]))
           _ -> refs
         end
 
       cites = Enum.map_join(refs, "", &"<cite ref=\"#{&1}\"/>")
 
+      kind =
+        if Application.get_env(:platform, :synthesis_test_mode) == :unrelated,
+          do: "depends_on",
+          else: "conflicts_with"
+
       {:ok,
        %{
          content:
-           "<meeting-finding kind=\"conflicts_with\" confidence=\"high\">Friday conflicts with Monday.#{cites}</meeting-finding>"
+           "<meeting-finding kind=\"#{kind}\" confidence=\"high\">Friday conflicts with Monday.#{cites}</meeting-finding>"
        }}
     end
   end
@@ -177,7 +185,7 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     assert {:error, :stale_or_claimed} = Synthesis.run(a.id, r.id, r.snapshot_hash)
   end
 
-  for mode <- [:unknown, :one_side] do
+  for mode <- [:unknown, :one_side, :unrelated] do
     test "drops #{mode} output", %{a: {a, r}} do
       Application.put_env(:platform, :synthesis_test_mode, unquote(mode))
       assert {:ok, []} = Synthesis.run(a.id, r.id, r.snapshot_hash)

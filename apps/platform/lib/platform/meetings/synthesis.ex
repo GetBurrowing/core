@@ -88,8 +88,11 @@ defmodule Platform.Meetings.Synthesis do
          sources <- Enum.take(context.sources, payload["max_sources"]),
          true <- sources != [],
          {:ok, system} <- PromptTemplates.render_template("meetings.brief_synthesis.v1", %{}),
-         {:ok, text} <- call_provider(cfg, payload, system, sources) do
-      findings = Parser.parse(text, sources, payload["min_confidence"])
+         {:ok, text} <- call_provider(cfg, payload, system, meeting.id, sources) do
+      findings =
+        Parser.parse(text, sources, payload["min_confidence"])
+        |> Enum.filter(&(meeting.id in &1.meeting_ids))
+
       persist(meeting, run_id, hash, findings)
     else
       false -> {:ok, :skipped}
@@ -162,7 +165,7 @@ defmodule Platform.Meetings.Synthesis do
     end)
   end
 
-  defp call_provider(cfg, payload, system, sources) do
+  defp call_provider(cfg, payload, system, meeting_id, sources) do
     provider = Platform.Chat.ContextSummary.Config.parse_provider(payload["provider"])
     adapter = Application.get_env(:platform, :meeting_synthesis_provider) || adapter(provider)
     same? = provider == cfg.provider
@@ -188,7 +191,11 @@ defmodule Platform.Meetings.Synthesis do
         %{ref: Parser.ref(s), meeting_ids: s.meeting_ids, text: s.text}
       end)
 
-    case adapter.chat(credentials, [%{role: "user", content: Jason.encode!(data)}], opts) do
+    case adapter.chat(
+           credentials,
+           [%{role: "user", content: Jason.encode!(%{meeting_id: meeting_id, sources: data})}],
+           opts
+         ) do
       {:ok, %{content: text}} when is_binary(text) -> {:ok, text}
       {:ok, %{content: [%{"text" => text} | _]}} -> {:ok, text}
       {:ok, %{"content" => [%{"text" => text} | _]}} -> {:ok, text}
