@@ -26,6 +26,9 @@ defmodule Platform.Meetings.MeetingBriefing do
     * `receipts` — node key → `%{"verb", "at", "by", "ref", "kind"}`, the
       same receipt shape the daily briefing uses. A rebuild never overwrites
       or removes a receipt.
+      Items of kind `"finding"` are the exception: their receipt lives on
+      the shared `Platform.Meetings.SynthesisFinding` row (task 01a16974),
+      because one finding can sit in several meetings' briefings.
     * `summary` / `transcript_id` — from the meeting's newest completed
       transcript, nil until one exists.
   """

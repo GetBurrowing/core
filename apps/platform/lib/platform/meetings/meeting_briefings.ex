@@ -53,6 +53,18 @@ defmodule Platform.Meetings.MeetingBriefings do
   inverse (a declared deviation, matching the daily briefing's
   `revert`/`delete` `:no_inverse`).
 
+  ## Synthesis findings (task 01a16974)
+
+  An item of kind `"finding"` (ref `"finding:<id>"`, added by
+  `add_finding/2`) points at a shared `Platform.Meetings.SynthesisFinding`
+  row that can sit in several meetings' briefings. Its receipt is the
+  FINDING's `receipt`, never this briefing's `receipts` map: `view/2` reads
+  it from the finding and `act/5` writes it there, under a `FOR UPDATE` lock
+  on the finding row. So one click from any briefing resolves the item in
+  every briefing that carries it, and a second click from any of them is
+  `{:error, :already_resolved, briefing}`. A finding item whose finding row
+  no longer exists is left out of `view/2`.
+
   ## Pure merge
 
   `build/1` never removes or overwrites: an existing item key keeps its
@@ -73,6 +85,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.SynthesisFinding
+  alias Platform.Meetings.SynthesisFindings
   alias Platform.Meetings.Transcript
   alias Platform.Repo
 
@@ -176,6 +190,47 @@ defmodule Platform.Meetings.MeetingBriefings do
         lock: "FOR UPDATE"
       )
     )
+  end
+
+  @doc """
+  Add `finding` as a `"finding"` item to `meeting`'s briefing (creating the
+  row if the meeting has none yet). Idempotent: an item already present is
+  left as it is, so its key and resolution survive. Pure merge, like
+  `build/1`: no receipt is written or removed.
+
+  Returns `{:ok, briefing, %{new_keys: keys}}`; `{:error, :not_found}` when
+  the meeting does not exist or is not in `finding.meeting_ids`.
+  """
+  @spec add_finding(Meeting.t() | binary(), SynthesisFinding.t()) ::
+          {:ok, MeetingBriefing.t(), %{new_keys: [String.t()]}} | {:error, :not_found}
+  def add_finding(%Meeting{id: id}, finding), do: add_finding(id, finding)
+
+  def add_finding(meeting_id, %SynthesisFinding{} = finding) when is_binary(meeting_id) do
+    with true <- meeting_id in (finding.meeting_ids || []),
+         %Meeting{} = meeting <- Repo.get(Meeting, meeting_id) do
+      {:ok, result} =
+        Repo.transaction(fn ->
+          row = lock_row!(meeting)
+          {key, item} = SynthesisFindings.item(finding)
+          items = row.items || %{}
+
+          if Map.has_key?(items, key) do
+            {row, %{new_keys: []}}
+          else
+            updated =
+              row
+              |> MeetingBriefing.changeset(%{items: Map.put(items, key, item)})
+              |> Repo.update!()
+
+            {updated, %{new_keys: [key]}}
+          end
+        end)
+
+      {briefing, delta} = result
+      {:ok, briefing, delta}
+    else
+      _ -> {:error, :not_found}
+    end
   end
 
   # ── Items ─────────────────────────────────────────────────────────────────
@@ -603,9 +658,10 @@ defmodule Platform.Meetings.MeetingBriefings do
   def view(%MeetingBriefing{} = briefing, scope) do
     briefing = Repo.preload(briefing, :meeting)
     meeting = briefing.meeting
-    receipts = briefing.receipts || %{}
-    items = Map.delete(briefing.items || %{}, @content_key)
     content = Map.get(briefing.items || %{}, @content_key, %{})
+
+    {items, receipts} =
+      resolve_findings(Map.delete(briefing.items || %{}, @content_key), briefing.receipts || %{})
     revertible = revertible_task_ids(meeting, items)
 
     names =
@@ -647,6 +703,30 @@ defmodule Platform.Meetings.MeetingBriefings do
       open: open,
       resolved: resolved
     }
+  end
+
+  # Finding items take their receipt from the shared finding row, never from
+  # this briefing's receipts map; a finding item whose row is gone is dropped.
+  defp resolve_findings(items, receipts) do
+    finding_ids =
+      for {_key, %{"kind" => "finding", "ref" => "finding:" <> id}} <- items, do: id
+
+    findings = SynthesisFindings.get_many(finding_ids)
+
+    Enum.reduce(items, {%{}, receipts}, fn
+      {key, %{"kind" => "finding", "ref" => "finding:" <> id} = item}, {acc, rcpts} ->
+        case Map.get(findings, id) do
+          %SynthesisFinding{receipt: nil} -> {Map.put(acc, key, item), Map.delete(rcpts, key)}
+          %SynthesisFinding{receipt: r} -> {Map.put(acc, key, item), Map.put(rcpts, key, r)}
+          nil -> {acc, Map.delete(rcpts, key)}
+        end
+
+      {key, %{"kind" => "finding"}}, {acc, rcpts} ->
+        {acc, Map.delete(rcpts, key)}
+
+      {key, item}, {acc, rcpts} ->
+        {Map.put(acc, key, item), rcpts}
+    end)
   end
 
   defp actions(nil, true, "task"), do: [:revert, :ask]
@@ -793,6 +873,15 @@ defmodule Platform.Meetings.MeetingBriefings do
          `"asked"`, ref `message:<id>`;
     6. the receipt `%{"verb", "at", "by", "ref", "kind"}` is written.
 
+  For a `"finding"` item, step 4 and step 6 use the shared
+  `Platform.Meetings.SynthesisFinding` row instead of this briefing's
+  `receipts`: the finding is locked `FOR UPDATE` after the briefing,
+  `{:error, :not_found}` unless it still lists this meeting and the clicker
+  as a recipient, `:already_resolved` when `finding.receipt` is set, and the
+  receipt is written to the finding. After the commit `{:inbox_changed, _}`
+  goes to every recipient and `{:meeting_briefing_changed, _}` to every
+  briefing of a meeting in `finding.meeting_ids`.
+
   A failed verb rolls the whole transaction back: no receipt, no side
   effect. After the commit, `{:inbox_changed, user_id}` is broadcast to
   EVERY attendee and `{:meeting_briefing_changed, briefing_id}` on
@@ -816,7 +905,8 @@ defmodule Platform.Meetings.MeetingBriefings do
         with %MeetingBriefing{} = row <- lock_briefing(id),
              :ok <- ensure_attendee(row, user_id),
              {:ok, item} <- fetch_item(row, key),
-             :ok <- ensure_unresolved(row, key),
+             {:ok, finding} <- lock_finding(row, item, user_id),
+             :ok <- ensure_unresolved(row, key, finding),
              {:ok, ref} <- run_verb(verb, row, item, scope, user_id, params || %{}) do
           receipt = %{
             "verb" => Map.fetch!(@receipt_verbs, verb),
@@ -826,9 +916,7 @@ defmodule Platform.Meetings.MeetingBriefings do
             "kind" => item["kind"]
           }
 
-          row
-          |> MeetingBriefing.changeset(%{receipts: Map.put(row.receipts || %{}, key, receipt)})
-          |> Repo.update!()
+          write_receipt!(row, key, finding, receipt)
         else
           nil -> Repo.rollback(:not_found)
           {:already_resolved, row} -> Repo.rollback({:already_resolved, row})
@@ -837,6 +925,10 @@ defmodule Platform.Meetings.MeetingBriefings do
       end)
 
     case result do
+      {:ok, {briefing, %SynthesisFinding{} = finding}} ->
+        broadcast_finding_changed(briefing, finding)
+        {:ok, briefing}
+
       {:ok, briefing} ->
         broadcast_changed(briefing)
         {:ok, briefing}
@@ -878,8 +970,44 @@ defmodule Platform.Meetings.MeetingBriefings do
     end
   end
 
-  defp ensure_unresolved(%MeetingBriefing{receipts: receipts} = row, key) do
+  # A finding item's resolution lives on the shared finding row, locked
+  # FOR UPDATE here so clicks from DIFFERENT briefings serialise on it (the
+  # briefing lock alone only serialises clicks within one briefing). Lock
+  # order is always briefing, then finding. The finding must still list this
+  # briefing's meeting and the clicker as a recipient.
+  defp lock_finding(row, %{"kind" => "finding", "ref" => "finding:" <> finding_id}, user_id) do
+    case SynthesisFindings.lock(finding_id) do
+      %SynthesisFinding{} = finding ->
+        if row.meeting_id in (finding.meeting_ids || []) and
+             user_id in (finding.recipient_user_ids || []),
+           do: {:ok, finding},
+           else: {:error, :not_found}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp lock_finding(_row, %{"kind" => "finding"}, _user_id), do: {:error, :not_found}
+  defp lock_finding(_row, _item, _user_id), do: {:ok, nil}
+
+  defp ensure_unresolved(row, _key, %SynthesisFinding{receipt: receipt}) do
+    if is_nil(receipt), do: :ok, else: {:already_resolved, row}
+  end
+
+  defp ensure_unresolved(%MeetingBriefing{receipts: receipts} = row, key, nil) do
     if Map.has_key?(receipts || %{}, key), do: {:already_resolved, row}, else: :ok
+  end
+
+  defp write_receipt!(row, _key, %SynthesisFinding{} = finding, receipt) do
+    updated = finding |> SynthesisFinding.receipt_changeset(receipt) |> Repo.update!()
+    {row, updated}
+  end
+
+  defp write_receipt!(row, key, nil, receipt) do
+    row
+    |> MeetingBriefing.changeset(%{receipts: Map.put(row.receipts || %{}, key, receipt)})
+    |> Repo.update!()
   end
 
   defp run_verb(:confirm, _row, item, _scope, _user_id, _params), do: {:ok, item["ref"]}
@@ -960,6 +1088,36 @@ defmodule Platform.Meetings.MeetingBriefings do
       |> String.replace("\n", " ")
 
     "> " <> title <> "\n\n" <> String.trim(question)
+  end
+
+  # A finding resolution changes every briefing carrying it: tell every
+  # recipient's Inbox and every one of those briefings' topics.
+  defp broadcast_finding_changed(%MeetingBriefing{} = briefing, %SynthesisFinding{} = finding) do
+    meeting_ids = finding.meeting_ids || []
+
+    briefing_ids =
+      from(b in MeetingBriefing, where: b.meeting_id in ^meeting_ids, select: b.id)
+      |> Repo.all()
+
+    users =
+      Enum.uniq(
+        (finding.recipient_user_ids || []) ++ (briefing.attendee_user_ids || [])
+      )
+
+    Enum.each(users, fn user_id ->
+      Phoenix.PubSub.broadcast(Platform.PubSub, Inbox.topic(user_id), {:inbox_changed, user_id})
+    end)
+
+    briefing_ids
+    |> Enum.concat([briefing.id])
+    |> Enum.uniq()
+    |> Enum.each(fn briefing_id ->
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        topic(briefing_id),
+        {:meeting_briefing_changed, briefing_id}
+      )
+    end)
   end
 
   defp broadcast_changed(%MeetingBriefing{} = briefing) do
