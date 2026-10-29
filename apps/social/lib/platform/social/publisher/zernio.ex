@@ -1,8 +1,8 @@
 defmodule Platform.Social.Publisher.Zernio do
   @moduledoc """
   `Platform.Social.Publisher` over Zernio's REST API (task 01a140a9, Social
-  2/7, stage 4). The ONLY vendor-specific code in Social: if Postiz is picked
-  instead, this file, its test and its config entry are what change.
+  2/7, stage 4). Publishing-specific vendor code; the HTTP builder is shared
+  with the analytics client through `Platform.Social.ZernioHTTP`.
 
   Selected by config (`config :social, :publisher, Platform.Social.Publisher.Zernio`),
   which prod sets at boot from `SOCIAL_PUBLISHER` (`Platform.Social.RuntimeConfig`).
@@ -98,7 +98,6 @@ defmodule Platform.Social.Publisher.Zernio do
 
   alias Platform.Social.{PlatformOptions, Secrets}
 
-  @default_base_url "https://zernio.com/api"
   @signature_headers ["x-zernio-signature", "x-late-signature"]
 
   # Our platform names to Zernio's enum (it says "twitter" for X).
@@ -323,14 +322,7 @@ defmodule Platform.Social.Publisher.Zernio do
   # ── Request building ─────────────────────────────────────────────────
 
   defp request(key) do
-    config = Application.get_env(:social, __MODULE__, [])
-
-    Req.new(
-      base_url: Keyword.get(config, :base_url) || @default_base_url,
-      auth: {:bearer, key},
-      receive_timeout: 15_000
-    )
-    |> Req.merge(Application.get_env(:social, :zernio_req_options, []))
+    Platform.Social.ZernioHTTP.request(key)
   end
 
   # One key for the install; the account is not consulted.

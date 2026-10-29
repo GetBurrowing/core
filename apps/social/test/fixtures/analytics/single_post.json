@@ -1,0 +1,58 @@
+{
+  "postId": "65f1c0a9e2b5af0012ab34cd",
+  "latePostId": null,
+  "status": "published",
+  "content": "Check out our new product launch!",
+  "scheduledFor": "2024-11-01T10:00:00Z",
+  "publishedAt": "2024-11-01T10:00:05Z",
+  "analytics": {
+    "impressions": 15420,
+    "reach": 12350,
+    "likes": 342,
+    "comments": 28,
+    "shares": 45,
+    "saves": 0,
+    "clicks": 189,
+    "views": 0,
+    "engagementRate": 2.78,
+    "lastUpdated": "2024-11-02T08:30:00Z"
+  },
+  "platformAnalytics": [
+    {
+      "platform": "twitter",
+      "status": "published",
+      "platformPostId": "123456789",
+      "accountId": "64e1f0a9e2b5af0012ab34cd",
+      "accountUsername": "@acmecorp",
+      "analytics": {
+        "impressions": 15420,
+        "reach": 12350,
+        "likes": 342,
+        "comments": 28,
+        "shares": 45,
+        "saves": 0,
+        "clicks": 189,
+        "views": 0,
+        "engagementRate": 2.78,
+        "lastUpdated": "2024-11-02T08:30:00Z"
+      },
+      "syncStatus": "synced",
+      "platformPostUrl": "https://twitter.com/acmecorp/status/123456789",
+      "errorMessage": null
+    }
+  ],
+  "platform": "twitter",
+  "platformPostUrl": "https://twitter.com/acmecorp/status/123456789",
+  "isExternal": false,
+  "syncStatus": "synced",
+  "message": null,
+  "thumbnailUrl": "https://storage.example.com/image.jpg",
+  "mediaType": "image",
+  "mediaItems": [
+    {
+      "type": "image",
+      "url": "https://storage.example.com/image.jpg",
+      "thumbnail": "https://storage.example.com/image.jpg"
+    }
+  ]
+}

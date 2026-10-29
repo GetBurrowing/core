@@ -1,0 +1,38 @@
+{
+  "data": [
+    {
+      "postId": "65f1c0a9e2b5af0012ab34cd",
+      "accountId": "64e1f0a9e2b5af0012ab34cd",
+      "profileId": "64e1f0a9e2b5af0012ab34aa",
+      "platform": "youtube",
+      "platformPostId": "dQw4w9WgXcQ",
+      "publishedAt": "2026-08-28T10:00:05Z",
+      "syncedAt": "2026-09-01T17:11:38Z",
+      "isDeleted": false,
+      "metrics": {
+        "impressions": 15420,
+        "reach": 12350,
+        "likes": 342,
+        "comments": 28,
+        "shares": 45,
+        "saves": 12,
+        "sends": 0,
+        "clicks": 189,
+        "views": 9310,
+        "follows": 4,
+        "igReelsAvgWatchTime": 0,
+        "igReelsVideoViewTotalTime": 0,
+        "reposts": 0,
+        "reelsSkipRate": 0,
+        "completionRate": 0,
+        "profileViews": 0,
+        "websiteClicks": 0,
+        "impressionSources": {},
+        "audienceTypes": {},
+        "audienceCountries": {}
+      }
+    }
+  ],
+  "nextCursor": "v1.WyIyMDI2LTA5LTAxIDE3OjEyOjA0IiwiNjVmMWMwYTllMmI1YWYwMDEyYWIzNGNkIl0",
+  "hasMore": true
+}

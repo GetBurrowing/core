@@ -86,6 +86,11 @@ defmodule Platform.Social.Post do
     field(:publish_attempts, :integer, default: 0)
     field(:published_at, :utc_datetime_usec)
 
+    # Clip Studio 9/9: vendor snapshots, owned by the analytics sync only.
+    # Absent views are different from zero. Never cast from editors/agents.
+    field(:metrics, :map, default: %{})
+    field(:metrics_synced_at, :utc_datetime_usec)
+
     # Social authoring 2/11 (task 01a16c4e). In NO cast list: set only by
     # `Platform.Social.AgentDrafts` (checked against the idea's org and
     # profile) and `Platform.Social.ClipDecisions.approve_clip/5`. Nil is a
