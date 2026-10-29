@@ -470,7 +470,9 @@ defmodule Platform.Social.ClipDecisions do
   end
 
   defp lock_clip(%Clip{id: id}) do
-    case Repo.one(from(c in Clip, where: c.id == ^id, lock: "FOR UPDATE")) do
+    case Repo.one(
+           from(c in Clip, where: c.id == ^id and is_nil(c.removed_at), lock: "FOR UPDATE")
+         ) do
       nil -> {:error, :not_found}
       clip -> {:ok, clip}
     end

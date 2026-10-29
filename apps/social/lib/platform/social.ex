@@ -108,11 +108,14 @@ defmodule Platform.Social do
   # The one org filter every read and write in this module goes through,
   # built from `visible_orgs/1`.
   defp scoped_query(schema, scope) do
-    case visible_orgs(scope) do
-      :all -> from(x in schema)
-      [] -> where(schema, false)
-      org_ids -> org_filter(schema, org_ids)
-    end
+    query =
+      case visible_orgs(scope) do
+        :all -> from(x in schema)
+        [] -> where(schema, false)
+        org_ids -> org_filter(schema, org_ids)
+      end
+
+    if schema == Clip, do: where(query, [c], is_nil(c.removed_at)), else: query
   end
 
   defp org_filter(Profile, org_ids), do: where(Profile, [p], p.org_id in ^org_ids)
@@ -2437,11 +2440,16 @@ defmodule Platform.Social do
          do: clip |> Clip.changeset(attrs) |> Repo.update()
   end
 
-  @spec delete_clip(Ecto.UUID.t(), Clip.t() | Ecto.UUID.t()) ::
-          {:ok, Clip.t()} | {:error, term()}
+  @doc "Unattributed deletion is refused; use remove_clip/4 with a human approver."
+  @spec delete_clip(Ecto.UUID.t(), Clip.t() | Ecto.UUID.t()) :: {:error, term()}
   def delete_clip(org_id, clip) do
-    with {:ok, clip} <- fetch(Clip, org_id, clip), do: Repo.delete(clip)
+    with {:ok, _clip} <- fetch(Clip, org_id, clip), do: {:error, :human_required}
   end
+
+  defdelegate remove_clip(org_id, profile_id, clip_id, user_id), to: Platform.Social.ClipRemoval
+
+  defdelegate remove_clip_render(org_id, profile_id, clip_id, render_id, user_id),
+    to: Platform.Social.ClipRemoval
 
   # Clip decisions (Clip Studio 2/9)
   #

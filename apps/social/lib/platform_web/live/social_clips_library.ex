@@ -1,17 +1,45 @@
 defmodule PlatformWeb.SocialClipsLibrary do
-  @moduledoc """
-  The Clips tab's Library view (Clip Studio 3/9, task 01a16662-8c00): an
-  empty shell mounted by `PlatformWeb.SocialLive` when the clips view is
-  "library".
+  @moduledoc "The profile's retained clip entries, with shared authorized removal controls."
+  use PlatformWeb, :live_component
+  alias Platform.Social.ClipLibrary
 
-  Clip Studio 7/9 fills it, in THIS file; it never edits `social_live.ex`.
-  """
-  use Phoenix.LiveComponent
+  @impl true
+  def update(assigns, socket) do
+    socket = assign(socket, Map.drop(assigns, [:refresh]))
+
+    items =
+      case socket.assigns[:profile] do
+        %{org_id: org, id: id} -> ClipLibrary.list(org, %{"show" => id}).items
+        _ -> []
+      end
+
+    {:ok, assign(socket, :items, items)}
+  end
 
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="social-clips-library" data-role="clips-library"></div>
+    <div id="social-clips-library" data-role="clips-library" class="space-y-3">
+      <p :if={@items == []} class="p-4 text-sm text-subtle">No clips in Library.</p>
+      <article
+        :for={item <- @items}
+        id={"library-clip-#{item.clip.id}"}
+        data-role="library-clip"
+        class="rounded-box border border-base-300 bg-base-100 p-4"
+      >
+        <div class="mb-2 flex items-center gap-2">
+          <h3 class="min-w-0 flex-1 truncate font-semibold">{item.clip.title || "Untitled clip"}</h3>
+          <span class="badge badge-outline">{item.state}</span>
+        </div>
+        <.live_component
+          module={PlatformWeb.SocialClipRemoval}
+          id={"library-remove-#{item.clip.id}"}
+          clip={item.clip}
+          profile={@profile}
+          user_id={@user_id}
+        />
+      </article>
+    </div>
     """
   end
 end

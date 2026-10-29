@@ -289,7 +289,7 @@ defmodule Platform.Social.Tools do
   end
 
   defp job_tool("social_clip_job_source", args, scope, agent) do
-    case ClipJobs.source_download(scope, args["job_id"], agent.id) do
+    case ClipJobs.source_download(scope, args["job_id"], agent.id, args["asset"] || "episode") do
       {:ok, source} -> {:ok, source}
       error -> {:error, error_envelope(error)}
     end
@@ -694,6 +694,15 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :music_unavailable}) do
+    err(
+      :music_unavailable,
+      "the selected music is not available in the job's project",
+      false,
+      "Fail this job safely. A human can select or upload project audio and rerender."
+    )
+  end
+
   defp error_envelope({:error, :source_unavailable}) do
     err(
       :source_unavailable,
@@ -1080,6 +1089,7 @@ defmodule Platform.Social.Tools do
         :attempts,
         :rendered_at
       ])
+      |> Map.put(:next_rev, Platform.Social.ClipVersions.next_rev(c))
 
   defp job_json(%ClipJob{} = j),
     do:

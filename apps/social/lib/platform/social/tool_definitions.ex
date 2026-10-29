@@ -520,14 +520,25 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_job_source",
         description:
-          "Download the source of an automatic episode job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
+          "Download the episode source or selected project music asset of a job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
-          job_id: %{type: "string", required: true, description: "Your open episode job id."}
+          job_id: %{
+            type: "string",
+            required: true,
+            description: "Your open claimed/running job id."
+          },
+          asset: %{
+            type: "string",
+            required: false,
+            enum: ["episode", "music"],
+            description:
+              "Defaults to episode; music resolves only the persisted selected audio asset."
+          }
         },
         returns: "%{file_id, project_id, url, expires_at, content_type, byte_size}",
         limitations:
-          "Only the claimer of a claimed/running episode job. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
+          "Only the claimer of a claimed/running job. Music must be the persisted selected asset. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
             @job_errors <> " " <> @privacy_null,
         when_to_use:
           "After claiming an episode, to fetch its source automatically; call again if a download URL expired."

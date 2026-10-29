@@ -91,6 +91,61 @@ defmodule Platform.Social.ClipJobsTest do
     assert Repo.get!(Clip, clip.id).render_file_id == w.f2.id
   end
 
+  test "appearance merges immutable look and corrections, always sends style and rejects stale versions",
+       w do
+    clip = rendered_clip!(w)
+    [base] = renders(clip.id)
+
+    base
+    |> Ecto.Changeset.change(
+      look: %{"cap" => %{"font" => "Inter SemiBold"}},
+      headline: "User headline",
+      caption: "User caption",
+      caption_fixes: %{"edits" => [%{"position" => 1, "original" => "a", "replacement" => "b"}]}
+    )
+    |> Repo.update!()
+
+    {:ok, job} =
+      ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+        base_render_id: base.id,
+        look: %{cap: %{style: "plain"}}
+      })
+
+    assert job.payload["look"]["cap"]["font"] == "Inter SemiBold"
+    assert job.payload["clip_overrides"]["mapped"]["captions.style"] == "plain"
+    assert job.payload["title"] == "User headline"
+
+    assert job.payload["caption_fixes"]["edits"] == [
+             %{"position" => 1, "original" => "a", "replacement" => "b"}
+           ]
+
+    assert {:error, :job_in_flight} =
+             ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "karaoke"}}
+             })
+
+    claimed!(w, job)
+    {:ok, %{clip: updated}} = ClipJobs.complete(w.scope, job.id, w.agent.id, %{file_id: w.f2.id})
+    assert updated.title == "User headline"
+    [old, new] = renders(clip.id)
+    assert old.id == base.id
+    assert new.headline == "User headline"
+    assert new.caption_fixes == job.payload["caption_fixes"]
+
+    assert {:error, :stale_version} =
+             ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "plain"}}
+             })
+
+    assert {:error, :not_found} =
+             ClipJobs.enqueue_appearance(w.other.org_id, clip.id, w.other.approver.id, %{
+               base_render_id: new.id,
+               look: %{cap: %{style: "plain"}}
+             })
+  end
+
   describe "enqueue_new_clip" do
     test "a new_clip job's clip is never in rendering", w do
       {clip, job} = new_clip!(w, %{title: "Who makes Total War?"})

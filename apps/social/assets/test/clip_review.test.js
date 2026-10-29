@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest"
-import { clipsUrl, keyAction, scrubPercent, secondsLeft, typingTarget } from "../js/hooks/clip_review.js"
+import { describe, it, expect, vi } from "vitest"
+import ClipReview, { clipsUrl, keyAction, scrubPercent, secondsLeft, typingTarget } from "../js/hooks/clip_review.js"
 
 /**
  * The Review bay hook's pure parts (Clip Studio 3/9, task 01a16662-8c00
@@ -106,5 +106,22 @@ describe("clipsUrl", () => {
 
   it("works from an empty query", () => {
     expect(clipsUrl("", { view: "review", clip: "c2" })).toBe("?tab=clips&view=review&clip=c2")
+  })
+})
+
+
+describe("removal dialog keyboard isolation", () => {
+  it("does not navigate or toggle the clip behind a confirmation", () => {
+    const push = vi.fn()
+    const toggle = vi.fn()
+    const preventDefault = vi.fn()
+    const hook = { active: () => true, el: { querySelector: () => ({}) }, pushEventTo: push, toggle }
+    for (const key of ["j", "k", " "]) ClipReview.key.call(hook, {key, target: body, preventDefault})
+    expect(push).not.toHaveBeenCalled()
+    expect(toggle).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    hook.el.querySelector = () => null
+    ClipReview.key.call(hook, {key: "j", target: body, preventDefault})
+    expect(push).toHaveBeenCalledWith(hook.el, "next", {})
   })
 })
