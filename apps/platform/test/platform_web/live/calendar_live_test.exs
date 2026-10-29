@@ -27,6 +27,44 @@ defmodule PlatformWeb.CalendarLiveTest do
     }
   end
 
+  test "agent access loads saved permissions and revocation clears the form", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    n = System.unique_integer([:positive])
+    agent = Repo.insert!(%Platform.Agents.Agent{name: "UI grant agent", slug: "ui-grant-#{n}"})
+
+    Repo.insert!(%Platform.Agents.AgentRuntime{
+      runtime_id: "ui-grant-#{n}",
+      owner_user_id: user.id,
+      agent_id: agent.id,
+      status: "active",
+      display_name: "UI grant agent"
+    })
+
+    {:ok, _} = Platform.Calendar.AgentAccess.grant(scope, agent.id, %{read: true, create: true})
+    {:ok, view, _} = live(conn, "/calendar")
+    view |> element("#calendar-agent-access") |> render_click()
+    render_change(view, "choose_grant_agent", %{"grant" => %{"agent_id" => agent.id}})
+    assert has_element?(view, "#grant_read[checked]")
+    assert has_element?(view, "#grant_create[checked]")
+    refute has_element?(view, "#grant_move[checked]")
+
+    view
+    |> form("#calendar-agent-grant-form",
+      grant: %{agent_id: agent.id, read: true, create: true, move: true, preapprove: true}
+    )
+    |> render_submit()
+
+    assert has_element?(view, "#grant_move[checked]")
+    view |> element("#calendar-revoke-agent-#{agent.id}") |> render_click()
+    refute has_element?(view, "#grant_read[checked]")
+    refute has_element?(view, "#grant_move[checked]")
+    assert [%{revoked_at: revoked_at}] = Platform.Calendar.AgentAccess.list(scope)
+    assert revoked_at
+  end
+
   test "event CRUD uses viewer-local time, and deletion removes the calendar entry", %{
     conn: conn,
     scope: scope

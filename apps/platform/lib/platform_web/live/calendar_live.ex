@@ -69,13 +69,30 @@ defmodule PlatformWeb.CalendarLive do
         Platform.Accounts.get_user(socket.assigns.current_user_record.id)
       )
 
+    choices = Platform.Calendar.AgentAccess.agents(scope)
+    grants = Platform.Calendar.AgentAccess.list(scope)
+
+    agent_id =
+      case choices do
+        [agent | _] -> agent.id
+        _ -> nil
+      end
+
     {:noreply,
      assign(socket,
        sheet: :agent_access,
-       agent_choices: Platform.Calendar.AgentAccess.agents(scope),
-       calendar_grants: Platform.Calendar.AgentAccess.list(scope),
+       agent_choices: choices,
+       calendar_grants: grants,
+       grant_form: agent_grant_form(Enum.find(grants, &(&1.agent_id == agent_id)), agent_id),
        error: nil
      )}
+  end
+
+  def handle_event("choose_grant_agent", %{"grant" => %{"agent_id" => id}}, socket) do
+    grants = Map.get(socket.assigns, :calendar_grants, [])
+
+    {:noreply,
+     assign(socket, :grant_form, agent_grant_form(Enum.find(grants, &(&1.agent_id == id)), id))}
   end
 
   def handle_event("grant_agent", %{"grant" => attrs}, socket) do
@@ -85,9 +102,14 @@ defmodule PlatformWeb.CalendarLive do
       )
 
     case Platform.Calendar.AgentAccess.grant(scope, attrs["agent_id"], attrs) do
-      {:ok, _} ->
+      {:ok, grant} ->
         {:noreply,
-         socket |> assign(calendar_grants: Platform.Calendar.AgentAccess.list(scope), error: nil)}
+         socket
+         |> assign(
+           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
+           grant_form: agent_grant_form(grant, grant.agent_id),
+           error: nil
+         )}
 
       _ ->
         {:noreply, assign(socket, :error, "Couldn't save agent access.")}
@@ -101,10 +123,14 @@ defmodule PlatformWeb.CalendarLive do
       )
 
     case Platform.Calendar.AgentAccess.revoke(scope, id) do
-      {:ok, _} ->
+      {:ok, grant} ->
         {:noreply,
          socket
-         |> assign(calendar_grants: Platform.Calendar.AgentAccess.list(scope), error: nil)
+         |> assign(
+           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
+           grant_form: agent_grant_form(grant, id),
+           error: nil
+         )
          |> reload()}
 
       _ ->
@@ -533,5 +559,15 @@ defmodule PlatformWeb.CalendarLive do
     if sign == 1,
       do: Date.add(base, Date.days_in_month(base)),
       else: Date.add(base, -1) |> Date.beginning_of_month()
+  end
+
+  defp agent_grant_form(grant, agent_id) do
+    fields =
+      for field <- ~w(read read_private create move preapprove)a, into: %{} do
+        {Atom.to_string(field),
+         not is_nil(grant) and is_nil(grant.revoked_at) and Map.get(grant, field, false)}
+      end
+
+    to_form(Map.put(fields, "agent_id", agent_id), as: :grant)
   end
 end

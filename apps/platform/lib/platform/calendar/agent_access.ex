@@ -69,7 +69,7 @@ defmodule Platform.Calendar.AgentAccess do
         grant =
           Repo.get_by(AgentGrant, owner_id: id, agent_id: agent_id) || Repo.rollback(:not_found)
 
-        grant |> CS.change(revoked_at: DateTime.utc_now()) |> Repo.update!()
+        grant = grant |> CS.change(revoked_at: DateTime.utc_now()) |> Repo.update!()
 
         for consent <-
               Repo.all(

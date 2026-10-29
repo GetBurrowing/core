@@ -292,37 +292,38 @@
           <p class="mt-2 text-sm text-subtle">
             Choose what an agent may do. Changes wait for your approval in Inbox unless you preapprove them.
           </p>
-          <form phx-submit="grant_agent" class="mt-4 space-y-3">
-            <label class="block text-sm">
-              Agent
-              <select name="grant[agent_id]" required class="select select-bordered w-full">
-                <option :for={agent <- @agent_choices} value={agent.id}>{agent.name}</option>
-              </select>
-            </label>
-            <label
+          <.form
+            for={@grant_form}
+            id="calendar-agent-grant-form"
+            phx-submit="grant_agent"
+            class="mt-4 space-y-3 [&_label]:min-h-11"
+          >
+            <.input
+              field={@grant_form[:agent_id]}
+              type="select"
+              label="Agent"
+              options={Enum.map(@agent_choices, &{&1.name, &1.id})}
+              phx-change="choose_grant_agent"
+              required
+            />
+            <.input
               :for={
                 {field, label} <- [
-                  {"read", "Read shared events"},
-                  {"read_private", "Include private events"},
-                  {"create", "Create events"},
-                  {"move", "Move events"},
-                  {"preapprove", "Preapprove changes"}
+                  read: "Read shared events",
+                  read_private: "Include private events",
+                  create: "Create events",
+                  move: "Move events",
+                  preapprove: "Preapprove changes"
                 ]
               }
-              class="flex min-h-11 items-center gap-2 text-sm"
-            >
-              <input type="hidden" name={"grant[#{field}]"} value="false" />
-              <input
-                type="checkbox"
-                class="checkbox checkbox-sm"
-                name={"grant[#{field}]"}
-                value="true"
-              />{label}
-            </label>
+              field={@grant_form[field]}
+              type="checkbox"
+              label={label}
+            />
             <button class="btn btn-primary min-h-11" disabled={@agent_choices == []}>
               Save access
             </button>
-          </form>
+          </.form>
           <div
             :for={grant <- @calendar_grants}
             class="mt-4 rounded-xl border border-edge p-3 text-sm"
@@ -339,6 +340,7 @@
             </p>
             <button
               :if={is_nil(grant.revoked_at)}
+              id={"calendar-revoke-agent-#{grant.agent_id}"}
               phx-click="revoke_agent"
               phx-value-id={grant.agent_id}
               class="btn btn-ghost min-h-11 text-error"
