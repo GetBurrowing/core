@@ -126,9 +126,22 @@ defmodule Platform.Calendar.Subscriptions do
       true ->
         native =
           Platform.Calendar.list_entries(scope, from, to)
-          |> Enum.reject(&(&1.kind == :external and &1.transparent))
+          |> Enum.reject(fn
+            %{kind: :external, transparent: true} ->
+              true
 
-        {:ok, Enum.map(native, &%{starts_at: &1.starts_at, ends_at: &1.ends_at})}
+            %{kind: :meeting, meeting: %{status: status}} when status in ["cancelled", "ended"] ->
+              true
+
+            _ ->
+              false
+          end)
+
+        {:ok,
+         Enum.map(
+           native,
+           &%{starts_at: &1.starts_at, ends_at: &1.ends_at || DateTime.add(&1.starts_at, 1800)}
+         )}
     end
   end
 end

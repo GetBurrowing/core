@@ -125,7 +125,7 @@ defmodule Platform.Calendar.ICal do
 
   # A conservative year bound keeps the native expansion inside Date's domain,
   # including monthly rules that skip nonexistent days before counting.
-  defp supported_recurrence?(%{count: count, interval: interval}, "Etc/UTC", first)
+  defp supported_recurrence?(%{count: count, interval: interval, until: nil}, "Etc/UTC", first)
        when is_integer(count) and count <= 1000,
        do: first.year + (count - 1) * interval <= 9999
 

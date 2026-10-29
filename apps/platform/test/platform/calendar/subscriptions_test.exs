@@ -123,6 +123,16 @@ defmodule Platform.Calendar.SubscriptionsTest do
     {:ok, sub} = Subscriptions.refresh(owner, sub.id)
     assert {:ok, []} = Subscriptions.availability(owner, @from, @to)
 
+    assert {:ok, _} =
+             Platform.Calendar.create_event(owner, %{
+               title: "Native busy",
+               starts_at: ~U[2026-10-30 21:00:00Z],
+               ends_at: ~U[2026-10-30 22:00:00Z]
+             })
+
+    assert {:ok, [%{starts_at: ~U[2026-10-30 21:00:00Z]}]} =
+             Subscriptions.availability(owner, @from, @to)
+
     Repo.update!(
       Ecto.Changeset.change(sub, refreshed_at: DateTime.add(DateTime.utc_now(), -3601))
     )
@@ -206,6 +216,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
 
     for extra <- [
           "\r\nRRULE:FREQ=DAILY",
+          "\r\nRRULE:FREQ=DAILY;COUNT=2;UNTIL=20261231",
           "\r\nRRULE:FREQ=YEARLY;COUNT=2",
           "\r\nRDATE:20261101T190000Z",
           "\r\nRECURRENCE-ID:20261030T190000Z",
