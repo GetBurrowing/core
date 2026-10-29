@@ -395,6 +395,72 @@ defmodule Platform.FederationTest do
     end
   end
 
+  describe "unsuspend_runtime/1 and unsuspend_runtime/2" do
+    setup do
+      owner = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(owner.id, %{
+          runtime_id: "unsuspend-#{System.unique_integer([:positive])}"
+        })
+
+      %{runtime: runtime, scope: Platform.Access.Scope.for_user(owner)}
+    end
+
+    test "owner restores authentication with the original token and hash", %{
+      runtime: runtime,
+      scope: scope
+    } do
+      {:ok, active, token} = Federation.activate_runtime(runtime)
+      assert Federation.get_runtime_by_token(token).id == runtime.id
+      {:ok, suspended} = Federation.suspend_runtime(scope, active)
+      assert Federation.get_runtime_by_token(token) == nil
+
+      assert {:ok, restored} = Federation.unsuspend_runtime(scope, suspended)
+      assert restored.status == "active"
+      assert restored.auth_token_hash == active.auth_token_hash
+      assert Repo.reload!(restored).auth_token_hash == active.auth_token_hash
+      assert Federation.get_runtime_by_token(token).id == runtime.id
+    end
+
+    test "non-manager cannot restore a suspended runtime", %{runtime: runtime} do
+      {:ok, active, token} = Federation.activate_runtime(runtime)
+      {:ok, suspended} = Federation.suspend_runtime(active)
+      stranger_scope = Platform.Access.Scope.for_user(create_user())
+
+      assert {:error, :unauthorized} = Federation.unsuspend_runtime(stranger_scope, suspended)
+      assert Repo.reload!(suspended).status == "suspended"
+      assert Repo.reload!(suspended).auth_token_hash == active.auth_token_hash
+      assert Federation.get_runtime_by_token(token) == nil
+    end
+
+    test "pending, active and revoked runtimes are refused", %{runtime: pending, scope: scope} do
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(pending)
+      assert Repo.reload!(pending).status == "pending"
+      {:ok, active, token} = Federation.activate_runtime(pending)
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(scope, active)
+      assert Repo.reload!(active).auth_token_hash == active.auth_token_hash
+      {:ok, revoked} = Federation.revoke_runtime(active)
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(revoked)
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(scope, revoked)
+      assert Repo.reload!(revoked).status == "revoked"
+      assert Repo.reload!(revoked).auth_token_hash == nil
+      assert Federation.get_runtime_by_token(token) == nil
+    end
+
+    test "a stale suspended struct cannot undo revocation", %{runtime: runtime, scope: scope} do
+      {:ok, active, token} = Federation.activate_runtime(runtime)
+      {:ok, suspended} = Federation.suspend_runtime(active)
+      {:ok, _revoked} = Federation.revoke_runtime(suspended)
+
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(suspended)
+      assert {:error, :not_suspended} = Federation.unsuspend_runtime(scope, suspended)
+      assert Repo.reload!(suspended).status == "revoked"
+      assert Repo.reload!(suspended).auth_token_hash == nil
+      assert Federation.get_runtime_by_token(token) == nil
+    end
+  end
+
   describe "dispatch_scribe_attention/2" do
     @scribe_event [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]
 

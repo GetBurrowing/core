@@ -102,6 +102,29 @@ defmodule Platform.Federation do
         else: {:error, :unauthorized}
       )
 
+  @doc "Restore a suspended runtime without changing its existing token."
+  def unsuspend_runtime(%AgentRuntime{id: id}) do
+    # Check the persisted status in the write itself: a stale suspended struct
+    # must never restore a runtime that has since been revoked.
+    query =
+      from(r in AgentRuntime,
+        where: r.id == ^id and r.status == "suspended",
+        select: r
+      )
+
+    case Repo.update_all(query, set: [status: "active", updated_at: DateTime.utc_now()]) do
+      {1, [runtime]} -> {:ok, runtime}
+      {0, []} -> {:error, :not_suspended}
+    end
+  end
+
+  def unsuspend_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: unsuspend_runtime(runtime),
+        else: {:error, :unauthorized}
+      )
+
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
     runtime
