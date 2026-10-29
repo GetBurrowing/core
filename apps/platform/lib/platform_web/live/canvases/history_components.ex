@@ -42,7 +42,7 @@ defmodule PlatformWeb.Canvases.HistoryComponents do
             <span class="ml-2 text-subtle">{row.written_by["display_name"] || "Unknown author"}</span>
             <span
               :if={row.restored_from}
-              class="mt-1 block text-subtle"
+              class="mt-1 block text-subtle tabular-nums"
               data-role="canvas-history-restored-from"
             >
               Restored from {ChatVersionHistory.clock(row.source_at)}
@@ -66,7 +66,7 @@ defmodule PlatformWeb.Canvases.HistoryComponents do
       class="border-b border-edge bg-base-200 px-4 py-3 text-[13px] text-base-content"
     >
       <div class="mx-auto flex max-w-[880px] flex-wrap items-center gap-3">
-        <p class="grow">Viewing {ChatVersionHistory.clock(@preview.at)} version</p>
+        <p class="grow tabular-nums">Viewing {ChatVersionHistory.clock(@preview.at)} version</p>
         <button
           id="canvas-history-back-current"
           type="button"
