@@ -59,8 +59,11 @@ defmodule Platform.Calendar.Recurrence do
     end_date = to |> DateTime.shift_zone!(event.time_zone) |> DateTime.to_date()
 
     Stream.iterate(0, &(&1 + 1))
-    |> Stream.take_while(&(is_nil(rule.count) or &1 < rule.count))
     |> Stream.map(fn n -> occurrence_date(first_date, rule, n) end)
+    |> Stream.reject(&is_nil/1)
+    |> Stream.with_index()
+    |> Stream.take_while(fn {_date, index} -> is_nil(rule.count) or index < rule.count end)
+    |> Stream.map(&elem(&1, 0))
     |> Stream.take_while(fn date ->
       is_nil(date) or
         (Date.compare(date, end_date) != :gt and
