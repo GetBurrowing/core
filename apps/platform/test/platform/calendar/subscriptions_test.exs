@@ -228,6 +228,13 @@ defmodule Platform.Calendar.SubscriptionsTest do
     assert {:error, _} =
              ICal.parse(feed("UID:floating\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000"))
 
+    assert {:error, _} =
+             ICal.parse(
+               feed(
+                 "UID:boundary\r\nDTSTART:99991231T120000Z\r\nDTEND:99991231T130000Z\r\nRRULE:FREQ=MONTHLY;COUNT=1"
+               )
+             )
+
     old = event("\r\nSEQUENCE:1")
 
     newer =

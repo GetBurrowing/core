@@ -132,7 +132,7 @@ defmodule Platform.Calendar.ICal do
   # including monthly rules that skip nonexistent days before counting.
   defp supported_recurrence?(%{count: count, interval: interval, until: nil}, "Etc/UTC", first)
        when is_integer(count) and count <= 1000,
-       do: first.year + (count - 1) * interval <= 9999
+       do: first.year + (count + 2) * interval <= 9998
 
   defp supported_recurrence?(_, _, _), do: false
   defp sequence(nil), do: 0
