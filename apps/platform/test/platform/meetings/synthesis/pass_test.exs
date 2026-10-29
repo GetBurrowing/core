@@ -195,24 +195,29 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     end
   end
 
-  test "provider none skips and releases delivery", %{a: {a, r}} do
+  test "provider none skips and releases delivery", %{a: {a, r}, user: u} do
     Application.put_env(:platform, :meetings_summary, %{provider: :none})
     assert "synthesis" in MeetingBriefings.readiness(a).missing
     assert {:ok, :pending} = MeetingBriefings.deliver(a)
+    briefing = MeetingBriefings.get_for_attendee(a.id, u.id)
+    refute Platform.Inbox.active_source_row?(u.id, "meeting_briefing", briefing.id)
     assert {:ok, :skipped} = Synthesis.run(a.id, r.id, r.snapshot_hash)
     refute_receive {:provider, _, _}
     assert MeetingBriefings.readiness(a).ready?
     assert {:ok, %{created: _}} = MeetingBriefings.deliver(a)
     assert SynthesisFindings.list_for_meeting(a.id) == []
+    assert Platform.Inbox.active_source_row?(u.id, "meeting_briefing", briefing.id)
   end
 
-  test "raising provider marks complete and delivers", %{a: {a, r}} do
+  test "raising provider marks complete and delivers", %{a: {a, r}, user: u} do
     Application.put_env(:platform, :synthesis_test_mode, :raise)
     refute MeetingBriefings.readiness(a).ready?
     assert {:error, :synthesis_failed} = Synthesis.run(a.id, r.id, r.snapshot_hash)
     assert Repo.get!(CompletionRun, r.id).synthesis["status"] == "complete"
     assert MeetingBriefings.readiness(a).ready?
     assert {:ok, %{created: _}} = MeetingBriefings.deliver(a)
+    briefing = MeetingBriefings.get_for_attendee(a.id, u.id)
+    assert Platform.Inbox.active_source_row?(u.id, "meeting_briefing", briefing.id)
   end
 
   test "resolution metric counts judged findings once and distinguishes no data", %{a: {a, r}} do
@@ -265,7 +270,9 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     Repo.update_all(
       from(v in Platform.Experiments.Variant,
         where: v.experiment_id == ^running.id and v.slug == "control"
-      ), set: [weight: 0])
+      ),
+      set: [weight: 0]
+    )
 
     assert {:ok, [_]} = Synthesis.run(a.id, r.id, r.snapshot_hash)
     assert_receive {:provider, _, opts}
