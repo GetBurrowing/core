@@ -26,13 +26,18 @@ defmodule PlatformWeb.ChatLive.ExecutionActivityHooks do
         _ -> nil
       end
 
+    # A non-matching clause (e.g. a backlog %Task{}) must not fall through as
+    # the status: a struct is a map, so is_map/1 would accept it.
     status =
       with true <- Platform.UUID.valid?(task_id),
            true <- readable?(socket.assigns[:access_scope], task_id),
-           %{status: "in_progress"} = task <- Platform.Tasks.get_task_record(task_id),
-           do: ExecutionStatus.for_task(task, socket.assigns[:access_scope])
+           %{status: "in_progress"} = task <- Platform.Tasks.get_task_record(task_id) do
+        ExecutionStatus.for_task(task, socket.assigns[:access_scope])
+      else
+        _ -> nil
+      end
 
-    assign(socket, :chat_execution_activity, if(is_map(status), do: status, else: nil))
+    assign(socket, :chat_execution_activity, status)
   end
 
   defp readable?(%Platform.Access.Scope{} = scope, id),
