@@ -123,7 +123,7 @@ defmodule PlatformWeb.TasksMyTasksListTest do
            |> LazyHTML.query("[data-role=execution-status][data-state=unknown]")
            |> Enum.any?()
 
-    assert high_row |> LazyHTML.query("[data-role=tasks-my-dot]") == []
+    assert high_row |> LazyHTML.query("[data-role=tasks-my-dot]") |> Enum.empty?()
 
     assert low_row
            |> LazyHTML.query("[data-role=tasks-my-dot]")
