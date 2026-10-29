@@ -125,18 +125,22 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   end
 
   defp namespace_readable?(user, scope, path) do
-    case String.split(path, "/") do
-      ["org", kind | _] when kind in ["page", "journal"] ->
-        true
+    if String.contains?(path, "/private/") do
+      false
+    else
+      case String.split(path, "/") do
+        ["org" | _] ->
+          true
 
-      ["project", id, kind | _] when kind in ["page", "journal"] ->
-        Platform.UUID.valid?(id) and Access.can?(scope, "memory.read", {:project, id})
+        ["project", id | _] ->
+          Platform.UUID.valid?(id) and Access.can?(scope, "memory.read", {:project, id})
 
-      ["space", id, kind | _] when kind in ["page", "journal"] ->
-        Platform.UUID.valid?(id) and space_readable?(user, scope, id)
+        ["space", id | _] ->
+          Platform.UUID.valid?(id) and space_readable?(user, scope, id)
 
-      _ ->
-        false
+        _ ->
+          false
+      end
     end
   end
 

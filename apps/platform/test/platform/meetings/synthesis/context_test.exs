@@ -261,6 +261,17 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
       )
 
     assert Visibility.readable_by?(c.allowed.id, {:memory_page, page.id})
+
+    legacy =
+      Repo.insert!(
+        Platform.Org.WikiPage.changeset(%Platform.Org.WikiPage{}, %{
+          file_key: "org/memory.md",
+          content: "Checkout release history",
+          org_id: acme_org_id()
+        })
+      )
+
+    assert Visibility.readable_by?(c.allowed.id, {:memory_page, legacy.id})
     assert Visibility.readable_by?(c.allowed.id, {:memory_journal, journal.id})
 
     space_journal =
