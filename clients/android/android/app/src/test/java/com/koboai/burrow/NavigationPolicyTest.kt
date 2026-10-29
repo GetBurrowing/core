@@ -1,6 +1,7 @@
 package com.koboai.burrow
 
 import com.koboai.burrow.NavigationDecision.ALLOW
+import com.koboai.burrow.NavigationDecision.LOAD_IN_MAIN_VIEW
 import com.koboai.burrow.NavigationDecision.BLOCK
 import com.koboai.burrow.NavigationDecision.OPEN_EXTERNALLY
 import com.koboai.burrow.NavigationDecision.SIGN_OUT
@@ -33,6 +34,26 @@ class NavigationPolicyTest {
         assertEquals(OPEN_EXTERNALLY, main("https://evil.example/?next=https://burrow.example.net/"))
         assertEquals(OPEN_EXTERNALLY, main("mailto:someone@example.com"))
         assertEquals(OPEN_EXTERNALLY, main("tel:+15555550100"))
+    }
+
+    @Test
+    fun `same-install new windows load in the main view`() {
+        assertEquals(LOAD_IN_MAIN_VIEW, policy.decide("https://BURROW.example.net/tasks/abc", false, true))
+    }
+
+    @Test
+    fun `foreign new windows open externally`() {
+        assertEquals(OPEN_EXTERNALLY, policy.decide("https://outside.example/chat", false, true))
+        assertEquals(OPEN_EXTERNALLY, policy.decide("https://burrow.example.net.evil.example/", false, true))
+    }
+
+    @Test
+    fun `new windows retain auth and blocked scheme policies`() {
+        assertEquals(START_NATIVE_LOGIN, policy.decide("https://burrow.example.net/auth/login", false, true))
+        assertEquals(SIGN_OUT, policy.decide("https://burrow.example.net/auth/logout", false, true))
+        assertEquals(LOAD_IN_MAIN_VIEW, policy.decide("https://burrow.example.net/auth/login?app_challenge=x", false, true))
+        assertEquals(BLOCK, policy.decide("javascript:alert(1)", false, true))
+        assertEquals(BLOCK, policy.decide("intent://scan/", false, true))
     }
 
     @Test

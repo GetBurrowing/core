@@ -699,7 +699,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         if loginProbeHost != nil { return false }
         guard let policy, let install = currentInstall else { return false }
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
-        let decision = policy.decide(url: action.request.url, isMainFrame: isMainFrame)
+        let decision = policy.decide(url: action.request.url, isMainFrame: isMainFrame, isNewWindow: action.targetFrame == nil)
         if signingOutHost == install.host {
             switch decision {
             case .signOut:
@@ -712,11 +712,17 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 return true
             case .allow:
                 return false
+            case .loadInMainView:
+                loadTraced(action.request, reason: "new-window")
+                return true
             }
         }
         switch decision {
         case .allow:
             return false
+        case .loadInMainView:
+            loadTraced(action.request, reason: "new-window")
+            return true
         case .openExternally:
             if let url = action.request.url {
                 UIApplication.shared.open(url)

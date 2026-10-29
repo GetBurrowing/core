@@ -7,6 +7,9 @@ enum class NavigationDecision {
     /** Stay in the WebView. */
     ALLOW,
 
+    /** Cancel the popup and load its request in the main WebView. */
+    LOAD_IN_MAIN_VIEW,
+
     /** Cancel and hand the URL to Android (the browser, mail, phone...). */
     OPEN_EXTERNALLY,
 
@@ -51,13 +54,15 @@ class NavigationPolicy(
     fun decide(
         url: String?,
         isMainFrame: Boolean,
+        isNewWindow: Boolean = false,
     ): NavigationDecision {
+        val isTopLevel = isMainFrame || isNewWindow
         if (url == null) return NavigationDecision.ALLOW
         val uri =
             try {
                 URI(url)
             } catch (_: Exception) {
-                return if (isMainFrame) NavigationDecision.BLOCK else NavigationDecision.ALLOW
+                return if (isTopLevel) NavigationDecision.BLOCK else NavigationDecision.ALLOW
             }
         val scheme = uri.scheme?.lowercase() ?: return NavigationDecision.ALLOW
         if (scheme in IN_VIEW_SCHEMES) return NavigationDecision.ALLOW
@@ -66,13 +71,13 @@ class NavigationPolicy(
 
         val host = uri.host?.lowercase() ?: ""
         if (host != installHost) {
-            return if (isMainFrame) NavigationDecision.OPEN_EXTERNALLY else NavigationDecision.ALLOW
+            return if (isTopLevel) NavigationDecision.OPEN_EXTERNALLY else NavigationDecision.ALLOW
         }
-        if (isMainFrame && uri.path == "/auth/logout") return NavigationDecision.SIGN_OUT
-        if (isMainFrame && uri.path == "/auth/login" && !hasQueryItem(uri, "app_challenge")) {
+        if (isTopLevel && uri.path == "/auth/logout") return NavigationDecision.SIGN_OUT
+        if (isTopLevel && uri.path == "/auth/login" && !hasQueryItem(uri, "app_challenge")) {
             return NavigationDecision.START_NATIVE_LOGIN
         }
-        return NavigationDecision.ALLOW
+        return if (isNewWindow) NavigationDecision.LOAD_IN_MAIN_VIEW else NavigationDecision.ALLOW
     }
 
     private fun hasQueryItem(

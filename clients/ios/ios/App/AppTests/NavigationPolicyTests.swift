@@ -31,6 +31,21 @@ final class NavigationPolicyTests: XCTestCase {
         XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.net/auth/login?app_challenge=x"), isMainFrame: true), .allow)
     }
 
+    func testNewWindowOnInstallLoadsInMainView() {
+        XCTAssertEqual(policy.decide(url: URL(string: "https://BURROW.example.net/tasks/abc"), isMainFrame: false, isNewWindow: true), .loadInMainView)
+    }
+
+    func testForeignNewWindowOpensExternally() {
+        XCTAssertEqual(policy.decide(url: URL(string: "https://outside.example/tasks/abc"), isMainFrame: false, isNewWindow: true), .openExternally)
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.net.evil.example/"), isMainFrame: false, isNewWindow: true), .openExternally)
+    }
+
+    func testNewWindowKeepsNativeAuthenticationPolicy() {
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.net/auth/login"), isMainFrame: false, isNewWindow: true), .startNativeLogin)
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.net/auth/logout"), isMainFrame: false, isNewWindow: true), .signOut)
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.net/auth/login?app_challenge=x"), isMainFrame: false, isNewWindow: true), .loadInMainView)
+    }
+
     func testPullToRefreshIsOffInChat() {
         XCTAssertFalse(NavigationPolicy.allowsPullToRefresh(path: "/chat"))
         XCTAssertFalse(NavigationPolicy.allowsPullToRefresh(path: "/chat/0198-abc"))
