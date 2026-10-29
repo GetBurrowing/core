@@ -288,7 +288,7 @@ defmodule Platform.Social.AnalyticsSyncTest do
       Req.Test.json(conn, baseline(c.post, %{"latePostId" => "somebody-else"}))
     end)
 
-    assert {:ok, {:deferred, :baseline_pending}} = run(c.org)
+    assert :ok = run(c.org, max_requests: 1)
     assert Repo.get!(Post, c.post.id).analytics_external_id == nil
     assert Repo.get!(Post, c.post.id).metrics == %{"views" => 7}
   end
@@ -376,16 +376,56 @@ defmodule Platform.Social.AnalyticsSyncTest do
     Repo.update!(Ecto.Changeset.change(c.post, analytics_external_id: nil))
     Repo.insert!(%SyncState{org_id: c.org, cursor: "captured"})
     stub(fn conn, _ -> conn |> Plug.Conn.put_status(202) |> Req.Test.json(%{}) end)
-    assert {:ok, {:deferred, :sync_pending}} = run(c.org)
+    assert :ok = run(c.org, max_requests: 1)
     state = Repo.get!(SyncState, c.org)
     assert state.cursor == "captured"
-    assert state.bootstrap_after_post_id == nil
+    assert state.bootstrap_after_post_id == c.post.id
+    assert state.pending_baseline_ids == [c.post.id]
     refute state.bootstrap_complete
-    Repo.update!(Ecto.Changeset.change(state, retry_at: DateTime.add(DateTime.utc_now(), -1)))
+
+    Repo.update!(
+      Ecto.Changeset.change(state, baseline_retry_at: DateTime.add(DateTime.utc_now(), -1))
+    )
+
     stub(fn conn, _ -> Req.Test.json(conn, baseline(c.post)) end)
     assert :ok = run(c.org, max_requests: 1)
     assert Repo.get!(SyncState, c.org).bootstrap_after_post_id == c.post.id
     assert Repo.get!(Post, c.post.id).metrics == %{"views" => 100}
+  end
+
+  test "unavailable new baseline cannot starve an established post's delta", c do
+    ready(c.org)
+    pending = published!(c.org, c.account, "publisher-pending", "platform-pending", nil)
+
+    stub(fn conn, _ ->
+      if String.ends_with?(conn.request_path, "/delta"),
+        do: Req.Test.json(conn, page([snapshot()])),
+        else: conn |> Plug.Conn.put_status(424) |> Req.Test.json(%{})
+    end)
+
+    assert {:ok, :caught_up} = run(c.org)
+    assert Repo.get!(Post, c.post.id).metrics == %{"views" => 12400}
+    assert Repo.get!(Post, pending.id).metrics == %{"views" => 7}
+    state = Repo.get!(SyncState, c.org)
+    assert state.pending_baseline_ids == [pending.id]
+    assert state.retry_at == nil
+    assert DateTime.compare(state.baseline_retry_at, DateTime.utc_now()) == :gt
+    assert {:ok, :caught_up} = run(c.org)
+    assert_received {:http, "/api/v1/analytics", _}
+    refute_received {:http, "/api/v1/analytics", _}
+    assert_received {:http, "/api/v1/analytics/delta", %{"cursor" => "C0"}}
+    assert_received {:http, "/api/v1/analytics/delta", %{"cursor" => "C1"}}
+  end
+
+  test "200 pending platform retains an old mapping but queues unfinished rebaseline", c do
+    Repo.insert!(%SyncState{org_id: c.org, cursor: "fresh", bootstrap_complete: false})
+    stub(fn conn, _ -> Req.Test.json(conn, baseline(c.post, %{"platformAnalytics" => []})) end)
+    assert :ok = run(c.org, max_requests: 1)
+    state = Repo.get!(SyncState, c.org)
+    assert state.pending_baseline_ids == [c.post.id]
+    assert state.bootstrap_after_post_id == c.post.id
+    assert Repo.get!(Post, c.post.id).metrics == %{"views" => 7}
+    assert Repo.get!(Post, c.post.id).analytics_external_id == "analytics-A"
   end
 
   test "release host enables analytics only in prod even without Social config" do

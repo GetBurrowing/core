@@ -110,6 +110,8 @@ defmodule Platform.Social.AnalyticsSync do
           cursor_captured_at: DateTime.utc_now(),
           bootstrap_after_post_id: nil,
           bootstrap_complete: false,
+          pending_baseline_ids: [],
+          baseline_retry_at: nil,
           retry_at: nil
         )
 
@@ -125,7 +127,9 @@ defmodule Platform.Social.AnalyticsSync do
 
     query =
       if state.bootstrap_complete do
-        from([po, _, _] in query, where: is_nil(po.analytics_external_id))
+        from([po, _, _] in query,
+          where: is_nil(po.analytics_external_id) and po.id not in ^state.pending_baseline_ids
+        )
       else
         if state.bootstrap_after_post_id do
           from([po, _, _] in query, where: po.id > ^state.bootstrap_after_post_id)
@@ -135,11 +139,11 @@ defmodule Platform.Social.AnalyticsSync do
       end
 
     case Repo.one(from([po, _, _] in query, order_by: po.id, limit: 1)) do
-      nil ->
-        state =
-          if state.bootstrap_complete, do: state, else: save(state, bootstrap_complete: true)
+      nil when not state.bootstrap_complete ->
+        do_step(save(state, bootstrap_complete: true), opts)
 
-        delta(state, opts)
+      nil ->
+        retry_pending_or_delta(state, opts)
 
       {post, account, _profile} ->
         baseline(state, post, account, opts)
@@ -149,27 +153,81 @@ defmodule Platform.Social.AnalyticsSync do
   defp baseline(state, post, account, opts) do
     case request(fn -> Zernio.post(post.external_id) end, opts) do
       {:ok, result} ->
-        if result.late_post_id == post.external_id or result.post_id == post.external_id do
-          for snapshot <- result.data,
-              snapshot.post_id == result.post_id,
-              snapshot.account_id == account.provider_account_ref,
-              snapshot.platform == vendor_platform(account.platform),
-              snapshot.platform_post_id == post.platform_post_id do
-            write_metrics(post, snapshot, analytics_external_id: result.post_id)
+        matching =
+          if result.late_post_id == post.external_id or result.post_id == post.external_id do
+            Enum.filter(result.data, fn snapshot ->
+              snapshot.post_id == result.post_id and
+                snapshot.account_id == account.provider_account_ref and
+                snapshot.platform == vendor_platform(account.platform) and
+                snapshot.platform_post_id == post.platform_post_id
+            end)
+          else
+            []
           end
-        end
 
-        if is_nil(Repo.get!(Post, post.id).analytics_external_id) do
-          defer(state, :baseline_pending)
+        for snapshot <- matching,
+            do: write_metrics(post, snapshot, analytics_external_id: result.post_id)
+
+        if matching == [] do
+          pending_baseline(state, post, :baseline_pending)
         else
-          unless state.bootstrap_complete,
-            do: save(state, bootstrap_after_post_id: post.id, retry_at: nil)
+          changes = [pending_baseline_ids: List.delete(state.pending_baseline_ids, post.id)]
 
+          changes =
+            if state.bootstrap_complete,
+              do: changes,
+              else: Keyword.put(changes, :bootstrap_after_post_id, post.id)
+
+          save(state, changes)
           :more
         end
 
-      {:error, reason} ->
+      {:error, {:retry_after, _, _} = reason} ->
         defer(state, reason)
+
+      {:error, reason} ->
+        pending_baseline(state, post, reason)
+    end
+  end
+
+  # A pending/unavailable post must not starve its org's already-correlated
+  # posts. Keep unfinished baselines in a durable round-robin queue while
+  # the feed continues, with a separate retry deadline from vendor limits.
+  defp pending_baseline(state, post, _reason) do
+    pending = List.delete(state.pending_baseline_ids, post.id) ++ [post.id]
+
+    changes = [
+      pending_baseline_ids: pending,
+      baseline_retry_at: DateTime.add(DateTime.utc_now(), 60)
+    ]
+
+    changes =
+      if state.bootstrap_complete,
+        do: changes,
+        else: Keyword.put(changes, :bootstrap_after_post_id, post.id)
+
+    save(state, changes)
+    :more
+  end
+
+  defp retry_pending_or_delta(state, opts) do
+    due =
+      is_nil(state.baseline_retry_at) or
+        DateTime.compare(state.baseline_retry_at, DateTime.utc_now()) != :gt
+
+    case {state.pending_baseline_ids, due} do
+      {[post_id | rest], true} ->
+        case Repo.one(from([po, _, _] in posts(state.org_id), where: po.id == ^post_id)) do
+          nil ->
+            save(state, pending_baseline_ids: rest)
+            :more
+
+          {post, account, _} ->
+            baseline(state, post, account, opts)
+        end
+
+      _ ->
+        delta(state, opts)
     end
   end
 
@@ -207,6 +265,8 @@ defmodule Platform.Social.AnalyticsSync do
           replay_cursor: nil,
           bootstrap_complete: false,
           bootstrap_after_post_id: nil,
+          pending_baseline_ids: [],
+          baseline_retry_at: nil,
           retry_at: nil
         )
 
