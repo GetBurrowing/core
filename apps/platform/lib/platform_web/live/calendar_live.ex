@@ -183,7 +183,7 @@ defmodule PlatformWeb.CalendarLive do
             true
 
           _ ->
-            DateTime.compare(entry.ends_at || entry.starts_at, now) == :gt
+            DateTime.compare(entry.ends_at || DateTime.add(entry.starts_at, 1800), now) == :gt
         end
       end)
 
@@ -317,7 +317,7 @@ defmodule PlatformWeb.CalendarLive do
         {from, to} = CalendarWindow.day_bounds(date, zone)
 
         DateTime.compare(entry.starts_at, to) == :lt and
-          DateTime.compare(entry.ends_at || entry.starts_at, from) == :gt
+          DateTime.compare(entry.ends_at || DateTime.add(entry.starts_at, 1800), from) == :gt
       end)
 
   def joinable?(%{kind: :meeting, meeting: meeting, starts_at: at}),

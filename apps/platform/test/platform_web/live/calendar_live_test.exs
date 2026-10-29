@@ -172,5 +172,12 @@ defmodule PlatformWeb.CalendarLiveTest do
              PlatformWeb.CalendarLive.day_blocks([first], ~D[2026-10-30], "Etc/UTC")
 
     assert position.top == 0
+    midnight = %{first | starts_at: ~U[2026-10-30 00:00:00Z], ends_at: nil}
+
+    assert [{_, midnight_position}] =
+             PlatformWeb.CalendarLive.day_blocks([midnight], ~D[2026-10-30], "Etc/UTC")
+
+    assert midnight_position.top == 0
+    assert midnight_position.height > 0
   end
 end
