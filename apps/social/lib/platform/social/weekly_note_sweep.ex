@@ -73,7 +73,7 @@ defmodule Platform.Social.WeeklyNoteSweep do
 
       case note(profile.id, week) do
         %WeeklyNote{} = note ->
-          send_once(profile, week, :link_sent, "Weekly note: " <> link(profile, week, note.id))
+          send_once(profile, week, :link_sent, note_message(profile, week, note.id))
 
         nil when is_binary(profile.drafting_agent_id) ->
           request(profile, week)
@@ -99,7 +99,7 @@ defmodule Platform.Social.WeeklyNoteSweep do
       p,
       note.week_start,
       :link_sent,
-      "Weekly note: " <> link(p, note.week_start, note.id)
+      note_message(p, note.week_start, note.id)
     )
   rescue
     _ -> {:error, :link_delivery_failed}
@@ -114,6 +114,8 @@ defmodule Platform.Social.WeeklyNoteSweep do
           weekly_note_week: Date.to_iso8601(week),
           weekly_note_target: target
         })
+
+  defp note_message(p, w, id), do: "[Review weekly note](" <> link(p, w, id) <> ")"
 
   defp note(id, week),
     do: Repo.one(from(n in WeeklyNote, where: n.profile_id == ^id and n.week_start == ^week))
@@ -134,9 +136,9 @@ defmodule Platform.Social.WeeklyNoteSweep do
           p,
           w,
           :request_sent,
-          "@[#{a.name}] Please write this week's note from these measured facts: " <>
+          "@[#{a.name}] Please write this week's note from these [measured facts](" <>
             link(p, w, "facts") <>
-            ". Submit with social_weekly_note_submit; week_start is delivery Monday, facts cover the prior completed local week."
+            "). Submit with social_weekly_note_submit; week_start is delivery Monday, facts cover the prior completed local week."
         )
 
       _ ->
@@ -238,7 +240,7 @@ defmodule Platform.Social.WeeklyNoteSweep do
       )
 
       case result do
-        {:ok, note} -> send_once(p, w, :link_sent, "Weekly note: " <> link(p, w, note.id))
+        {:ok, note} -> send_once(p, w, :link_sent, note_message(p, w, note.id))
         error -> error
       end
     else

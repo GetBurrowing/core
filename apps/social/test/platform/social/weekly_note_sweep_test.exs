@@ -56,6 +56,12 @@ defmodule Platform.Social.WeeklyNoteSweepTest do
     [request] = messages(c)
     assert request.content =~ "@[#{agent.name}]"
     assert request.content =~ "weekly_note_target=facts"
+    assert request.content =~ "[measured facts]("
+
+    assert Enum.any?(
+             Platform.Chat.list_participants(c.space.id),
+             &(&1.participant_type == "agent" and &1.participant_id == agent.id)
+           )
 
     assert {:ok, _} =
              WeeklyNotes.submit(
@@ -70,6 +76,7 @@ defmodule Platform.Social.WeeklyNoteSweepTest do
     assert {:ok, :already_sent} = WeeklyNoteSweep.deliver(p, @week, @now)
     assert {:ok, :already_sent} = WeeklyNoteSweep.deliver(p, @week, @now)
     assert length(messages(c)) == 2
+    assert Enum.any?(messages(c), &String.starts_with?(&1.content, "[Review weekly note]("))
     refute_received {:prompt, _}
   end
 
