@@ -149,6 +149,9 @@ defmodule Platform.Chat.CanvasRestoreTest do
     assert {:error, :invalid_revision} =
              Restore.restore(c.user, c.canvas.id, 1, 99_999_999_999_999_999_999)
 
+    # A restore creates expected+1, so the highest int4 value is exhausted.
+    assert {:error, :invalid_revision} = Restore.restore(c.user, c.canvas.id, 1, 2_147_483_647)
+
     assert {:error, :revision_not_found} =
              Server.restore(c.canvas.id, c.user, 99_999_999_999_999_999_999, 2)
 

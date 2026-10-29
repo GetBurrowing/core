@@ -18,7 +18,7 @@ defmodule Platform.Chat.Canvas.Restore do
       when is_integer(source_revision) and source_revision > 0 and
              source_revision <= @max_revision and
              is_integer(expected_revision) and expected_revision > 0 and
-             expected_revision <= @max_revision do
+             expected_revision < @max_revision do
     with {:ok, _, _} <- authorize(actor, canvas_id) do
       Server.restore(canvas_id, actor, source_revision, expected_revision)
     end
@@ -58,6 +58,7 @@ defmodule Platform.Chat.Canvas.Restore do
   def perform(state, actor, source_revision, expected_revision) do
     with {:ok, canvas, attribution} <- authorize(actor, state.canvas_id),
          :ok <- at_head(state.revision, expected_revision),
+         true <- state.revision < @max_revision,
          true <-
            is_integer(source_revision) and source_revision > 0 and
              source_revision < state.revision and source_revision <= @max_revision,
