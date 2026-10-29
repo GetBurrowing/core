@@ -4,6 +4,7 @@ defmodule PlatformWeb.Files.CanvasEngagement do
   import Phoenix.LiveView
   alias Platform.Chat
   alias Platform.Chat.{CanvasAccess, Presence}
+  alias PlatformWeb.SpaceTopics
 
   def attach(socket) do
     socket
@@ -35,14 +36,15 @@ defmodule PlatformWeb.Files.CanvasEngagement do
   end
 
   def clear(socket) do
-    case socket.assigns[:fullscreen_presence] do
-      {space_id, key} ->
-        Presence.safe_untrack_in_space(self(), space_id, key)
-        Phoenix.PubSub.unsubscribe(Platform.PubSub, Chat.PubSub.space_topic(space_id))
+    socket =
+      case socket.assigns[:fullscreen_presence] do
+        {space_id, key} ->
+          Presence.safe_untrack_in_space(self(), space_id, key)
+          SpaceTopics.release(socket, space_id, :canvas_viewing)
 
-      _ ->
-        :ok
-    end
+        _ ->
+          socket
+      end
 
     assign(socket, :fullscreen_presence, nil)
   end
@@ -58,8 +60,9 @@ defmodule PlatformWeb.Files.CanvasEngagement do
              canvas: %{canvas_id: canvas.id, engagement: :viewing}
            }) do
         {:ok, _} ->
-          Chat.PubSub.subscribe(canvas.space_id)
-          assign(socket, :fullscreen_presence, {canvas.space_id, user_id})
+          socket
+          |> SpaceTopics.hold(canvas.space_id, :canvas_viewing)
+          |> assign(:fullscreen_presence, {canvas.space_id, user_id})
 
         _ ->
           socket

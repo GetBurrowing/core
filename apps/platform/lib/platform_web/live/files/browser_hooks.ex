@@ -5,6 +5,7 @@ defmodule PlatformWeb.Files.BrowserHooks do
   alias Platform.{Chat, Files}
   alias Platform.Files.{Browser, BrowserActions, Stars}
   alias PlatformWeb.FilesLive
+  alias PlatformWeb.SpaceTopics
 
   def attach(socket) do
     if connected?(socket), do: Stars.subscribe(socket.assigns.viewer)
@@ -110,15 +111,39 @@ defmodule PlatformWeb.Files.BrowserHooks do
 
       projects = Enum.flat_map(tree.orgs, & &1.projects) ++ tree.other.projects
 
-      topics =
-        MapSet.new(
-          Enum.map(spaces, &Chat.PubSub.space_topic(&1.id)) ++
-            Enum.map(projects, &Files.project_topic(&1.id))
-        )
+      space_ids = MapSet.new(spaces, & &1.id)
+      socket = SpaceTopics.ensure_holders(socket)
 
-      old = socket.assigns.browser_topics
-      Enum.each(MapSet.difference(old, topics), &Phoenix.PubSub.unsubscribe(Platform.PubSub, &1))
-      Enum.each(MapSet.difference(topics, old), &Phoenix.PubSub.subscribe(Platform.PubSub, &1))
+      socket =
+        Enum.reduce(socket.assigns.chat_space_holders, socket, fn {id, owners}, acc ->
+          if MapSet.member?(owners, :files_browser) and not MapSet.member?(space_ids, id),
+            do: SpaceTopics.release(acc, id, :files_browser),
+            else: acc
+        end)
+
+      socket =
+        Enum.reduce(space_ids, socket, fn id, acc ->
+          SpaceTopics.hold(acc, id, :files_browser)
+        end)
+
+      project_topics = MapSet.new(projects, &Files.project_topic(&1.id))
+
+      old_projects =
+        socket.assigns.browser_topics
+        |> Enum.reject(&String.starts_with?(&1, "chat:space:"))
+        |> MapSet.new()
+
+      Enum.each(
+        MapSet.difference(old_projects, project_topics),
+        &Phoenix.PubSub.unsubscribe(Platform.PubSub, &1)
+      )
+
+      Enum.each(
+        MapSet.difference(project_topics, old_projects),
+        &Phoenix.PubSub.subscribe(Platform.PubSub, &1)
+      )
+
+      topics = MapSet.union(project_topics, MapSet.new(spaces, &Chat.PubSub.space_topic(&1.id)))
       assign(socket, :browser_topics, topics)
     else
       socket

@@ -14,7 +14,12 @@ defmodule PlatformWeb.Files.CanvasPresence do
 
   def attach(socket) do
     socket
-    |> assign(canvas_previews: %{}, canvas_people: %{}, canvas_card_timers: %{})
+    |> assign(
+      canvas_previews: %{},
+      canvas_people: %{},
+      canvas_card_timers: %{},
+      presence_diff_downstream?: true
+    )
     |> attach_hook(:canvas_cards_params, :handle_params, fn _, _, s ->
       if connected?(s), do: send(self(), :sync_canvas_cards)
       {:cont, s}

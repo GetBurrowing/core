@@ -194,6 +194,70 @@ defmodule PlatformWeb.Files.CanvasPresenceTest do
     refute MapSet.member?(socket.assigns.browser_topics, Chat.PubSub.space_topic(c.space.id))
   end
 
+  test "shell forwards presence joins and leaves to displayed canvas cards", c do
+    conn = build_conn() |> init_test_session(current_user_id: c.user.id)
+    {:ok, view, _} = live(conn, "/files?space=#{c.space.id}&type=canvas")
+    _ = render(view)
+    assert :sys.get_state(view.pid).socket.assigns.canvas_people == %{}
+
+    {:ok, _} =
+      Presence.track_in_space(self(), c.space.id, c.user.id, %{
+        canvas: %{canvas_id: c.canvas.id, engagement: :viewing}
+      })
+
+    diff = %Phoenix.Socket.Broadcast{
+      event: "presence_diff",
+      topic: Chat.PubSub.space_topic(c.space.id),
+      payload: %{joins: %{}, leaves: %{}}
+    }
+
+    send(view.pid, diff)
+    _ = render(view)
+    people = :sys.get_state(view.pid).socket.assigns.canvas_people[c.canvas.id]
+    assert [%{principal_id: id}] = people.people
+    assert id == c.user.id
+    refute people.leaving?
+
+    Presence.untrack_in_space(self(), c.space.id, c.user.id)
+    send(view.pid, diff)
+    _ = render(view)
+    assert :sys.get_state(view.pid).socket.assigns.canvas_people[c.canvas.id].leaving?
+  end
+
+  test "browser space topics share shell registrations and release only their own hold", c do
+    socket =
+      %{c.socket | transport_pid: self()}
+      |> Phoenix.Component.assign(:tree, Browser.tree(c.viewer))
+      |> Phoenix.Component.assign(:browser_topics, MapSet.new())
+      |> PlatformWeb.SpaceTopics.hold(c.space.id, :presence)
+
+    topic = Chat.PubSub.space_topic(c.space.id)
+
+    registrations = fn ->
+      Registry.lookup(Platform.PubSub, topic) |> Enum.count(fn {pid, _} -> pid == self() end)
+    end
+
+    assert registrations.() == 1
+    socket = PlatformWeb.Files.BrowserHooks.sync_topics(socket, [c.space.id])
+    assert registrations.() == 1
+    socket = PlatformWeb.Files.BrowserHooks.sync_topics(socket, [])
+    assert registrations.() == 1
+    assert PlatformWeb.SpaceTopics.held_by?(socket, c.space.id, :presence)
+  end
+
+  test "leaving fullscreen cannot remove the shell's subscription", c do
+    socket =
+      c.socket
+      |> Phoenix.Component.assign(:fullscreen_presence, {c.space.id, c.user.id})
+      |> PlatformWeb.SpaceTopics.hold(c.space.id, :presence)
+
+    topic = Chat.PubSub.space_topic(c.space.id)
+    assert Enum.any?(Registry.lookup(Platform.PubSub, topic), fn {pid, _} -> pid == self() end)
+    socket = PlatformWeb.Files.CanvasEngagement.clear(socket)
+    assert socket.assigns.fullscreen_presence == nil
+    assert Enum.any?(Registry.lookup(Platform.PubSub, topic), fn {pid, _} -> pid == self() end)
+  end
+
   test "one bounded document batch and one metadata batch serve multiple cards", c do
     canvases =
       for n <- 1..5,
