@@ -585,20 +585,6 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp results_period(period) when period in [7, 30, 90], do: {:ok, period}
-  defp results_period(_), do: {:error, :invalid_period}
-
-  defp results_json(row) do
-    row
-    |> ResultBound.snippet(:title)
-    |> Map.update!(:versions, fn versions ->
-      Enum.map(
-        versions,
-        &Map.update!(&1, :published_at, fn value -> DateTime.to_iso8601(value) end)
-      )
-    end)
-  end
-
   defp run("social_post_list", args, scope) do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
@@ -680,6 +666,20 @@ defmodule Platform.Social.Tools do
       nil ->
         {:error, not_found("profile")}
     end
+  end
+
+  defp results_period(period) when period in [7, 30, 90], do: {:ok, period}
+  defp results_period(_), do: {:error, :invalid_period}
+
+  defp results_json(row) do
+    row
+    |> ResultBound.snippet(:title)
+    |> Map.update!(:versions, fn versions ->
+      Enum.map(
+        versions,
+        &Map.update!(&1, :published_at, fn value -> DateTime.to_iso8601(value) end)
+      )
+    end)
   end
 
   defp review_filter(value) do
