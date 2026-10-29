@@ -406,7 +406,81 @@
           >
             Open in Meetings
           </.link>
+        <% :external -> %>
+          <h2 class="text-lg font-semibold">{@selected.title}</h2>
+          <p class="text-sm">{@selected.subscription} · Read-only external calendar</p>
+          <p :if={@selected.stale} class="text-sm text-error">
+            Refresh required; availability unknown.
+          </p>
+          <p class="text-sm">Edit this event in its source calendar.</p>
         <% :subscribe -> %>
+          <section class="space-y-3 border-b border-edge pb-4">
+            <h2 class="text-lg font-semibold">External calendars</h2>
+            <p class="text-sm">
+              Only you can see these calendars. Read-only; changes stay in the source calendar.
+            </p>
+            <.form
+              for={%{}}
+              as={:subscription}
+              phx-submit="add_external"
+              id="external-calendar-form"
+              class="space-y-2"
+            >
+              <label class="block text-[15px]">
+                Name<input
+                  name="subscription[name]"
+                  required
+                  maxlength="100"
+                  class="input w-full"
+                />
+              </label>
+              <label class="block text-[15px]">
+                Calendar URL<input
+                  name="subscription[url]"
+                  type="url"
+                  required
+                  autocomplete="off"
+                  class="input w-full"
+                  placeholder="https://…/calendar.ics"
+                />
+              </label>
+              <button class="btn min-h-11" type="submit">Add external calendar</button>
+            </.form>
+            <div
+              :for={subscription <- @external_subscriptions}
+              id={"external-calendar-#{subscription.id}"}
+              class="space-y-2 rounded-lg border border-edge p-3"
+            >
+              <h3 class="font-semibold">{subscription.name}</h3>
+              <p class="text-sm">
+                Read-only · {if Platform.Calendar.Subscriptions.fresh?(subscription),
+                  do: "Up to date",
+                  else: "Availability unknown"}
+              </p>
+              <p :if={subscription.refreshed_at} class="text-xs text-subtle">
+                Last refreshed {Calendar.strftime(subscription.refreshed_at, "%b %-d, %H:%M UTC")}
+              </p>
+              <p :if={subscription.error} class="text-sm text-error">{subscription.error}</p>
+              <div class="flex gap-2">
+                <button
+                  phx-click="refresh_external"
+                  phx-value-id={subscription.id}
+                  class="btn min-h-11"
+                  phx-disable-with="Refreshing…"
+                >
+                  Refresh
+                </button>
+                <button
+                  phx-click="remove_external"
+                  phx-value-id={subscription.id}
+                  data-confirm="Remove this external calendar?"
+                  class="btn btn-ghost min-h-11 text-error"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          </section>
           <h2 class="text-lg font-semibold">Subscribe to your calendar</h2>
           <p class="text-sm">Shows every event you can see. Anyone with this link can read it.</p>
           <%= if @feed_url do %>

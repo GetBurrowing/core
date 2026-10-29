@@ -233,6 +233,7 @@ defmodule Platform.Role do
   ]
 
   @background [
+    Platform.Calendar.RefreshWorker,
     DNSCluster,
     # Subscribes to the relay topic and re-executes telemetry: it acts.
     Platform.Role.RelayReceiver,

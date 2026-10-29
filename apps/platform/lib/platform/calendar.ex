@@ -114,7 +114,11 @@ defmodule Platform.Calendar do
         []
       end
 
-    Enum.sort_by(native ++ meetings, & &1.starts_at, DateTime)
+    Enum.sort_by(
+      native ++ meetings ++ Platform.Calendar.Subscriptions.entries(scope, from, to),
+      & &1.starts_at,
+      DateTime
+    )
   end
 
   def rotate_feed(%Scope{actor: %Accounts.User{id: id}} = scope) do

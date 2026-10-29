@@ -84,6 +84,38 @@ defmodule PlatformWeb.CalendarLive do
     {:noreply, assign(socket, selected: entry, sheet: if(entry, do: :meeting, else: nil))}
   end
 
+  def handle_event("select", %{"id" => id, "kind" => "external"}, socket) do
+    entry = Enum.find(socket.assigns.entries, &(&1.kind == :external and &1.id == id))
+    {:noreply, assign(socket, selected: entry, sheet: if(entry, do: :external, else: nil))}
+  end
+
+  def handle_event("add_external", %{"subscription" => attrs}, socket) do
+    case Platform.Calendar.Subscriptions.create(socket.assigns.access_scope, attrs) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> put_flash(:info, "Calendar added. Refresh runs shortly.") |> reload()}
+
+      _ ->
+        {:noreply, assign(socket, :error, "Enter a name and a valid HTTPS calendar URL.")}
+    end
+  end
+
+  def handle_event("refresh_external", %{"id" => id}, socket) do
+    scope = socket.assigns.access_scope
+    # A supervised task keeps the sheet responsive; the context rechecks ownership.
+    start_async(socket, {:external_refresh, id}, fn ->
+      Platform.Calendar.Subscriptions.refresh(scope, id)
+    end)
+    |> then(&{:noreply, &1})
+  end
+
+  def handle_event("remove_external", %{"id" => id}, socket) do
+    case Platform.Calendar.Subscriptions.delete(socket.assigns.access_scope, id) do
+      {:ok, _} -> {:noreply, reload(socket)}
+      _ -> {:noreply, assign(socket, :error, "Calendar is no longer available.")}
+    end
+  end
+
   def handle_event("edit", _, %{assigns: %{selected: %Event{} = event}} = socket) do
     {:noreply, event_form(socket, event)}
   end
@@ -162,7 +194,17 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_info(_, socket), do: {:noreply, reload(socket)}
 
+  @impl true
+  def handle_async({:external_refresh, _id}, _result, socket), do: {:noreply, reload(socket)}
+
   defp reload(socket) do
+    socket =
+      assign(
+        socket,
+        :external_subscriptions,
+        Platform.Calendar.Subscriptions.list(socket.assigns.access_scope)
+      )
+
     anchor = socket.assigns.anchor
     first = if socket.assigns.view == "month", do: Date.beginning_of_month(anchor), else: anchor
     {from, _} = CalendarWindow.week_bounds(first, socket.assigns.zone)

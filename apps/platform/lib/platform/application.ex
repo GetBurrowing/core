@@ -95,6 +95,10 @@ defmodule Platform.Application do
        List.flatten([
          Platform.Vault.Encryption,
          Platform.Repo,
+         if(flag.(:platform, :start_calendar_refresh, true),
+           do: Platform.Calendar.RefreshWorker,
+           else: []
+         ),
          PlatformWeb.Telemetry,
          {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
          {Phoenix.PubSub, name: Platform.PubSub},
