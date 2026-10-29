@@ -99,7 +99,12 @@ defmodule Platform.Calendar.Feed do
           window ++
           [
             "SUMMARY:" <> ICal.escape(event.title),
-            "STATUS:" <> if(event.cancelled_at, do: "CANCELLED", else: "CONFIRMED"),
+            "STATUS:" <>
+              cond do
+                event.cancelled_at -> "CANCELLED"
+                event.tentative -> "TENTATIVE"
+                true -> "CONFIRMED"
+              end,
             "SEQUENCE:" <> Integer.to_string(event.sequence),
             "TRANSP:OPAQUE"
           ] ++

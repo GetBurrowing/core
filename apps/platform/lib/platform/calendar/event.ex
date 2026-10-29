@@ -23,6 +23,7 @@ defmodule Platform.Calendar.Event do
     field(:exception_dates, {:array, :date}, default: [])
     field(:sequence, :integer, default: 0)
     field(:cancelled_at, :utc_datetime_usec)
+    field(:tentative, :boolean, default: false)
     timestamps(type: :utc_datetime_usec)
   end
 

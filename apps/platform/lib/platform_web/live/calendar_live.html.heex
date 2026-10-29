@@ -22,6 +22,13 @@
     >
       Booking links
     </.link>
+    <button
+      id="calendar-agent-access"
+      phx-click="agent_access"
+      class="btn btn-ghost btn-sm min-h-11"
+    >
+      Agent access
+    </button>
     <button id="calendar-new" phx-click="new" class="btn btn-primary btn-sm min-h-11">
       <.icon name="hero-plus" class="size-4" /> New
     </button>
@@ -280,6 +287,66 @@
     <div class="space-y-4">
       <p :if={@error} role="alert" class="text-sm text-error">{@error}</p>
       <%= case @sheet do %>
+        <% :agent_access -> %>
+          <h2 class="text-lg font-semibold">Agent access</h2>
+          <p class="mt-2 text-sm text-subtle">
+            Choose what an agent may do. Changes wait for your approval in Inbox unless you preapprove them.
+          </p>
+          <form phx-submit="grant_agent" class="mt-4 space-y-3">
+            <label class="block text-sm">
+              Agent
+              <select name="grant[agent_id]" required class="select select-bordered w-full">
+                <option :for={agent <- @agent_choices} value={agent.id}>{agent.name}</option>
+              </select>
+            </label>
+            <label
+              :for={
+                {field, label} <- [
+                  {"read", "Read shared events"},
+                  {"read_private", "Include private events"},
+                  {"create", "Create events"},
+                  {"move", "Move events"},
+                  {"preapprove", "Preapprove changes"}
+                ]
+              }
+              class="flex min-h-11 items-center gap-2 text-sm"
+            >
+              <input type="hidden" name={"grant[#{field}]"} value="false" />
+              <input
+                type="checkbox"
+                class="checkbox checkbox-sm"
+                name={"grant[#{field}]"}
+                value="true"
+              />{label}
+            </label>
+            <button class="btn btn-primary min-h-11" disabled={@agent_choices == []}>
+              Save access
+            </button>
+          </form>
+          <div
+            :for={grant <- @calendar_grants}
+            class="mt-4 rounded-xl border border-edge p-3 text-sm"
+          >
+            <p>
+              {Enum.find_value(@agent_choices, grant.agent_id, fn agent ->
+                if agent.id == grant.agent_id, do: agent.name
+              end)}
+            </p>
+            <p class="text-subtle">
+              {if grant.revoked_at, do: "Revoked", else: "Active"} · {if grant.preapprove,
+                do: "Preapproved",
+                else: "Approval required"}
+            </p>
+            <button
+              :if={is_nil(grant.revoked_at)}
+              phx-click="revoke_agent"
+              phx-value-id={grant.agent_id}
+              class="btn btn-ghost min-h-11 text-error"
+            >
+              Revoke access
+            </button>
+          </div>
+          <p :if={@error} role="alert" class="mt-3 text-sm text-error">{@error}</p>
         <% :choose -> %>
           <h2 class="text-lg font-semibold">New</h2>
           <button
@@ -397,7 +464,20 @@
           </p>
           <p class="text-xs text-subtle">Created in {@selected.time_zone}</p>
           <p class="whitespace-pre-wrap text-sm">{@selected.description}</p>
-          <div :if={@selected.owner_id == @current_user_record.id} class="flex gap-2">
+          <p :if={@selected.tentative} class="text-sm text-subtle">
+            Tentative · Review this change in Inbox.
+          </p>
+          <.link
+            :if={@selected.tentative and @selected.owner_id == @current_user_record.id}
+            navigate={~p"/inbox"}
+            class="btn min-h-11"
+          >
+            Open Inbox
+          </.link>
+          <div
+            :if={@selected.owner_id == @current_user_record.id and not @selected.tentative}
+            class="flex gap-2"
+          >
             <button phx-click="edit" class="btn min-h-11">Edit event</button><button
               phx-click="delete"
               data-confirm="Delete this event?"

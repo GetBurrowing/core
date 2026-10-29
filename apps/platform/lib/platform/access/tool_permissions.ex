@@ -9,6 +9,8 @@ defmodule Platform.Access.ToolPermissions do
               {"access.manage", ~w(access_explain access_propose access_apply access_undo)},
               {"agents.manage_own",
                ~w(dm_create federation_status feedback_submit principal_search space_create space_leave space_list_agents)},
+              {"calendar.read", ~w(calendar_list)},
+              {"calendar.write", ~w(calendar_propose)},
               {"canvas.read",
                ~w(canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_get canvas_list)},
               {"canvas.write", ~w(canvas_create canvas_patch canvas_restore)},

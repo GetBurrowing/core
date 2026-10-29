@@ -63,6 +63,55 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
+  def handle_event("agent_access", _, socket) do
+    scope =
+      Platform.Access.Scope.for_user(
+        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
+      )
+
+    {:noreply,
+     assign(socket,
+       sheet: :agent_access,
+       agent_choices: Platform.Calendar.AgentAccess.agents(scope),
+       calendar_grants: Platform.Calendar.AgentAccess.list(scope),
+       error: nil
+     )}
+  end
+
+  def handle_event("grant_agent", %{"grant" => attrs}, socket) do
+    scope =
+      Platform.Access.Scope.for_user(
+        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
+      )
+
+    case Platform.Calendar.AgentAccess.grant(scope, attrs["agent_id"], attrs) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> assign(calendar_grants: Platform.Calendar.AgentAccess.list(scope), error: nil)}
+
+      _ ->
+        {:noreply, assign(socket, :error, "Couldn't save agent access.")}
+    end
+  end
+
+  def handle_event("revoke_agent", %{"id" => id}, socket) do
+    scope =
+      Platform.Access.Scope.for_user(
+        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
+      )
+
+    case Platform.Calendar.AgentAccess.revoke(scope, id) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> assign(calendar_grants: Platform.Calendar.AgentAccess.list(scope), error: nil)
+         |> reload()}
+
+      _ ->
+        {:noreply, assign(socket, :error, "Couldn't revoke agent access.")}
+    end
+  end
+
   def handle_event("new", _, socket), do: {:noreply, assign(socket, :sheet, :choose)}
 
   def handle_event("new_event", _, socket) do

@@ -12,34 +12,53 @@ defmodule Platform.Calendar do
 
     with :ok <- Access.authorize(scope, "calendar.write"),
          :ok <- authorize_scope(scope, changeset) do
-      changeset |> Repo.insert() |> broadcast()
+      owner_transaction(owner_id, fn -> changeset |> Repo.insert() end) |> broadcast()
     end
   end
 
   def create_event(_, _), do: {:error, :forbidden}
 
-  def update_event(scope, id, attrs) do
-    with {:ok, event} <- owned_event(scope, id) do
-      event
-      |> Event.changeset(attrs)
-      |> Ecto.Changeset.put_change(:sequence, event.sequence + 1)
-      |> then(fn changeset ->
-        with :ok <- authorize_scope(scope, changeset), do: Repo.update(changeset)
-      end)
-      |> broadcast()
-    end
+  def update_event(%Scope{actor: %Accounts.User{id: owner_id}} = scope, id, attrs) do
+    owner_transaction(owner_id, fn ->
+      with {:ok, event} <- owned_event(scope, id) do
+        event
+        |> Event.changeset(attrs)
+        |> Ecto.Changeset.put_change(:sequence, event.sequence + 1)
+        |> then(fn changeset ->
+          with :ok <- authorize_scope(scope, changeset), do: Repo.update(changeset)
+        end)
+      end
+    end)
+    |> broadcast()
   end
 
-  def delete_event(scope, id) do
-    with {:ok, event} <- owned_event(scope, id) do
-      event
-      |> Ecto.Changeset.change(cancelled_at: DateTime.utc_now(), sequence: event.sequence + 1)
-      |> Repo.update()
-      |> broadcast()
-    end
+  def update_event(_, _, _), do: {:error, :forbidden}
+
+  def delete_event(%Scope{actor: %Accounts.User{id: owner_id}} = scope, id) do
+    owner_transaction(owner_id, fn ->
+      with {:ok, event} <- owned_event(scope, id) do
+        event
+        |> Ecto.Changeset.change(cancelled_at: DateTime.utc_now(), sequence: event.sequence + 1)
+        |> Repo.update()
+      end
+    end)
+    |> broadcast()
   end
 
-  def get_event(%Scope{} = scope, id) do
+  def delete_event(_, _), do: {:error, :forbidden}
+
+  defp owner_transaction(id, fun) do
+    Repo.transaction(fn ->
+      Repo.one!(from(u in Accounts.User, where: u.id == ^id, lock: "FOR UPDATE"))
+
+      case fun.() do
+        {:ok, event} -> event
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  def get_event(%Scope{actor: %Accounts.User{}} = scope, id) do
     with true <- Platform.UUID.valid?(id),
          :ok <- Access.authorize(scope, "calendar.read"),
          %Event{} = event <- Repo.one(where(visible_query(scope), [e], e.id == ^id)) do
@@ -53,7 +72,12 @@ defmodule Platform.Calendar do
 
   def list_events(scope, from, to, opts \\ [])
 
-  def list_events(%Scope{} = scope, %DateTime{} = from, %DateTime{} = to, opts) do
+  def list_events(
+        %Scope{actor: %Accounts.User{}} = scope,
+        %DateTime{} = from,
+        %DateTime{} = to,
+        opts
+      ) do
     if Access.can?(scope, "calendar.read") and DateTime.compare(from, to) == :lt do
       query = visible_query(scope)
 
@@ -84,7 +108,7 @@ defmodule Platform.Calendar do
           kind: :event,
           id: &1.id,
           event: &1,
-          title: &1.title,
+          title: if(&1.tentative, do: "Tentative · " <> &1.title, else: &1.title),
           starts_at: &1.starts_at,
           ends_at: &1.ends_at,
           all_day: &1.all_day
@@ -181,7 +205,7 @@ defmodule Platform.Calendar do
     with true <- Platform.UUID.valid?(id),
          :ok <- Access.authorize(scope, "calendar.write"),
          %Event{} = event <- Repo.get_by(Event, id: id, owner_id: owner_id),
-         true <- is_nil(event.cancelled_at) do
+         true <- is_nil(event.cancelled_at) and not event.tentative do
       {:ok, event}
     else
       _ -> {:error, :not_found}
