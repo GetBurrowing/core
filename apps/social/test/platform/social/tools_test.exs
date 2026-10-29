@@ -65,6 +65,108 @@ defmodule Platform.Social.ToolsTest do
      Repo.get!(Clip, ctx.clip.id), Repo.aggregate(Post, :count), Repo.aggregate(Clip, :count)}
   end
 
+  describe "social_results_get" do
+    test "discovered read tool returns measured results, timestamps and samples", ctx do
+      now = DateTime.utc_now()
+
+      ctx.post
+      |> Ecto.Changeset.change(
+        status: "published",
+        approved_by_user_id: ctx.user.id,
+        approved_at: now,
+        published_at: now,
+        metrics_synced_at: now,
+        metrics: %{"likes" => 12, "reach" => 0}
+      )
+      |> Repo.update!()
+
+      assert "social_results_get" in ToolDefinitions.names()
+      assert {:ok, result} = call("social_results_get", %{"profile_id" => ctx.profile.id}, ctx.a)
+      assert result.period == 30
+      assert result.total == 1
+      assert result.has_more == false
+      assert [row] = result.by_idea
+      assert row.engagement == 12
+      assert [version] = row.versions
+      assert version.published_at == DateTime.to_iso8601(now)
+      assert version.engagement_rate == nil
+      assert version.metrics.views == nil
+      assert result.best_times.total == 2
+
+      assert %{count: 1, best_times: nil} =
+               Enum.find(result.best_times.accounts, &(&1.account_id == ctx.acc1.id))
+
+      assert Jason.encode!(result) =~ "published_at"
+
+      assert {:ok, %{by_idea: [], total: 1, has_more: false}} =
+               call("social_results_get", %{"profile_id" => ctx.profile.id, "offset" => 1}, ctx.a)
+    end
+
+    test "ten measured posts expose account-only buckets and counts", ctx do
+      now = DateTime.utc_now()
+
+      for _ <- 1..10 do
+        approved_post!(ctx.org_a, ctx.acc1)
+        |> Ecto.Changeset.change(
+          status: "published",
+          published_at: now,
+          metrics_synced_at: now,
+          metrics: %{"likes" => 2}
+        )
+        |> Repo.update!()
+      end
+
+      assert {:ok, result} = call("social_results_get", %{"profile_id" => ctx.profile.id}, ctx.a)
+      row = Enum.find(result.best_times.accounts, &(&1.account_id == ctx.acc1.id))
+      assert row.count == 10
+
+      assert %{count: 10, buckets: [%{engagement: 20, post_count: 10, mean_engagement: 2.0}]} =
+               row.best_times
+
+      assert %{count: 0, best_times: nil} =
+               Enum.find(result.best_times.accounts, &(&1.account_id == ctx.acc2.id))
+    end
+
+    test "foreign, missing and malformed ids have identical refusal even with forged org", ctx do
+      errors =
+        for id <- [ctx.profile_b.id, Ecto.UUID.generate(), "bad"] do
+          assert {:error, %{code: :not_found} = error} =
+                   call("social_results_get", %{"profile_id" => id, "org_id" => ctx.org_b}, ctx.a)
+
+          error
+        end
+
+      assert length(Enum.uniq(errors)) == 1
+
+      assert {:error, %{code: :no_agent}} =
+               call("social_results_get", %{"profile_id" => ctx.profile.id}, %{})
+    end
+
+    test "only integer 7/30/90 periods are accepted and reads write nothing", ctx do
+      before = snapshot(ctx)
+
+      for period <- [7, 30, 90] do
+        assert {:ok, %{period: ^period}} =
+                 call(
+                   "social_results_get",
+                   %{"profile_id" => ctx.profile.id, "period" => period},
+                   ctx.a
+                 )
+      end
+
+      for period <- [0, 8, 365, "30", nil, 30.0] do
+        assert {:error, %{code: :invalid_argument}} =
+                 call(
+                   "social_results_get",
+                   %{"profile_id" => ctx.profile.id, "period" => period},
+                   ctx.a
+                 )
+      end
+
+      assert snapshot(ctx) == before
+    end
+  end
+
   describe "social_profile_list" do
     test "an org A agent sees A's profile with an accounts summary and a list envelope", ctx do
       assert {:ok, %{profiles: [p], total: 1, has_more: false}} =

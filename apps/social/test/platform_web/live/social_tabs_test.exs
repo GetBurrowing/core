@@ -76,28 +76,28 @@ defmodule PlatformWeb.SocialTabsTest do
                ~w(queue ideas calendar clips results connections settings)
 
       assert SocialIdeasTab.enabled?()
-      refute SocialResultsTab.enabled?()
+      assert SocialResultsTab.enabled?()
       # Social authoring 6/11 switched the composer on.
       assert PlatformWeb.SocialComposer.enabled?()
 
       assert Enum.map(SocialTabs.tabs(), & &1.key) ==
-               ~w(queue ideas calendar clips connections settings)
+               ~w(queue ideas calendar clips results connections settings)
 
       queue = %{key: "queue", label: "Queue", module: SocialQueueTab}
       results = %{key: "results", label: "Results", module: SocialResultsTab}
-      assert SocialTabs.tabs([results, queue]) == [queue]
+      assert SocialTabs.tabs([results, queue]) == [results, queue]
     end
 
-    test "a disabled tab adds no button, no data-tab and no pane; New idea shows once enabled",
+    test "enabled tabs add buttons and panes, unknown tabs do not",
          %{conn: conn, j: j} do
       child = open(conn, j)
 
-      for key <- ~w(queue ideas calendar clips connections settings) do
+      for key <- ~w(queue ideas calendar clips results connections settings) do
         assert has_element?(child, "[data-role='social-tab-button'][data-tab='#{key}']")
         assert has_element?(child, "[data-pane='#{key}']")
       end
 
-      for key <- ~w(results) do
+      for key <- ~w(nonexistent) do
         refute has_element?(child, "[data-tab='#{key}']")
         refute has_element?(child, "[data-pane='#{key}']")
       end
@@ -105,11 +105,11 @@ defmodule PlatformWeb.SocialTabsTest do
       assert has_element?(child, "[data-role='social-new-idea']")
     end
 
-    test "a disabled tab's key is ignored by select_tab and by ?tab=", %{conn: conn, j: j} do
-      child = open(conn, j, "?tab=results")
+    test "an unknown tab's key is ignored by select_tab and by ?tab=", %{conn: conn, j: j} do
+      child = open(conn, j, "?tab=nonexistent")
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='queue']")
 
-      render_click(child, "select_tab", %{"tab" => "results"})
+      render_click(child, "select_tab", %{"tab" => "nonexistent"})
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='queue']")
     end
   end

@@ -15,7 +15,7 @@ defmodule Platform.Social.ToolDefinitions do
   and six tools a clip runner uses to work Clip Studio's
   job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Nineteen in all. No tool
+  Twenty in all. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -31,7 +31,7 @@ defmodule Platform.Social.ToolDefinitions do
   @human_approves "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
-            social_post_list social_clip_propose social_clip_submit social_clip_render
+            social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
             social_idea_create social_idea_list social_idea_note_add)
@@ -238,6 +238,37 @@ defmodule Platform.Social.ToolDefinitions do
           "not_found for a profile outside your org. Oldest first. clip_id, idea_id, platform_post_id, publish_attempts and published_at are read-only and may be null (publish_attempts is 0 before any vendor call). events is the post's change log, oldest first: actor_kind says whether an agent, a human or the system made each change.",
         when_to_use:
           "To see what is waiting, what shipped, what was rejected and why, and (refused: true) what is stuck before the vendor. Only a human retries a refused post; a rate_limited one goes out by itself at retry_after."
+      },
+      %{
+        name: "social_results_get",
+        description:
+          "Read measured results per idea and account-only best posting times. " <>
+            @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The authorized profile id."},
+          period: %{
+            type: "integer",
+            required: false,
+            description: "Elapsed days: 7, 30 or 90; default 30.",
+            schema: %{type: "integer", enum: [7, 30, 90]}
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Idea page size (default 50, maximum 500)."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "Idea rows to skip (default 0)."
+          }
+        },
+        returns:
+          "%{profile_id, period, by_idea: [idea metrics and platform versions with ISO published_at], total, has_more, limit, offset, best_times: %{accounts: [%{account_id, platform, count, best_times}], total, has_more}}",
+        limitations:
+          "Read-only, no vendor calls. Foreign/missing/malformed profile ids return not_found. Unknown metrics and unavailable rates are null. Best times are null below ten measured posts; count reports the sample. Idea titles are bounded previews and results follow standard envelope bounds.",
+        when_to_use:
+          "To compare measured ideas and each account's own eight-week posting history before drafting."
       },
       %{
         name: "social_clip_propose",
