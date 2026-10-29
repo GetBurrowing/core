@@ -212,7 +212,10 @@ defmodule PlatformWeb.CalendarLive do
     first_date = Date.beginning_of_week(first)
     last = Date.add(first_date, days)
     {to, _} = CalendarWindow.day_bounds(last, socket.assigns.zone)
-    entries = Events.list_entries(socket.assigns.access_scope, from, to)
+
+    entries =
+      Events.list_entries(socket.assigns.access_scope, from, to, time_zone: socket.assigns.zone)
+
     now = DateTime.utc_now()
 
     candidates =

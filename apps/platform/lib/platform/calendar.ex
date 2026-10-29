@@ -76,7 +76,7 @@ defmodule Platform.Calendar do
 
   def list_events(_, _, _, _), do: []
 
-  def list_entries(scope, from, to) do
+  def list_entries(scope, from, to, opts \\ []) do
     native =
       Enum.map(
         list_events(scope, from, to),
@@ -115,7 +115,7 @@ defmodule Platform.Calendar do
       end
 
     Enum.sort_by(
-      native ++ meetings ++ Platform.Calendar.Subscriptions.entries(scope, from, to),
+      native ++ meetings ++ Platform.Calendar.Subscriptions.entries(scope, from, to, opts),
       & &1.starts_at,
       DateTime
     )

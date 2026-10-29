@@ -140,6 +140,50 @@ defmodule Platform.Calendar.SubscriptionsTest do
     assert {:error, :external_coverage_unknown} = Subscriptions.availability(owner, @from, @to)
   end
 
+  test "all-day availability requires an explicit zone and covers both UTC date edges and DST" do
+    owner = scope()
+
+    {:ok, sub} =
+      Subscriptions.create(owner, %{name: "All day", url: "https://calendar.example/feed"})
+
+    stub(feed("UID:day\r\nDTSTART;VALUE=DATE:20261030\r\nDTEND;VALUE=DATE:20261031"))
+    {:ok, _} = Subscriptions.refresh(owner, sub.id)
+    assert {:error, :external_timezone_required} = Subscriptions.availability(owner, @from, @to)
+
+    assert {:error, :invalid_time_zone} =
+             Subscriptions.availability(owner, @from, @to, time_zone: "Not/AZone")
+
+    assert {:ok, [east]} =
+             Subscriptions.availability(owner, ~U[2026-10-29 11:00:00Z], ~U[2026-10-29 12:00:00Z],
+               time_zone: "Pacific/Kiritimati"
+             )
+
+    assert DateTime.compare(east.starts_at, ~U[2026-10-29 10:00:00Z]) == :eq
+    assert DateTime.compare(east.ends_at, ~U[2026-10-30 10:00:00Z]) == :eq
+
+    assert {:ok, [west]} =
+             Subscriptions.availability(owner, ~U[2026-10-31 10:00:00Z], ~U[2026-10-31 11:00:00Z],
+               time_zone: "Etc/GMT+12"
+             )
+
+    assert DateTime.compare(west.ends_at, ~U[2026-10-31 12:00:00Z]) == :eq
+    stub(feed("UID:dst\r\nDTSTART;VALUE=DATE:20261101\r\nDTEND;VALUE=DATE:20261102"))
+    {:ok, _} = Subscriptions.refresh(owner, sub.id)
+
+    assert {:ok, [dst]} =
+             Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+
+    assert DateTime.diff(dst.ends_at, dst.starts_at) == 25 * 3600
+
+    assert [%{all_day: true, event: %{start_date: ~D[2026-11-01]}} = entry] =
+             Platform.Calendar.list_entries(owner, @from, @to, time_zone: "America/Chicago")
+
+    assert [entry] ==
+             PlatformWeb.CalendarLive.entries_on([entry], ~D[2026-11-01], "America/Chicago")
+
+    assert [] == PlatformWeb.CalendarLive.entries_on([entry], ~D[2026-10-31], "America/Chicago")
+  end
+
   test "URL validation rejects private/mixed DNS and revalidates bounded redirects" do
     for url <- [
           "http://calendar.example/feed",

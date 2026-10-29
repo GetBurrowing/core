@@ -5,6 +5,7 @@ defmodule Platform.Calendar.Subscriptions do
   alias Platform.Access.Scope
   alias Platform.Accounts.User
   alias Platform.Calendar.{Subscription, ExternalFetch, ICal, Recurrence}
+  alias PlatformWeb.MeetingLive.CalendarWindow
   @fresh_seconds 3600
 
   def list(%Scope{actor: %User{id: id}} = scope) do
@@ -88,12 +89,14 @@ defmodule Platform.Calendar.Subscriptions do
     end)
   end
 
-  def entries(scope, from, to) do
+  def entries(scope, from, to, opts \\ []) do
+    zone = CalendarWindow.resolve_time_zone(Keyword.get(opts, :time_zone, "Etc/UTC"))
+
     list(scope)
     |> Enum.flat_map(fn sub ->
       Enum.flat_map(sub.snapshot, fn row ->
         ICal.event(row, sub.id)
-        |> Recurrence.occurrences(from, to)
+        |> occurrences(from, to, zone)
         |> Enum.map(fn event ->
           %{
             kind: :external,
@@ -112,7 +115,28 @@ defmodule Platform.Calendar.Subscriptions do
     end)
   end
 
-  def availability(scope, from, to) do
+  defp occurrences(%{all_day: false} = event, from, to, _zone),
+    do: Recurrence.occurrences(event, from, to)
+
+  defp occurrences(_event, _from, _to, nil), do: []
+
+  defp occurrences(event, from, to, zone) do
+    # DATE values are floating local dates. Widen the UTC lookup before
+    # projecting, so dates in UTC+14 or UTC-12 cannot disappear at the edge.
+    event
+    |> Recurrence.occurrences(DateTime.add(from, -172_800), DateTime.add(to, 172_800))
+    |> Enum.map(fn occurrence ->
+      {first, _} = CalendarWindow.day_bounds(occurrence.start_date, zone)
+      {_, last} = CalendarWindow.day_bounds(Date.add(occurrence.end_date, -1), zone)
+      %{occurrence | starts_at: first, ends_at: last, time_zone: zone}
+    end)
+    |> Enum.filter(&Recurrence.overlaps?(&1.starts_at, &1.ends_at, from, to))
+  end
+
+  def availability(scope, from, to, opts \\ []) do
+    subscriptions = list(scope)
+    zone = CalendarWindow.resolve_time_zone(Keyword.get(opts, :time_zone))
+
     cond do
       not Access.can?(scope, "calendar.read") ->
         {:error, :forbidden}
@@ -120,12 +144,21 @@ defmodule Platform.Calendar.Subscriptions do
       DateTime.compare(from, to) != :lt or DateTime.diff(to, from) > 366 * 86400 ->
         {:error, :invalid_window}
 
-      Enum.any?(list(scope), &(not fresh?(&1))) ->
+      Enum.any?(subscriptions, &(not fresh?(&1))) ->
         {:error, :external_coverage_unknown}
+
+      Keyword.has_key?(opts, :time_zone) and is_nil(zone) ->
+        {:error, :invalid_time_zone}
+
+      is_nil(zone) and
+          Enum.any?(subscriptions, fn sub ->
+            Enum.any?(sub.snapshot, &(&1["all_day"] and not &1["transparent"]))
+          end) ->
+        {:error, :external_timezone_required}
 
       true ->
         native =
-          Platform.Calendar.list_entries(scope, from, to)
+          Platform.Calendar.list_entries(scope, from, to, time_zone: zone || "Etc/UTC")
           |> Enum.reject(fn
             %{kind: :external, transparent: true} ->
               true
