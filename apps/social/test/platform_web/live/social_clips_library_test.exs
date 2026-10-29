@@ -613,6 +613,43 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     assert has_element?(view, "[data-role=library-retry]")
   end
 
+  test "confirmed recovery survives remount while unconfirmed and stale accounts do not",
+       %{conn: conn, w: w} do
+    {:ok, account} = Social.update_account(w.org_id, w.tiktok, %{status: "reauth_needed"})
+    clip = clip!(w, "Redirect recovery", %{}, review_status: "approved")
+    post!(w, clip, account, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "[data-role=library-reconnect]")
+    refute has_element?(view, "[data-role=library-reconnected]")
+
+    # The external redirect destroys the component. A fresh mount cannot claim
+    # recovery until the real provider callback confirms the account.
+    fresh = open(Phoenix.ConnTest.recycle(conn), w.approver, w.profile)
+    detail(fresh, clip)
+    assert has_element?(fresh, "[data-role=library-reconnect]")
+    refute has_element?(fresh, "[data-role=library-reconnected]")
+
+    assert {:ok, :reconnected} = Social.Health.account_reconnected(account.id)
+    returned = open(Phoenix.ConnTest.recycle(conn), w.approver, w.profile)
+    detail(returned, clip)
+    assert has_element?(returned, "[data-role=library-reconnected]", "Reconnected")
+    refute has_element?(returned, "[data-role=library-reconnect]")
+    assert has_element?(returned, "[data-role=library-retry]")
+
+    # A subsequent failure postdates the connected account and requires recovery.
+    newer = clip!(w, "New authentication failure", %{}, review_status: "approved")
+    post!(w, newer, account, "failed", error: "TOKEN_EXPIRED")
+    detail(returned, newer)
+    assert has_element?(returned, "[data-role=library-reconnect]")
+    refute has_element?(returned, "[data-role=library-reconnected]")
+
+    {:ok, _} = Social.update_account(w.org_id, account, %{status: "reauth_needed"})
+    detail(returned, clip)
+    assert has_element?(returned, "[data-role=library-reconnect]")
+    refute has_element?(returned, "[data-role=library-reconnected]")
+  end
+
   test "removing a displayed clip or switching profile clears detail", %{conn: conn, w: w} do
     clip = clip!(w, "Gone after refresh")
     view = open(conn, w.approver, w.profile)

@@ -22,7 +22,6 @@ defmodule PlatformWeb.SocialClipsLibrary do
      socket
      |> assign(:detail_id, nil)
      |> assign(:detail, nil)
-     |> assign(:reconnecting, %{})
      |> assign(:retry_error, nil)
      |> assign(:filters, %{})
      |> assign(:show_chip?, false)
@@ -42,7 +41,6 @@ defmodule PlatformWeb.SocialClipsLibrary do
         |> assign(:show_chip?, socket.assigns.loaded_profile_id != nil)
         |> assign(:detail_id, nil)
         |> assign(:detail, nil)
-        |> assign(:reconnecting, %{})
         |> assign(:retry_error, nil)
       else
         socket
@@ -88,22 +86,11 @@ defmodule PlatformWeb.SocialClipsLibrary do
      socket |> assign(:detail_id, nil) |> assign(:detail, nil) |> assign(:retry_error, nil)}
   end
 
-  def handle_event("reconnect", %{"clip_id" => id, "post_id" => post_id}, socket) do
+  def handle_event("reconnect", %{"clip_id" => id, "post_id" => _post_id}, socket) do
     socket = socket |> assign(:detail_id, id) |> load()
 
-    socket =
-      case detail_row(socket, post_id) do
-        %{auth_error?: true, can_connect?: true, account: account} ->
-          assign(
-            socket,
-            :reconnecting,
-            Map.put(socket.assigns.reconnecting, account.id, account.updated_at)
-          )
-
-        _ ->
-          socket
-      end
-
+    # Confirmation comes from persisted account state after the provider
+    # callback; this event only refreshes the authorized detail.
     {:noreply, socket}
   end
 
@@ -165,7 +152,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
                   entry: entry,
                   account: account,
                   auth_error?: auth_error?(entry, account),
-                  reconnected?: reconnected?(socket.assigns.reconnecting, account),
+                  reconnected?: auth_error?(entry, account) and reconnected?(entry, account),
                   can_connect?:
                     is_nil(account.archived_at) and
                       Social.approver_check(org_id, profile, socket.assigns.user_id) == :ok,
@@ -192,12 +179,19 @@ defmodule PlatformWeb.SocialClipsLibrary do
     end
   end
 
-  defp reconnected?(pending, %{id: id, status: "connected", updated_at: updated}) do
-    case pending[id] do
-      %DateTime{} = before -> DateTime.compare(updated, before) == :gt
-      _ -> false
-    end
-  end
+  # A connected account may predate this authentication failure. Only a
+  # refreshed connected record newer than the recorded failure confirms recovery.
+  # Persisted timestamps preserve that proof across external redirects/remounts.
+  defp reconnected?(
+         %{state: :failed, at: %DateTime{} = failed_at},
+         %{
+           status: "connected",
+           updated_at: %DateTime{} = updated,
+           archived_at: nil,
+           disconnect_alerted_at: nil
+         }
+       ),
+       do: DateTime.compare(updated, failed_at) == :gt
 
   defp reconnected?(_, _), do: false
 
