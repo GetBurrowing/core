@@ -1108,8 +1108,7 @@ defmodule PlatformWeb.AdminThemesLive do
                   <span>mobile · {mode} · 375×812</span>
                   <a
                     href={~p"/chat"}
-                    target="_blank"
-                    rel="noopener"
+                    {Platform.Chat.LinkTargets.open_attrs(~p"/chat")}
                     class="text-base-content underline"
                   >
                     open ↗
@@ -1131,8 +1130,7 @@ defmodule PlatformWeb.AdminThemesLive do
                   <span>desktop · {mode} · 1280×800 scaled</span>
                   <a
                     href={~p"/chat"}
-                    target="_blank"
-                    rel="noopener"
+                    {Platform.Chat.LinkTargets.open_attrs(~p"/chat")}
                     class="text-base-content underline"
                   >
                     open ↗

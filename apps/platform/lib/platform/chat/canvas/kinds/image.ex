@@ -81,9 +81,8 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
            dismissal behaviour in each. Same reasoning as the drawer scroll
            fix — reuse the mechanism the browser already has. --%>
       <a
-        href={@props["src"] || ""}
-        target="_blank"
-        rel="noopener"
+        href={Platform.Chat.LinkTargets.open_href(@props["src"] || "")}
+        {Platform.Chat.LinkTargets.open_attrs(@props["src"] || "")}
         title="Open full size"
         class="block cursor-zoom-in"
       >

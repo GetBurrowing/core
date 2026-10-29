@@ -40,6 +40,7 @@ defmodule Platform.Chat.ContentRenderer do
   def render_message(content, opts) when is_binary(content) do
     content
     |> sanitized_html()
+    |> relativize_path_links()
     |> Platform.Chat.LinkTargets.strip_bare_lines(Keyword.get(opts, :cards, []), [])
     |> decorate_mentions()
     |> wrap_code_blocks()
@@ -127,11 +128,12 @@ defmodule Platform.Chat.ContentRenderer do
     end)
   end
 
-  # Rung 13 stage 1: a link to a canvas or prototype on this install is an
-  # in-app link: no target, and `data-in-app-link` so a click is intercepted
-  # and opened inside the app. Every other link (external, other paths, and
-  # the `#blocked:` hrefs `neutralize_dangerous_urls/1` left) keeps
-  # target="_blank" rel="noopener noreferrer" exactly as before.
+  # A link to anything on this install (canvas, prototype, or any other
+  # path-relative / endpoint-host / alias-host href) is an in-app link: no
+  # target, and `data-in-app-link` ("canvas" / "prototype" / "path"). Every
+  # other link (external, and the `#blocked:` hrefs
+  # `neutralize_dangerous_urls/1` left) keeps target="_blank"
+  # rel="noopener noreferrer".
   defp add_link_attributes(html) do
     Regex.replace(
       ~r/<a\s+href=("[^"]*"|'[^']*'|[^\s>]*)/i,
@@ -141,30 +143,45 @@ defmodule Platform.Chat.ContentRenderer do
 
         case Platform.Chat.LinkTargets.classify(href) do
           {kind, _id, _version} when kind in [:canvas, :prototype] ->
-            ~s(<a data-in-app-link="#{kind}" href=#{relative_if_alias(href, quoted)})
+            ~s(<a data-in-app-link="#{kind}" href=#{relative_if_same_install(href, quoted)})
 
           _ ->
-            ~s(<a target="_blank" rel="noopener noreferrer" href=#{quoted})
+            if Platform.Chat.LinkTargets.same_install?(href) do
+              ~s(<a data-in-app-link="path" href=#{quoted})
+            else
+              ~s(<a target="_blank" rel="noopener noreferrer" href=#{quoted})
+            end
         end
       end
     )
   end
 
-  # An in-app link written with one of this install's alias hosts
-  # (`LinkTargets.alias_host?/2`) becomes path-relative, so the in-app
-  # viewer and any frame src resolve against the current origin rather than
-  # a host the endpoint is not configured as.
-  defp relative_if_alias(href, quoted) do
-    uri = href |> unescape() |> String.trim() |> URI.parse()
+  # A same-install canvas / prototype link is made path-relative while the
+  # html is sanitized. Any other same-install link (`data-in-app-link="path"`)
+  # keeps its absolute href there, because `LinkTargets` classifies cards and
+  # chips from that html and a relative path would lose its kind; it is made
+  # path-relative here, at render time, so it opens on the current origin
+  # (the endpoint's own host or one of its alias hosts).
+  defp relativize_path_links(html) do
+    Regex.replace(
+      ~r/(<a\b[^>]*\bdata-in-app-link="path"[^>]*\bhref=")([^"]*)(")/,
+      html,
+      fn _whole, pre, href, post ->
+        relative = href |> unescape() |> Platform.Chat.LinkTargets.relative_href()
+        pre <> (Phoenix.HTML.html_escape(relative) |> Phoenix.HTML.safe_to_string()) <> post
+      end
+    )
+  end
 
-    if Platform.Chat.LinkTargets.alias_host?(uri) do
-      relative =
-        %URI{path: uri.path, query: uri.query, fragment: uri.fragment}
-        |> URI.to_string()
+  # An in-app canvas / prototype link on this install becomes path-relative.
+  defp relative_if_same_install(href, quoted) do
+    unescaped = href |> unescape() |> String.trim()
 
-      ~s("#{Phoenix.HTML.html_escape(relative) |> Phoenix.HTML.safe_to_string()}")
-    else
+    if String.starts_with?(unescaped, "/") do
       quoted
+    else
+      relative = Platform.Chat.LinkTargets.relative_href(unescaped)
+      ~s("#{Phoenix.HTML.html_escape(relative) |> Phoenix.HTML.safe_to_string()}")
     end
   end
 

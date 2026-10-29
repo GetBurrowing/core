@@ -984,9 +984,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
     ~H"""
     <a
-      href={attachment_url(@file)}
-      target="_blank"
-      rel="noopener noreferrer"
+      href={Platform.Chat.LinkTargets.open_href(attachment_url(@file))}
+      {Platform.Chat.LinkTargets.open_attrs(attachment_url(@file))}
       data-role={@prefix <> "-link-row"}
       data-kind={if video?(@file), do: "video", else: "file"}
       class={row_class(@surface)}
@@ -1011,9 +1010,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
     ~H"""
     <a
-      href={@link.url}
-      target="_blank"
-      rel="noopener noreferrer"
+      href={Platform.Chat.LinkTargets.open_href(@link.url)}
+      {Platform.Chat.LinkTargets.open_attrs(@link.url)}
       data-role={@prefix <> "-link-row"}
       data-kind={@link.kind}
       class={row_class(@surface)}

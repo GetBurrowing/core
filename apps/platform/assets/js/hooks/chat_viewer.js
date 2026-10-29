@@ -46,6 +46,9 @@ const ChatViewer = {
       if (!e.target.closest || this.isOpen()) return
       const src = e.target.closest("[data-viewer-open], a[data-in-app-link]")
       if (!src) return
+      // data-in-app-link="path" is a plain same-install link: let the browser
+      // navigate through the shared document-level in_app_links handler.
+      if (src.matches('a[data-in-app-link="path"]')) return
       const scroller = chatScroller()
       this.saved = {
         scrollTop: scroller ? scroller.scrollTop : null,

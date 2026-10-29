@@ -104,6 +104,18 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
     {view, html}
   end
 
+  test "chat task links render for in-app navigation without a target", %{conn: conn} do
+    user = user!("internal-task-link")
+    channel = space!("channel")
+    participant = seat_user(channel, user)
+    task_id = Ecto.UUID.generate()
+    post!(channel, participant, "[Open task](/tasks/#{task_id})")
+    {view, _html} = open_as(conn, user, channel)
+
+    assert has_element?(view, "a[href='/tasks/#{task_id}'][data-in-app-link='path']", "Open task")
+    refute has_element?(view, "a[href='/tasks/#{task_id}'][target]")
+  end
+
   defp lv_assigns(view), do: :sys.get_state(view.pid).socket.assigns
 
   # The title opens on the All segment (stage 4); most tests here work on the
@@ -1264,8 +1276,15 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
 
       for a <- anchors do
         assert LazyHTML.attribute(a, "phx-click") == []
-        assert LazyHTML.attribute(a, "target") == ["_blank"]
-        assert LazyHTML.attribute(a, "rel") == ["noopener noreferrer"]
+
+        # Same-install (path-relative) rows open in the app; the rest are external.
+        if LazyHTML.attribute(a, "href") |> hd() |> String.starts_with?("/") do
+          assert LazyHTML.attribute(a, "target") == []
+          assert LazyHTML.attribute(a, "data-in-app-link") == ["path"]
+        else
+          assert LazyHTML.attribute(a, "target") == ["_blank"]
+          assert LazyHTML.attribute(a, "rel") == ["noopener noreferrer"]
+        end
       end
 
       w.view

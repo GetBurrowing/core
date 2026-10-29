@@ -91,6 +91,8 @@ class MainActivity :
 
         exposure = NativeBridgeExposure(bridge)
         bridge.setWebViewClient(BurrowWebViewClient(bridge, this))
+        bridge.webView.settings.setSupportMultipleWindows(true)
+        bridge.webView.webChromeClient = BurrowWebChromeClient(bridge, this)
         val surface = ContextCompat.getColor(this, R.color.burrow_surface)
         bridge.webView.setBackgroundColor(surface)
 
@@ -421,14 +423,19 @@ class MainActivity :
     fun handleNavigation(
         url: String,
         isMainFrame: Boolean,
+        isNewWindow: Boolean = false,
     ): Boolean? {
         val policy = policy ?: return null
         val install = currentInstall ?: return null
-        val decision = policy.decide(url, isMainFrame)
+        val decision = policy.decide(url, isMainFrame, isNewWindow)
         if (signingOutHost == install.host) {
             return when (decision) {
                 // The shell's own load of /auth/logout, after NativeSignOut.
                 NavigationDecision.SIGN_OUT, NavigationDecision.ALLOW -> false
+                NavigationDecision.LOAD_IN_MAIN_VIEW -> {
+                    bridge.webView.loadUrl(url)
+                    true
+                }
                 // The end-session redirect, or the signed-out install asking
                 // for a login: the sign-out is done.
                 else -> {
@@ -439,6 +446,10 @@ class MainActivity :
         }
         return when (decision) {
             NavigationDecision.ALLOW -> false
+            NavigationDecision.LOAD_IN_MAIN_VIEW -> {
+                bridge.webView.loadUrl(url)
+                true
+            }
             NavigationDecision.BLOCK -> true
             NavigationDecision.OPEN_EXTERNALLY -> {
                 openExternally(url)
