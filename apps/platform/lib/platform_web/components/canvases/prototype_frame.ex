@@ -47,6 +47,19 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   (`Prototypes.embed_html/2`); `Prototypes.publish_embed/1` finds the live
   version with that sha and re-stamps the ref to it, publishing nothing.
 
+  ## Preview
+
+  `props["preview"] == true` is set only by the canvas history projection
+  (`PlatformWeb.Canvases.VersionHistory.inert_document/2`, task 01a18834
+  stage 2; `Kinds.Prototype.validate_props/1` refuses it on every write).
+  The frame then shows the one version the projection pinned, sealed and
+  NOT connected: no `CanvasRoom.frame_attrs` on the room element, no version
+  menu, Pin, fullscreen or Open. An info strip ("Preview · vN · read-only")
+  replaces the bar and the edge is dashed `border-base-300`; the frame is
+  not dimmed, so the prototype's colours stay true. A retention-removed
+  version shows the removed panel without its View action. `toggle`, `pin`
+  and `fullscreen` are no-ops.
+
   ## Org scoping
 
   The canvas's space org is resolved here and handed to `frame_view/3`, which
@@ -71,7 +84,8 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
        load_key: nil,
        view: nil,
        pin_error: nil,
-       retention_days: nil
+       retention_days: nil,
+       preview?: false
      )}
   end
 
@@ -90,6 +104,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:props, props)
       |> assign(:canvas_id, canvas_id)
       |> assign(:viewer, assigns[:viewer])
+      |> assign(:preview?, props["preview"] == true)
 
     socket = if socket.assigns.load_key == key, do: socket, else: load(socket, key)
     {:ok, socket}
@@ -142,7 +157,13 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     end
   end
 
+  # A history preview renders none of these controls and sits under an
+  # `inert` subtree; a forged event is still a no-op (defence in depth).
   @impl true
+  def handle_event(event, _params, %{assigns: %{preview?: true}} = socket)
+      when event in ~w(toggle pin fullscreen),
+      do: {:noreply, socket}
+
   def handle_event("toggle", %{"panel" => panel}, socket) when panel in ~w(versions menu) do
     panel = String.to_existing_atom(panel)
     open = if socket.assigns.open == panel, do: nil, else: panel
@@ -213,6 +234,75 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-subtle"
     >
       This prototype is not available.
+    </div>
+    """
+  end
+
+  # History preview (task 01a18834 stage 2; see "Preview"): the sealed frame
+  # of one pinned version, with no room bridge and no controls.
+  def render(%{preview?: true} = assigns) do
+    view = assigns.view
+    props = assigns.props
+
+    assigns =
+      assigns
+      |> assign(:url, Prototypes.url(view.prototype.id, view.shown))
+      |> assign(:height, Kind.height(props))
+      |> assign(:width, Kind.width(props))
+      |> assign(:min_scale, Kind.min_scale(props))
+      |> assign(:title, title(assigns.node, view))
+
+    ~H"""
+    <div
+      id={@id}
+      class="relative rounded-xl border border-dashed border-base-300"
+      data-role="prototype-canvas"
+      data-preview="true"
+    >
+      <.chip
+        tone="info"
+        class="flex w-full items-start rounded-b-none rounded-t-xl border-0 px-3 py-2 text-sm"
+        data-role="prototype-preview-strip"
+      >
+        <span class="hero-information-circle mt-0.5 size-4 shrink-0" aria-hidden="true"></span>
+        <span class="min-w-0">
+          Preview · <span class="font-mono text-xs">v{@view.shown}</span>
+          · read-only — not connected to the room
+        </span>
+      </.chip>
+      <%= if @view.state == :removed do %>
+        <div
+          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content"
+          data-role="prototype-removed"
+        >
+          <span>
+            {removed_text(@retention_days)} Latest is v{@view.latest}.
+          </span>
+        </div>
+      <% else %>
+        <div id={"#{@id}-room-v#{@view.shown}"}>
+          <div
+            id={"#{@id}-frame-v#{@view.shown}"}
+            phx-hook="EmbedCanvasScale"
+            phx-update="ignore"
+            data-declared-width={@width}
+            data-declared-height={@height}
+            data-min-scale={@min_scale}
+            class="relative overflow-hidden rounded-b-xl"
+            style={"height: #{@height}px;"}
+            data-role="prototype-frame"
+          >
+            <iframe
+              src={@url}
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title={@title}
+              style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
+            >
+            </iframe>
+          </div>
+        </div>
+      <% end %>
     </div>
     """
   end

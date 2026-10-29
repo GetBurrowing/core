@@ -565,6 +565,51 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
       assert pins.({:user, ctx.editor.id}) == 2
       assert pins.(nil) == 0
     end
+
+    test "preview mode (task 01a18834 stage 2): forged pin/toggle/fullscreen are no-ops", ctx do
+      {:ok, _} =
+        Chat.patch_canvas({:user, ctx.editor.id}, ctx.scanvas, [
+          {:append_child, "root",
+           %{
+             "id" => "pp",
+             "type" => "prototype",
+             "props" => %{"prototype_id" => ctx.embed_prototype_id, "version" => 3}
+           }}
+        ])
+
+      pin_v2 = fn props ->
+        node = %{"id" => "pp", "type" => "prototype", "props" => props}
+
+        {:ok, view, _} =
+          live_isolated(build_conn(), __MODULE__.Host,
+            session: %{
+              "canvas_id" => ctx.scanvas.id,
+              "node" => node,
+              "viewer" => {:user, ctx.editor.id}
+            }
+          )
+
+        target = view |> with_target(~s([data-role="prototype-canvas"]))
+        render_click(target, "toggle", %{"panel" => "versions"})
+        render_click(target, "fullscreen", %{"on" => "true"})
+        render_click(target, "pin", %{"version" => "2"})
+        {:ok, %{document: doc}} = Platform.Chat.Canvas.Server.describe(ctx.scanvas.id)
+        {view, Platform.Chat.CanvasDocument.get_node(doc, "pp")["props"]["version"]}
+      end
+
+      {view, version} =
+        pin_v2.(%{"prototype_id" => ctx.embed_prototype_id, "version" => 3, "preview" => true})
+
+      assert version == 3
+      refute has_element?(view, ~s([data-fullscreen="true"]))
+      refute has_element?(view, ~s([data-role="prototype-versions-panel"]))
+      assert has_element?(view, ~s([data-role="prototype-preview-strip"]), "v3")
+      refute has_element?(view, ~s([phx-hook="CanvasRoomBridge"]))
+
+      # Positive control: the same forged pin on the live node writes v2.
+      {_view, version} = pin_v2.(%{"prototype_id" => ctx.embed_prototype_id, "version" => 3})
+      assert version == 2
+    end
   end
 
   defp scripted_html(v),

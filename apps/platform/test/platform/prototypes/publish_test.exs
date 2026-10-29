@@ -207,4 +207,26 @@ defmodule Platform.Prototypes.PublishTest do
       assert Prototypes.embed_html(p.id, "1") == {:error, :not_found}
     end
   end
+
+  describe "version_at/2 (task 01a18834 stage 2)" do
+    test "the newest version inserted at or before the instant, removed ones included", ctx do
+      {:ok, %{prototype: p, version: v1}} =
+        publish(ctx.agent, %{org_id: ctx.org_id, name: "At"}, {:files, bundle_files("v1")})
+
+      {:ok, %{prototype: p, version: v2}} =
+        publish(ctx.agent, %{prototype: p}, {:files, bundle_files("v2")})
+
+      v2
+      |> Ecto.Changeset.change(removed_at: DateTime.utc_now())
+      |> Platform.Repo.update!()
+
+      assert Prototypes.version_at(p.id, DateTime.add(v1.inserted_at, -1, :second)) == nil
+      assert Prototypes.version_at(p.id, v1.inserted_at) == 1
+      assert Prototypes.version_at(p.id, DateTime.add(v2.inserted_at, -1, :microsecond)) == 1
+      assert Prototypes.version_at(p.id, v2.inserted_at) == 2
+      assert Prototypes.version_at(p.id, DateTime.add(v2.inserted_at, 1, :hour)) == 2
+      assert Prototypes.version_at("not-a-uuid", DateTime.utc_now()) == nil
+      assert Prototypes.version_at(Ecto.UUID.generate(), DateTime.utc_now()) == nil
+    end
+  end
 end

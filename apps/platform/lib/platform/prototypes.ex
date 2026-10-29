@@ -144,6 +144,27 @@ defmodule Platform.Prototypes do
 
   def embed_html(_prototype_id, _version), do: {:error, :not_found}
 
+  @doc """
+  The version number that was newest at `at` (task 01a18834 stage 2): the
+  highest version with `inserted_at <= at`, removed ones included, so a
+  history preview of a follow-latest `prototype` node shows what was live
+  when that canvas version was written (and retention shows as removed).
+  nil when no version existed yet, or for a non-UUID id.
+  """
+  @spec version_at(term(), DateTime.t()) :: integer() | nil
+  def version_at(prototype_id, %DateTime{} = at) do
+    if Platform.UUID.valid?(prototype_id) do
+      Repo.one(
+        from(v in Version,
+          where: v.prototype_id == ^prototype_id and v.inserted_at <= ^at,
+          select: max(v.version)
+        )
+      )
+    end
+  end
+
+  def version_at(_prototype_id, _at), do: nil
+
   @doc "Every version of a prototype, newest first, removed ones included."
   @spec list_versions(Prototype.t()) :: [Version.t()]
   def list_versions(%Prototype{id: id}) do
