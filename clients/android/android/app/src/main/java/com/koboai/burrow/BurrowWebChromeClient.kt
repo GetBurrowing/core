@@ -23,6 +23,7 @@ class BurrowWebChromeClient(
         // This unattached view has no JS or native bridge and never renders it.
         val popup = WebView(view.context)
         var handled = false
+
         fun route(url: String): Boolean {
             if (handled) return true
             handled = true

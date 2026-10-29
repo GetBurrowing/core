@@ -1,8 +1,8 @@
 package com.koboai.burrow
 
 import com.koboai.burrow.NavigationDecision.ALLOW
-import com.koboai.burrow.NavigationDecision.LOAD_IN_MAIN_VIEW
 import com.koboai.burrow.NavigationDecision.BLOCK
+import com.koboai.burrow.NavigationDecision.LOAD_IN_MAIN_VIEW
 import com.koboai.burrow.NavigationDecision.OPEN_EXTERNALLY
 import com.koboai.burrow.NavigationDecision.SIGN_OUT
 import com.koboai.burrow.NavigationDecision.START_NATIVE_LOGIN
