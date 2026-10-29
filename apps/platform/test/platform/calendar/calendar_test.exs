@@ -115,7 +115,8 @@ defmodule Platform.CalendarTest do
       Repo.insert!(%Platform.Chat.Participant{
         space_id: space.id,
         participant_type: "user",
-        participant_id: actor.id
+        participant_id: actor.id,
+        joined_at: DateTime.utc_now()
       })
     end
 
