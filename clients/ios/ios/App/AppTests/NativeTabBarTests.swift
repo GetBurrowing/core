@@ -349,6 +349,37 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(host.bar.items?.compactMap(\.badgeValue), [])
     }
 
+    func testSlidingControlsEnterAccessibilityOnlyAfterTheCurrentShowCompletes() {
+        let parent = UIViewController()
+        var completions: [(Bool) -> Void] = []
+        let host = StandaloneTabBarHost { _, _, changes, completion in
+            changes()
+            completions.append(completion)
+        }
+        host.install(in: parent)
+        var next = state(["items": five, "visible": true])
+        host.render(next)
+        XCTAssertTrue(host.bar.accessibilityElementsHidden, "a sliding-in bar is not an accessibility target")
+        next.visible = false
+        host.render(next)
+        next.visible = true
+        host.render(next)
+        // Obsolete callbacks cannot expose controls during a newer show.
+        completions[0](true)
+        completions[1](false)
+        XCTAssertTrue(host.bar.accessibilityElementsHidden)
+        completions[2](true)
+        XCTAssertFalse(host.bar.accessibilityElementsHidden)
+        XCTAssertFalse(host.bar.isHidden)
+
+        next.visible = false
+        host.render(next)
+        XCTAssertTrue(host.bar.accessibilityElementsHidden, "a sliding-out bar immediately leaves accessibility")
+        completions[3](true)
+        XCTAssertTrue(host.bar.isHidden)
+        XCTAssertTrue(host.bar.accessibilityElementsHidden)
+    }
+
     #if DEBUG
         func testRenderedProbeReadsActualHiddenState() {
             let bar = UITabBar()
