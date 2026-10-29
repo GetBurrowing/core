@@ -11,15 +11,22 @@ defmodule Platform.Social.ToolDefinitionsTest do
                 social_clip_job_complete social_clip_job_fail)
 
   @nineteen ~w(social_profile_list social_profile_get social_draft_create social_draft_update
-              social_post_list social_clip_propose social_clip_submit social_clip_render
+              social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
               social_clip_list social_task_request) ++
               @job_tools ++ ~w(social_idea_create social_idea_list social_idea_note_add)
 
   @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  test "exactly the nineteen tools, names() and definitions() agree" do
+  test "exactly the twenty tools, names() and definitions() agree" do
     assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@nineteen)
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
+  end
+
+  test "results schema exposes only bounded read parameters" do
+    tool = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_results_get"))
+    assert tool.parameters.period.schema == %{type: "integer", enum: [7, 30, 90]}
+    assert Enum.sort(Map.keys(tool.parameters)) == [:limit, :offset, :period, :profile_id]
+    assert tool.limitations =~ "Read-only"
   end
 
   test "social_post_list documents the read-only Clip Studio post fields" do

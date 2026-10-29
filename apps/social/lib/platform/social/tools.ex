@@ -45,6 +45,7 @@ defmodule Platform.Social.Tools do
     PostEvent,
     PostEvents,
     Profile,
+    Results,
     TaskBridge,
     ToolDefinitions
   }
@@ -541,6 +542,61 @@ defmodule Platform.Social.Tools do
       %Profile{} = profile -> {:ok, profile_json(profile, scope, true)}
       nil -> {:error, not_found("profile")}
     end
+  end
+
+  defp run("social_results_get", args, scope) do
+    with %Profile{} = profile <- Social.get_profile(scope, args["profile_id"]),
+         {:ok, period} <- results_period(Map.get(args, "period", 30)) do
+      {limit, offset} = ResultBound.page(args)
+      rows = Results.by_idea([profile], period)
+      page = rows |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&results_json/1)
+
+      accounts =
+        Social.list_accounts(scope, profile_id: profile.id, include_archived: true)
+        |> Enum.map(fn account ->
+          %{
+            account_id: account.id,
+            platform: account.platform,
+            count: Results.best_times_count(account),
+            best_times: Results.best_times(account)
+          }
+        end)
+
+      {:ok,
+       ResultBound.paged(:by_idea, page, length(rows), offset, %{
+         profile_id: profile.id,
+         period: period,
+         limit: limit,
+         offset: offset,
+         best_times: ResultBound.whole(:accounts, accounts)
+       })}
+    else
+      nil ->
+        {:error, not_found("profile")}
+
+      _ ->
+        {:error,
+         err(
+           :invalid_argument,
+           "period must be 7, 30 or 90",
+           true,
+           "Pass an integer period of 7, 30 or 90 days."
+         )}
+    end
+  end
+
+  defp results_period(period) when period in [7, 30, 90], do: {:ok, period}
+  defp results_period(_), do: {:error, :invalid_period}
+
+  defp results_json(row) do
+    row
+    |> ResultBound.snippet(:title)
+    |> Map.update!(:versions, fn versions ->
+      Enum.map(
+        versions,
+        &Map.update!(&1, :published_at, fn value -> DateTime.to_iso8601(value) end)
+      )
+    end)
   end
 
   defp run("social_post_list", args, scope) do
