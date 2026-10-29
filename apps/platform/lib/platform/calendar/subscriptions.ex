@@ -133,7 +133,9 @@ defmodule Platform.Calendar.Subscriptions do
     |> Enum.filter(&Recurrence.overlaps?(&1.starts_at, &1.ends_at, from, to))
   end
 
-  def availability(scope, from, to, opts \\ []) do
+  def availability(scope, from, to, opts \\ [])
+
+  def availability(%Scope{actor: %User{}} = scope, from, to, opts) do
     subscriptions = list(scope)
     zone = CalendarWindow.resolve_time_zone(Keyword.get(opts, :time_zone))
 
@@ -180,4 +182,6 @@ defmodule Platform.Calendar.Subscriptions do
          )}
     end
   end
+
+  def availability(_, _, _, _), do: {:error, :forbidden}
 end

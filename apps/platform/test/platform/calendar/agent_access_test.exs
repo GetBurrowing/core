@@ -94,6 +94,13 @@ defmodule Platform.Calendar.AgentAccessTest do
 
     assert [] = Calendar.feed_events(ctx.scope)
 
+    assert {:error, :forbidden} =
+             Calendar.Subscriptions.availability(
+               ctx.scope,
+               ~U[2026-11-01 00:00:00Z],
+               ~U[2026-11-10 00:00:00Z]
+             )
+
     assert [] =
              Calendar.list_events(ctx.scope, ~U[2026-11-01 00:00:00Z], ~U[2026-11-10 00:00:00Z])
   end
@@ -450,5 +457,70 @@ defmodule Platform.Calendar.AgentAccessTest do
              AgentAccess.propose(ctx.scope, other.id, "create", attrs(), "second-after-revoke")
 
     assert {:ok, _} = propose(ctx, "first-still-granted")
+  end
+
+  test "move approval rechecks shared-scope membership and rolls back after access loss", ctx do
+    grant(ctx)
+    org = Platform.Tenancy.get_org_by_slug!("globex")
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Consent access",
+        slug: "consent-access-#{System.unique_integer([:positive])}",
+        org_id: org.id
+      })
+
+    {:ok, event} = Calendar.create_event(ctx.owner, attrs(%{project_id: project.id}))
+
+    {:ok, intent} =
+      AgentAccess.propose(
+        ctx.scope,
+        ctx.owner.actor.id,
+        "move",
+        %{starts_at: ~U[2026-11-06 10:00:00Z], ends_at: ~U[2026-11-06 11:00:00Z]},
+        "membership-loss",
+        event.id
+      )
+
+    assert Repo.get!(Event, intent.hold_id).project_id == nil
+    import Ecto.Query
+
+    Repo.delete_all(
+      from(m in Platform.Tenancy.OrgMembership,
+        where: m.user_id == ^ctx.owner.actor.id and m.org_id == ^org.id
+      )
+    )
+
+    assert {:error, _} = Briefings.handle(row(intent), key(intent), "approve", ctx.owner)
+    assert Repo.get!(Event, event.id).starts_at == event.starts_at
+    assert Repo.get!(Consent, intent.id).state == "pending"
+    assert row(intent).receipts == %{}
+  end
+
+  test "unsupported recurring, all-day and cancelled moves are explicit refusals", ctx do
+    grant(ctx)
+
+    cases = [
+      %{recurrence: "FREQ=DAILY;COUNT=2"},
+      %{all_day: true, start_date: ~D[2026-11-05], end_date: ~D[2026-11-06]},
+      %{}
+    ]
+
+    for {extra, index} <- Enum.with_index(cases) do
+      {:ok, event} = Calendar.create_event(ctx.owner, attrs(extra))
+      if index == 2, do: Calendar.delete_event(ctx.owner, event.id)
+
+      assert {:error, :unsupported_move} =
+               AgentAccess.propose(
+                 ctx.scope,
+                 ctx.owner.actor.id,
+                 "move",
+                 %{starts_at: ~U[2026-11-06 10:00:00Z], ends_at: ~U[2026-11-06 11:00:00Z]},
+                 "unsupported-#{index}",
+                 event.id
+               )
+    end
+
+    assert Repo.aggregate(Consent, :count) == 0
   end
 end

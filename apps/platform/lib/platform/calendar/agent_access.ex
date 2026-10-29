@@ -118,6 +118,7 @@ defmodule Platform.Calendar.AgentAccess do
             :starts_at,
             :ends_at,
             :time_zone,
+            :all_day,
             :tentative,
             :sequence
           ])
@@ -128,7 +129,7 @@ defmodule Platform.Calendar.AgentAccess do
         if grant.read_private do
           Platform.Calendar.list_entries(owner_scope, from, to)
           |> Enum.reject(&(&1.kind == :event))
-          |> Enum.map(&Map.take(&1, [:kind, :id, :title, :starts_at, :ends_at]))
+          |> Enum.map(&Map.take(&1, [:kind, :id, :title, :starts_at, :ends_at, :all_day]))
         else
           []
         end
@@ -372,8 +373,8 @@ defmodule Platform.Calendar.AgentAccess do
         from(e in Event, where: e.id == ^id and e.owner_id == ^owner_id, lock: "FOR UPDATE")
       ) || Repo.rollback(:not_found)
 
-    if (event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
-          (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id))) or
+    if event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
+         (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id)) ||
          Repo.exists?(from(b in Booking, where: b.event_id == ^id)),
        do: Repo.rollback(:unsupported_move)
 
@@ -381,6 +382,8 @@ defmodule Platform.Calendar.AgentAccess do
   end
 
   defp approve(consent, grant, auto \\ false) do
+    owner_scope = Scope.for_user(Accounts.get_user(consent.owner_id))
+    if not Access.can?(owner_scope, "calendar.write"), do: Repo.rollback(:forbidden)
     hold = Repo.get!(Event, consent.hold_id)
     if hold.cancelled_at || not hold.tentative, do: Repo.rollback(:stale)
 
@@ -390,10 +393,12 @@ defmodule Platform.Calendar.AgentAccess do
         if event.sequence != consent.target_sequence, do: Repo.rollback(:stale)
 
         updated =
-          event
-          |> Event.changeset(Map.take(snapshot(hold), ~w(starts_at ends_at time_zone)))
-          |> CS.change(sequence: event.sequence + 1)
-          |> Repo.update!()
+          Platform.Calendar.update_event(
+            owner_scope,
+            event.id,
+            Map.take(snapshot(hold), ~w(starts_at ends_at time_zone))
+          )
+          |> unwrap()
 
         cancel_hold(consent)
         {updated.id, updated.sequence}
