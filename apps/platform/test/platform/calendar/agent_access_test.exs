@@ -336,7 +336,7 @@ defmodule Platform.Calendar.AgentAccessTest do
       Calendar.BookingLinks.book(
         link.token,
         %{"name" => "Guest", "starts_at" => DateTime.to_iso8601(slot.starts_at)},
-        "agent-booked"
+        "agent-booked-reservation"
       )
 
     assert {:error, :unsupported_move} =
