@@ -364,4 +364,273 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     count(view, "0 of 0 clips")
     refute has_element?(view, "[data-role=library-show-option]")
   end
+
+  defp post!(w, clip, account, status, attrs \\ []) do
+    {:ok, post} =
+      Social.create_post(w.org_id, account, %{
+        body: "Post caption",
+        media_file_ids: [clip.render_file_id]
+      })
+
+    post
+    |> Ecto.Changeset.change(
+      Keyword.merge(
+        [
+          clip_id: clip.id,
+          clip_render_id: render_id!(clip),
+          status: status,
+          approved_by_user_id: w.approver.id,
+          approved_at: DateTime.utc_now()
+        ],
+        attrs
+      )
+    )
+    |> Repo.update!()
+  end
+
+  defp detail(view, clip),
+    do:
+      view |> element("#library-clip-#{clip.id} [data-role=library-thumbnail]") |> render_click()
+
+  defp event(view, name, attrs),
+    do: view |> with_target("#social-clips-library") |> render_hook(name, attrs)
+
+  test "detail preserves mixed-platform facts and retries only the failed post", %{
+    conn: conn,
+    w: w
+  } do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    Platform.Social.RateLimit.reset()
+    clip = clip!(w, "Independent posts", %{}, review_status: "approved")
+
+    ig =
+      post!(w, clip, w.ig, "published",
+        published_at: DateTime.utc_now(),
+        external_url: "https://example.com/ig"
+      )
+
+    tt = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED", publish_attempts: 2)
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "#library-detail", "Clip · clip #{String.slice(clip.id, 0, 8)}")
+    assert has_element?(view, "[data-post-id='#{ig.id}']", "Published")
+
+    assert has_element?(
+             view,
+             "[data-post-id='#{ig.id}'] a[href='https://example.com/ig']",
+             "View post ↗"
+           )
+
+    assert has_element?(view, "[data-post-id='#{tt.id}']", "Failed")
+    assert has_element?(view, "[data-post-id='#{tt.id}']", "2 attempts")
+    assert has_element?(view, "[data-post-id='#{tt.id}']", "TOKEN_EXPIRED")
+    assert has_element?(view, "[data-post-id='#{tt.id}']", "TikTok signed us out.")
+    refute has_element?(view, "#library-detail", "views")
+    refute has_element?(view, "[data-role=library-reconnected]")
+    view |> element("[data-post-id='#{tt.id}'] [data-role=library-retry]") |> render_click()
+
+    assert [%{id: id}] =
+             Enum.map(Fake.calls(:publish), fn {:publish, [_, req], _} ->
+               %{id: req.idempotency_key}
+             end)
+
+    assert id == tt.id
+    assert Repo.get!(Platform.Social.Post, ig.id) == ig
+    assert Repo.get!(Platform.Social.Post, tt.id).status == "scheduled"
+    refute has_element?(view, "[data-role=library-retry]")
+  end
+
+  test "detail shows recorded renderer, reviewer, rejection note and Review path without invented source",
+       %{conn: conn, w: w} do
+    w.agent |> Ecto.Changeset.change(name: "Octavius") |> Repo.update!()
+
+    clip =
+      clip!(w, "Rejected story", %{}, review_status: "rejected", review_note: "Crop the intro")
+
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "[data-role=library-renderer]", "rendered by Octavius")
+    assert has_element?(view, "[data-role=library-decision]", "Rejected by #{w.approver.name}")
+    refute has_element?(view, "[data-role=library-decision]", "in chat")
+    assert has_element?(view, "[data-role=library-rejection]", "“Crop the intro”")
+
+    assert has_element?(
+             view,
+             "[data-role=library-open-review][href='/m/social?tab=clips&view=review&clip=#{clip.id}&profile=#{w.profile.id}']"
+           )
+
+    assert has_element?(view, "[data-role=library-not-posted]", "Not selected")
+    assert has_element?(view, "[data-role=library-not-posted]", "Not posted")
+    view |> element("#library-detail header button") |> render_click()
+    refute has_element?(view, "#library-detail")
+  end
+
+  test "scheduled, queued, uploading and non-auth failure rows retain real facts", %{
+    conn: conn,
+    w: w
+  } do
+    clip = clip!(w, "Status variety", %{}, review_status: "approved")
+
+    scheduled =
+      post!(w, clip, w.ig, "scheduled", scheduled_at: DateTime.add(DateTime.utc_now(), 86400))
+
+    queued =
+      post!(w, clip, w.tiktok, "approved", publish_after: DateTime.add(DateTime.utc_now(), 8))
+
+    {:ok, yt} =
+      Social.create_account(w.org_id, w.profile, %{platform: "youtube", handle: "@more"})
+
+    uploading = post!(w, clip, yt, "approved")
+    failed = post!(w, clip, w.x, "failed", error: "VIDEO_TOO_LONG", publish_attempts: 3)
+    {:ok, _} = Social.update_account(w.org_id, w.x, %{status: "reauth_needed"})
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "[data-post-id='#{queued.id}']", "Queued ·")
+
+    assert has_element?(
+             view,
+             "[data-post-id='#{queued.id}']",
+             "publishes when the undo window closes"
+           )
+
+    assert has_element?(view, "[data-post-id='#{uploading.id}']", "Uploading")
+    refute has_element?(view, "[data-post-id='#{uploading.id}']", "%")
+    assert has_element?(view, "[data-post-id='#{failed.id}']", "VIDEO_TOO_LONG")
+    refute has_element?(view, "[data-post-id='#{failed.id}']", "signed us out")
+    refute has_element?(view, "[data-post-id='#{failed.id}'] [data-role=library-reconnect]")
+
+    button =
+      view
+      |> element("[data-post-id='#{scheduled.id}'] [data-role=library-reschedule]")
+      |> render()
+
+    assert button =~ "select_tab"
+    assert button =~ "calendar"
+    assert button =~ "open_post"
+    assert button =~ scheduled.id
+  end
+
+  test "a reader sees no Retry and forged retry makes no writes", %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    clip = clip!(w, "Read only detail", %{}, review_status: "approved")
+    post = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+    reader = member!(user!(), w.org_id)
+    view = open(conn, reader, w.profile)
+    detail(view, clip)
+    refute has_element?(view, "[data-role=library-retry]")
+    refute has_element?(view, "[data-role=library-reconnect]")
+    event(view, "retry", %{clip_id: clip.id, post_id: post.id})
+    assert Repo.get!(Platform.Social.Post, post.id) == post
+    assert Fake.calls(:publish) == []
+  end
+
+  test "stale approver or account ownership is rechecked on retry", %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    clip = clip!(w, "Stale permission", %{}, review_status: "approved")
+    post = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "[data-role=library-retry]")
+    {:ok, _} = Social.set_account_owner(w.org_id, w.tiktok, member!(user!(), w.org_id).id)
+    event(view, "retry", %{clip_id: clip.id, post_id: post.id})
+    refute has_element?(view, "[data-role=library-retry]")
+    assert Repo.get!(Platform.Social.Post, post.id) == post
+    assert Fake.calls(:publish) == []
+  end
+
+  test "foreign, malformed, unknown, removed and wrong-profile detail or retry ids fail closed",
+       %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    own = clip!(w, "Own", %{}, review_status: "approved")
+    own_post = post!(w, own, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+    other = render_world!()
+    foreign = clip!(other, "Foreign secret", %{platforms: ["tiktok"]}, review_status: "approved")
+    foreign_post = post!(other, foreign, other.tiktok, "failed", error: "TOKEN_EXPIRED")
+    removed = clip!(w, "Removed", %{}, removed_at: DateTime.utc_now())
+
+    {:ok, profile} =
+      Social.create_profile(w.org_id, %{
+        name: "Other profile",
+        project_id: w.project.id,
+        approver_user_ids: [w.approver.id]
+      })
+
+    wrong_profile = clip!(%{w | profile: profile}, "Wrong profile", %{platforms: []})
+    view = open(conn, w.approver, w.profile)
+
+    for id <- [
+          foreign.id,
+          removed.id,
+          wrong_profile.id,
+          Ecto.UUID.generate(),
+          "oops",
+          nil,
+          %{},
+          [own.id]
+        ] do
+      event(view, "open_detail", %{id: id})
+      refute has_element?(view, "#library-detail")
+      event(view, "retry", %{clip_id: id, post_id: own_post.id})
+    end
+
+    event(view, "retry", %{clip_id: own.id, post_id: foreign_post.id})
+    assert Repo.get!(Platform.Social.Post, foreign_post.id) == foreign_post
+    assert Repo.get!(Platform.Social.Post, own_post.id) == own_post
+    assert Fake.calls(:publish) == []
+    refute render(view) =~ "Foreign secret"
+  end
+
+  test "reconnect is scoped and requires refreshed connected state before confirmation", %{
+    conn: conn,
+    w: w
+  } do
+    {:ok, account} = Social.update_account(w.org_id, w.tiktok, %{status: "reauth_needed"})
+    clip = clip!(w, "Reconnect detail", %{}, review_status: "approved")
+    post = post!(w, clip, account, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    refute has_element?(view, "[data-role=library-reconnected]")
+    html = view |> element("[data-role=library-reconnect]") |> render()
+    assert html =~ "connect_account"
+    assert html =~ "connections"
+    assert html =~ account.id
+    event(view, "reconnect", %{clip_id: clip.id, post_id: post.id})
+    event(view, "refresh", %{})
+    refute has_element?(view, "[data-role=library-reconnected]")
+    {:ok, _} = Social.update_account(w.org_id, account, %{status: "connected"})
+    event(view, "refresh", %{})
+    assert has_element?(view, "[data-role=library-reconnected]", "Reconnected")
+    assert has_element?(view, "[data-role=library-retry]")
+  end
+
+  test "removing a displayed clip or switching profile clears detail", %{conn: conn, w: w} do
+    clip = clip!(w, "Gone after refresh")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    clip |> Ecto.Changeset.change(removed_at: DateTime.utc_now()) |> Repo.update!()
+    event(view, "refresh", %{})
+    refute has_element?(view, "#library-detail")
+    remaining = clip!(w, "Switch away")
+    event(view, "refresh", %{})
+    detail(view, remaining)
+
+    {:ok, profile} =
+      Social.create_profile(w.org_id, %{
+        name: "Switch target",
+        project_id: w.project.id,
+        approver_user_ids: [w.approver.id]
+      })
+
+    event(view, "refresh", %{})
+
+    view
+    |> element("[data-role=library-show-option][data-value='#{profile.id}']")
+    |> render_click()
+
+    refute has_element?(view, "#library-detail")
+  end
 end
