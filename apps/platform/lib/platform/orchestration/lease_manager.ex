@@ -490,6 +490,19 @@ defmodule Platform.Orchestration.LeaseManager do
     GenServer.call(__MODULE__, {:clear_if_owner, task_id, caller_runtime_id})
   end
 
+  @doc "Restore measured ack/progress timestamps after ETS loss without inventing a new liveness window."
+  def restore_activity(task_id, stage_id, runtime_id, acked_at, progress_at) do
+    GenServer.call(
+      __MODULE__,
+      {:restore_activity, task_id, stage_id, runtime_id, acked_at, progress_at}
+    )
+  end
+
+  @doc "Clear only the matching stage owner; a delayed prior-stage terminal cannot clear a new lease."
+  def clear_if_owner(task_id, caller_runtime_id, stage_id) when is_binary(task_id) do
+    GenServer.call(__MODULE__, {:clear_stage_if_owner, task_id, caller_runtime_id, stage_id})
+  end
+
   # ── Handlers ───────────────────────────────────────────────────────────────
 
   @impl true
@@ -598,6 +611,50 @@ defmodule Platform.Orchestration.LeaseManager do
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call(
+        {:restore_activity, task_id, stage_id, runtime_id, acked_at, progress_at},
+        _from,
+        state
+      ) do
+    result =
+      case direct_get(task_id) do
+        %{stage_id: ^stage_id, owner_runtime_id: ^runtime_id} = lease ->
+          latest =
+            [lease.dispatched_at, acked_at, progress_at]
+            |> Enum.reject(&is_nil/1)
+            |> Enum.max(DateTime)
+
+          timeouts = timeouts_for(lease.stage_kind)
+
+          restored = %{
+            lease
+            | ack_at: acked_at,
+              last_progress_at: progress_at,
+              ack_runtime_id: if(acked_at, do: runtime_id, else: nil),
+              no_ack_at: if(acked_at, do: nil, else: lease.no_ack_at),
+              safety_net_at: maybe_add(latest, timeouts.safety_net_ms)
+          }
+
+          :ets.insert(@table, {task_id, restored})
+          :ok
+
+        _ ->
+          {:error, :not_owner}
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:clear_stage_if_owner, task_id, caller_runtime_id, stage_id}, from, state) do
+    case direct_get(task_id) do
+      %{stage_id: current} when current != stage_id ->
+        {:reply, {:error, :stale_stage}, state}
+
+      _ ->
+        handle_call({:clear_if_owner, task_id, caller_runtime_id}, from, state)
+    end
   end
 
   def handle_call({:clear_if_owner, task_id, caller_runtime_id}, _from, state) do

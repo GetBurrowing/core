@@ -428,6 +428,7 @@ defmodule Platform.Orchestration.TaskRouter do
     Process.flag(:trap_exit, true)
 
     Tasks.subscribe_board()
+    send(self(), :reassess_dependency_waits)
     ReviewRequests.subscribe_for_task(task_id)
 
     execution_space_id =
@@ -532,10 +533,15 @@ defmodule Platform.Orchestration.TaskRouter do
             {:ok, %{state | status: :waiting_human}}
 
           true ->
+            # Reconcile the durable dispatch ledger on boot too. A persisted
+            # unblock may have committed just before the old router died.
+            send(self(), :dispatch_boot)
             {:ok, %{state | status: :running}}
         end
 
       "blocked" ->
+        # Re-arm the persisted hold's reminder without posting another notice.
+        send(self(), :dispatch_boot)
         {:ok, %{state | status: :waiting_human}}
 
       _ ->
@@ -1181,26 +1187,22 @@ defmodule Platform.Orchestration.TaskRouter do
       ) do
     case needs_human_blocker_hold(state) do
       %{id: ^lease_id} = hold ->
-        elapsed_ms = DateTime.diff(DateTime.utc_now(), hold.started_at, :millisecond)
+        elapsed_ms =
+          DateTime.diff(DateTime.utc_now(), RuntimeSupervision.blocked_at(hold), :millisecond)
 
-        broadcast_router_event(
-          "execution.awaiting_human_blocker",
-          state.task_id,
-          hold.stage_id,
-          %{
-            task_id: state.task_id,
-            stage_id: hold.stage_id,
-            elapsed_ms: elapsed_ms,
-            expires_at: hold.expires_at
-          }
-        )
-
-        post_router_notice(state, awaiting_human_notice(hold, elapsed_ms), %{
-          "reason" => "execution.awaiting_human_blocker",
-          "stage_id" => hold.stage_id,
-          "needs_human" => true,
-          "elapsed_ms" => elapsed_ms
-        })
+        if deliver_awaiting_human_notice(state, hold, elapsed_ms) == {:ok, :sent} do
+          broadcast_router_event(
+            "execution.awaiting_human_blocker",
+            state.task_id,
+            hold.stage_id,
+            %{
+              task_id: state.task_id,
+              stage_id: hold.stage_id,
+              elapsed_ms: elapsed_ms,
+              expires_at: hold.expires_at
+            }
+          )
+        end
 
         {:noreply, arm_awaiting_human_reminder(state, lease_id)}
 
@@ -1306,6 +1308,37 @@ defmodule Platform.Orchestration.TaskRouter do
     # _}`. Exactly one dispatch per hold still holds, for a stronger reason
     # than before: the RUN, not a router status flag, is the de-duplication
     # token.
+    {:noreply, state}
+  end
+
+  def handle_info(:reassess_dependency_waits, state) do
+    Platform.Orchestration.BlockerReassessment.reassess(state.task_id)
+
+    Process.send_after(
+      self(),
+      :reassess_dependency_waits,
+      Platform.Orchestration.BlockerReassessment.interval_ms()
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:dependency_completed, dependency_id}, state) do
+    Platform.Orchestration.BlockerReassessment.dependency_completed(state.task_id, dependency_id)
+    {:noreply, state}
+  end
+
+  def handle_info({:blocker_verification_requested, request}, state) do
+    if request.task_id == state.task_id do
+      # This is a scoped capability probe, not a stage dispatch. Preserve the
+      # existing worker and human-hold guards; consumers use the request token.
+      PlatformWeb.Endpoint.broadcast(
+        "runtime:#{request.runtime_id}",
+        "blocker_verification_requested",
+        request
+      )
+    end
+
     {:noreply, state}
   end
 
@@ -1533,6 +1566,12 @@ defmodule Platform.Orchestration.TaskRouter do
 
   # Ignore unrelated board events
   def handle_info({:plan_updated, _plan}, state), do: {:noreply, state}
+
+  def handle_info({:task_updated, %{id: dependency_id, status: "done"}}, state) do
+    Platform.Orchestration.BlockerReassessment.dependency_completed(state.task_id, dependency_id)
+    {:noreply, state}
+  end
+
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -2655,7 +2694,22 @@ defmodule Platform.Orchestration.TaskRouter do
       true ->
         delivered_online = RuntimePresence.online?(state.assignee.id)
 
-        case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
+        case dispatch_attention(
+               state.assignee,
+               state.task_id,
+               "task_assigned",
+               Map.put(
+                 context,
+                 :dispatch_stage_id,
+                 if(
+                   current_stage_type(%{state | current_stage_id: stage && stage.id}) ==
+                     "manual_approval",
+                   do: nil,
+                   else: stage && stage.id
+                 )
+               ),
+               prompt
+             ) do
           :ok ->
             # Post log message to execution space after successful runtime dispatch so
             # boot retries do not duplicate task-assigned chatter.
@@ -2768,6 +2822,13 @@ defmodule Platform.Orchestration.TaskRouter do
 
             {:noreply, state}
 
+          {:error, :dispatch_in_flight} ->
+            # A reconnect is not permission to send a second worker prompt.
+            stage_kind = current_stage_type(%{state | current_stage_id: stage && stage.id})
+            arm_liveness_timers(state.task_id, stage, stage_kind, state.assignee.id)
+            emit_dispatch_suppressed_telemetry(state.task_id, :dispatch_in_flight)
+            {:noreply, state |> Map.put(:status, :running) |> maybe_set_stage(stage)}
+
           {:error, :endpoint_not_ready} ->
             Logger.warning(
               "[TaskRouter] endpoint not ready for task #{state.task_id}; retrying dispatch"
@@ -2870,7 +2931,9 @@ defmodule Platform.Orchestration.TaskRouter do
         DateTime.diff(DateTime.utc_now(), acked_at, :millisecond) < safety_net_ms and
           not finished_since?(state.task_id, stage.id, acked_at) and
           not human_released_since?(state.task_id, stage.id, acked_at) and
-          not stage_restarted_since?(stage, acked_at)
+          not runtime_released_since?(state.task_id, stage.id, state.assignee.id, acked_at) and
+          not stage_restarted_since?(stage, acked_at) and
+          not RuntimeSupervision.dispatch_turn_ended?(state.task_id, stage.id, state.assignee.id)
 
       _ ->
         false
@@ -2917,6 +2980,19 @@ defmodule Platform.Orchestration.TaskRouter do
       %DateTime{} = finished_at -> DateTime.compare(finished_at, acked_at) != :lt
       _ -> false
     end
+  end
+
+  defp runtime_released_since?(task_id, stage_id, runtime_id, acked_at) do
+    import Ecto.Query
+
+    Platform.Repo.exists?(
+      from(e in Platform.Orchestration.RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.runtime_id == ^runtime_id and
+            e.event_type == "execution.unblocked" and e.payload["stage_id"] == ^stage_id and
+            e.occurred_at >= ^acked_at
+      )
+    )
   end
 
   # A STAGE THAT RESTARTED AFTER THE ACK is the third shape (ticket 01a08e86,
@@ -3408,11 +3484,60 @@ defmodule Platform.Orchestration.TaskRouter do
   # the first. Only the raw error term moved: the funnel logs it, so these
   # lines no longer restate it.
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
+    case context[:dispatch_stage_id] do
+      stage_id when is_binary(stage_id) ->
+        case RuntimeSupervision.reserve_dispatch(
+               task_id,
+               stage_id,
+               runtime_id,
+               DateTime.utc_now(),
+               transport_retry: true
+             ) do
+          {:ok, {:reserved, attempt}} ->
+            online_at_send = RuntimePresence.online?(runtime_id)
+
+            result =
+              send_dispatch_attention(
+                runtime_id,
+                task_id,
+                reason,
+                Map.put(context, :dispatch_correlation_id, attempt.payload["correlation_id"]),
+                prompt
+              )
+
+            RuntimeSupervision.dispatch_result(
+              attempt,
+              result,
+              online_at_send
+            )
+
+            result
+
+          {:ok, {:in_flight, _correlation}} ->
+            {:error, :dispatch_in_flight}
+
+          {:error, _} ->
+            {:error, :reservation_failed}
+        end
+
+      _ ->
+        send_dispatch_attention(runtime_id, task_id, reason, context, prompt)
+    end
+  end
+
+  defp send_dispatch_attention(runtime_id, task_id, reason, context, prompt) do
     task_status = context[:task][:status] || context[:task]["status"]
     space_id = context[:execution_space_id]
 
     payload = %{
-      signal: %{reason: reason, task_id: task_id, task_status: task_status, space_id: space_id},
+      signal: %{
+        reason: reason,
+        task_id: task_id,
+        task_status: task_status,
+        space_id: space_id,
+        correlation_id: context[:dispatch_correlation_id],
+        stage_id: context[:dispatch_stage_id]
+      },
       context: context,
       message: %{content: prompt, author: "TaskRouter"}
     }
@@ -3465,25 +3590,59 @@ defmodule Platform.Orchestration.TaskRouter do
   defp arm_liveness_timers(_task_id, nil, _stage_kind, _owner_runtime_id), do: :ok
 
   defp arm_liveness_timers(task_id, %Stage{} = stage, stage_kind, owner_runtime_id) do
+    existing = LeaseManager.get(task_id)
+
+    restore? =
+      is_nil(existing) or existing.stage_id != stage.id or
+        existing.owner_runtime_id != owner_runtime_id
+
+    dispatch_time =
+      if restore?,
+        do: RuntimeSupervision.dispatch_started_at(task_id, stage.id, owner_runtime_id),
+        else: nil
+
     :ok =
       LeaseManager.record_dispatch(
         task_id,
         stage.id,
         stage_kind,
-        DateTime.utc_now(),
+        dispatch_time || DateTime.utc_now(),
         owner_runtime_id
       )
+
+    if restore? and not is_nil(dispatch_time) do
+      {acked_at, progress_at} =
+        RuntimeSupervision.dispatch_activity(task_id, stage.id, owner_runtime_id)
+
+      LeaseManager.restore_activity(task_id, stage.id, owner_runtime_id, acked_at, progress_at)
+    end
 
     timeouts =
       LeaseManager.stage_kind_timeouts()
       |> Map.get(stage_kind, %{ack_ms: nil, safety_net_ms: nil})
 
     if timeouts.ack_ms do
-      Process.send_after(self(), :check_no_ack, timeouts.ack_ms)
+      deadline = LeaseManager.get(task_id).no_ack_at
+
+      if deadline,
+        do:
+          Process.send_after(
+            self(),
+            :check_no_ack,
+            max(0, DateTime.diff(deadline, DateTime.utc_now(), :millisecond))
+          )
     end
 
     if timeouts.safety_net_ms do
-      Process.send_after(self(), :check_safety_net, timeouts.safety_net_ms)
+      deadline = LeaseManager.get(task_id).safety_net_at
+
+      if deadline,
+        do:
+          Process.send_after(
+            self(),
+            :check_safety_net,
+            max(0, DateTime.diff(deadline, DateTime.utc_now(), :millisecond))
+          )
     end
 
     :ok
@@ -3721,8 +3880,13 @@ defmodule Platform.Orchestration.TaskRouter do
   # `maybe_fire_no_ack/3`, extend the owner's safety net.
   defp durable_ack_suppresses_alarm?(task_id, stage_id, owner_runtime_id) do
     case Platform.Orchestration.last_stage_ack_at(task_id, stage_id, owner_runtime_id) do
-      %DateTime{} = acked_at -> not human_released_since?(task_id, stage_id, acked_at)
-      _ -> false
+      %DateTime{} = acked_at ->
+        not human_released_since?(task_id, stage_id, acked_at) and
+          not runtime_released_since?(task_id, stage_id, owner_runtime_id, acked_at) and
+          not RuntimeSupervision.dispatch_turn_ended?(task_id, stage_id, owner_runtime_id)
+
+      _ ->
+        false
     end
   end
 
@@ -4142,7 +4306,29 @@ defmodule Platform.Orchestration.TaskRouter do
   defp apply_runtime_event(state, %{event_type: "execution.dispatch_stageless"}), do: state
   defp apply_runtime_event(state, %{event_type: "execution.dispatch_unanswered"}), do: state
 
+  defp apply_runtime_event(state, %{event_type: type})
+       when type in ~w(execution.dispatch_attempt execution.dispatch_result execution.dispatch_suppressed),
+       do: state
+
   defp apply_runtime_event(state, event) do
+    if RuntimeSupervision.event_matches_worker?(event, state.current_stage_id, state.assignee.id) do
+      apply_owned_runtime_event(state, event)
+    else
+      if event.runtime_id != state.assignee.id do
+        Logger.warning(
+          "[TaskRouter] #{event.event_type} from runtime #{inspect(event.runtime_id)} refused: stage owner is #{inspect(state.assignee.id)}"
+        )
+      end
+
+      Logger.info(
+        "[TaskRouter] ignored stale lifecycle event task=#{state.task_id} stage=#{state.current_stage_id} runtime=#{event.runtime_id}"
+      )
+
+      state
+    end
+  end
+
+  defp apply_owned_runtime_event(state, event) do
     event_time = event.occurred_at || DateTime.utc_now()
     lease_status = event.lease && event.lease.status
 
@@ -4293,7 +4479,10 @@ defmodule Platform.Orchestration.TaskRouter do
         # clear the lease. A stranger's (e.g. openclaw `finishOtherPhases`
         # finishing an OLD phase after a re-dispatch to another runtime)
         # used to delete the owner's row, and with it both alarms.
-        case LeaseManager.clear_if_owner(state.task_id, event.runtime_id) do
+        case clear_matching_worker(state, event) do
+          {:error, :stale_stage} ->
+            state
+
           {:error, {:not_owner, owner}} ->
             refuse_terminal_event(state, event, owner)
             base_state
@@ -4311,7 +4500,10 @@ defmodule Platform.Orchestration.TaskRouter do
       type when type in ["execution.failed", "execution.abandoned", "assignment.rejected"] ->
         # Task 01a0dd2c stage 2: gated like `execution.finished` above. A
         # refused event posts no failure log and does not stall the router.
-        case LeaseManager.clear_if_owner(state.task_id, event.runtime_id) do
+        case clear_matching_worker(state, event) do
+          {:error, :stale_stage} ->
+            state
+
           {:error, {:not_owner, owner}} ->
             refuse_terminal_event(state, event, owner)
             base_state
@@ -4333,6 +4525,12 @@ defmodule Platform.Orchestration.TaskRouter do
       _ ->
         base_state
     end
+  end
+
+  defp clear_matching_worker(state, event) do
+    if needs_human_blocker_hold(state),
+      do: :ok,
+      else: LeaseManager.clear_if_owner(state.task_id, event.runtime_id, state.current_stage_id)
   end
 
   defp maybe_log_heartbeat_suppressed(state, stage, opts \\ [])
@@ -5164,21 +5362,27 @@ defmodule Platform.Orchestration.TaskRouter do
   # Edge-triggered on `{stage_id, lease_id}`. Re-entering the SAME hold is a
   # no-op, which is what keeps a dozen dispatch injectors from producing a
   # dozen identical notices.
-  defp enter_awaiting_human(%State{awaiting_human_key: {_stage, lease_id}} = state, %{
-         id: lease_id
-       }) do
+  defp enter_awaiting_human(
+         %State{awaiting_human_key: {_stage, lease_id}} = state,
+         %{
+           id: lease_id
+         } = hold
+       ) do
+    # The lease row may be reused after an unblock. A different hold
+    # generation needs an immediate notice even when its lease id is unchanged.
+    if hold.metadata["human_notice_revision"] != RuntimeSupervision.hold_revision(hold),
+      do: stamp_awaiting_human_action(state.task_id, "blocker")
+
+    elapsed = DateTime.diff(DateTime.utc_now(), RuntimeSupervision.blocked_at(hold), :millisecond)
+    deliver_awaiting_human_notice(state, hold, elapsed)
     state
   end
 
   defp enter_awaiting_human(%State{} = state, hold) do
     state = cancel_awaiting_human_timer(state)
 
-    post_router_notice(state, awaiting_human_notice(hold, 0), %{
-      "reason" => "execution.awaiting_human_blocker",
-      "stage_id" => hold.stage_id,
-      "needs_human" => true,
-      "elapsed_ms" => 0
-    })
+    elapsed = DateTime.diff(DateTime.utc_now(), RuntimeSupervision.blocked_at(hold), :millisecond)
+    deliver_awaiting_human_notice(state, hold, elapsed)
 
     stamp_awaiting_human_action(state.task_id, "blocker")
 
@@ -5187,12 +5391,41 @@ defmodule Platform.Orchestration.TaskRouter do
     |> arm_awaiting_human_reminder(hold.id)
   end
 
+  defp deliver_awaiting_human_notice(state, hold, elapsed_ms) do
+    result =
+      RuntimeSupervision.deliver_hold_notice(hold.id, awaiting_human_reminder_ms(), fn _lease ->
+        case state.execution_space_id do
+          nil ->
+            {:error, :no_execution_space}
+
+          space_id ->
+            ExecutionSpace.post_engagement(space_id, awaiting_human_notice(hold, elapsed_ms),
+              metadata: %{
+                "reason" => "execution.awaiting_human_blocker",
+                "stage_id" => hold.stage_id,
+                "needs_human" => true,
+                "elapsed_ms" => elapsed_ms,
+                "hold_id" => hold.id
+              }
+            )
+        end
+      end)
+
+    if match?({:ok, {:delivery_failed, _}}, result) do
+      Logger.warning(
+        "[TaskRouter] human reminder delivery failed task=#{state.task_id} hold=#{hold.id}; retry due in 60s"
+      )
+    end
+
+    result
+  end
+
   defp arm_awaiting_human_reminder(%State{} = state, lease_id) do
     ref =
       Process.send_after(
         self(),
         {:awaiting_human_reminder, lease_id},
-        awaiting_human_reminder_ms()
+        min(awaiting_human_reminder_ms(), 60_000)
       )
 
     %{state | awaiting_human_timer: ref}
@@ -5330,6 +5563,10 @@ defmodule Platform.Orchestration.TaskRouter do
   # metadata shape are unchanged from the single-reason version — existing
   # dashboards keep working, they just see a second `reason` value.
   defp emit_dispatch_suppressed_telemetry(task_id, reason) do
+    Logger.info(
+      "[TaskRouter] dispatch suppressed task=#{task_id} reason=#{reason} core_build=#{Platform.BuildInfo.commit()}"
+    )
+
     :telemetry.execute(
       [:platform, :orchestration, :dispatch_suppressed],
       %{count: 1},
@@ -5414,8 +5651,8 @@ defmodule Platform.Orchestration.TaskRouter do
     Enum.any?(stage_validations, &(&1.id == validation_id))
   end
 
-  defp still_awaiting_human?(%State{task_id: task_id}) do
-    pending_review_request?(task_id)
+  defp still_awaiting_human?(%State{task_id: task_id} = state) do
+    pending_review_request?(task_id) or not is_nil(needs_human_blocker_hold(state))
   end
 
   # Plan-level "human is sitting with the latest plan" check. Distinct from

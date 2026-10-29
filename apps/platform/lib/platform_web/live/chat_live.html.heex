@@ -188,6 +188,14 @@
         details_panel={@details_panel}
       />
 
+      <div
+        :if={@chat_execution_activity}
+        id="chat-execution-activity"
+        class="border-b border-edge bg-base-100 px-4 py-2 overflow-x-auto"
+      >
+        <PlatformWeb.ExecutionStatus.line status={@chat_execution_activity} />
+      </div>
+
       <%!-- The canvases drawer opens and closes inside one always-rendered,
            box-less slot, so it is never a new sibling ahead of #chat-dock
            (rung 10 stage 5; see the slot note at the top of this file). The

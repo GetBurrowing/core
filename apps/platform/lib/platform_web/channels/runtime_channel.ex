@@ -687,6 +687,9 @@ defmodule PlatformWeb.RuntimeChannel do
       {:ok, event} ->
         push(socket, "execution_event_ack", %{
           idempotency_key: event.idempotency_key,
+          correlation_id: event.payload["correlation_id"],
+          runtime_worker_ref: event.payload["runtime_worker_ref"],
+          runtime_id: event.runtime_id,
           status: "ok"
         })
 

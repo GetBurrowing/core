@@ -1876,6 +1876,42 @@ defmodule Platform.Federation.ToolSurface do
   defp task_tools do
     [
       %{
+        name: "blocker_recheck",
+        description:
+          "Explicitly reclassify a legacy owning-runtime hold as a typed dependency wait and return a fenced installed-capability verification request. Completion never releases a hold.",
+        parameters: %{
+          task_id: %{type: "string", required: true},
+          stage_id: %{type: "string", required: true},
+          dependencies: %{type: "array", required: true, items: %{type: "object"}},
+          required_capability: %{type: "string", required: true},
+          verifier: %{type: "string", required: true}
+        },
+        returns: "Durable verification request or attributed release result",
+        limitations:
+          "Current stage/runtime ownership and tenant-valid typed task references required; explicitly classified human action stays parked. Stale evidence fails closed. Verifier must be owning_runtime. Never use a done flag or PR merge as installed-capability evidence.",
+        when_to_use:
+          "Reassess an explicitly typed dependency after verifying its installed capability"
+      },
+      %{
+        name: "blocker_verify",
+        description:
+          "Report real installed-capability verification using a fresh matching request token and hold revision. Only the authenticated owning runtime may release the verified dependency hold through execution.unblocked.",
+        parameters: %{
+          task_id: %{type: "string", required: true},
+          stage_id: %{type: "string", required: true},
+          request_token: %{type: "string", required: true},
+          hold_revision: %{type: "string", required: true},
+          required_capability: %{type: "string", required: true},
+          verified: %{type: "boolean", required: true},
+          evidence_refs: %{type: "array", required: true, items: %{type: "string"}}
+        },
+        returns: "Durable verification request or attributed release result",
+        limitations:
+          "Current stage/runtime ownership and tenant-valid typed task references required; explicitly classified human action stays parked. Stale evidence fails closed. Verifier must be owning_runtime. Never use a done flag or PR merge as installed-capability evidence.",
+        when_to_use:
+          "Reassess an explicitly typed dependency after verifying its installed capability"
+      },
+      %{
         name: "project_list",
         description:
           "List projects, optionally filtered by org (ADR-0042). Each project carries its parent org's id and slug.",
@@ -3977,6 +4013,10 @@ defmodule Platform.Federation.ToolSurface do
             required: true,
             description: "What is blocked and why"
           },
+          wait_kind: %{type: "string", enum: ["human", "dependency"], required: false},
+          dependencies: %{type: "array", items: %{type: "object"}, required: false},
+          required_capability: %{type: "string", required: false},
+          verifier: %{type: "string", enum: ["owning_runtime"], required: false},
           needs_human: %{
             type: "boolean",
             required: false,
@@ -4150,6 +4190,8 @@ defmodule Platform.Federation.ToolSurface do
     "plan_update" => [plan: "plan_id"],
     "project_update" => [project: "project_id"],
     "report_blocker" => [task: "task_id"],
+    "blocker_recheck" => [task: "task_id", stage: "stage_id"],
+    "blocker_verify" => [task: "task_id", stage: "stage_id"],
     "review_request_create" => [validation: "validation_id"],
     "stack_abandon" => [stack: "stack_id"],
     "stack_add" => [stack: "stack_id", task: "task_id"],
@@ -7686,6 +7728,28 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Verify the stage state and validations"
          }}
     end
+  end
+
+  def execute("blocker_recheck", args, context) do
+    blocker_result(
+      Platform.Orchestration.BlockerReassessment.recheck(
+        args["task_id"],
+        args["stage_id"],
+        args,
+        context
+      )
+    )
+  end
+
+  def execute("blocker_verify", args, context) do
+    blocker_result(
+      Platform.Orchestration.BlockerReassessment.verify(
+        args["task_id"],
+        args["stage_id"],
+        args,
+        context
+      )
+    )
   end
 
   def execute("report_blocker", args, context) do
@@ -16188,6 +16252,30 @@ defmodule Platform.Federation.ToolSurface do
 
   defp non_blank_string?(value), do: is_binary(value) and String.trim(value) != ""
 
+  defp blocker_result({:ok, result}) when is_list(result) do
+    {:ok,
+     %{
+       results:
+         Enum.map(result, fn
+           {:requested, request} -> %{status: "verification_requested", request: request}
+           {:waiting, reason} -> %{status: "waiting", reason: reason}
+           state when is_atom(state) -> %{status: Atom.to_string(state)}
+           {:error, reason} -> %{status: "error", reason: inspect(reason)}
+         end)
+     }}
+  end
+
+  defp blocker_result({:ok, result}), do: {:ok, result}
+
+  defp blocker_result({:error, reason}),
+    do:
+      {:error,
+       %{
+         error: "Dependency verification refused: #{inspect(reason)}",
+         recoverable: true,
+         suggestion: "Use the authenticated owning runtime and current typed dependency evidence."
+       }}
+
   defp record_blocker(args, context) do
     task_id = Map.get(args, "task_id")
     stage_id = Map.get(args, "stage_id")
@@ -16208,7 +16296,11 @@ defmodule Platform.Federation.ToolSurface do
         "attempts" => Map.get(args, "attempts"),
         "memory_ref" => Map.get(args, "memory_ref"),
         "unblock_action" => Map.get(args, "unblock_action"),
-        "category" => Map.get(args, "category")
+        "category" => Map.get(args, "category"),
+        "wait_kind" => Map.get(args, "wait_kind"),
+        "dependencies" => Map.get(args, "dependencies"),
+        "required_capability" => Map.get(args, "required_capability"),
+        "verifier" => Map.get(args, "verifier")
       }
     }
 

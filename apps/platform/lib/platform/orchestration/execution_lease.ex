@@ -35,6 +35,17 @@ defmodule Platform.Orchestration.ExecutionLease do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @doc "Typed wait evidence, or nil for legacy and genuine human holds."
+  def dependency_wait(%__MODULE__{
+        status: "blocked",
+        metadata: %{"wait_kind" => "dependency", "dependency_wait" => wait}
+      })
+      when is_map(wait), do: wait
+
+  def dependency_wait(_), do: nil
+
+  def wait_kind(lease), do: if(dependency_wait(lease), do: "dependency", else: "human")
+
   def phases, do: @phases
   def statuses, do: @statuses
   def attribution_statuses, do: @attribution_statuses

@@ -784,7 +784,7 @@ defmodule PlatformWeb.ChatLive do
 
     socket =
       socket
-      |> PresenceHooks.attach()
+      |> PlatformWeb.ChatLive.ExecutionActivityHooks.attach()
       # Ahead of MessagesHooks: both look at "send_message" before the send
       # (the tray guard, then large files; task 01a1557a-9de3).
       |> AttachHooks.attach()
@@ -1155,7 +1155,7 @@ defmodule PlatformWeb.ChatLive do
       socket
       |> assign(:restricted_channel_ids, restricted_ids)
       |> leave_active_space()
-      |> assign(:active_space, nil)
+      |> PlatformWeb.ChatLive.ExecutionActivityHooks.assign_space(nil)
       |> assign(:current_participant, nil)
 
     if socket.assigns.external? do
@@ -4411,7 +4411,7 @@ defmodule PlatformWeb.ChatLive do
     org = space_org(space)
 
     socket
-    |> assign(:active_space, space)
+    |> PlatformWeb.ChatLive.ExecutionActivityHooks.assign_space(space)
     |> assign(:active_space_scope, org_scope_of(org))
     # Whether the New canvas form offers Prototype: the install switch and
     # publish policy for THIS space's org, so it rides the space funnel.

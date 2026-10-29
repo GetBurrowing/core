@@ -113,16 +113,17 @@ defmodule PlatformWeb.TasksMyTasksListTest do
     assert d |> q("[data-role=tasks-title-project]") |> hd() |> text() == ctx.p.name
 
     [high_row, _theirs_row, _done_row, low_row] = rows
-    assert text(high_row) =~ "In progress · #{ctx.p.name}"
+    assert text(high_row) =~ "No activity · last activity unknown · #{ctx.p.name}"
     assert text(low_row) =~ "In review · #{ctx.p.name}"
     assert high_row |> LazyHTML.query("[data-role=tasks-my-priority]") |> text() == "High"
     assert low_row |> LazyHTML.query("[data-role=tasks-my-priority]") |> text() == "Low"
 
     # StatusLabels.dot_class/1, the binding palette (canvas 01a15db1 `dots`).
     assert high_row
-           |> LazyHTML.query("[data-role=tasks-my-dot]")
-           |> classes()
-           |> Enum.member?("bg-info")
+           |> LazyHTML.query("[data-role=execution-status][data-state=unknown]")
+           |> Enum.any?()
+
+    assert high_row |> LazyHTML.query("[data-role=tasks-my-dot]") |> Enum.empty?()
 
     assert low_row
            |> LazyHTML.query("[data-role=tasks-my-dot]")

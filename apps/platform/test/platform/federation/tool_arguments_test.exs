@@ -219,7 +219,12 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # snapshot_hash; triage also requires action_items. Completion.callback/4
   # refuses absent identities/hash, and triage_file/2 refuses absent items;
   # none is aliased, defaulted, or resolved from caller context.
-  @surveyed_required_count 207
+  # 219 with blocker_recheck's five and blocker_verify's seven parameters
+  # (task 01a18305 stage 2). All twelve are HONEST: task/stage ids resolve
+  # only from their declared keys, dependency/capability/verifier are checked
+  # by validate_spec/4, and verify/4 refuses missing tokens, capability,
+  # boolean result or evidence list. None is aliased or defaulted from context.
+  @surveyed_required_count 219
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather
@@ -253,6 +258,37 @@ defmodule Platform.Federation.ToolArgumentsTest do
     |> Enum.map(fn {{name, start}, stop} ->
       {name, binary_part(source, start, stop - start)}
     end)
+  end
+
+  test "dependency verification tools enforce every declared identity and evidence field" do
+    cases = [
+      {"blocker_recheck",
+       %{
+         "task_id" => "task",
+         "stage_id" => "stage",
+         "dependencies" => [],
+         "required_capability" => "headline_review:1",
+         "verifier" => "owning_runtime"
+       }},
+      {"blocker_verify",
+       %{
+         "task_id" => "task",
+         "stage_id" => "stage",
+         "request_token" => "token",
+         "hold_revision" => "revision",
+         "required_capability" => "headline_review:1",
+         "verified" => false,
+         "evidence_refs" => []
+       }}
+    ]
+
+    for {tool, args} <- cases do
+      assert :ok = ToolArguments.validate(tool, args)
+
+      for key <- Map.keys(args) do
+        assert {:error, _} = ToolArguments.validate(tool, Map.delete(args, key))
+      end
+    end
   end
 
   describe "the classification is total" do

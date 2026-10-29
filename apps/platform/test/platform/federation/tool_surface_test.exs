@@ -93,7 +93,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 149 tools with required components" do
+    test "returns all 151 tools with required components" do
       tools = ToolSurface.tool_definitions()
       # 88 as of task 019f70b8 stage 3, which added `intent_ack` to the
       # `task` bundle. 89 as of ADR-0046 member 5 stage 4, which added
@@ -193,7 +193,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 147 as of task 01a17b10 stage 4: the 2-tool `voice_ask` bundle
       # (voice_ask_agent, voice_ask_poll).
       # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
-      assert length(tools) == 149
+      # +2 owning-runtime dependency verification tools (task 01a18305 stage 2).
+      assert length(tools) == 151
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

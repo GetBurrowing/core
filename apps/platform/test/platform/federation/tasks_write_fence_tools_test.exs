@@ -67,6 +67,8 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
 
   @mcp_guarded ~w(
     alarm_silence
+    blocker_recheck
+    blocker_verify
     design_critique_request
     epic_create
     epic_update
@@ -126,9 +128,14 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
   #     root-org admin, so every other caller stops at the principal check
   #     before an id is read. The root admin's refusal is observable through
   #     a tasks.write deny, covered by its own describe block.
+  #   * blocker_recheck/blocker_verify: this fixture has neither a running
+  #     stage nor an owning-runtime hold/request. Both must refuse before
+  #     that row is actionable. BlockerReassessmentTest supplies those real
+  #     states and checks permitted versus capped-scope writes explicitly.
   @unobservable %{
-    non_root_admin: ~w(design_critique_request task_close_as_delivered),
-    root_admin: ~w(design_critique_request)
+    non_root_admin:
+      ~w(blocker_recheck blocker_verify design_critique_request task_close_as_delivered),
+    root_admin: ~w(blocker_recheck blocker_verify design_critique_request)
   }
 
   @canvas_id "0190f0c3-0000-7000-8000-00000000c0de"
@@ -373,6 +380,26 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
       "stage_id" => i.stage,
       "until_seconds" => 600,
       "reason" => "fence probe silence"
+    }
+
+  defp args_for("blocker_recheck", i),
+    do: %{
+      "task_id" => i.task,
+      "stage_id" => i.stage,
+      "dependencies" => [],
+      "required_capability" => "headline_review:1",
+      "verifier" => "owning_runtime"
+    }
+
+  defp args_for("blocker_verify", i),
+    do: %{
+      "task_id" => i.task,
+      "stage_id" => i.stage,
+      "request_token" => "probe",
+      "hold_revision" => "probe",
+      "required_capability" => "headline_review:1",
+      "verified" => false,
+      "evidence_refs" => []
     }
 
   defp args_for("design_critique_request", i),
@@ -836,7 +863,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     test "the raw ToolPermissions list equals @mcp_guarded ++ @mcp_exempt" do
       raw = permission_source_names(["tasks.write", "tasks.manage"])
 
-      assert length(raw) == 43
+      assert length(raw) == 45
       assert Enum.sort(raw) == Enum.sort(@mcp_guarded ++ @mcp_exempt)
 
       for name <- raw,

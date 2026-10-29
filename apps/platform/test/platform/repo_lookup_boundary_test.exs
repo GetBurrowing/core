@@ -552,7 +552,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/memory/telemetry_handler.ex", :get, "Platform.Org.WikiJournalEntry", 1,
      :safe_internal,
      "`metadata.memory_entry_id` comes off the telemetry event `Org.Wiki` emits with the PK it just inserted"},
+    {"platform/orchestration/execution_status.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "Agent assignee ids and typed dependency ids are filtered through Platform.UUID.valid?/1 before batched UUID queries; malformed references are omitted and project as unknown."},
+    {"platform_web/live/chat/execution_activity_hooks.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "Execution-space metadata task_id is checked with Platform.UUID.valid?/1 before scoped authorization and Tasks.get_task_record/1; invalid metadata produces no fragment."},
     # ── Orchestration ──────────────────────────────────────────────────
+    {"platform/orchestration/blocker_reassessment.ex", :get, "Platform.Tasks.Project", 2,
+     :safe_internal,
+     "both ids are project_id foreign keys read from persisted Tasks.Task structs; validate_spec requires the owning task project_id to be binary and valid_reference?/2 pattern-matches a persisted non-nil dependency project_id before these lookups"},
+    {"platform/orchestration/blocker_reassessment.ex", :platform_uuid_guard, "-", 6,
+     :safe_internal,
+     "current_task/2 guards the external task_id and stage_id with Platform.UUID.valid?/1 before task/plan reads; valid_reference?/2 guards the typed external dependency task_id before Tasks.get_task_record/1; request_from_user/6 guards task, stage and lease ids before the FOR UPDATE query, with tenant authorization and current hold revision checks"},
     {"platform/orchestration/context_assembler.ex", :get, "TaskSchema", 1, :safe_internal,
      "`load_parent_plan_entry/1` uses `parent_id` read off the `%Task{}` it already loaded"},
     {"platform/orchestration/execution_space.ex", :get_by, "Participant", 1, :safe_internal,
@@ -1033,6 +1044,7 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    "platform/orchestration/blocker_reassessment.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.
     "platform/chat/canvas/broadcasts.ex" => 1,
@@ -1572,7 +1584,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # and a `stage.id` off a `%Stage{}` loaded from the plan — inside a guard
     # that rescues and fails open. No boundary caller exists; one would need
     # `Platform.UUID.valid?/1`.
-    "platform/orchestration/runtime_supervision.ex" => 6,
+    # 6 -> 10: dispatch_activity aggregates only persisted events for the current
+    # internal worker token; latest dispatch reads are scoped to router task/stage ids loaded
+    # from the approved plan; dispatch_open?/1 reads a stage_id stamped by
+    # reserve_dispatch/4 from that same plan (not caller prose). Task/lease
+    # row locks use ids from persisted structs, never a boundary UUID string.
+    "platform/orchestration/runtime_supervision.ex" => 10,
     # 0 -> 1 for task 01a136c1 stage 1: `open_stack_deployer_blocked_event?/1`
     # (the unstamped-member sweep's open-blocker check) takes the latest
     # stack_deployer `execution.blocked` time with `select: max(...)`. Triaged

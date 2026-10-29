@@ -9342,6 +9342,23 @@ body.screen-share-fullscreen-active {
   opacity: 0.5;
 }
 
+/* Execution activity is measured on the server; workflow status is separate. */
+.execution-status, .execution-header { font-family: "Public Sans", sans-serif; }
+.execution-utility { font-family: "JetBrains Mono", monospace; }
+.execution-dot-running { background: var(--color-success); }
+.execution-dot-waiting { border: 2px solid var(--color-info); }
+.execution-dot-human { background: var(--color-warning); }
+.execution-dot-unknown { border: 1px solid var(--color-neutral); }
+.execution-human-chip { background: color-mix(in oklab, var(--color-warning) 14%, var(--color-base-100)); color: var(--color-base-content); }
+.execution-rule { border-left-width: 3px; }
+.execution-rule-human { border-left-color: var(--color-warning); }
+.execution-rule-waiting { border-left-color: var(--color-info); }
+.execution-rule-unknown { border-left-color: var(--color-neutral); }
+@media (prefers-reduced-motion: no-preference) {
+  .execution-pulse { animation: execution-progress 2s ease-in-out infinite; }
+  @keyframes execution-progress { 50% { opacity: 0.45; } }
+}
+
 /* Personal stars stay neutral. Controls reveal only on hover-capable desktops. */
 @media (hover: hover) and (pointer: fine) and (min-width: 1024px) {
   .browser-item-actions { opacity: 0; }
