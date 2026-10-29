@@ -63,14 +63,14 @@ defmodule Platform.Meetings.Synthesis.Visibility do
     end
   end
 
-  defp readable?(_user, scope, :memory_page, id) do
+  defp readable?(user, scope, :memory_page, id) do
     case fetch(Platform.Org.WikiPage, id) do
       nil ->
         false
 
       page ->
         memory_readable?(scope, page) and
-          not String.contains?(page.file_key, "/private/") and
+          namespace_readable?(user, scope, page.file_key) and
           Repo.exists?(
             Platform.Org.Wiki.scope_by(
               from(p in Platform.Org.WikiPage, where: p.id == ^id),
@@ -81,7 +81,7 @@ defmodule Platform.Meetings.Synthesis.Visibility do
     end
   end
 
-  defp readable?(_user, scope, :memory_journal, id) do
+  defp readable?(user, scope, :memory_journal, id) do
     case fetch(Platform.Org.WikiJournalEntry, id) do
       nil ->
         false
@@ -89,7 +89,7 @@ defmodule Platform.Meetings.Synthesis.Visibility do
       entry ->
         path = journal_path(entry)
 
-        memory_readable?(scope, entry) and
+        memory_readable?(scope, entry) and namespace_readable?(user, scope, path) and
           Access.within?(scope, "memory.read", {:memory, path}, true)
     end
   end
@@ -107,9 +107,27 @@ defmodule Platform.Meetings.Synthesis.Visibility do
 
   defp readable?(_, _, _, _), do: false
 
-  defp journal_path(%{project_id: project_id, date: date}) do
-    namespace = if project_id, do: "project/" <> project_id, else: "org"
-    namespace <> "/journal/" <> Date.to_iso8601(date) <> ".md"
+  defp journal_path(entry) do
+    namespace =
+      Map.get(entry.metadata || %{}, "namespace", Platform.Org.Wiki.Journal.default_namespace())
+
+    Platform.Org.Wiki.Journal.virtual_file_key(namespace, entry.date)
+  end
+
+  defp namespace_readable?(user, scope, path) do
+    case String.split(path, "/") do
+      ["org", kind | _] when kind in ["page", "journal"] ->
+        true
+
+      ["project", id, kind | _] when kind in ["page", "journal"] ->
+        Platform.UUID.valid?(id) and Access.can?(scope, "memory.read", {:project, id})
+
+      ["space", id, kind | _] when kind in ["page", "journal"] ->
+        Platform.UUID.valid?(id) and space_readable?(user, scope, id)
+
+      _ ->
+        false
+    end
   end
 
   defp memory_readable?(scope, %{org_id: org_id, project_id: project_id}) do

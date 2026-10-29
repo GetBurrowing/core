@@ -247,6 +247,19 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     assert Visibility.readable_by?(c.allowed.id, {:memory_page, page.id})
     assert Visibility.readable_by?(c.allowed.id, {:memory_journal, journal.id})
 
+    space_journal =
+      Repo.insert!(
+        Platform.Org.WikiJournalEntry.changeset(%Platform.Org.WikiJournalEntry{}, %{
+          date: Date.utc_today(),
+          content: "Private checkout release",
+          org_id: acme_org_id(),
+          metadata: %{"namespace" => "space/" <> c.meeting.chat_space_id}
+        })
+      )
+
+    assert Visibility.readable_by?(c.allowed.id, {:memory_journal, space_journal.id})
+    refute Visibility.readable_by?(c.denied.id, {:memory_journal, space_journal.id})
+
     {:ok, _} =
       Grants.deny(%{principal: c.denied, permission: "memory.read", resource: {:memory, "org/"}})
 

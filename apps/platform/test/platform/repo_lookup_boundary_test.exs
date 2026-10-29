@@ -544,8 +544,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a16974 stage 1: public `get/1` takes a finding id that later stages read from a briefing item's `finding:<id>` ref; it is guarded with Platform.UUID.valid?/1 and answers nil for a malformed id, the same as a missing row"},
     {"platform/meetings/synthesis_findings.ex", :platform_uuid_guard, "-", 4, :safe_internal,
      "task 01a16974 stage 1: `get/1`, `get_many/1` (filters ids parsed out of briefing items' `finding:<id>` refs), `list_for_meeting/1` and `lock/1` (the id parsed out of the clicked item's ref in MeetingBriefings.act/5) each check Platform.UUID.valid?/1 before any `where:`, answering nil / %{} / [] for a malformed id. Each guard is a BOOLEAN; the value is never rewritten"},
-    {"platform/meetings/synthesis/visibility.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "task 01a16974 stage 2: readable_by?/2 validates the typed citation id before its shared private fetch query; user ids go through Accounts.get_user/1"},
+    {"platform/meetings/synthesis/visibility.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "task 01a16974 stage 2: readable_by?/2 validates the typed citation id before its shared private fetch query and validates project/space ids parsed from memory paths; user ids go through Accounts.get_user/1"},
     {"platform/meetings/synthesis/context.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a16974 stage 2: recipients_for/1 validates meeting ids from citation metadata before querying their attendee sets"},
     # ── Memory ─────────────────────────────────────────────────────────
