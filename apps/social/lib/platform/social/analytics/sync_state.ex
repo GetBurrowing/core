@@ -14,6 +14,8 @@ defmodule Platform.Social.Analytics.SyncState do
 
   schema "social_analytics_sync_states" do
     field(:cursor, :string)
+    field(:replay_cursor, :string)
+    field(:retry_at, :utc_datetime_usec)
     field(:cursor_captured_at, :utc_datetime_usec)
     field(:bootstrap_after_post_id, :binary_id)
     field(:bootstrap_complete, :boolean, default: false)

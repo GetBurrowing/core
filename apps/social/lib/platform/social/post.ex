@@ -88,6 +88,7 @@ defmodule Platform.Social.Post do
 
     # Clip Studio 9/9: vendor snapshots, owned by the analytics sync only.
     # Absent views are different from zero. Never cast from editors/agents.
+    field(:analytics_external_id, :string)
     field(:metrics, :map, default: %{})
     field(:metrics_synced_at, :utc_datetime_usec)
 

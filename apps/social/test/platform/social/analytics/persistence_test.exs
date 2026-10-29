@@ -31,6 +31,7 @@ defmodule Platform.Social.Analytics.PersistenceTest do
     edited =
       Post.changeset(stored, %{
         "metrics" => %{"views" => 9999},
+        "analytics_external_id" => "agent-injected-analytics-ID",
         "metrics_synced_at" => "2099-01-01T00:00:00Z",
         "body" => "edited"
       })
