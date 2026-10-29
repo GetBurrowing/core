@@ -109,7 +109,9 @@ defmodule PlatformWeb.PublicBookingLive do
     <main class="min-h-screen bg-base-200 px-4 py-8 text-base-content">
       <div class="mx-auto max-w-xl space-y-5 rounded-2xl border border-edge bg-base-100 p-5 sm:p-8">
         <h1 class="text-2xl font-semibold">Book a time</h1>
-        <p class="text-sm text-subtle">Choose an available time. All dates and times are in {@zone}.</p>
+        <p class="text-sm text-subtle">
+          Choose an available time. All dates and times are in {@zone}.
+        </p>
         <p :if={@error} role="alert" class="rounded-lg bg-error/10 p-3 text-error">{@error}</p>
         <section :if={@receipt} aria-label="Booking confirmation" class="space-y-3">
           <h2 class="text-xl font-semibold">You're booked</h2>
@@ -159,7 +161,11 @@ defmodule PlatformWeb.PublicBookingLive do
             <.input field={@form[:name]} label="Your name" required maxlength="120" />
             <.input
               field={@form[:email]}
-              label={if @requires_email, do: "Email (required for meeting invitation)", else: "Email (optional)"}
+              label={
+                if @requires_email,
+                  do: "Email (required for meeting invitation)",
+                  else: "Email (optional)"
+              }
               required={@requires_email}
               type="email"
               maxlength="254"
