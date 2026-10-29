@@ -262,9 +262,22 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     refute Visibility.readable_by?(c.denied.id, {:memory_journal, space_journal.id})
 
     {:ok, _} =
-      Grants.deny(%{principal: c.denied, permission: "memory.read", resource: {:memory, "org/"}})
+      Grants.deny(%{
+        principal: c.denied,
+        permission: "memory.read",
+        resource: {:memory, page.file_key}
+      })
 
     refute Visibility.readable_by?(c.denied.id, {:memory_page, page.id})
+    assert Visibility.readable_by?(c.denied.id, {:memory_journal, journal.id})
+
+    {:ok, _} =
+      Grants.deny(%{
+        principal: c.denied,
+        permission: "memory",
+        resource: {:module, acme_org_id()}
+      })
+
     refute Visibility.readable_by?(c.denied.id, {:memory_journal, journal.id})
 
     p =
