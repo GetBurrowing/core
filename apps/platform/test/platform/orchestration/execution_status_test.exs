@@ -176,4 +176,141 @@ defmodule Platform.Orchestration.ExecutionStatusTest do
 
     assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :unknown
   end
+
+  describe "running stage without a lease" do
+    defp event(ctx, type, at, attrs \\ %{}) do
+      Repo.insert!(%RuntimeEvent{
+        task_id: Map.get(attrs, :task_id, ctx.task.id),
+        phase: "execution",
+        runtime_id: Map.get(attrs, :runtime_id, ctx.runtime.runtime_id),
+        event_type: type,
+        occurred_at: at,
+        idempotency_key: Ecto.UUID.generate(),
+        payload: %{"stage_id" => Map.get(attrs, :stage_id, ctx.stage.id)}
+      })
+    end
+
+    defp drain(ref, n) do
+      receive do
+        {^ref, :query} -> drain(ref, n + 1)
+      after
+        0 -> n
+      end
+    end
+
+    defp ago(ctx, minutes), do: DateTime.add(ctx.now, -minutes * 60)
+
+    test "owner ack 5 min ago reads Working without pulse", c do
+      event(c, "execution.acked", ago(c, 5))
+      s = ExecutionStatus.load([c.task], c.now)[c.task.id]
+      assert s.state == :working
+      assert s.label == "Working"
+      assert s.elapsed == "5m"
+      refute s.pulse?
+    end
+
+    test "validation evaluated 3 min ago outranks an 80 min old ack", c do
+      event(c, "execution.acked", ago(c, 80))
+
+      Repo.insert!(%Platform.Tasks.Validation{
+        stage_id: c.stage.id,
+        kind: "test_pass",
+        status: "passed",
+        evaluated_at: ago(c, 3)
+      })
+
+      s = ExecutionStatus.load([c.task], c.now)[c.task.id]
+      assert s.state == :working
+      assert s.elapsed == "3m"
+    end
+
+    test "ack 91 min ago is No activity with a known elapsed", c do
+      event(c, "execution.acked", ago(c, 91))
+      s = ExecutionStatus.load([c.task], c.now)[c.task.id]
+      assert s.state == :unknown
+      assert s.label == "No activity"
+      assert s.elapsed == "1h"
+      refute s.pulse?
+    end
+
+    test "ack exactly 90 min ago is still Working", c do
+      event(c, "execution.acked", ago(c, 90))
+      assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :working
+    end
+
+    test "non-owner runtime ack is not activity", c do
+      event(c, "execution.acked", ago(c, 5), %{runtime_id: "other-#{Ecto.UUID.generate()}"})
+      assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :unknown
+    end
+
+    test "ack for a different stage is not activity", c do
+      event(c, "execution.acked", ago(c, 5), %{stage_id: Ecto.UUID.generate()})
+      assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :unknown
+    end
+
+    test "a dispatch attempt alone is not activity", c do
+      event(c, "execution.dispatch_attempt", ago(c, 5))
+      assert ExecutionStatus.load([c.task], c.now)[c.task.id].state == :unknown
+    end
+
+    test "terminal owner event reads Worker ended", c do
+      event(c, "execution.finished", ago(c, 5))
+      s = ExecutionStatus.load([c.task], c.now)[c.task.id]
+      assert s.state == :unknown
+      assert s.reason == "Worker ended; awaiting current execution evidence"
+      assert s.elapsed == "5m"
+    end
+
+    test "in_progress task with no running stage has no status", c do
+      Repo.update!(Ecto.Changeset.change(c.stage, status: "passed"))
+      statuses = ExecutionStatus.load([c.task], c.now)
+      assert statuses[c.task.id] == nil
+      assert ExecutionStatus.for_task(c.task) == nil
+    end
+
+    test "load/3 issues the same query count for 20 tasks as for 1", c do
+      tasks =
+        for i <- 1..20 do
+          t =
+            Repo.insert!(%Tasks.Task{
+              project_id: c.task.project_id,
+              title: "Batch #{i}",
+              status: "in_progress",
+              assignee_id: c.task.assignee_id,
+              assignee_type: "agent"
+            })
+
+          {:ok, plan} = Tasks.create_plan(%{task_id: t.id, status: "approved", version: 1})
+
+          {:ok, stage} =
+            Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "B", status: "running"})
+
+          event(c, "execution.acked", ago(c, 5), %{task_id: t.id, stage_id: stage.id})
+          t
+        end
+
+      count = fn list ->
+        pid = self()
+        ref = make_ref()
+        id = "execution-status-count-#{inspect(ref)}"
+
+        :telemetry.attach(
+          id,
+          [:platform, :repo, :query],
+          fn _, _, _, _ -> if self() == pid, do: send(pid, {ref, :query}) end,
+          nil
+        )
+
+        statuses = ExecutionStatus.load(list, c.now)
+        :telemetry.detach(id)
+        {statuses, drain(ref, 0)}
+      end
+
+      {_, one} = count.([hd(tasks)])
+      {statuses, twenty} = count.(tasks)
+      assert one > 0
+      assert one == twenty
+      assert Enum.all?(tasks, &(statuses[&1.id].state == :working))
+    end
+  end
 end

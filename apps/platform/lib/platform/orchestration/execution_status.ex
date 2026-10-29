@@ -8,6 +8,16 @@ defmodule Platform.Orchestration.ExecutionStatus do
 
   @recent_seconds 120
   @terminal ~w(execution.finished execution.failed execution.abandoned execution.turn_ended)
+  # Events the executing worker itself emits. Router-emitted execution.dispatch_*
+  # events are the router talking, not the worker, and never count as activity.
+  @executor ~w(execution.acked execution.started execution.heartbeat execution.progress execution.unblocked)
+  # Activity window for a running stage that holds no lease (acks never mint one).
+  # Measured re-ack cadence on live tasks is ~53-67 min (01a16974 acked 17:08,
+  # 18:01, 19:08Z; no heartbeat/progress events are emitted in practice), so a
+  # healthy task gets a fresh ack about hourly. 90 min = 1.5x that cadence: one
+  # late beat never flips a healthy task to "No activity", two missed beats do.
+  # Deliberately separate from @recent_seconds, the Running/pulse bar for leased workers.
+  @activity_window_seconds 90 * 60
 
   def load(tasks, now \\ DateTime.utc_now(), scope \\ nil) do
     tasks = Enum.filter(tasks, &(&1.status == "in_progress")) |> Enum.uniq_by(& &1.id)
@@ -32,6 +42,18 @@ defmodule Platform.Orchestration.ExecutionStatus do
       |> Map.new(&{&1.plan_id, &1})
 
     plans = Map.new(plans, &{&1.task_id, &1})
+
+    stage_ids = stages |> Map.values() |> Enum.map(& &1.id)
+
+    validated =
+      Repo.all(
+        from(v in Platform.Tasks.Validation,
+          where: v.stage_id in ^stage_ids and not is_nil(v.evaluated_at),
+          group_by: v.stage_id,
+          select: {v.stage_id, max(v.evaluated_at)}
+        )
+      )
+      |> Map.new()
 
     leases =
       Repo.all(
@@ -124,7 +146,15 @@ defmodule Platform.Orchestration.ExecutionStatus do
                e.payload["runtime_worker_ref"] == current.runtime_worker_ref)
         end)
 
-      {task.id, project(task, stage, current, latest, deps, now)}
+      # No lease: the owner runtime's newest event for this stage stands in.
+      unleased =
+        Enum.find(events[task.id] || [], fn e ->
+          stage && is_nil(current) && owner && e.runtime_id == owner &&
+            e.payload["stage_id"] == stage.id
+        end)
+
+      validated_at = stage && validated[stage.id]
+      {task.id, project(task, stage, current, latest || unleased, deps, now, validated_at)}
     end)
   end
 
@@ -132,7 +162,7 @@ defmodule Platform.Orchestration.ExecutionStatus do
     do: Enum.map(tasks, &Map.put(&1, :execution_activity, statuses[&1.id]))
 
   def for_task(task, scope \\ nil),
-    do: load([task], DateTime.utc_now(), scope)[task.id] || unknown()
+    do: load([task], DateTime.utc_now(), scope)[task.id]
 
   def unknown,
     do: %{
@@ -153,7 +183,7 @@ defmodule Platform.Orchestration.ExecutionStatus do
       elapsed: "unknown"
     }
 
-  def project(_task, stage, lease, event, deps, now) do
+  def project(_task, stage, lease, event, deps, now, validated_at \\ nil) do
     base =
       unknown()
       |> Map.merge(%{
@@ -165,8 +195,11 @@ defmodule Platform.Orchestration.ExecutionStatus do
       })
 
     cond do
-      is_nil(stage) or is_nil(lease) ->
-        base
+      is_nil(stage) ->
+        nil
+
+      is_nil(lease) ->
+        unleased(base, event, validated_at, now)
 
       RuntimeSupervision.needs_human_hold?(lease) ->
         held(base, lease, deps, now)
@@ -233,6 +266,43 @@ defmodule Platform.Orchestration.ExecutionStatus do
         elapsed: elapsed(at, now)
     }
   end
+
+  defp unleased(base, %{event_type: type} = event, _validated_at, now) when type in @terminal do
+    %{
+      base
+      | reason: "Worker ended; awaiting current execution evidence",
+        activity_at: event.occurred_at,
+        elapsed: elapsed(event.occurred_at, now)
+    }
+  end
+
+  defp unleased(base, event, validated_at, now) do
+    event_at = if event && event.event_type in @executor, do: event.occurred_at
+    at = latest_at(event_at, validated_at)
+
+    if within_window?(at, now) do
+      %{
+        base
+        | state: :working,
+          label: "Working",
+          reason: nil,
+          pulse?: false,
+          activity_at: at,
+          elapsed: elapsed(at, now)
+      }
+    else
+      %{base | activity_at: at, elapsed: elapsed(at, now)}
+    end
+  end
+
+  defp latest_at(nil, b), do: b
+  defp latest_at(a, nil), do: a
+  defp latest_at(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
+
+  defp within_window?(%DateTime{} = at, now),
+    do: DateTime.diff(now, at, :second) in 0..@activity_window_seconds
+
+  defp within_window?(_, _), do: false
 
   def recent?(%DateTime{} = at, now), do: DateTime.diff(now, at, :second) in 0..@recent_seconds
   def recent?(_, _), do: false
