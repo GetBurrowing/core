@@ -97,7 +97,7 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   defp readable?(user, scope, :mail, id) do
     case fetch(Platform.Mail.InboundMessage, id) do
       %{org_id: org_id, chat_message_id: message_id} when is_binary(message_id) ->
-        Platform.Mail.can_use?(user, org_id) and Access.can?(scope, "mail.use", {:org, org_id}) and
+        Platform.Mail.can_use?(user, org_id) and Access.can?(scope, "mail.use", org_id) and
           readable?(user, scope, :message, message_id)
 
       _ ->
@@ -131,7 +131,7 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   end
 
   defp memory_readable?(scope, %{org_id: org_id, project_id: project_id}) do
-    target = if project_id, do: {:project, project_id}, else: {:org, org_id}
+    target = if project_id, do: {:project, project_id}, else: org_id
     Access.can?(scope, "memory.read", target)
   end
 
