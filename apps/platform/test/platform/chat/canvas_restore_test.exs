@@ -142,6 +142,20 @@ defmodule Platform.Chat.CanvasRestoreTest do
     assert {:ok, %{revision: 3}} = Server.describe(canvas_id)
   end
 
+  test "out-of-range revision payloads never reach Postgrex or crash the canvas server", c do
+    assert {:error, :invalid_revision} =
+             Restore.restore(c.user, c.canvas.id, 99_999_999_999_999_999_999, 2)
+
+    assert {:error, :invalid_revision} =
+             Restore.restore(c.user, c.canvas.id, 1, 99_999_999_999_999_999_999)
+
+    assert {:error, :revision_not_found} =
+             Server.restore(c.canvas.id, c.user, 99_999_999_999_999_999_999, 2)
+
+    assert {:ok, %{revision: 2}} = Server.describe(c.canvas.id)
+    refute Versions.get(c.canvas.id, 3)
+  end
+
   test "canonical current is retained even when no stored snapshot exists for its revision", c do
     import Ecto.Query
     Repo.delete_all(from(v in Version, where: v.canvas_id == ^c.canvas.id and v.revision == 2))

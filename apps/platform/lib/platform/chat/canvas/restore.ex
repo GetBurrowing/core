@@ -11,9 +11,14 @@ defmodule Platform.Chat.Canvas.Restore do
   alias Platform.Files.BrowserActions
   alias Ecto.Multi
 
+  # canvas_versions.revision is PostgreSQL integer (int4). Check before
+  # any Versions.get/2, including forged legacy drawer confirmation events.
+  @max_revision 2_147_483_647
   def restore(actor, canvas_id, source_revision, expected_revision)
       when is_integer(source_revision) and source_revision > 0 and
-             is_integer(expected_revision) and expected_revision > 0 do
+             source_revision <= @max_revision and
+             is_integer(expected_revision) and expected_revision > 0 and
+             expected_revision <= @max_revision do
     with {:ok, _, _} <- authorize(actor, canvas_id) do
       Server.restore(canvas_id, actor, source_revision, expected_revision)
     end
@@ -53,8 +58,10 @@ defmodule Platform.Chat.Canvas.Restore do
   def perform(state, actor, source_revision, expected_revision) do
     with {:ok, canvas, attribution} <- authorize(actor, state.canvas_id),
          :ok <- at_head(state.revision, expected_revision),
+         true <-
+           is_integer(source_revision) and source_revision > 0 and
+             source_revision < state.revision and source_revision <= @max_revision,
          %Version{} = source <- Versions.get(canvas.id, source_revision),
-         true <- source_revision < state.revision,
          {:ok, document} <-
            CanvasPatch.apply_many(state.document, [{:replace_document, source.document}]),
          {:ok, document, refs} <-
