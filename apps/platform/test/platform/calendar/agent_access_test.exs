@@ -198,6 +198,7 @@ defmodule Platform.Calendar.AgentAccessTest do
 
     for c <- [first, second] do
       assert Repo.get!(Consent, c.id).state == "revoked"
+      assert Repo.get!(Event, c.hold_id).sequence == 1
       assert Repo.get!(Event, c.hold_id).cancelled_at
       assert row(c).receipts[key(c)]["verb"] == "revoked"
       assert {:error, :already_resolved} = Briefings.handle(row(c), key(c), "approve", ctx.owner)

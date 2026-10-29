@@ -428,8 +428,10 @@ defmodule Platform.Calendar.AgentAccess do
   end
 
   defp cancel_hold(consent) do
-    Repo.get!(Event, consent.hold_id)
-    |> CS.change(cancelled_at: DateTime.utc_now())
+    hold = Repo.get!(Event, consent.hold_id)
+
+    hold
+    |> CS.change(cancelled_at: DateTime.utc_now(), sequence: hold.sequence + 1)
     |> Repo.update!()
   end
 
