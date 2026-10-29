@@ -154,6 +154,18 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "h2", "Past")
   end
 
+  test "the phone week strip follows the selected day while the desktop is in Month", %{
+    conn: conn
+  } do
+    {:ok, view, _} = live(conn, "/calendar?view=month")
+    render_click(view, "select_day", %{"date" => "2060-10-29"})
+    assert has_element?(view, "[data-role=calendar-month]")
+
+    for date <- Date.range(~D[2060-10-25], ~D[2060-10-31]) do
+      assert has_element?(view, "button[phx-click=select_day][phx-value-date='#{date}']")
+    end
+  end
+
   test "shared arithmetic lays overlapping native events in separate lanes and clips midnight" do
     first = %{
       kind: :event,

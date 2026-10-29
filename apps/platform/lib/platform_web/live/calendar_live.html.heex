@@ -111,7 +111,7 @@
     <section class={[@view != "agenda" && "lg:hidden"]} data-role="calendar-agenda">
       <div class="mb-4 grid grid-cols-7 gap-1" aria-label="Week strip">
         <button
-          :for={date <- Enum.take(@days, 7)}
+          :for={date <- Date.range(Date.beginning_of_week(@anchor), Date.end_of_week(@anchor))}
           type="button"
           phx-click="select_day"
           phx-value-date={date}
