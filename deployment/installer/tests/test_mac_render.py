@@ -692,7 +692,7 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
 
     def test_generated_identity_collision_is_excluded(self):
         term = planted_term()
-        secret = "safe_" + term.capitalize() + "_" + "x" * 40
+        secret = ("safe_" + term.capitalize() + "_").ljust(64, "x")
         for path in (MAC, MAC_LITE):
             with self.subTest(example=os.path.basename(path)):
                 m = manifest_from(path)

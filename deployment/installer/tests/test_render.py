@@ -501,7 +501,7 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
 
     def test_generated_identity_collision_is_excluded(self):
         term = planted_term()
-        secret = "safe_" + term.capitalize() + "_" + "x" * 40
+        secret = ("safe_" + term.capitalize() + "_").ljust(64, "x")
         for path in (EXAMPLE, MEMORY_OFF, VOICE_CUDA):
             with self.subTest(manifest=os.path.basename(path)):
                 with patch.object(registry._random, "token_urlsafe", return_value=secret) as generate:
