@@ -314,8 +314,8 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     {:ok, _} =
       Grants.deny(%{
         principal: c.allowed,
-        permission: "mail.use",
-        resource: {:org, acme_org_id()}
+        permission: "mail",
+        resource: {:module, acme_org_id()}
       })
 
     refute Visibility.readable_by?(c.allowed.id, {:mail, mail.id})
