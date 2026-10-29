@@ -329,6 +329,11 @@ defmodule PlatformWeb.CalendarLive do
   def joinable?(_), do: false
   def cancelled?(%{kind: :meeting, meeting: %{status: "cancelled"}}), do: true
   def cancelled?(_), do: false
+
+  def scope_label(%{kind: :meeting, meeting: %{project_id: id}}, _, projects) do
+    (Enum.find(projects, &(&1.id == id)) || %{name: "Meeting"}).name
+  end
+
   def scope_label(%{kind: :meeting}, _, _), do: "Meeting"
 
   def scope_label(%{event: %{space_id: id}}, spaces, _) when not is_nil(id),
