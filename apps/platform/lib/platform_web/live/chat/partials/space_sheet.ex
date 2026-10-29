@@ -369,20 +369,13 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
         label="Search in space"
         click={JS.push(page_event(@surface), value: %{page: "search"})}
       />
-      <%!-- Opens the existing canvases drawer. Already open: the sheet just
-           shuts, because `canvas_panel_toggle` would close the drawer; the
-           panel does nothing. --%>
       <.sheet_row
         surface={@surface}
         role={@prefix <> "-canvases"}
-        icon="hero-puzzle-piece"
+        icon="hero-rectangle-group"
         label="Canvases in this space"
         preview={count_preview(@canvases)}
-        click={
-          if @show_canvases,
-            do: lead(@surface),
-            else: lead(@surface) |> JS.push("canvas_panel_toggle")
-        }
+        click={lead(@surface) |> JS.push("space_canvases_browser")}
       />
       <%!-- The phone way into the Members sheet (task 01a1557a-8f80 stage
            3): every space but a DM, like the header entry; the meta is the
@@ -984,9 +977,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
     ~H"""
     <a
-      href={attachment_url(@file)}
-      target="_blank"
-      rel="noopener noreferrer"
+      href={Platform.Chat.LinkTargets.open_href(attachment_url(@file))}
+      {Platform.Chat.LinkTargets.open_attrs(attachment_url(@file))}
       data-role={@prefix <> "-link-row"}
       data-kind={if video?(@file), do: "video", else: "file"}
       class={row_class(@surface)}
@@ -1011,9 +1003,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
     ~H"""
     <a
-      href={@link.url}
-      target="_blank"
-      rel="noopener noreferrer"
+      href={Platform.Chat.LinkTargets.open_href(@link.url)}
+      {Platform.Chat.LinkTargets.open_attrs(@link.url)}
       data-role={@prefix <> "-link-row"}
       data-kind={@link.kind}
       class={row_class(@surface)}

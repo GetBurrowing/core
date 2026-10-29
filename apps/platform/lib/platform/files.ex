@@ -315,6 +315,15 @@ defmodule Platform.Files do
     |> Repo.preload(preload)
   end
 
+  @doc "True for a finalized, non-deleted upload with storage identity; reservations are false."
+  def finalized_upload?(%File{} = file) do
+    is_nil(file.deleted_at) and is_binary(file.content_hash) and file.content_hash != "" and
+      is_binary(file.storage_key) and file.storage_key != "" and is_integer(file.byte_size) and
+      file.byte_size > 0
+  end
+
+  def finalized_upload?(_), do: false
+
   @doc """
   Lists live files across `project_ids`, most recently changed first
   (`updated_at` desc), with `:uploaded_by_user` preloaded for its display
@@ -1339,10 +1348,10 @@ defmodule Platform.Files do
   registration and every later broadcast on the topic is delivered twice.
 
   The caller's obligation is therefore to track what it has subscribed and
-  guard the subscribe. `PlatformWeb.FilesLive` is the shape to copy: it holds
-  the current topic in the `:subscribed_project_id` assign and releases it via
-  `maybe_unsubscribe/1` before subscribing to the next project
-  (apps/platform/lib/platform_web/live/files_live.ex:805).
+  guard the subscribe. `PlatformWeb.Files.BrowserHooks` tracks the complete
+  readable topic set in `:browser_topics` and applies its MapSet differences.
+  It is the browser's sole project-topic owner: entering or leaving a project
+  node changes detail state, not the global Recents/Starred subscriptions.
 
   ASYMMETRY — do NOT reflexively pair every subscribe with an unsubscribe.
   One `Registry.unregister/2` takes that pid's count for the key to 0, not to

@@ -2118,7 +2118,7 @@ defmodule PlatformWeb.InboxLiveTest do
     end
 
     # A meeting A and B attended, with two backlog tasks, concluded through
-    # `end_meeting/1` so each has the real Inbox row and briefing.
+    # the deadline fallback so each has the real Inbox row and briefing.
     defp concluded_meeting! do
       n = System.unique_integer([:positive])
 
@@ -2159,6 +2159,14 @@ defmodule PlatformWeb.InboxLiveTest do
       t1 = graduate_task!(live, "somebody should rotate the S3 keys")
       t2 = graduate_task!(live, "somebody should renew the TLS certs")
       {:ok, ended} = Meetings.end_meeting(live)
+      assert is_nil(MeetingBriefings.get_for_attendee(ended.id, a.id))
+
+      ended =
+        ended
+        |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+        |> Repo.update!()
+
+      assert {:ok, %{created: 2}} = MeetingBriefings.deliver(ended)
 
       %{meeting: ended, a: a, b: b, t1: t1, t2: t2}
     end

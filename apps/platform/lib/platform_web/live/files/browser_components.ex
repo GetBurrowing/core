@@ -42,8 +42,8 @@ defmodule PlatformWeb.Files.BrowserComponents do
   alias PlatformWeb.Files.BrowserView
   alias PlatformWeb.FilesLive
 
-  @type_words %{canvas: "Canvases", game: "Games", doc: "Docs", image: "Images"}
-  @type_singular %{canvas: "canvases", game: "games", doc: "docs", image: "images"}
+  @type_words %{file: "Files", canvas: "Canvases", game: "Games", doc: "Docs", image: "Images"}
+  @type_singular %{file: "files", canvas: "canvases", game: "games", doc: "docs", image: "images"}
   @type_icons %{
     canvas: "hero-rectangle-group",
     game: "hero-puzzle-piece",
@@ -116,6 +116,8 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   defp header_title(%{mode: :browse, node: :all, type: type}) when not is_nil(type),
     do: type_word(type)
+
+  defp header_title(%{mode: :starred}), do: "Starred"
 
   defp header_title(_browser), do: "Files"
 
@@ -288,7 +290,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
       assign(
         assigns,
         :types,
-        [nil, :canvas] ++ if(assigns.games, do: [:game], else: []) ++ [:doc, :image]
+        [nil, :canvas] ++ if(assigns.games, do: [:game], else: []) ++ [:file, :doc, :image]
       )
 
     ~H"""
@@ -311,6 +313,13 @@ defmodule PlatformWeb.Files.BrowserComponents do
           role="files-tab-browse"
         >
           Browse
+        </.chip>
+        <.chip
+          href={BrowserView.browser_path(%{"tab" => "starred"}, %{"type" => @browser.params["type"]})}
+          selected={@browser.mode == :starred}
+          role="files-tab-starred"
+        >
+          Starred
         </.chip>
         <span class="mx-1 h-5 w-px shrink-0 bg-edge" aria-hidden="true"></span>
       <% end %>
@@ -417,6 +426,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
         {count_text(@browser)}
       </span>
       <.link
+        :if={@browser.mode != :starred}
         patch={BrowserView.browser_path(@browser.params, %{"sort" => next_sort(@browser.sort)})}
         data-role="files-sort"
         data-sort={@browser.sort}
@@ -476,7 +486,10 @@ defmodule PlatformWeb.Files.BrowserComponents do
           <span class="inline-flex size-11 shrink-0 items-center justify-center rounded-box border border-edge bg-base-200 text-base-content">
             <.icon name={node_icon(node.kind)} class="size-5" />
           </span>
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
+          <span
+            data-role="files-node-title"
+            class="min-w-0 flex-1 truncate text-sm font-medium text-base-content"
+          >
             {node.label}
           </span>
           <.icon name="hero-chevron-right" class="size-4 shrink-0 text-subtle" />
@@ -503,6 +516,10 @@ defmodule PlatformWeb.Files.BrowserComponents do
   attr :claims, :map, default: %{}
 
   @doc "The list layout (default)."
+  attr :viewer, :map, default: %{}
+  attr :editing, :any, default: nil
+  attr :revision, :integer, default: 0
+
   def item_list(assigns) do
     assigns = assign_from(assigns)
 
@@ -511,6 +528,12 @@ defmodule PlatformWeb.Files.BrowserComponents do
       <li
         :for={item <- @browser.items}
         data-role={if Map.has_key?(@file_rows, item.id), do: "files-row", else: "browser-row"}
+        id={"browser-#{item.kind}-#{item.id}"}
+        phx-hook="BrowserRow"
+        data-long-press-event="browser_open_actions"
+        data-long-press-kind={item.kind}
+        data-long-press-id={item.id}
+        data-editing={to_string(@editing == {item.kind, item.id})}
         data-item-id={item.id}
         data-kind={item.kind}
         data-type={item.type}
@@ -519,7 +542,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
         data-ingest-intent={file_attr(@file_rows, item, :ingest_intent)}
         data-location={to_string(@show_location)}
         data-row-grid
-        class="group grid grid-cols-[2.75rem_minmax(0,1fr)_auto] grid-rows-[1fr_1fr] gap-x-3 px-4 py-2 active:bg-base-100 data-[location=false]:grid-rows-[1fr_0]"
+        class="group relative grid grid-cols-[2.75rem_minmax(0,1fr)_auto] grid-rows-[1fr_1fr] gap-x-3 px-4 py-2 active:bg-base-100 data-[location=false]:grid-rows-[1fr_0]"
       >
         <%!-- Prototype v3 :641-646: the title and the location line sit
              BESIDE the 44px tile, inside its height (row 60px). The item
@@ -534,10 +557,20 @@ defmodule PlatformWeb.Files.BrowserComponents do
           <span class="row-start-1 row-end-3 flex self-center" data-role="files-row-tile">
             <.thumb item={item} />
           </span>
-          <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content col-start-2 row-start-1 self-end group-data-[location=false]:self-center">
+          <span
+            :if={@editing != {item.kind, item.id}}
+            data-role="files-row-title"
+            class="min-w-0 flex-1 truncate lg:pr-16 text-[15px] font-semibold text-base-content col-start-2 row-start-1 self-end group-data-[location=false]:self-center"
+          >
             {title(item)}
           </span>
         </.item_link>
+        <PlatformWeb.Files.ItemActions.title_field
+          :if={@editing == {item.kind, item.id}}
+          item={item}
+          class="col-start-2 row-start-1 relative z-20"
+        />
+        <PlatformWeb.Files.ItemActions.affordances item={item} viewer={@viewer} revision={@revision} />
         <%= if file = Map.get(@file_rows, item.id) do %>
           <span
             class={[
@@ -634,6 +667,13 @@ defmodule PlatformWeb.Files.BrowserComponents do
   attr :show_location, :boolean, required: true
 
   @doc "The grid layout: base-100 tiles with border-edge, a thumbnail or the glyph."
+  attr :viewer, :map, default: %{}
+  attr :editing, :any, default: nil
+  attr :revision, :integer, default: 0
+
+  attr :previews, :map, default: %{}
+  attr :presence, :map, default: %{}
+
   def item_grid(assigns) do
     assigns = assign_from(assigns)
 
@@ -645,10 +685,16 @@ defmodule PlatformWeb.Files.BrowserComponents do
       <li
         :for={item <- @browser.items}
         data-role="browser-tile"
+        id={"browser-#{item.kind}-#{item.id}"}
+        phx-hook="BrowserRow"
+        data-long-press-event="browser_open_actions"
+        data-long-press-kind={item.kind}
+        data-long-press-id={item.id}
+        data-editing={to_string(@editing == {item.kind, item.id})}
         data-item-id={item.id}
         data-kind={item.kind}
         data-type={item.type}
-        class="flex min-w-0 flex-col overflow-hidden rounded-box border border-edge bg-base-100"
+        class="group relative flex min-w-0 flex-col overflow-hidden rounded-box border border-edge bg-base-100"
       >
         <.item_link
           item={item}
@@ -656,8 +702,13 @@ defmodule PlatformWeb.Files.BrowserComponents do
           class="flex min-w-0 flex-col active:bg-base-200 focus-visible-ring"
         >
           <.game_thumb :if={item.type == :game} item={item} />
+          <PlatformWeb.Files.CanvasCard.thumbnail
+            :if={item.type == :canvas}
+            preview={Map.get(@previews, item.id)}
+            presence={Map.get(@presence, item.id)}
+          />
           <span
-            :if={item.type != :game}
+            :if={item.type not in [:game, :canvas]}
             class="flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-base-200 text-base-content"
           >
             <img
@@ -669,10 +720,27 @@ defmodule PlatformWeb.Files.BrowserComponents do
             />
             <.icon :if={!item.thumb_src} name={type_icon(item.type)} class="size-8" />
           </span>
-          <span class="truncate px-3 pt-2 text-sm font-medium text-base-content">
+          <span
+            :if={@editing != {item.kind, item.id}}
+            data-role="files-grid-title"
+            class="line-clamp-2 px-3 pt-2 lg:pr-16 text-[15px] font-semibold text-base-content"
+          >
             {title(item)}
           </span>
         </.item_link>
+        <PlatformWeb.Files.ItemActions.title_field
+          :if={@editing == {item.kind, item.id}}
+          item={item}
+          class="relative z-20 px-3 pt-2"
+        />
+        <PlatformWeb.Files.ItemActions.affordances item={item} viewer={@viewer} revision={@revision} />
+        <span
+          :if={item.type == :canvas}
+          data-role="canvas-card-edited"
+          class="px-3 pb-1 text-[13px] text-subtle"
+        >
+          Edited {card_age(item.at)}<span :if={get_in(@previews, [item.id, :editor])}> by {get_in(@previews, [item.id, :editor])}</span>
+        </span>
         <%!-- Tiles show the copy marker always, and author and age as
              width allows, on a second line under the location (stage 5). --%>
         <.location_line
@@ -686,6 +754,19 @@ defmodule PlatformWeb.Files.BrowserComponents do
       </li>
     </ul>
     """
+  end
+
+  defp card_age(nil), do: "recently"
+
+  defp card_age(at) do
+    seconds = max(DateTime.diff(DateTime.utc_now(), at), 0)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3600 -> "#{div(seconds, 60)}m ago"
+      seconds < 86_400 -> "#{div(seconds, 3600)}h ago"
+      true -> "#{div(seconds, 86_400)}d ago"
+    end
   end
 
   # ── Shared row parts ─────────────────────────────────────────────────────
@@ -925,10 +1006,21 @@ defmodule PlatformWeb.Files.BrowserComponents do
       >
         <.icon name="hero-clock" class="size-4" /> Recents
       </.link>
+      <.link
+        patch="/files?tab=starred"
+        data-role="files-tree-starred"
+        aria-current={if @browser.mode == :starred, do: "page", else: "false"}
+        class={[
+          "mx-2 flex min-h-11 items-center gap-2 rounded-field px-3 text-sm text-base-content focus-visible-ring",
+          if(@browser.mode == :starred, do: "bg-base-300 font-semibold", else: "active:bg-base-200")
+        ]}
+      >
+        <.icon name="hero-star" class="size-4" /> Starred
+      </.link>
       <div
         :for={%{org: org, projects: projects, spaces: spaces} <- @tree.orgs}
         data-role="files-tree-org"
-        data-org-slug={org.slug}
+        data-org-slug={if !Map.get(@labels, :masked?, true), do: org.slug}
         data-org-id={org.id}
         class="mt-2"
       >
@@ -1058,13 +1150,15 @@ defmodule PlatformWeb.Files.BrowserComponents do
       data-role="files-browser-empty"
       class="flex min-h-[40vh] flex-col items-center justify-center px-6 text-center"
     >
-      <.icon name="hero-folder-open" class="size-10 text-subtle" />
+      <.icon :if={@browser.mode != :starred} name="hero-folder-open" class="size-10 text-subtle" />
       <p class="mt-3 max-w-md text-sm text-subtle">{@copy}</p>
     </div>
     """
   end
 
   @doc false
+  def empty_copy(%{mode: :starred}, _labels), do: "Star canvases and files to keep them here."
+
   def empty_copy(%{mode: :search, q: q}, _labels),
     do: ~s(Nothing matches "#{q}". Searched project file names and canvas titles and text.)
 

@@ -26,6 +26,22 @@ defmodule PlatformWeb.Components.ChatVersionHistory do
 
   alias PlatformWeb.Components.ChatHelpers
 
+  @doc "Clock label shared by canvas history; timestamps remain data, not fixed copy."
+  def clock(%DateTime{} = at), do: at |> Calendar.strftime("%I:%M %p") |> String.trim_leading("0")
+  def clock(_), do: "Unknown time"
+
+  def history_time(at, today \\ Date.utc_today())
+
+  def history_time(%DateTime{} = at, today) do
+    case Date.diff(today, DateTime.to_date(at)) do
+      0 -> clock(at)
+      1 -> "Yesterday " <> clock(at)
+      _ -> Calendar.strftime(at, "%b %-d ") <> clock(at)
+    end
+  end
+
+  def history_time(_, _), do: "Unknown time"
+
   @typedoc "One run of a word diff: kept, removed or added text."
   @type diff_op :: {:eq | :del | :ins, String.t()}
 

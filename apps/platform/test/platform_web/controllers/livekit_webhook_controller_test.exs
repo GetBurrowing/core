@@ -441,7 +441,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
     # Task 01a1694a stage 2: conclusion delivers the meeting briefing — ONE
     # briefing row and ONE Inbox row per attendee — and a replayed
     # room_finished (LiveKit retries webhooks) adds nothing.
-    test "room_finished delivers one meeting briefing, and a replay adds nothing", %{conn: conn} do
+    test "room_finished defers briefing until deadline, and replay adds nothing", %{conn: conn} do
       import Ecto.Query, only: [from: 2]
 
       {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook Brief #{unique_room_id()}"})
@@ -450,6 +450,11 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
         Meetings.create_meeting(%{project_id: project.id, name: "Brief Me #{unique_room_id()}"})
 
       {:ok, live} = Meetings.start_meeting(meeting)
+
+      live =
+        live
+        |> Ecto.Changeset.change(started_at: DateTime.add(DateTime.utc_now(), -3600))
+        |> Platform.Repo.update!()
 
       n = System.unique_integer([:positive])
 
@@ -470,7 +475,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
         room_id: room.id,
         user_id: attendee.id,
         display_name: "Attendee",
-        joined_at: DateTime.add(live.started_at, -1, :second)
+        joined_at: DateTime.add(live.started_at, 60, :second)
       })
 
       payload = %{
@@ -481,7 +486,26 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert json_response(post(conn, @livekit_webhook_path, payload), 200)
       assert json_response(post(build_conn(), @livekit_webhook_path, payload), 200)
 
-      assert Meetings.get_meeting(live.id).status == "ended"
+      ended = Meetings.get_meeting(live.id)
+      assert ended.status == "ended"
+
+      assert Platform.Repo.all(
+               from(b in Platform.Meetings.MeetingBriefing, where: b.meeting_id == ^live.id)
+             ) == []
+
+      assert Platform.Repo.all(
+               from(i in Platform.Inbox.Item,
+                 where: i.user_id == ^attendee.id and i.kind == "meeting_briefing"
+               )
+             ) == []
+
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Platform.Repo.update!()
+
+      Meetings.Completion.sweep()
+      assert json_response(post(build_conn(), @livekit_webhook_path, payload), 200)
+      Meetings.Completion.sweep()
 
       briefings =
         Platform.Repo.all(

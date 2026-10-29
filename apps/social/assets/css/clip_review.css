@@ -1,0 +1,74 @@
+/* Only desktop review is a bounded desk. Phone retains its document flow
+   and existing fixed decision bar. The hook measures the bay's actual top,
+   so shell headers, episode outcomes and viewport changes all count. */
+@media (min-width: 761px) {
+  [data-role="clips-bay"] {
+    height: var(--clips-bay-height, calc(100dvh - 16rem));
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  [data-role="clips-queue"],
+  [data-role="clips-stage"],
+  [data-role="clips-details"] {
+    min-height: 0;
+  }
+
+  [data-role="clips-queue"] > * {
+    flex-shrink: 0;
+  }
+
+  [data-role="clips-stage"] {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: center;
+  }
+
+  [data-role="clips-player-stack"] {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    align-self: stretch;
+  }
+
+  [data-role="clips-pv-row"] {
+    container-type: size;
+    min-height: 0;
+    align-items: center;
+  }
+
+  [data-role="clip-player"] {
+    width: min(100%, calc(100cqh * 9 / 16));
+    min-width: 0;
+  }
+
+  [data-role="clip-scrub"] {
+    width: 100%;
+    max-width: 26.25rem;
+    justify-self: center;
+  }
+
+  [data-role="clips-details-body"] {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1rem;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 1rem;
+  }
+
+  [data-role="clips-details-body"] > * {
+    flex-shrink: 0;
+  }
+
+  [data-role="episode-jobs"] {
+    max-height: min(18dvh, 8rem);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+}

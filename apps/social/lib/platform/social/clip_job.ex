@@ -1,15 +1,20 @@
 defmodule Platform.Social.ClipJob do
   @moduledoc """
   One job on Clip Studio's job list (task 01a16661-e234, Clip Studio 1/9):
-  what the htc-clip-tool contract calls the render queue. A human enqueues
-  it through `Platform.Social.ClipJobs`; a runner agent claims it, reports
-  progress, and completes or fails it.
+  what the htc-clip-tool contract calls the render queue. Humans enqueue
+  manual jobs through `Platform.Social.ClipJobs`; EpisodeDiscovery queues
+  source-level episode jobs automatically. A runner claims each job,
+  reports progress, and completes or fails it.
 
-  `kind` is `new_clip`, `rerender` or `save_default` (a plain string with the
-  named CHECK `social_clip_jobs_kind_check`, so a later kind is a CHECK
+  `kind` is `new_clip`, `rerender`, `save_default` or `episode` (a plain
+  string with the named CHECK `social_clip_jobs_kind_check`, so a later kind is a CHECK
   change, never an enum migration). `status` runs `queued` -> `claimed` ->
   `running` -> `done` | `failed`. At most one open job per clip (partial
   unique index `social_clip_jobs_one_open_per_clip`).
+
+  An `episode` has a source file and pipeline identity, no clip yet, and no
+  requesting user. Its profile/source/pipeline identity is unique across
+  every status so reconciliation never resubmits a completed or failed source.
 
   `payload` is what the runner needs (built by `Platform.Social.ClipJobs`,
   string keys); `result` is the runner's whitelisted answer.
@@ -21,7 +26,7 @@ defmodule Platform.Social.ClipJob do
   @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
 
-  @kinds ~w(new_clip rerender save_default)
+  @kinds ~w(new_clip rerender save_default episode)
   @statuses ~w(queued claimed running done failed)
   @open_statuses ~w(queued claimed running)
 
@@ -30,6 +35,8 @@ defmodule Platform.Social.ClipJob do
   schema "social_clip_jobs" do
     belongs_to(:profile, Platform.Social.Profile)
     belongs_to(:clip, Platform.Social.Clip)
+    belongs_to(:source_file, Platform.Files.File)
+    belongs_to(:episode_pipeline, Platform.Social.EpisodePipeline)
     field(:kind, :string)
     field(:status, :string, default: "queued")
     field(:progress, :float)
@@ -61,11 +68,20 @@ defmodule Platform.Social.ClipJob do
   @spec enqueue_changeset(t(), map()) :: Ecto.Changeset.t()
   def enqueue_changeset(%__MODULE__{} = job, attrs) do
     job
-    |> cast(attrs, [:profile_id, :clip_id, :kind, :payload, :requested_by_user_id])
+    |> cast(attrs, [
+      :profile_id,
+      :clip_id,
+      :kind,
+      :payload,
+      :requested_by_user_id,
+      :source_file_id,
+      :episode_pipeline_id
+    ])
     |> put_change(:status, "queued")
     |> validate_required([:profile_id, :kind, :payload])
     |> validate_inclusion(:kind, @kinds)
     |> validate_clip()
+    |> validate_episode()
     |> job_constraints()
   end
 
@@ -104,9 +120,24 @@ defmodule Platform.Social.ClipJob do
   end
 
   defp validate_clip(changeset) do
-    if get_field(changeset, :kind) != "save_default",
+    if get_field(changeset, :kind) not in ["save_default", "episode"],
       do: validate_required(changeset, [:clip_id]),
       else: changeset
+  end
+
+  defp validate_episode(changeset) do
+    if get_field(changeset, :kind) == "episode" do
+      changeset
+      |> validate_required([:source_file_id, :episode_pipeline_id])
+      |> validate_change(:clip_id, fn :clip_id, _ ->
+        [clip_id: "must be absent for an episode"]
+      end)
+      |> validate_change(:requested_by_user_id, fn :requested_by_user_id, _ ->
+        [requested_by_user_id: "must be absent for an automatic episode"]
+      end)
+    else
+      changeset
+    end
   end
 
   defp job_constraints(changeset) do
@@ -120,6 +151,12 @@ defmodule Platform.Social.ClipJob do
       name: :social_clip_jobs_one_open_per_clip,
       message: "already has an open job"
     )
+    |> check_constraint(:source_file_id, name: :social_clip_jobs_episode_source_check)
+    |> unique_constraint([:profile_id, :source_file_id, :episode_pipeline_id],
+      name: :social_clip_jobs_one_per_episode
+    )
+    |> foreign_key_constraint(:source_file_id)
+    |> foreign_key_constraint(:episode_pipeline_id)
     |> foreign_key_constraint(:profile_id)
     |> foreign_key_constraint(:clip_id)
     |> foreign_key_constraint(:claimed_by_agent_id)

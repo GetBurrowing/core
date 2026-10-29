@@ -18,7 +18,7 @@ defmodule Platform.Social.ClipVersions do
       {:ok,
        Repo.all(
          from(r in ClipRender,
-           where: r.clip_id == ^clip_id,
+           where: r.clip_id == ^clip_id and is_nil(r.removed_at),
            order_by: [desc: r.rev],
            limit: ^min(max(limit, 1), 50)
          )
@@ -34,7 +34,11 @@ defmodule Platform.Social.ClipVersions do
          %{} <- Social.get_profile(scope, profile_id),
          %Clip{profile_id: ^profile_id} <- Social.get_clip(scope, clip_id),
          %ClipRender{} = render <-
-           Repo.one(from(r in ClipRender, where: r.clip_id == ^clip_id and r.id == ^version_id)) do
+           Repo.one(
+             from(r in ClipRender,
+               where: r.clip_id == ^clip_id and r.id == ^version_id and is_nil(r.removed_at)
+             )
+           ) do
       {:ok, render}
     else
       _ -> {:error, :not_found}
@@ -45,6 +49,7 @@ defmodule Platform.Social.ClipVersions do
   def append!(clip_id, file, attrs, snapshot) do
     unless Repo.in_transaction?(), do: raise("append! requires a transaction")
     clip = Repo.one!(from(c in Clip, where: c.id == ^clip_id, lock: "FOR UPDATE"))
+    if clip.removed_at, do: Repo.rollback(:not_found)
     key = snapshot[:completion_key]
 
     duplicate =
@@ -58,8 +63,7 @@ defmodule Platform.Social.ClipVersions do
     if duplicate do
       clip
     else
-      last_rev = Repo.one(from(r in ClipRender, where: r.clip_id == ^clip_id, select: max(r.rev)))
-      rev = if last_rev, do: max(last_rev, clip.rev) + 1, else: clip.rev
+      rev = next_rev(clip)
 
       clip =
         clip
@@ -101,6 +105,12 @@ defmodule Platform.Social.ClipVersions do
     end
   end
 
+  @doc "Next allocation includes removed snapshots, so deletion never reuses a revision."
+  def next_rev(clip) do
+    last = Repo.one(from(r in ClipRender, where: r.clip_id == ^clip.id, select: max(r.rev)))
+    if last, do: max(last, clip.rev) + 1, else: clip.rev
+  end
+
   defp update!(changeset) do
     case Repo.update(changeset) do
       {:ok, clip} -> clip
@@ -110,6 +120,8 @@ defmodule Platform.Social.ClipVersions do
 
   @doc "Read-only tool representation, without Ecto metadata."
   def metadata(render) do
-    render |> Map.from_struct() |> Map.drop([:__meta__, :clip, :file, :submitted_by_agent])
+    render
+    |> Map.from_struct()
+    |> Map.drop([:__meta__, :clip, :file, :submitted_by_agent, :removed_by_user])
   end
 end

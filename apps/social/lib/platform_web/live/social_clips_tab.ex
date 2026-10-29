@@ -76,11 +76,24 @@ defmodule PlatformWeb.SocialClipsTab do
     case socket.assigns.profile do
       %{id: profile_id} when profile_id == clip.profile_id ->
         send_update(PlatformWeb.SocialClipsReview, id: "social-clips-review", clip_event: clip)
+
+        if socket.assigns.clips_view == "library" do
+          send_update(PlatformWeb.SocialClipsLibrary, id: "social-clips-library", refresh: true)
+        end
+
         {:noreply, load_count(socket)}
 
       _ ->
         {:noreply, socket}
     end
+  end
+
+  def handle_info({:social_clip_job, %{profile_id: profile_id}}, socket) do
+    if socket.assigns.profile && socket.assigns.profile.id == profile_id do
+      send_update(PlatformWeb.SocialClipsReview, id: "social-clips-review", job_event: true)
+    end
+
+    {:noreply, socket}
   end
 
   # The Review bay's segmented control.
@@ -113,6 +126,8 @@ defmodule PlatformWeb.SocialClipsTab do
       :if={@clips_view == "library"}
       module={PlatformWeb.SocialClipsLibrary}
       id="social-clips-library"
+      profile={@profile}
+      user_id={@user.id}
     />
     <.live_component module={PlatformWeb.SocialClipNew} id="social-clip-new" />
     """

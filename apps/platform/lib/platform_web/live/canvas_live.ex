@@ -122,14 +122,16 @@ defmodule PlatformWeb.CanvasLive do
     viewer = viewer_actor(socket)
     # Extension kinds' events (e.g. a `game_stream` node's, task 01a0db5f
     # stage 4; ADR 0055). See the moduledoc's read-only section.
-    socket = Extensions.attach_live_hooks(socket)
+    socket =
+      socket |> PlatformWeb.Canvases.VersionHistory.attach() |> Extensions.attach_live_hooks()
 
     # `audit: false` on the connected mount — see the moduledoc. The
     # disconnected render already recorded this arrival.
-    opts = [audit: not connected?(socket)]
+    opts = [audit: not connected?(socket), access_scope: socket.assigns[:access_scope]]
 
     case CanvasAccess.fetch_for_viewer(canvas_id, viewer, opts) do
       {:ok, canvas, level} ->
+        if connected?(socket), do: Chat.PubSub.subscribe_canvas(canvas.id)
         # One read of the parent space feeds both the crumb and the close
         # destination. It was already loaded for the crumb; the exit reuses it
         # rather than issuing a second query for the same row.
@@ -144,7 +146,10 @@ defmodule PlatformWeb.CanvasLive do
          |> assign(:canvas_url, canvas_url(canvas.id))
          |> assign(:revision, CanvasDocument.revision(canvas.document))
          |> assign_provenance(canvas, space)
-         |> assign_close_path(space, level)}
+         |> assign_close_path(space, level)
+         |> PlatformWeb.Canvases.VersionHistory.refresh()
+         |> PlatformWeb.Files.CanvasStarHooks.attach()
+         |> PlatformWeb.Files.CanvasEngagement.attach()}
 
       {:error, reason} when reason in [:forbidden, :not_found] ->
         {:ok,
@@ -172,6 +177,31 @@ defmodule PlatformWeb.CanvasLive do
     # Read-only surface. Interactive canvas nodes stay rendered for citation
     # parity, so their events still reach us; they resolve to nothing here.
     {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:canvas_deleted, %{id: id}}, socket) do
+    if socket.assigns[:canvas] && socket.assigns.canvas.id == id do
+      # A deletion or ownership move retires this subscribed generation. Clear
+      # the document before navigating; the fresh mount reauthorizes the URL.
+      Chat.PubSub.unsubscribe_canvas(id)
+
+      {:noreply,
+       socket
+       |> assign(:canvas, nil)
+       |> assign(:load_error, :not_found)
+       |> push_navigate(to: ~p"/canvases/#{id}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  def on_access_changed(socket) do
+    socket
+    |> PlatformWeb.Files.CanvasEngagement.refresh()
+    |> PlatformWeb.Canvases.VersionHistory.refresh()
   end
 
   # ── Denial context (stage 4) ──────────────────────────────────────────────

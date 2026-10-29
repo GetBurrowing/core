@@ -12,10 +12,10 @@ defmodule Platform.Social.ToolDefinitions do
   1/9) submit a clip rendered outside Burrow for review, (Social 5/7)
   queue a clip's render and list clips with their render and review state,
   (Social 6/7) file a social task for an ask heard in a meeting or chat,
-  and (Clip Studio 1/9) five tools a clip runner uses to work Clip Studio's
-  job list (list, claim, progress, complete, fail), and (Social authoring
+  and six tools a clip runner uses to work Clip Studio's
+  job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Seventeen in all. No tool
+  Nineteen in all. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -33,7 +33,7 @@ defmodule Platform.Social.ToolDefinitions do
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
             social_post_list social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
-            social_clip_job_progress social_clip_job_complete social_clip_job_fail
+            social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
             social_idea_create social_idea_list social_idea_note_add)
 
   @doc "The sentence every tool's description carries."
@@ -482,7 +482,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_job_list",
         description:
-          "List a profile's Clip Studio jobs (new_clip, rerender, save_default), each with the payload a clip runner needs. Humans enqueue jobs in Burrow; no tool creates one. " <>
+          "List a profile's Clip Studio jobs (episode, new_clip, rerender, save_default), each with the payload a clip runner needs. Humans enqueue jobs in Burrow; no tool creates one. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -518,20 +518,66 @@ defmodule Platform.Social.ToolDefinitions do
         when_to_use: "Before running `clip` for a queued job."
       },
       %{
+        name: "social_clip_job_source",
+        description:
+          "Download the episode source or selected project music asset of a job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{
+            type: "string",
+            required: true,
+            description: "Your open claimed/running job id."
+          },
+          asset: %{
+            type: "string",
+            required: false,
+            enum: ["episode", "music"],
+            description:
+              "Defaults to episode; music resolves only the persisted selected audio asset."
+          }
+        },
+        returns: "%{file_id, project_id, url, expires_at, content_type, byte_size}",
+        limitations:
+          "Only the claimer of a claimed/running job. Music must be the persisted selected asset. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
+            @job_errors <> " " <> @privacy_null,
+        when_to_use:
+          "After claiming an episode, to fetch its source automatically; call again if a download URL expired."
+      },
+      %{
         name: "social_clip_job_progress",
         description:
-          "Report progress on a job you claimed; the job becomes running. " <>
+          "Report progress on a job you claimed; the job becomes running. With picks, atomically register an episode's stable pick plan and return its child jobs. Generated headline text must stay local. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
           job_id: %{type: "string", required: true, description: "The job id."},
           progress: %{type: "number", required: true, description: "Fraction done, 0 to 1."},
+          picks: %{
+            type: "array",
+            schema: %{
+              type: "array",
+              maxItems: 100,
+              items: %{
+                type: "object",
+                required: ["candidate_id", "in_s", "out_s"],
+                additionalProperties: false,
+                properties: %{
+                  candidate_id: %{type: "string", minLength: 1, maxLength: 200},
+                  in_s: %{type: "number", minimum: 0},
+                  out_s: %{type: "number", minimum: 0}
+                }
+              }
+            },
+            required: false,
+            description:
+              "Episode claimer only: stable content-free pick plan, each {candidate_id, in_s, out_s}. Persisted atomically; replay returns the same child jobs. No headline/transcript text."
+          },
           eta_s: %{
             type: "number",
             required: false,
             description: "Estimated seconds left (>= 0)."
           }
         },
-        returns: "%{job: #{@job_row}}",
+        returns: "%{job: #{@job_row}}; with picks: %{jobs: [#{@job_row}]}",
         limitations: @job_errors <> " " <> @privacy_null,
         when_to_use: "While `clip` runs, so the studio's render queue shows progress."
       },
@@ -541,6 +587,12 @@ defmodule Platform.Social.ToolDefinitions do
           "Complete a job you claimed with the rendered video and its metadata (the social_clip_submit arguments). For new_clip and rerender the clip gets the new file and a new rev and returns to review as pending; save_default writes no clip. " <>
             @runner_contract <> " " <> @review_only <> " " <> @human_approves,
         parameters: %{
+          headline_applied: %{
+            type: "boolean",
+            required: false,
+            description:
+              "For automatic episode children: true only after headline-review/1 verification and a fresh finalized render. Never export generated headline text."
+          },
           job_id: %{type: "string", required: true, description: "The job id."},
           file_id: %{
             type: "string",

@@ -1476,6 +1476,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # halting here would stop the event reaching CanvasHooks and would make this
   # module's hook ordering load-bearing for a guard that belongs to CanvasHooks.
   # Each hook decides for itself what it will render.
+  defp handle_info({:canvas_deleted, canvas}, socket) do
+    socket =
+      if same_active_space?(socket, canvas) do
+        canvas.id
+        |> Chat.list_message_ids_for_canvas()
+        |> Enum.reduce(socket, &reinsert_stream_message(&2, &1))
+      else
+        socket
+      end
+
+    {:cont, socket}
+  end
+
   defp handle_info({:canvas_updated, canvas}, socket) do
     socket =
       if same_active_space?(socket, canvas) do

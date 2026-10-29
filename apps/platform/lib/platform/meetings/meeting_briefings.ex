@@ -20,35 +20,26 @@ defmodule Platform.Meetings.MeetingBriefings do
   **Content** — rebuilt on every run and stored under the reserved key
   `"_content"`, which is not an item:
 
-    * `"open_questions"` — candidates classified `open_question`;
-    * `"unfiled_action_items"` — candidates classified `action_items` that
+    * `"open_questions"` — accepted candidates classified `open_question`;
+    * `"unfiled_action_items"` — accepted candidates classified `action_items` that
       never got a task;
     * `"transcript_url"` — `/meetings/<slug>`.
 
   Both candidate lists leave out a candidate closed as `retracted`,
   `duplicate` or `vetoed`: those were taken back in the meeting.
 
-  **Summary** — `summary` and `transcript_id` come from the newest
-  `complete` transcript in the meeting's chat space that completed at or
-  after the meeting started.
+  **Summary** — complete transcripts explicitly owned by this meeting, or
+  historical transcripts captured within its start/end bounds. Space-level
+  completion timestamps never associate transcripts with a meeting.
 
-  ## Delivery (stage 2)
+  ## Delivery
 
-  `deliver/1` builds, then writes ONE Inbox row per attendee
-  (`Platform.Inbox.upsert_meeting_briefing_item/3`) and pushes ONCE per
-  attendee per meeting: only when that attendee's row was `:created`. A
-  rebuild re-lists an existing row as unread only when it added items
-  (`new_keys != []`), and never pushes again. Its callers:
-
-    * `Platform.Meetings.end_meeting/1` — the meeting's only live→ended
-      transition, i.e. conclusion, not one person leaving;
-    * `Platform.Meetings.complete_transcript/2`, through
-      `refresh_for_transcript/1` — merges the summary;
-    * `Platform.Meetings.Triage.file_tasks_from_canvas/2` — merges tasks
-      filed from the transcript after the meeting.
-
-  Every caller wraps it in a rescue: a briefing failure never fails the
-  meeting, the transcript or the triage pass that triggered it.
+  Completion callbacks and the 30-second completion sweeper recompute readiness
+  from the durable captured snapshot. Delivery waits for every owned summary,
+  the committed full filing ledger, and any synthesis prerequisite registered
+  for that snapshot. The fallback deadline is `ended_at + 20 minutes`.
+  Inbox uniqueness arbitrates each attendee's first push; later merges do not
+  push. No automatic delivery runs inside a filing transaction.
 
   ## Reading and acting (stage 3)
 
@@ -78,6 +69,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   alias Platform.Chat.Canvas
   alias Platform.Inbox
   alias Platform.Meetings
+  alias Platform.Meetings.CompletionRun
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingCandidate
@@ -223,6 +215,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       from(c in MeetingCandidate,
         where: c.meeting_id == ^meeting.id,
         where: c.classified_intent in ["open_question", "action_items"],
+        where: c.disposition == :accepted,
         where: is_nil(c.closed_reason) or c.closed_reason not in ^@withdrawn_reasons,
         order_by: [asc: c.inserted_at, asc: c.id],
         select: %{
@@ -234,34 +227,127 @@ defmodule Platform.Meetings.MeetingBriefings do
       )
       |> Repo.all()
 
+    filed_candidate_ids = filed_candidate_ids(meeting)
+
     %{
       "open_questions" => for(%{intent: "open_question"} = c <- candidates, do: content_entry(c)),
       "unfiled_action_items" =>
-        for(%{intent: "action_items", task_id: nil} = c <- candidates, do: content_entry(c)),
+        for(
+          %{intent: "action_items", task_id: nil} = c <- candidates,
+          not MapSet.member?(filed_candidate_ids, c.id),
+          do: content_entry(c)
+        ),
+      "missing_prerequisites" => readiness(meeting).missing,
       "transcript_url" => "/meetings/" <> meeting.slug
     }
+  end
+
+  # Only identity can reconcile a candidate with a final checklist item. A
+  # shared canvas or similar title is not evidence that this action was filed.
+  # Keep the task query canonical, including its soft-deletion/access scope.
+  defp filed_candidate_ids(meeting) do
+    tasks =
+      meeting
+      |> Meetings.meeting_tasks_query()
+      |> select([task: t], %{id: t.id, metadata: t.metadata})
+      |> Repo.all()
+
+    task_ids = MapSet.new(tasks, & &1.id)
+    direct_ids = Enum.map(tasks, & &1.metadata["candidate_id"])
+
+    ledger_ids =
+      case Repo.get_by(CompletionRun, meeting_id: meeting.id) do
+        nil ->
+          []
+
+        run ->
+          for {_item_id, entry} <- run.item_results || %{},
+              entry["status"] == "processed",
+              Enum.any?(
+                (entry["task_ids"] || []) ++ (entry["existing_task_ids"] || []),
+                &MapSet.member?(task_ids, &1)
+              ),
+              candidate_id <- entry["candidate_ids"] || [],
+              do: candidate_id
+      end
+
+    MapSet.new(direct_ids ++ ledger_ids)
   end
 
   defp content_entry(candidate), do: %{"id" => candidate.id, "text" => candidate.quote || ""}
 
   # ── Summary ───────────────────────────────────────────────────────────────
 
-  defp summary_attrs(%Meeting{started_at: nil}), do: %{}
+  defp summary_attrs(meeting) do
+    transcripts = owned_transcripts(meeting) |> Enum.filter(&(&1.status == "complete"))
 
-  defp summary_attrs(%Meeting{chat_space_id: space_id, started_at: started_at}) do
-    from(t in Transcript,
-      where: t.space_id == ^space_id,
-      where: t.status == "complete",
-      where: t.completed_at >= ^started_at,
-      order_by: [desc: t.completed_at, desc: t.id],
-      limit: 1,
-      select: %{id: t.id, summary: t.summary}
-    )
-    |> Repo.one()
-    |> case do
-      nil -> %{}
-      %{id: id, summary: summary} -> %{summary: summary, transcript_id: id}
+    case List.last(transcripts) do
+      nil ->
+        %{}
+
+      transcript ->
+        summaries =
+          Enum.map(transcripts, & &1.summary)
+          |> Enum.filter(&(is_binary(&1) && String.trim(&1) != ""))
+
+        %{
+          summary: if(summaries == [], do: nil, else: Enum.join(summaries, "\n\n")),
+          transcript_id: transcript.id
+        }
     end
+  end
+
+  defp owned_transcripts(meeting) do
+    Repo.all(
+      from(t in Transcript,
+        where: t.space_id == ^meeting.chat_space_id,
+        order_by: [asc: t.started_at, asc: t.id]
+      )
+    )
+    |> Enum.filter(&Platform.Meetings.Completion.belongs_to_meeting?(&1, meeting))
+  end
+
+  @doc "Durable delivery gates, recomputed from the current captured snapshot."
+  def readiness(meeting, now \\ DateTime.utc_now()) do
+    run = Repo.get_by(CompletionRun, meeting_id: meeting.id)
+    snapshot = Platform.Meetings.Completion.snapshot(meeting)
+
+    current? =
+      case snapshot do
+        {:ok, snap, _} ->
+          run && run.capture_finished_at &&
+            run.snapshot_hash == Platform.Meetings.Completion.snapshot_hash(run, snap)
+
+        _ ->
+          false
+      end
+
+    transcripts = owned_transcripts(meeting)
+
+    summary? =
+      current? && transcripts != [] &&
+        Enum.all?(transcripts, fn t ->
+          Transcript.summary_current?(t) && is_binary(t.summary) && String.trim(t.summary) != ""
+        end)
+
+    triage? = current? && run.status == "filed"
+
+    synthesis? =
+      is_nil(run) || run.synthesis == %{} ||
+        run.synthesis["snapshot_hash"] != run.snapshot_hash ||
+        run.synthesis["status"] == "complete"
+
+    missing =
+      for {part, ready} <- [
+            {"summary", summary?},
+            {"triage filing", triage?},
+            {"synthesis", synthesis?}
+          ],
+          !ready,
+          do: part
+
+    deadline? = not is_nil(meeting.ended_at) && DateTime.diff(now, meeting.ended_at) >= 1200
+    %{ready?: missing == [], deadline?: deadline?, missing: missing}
   end
 
   # ── Delivery ──────────────────────────────────────────────────────────────
@@ -280,76 +366,87 @@ defmodule Platform.Meetings.MeetingBriefings do
   """
   @spec deliver(Meeting.t()) ::
           {:ok, %{created: non_neg_integer(), updated: non_neg_integer()}}
+          | {:ok, :pending}
           | {:error, :not_concluded}
   def deliver(%Meeting{} = meeting) do
-    with {:ok, briefing, delta} <- build(meeting) do
-      meeting = Repo.get!(Meeting, meeting.id)
-      count = briefing |> item_keys() |> length()
+    if Repo.in_transaction?(), do: {:ok, :pending}, else: deliver_committed(meeting)
+  end
 
-      fields = %{
-        title: meeting.name,
-        body: items_label(count),
-        url: inbox_url(meeting),
-        new_items?: delta.new_keys != []
-      }
+  defp deliver_committed(%Meeting{id: id}) do
+    # Lock in the same order as completion callbacks. Inbox insert uniqueness
+    # arbitrates pushes; push only AFTER the transaction which writes the row.
+    {:ok, outcome} =
+      Repo.transaction(fn ->
+        Meetings.lock_transcript_space(Repo.get(Meeting, id))
+        Repo.one(from(r in CompletionRun, where: r.meeting_id == ^id, lock: "FOR UPDATE"))
+        meeting = Repo.one(from(m in Meeting, where: m.id == ^id, lock: "FOR UPDATE"))
 
-      outcomes =
-        Enum.map(briefing.attendee_user_ids, fn user_id ->
-          case Inbox.upsert_meeting_briefing_item(briefing, user_id, fields) do
-            {:ok, _item, :created} ->
-              push(user_id, meeting, count)
-              :created
+        cond do
+          is_nil(meeting) or meeting.status != "ended" ->
+            {:error, :not_concluded}
 
-            {:ok, _item, :updated} ->
-              :updated
+          true ->
+            gates = readiness(meeting)
 
-            {:error, reason} ->
-              Logger.warning(
-                "[meeting_briefings] inbox row for user #{user_id}, meeting #{meeting.id} " <>
-                  "not written: #{inspect(reason)}"
-              )
+            if gates.ready? or gates.deadline? do
+              {:ok, briefing, delta} = build(meeting)
+              count = briefing |> item_keys() |> length()
 
-              :error
-          end
+              fields = %{
+                title: meeting.name,
+                body: items_label(count),
+                url: inbox_url(meeting),
+                new_items?: delta.new_keys != []
+              }
+
+              outcomes =
+                Enum.map(briefing.attendee_user_ids, fn user_id ->
+                  case Inbox.upsert_meeting_briefing_item(briefing, user_id, fields) do
+                    {:ok, _, status} -> {user_id, status}
+                    {:error, _} -> {user_id, :error}
+                  end
+                end)
+
+              {:delivered, meeting, count, outcomes}
+            else
+              {:ok, :pending}
+            end
+        end
+      end)
+
+    case outcome do
+      {:delivered, meeting, count, outcomes} ->
+        Enum.each(outcomes, fn
+          {user_id, :created} -> push(user_id, meeting, count)
+          _ -> :ok
         end)
 
-      {:ok,
-       %{
-         created: Enum.count(outcomes, &(&1 == :created)),
-         updated: Enum.count(outcomes, &(&1 == :updated))
-       }}
+        {:ok,
+         %{
+           created: Enum.count(outcomes, &(elem(&1, 1) == :created)),
+           updated: Enum.count(outcomes, &(elem(&1, 1) == :updated))
+         }}
+
+      other ->
+        other
     end
   end
 
-  @doc """
-  Re-deliver the briefing of the meeting a just-completed `transcript`
-  belongs to, so the summary is merged in. No push: every attendee's row
-  already exists from conclusion, so their upserts are `:updated`.
+  @doc "Refresh only the meeting owning this transcript, using capture-time legacy bounds."
+  def refresh_for_transcript(%Transcript{space_id: nil}), do: :ok
 
-  The meeting is the ENDED one in the transcript's chat space whose
-  `ended_at` is nearest before the transcript's `completed_at`. `:ok` when
-  there is none (a transcript of a meeting still live, or of a space with no
-  meeting).
-  """
-  @spec refresh_for_transcript(Transcript.t()) :: :ok | {:ok, map()} | {:error, term()}
-  def refresh_for_transcript(%Transcript{space_id: space_id, completed_at: completed_at})
-      when is_binary(space_id) do
-    completed_at = completed_at || DateTime.utc_now()
+  def refresh_for_transcript(%Transcript{} = transcript) do
+    query =
+      from(m in Meeting, where: m.status == "ended" and m.chat_space_id == ^transcript.space_id)
 
-    from(m in Meeting,
-      where: m.chat_space_id == ^space_id and m.status == "ended",
-      where: not is_nil(m.ended_at) and m.ended_at <= ^completed_at,
-      order_by: [desc: m.ended_at],
-      limit: 1
-    )
-    |> Repo.one()
-    |> case do
-      nil -> :ok
-      %Meeting{} = meeting -> deliver(meeting)
-    end
+    Repo.all(query)
+    |> Enum.filter(&Platform.Meetings.Completion.belongs_to_meeting?(transcript, &1))
+    |> Enum.each(&deliver/1)
+
+    :ok
   end
 
-  def refresh_for_transcript(_transcript), do: :ok
+  def refresh_for_transcript(_), do: :ok
 
   @doc """
   Whether the Inbox row for briefing `briefing_id` may be cleared
@@ -542,6 +639,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     %{
       meeting: meeting,
       summary: briefing.summary,
+      missing_prerequisites: content["missing_prerequisites"] || [],
       transcript_url: content["transcript_url"] || "/meetings/" <> meeting.slug,
       open_questions: content["open_questions"] || [],
       unfiled_action_items: content["unfiled_action_items"] || [],

@@ -277,7 +277,9 @@ defmodule PlatformWeb.SpaceTopicsTest do
              :chat_rail,
              :chat_active,
              :tasks_exec,
-             :meeting
+             :meeting,
+             :files_browser,
+             :canvas_viewing
            ]
   end
 

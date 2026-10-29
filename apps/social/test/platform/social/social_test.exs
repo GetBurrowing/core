@@ -107,7 +107,8 @@ defmodule Platform.SocialTest do
       assert {:ok, %{handle: "@a2"}} = Social.update_account(a, ctx.account, %{handle: "@a2"})
       assert {:ok, %{body: "edited"}} = Social.update_post(a, ctx.post, %{body: "edited"})
       assert {:ok, %{caption: "c"}} = Social.update_clip(a, ctx.clip, %{caption: "c"})
-      assert {:ok, _} = Social.delete_clip(a, ctx.clip)
+      assert {:error, :human_required} = Social.delete_clip(a, ctx.clip)
+      assert Social.get_clip(a, ctx.clip.id)
       assert {:ok, _} = Social.delete_post(a, ctx.post)
     end
 

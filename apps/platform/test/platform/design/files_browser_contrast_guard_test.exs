@@ -162,15 +162,20 @@ defmodule Platform.Design.FilesBrowserContrastGuardTest do
       |> tag_with("size-11 shrink-0 items-center justify-center overflow-hidden")
       |> classes()
 
-    # Item rows and node rows share the title span's ink; every copy must
-    # agree on it (placement classes may differ: stage 5's row grid).
+    # Named title markers survive typography changes; all three surfaces
+    # must still agree on their ink. Each marker must resolve exactly once.
     titles =
-      code |> tags_with("min-w-0 flex-1 truncate text-sm font-medium") |> Enum.map(&classes/1)
-
-    assert length(titles) == 2, "expected the item-row and node-row title spans"
+      for role <- ~w(files-row-title files-grid-title files-node-title) do
+        code |> tag_with(~s(data-role="#{role}")) |> classes()
+      end
 
     title_inks =
-      titles |> Enum.map(&(prefixed(&1, "text-") -- ["sm", "xs"])) |> Enum.uniq()
+      titles
+      |> Enum.map(fn classes ->
+        prefixed(classes, "text-")
+        |> Enum.reject(&(&1 in ["sm", "xs"] or Regex.match?(~r/^\[\d+px\]$/, &1)))
+      end)
+      |> Enum.uniq()
 
     location = code |> tag_with(~s(class={["flex min-w-0 items-baseline gap-1)) |> raw_classes()
     new = code |> tag_with(~s(data-role="files-new")) |> classes()
@@ -284,6 +289,19 @@ defmodule Platform.Design.FilesBrowserContrastGuardTest do
       end
 
     assert failures == []
+  end
+
+  test "title measurement detects a changed ink on each named surface", ctx do
+    for role <- ~w(files-row-title files-grid-title files-node-title) do
+      tag = tag_with(ctx.code, ~s(data-role="#{role}"))
+      assert tag =~ "text-base-content"
+      changed = String.replace(tag, "text-base-content", "text-warning")
+      mutant = String.replace(ctx.code, tag, changed, global: false)
+
+      assert_raise ExUnit.AssertionError, ~r/expected exactly one title ink list/, fn ->
+        slots(ctx.heex, mutant)
+      end
+    end
   end
 
   test "the slots the guard read are the ruling's (Saru pal)", ctx do

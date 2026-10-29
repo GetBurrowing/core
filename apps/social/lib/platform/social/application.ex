@@ -32,7 +32,8 @@ defmodule Platform.Social.Application do
     Platform.Social.RenderTaskSupervisor,
     Platform.Social.RenderQueue,
     Platform.Social.PublishRetry,
-    Platform.Social.ClipPublish
+    Platform.Social.ClipPublish,
+    Platform.Social.EpisodeDiscovery
   ]
 
   @impl true
@@ -74,7 +75,9 @@ defmodule Platform.Social.Application do
       # Clip Studio 2/9: publishes approved clip posts when their 8s undo
       # window closes. State is in the DB (publish_after), and a boot sweep
       # picks up anything a restart left due.
-      Platform.Social.ClipPublish
+      Platform.Social.ClipPublish,
+      # Task 01a17e37: durable source-level episode discovery.
+      Platform.Social.EpisodeDiscovery
     ]
     |> Platform.Role.select(role, @web)
   end

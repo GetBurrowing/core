@@ -2657,8 +2657,8 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <span>{v.kind}</span>
             <a
               :if={validation_evidence_link(v)}
-              href={validation_evidence_link(v)}
-              target="_blank"
+              href={Platform.Chat.LinkTargets.open_href(validation_evidence_link(v))}
+              {Platform.Chat.LinkTargets.open_attrs(validation_evidence_link(v))}
               class="link link-hover ml-1 text-[10px] uppercase tracking-wide"
             >
               evidence
@@ -2715,8 +2715,8 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             </span>
             <a
               :if={validation_evidence_link(v)}
-              href={validation_evidence_link(v)}
-              target="_blank"
+              href={Platform.Chat.LinkTargets.open_href(validation_evidence_link(v))}
+              {Platform.Chat.LinkTargets.open_attrs(validation_evidence_link(v))}
               class="link link-hover ml-auto text-[10px] uppercase tracking-wide"
             >
               evidence

@@ -75,7 +75,12 @@ defmodule Platform.Chat.Canvas.Server do
     # `embed_refs`: the scripted-embed refs this server has verified,
     # `%{node_id => {sha256, ref}}` (`Platform.Chat.Canvas.ScriptedEmbeds`),
     # so a patch that leaves a scripted embed alone costs no query.
-    defstruct canvas_id: nil, space_id: nil, document: nil, revision: 1, embed_refs: %{}
+    defstruct canvas_id: nil,
+              space_id: nil,
+              document: nil,
+              revision: 1,
+              embed_refs: %{},
+              pending_writes: %{}
   end
 
   # ── Public API ──────────────────────────────────────────────────────────
@@ -139,6 +144,24 @@ defmodule Platform.Chat.Canvas.Server do
         via(canvas_id),
         {:apply_patches, operations, base_revision, written_by_attribution}
       )
+    end
+  end
+
+  @doc "Restore a historical revision with actor authorization and strict head comparison."
+  def restore(canvas_id, actor, source_revision, expected_revision) do
+    with {:ok, _} <- start_server(canvas_id) do
+      GenServer.call(
+        via(canvas_id),
+        {:restore, actor, source_revision, expected_revision},
+        30_000
+      )
+    end
+  end
+
+  @doc "Move ownership, serialized with patches; reauthorize caller and both spaces."
+  def move(canvas_id, actor, destination_id) do
+    with {:ok, _pid} <- start_server(canvas_id) do
+      GenServer.call(via(canvas_id), {:move, actor, destination_id})
     end
   end
 
@@ -210,6 +233,48 @@ defmodule Platform.Chat.Canvas.Server do
   end
 
   @impl true
+  def handle_call({:restore, actor, source, expected}, _from, state) do
+    # Await prior write-through children so none can land an old document
+    # after this synchronous restore. DOWN messages make this a barrier,
+    # rather than a polling delay. Ordinary patches remain asynchronous.
+    case await_writes(state.pending_writes) do
+      {:ok, _} ->
+        state = %{state | pending_writes: %{}}
+
+        case Platform.Chat.Canvas.Restore.perform(state, actor, source, expected) do
+          {:ok, canvas, refs} ->
+            revision = CanvasDocument.revision(canvas.document)
+            Chat.publish_canvas_updated(canvas)
+
+            ChatPubSub.broadcast_canvas(
+              canvas.id,
+              {:canvas_patched, canvas.id, revision, [{:replace_document, canvas.document}]}
+            )
+
+            {:reply, {:ok, revision},
+             %{state | document: canvas.document, revision: revision, embed_refs: refs}}
+
+          error ->
+            {:reply, error, state}
+        end
+
+      {:timeout, remaining} ->
+        {:reply, {:error, :persistence_pending}, %{state | pending_writes: remaining}}
+    end
+  end
+
+  @impl true
+  def handle_call({:move, actor, destination_id}, _from, state) do
+    case Platform.Files.CanvasMove.perform(actor, state.canvas_id, destination_id) do
+      {:ok, canvas} ->
+        {:reply, {:ok, canvas}, %{state | space_id: canvas.space_id, embed_refs: %{}}}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  @impl true
   def handle_call(
         {:apply_patches, operations, base_revision, written_by_attribution},
         _from,
@@ -230,7 +295,8 @@ defmodule Platform.Chat.Canvas.Server do
     # `WithClauseError` here instead of being reshaped into `{:error, _}`.
     # The one `{:error, _}` arm below is the scripted-embed stamp's, which is
     # a genuine refusal and not a rebase outcome (task 01a1316b-677a).
-    with {:ok, new_document, new_revision} <- apply_with_rebase(state, operations, base_revision),
+    with :ok <- Platform.Files.CanvasMove.authorize_patch(state.canvas_id, written_by_attribution),
+         {:ok, new_document, new_revision} <- apply_with_rebase(state, operations, base_revision),
          # Task 01a1316b-677a: every embed's `prototype_ref` is (re)stamped
          # here, before the write is persisted or broadcast, at the same
          # revision. A refusal (`prototypes_disabled`, ...) is an
@@ -242,15 +308,33 @@ defmodule Platform.Chat.Canvas.Server do
              actor: written_by_attribution,
              verified: state.embed_refs
            }) do
-      persist_and_announce(state, new_document, new_revision, operations, written_by_attribution)
+      pending =
+        persist_and_announce(
+          state,
+          new_document,
+          new_revision,
+          operations,
+          written_by_attribution
+        )
+
+      writes =
+        if pending,
+          do: Map.put(state.pending_writes, elem(pending, 0), elem(pending, 1)),
+          else: state.pending_writes
 
       {:reply, {:ok, new_revision},
-       %State{state | document: new_document, revision: new_revision, embed_refs: embed_refs}}
+       %State{
+         state
+         | document: new_document,
+           revision: new_revision,
+           embed_refs: embed_refs,
+           pending_writes: writes
+       }}
     else
       {:conflict, payload} ->
         {:reply, {:conflict, payload}, state}
 
-      {:error, %{code: _} = error} ->
+      {:error, error} ->
         {:reply, {:error, error}, state}
     end
   end
@@ -267,13 +351,14 @@ defmodule Platform.Chat.Canvas.Server do
   end
 
   defp persist_and_announce(state, new_document, new_revision, operations, written_by_attribution) do
-    persist_async(
-      state.canvas_id,
-      new_document,
-      new_revision,
-      operations,
-      written_by_attribution
-    )
+    pending =
+      persist_async(
+        state.canvas_id,
+        new_document,
+        new_revision,
+        operations,
+        written_by_attribution
+      )
 
     ChatPubSub.broadcast_canvas(
       state.canvas_id,
@@ -290,6 +375,27 @@ defmodule Platform.Chat.Canvas.Server do
         op_count: length(operations)
       }
     )
+
+    pending
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state),
+    do: {:noreply, %{state | pending_writes: Map.delete(state.pending_writes, ref)}}
+
+  defp await_writes(writes),
+    do: await_writes(writes, System.monotonic_time(:millisecond) + 10_000)
+
+  defp await_writes(writes, _deadline) when map_size(writes) == 0, do: {:ok, %{}}
+
+  defp await_writes(writes, deadline) do
+    {ref, pid} = Enum.at(writes, 0)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _} -> await_writes(Map.delete(writes, ref), deadline)
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> {:timeout, writes}
+    end
   end
 
   # ── Rebase-or-reject core ───────────────────────────────────────────────
@@ -427,13 +533,15 @@ defmodule Platform.Chat.Canvas.Server do
   defp persist_async(canvas_id, document, revision, operations, attribution) do
     if Application.get_env(:platform, :canvas_persist_sync, false) do
       do_persist(canvas_id, document, revision, operations, attribution)
+      nil
     else
-      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-        do_persist(canvas_id, document, revision, operations, attribution)
-      end)
-    end
+      {:ok, pid} =
+        Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+          do_persist(canvas_id, document, revision, operations, attribution)
+        end)
 
-    :ok
+      {Process.monitor(pid), pid}
+    end
   end
 
   # Writes the canvas update + the canvas_versions row in a single

@@ -53,6 +53,8 @@ defmodule PlatformWeb.SocialClipsReview do
   """
   use PlatformWeb, :live_component
 
+  import PlatformWeb.SocialClipsReviewActions, only: [pbar: 1, decision_bar: 1]
+
   alias Platform.Social
 
   alias Platform.Social.{
@@ -78,6 +80,7 @@ defmodule PlatformWeb.SocialClipsReview do
      assign(socket,
        queue: [],
        jobs: [],
+       episode_jobs: [],
        accounts: [],
        clip: nil,
        byline: %{source_label: nil, agent_name: nil},
@@ -92,6 +95,7 @@ defmodule PlatformWeb.SocialClipsReview do
        selected_render: nil,
        headline_attempt: nil,
        headline_error: nil,
+       appearance_dirty: false,
        jobs_timer?: false
      )}
   end
@@ -99,6 +103,14 @@ defmodule PlatformWeb.SocialClipsReview do
   @impl true
   def update(%{clip_event: %Clip{} = clip}, socket),
     do: {:ok, socket |> clip_event(clip) |> schedule_jobs_refresh()}
+
+  def update(%{appearance_clip_id: id, appearance_dirty: dirty}, socket) do
+    {:ok,
+     if(socket.assigns.clip && socket.assigns.clip.id == id,
+       do: assign(socket, :appearance_dirty, dirty),
+       else: socket
+     )}
+  end
 
   # Timers this component scheduled for itself with send_update_after/4.
   # None of them decides, commits or publishes anything.
@@ -112,19 +124,11 @@ defmodule PlatformWeb.SocialClipsReview do
   def update(%{landed_expire: clip_id}, socket),
     do: {:ok, assign(socket, :landed, MapSet.delete(socket.assigns.landed, clip_id))}
 
+  def update(%{job_event: true}, socket),
+    do: {:ok, socket |> refresh_job_state() |> schedule_jobs_refresh()}
+
   def update(%{refresh_jobs: true}, socket) do
-    socket = assign(socket, :jobs_timer?, false)
-
-    socket =
-      case socket.assigns do
-        %{profile: %Profile{} = p} ->
-          assign(socket, :jobs, ClipReviewFeed.rendering(p.org_id, p.id))
-
-        _ ->
-          socket
-      end
-
-    {:ok, socket |> headline_state() |> schedule_jobs_refresh()}
+    {:ok, socket |> assign(:jobs_timer?, false) |> refresh_job_state() |> schedule_jobs_refresh()}
   end
 
   def update(assigns, socket) do
@@ -144,6 +148,21 @@ defmodule PlatformWeb.SocialClipsReview do
       |> schedule_jobs_refresh()
 
     {:ok, socket}
+  end
+
+  defp refresh_job_state(socket) do
+    socket =
+      case socket.assigns do
+        %{profile: %Profile{} = p} ->
+          socket
+          |> assign(:jobs, ClipReviewFeed.rendering(p.org_id, p.id))
+          |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(p.org_id, p.id))
+
+        _ ->
+          socket
+      end
+
+    headline_state(socket)
   end
 
   # ── Events ───────────────────────────────────────────────────────────
@@ -264,7 +283,7 @@ defmodule PlatformWeb.SocialClipsReview do
   def handle_event("approve", %{"id" => id, "render_id" => render_id}, socket) do
     socket = authorize(socket)
 
-    with true <- socket.assigns.can_decide?,
+    with true <- socket.assigns.can_decide? and not socket.assigns.appearance_dirty,
          %{profile: profile, user_id: user_id} = socket.assigns,
          {:ok, %Clip{} = clip} <- ClipReviewFeed.fetch_clip(profile.org_id, profile.id, id),
          [_ | _] = accounts <- ticked_accounts(profile, clip),
@@ -396,7 +415,7 @@ defmodule PlatformWeb.SocialClipsReview do
         if selected && selected.id == clip_id do
           case Enum.at(rest, min(i, length(rest) - 1)) do
             %Clip{} = next when rest != [] ->
-              select_clip(socket, next)
+              select_clip(socket, next) |> push_event("clips:focus", %{clip: next.id})
 
             _ ->
               socket
@@ -442,7 +461,9 @@ defmodule PlatformWeb.SocialClipsReview do
         true -> socket
       end
 
-    assign(socket, :jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    socket
+    |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
   end
 
   defp clip_event(socket, _clip), do: socket
@@ -491,9 +512,22 @@ defmodule PlatformWeb.SocialClipsReview do
       else: socket
   end
 
-  # 1/9 does not broadcast job progress: while jobs are open, re-read them
-  # every 5s; one timer at a time, none once the queue is empty.
-  defp schedule_jobs_refresh(%{assigns: %{jobs: [_ | _], jobs_timer?: false}} = socket) do
+  # Broadcasts deliver new jobs even from an initially empty bay. Poll only
+  # while work remains open, as a fallback after missed notifications.
+  defp schedule_jobs_refresh(%{assigns: %{jobs_timer?: false}} = socket) do
+    open? =
+      socket.assigns.jobs != [] or
+        Enum.any?(socket.assigns.episode_jobs, fn job ->
+          job.status in ["queued", "claimed", "running"] or
+            Enum.any?(job.children, &(&1.status in ["queued", "claimed", "running"]))
+        end)
+
+    if open?, do: schedule_job_timer(socket), else: socket
+  end
+
+  defp schedule_jobs_refresh(socket), do: socket
+
+  defp schedule_job_timer(socket) do
     send_update_after(
       self(),
       __MODULE__,
@@ -503,8 +537,6 @@ defmodule PlatformWeb.SocialClipsReview do
 
     assign(socket, :jobs_timer?, true)
   end
-
-  defp schedule_jobs_refresh(socket), do: socket
 
   # A write: refused with no write unless the fresh approver check passed.
   defp save(%{assigns: %{can_decide?: false}} = socket, _attrs), do: socket
@@ -538,7 +570,13 @@ defmodule PlatformWeb.SocialClipsReview do
 
   defp select_clip(socket, %Clip{} = clip) do
     socket
-    |> assign(clip: clip, selected_id: clip.id, editing_title?: false, note: "")
+    |> assign(
+      clip: clip,
+      selected_id: clip.id,
+      editing_title?: false,
+      note: "",
+      appearance_dirty: false
+    )
     |> assign(:byline, ClipReviewFeed.byline(socket.assigns.profile.org_id, clip))
     |> assign(:headline_error, nil)
     |> headline_state()
@@ -558,8 +596,9 @@ defmodule PlatformWeb.SocialClipsReview do
     )
   end
 
-  defp reviewable?(%Clip{review_status: "pending", render_file_id: id}) when not is_nil(id),
-    do: true
+  defp reviewable?(%Clip{review_status: "pending", render_file_id: id, removed_at: nil})
+       when not is_nil(id),
+       do: true
 
   defp reviewable?(_), do: false
 
@@ -575,6 +614,7 @@ defmodule PlatformWeb.SocialClipsReview do
     socket
     |> assign(:queue, queue)
     |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
+    |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
     |> assign(:accounts, Social.list_accounts(profile.org_id, profile_id: profile.id))
     |> assign(:clip, clip)
     |> assign(:selected_id, clip && clip.id)
@@ -589,7 +629,15 @@ defmodule PlatformWeb.SocialClipsReview do
   end
 
   defp load(socket),
-    do: assign(socket, queue: [], jobs: [], accounts: [], clip: nil, can_decide?: false)
+    do:
+      assign(socket,
+        queue: [],
+        jobs: [],
+        episode_jobs: [],
+        accounts: [],
+        clip: nil,
+        can_decide?: false
+      )
 
   # Shares the selected immutable version with the sibling version picker.
   # Re-read on promotion; queueing/failure never changes the playable clip.
@@ -674,6 +722,7 @@ defmodule PlatformWeb.SocialClipsReview do
     >
       <div id="social-clips-review-keys" phx-hook="ClipReview" data-role="clips-review-keys">
         <.subhead view={@view} count={length(@queue)} jobs={@jobs} myself={@myself} />
+        <.episode_outcomes :if={@view == "review"} jobs={@episode_jobs} />
 
         <div
           :if={@view == "review"}
@@ -681,7 +730,7 @@ defmodule PlatformWeb.SocialClipsReview do
           data-clip-id={@clip && @clip.id}
           class={[
             "grid grid-cols-1 overflow-hidden rounded-box border border-base-300 bg-base-100",
-            "min-[761px]:grid-cols-[150px_1fr_360px] min-[1181px]:grid-cols-[208px_minmax(0,1fr)_404px]",
+            "min-[761px]:grid-cols-[150px_minmax(0,1fr)_360px] min-[1181px]:grid-cols-[208px_minmax(0,1fr)_404px]",
             "max-[760px]:block max-[760px]:pb-[calc(84px+env(safe-area-inset-bottom))]"
           ]}
         >
@@ -697,6 +746,11 @@ defmodule PlatformWeb.SocialClipsReview do
             />
             <.details
               clip={@clip}
+              profile={@profile}
+              appearance_jobs={@jobs}
+              review_id={@id}
+              appearance_dirty={@appearance_dirty}
+              user_id={@user_id}
               byline={@byline}
               accounts={@accounts}
               ticked={@ticked}
@@ -716,6 +770,8 @@ defmodule PlatformWeb.SocialClipsReview do
 
         <.pbar
           :if={@view == "review" and @can_decide? and @clip != nil}
+          render_id={render_id(@clip)}
+          appearance_dirty={@appearance_dirty}
           clip={@clip}
           note={@note}
           ticked={@ticked}
@@ -724,58 +780,6 @@ defmodule PlatformWeb.SocialClipsReview do
 
         <.toast :if={@toast} toast={@toast} myself={@myself} />
       </div>
-    </div>
-    """
-  end
-
-  # [reviewHTML .pbar] the phone bottom bar: the same approve/reject events
-  # and enabled rules as the desktop footer. Rendered only for an approver
-  # with a clip selected; hidden above 760px.
-  attr :clip, :any, required: true
-  attr :note, :string, required: true
-  attr :ticked, :list, required: true
-  attr :myself, :any, required: true
-
-  defp pbar(assigns) do
-    assigns = assign(assigns, :blank?, String.trim(assigns.note) == "")
-
-    ~H"""
-    <div
-      class={
-        [
-          "fixed inset-x-0 bottom-0 z-30 hidden gap-2.5 border-t border-base-300 bg-base-100/80 backdrop-blur",
-          "px-3 pt-2.5 pb-[calc(10px+env(safe-area-inset-bottom))] max-[760px]:flex",
-          # Clears Burrow's own mobile tab bar (core's --bottom-nav-height,
-          # 56px below lg, 0 elsewhere); the prototype has no host nav.
-          "mb-[var(--bottom-nav-height,0px)]"
-        ]
-      }
-      data-role="clips-pbar"
-    >
-      <button
-        type="button"
-        class="btn btn-outline h-[46px] w-[112px] flex-none rounded-full text-base"
-        disabled={@blank?}
-        title={if @blank?, do: "Add a note first"}
-        phx-click="reject"
-        phx-value-id={@clip.id}
-        phx-target={@myself}
-        data-role="clips-pbar-reject"
-      >
-        Reject
-      </button>
-      <button
-        type="button"
-        class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
-        disabled={@ticked == []}
-        phx-click="approve"
-        phx-value-render_id={render_id(@clip)}
-        phx-value-id={@clip.id}
-        phx-target={@myself}
-        data-role="clips-pbar-approve"
-      >
-        {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
-      </button>
     </div>
     """
   end
@@ -1055,10 +1059,13 @@ defmodule PlatformWeb.SocialClipsReview do
         </div>
       </div>
 
-      <div class={[
-        "flex w-[min(100%,calc(min(448px,calc(100vh-340px))*9/16))] min-w-[169px] flex-col gap-2",
-        "max-[760px]:w-full max-[760px]:min-w-0"
-      ]}>
+      <div
+        class={[
+          "flex w-[min(100%,calc(min(448px,calc(100vh-340px))*9/16))] min-w-[169px] flex-col gap-2",
+          "max-[760px]:w-full max-[760px]:min-w-0"
+        ]}
+        data-role="clips-player-stack"
+      >
         <div class="flex justify-center gap-2.5" data-role="clips-pv-row">
           <div
             id={"clip-player-#{@clip.id}-r#{@clip.rev}"}
@@ -1217,6 +1224,12 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :selected_render, :any, default: nil
   attr :headline_attempt, :any, default: nil
   attr :headline_error, :any, default: nil
+  attr :review_id, :string, required: true
+  attr :appearance_dirty, :boolean, default: false
+  attr :appearance_jobs, :list, default: []
+
+  attr :profile, :any, required: true
+  attr :user_id, :any, required: true
 
   defp details(assigns) do
     assigns =
@@ -1231,257 +1244,334 @@ defmodule PlatformWeb.SocialClipsReview do
 
     ~H"""
     <aside
-      class="flex min-w-0 flex-col gap-4 border-base-300 p-4 max-[760px]:p-3 min-[761px]:border-l"
+      class="flex min-w-0 flex-col border-base-300 max-[760px]:gap-4 max-[760px]:p-3 min-[761px]:border-l"
       data-role="clips-details"
     >
-      <div>
-        <form
-          :if={@editing_title?}
-          phx-submit="save_title"
-          phx-target={@myself}
-          data-role="clip-title-form"
-        >
-          <input
-            type="text"
-            name="title"
-            value={@clip.title}
-            maxlength="200"
-            class="input input-bordered w-full bg-base-100 text-base font-semibold"
-            aria-label="Title"
-            phx-blur="save_title"
+      <div
+        class="contents"
+        data-role="clips-details-body"
+        role="region"
+        tabindex="0"
+        aria-label="Clip details"
+      >
+        <.live_component
+          module={PlatformWeb.SocialClipRemoval}
+          id={"review-remove-#{@clip.id}"}
+          clip={@clip}
+          profile={@profile}
+          user_id={@user_id}
+        />
+        <div>
+          <form
+            :if={@editing_title?}
+            phx-submit="save_title"
             phx-target={@myself}
-            phx-mounted={Phoenix.LiveView.JS.focus()}
-            data-role="clip-title-input"
-          />
-        </form>
-        <button
-          :if={!@editing_title?}
-          type="button"
-          class="group flex w-full items-start gap-2 rounded-box border border-base-300 px-3 py-2 text-left text-lg font-bold leading-snug text-base-content disabled:cursor-default"
-          phx-click="edit_title"
-          phx-target={@myself}
-          disabled={!@can_decide?}
-          data-role="clip-title"
-        >
-          <span class="flex-1" data-role="clips-selected-title">
-            {@clip.title || "Untitled clip"}
-          </span>
-          <.icon
-            :if={@can_decide?}
-            name="hero-pencil-square"
-            class="mt-0.5 size-4 shrink-0 text-subtle"
-          />
-        </button>
-        <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
-          {join_dot([
-            @clip.episode_code,
-            mmss(@clip.duration_s),
-            @clip.source_label,
-            "v#{@clip.rev}"
-          ])}
-        </p>
-        <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
-          <span
-            :if={@agent}
-            class="flex size-5 shrink-0 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content"
-            aria-hidden="true"
+            data-role="clip-title-form"
           >
-            {String.first(@agent) |> String.upcase()}
-          </span>
-          <span>
-            <span :if={@byline.source_label} class="font-mono">{@byline.source_label}</span><span :if={
-              @agent
-            }> · rendered by <b class="font-semibold text-base-content">{@agent}</b></span>
-          </span>
-        </p>
-        <div class="mt-3 hidden flex-wrap gap-2 max-[760px]:flex" data-role="clip-platform-chips">
-          <button
-            :for={platform <- @accounts |> Enum.map(& &1.platform) |> Enum.uniq()}
-            type="button"
-            role="checkbox"
-            aria-checked={to_string(platform in @ticked)}
-            class={[
-              "btn btn-sm rounded-full",
-              if(platform in @ticked, do: "btn-primary", else: "btn-outline border-base-300")
-            ]}
-            disabled={!@can_decide?}
-            phx-click="toggle_platform"
-            phx-value-platform={platform}
-            phx-target={@myself}
-            data-role="clip-platform-chip"
-            data-platform={platform}
-          >
-            {Approvals.platform_label(platform)}
-          </button>
-        </div>
-      </div>
-
-      <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
-        <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
-          <input type="hidden" name="base_render_id" value={@selected_render && @selected_render.id} />
-          <label for="clip-headline" class="text-xs font-semibold text-base-content">Headline</label>
-          <input
-            id="clip-headline"
-            name="headline"
-            type="text"
-            maxlength="200"
-            value={(@selected_render && @selected_render.headline) || ""}
-            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-            aria-describedby="clip-headline-help"
-            class="input input-bordered mt-1 w-full bg-base-100 text-sm"
-            data-role="clip-headline-input"
-          />
-          <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
-            Headlines are generated automatically. Enter new text to render another version.
-            Local generated text stays on the clip runner.
-          </p>
-          <button
-            type="submit"
-            class="btn btn-primary btn-sm mt-2 min-h-11"
-            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-            phx-disable-with="Rendering…"
-            data-role="clip-headline-render"
-          >
-            {if @headline_pending?, do: "Rendering…", else: "Render headline"}
-          </button>
-        </form>
-        <p
-          :if={@headline_pending?}
-          role="status"
-          class="text-xs text-subtle"
-          data-role="clip-headline-pending"
-        >
-          Rendering a new version. You can keep playing this one.
-        </p>
-        <p
-          :if={@headline_error}
-          role="alert"
-          class="text-xs text-error"
-          data-role="clip-headline-error"
-        >
-          {@headline_error}
-        </p>
-        <p
-          :if={@headline_attempt && @headline_attempt.status == "failed"}
-          role="alert"
-          class="text-xs text-error"
-          data-role="clip-headline-failure"
-        >
-          Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
-          Check the clip runner, then enter a headline and try again.
-        </p>
-      </section>
-
-      <form phx-change="save_caption" phx-target={@myself}>
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <label for="clip-caption" class="font-semibold text-base-content">Caption</label>
-          <span class="tabular-nums text-subtle" data-role="clip-caption-count">
-            {String.length(@caption)}/2200
-          </span>
-        </div>
-        <textarea
-          id="clip-caption"
-          name="caption"
-          rows="4"
-          maxlength="2200"
-          phx-debounce="600"
-          disabled={!@can_decide?}
-          class="textarea textarea-bordered w-full bg-base-100 text-sm"
-          data-role="clip-caption"
-        >{@caption}</textarea>
-      </form>
-
-      <div class="max-[760px]:hidden" data-role="clip-post-to">
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <span class="font-semibold text-base-content">Post to</span>
-          <span class="text-subtle">publishes on approve</span>
-        </div>
-        <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
-          <li
-            :for={account <- @accounts}
-            class="flex items-center gap-2 px-3 py-2"
-            data-role="clip-platform-row"
-            data-platform={account.platform}
-          >
-            <span class="flex size-6 shrink-0 items-center justify-center rounded-md border border-base-300">
-              <.icon name="hero-globe-alt" class="size-3.5 text-base-content" />
-            </span>
-            <span class="text-sm font-semibold text-base-content">
-              {Approvals.platform_label(account.platform)}
-            </span>
-            <span class="min-w-0 flex-1 truncate text-xs text-subtle">{account.handle}</span>
             <input
-              type="checkbox"
-              class="toggle toggle-primary toggle-sm"
-              role="switch"
-              aria-label={Approvals.platform_label(account.platform)}
-              checked={account.platform in @ticked}
+              type="text"
+              name="title"
+              value={@clip.title}
+              maxlength="200"
+              class="input input-bordered w-full bg-base-100 text-base font-semibold"
+              aria-label="Title"
+              phx-blur="save_title"
+              phx-target={@myself}
+              phx-mounted={Phoenix.LiveView.JS.focus()}
+              data-role="clip-title-input"
+            />
+          </form>
+          <button
+            :if={!@editing_title?}
+            type="button"
+            class="group flex w-full items-start gap-2 rounded-box border border-base-300 px-3 py-2 text-left text-lg font-bold leading-snug text-base-content disabled:cursor-default"
+            phx-click="edit_title"
+            phx-target={@myself}
+            disabled={!@can_decide?}
+            data-role="clip-title"
+          >
+            <span class="flex-1" data-role="clips-selected-title">
+              {@clip.title || "Untitled clip"}
+            </span>
+            <.icon
+              :if={@can_decide?}
+              name="hero-pencil-square"
+              class="mt-0.5 size-4 shrink-0 text-subtle"
+            />
+          </button>
+          <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
+            {join_dot([
+              @clip.episode_code,
+              mmss(@clip.duration_s),
+              @clip.source_label,
+              "v#{@clip.rev}"
+            ])}
+          </p>
+          <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
+            <span
+              :if={@agent}
+              class="flex size-5 shrink-0 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content"
+              aria-hidden="true"
+            >
+              {String.first(@agent) |> String.upcase()}
+            </span>
+            <span>
+              <span :if={@byline.source_label} class="font-mono">{@byline.source_label}</span><span :if={
+                @agent
+              }> · rendered by <b class="font-semibold text-base-content">{@agent}</b></span>
+            </span>
+          </p>
+          <div class="mt-3 hidden flex-wrap gap-2 max-[760px]:flex" data-role="clip-platform-chips">
+            <button
+              :for={platform <- @accounts |> Enum.map(& &1.platform) |> Enum.uniq()}
+              type="button"
+              role="checkbox"
+              aria-checked={to_string(platform in @ticked)}
+              class={[
+                "btn btn-sm rounded-full",
+                if(platform in @ticked, do: "btn-primary", else: "btn-outline border-base-300")
+              ]}
               disabled={!@can_decide?}
               phx-click="toggle_platform"
-              phx-value-platform={account.platform}
+              phx-value-platform={platform}
               phx-target={@myself}
-              data-role="clip-platform-toggle"
+              data-role="clip-platform-chip"
+              data-platform={platform}
+            >
+              {Approvals.platform_label(platform)}
+            </button>
+          </div>
+        </div>
+
+        <.live_component
+          module={PlatformWeb.SocialClipAppearance}
+          id={"appearance-#{@clip.id}"}
+          refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}
+          review_id={@review_id}
+          clip={@clip}
+          profile={@profile}
+          user_id={@user_id}
+        />
+
+        <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
+          <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
+            <input
+              type="hidden"
+              name="base_render_id"
+              value={@selected_render && @selected_render.id}
             />
-          </li>
-        </ul>
+            <label for="clip-headline" class="text-xs font-semibold text-base-content">
+              Headline
+            </label>
+            <input
+              id="clip-headline"
+              name="headline"
+              type="text"
+              maxlength="200"
+              value={(@selected_render && @selected_render.headline) || ""}
+              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+              aria-describedby="clip-headline-help"
+              class="input input-bordered mt-1 w-full bg-base-100 text-sm"
+              data-role="clip-headline-input"
+            />
+            <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
+              Headlines are generated automatically. Enter new text to render another version.
+              Local generated text stays on the clip runner.
+            </p>
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm mt-2 min-h-11"
+              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+              phx-disable-with="Rendering…"
+              data-role="clip-headline-render"
+            >
+              {if @headline_pending?, do: "Rendering…", else: "Render headline"}
+            </button>
+          </form>
+          <p
+            :if={@headline_pending?}
+            role="status"
+            class="text-xs text-subtle"
+            data-role="clip-headline-pending"
+          >
+            Rendering a new version. You can keep playing this one.
+          </p>
+          <p
+            :if={@headline_error}
+            role="alert"
+            class="text-xs text-error"
+            data-role="clip-headline-error"
+          >
+            {@headline_error}
+          </p>
+          <p
+            :if={@headline_attempt && @headline_attempt.status == "failed"}
+            role="alert"
+            class="text-xs text-error"
+            data-role="clip-headline-failure"
+          >
+            Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
+            Check the clip runner, then enter a headline and try again.
+          </p>
+        </section>
+
+        <form phx-change="save_caption" phx-target={@myself}>
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <label for="clip-caption" class="font-semibold text-base-content">Caption</label>
+            <span class="tabular-nums text-subtle" data-role="clip-caption-count">
+              {String.length(@caption)}/2200
+            </span>
+          </div>
+          <textarea
+            id="clip-caption"
+            name="caption"
+            rows="4"
+            maxlength="2200"
+            phx-debounce="600"
+            disabled={!@can_decide?}
+            class="textarea textarea-bordered w-full bg-base-100 text-sm"
+            data-role="clip-caption"
+          >{@caption}</textarea>
+        </form>
+
+        <div class="max-[760px]:hidden" data-role="clip-post-to">
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <span class="font-semibold text-base-content">Post to</span>
+            <span class="text-subtle">publishes on approve</span>
+          </div>
+          <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
+            <li
+              :for={account <- @accounts}
+              class="flex items-center gap-2 px-3 py-2"
+              data-role="clip-platform-row"
+              data-platform={account.platform}
+            >
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-md border border-base-300">
+                <.icon name="hero-globe-alt" class="size-3.5 text-base-content" />
+              </span>
+              <span class="text-sm font-semibold text-base-content">
+                {Approvals.platform_label(account.platform)}
+              </span>
+              <span class="min-w-0 flex-1 truncate text-xs text-subtle">{account.handle}</span>
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+                role="switch"
+                aria-label={Approvals.platform_label(account.platform)}
+                checked={account.platform in @ticked}
+                disabled={!@can_decide?}
+                phx-click="toggle_platform"
+                phx-value-platform={account.platform}
+                phx-target={@myself}
+                data-role="clip-platform-toggle"
+              />
+            </li>
+          </ul>
+        </div>
+
+        <form phx-change="note" phx-target={@myself}>
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <label for="clip-note" class="font-semibold text-base-content">Note</label>
+            <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
+          </div>
+          <textarea
+            id="clip-note"
+            name="note"
+            rows="3"
+            maxlength="2000"
+            phx-debounce="200"
+            disabled={!@can_decide?}
+            placeholder={"Why not? #{@agent || @byline.source_label || "the clip tool"} reads this for the next cut…"}
+            class="textarea textarea-bordered w-full bg-base-100 text-sm"
+            data-role="clip-note"
+          >{@note}</textarea>
+        </form>
       </div>
 
-      <form phx-change="note" phx-target={@myself}>
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <label for="clip-note" class="font-semibold text-base-content">Note</label>
-          <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
-        </div>
-        <textarea
-          id="clip-note"
-          name="note"
-          rows="3"
-          maxlength="2000"
-          phx-debounce="200"
-          disabled={!@can_decide?}
-          placeholder={"Why not? #{@agent || @byline.source_label || "the clip tool"} reads this for the next cut…"}
-          class="textarea textarea-bordered w-full bg-base-100 text-sm"
-          data-role="clip-note"
-        >{@note}</textarea>
-      </form>
-
-      <div
+      <.decision_bar
         :if={@can_decide?}
-        class="-mx-4 mt-auto flex flex-col gap-2 border-t border-base-300 px-4 pt-3 max-[760px]:hidden"
-        data-role="clips-decide"
-      >
-        <div class="flex gap-2">
-          <button
-            type="button"
-            class="btn btn-outline rounded-full"
-            disabled={String.trim(@note) == ""}
-            title={
-              if String.trim(@note) == "", do: "Add a note to reject", else: "Reject with your note"
-            }
-            phx-click="reject"
-            phx-value-id={@clip.id}
-            phx-target={@myself}
-            data-role="clip-reject"
-          >
-            Reject
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary flex-1 rounded-full"
-            disabled={@ticked == []}
-            phx-click="approve"
-            phx-value-render_id={render_id(@clip)}
-            phx-value-id={@clip.id}
-            phx-target={@myself}
-            data-role="clip-approve"
-          >
-            {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
-          </button>
-        </div>
-        <p class="text-center text-xs text-subtle" data-role="clip-why">
-          {why_line(@ticked)}
-        </p>
-      </div>
+        clip={@clip}
+        note={@note}
+        ticked={@ticked}
+        render_id={render_id(@clip)}
+        appearance_dirty={@appearance_dirty}
+        why_line={why_line(@ticked)}
+        myself={@myself}
+      />
     </aside>
+    """
+  end
+
+  attr :jobs, :list, required: true
+
+  defp episode_outcomes(assigns) do
+    ~H"""
+    <section
+      :if={@jobs != []}
+      aria-label="Automatic episodes"
+      data-role="episode-jobs"
+      class="mb-4 rounded-box border border-base-300 bg-base-100 p-4 text-base-content"
+    >
+      <h3 class="text-sm font-semibold">Automatic episodes</h3>
+      <p class="mt-1 text-xs text-subtle">
+        New episodes run automatically. Finished clips appear in Review.
+      </p>
+      <ul class="mt-3 space-y-3">
+        <li :for={job <- @jobs} data-role="episode-job" data-job-id={job.id} data-status={job.status}>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="font-semibold">
+              Episode <span class="font-normal text-subtle">· {job.uploaded_at}</span>
+            </span>
+            <span
+              class={if job.status == "failed", do: "text-error", else: "text-subtle"}
+              role={if job.status == "failed", do: "alert", else: "status"}
+            >
+              {job.step}<span :if={job.status == "failed"}> ({job.code})</span>
+            </span>
+            <span
+              :if={job.progress && job.status in ["claimed", "running"]}
+              class="text-xs tabular-nums text-subtle"
+            >
+              {round(job.progress * 100)}%
+            </span>
+          </div>
+          <progress
+            :if={job.status in ["claimed", "running"] && job.progress}
+            class="progress progress-primary mt-1 h-1 w-full max-w-sm"
+            value={job.progress}
+            max="1"
+            aria-label="Episode progress"
+          >
+          </progress>
+          <p :if={job.status == "failed"} class="mt-1 text-xs text-subtle">
+            Episode incomplete. Completed clips remain available for review. Check the clip runner.
+          </p>
+          <ul :if={job.children != []} class="mt-2 space-y-1 border-l border-base-300 pl-3">
+            <li
+              :for={{child, index} <- Enum.with_index(job.children, 1)}
+              data-role="episode-child-job"
+              data-job-id={child.id}
+              data-status={child.status}
+              class="flex flex-wrap gap-2 text-xs"
+            >
+              <span>Clip {index}</span>
+              <span
+                class={if child.status == "failed", do: "text-error", else: "text-subtle"}
+                role={if child.status == "failed", do: "alert", else: "status"}
+              >
+                {child.step}<span :if={child.status == "failed"}> ({child.code})</span>
+              </span>
+              <span
+                :if={child.progress && child.status in ["claimed", "running"]}
+                class="tabular-nums text-subtle"
+              >
+                {round(child.progress * 100)}%
+              </span>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </section>
     """
   end
 

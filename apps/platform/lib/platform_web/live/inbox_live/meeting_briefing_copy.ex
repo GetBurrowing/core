@@ -37,7 +37,12 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingCopy do
 
   @doc "The Summary section's text while no summary exists yet."
   @spec summary_pending() :: String.t()
-  def summary_pending, do: "Summary is being written"
+  def summary_pending, do: "Summary unavailable"
+
+  @doc "Missing parts at the bounded delivery deadline."
+  def missing_part("summary"), do: "Summary unavailable"
+  def missing_part("triage filing"), do: "Task filing incomplete"
+  def missing_part("synthesis"), do: "Synthesis incomplete"
 
   @doc "Section headings, in render order."
   @spec heading(atom()) :: String.t()

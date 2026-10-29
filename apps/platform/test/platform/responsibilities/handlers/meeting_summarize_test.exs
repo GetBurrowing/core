@@ -59,6 +59,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
     %{
       kind: :event_topic,
       topic: "meeting:finished",
+      summary_input_hash: Platform.Meetings.Transcript.summary_fingerprint(transcript),
       payload: %{
         transcript_id: transcript.id,
         room_id: transcript.room_id,
@@ -80,6 +81,37 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
   end
 
   describe "handle_output/3" do
+    test "captured context fingerprint fences a stale responsibility callback" do
+      transcript = create_transcript!(%{status: "processing", space_id: nil})
+
+      {:ok, %{meeting_transcript: context}} =
+        Platform.Responsibilities.ContextProviders.gather_context(:meeting_transcript,
+          transcript_id: transcript.id
+        )
+
+      assert context.summary_input_hash ==
+               Platform.Meetings.Transcript.summary_fingerprint(transcript)
+
+      old_meta =
+        trigger_meta(transcript) |> Map.put(:summary_input_hash, context.summary_input_hash)
+
+      {:ok, changed} =
+        Meetings.append_segment(transcript.id, %{"text" => "New material", "start_time" => 2})
+
+      {:ok, _} =
+        Meetings.complete_transcript(
+          transcript.id,
+          "New summary",
+          Platform.Meetings.Transcript.summary_fingerprint(changed)
+        )
+
+      assert {:error, {:complete_failed, :stale_summary}} =
+               MeetingSummarize.handle_output(responsibility(), "Old summary", old_meta)
+
+      assert Meetings.get_transcript(transcript.id).summary == "New summary"
+      assert Meetings.get_transcript(transcript.id).status == "complete"
+    end
+
     test "happy path persists summary and posts to space" do
       space = create_space!()
       transcript = create_transcript!(%{space_id: space.id})
@@ -96,6 +128,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       assert reloaded.status == "complete"
       assert reloaded.summary =~ "We shipped X."
       assert reloaded.completed_at
+      assert Platform.Meetings.Transcript.summary_current?(reloaded)
 
       # post_summary_to_space inserts a system-kind chat message; assert
       # we can find one referencing the transcript by metadata.

@@ -98,8 +98,8 @@ defmodule Platform.Social.Extension do
 
   # Build time only (a release host's `mix platform.extensions.assets`): the
   # cover picker's `CoverPicker` hook (task 01a165ec stage 4, Play's
-  # pattern), and the templates and hook for Tailwind to scan. No
-  # stylesheet.
+  # pattern), and the templates and hook for Tailwind to scan.
+  # Clip Review's viewport sizing stays scoped to the module stylesheet.
   @assets_root Path.expand("../../../assets", __DIR__)
   @lib_root Path.expand("../..", __DIR__)
 
@@ -107,6 +107,7 @@ defmodule Platform.Social.Extension do
   def assets do
     %{
       js_hooks: Path.join(@assets_root, "js/extension.js"),
+      css: Path.join(@assets_root, "css/clip_review.css"),
       tailwind_sources: [@lib_root, Path.join(@assets_root, "js")]
     }
   end

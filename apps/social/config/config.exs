@@ -99,3 +99,8 @@ config :social, :composer,
   temperature: 0.7,
   max_tokens: 1500,
   model: nil
+
+# Episode discovery queries committed uploads; tests own their worker and clock.
+if config_env() == :test do
+  config :social, :episode_discovery, interval_ms: :infinity, boot_sweep: false
+end

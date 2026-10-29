@@ -78,7 +78,15 @@ defmodule PlatformWeb.SpaceTopics do
 
   @assign :chat_space_holders
 
-  @owners [:presence, :chat_rail, :chat_active, :tasks_exec, :meeting]
+  @owners [
+    :presence,
+    :chat_rail,
+    :chat_active,
+    :tasks_exec,
+    :meeting,
+    :files_browser,
+    :canvas_viewing
+  ]
 
   # ── The second topic family: `space_agents:<id>` (task 01a0691d stage 3) ──
   #
@@ -124,9 +132,19 @@ defmodule PlatformWeb.SpaceTopics do
   MeetingLive's release also drops the other surface's hold, which is precisely
   the collision the holder map exists to remove. Holders must be
   distinguishable or the map buys nothing.
+
+  `:files_browser` holds displayed canvas/game invalidations and card presence.
+  `:canvas_viewing` holds the connected fullscreen canvas lifecycle. Both share
+  the shell pid and must release only their own subscription ownership.
   """
   @type owner ::
-          :presence | :chat_rail | :chat_active | :tasks_exec | :meeting
+          :presence
+          | :chat_rail
+          | :chat_active
+          | :tasks_exec
+          | :meeting
+          | :files_browser
+          | :canvas_viewing
 
   @typedoc """
   Closed set of surfaces permitted to hold a `space_agents:<id>` subscription.

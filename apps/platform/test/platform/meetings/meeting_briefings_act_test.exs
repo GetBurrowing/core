@@ -84,7 +84,7 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
   end
 
   # A concluded meeting with attendees A and B (and any `extra` attendees),
-  # two backlog tasks, and its briefing built by conclusion.
+  # two backlog tasks, and a briefing delivered by the bounded fallback.
   defp concluded!(opts \\ []) do
     n = System.unique_integer([:positive])
 
@@ -128,6 +128,14 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
     done = if Keyword.get(opts, :ack_done, false), do: ack_done!(live)
 
     {:ok, ended} = Meetings.end_meeting(live)
+    assert is_nil(MeetingBriefings.get_for_attendee(ended.id, a.id))
+
+    ended =
+      ended
+      |> Ecto.Changeset.change(ended_at: DateTime.add(DateTime.utc_now(), -1201))
+      |> Repo.update!()
+
+    assert {:ok, %{created: _}} = MeetingBriefings.deliver(ended)
     briefing = MeetingBriefings.get_for_attendee(ended.id, a.id)
     assert %MeetingBriefing{} = briefing
 

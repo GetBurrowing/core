@@ -29,6 +29,7 @@ import {uploadManager} from "./hooks/large_upload"
 import {installReloadGuard} from "./lib/reload_guard"
 import {createReconnectEscalation, parseThresholds} from "./lib/reconnect_escalation"
 import {createConnectionStatusView, fingerprint} from "./lib/connection_status_view"
+import {installInAppLinks} from "./lib/in_app_links"
 import {installNavPending} from "./lib/nav_pending"
 import {installTopBar} from "./lib/top_bar"
 import {installPressHold} from "./hooks/button_loading"
@@ -230,6 +231,7 @@ new MutationObserver(() => connectionView.reassert()).observe(document.body, {
 })
 
 // connect if there are any LiveViews on the page
+installInAppLinks(liveSocket)
 liveSocket.connect()
 
 // expose liveSocket on window for web console debug logs and latency simulation:

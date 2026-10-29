@@ -25,7 +25,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
   Kept in a separate module (rather than adding to `meeting_live_test.exs`)
   because `put_livekit_env/0` mutates `Application.put_env(:platform, :livekit, …)`
   which is async-unsafe. This module is `async: false`; the parent
-  `meeting_live_test.exs` stays `async: true`.
+  `meeting_live_test.exs` is also `async: false` for its LiveKit overrides.
   """
   use PlatformWeb.ConnCase, async: false
 

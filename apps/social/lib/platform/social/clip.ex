@@ -90,6 +90,10 @@ defmodule Platform.Social.Clip do
 
     has_many(:renders, Platform.Social.ClipRender)
 
+    # Removal hides review entries; immutable inputs, completion keys and media remain retained.
+    field(:removed_at, :utc_datetime_usec)
+    belongs_to(:removed_by_user, Platform.Accounts.User)
+
     timestamps()
   end
 

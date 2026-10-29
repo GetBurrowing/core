@@ -916,7 +916,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <ul class="divide-y divide-base-300">
           <li
             :for={v <- @versions}
-            id={"canvas-version-#{@canvas.id}-#{v.revision}"}
+            id={"canvas-version-#{if @mobile, do: "mobile", else: "desktop"}-#{@canvas.id}-#{v.revision}"}
             class={[
               "px-4 py-3 hover:bg-base-200 group",
               @restore_confirm_revision == v.revision && "bg-warning/10"

@@ -138,6 +138,65 @@ defmodule Platform.Chat.LinkTargets do
   end
 
   @doc """
+  True when `href` points at this install: a path-relative href (a single
+  leading `/`, never `//`), an absolute http(s) href on the endpoint's exact
+  host and port, or one on a configured alias host. Anything else (external
+  hosts, `#blocked:`, `mailto:`, fragments) is false.
+  """
+  @spec same_install?(String.t() | nil, keyword()) :: boolean()
+  def same_install?(href, opts \\ [])
+
+  def same_install?(href, opts) when is_binary(href) do
+    href = href |> decode_entities() |> String.trim()
+
+    if String.starts_with?(href, "/") do
+      not String.starts_with?(href, "//")
+    else
+      own_host?(URI.parse(href), opts)
+    end
+  end
+
+  def same_install?(_href, _opts), do: false
+
+  @doc """
+  The path-relative form (path, query, fragment) of a same-install absolute
+  href, so it opens on the current origin. Returns `href` unchanged when it
+  is already path-relative or not same-install.
+  """
+  @spec relative_href(String.t(), keyword()) :: String.t()
+  def relative_href(href, opts \\ []) when is_binary(href) do
+    decoded = href |> decode_entities() |> String.trim()
+
+    if same_install?(decoded, opts) and not String.starts_with?(decoded, "/") do
+      uri = URI.parse(decoded)
+      URI.to_string(%URI{path: uri.path || "/", query: uri.query, fragment: uri.fragment})
+    else
+      href
+    end
+  end
+
+  @doc """
+  Anchor attributes for a link, as a map to splat into HEEx (`{...}`). A
+  same-install link gets `data-in-app-link="path"` and no target; every other
+  link gets `target="_blank" rel="noopener noreferrer"`.
+  """
+  @spec open_attrs(String.t() | nil, keyword()) :: map()
+  def open_attrs(href, opts \\ []) do
+    if same_install?(href, opts),
+      do: %{"data-in-app-link" => "path"},
+      else: %{"target" => "_blank", "rel" => "noopener noreferrer"}
+  end
+
+  @doc """
+  `href` made path-relative when it is a same-install absolute link; for
+  use alongside `open_attrs/2`.
+  """
+  @spec open_href(String.t() | nil, keyword()) :: String.t() | nil
+  def open_href(href, opts \\ [])
+  def open_href(href, opts) when is_binary(href), do: relative_href(href, opts)
+  def open_href(href, _opts), do: href
+
+  @doc """
   True when `uri`'s scheme is http(s), it carries no userinfo, its authority
   is a plain `host[:port]`, and either host and port equal this install's, or
   the host is a configured alias (exact, case-insensitive) on the endpoint's

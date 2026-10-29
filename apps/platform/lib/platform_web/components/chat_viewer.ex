@@ -245,9 +245,8 @@ defmodule PlatformWeb.Components.ChatViewer do
       </div>
       <a
         data-role="viewer-open-in-browser"
-        href={@viewer.url}
-        target="_blank"
-        rel="noopener noreferrer"
+        href={Platform.Chat.LinkTargets.open_href(@viewer.url)}
+        {Platform.Chat.LinkTargets.open_attrs(@viewer.url)}
         class="btn btn-primary mt-2"
       >
         Open in browser

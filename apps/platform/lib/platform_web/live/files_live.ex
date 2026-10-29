@@ -92,8 +92,9 @@ defmodule PlatformWeb.FilesLive do
 
   ## PubSub
 
-  `mount/3` subscribes to `Platform.Files.project_topic/1` for the
-  selected project. `Platform.Files.Ingester` broadcasts
+  `BrowserHooks` owns the user's private star topic and every currently
+  readable project topic and the displayed authorized space topics. Leaving a project node clears detail state,
+  while keeping its updates available to Recents and Starred. `Platform.Files.Ingester` broadcasts
   `{:file_ingested, file_id}` (and `{:file_ingest_failed, …}`) when a
   run resolves; the LV re-fetches the row and updates the stream so
   the "Ingesting…" pill flips to "Ready" without a refresh. The
@@ -103,9 +104,9 @@ defmodule PlatformWeb.FilesLive do
 
   ## Delete + undo (task 019f7cb0 stage 5)
 
-  The detail-pane Delete button soft-deletes via
-  `Platform.Files.delete_file/2` — optimistic removal with NO confirm
-  dialog (ratified: undo over consent). The context broadcasts
+  The detail-pane Delete button opens the same confirmation as the browser
+  menu (rung 17), then soft-deletes through the actor-first command gate.
+  The context broadcasts
   `{:file_deleted, file_id}` itself, so this LV never re-broadcasts; the
   click handler still drops the row in-place for same-tab snappiness
   (the broadcast converges other tabs). An ~8s undo toast
@@ -179,6 +180,8 @@ defmodule PlatformWeb.FilesLive do
   # the toast dies — the toast is the fast path, not the only path.
   @undo_toast_ms 8_000
 
+  defdelegate on_access_changed(socket), to: PlatformWeb.Files.BrowserHooks, as: :refresh
+
   # ── Mount / handle_params ────────────────────────────────────────────────
 
   @impl true
@@ -206,6 +209,7 @@ defmodule PlatformWeb.FilesLive do
      # nil | :menu | :spaces | :projects (the ＋ New sheet and menu).
      |> assign(:new_sheet, nil)
      |> assign(:browser, empty_browser())
+     |> PlatformWeb.Files.BrowserHooks.attach()
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
      |> assign(:files, [])
@@ -227,7 +231,6 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:semantic_search_state, :idle)
      |> assign(:show_upload_sheet, false)
      |> assign(:undo_toast, nil)
-     |> assign(:subscribed_project_id, nil)
      |> assign(:upload_batch, empty_upload_batch())
      # Default CHECKED: most uploads are working material an agent should
      # be able to read. Checked does not force "attempt" — it just means
@@ -349,21 +352,9 @@ defmodule PlatformWeb.FilesLive do
     {:noreply, assign(socket, :preview_fullscreen, false)}
   end
 
-  # Optimistic delete — no confirm dialog (ratified design: undo over
-  # consent). The disabled button still emits clicks (aria-disabled is
-  # advisory), so the actor check here is the real rail.
-  def handle_event("delete_file", %{"id" => file_id}, socket) do
-    case {delete_actor(socket), find_known_file(socket, file_id)} do
-      {nil, _file} ->
-        {:noreply, put_flash(socket, :error, "Sign in to delete files.")}
-
-      {_actor, nil} ->
-        {:noreply, socket}
-
-      {actor, file} ->
-        do_delete_file(socket, actor, file)
-    end
-  end
+  # Detail Delete opens the same confirmation as the row menu (rung 17).
+  def handle_event("delete_file", %{"id" => file_id}, socket),
+    do: {:noreply, PlatformWeb.Files.BrowserHooks.request_file_delete(socket, file_id)}
 
   def handle_event("undo_delete", _params, socket) do
     case socket.assigns.undo_toast do
@@ -929,7 +920,13 @@ defmodule PlatformWeb.FilesLive do
 
   # ── Browser state: the URL is the state ─────────────────────────────────
 
-  @types %{"canvas" => :canvas, "game" => :game, "doc" => :doc, "image" => :image}
+  @types %{
+    "canvas" => :canvas,
+    "game" => :game,
+    "doc" => :doc,
+    "image" => :image,
+    "file" => :file
+  }
   @sorts %{"recent" => :recent, "name" => :name, "type" => :type}
 
   defp empty_browser do
@@ -946,7 +943,8 @@ defmodule PlatformWeb.FilesLive do
     }
   end
 
-  defp apply_browser_params(socket, params) do
+  @doc false
+  def apply_browser_params(socket, params) do
     type = parse_type(params["type"], socket.assigns.games?)
     sort = Map.get(@sorts, params["sort"], :recent)
     base = %{empty_browser() | type: type, sort: sort, params: clean_params(params, type, sort)}
@@ -1227,10 +1225,9 @@ defmodule PlatformWeb.FilesLive do
   defp leave_project(%{assigns: %{selected_project_id: nil}} = socket), do: socket
 
   defp leave_project(socket) do
-    # Drop the subscription so PubSub events for a project the viewer left
-    # stop arriving.
+    # BrowserHooks owns subscriptions for every readable project. Leaving
+    # this node clears its detail state, never its global browser updates.
     socket
-    |> maybe_unsubscribe()
     |> assign(:selected_project_id, nil)
     |> assign(:selected_project, nil)
     |> assign(:files, [])
@@ -1272,70 +1269,6 @@ defmodule PlatformWeb.FilesLive do
   defp stored_layout(%{preferences: %{"files_layout" => "list"}}), do: :list
   defp stored_layout(_user), do: nil
 
-  attr :browser, :map, required: true
-  attr :files, :list, required: true
-  attr :labels, :map, required: true
-  attr :layout, :atom, required: true
-  attr :claims, :map, required: true
-
-  # The toolbar and the rows. A project node builds its rows from `@files`
-  # (which PubSub keeps current), so a badge flip re-renders here; every
-  # other view reads the items `handle_params/3` loaded.
-  defp browser_view(assigns) do
-    {items, file_rows} =
-      case assigns.browser.node do
-        {:project, project} ->
-          files = assigns.files
-
-          {files
-           |> Enum.map(&Browser.item_for_file(&1, project.org_id))
-           |> Browser.filter(assigns.browser.type), Map.new(files, &{&1.id, &1})}
-
-        _ ->
-          {assigns.browser.items, %{}}
-      end
-
-    browser = %{assigns.browser | items: Browser.sort(items, assigns.browser.sort)}
-
-    nodes =
-      Enum.map(browser.nodes, fn node ->
-        Map.put(node, :label, BrowserView.node_label(node, assigns.labels))
-      end)
-
-    assigns =
-      assign(assigns,
-        browser: browser,
-        nodes: nodes,
-        file_rows: file_rows,
-        show_location: not match?({kind, _} when kind in [:project, :space], browser.node)
-      )
-
-    ~H"""
-    <BrowserComponents.toolbar browser={@browser} layout={@layout} />
-    <%= cond do %>
-      <% @browser.items == [] and @nodes != [] -> %>
-        <BrowserComponents.node_list nodes={@nodes} />
-      <% @browser.items == [] -> %>
-        <BrowserComponents.empty_state browser={@browser} labels={@labels} />
-      <% @layout == :grid -> %>
-        <BrowserComponents.item_grid
-          browser={@browser}
-          labels={@labels}
-          show_location={@show_location}
-        />
-      <% true -> %>
-        <BrowserComponents.item_list
-          browser={@browser}
-          labels={@labels}
-          show_location={@show_location}
-          file_rows={@file_rows}
-          claims={@claims}
-        />
-    <% end %>
-    <BrowserComponents.capped_note browser={@browser} />
-    """
-  end
-
   # ── Internals ───────────────────────────────────────────────────────────
 
   defp load_project(socket, project_id) do
@@ -1356,8 +1289,6 @@ defmodule PlatformWeb.FilesLive do
       project = Platform.Repo.preload(project, :org)
 
       socket
-      |> maybe_unsubscribe()
-      |> subscribe(project_id)
       |> assign(:selected_project_id, project_id)
       |> assign(:selected_project, project)
       |> assign(:files, list_files(project_id))
@@ -1388,21 +1319,6 @@ defmodule PlatformWeb.FilesLive do
       other ->
         other
     end
-  end
-
-  defp subscribe(socket, project_id) do
-    if connected?(socket) do
-      :ok = Files.subscribe_project(project_id)
-    end
-
-    assign(socket, :subscribed_project_id, project_id)
-  end
-
-  defp maybe_unsubscribe(%{assigns: %{subscribed_project_id: nil}} = socket), do: socket
-
-  defp maybe_unsubscribe(%{assigns: %{subscribed_project_id: project_id}} = socket) do
-    Phoenix.PubSub.unsubscribe(Platform.PubSub, Files.project_topic(project_id))
-    assign(socket, :subscribed_project_id, nil)
   end
 
   defp list_files(project_id), do: Files.list_files_for_project(project_id, limit: 200)
@@ -1557,8 +1473,9 @@ defmodule PlatformWeb.FilesLive do
     end
   end
 
-  defp do_delete_file(socket, actor, file) do
-    case Files.delete_file(actor, file) do
+  @doc false
+  def confirm_file_delete(socket, actor, file) do
+    case Platform.Files.BrowserActions.execute(actor, {:file, file.id}, :delete) do
       {:ok, deleted} ->
         # The context already broadcast {:file_deleted, id} for other
         # sessions; drop the row here too so this tab doesn't wait on
@@ -1677,7 +1594,7 @@ defmodule PlatformWeb.FilesLive do
   # A purged row makes Repo.update raise Ecto.StaleEntryError inside
   # restore_file/2 — normalize it to the :not_found the caller handles.
   defp safe_restore(actor, file) do
-    Files.restore_file(actor, file)
+    Platform.Files.BrowserActions.execute(actor, {:file, file.id}, :undo)
   rescue
     Ecto.StaleEntryError -> {:error, :not_found}
   end

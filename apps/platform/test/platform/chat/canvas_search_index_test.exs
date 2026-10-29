@@ -328,11 +328,11 @@ defmodule Platform.Chat.CanvasSearchIndexTest do
             String.contains?(source, "Canvas.changeset("),
             do: {Path.relative_to(path, lib_root), source}
 
-      # The two writer files verified against the branch: `chat.ex`
-      # (do_create_canvas, do_create_canvas_with_message, do_update_canvas)
-      # and `canvas/server.ex` (do_persist).
+      # Three canonical writers: ordinary context writes, server patches,
+      # and the actor-authorized restore transaction (task 01a1557a). The
+      # restore also calls CanvasSearchIndex.upsert_multi in that transaction.
       assert MapSet.new(writers, &elem(&1, 0)) ==
-               MapSet.new(["chat.ex", "chat/canvas/server.ex"])
+               MapSet.new(["chat.ex", "chat/canvas/server.ex", "chat/canvas/restore.ex"])
 
       unwired =
         for {relative, source} <- writers,

@@ -449,6 +449,7 @@ defmodule Platform.Responsibilities.ContextProviders do
                meeting_transcript: %{
                  transcript_id: transcript.id,
                  formatted_text: SummaryPrompt.format_segments(segments),
+                 summary_input_hash: Transcript.summary_fingerprint(transcript),
                  segment_count: length(segments),
                  duration_ms: max_end_time(segments)
                }

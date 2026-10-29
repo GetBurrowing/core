@@ -6,15 +6,12 @@ defmodule PlatformWeb.Components.FileDeleteUI do
   Two pieces that work together on `PlatformWeb.FilesLive`:
 
     * `delete_file_button/1` — the persistent ghost + `error` Delete
-      control that lives in the file-detail action row (desktop aside
-      AND mobile drawer — never on table rows, which stay data-only).
-      When the viewer cannot delete it renders disabled-but-visible:
-      `opacity-50` + `aria-disabled` + tooltip, never hidden (persistent
-      controls over reveal, locked design direction).
+      control in the file-detail action row (desktop aside and mobile
+      drawer). Rung 17 hides unauthorized controls and opens the same
+      confirmation as the browser menu before deleting.
 
-    * `file_undo_toast/1` — the signature element. Delete is optimistic
-      with NO confirm dialog (ratified: undo over consent); the toast IS
-      the confirmation. Inverted `--color-neutral` fill, `elev-3`
+    * `file_undo_toast/1` — the signature element. Deletion follows the shared
+      browser confirmation; this toast offers recovery. Inverted `--color-neutral` fill, `elev-3`
       (toast shadow per foundations §7), filename in `body` type, the
       Undo action in `--color-primary` small-strong. Bottom-anchored
       above the mobile bottom nav via the canonical
@@ -40,12 +37,8 @@ defmodule PlatformWeb.Components.FileDeleteUI do
   @doc """
   Persistent Delete button for the file-detail action row.
 
-  `can_delete` reflects the page's authorization for mutating actions —
-  for Files that is actor presence (`current_user_id` in session; the
-  route is already behind RequireAuth, so this is a defensive rail, not
-  a role gate). The button stays rendered either way; the disabled
-  state is visible + explained, and the host's `"delete_file"` handler
-  re-checks before acting (aria-disabled does not block clicks).
+  `can_delete` comes from the shared actor-first command eligibility check.
+  Unauthorized controls are absent, and confirmation rechecks permissions.
   """
   attr :file, Files.File, required: true
   attr :can_delete, :boolean, required: true
@@ -60,17 +53,15 @@ defmodule PlatformWeb.Components.FileDeleteUI do
   def delete_file_button(assigns) do
     ~H"""
     <button
+      :if={@can_delete}
       type="button"
       id={@id}
       phx-click="delete_file"
       phx-value-id={@file.id}
       class={[
         "btn btn-ghost btn-sm shrink-0 text-error active:bg-error active:text-error-content",
-        @class,
-        !@can_delete && "opacity-50"
+        @class
       ]}
-      aria-disabled={if !@can_delete, do: "true"}
-      title={if !@can_delete, do: "Sign in to delete files"}
       data-role={@data_role}
     >
       <span class="hero-trash size-4"></span> Delete

@@ -5,8 +5,9 @@ defmodule Platform.Social.ClipRender do
   rendered with. A clip keeps its id across re-renders; each new rev adds a
   row here and earlier rows are never rewritten. Unique per `(clip_id, rev)`.
 
-  Deleting the clip deletes its renders; deleting the file nils `file_id`
-  and keeps the row.
+  Human removal tombstones the review entry and retains this row and its
+  completion identity. Administrative clip teardown cascades renders; deleting
+  a Files row nils `file_id` and keeps the snapshot.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -42,6 +43,10 @@ defmodule Platform.Social.ClipRender do
     field(:completion_key, :string)
     field(:snapshot_status, :string, default: "recorded")
     belongs_to(:submitted_by_agent, Platform.Agents.Agent)
+
+    # Removal hides review entries; immutable inputs, completion keys and media remain retained.
+    field(:removed_at, :utc_datetime_usec)
+    belongs_to(:removed_by_user, Platform.Accounts.User)
 
     timestamps()
   end

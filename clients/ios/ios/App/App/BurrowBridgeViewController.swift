@@ -95,7 +95,27 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
 
     // MARK: Capacitor hooks
 
+    #if DEBUG
+        override func instanceDescriptor() -> InstanceDescriptor {
+            let descriptor = super.instanceDescriptor()
+            if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                // Use Capacitor's initial load, avoiding an index.html load
+                // racing a second fixture load from viewDidAppear.
+                descriptor.appStartPath = "tabbar-fixture.html"
+            }
+            return descriptor
+        }
+    #endif
+
     override func capacitorDidLoad() {
+        #if DEBUG
+            if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil,
+                let config = bridge?.config
+            {
+                // Install before Capacitor issues its initial navigation.
+                addTabBarScript(host: config.serverURL.host ?? "localhost")
+            }
+        #endif
         plugin.shell = self
         bridge?.registerPluginInstance(plugin)
         // Native meetings (task 01a10db7 stage 3), beside `SuiteNative`.
@@ -152,6 +172,21 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             webView.navigationDelegate = trace
             WebLoadLog.logger.notice("trace-installed isLoading=\(webView.isLoading) current=\(WebLoadLog.describe(webView.url), privacy: .public)")
         }
+
+        #if DEBUG
+            if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil,
+                let config = bridge?.config
+            {
+                addTabBarScript(host: config.serverURL.host ?? "localhost")
+                if recoveryRequest == nil {
+                    // super.viewDidLoad has already issued this one initial
+                    // request. Register its watchdog without issuing it again.
+                    let request = URLRequest(url: config.appStartServerURL)
+                    navTrace?.noteShellLoad("tabbar-fixture-bootstrap", url: request.url, webView: webView)
+                    webRecovery?.shellLoad(request)
+                }
+            }
+        #endif
 
         cover.backgroundColor = BurrowColor.surface.uiColor
         cover.frame = webView.bounds
@@ -236,6 +271,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             "viewDidAppear isLoading=\(self.webView?.isLoading ?? false) current=\(WebLoadLog.describe(self.webView?.url), privacy: .public)")
         if let request = recoveryRequest {
             recoveryRequest = nil
+            #if DEBUG
+                if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                    // The replacement bridge's initial load is already the
+                    // fixture; preserve the recovery epoch and avoid a second load.
+                    navTrace?.noteShellLoad("recreated-capacitor-bootstrap", url: request.url, webView: webView)
+                    _ = startTabBarFixture()
+                    return
+                }
+            #endif
             if let host = request.url?.host { addTabBarScript(host: host) }
             navTrace?.noteShellLoad("recreated-capacitor", url: request.url, webView: webView)
             webView?.load(request)
@@ -416,6 +460,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         observeBackdrop()
         for delay in [0.15, 0.7, 1.6] { scheduleBackdropSample(after: delay) }
         #if DEBUG
+            WebLoadLog.event("tabbar-transition request visible=\(tabBarState.shown) items=\(tabBarState.items.joined(separator: ","))")
             reportTabBarFixture()
         #endif
     }
@@ -558,7 +603,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             guard let base = bridge?.config.serverURL else { return true }
             view.layoutIfNeeded()
             addTabBarScript(host: base.host ?? "localhost")
-            loadTraced(URLRequest(url: base.appendingPathComponent("tabbar-fixture.html")), reason: "tabbar-fixture")
+            // instanceDescriptor selects the fixture before Capacitor bootstraps.
+            // This method applies window-dependent appearance only.
             return true
         }
 
@@ -568,9 +614,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 var report = NativeTabBarProbe.report(bar: host.bar, root: root)
                 report["hosting"] = "standalone"
+                let transition =
+                    "requested=\(self?.tabBarState.shown.description ?? "unknown") hidden=\(host.bar.isHidden) animations=\(host.bar.layer.animationKeys() ?? []) model=\(host.bar.frame) presentation=\(String(describing: host.bar.layer.presentation()?.frame))"
+                report["transition"] = transition
+                WebLoadLog.event("tabbar-transition report \(transition)")
                 report["rendered"] = NativeTabBarProbe.rendered(bar: host.bar, keys: host.renderedKeys)
                 guard let data = try? JSONSerialization.data(withJSONObject: report), let json = String(data: data, encoding: .utf8) else { return }
-                self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))")
+                self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))") { _, error in
+                    WebLoadLog.event("tabbar-transition report-delivery error=\(error.map { WebLoadLog.describe($0) } ?? "none")")
+                }
             }
         }
     #endif
@@ -692,7 +744,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         if loginProbeHost != nil { return false }
         guard let policy, let install = currentInstall else { return false }
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
-        let decision = policy.decide(url: action.request.url, isMainFrame: isMainFrame)
+        let decision = policy.decide(url: action.request.url, isMainFrame: isMainFrame, isNewWindow: action.targetFrame == nil)
         if signingOutHost == install.host {
             switch decision {
             case .signOut:
@@ -705,11 +757,17 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 return true
             case .allow:
                 return false
+            case .loadInMainView:
+                loadTraced(action.request, reason: "new-window")
+                return true
             }
         }
         switch decision {
         case .allow:
             return false
+        case .loadInMainView:
+            loadTraced(action.request, reason: "new-window")
+            return true
         case .openExternally:
             if let url = action.request.url {
                 UIApplication.shared.open(url)

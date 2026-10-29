@@ -1,3 +1,5 @@
+Code.require_file("priv/scripts/repair_meeting_briefing.exs")
+
 defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   @moduledoc """
   `Platform.Meetings.MeetingBriefings.build/1` (task 01a1694a stage 1): one
@@ -11,6 +13,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.CompletionRun
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.MeetingBriefing
   alias Platform.Meetings.MeetingBriefings
@@ -20,6 +23,13 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskRecord
+
+  defmodule RepairPushRecorder do
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:repair_push, user_id, payload})
+      :ok
+    end
+  end
 
   # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -239,6 +249,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         meeting_id: meeting.id,
         state: :heard,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "open_question",
         evidence_quote: "who owns the bucket policy?"
       })
@@ -249,6 +260,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         state: :closed,
         closed_reason: :retracted,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "open_question",
         evidence_quote: "never mind that"
       })
@@ -259,6 +271,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
         state: :closed,
         closed_reason: :dismissed,
         outcome_kind: :task,
+        disposition: :accepted,
         classified_intent: "action_items",
         evidence_quote: "someone should check the quotas"
       })
@@ -281,5 +294,231 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     assert Enum.map(content["unfiled_action_items"], & &1["id"]) == [unfiled.id]
     assert briefing.summary == "We agreed on the bucket policy."
     assert is_binary(briefing.transcript_id)
+  end
+
+  defp content_candidate!(meeting, intent, disposition, attrs \\ %{}) do
+    Repo.insert!(
+      struct!(
+        MeetingCandidate,
+        Map.merge(
+          %{
+            meeting_id: meeting.id,
+            state: :closed,
+            closed_reason: :done,
+            classified_intent: intent,
+            disposition: disposition,
+            evidence_quote: "#{intent} #{inspect(disposition)}"
+          },
+          attrs
+        )
+      )
+    )
+  end
+
+  test "content admits only accepted verdicts and still excludes withdrawn accepted candidates" do
+    %{meeting: meeting} = meeting_fixture!("Officer verdicts")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+
+    accepted =
+      for intent <- ["open_question", "action_items"] do
+        kept = content_candidate!(meeting, intent, :accepted)
+
+        for disposition <- [:rejected, :timed_out, nil] do
+          content_candidate!(meeting, intent, disposition)
+        end
+
+        for reason <- [:retracted, :duplicate, :vetoed] do
+          content_candidate!(meeting, intent, :accepted, %{closed_reason: reason})
+        end
+
+        kept
+      end
+
+    [question, action] = accepted
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+
+    assert briefing.items["_content"]["open_questions"] ==
+             [%{"id" => question.id, "text" => question.evidence_quote}]
+
+    assert briefing.items["_content"]["unfiled_action_items"] ==
+             [%{"id" => action.id, "text" => action.evidence_quote}]
+  end
+
+  test "completion ledger reconciles a filed action by stable identity without a task backlink" do
+    %{meeting: meeting, project: project, canvas: canvas} = meeting_fixture!("Filed identity")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+    candidate = content_candidate!(meeting, "action_items", :accepted)
+
+    unrelated =
+      content_candidate!(meeting, "action_items", :accepted, %{
+        evidence_quote: candidate.evidence_quote,
+        canvas_id: canvas.id
+      })
+
+    task = file!(canvas, project, "Normalized action title")
+
+    canvas
+    |> Chat.Canvas.changeset(%{
+      document: %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "type" => "stack",
+          "id" => "final-actions",
+          "children" => [
+            %{
+              "type" => "checklist_item",
+              "id" => candidate.id,
+              "props" => %{"label" => "Normalized action title"}
+            }
+          ]
+        }
+      }
+    })
+    |> Repo.update!()
+
+    Repo.insert!(%CompletionRun{
+      meeting_id: meeting.id,
+      canvas_id: canvas.id,
+      status: "filed",
+      item_results: %{
+        candidate.id => %{
+          "status" => "processed",
+          "candidate_ids" => [candidate.id],
+          "task_ids" => [task.id]
+        }
+      }
+    })
+
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+    assert is_nil(Repo.get!(MeetingCandidate, candidate.id).task_id)
+    assert refs_by_kind(briefing)["task"] == ["task:" <> task.id]
+
+    assert Enum.map(briefing.items["_content"]["unfiled_action_items"], & &1["id"]) ==
+             [unrelated.id]
+
+    # A ledger reference to a deleted task cannot hide an unfiled action.
+    task |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+    {:ok, rebuilt, _} = MeetingBriefings.build(meeting)
+
+    assert Enum.sort(Enum.map(rebuilt.items["_content"]["unfiled_action_items"], & &1["id"])) ==
+             Enum.sort([candidate.id, unrelated.id])
+  end
+
+  test "release repair selector stays in parity and preserves receipts and unrelated items" do
+    %{meeting: meeting} = meeting_fixture!("Repair parity")
+    meeting = meeting |> go_live!(ago(60)) |> end!()
+
+    for intent <- ["action_items", "open_question"],
+        disposition <- [:accepted, :rejected, :timed_out, nil] do
+      content_candidate!(meeting, intent, disposition)
+    end
+
+    {:ok, briefing, _} = MeetingBriefings.build(meeting)
+    replacement = MeetingBriefingRepair.replacement(briefing, meeting)
+
+    assert replacement.items["_content"] ==
+             Map.delete(briefing.items["_content"], "missing_prerequisites")
+
+    assert Map.delete(replacement.items, "_content") == Map.delete(briefing.items, "_content")
+
+    assert MeetingBriefingRepair.replacement(%{briefing | items: replacement.items}, meeting) ==
+             replacement
+
+    assert_raise ArgumentError, fn ->
+      MeetingBriefingRepair.run(Ecto.UUID.generate(), apply: true)
+    end
+
+    refute Map.has_key?(replacement, :receipts)
+    refute Map.has_key?(replacement, :attendee_user_ids)
+    refute Map.has_key?(replacement, :id)
+  end
+
+  test "exact repair defaults dry, preserves shared identity and receipts, and is idempotent" do
+    old = Application.get_env(:platform, :notifications_module)
+    Application.put_env(:platform, :notifications_module, RepairPushRecorder)
+    :persistent_term.put({RepairPushRecorder, :owner}, self())
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, :notifications_module, old),
+        else: Application.delete_env(:platform, :notifications_module)
+
+      :persistent_term.erase({RepairPushRecorder, :owner})
+    end)
+
+    n = System.unique_integer([:positive])
+
+    user =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        email: "repair-#{n}@example.com",
+        name: "Repair viewer",
+        oidc_sub: "repair-#{n}"
+      })
+      |> Repo.insert!()
+
+    %{meeting: source} = meeting_fixture!("Repair execution")
+
+    meeting =
+      Repo.insert!(%Meeting{
+        id: "01a182f9-2143-7000-a92f-2cf62a92cefc",
+        project_id: source.project_id,
+        chat_space_id: source.chat_space_id,
+        slug: "authorized-repair",
+        livekit_room_name: Ecto.UUID.generate(),
+        name: "Repair fixture",
+        status: "ended",
+        started_at: ago(60),
+        ended_at: ago(30)
+      })
+
+    accepted = content_candidate!(meeting, "open_question", :accepted)
+    rejected = content_candidate!(meeting, "open_question", :rejected)
+    receipts = %{"existing" => %{"verb" => "confirmed", "by" => Ecto.UUID.generate()}}
+
+    original =
+      Repo.insert!(%MeetingBriefing{
+        meeting_id: meeting.id,
+        attendee_user_ids: [user.id],
+        receipts: receipts,
+        items: %{
+          "_content" => %{
+            "open_questions" => [%{"id" => rejected.id}],
+            "unfiled_action_items" => []
+          }
+        }
+      })
+
+    inbox =
+      Repo.insert!(%Platform.Inbox.Item{
+        user_id: user.id,
+        kind: "meeting_briefing",
+        source_type: "meeting_briefing",
+        source_id: original.id,
+        title: "Read briefing",
+        body: "",
+        url: "/inbox/meeting/" <> meeting.id,
+        read_at: DateTime.utc_now()
+      })
+
+    assert %{
+             changed: true,
+             applied: false,
+             before: %{rejected: 1},
+             after: %{accepted: 1, rejected: 0}
+           } = MeetingBriefingRepair.run(meeting.id)
+
+    assert Repo.get!(MeetingBriefing, original.id).items == original.items
+    assert %{changed: true, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+    refute_receive {:repair_push, _, _}
+    repaired = Repo.get!(MeetingBriefing, original.id)
+    assert Repo.get!(Platform.Inbox.Item, inbox.id) == inbox
+    assert repaired.id == original.id
+    assert repaired.receipts == receipts
+    assert repaired.attendee_user_ids == original.attendee_user_ids
+    assert [%{"id" => id}] = repaired.items["_content"]["open_questions"]
+    assert id == accepted.id
+    assert %{changed: false, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
   end
 end

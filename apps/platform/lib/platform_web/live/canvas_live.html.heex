@@ -129,17 +129,33 @@
               {@canvas.title || "Untitled canvas"}
             </h1>
 
-            <p
-              class="order-5 min-w-0 basis-full truncate text-xs text-neutral sm:order-2 sm:grow sm:basis-0"
-              data-role="canvas-crumb"
-            >
-              {provenance_crumb(%{
-                org_name: @org_name,
-                space_name: @space_name,
-                author_name: @author_name,
-                canvas: @canvas
-              })}
-            </p>
+            <%!-- History shares the yielding crumb row on phones, keeping
+                 the title's existing first-row space and all one-tap exits. --%>
+            <div class="order-5 flex min-w-0 basis-full items-center gap-2 sm:order-2 sm:grow sm:basis-0">
+              <p
+                class="order-5 min-w-0 basis-full truncate text-xs text-neutral sm:order-2 sm:grow sm:basis-0"
+                data-role="canvas-crumb"
+              >
+                {provenance_crumb(%{
+                  org_name: @org_name,
+                  space_name: @space_name,
+                  author_name: @author_name,
+                  canvas: @canvas
+                })}
+              </p>
+
+              <button
+                id="canvas-history-open"
+                type="button"
+                phx-click="canvas_history_open"
+                class="btn btn-ghost btn-xs order-6 shrink-0 text-base-content"
+                aria-controls="canvas-history-sheet"
+                aria-expanded={@history_open}
+              >
+                <.icon name="hero-clock" class="size-4" />
+                <span>History</span>
+              </button>
+            </div>
 
             <%!-- `--color-neutral`, deliberately not primary: read-only is a
                fact about this page, not a feature of it. --%>
@@ -149,6 +165,12 @@
             >
               Read only
             </span>
+
+            <PlatformWeb.Files.ItemActions.canvas_star
+              canvas={@canvas}
+              viewer={%{id: @current_user_id}}
+              revision={@canvas_star_version}
+            />
 
             <%!-- `--color-primary` on hover and active only, never as text on
                white. --%>
@@ -192,6 +214,14 @@
           </div>
         </header>
 
+        <PlatformWeb.Canvases.HistoryComponents.banner
+          preview={@history_preview}
+          can_restore={@history_can_restore}
+          error={@history_error}
+        />
+        <PlatformWeb.Canvases.HistoryComponents.panel rows={@history_rows} open={@history_open} />
+        <PlatformWeb.Canvases.HistoryComponents.confirmation confirm={@history_confirm} />
+
         <%!-- The document sits DIRECTLY on `--color-base-100`: no card, no grey
            backdrop. Card-on-grey reads as an embedded preview of something
            living elsewhere, which is the wrong message for a page whose job is
@@ -216,7 +246,19 @@
           class="canvas-inert mx-auto w-full max-w-[880px] px-4 py-8 sm:px-6"
           data-role="canvas-body"
         >
+          <div
+            :if={@history_preview}
+            id="canvas-historical-document"
+            inert
+            data-preview-revision={@history_preview.revision}
+          >
+            <PlatformWeb.Chat.CanvasRenderer.canvas_document
+              canvas={@history_preview.canvas}
+              dom_id_base={"canvas-history-#{@history_preview.revision}"}
+            />
+          </div>
           <PlatformWeb.Chat.CanvasRenderer.canvas_document
+            :if={!@history_preview}
             canvas={@canvas}
             dom_id_base="canvas-standalone"
           />
@@ -228,7 +270,7 @@
             class="mt-10 text-center font-mono text-xs text-neutral"
             data-role="canvas-revision-stamp"
           >
-            rev {@revision} · {@canvas.id}
+            rev {if @history_preview, do: @history_preview.revision, else: @revision} · {@canvas.id}
           </p>
         </article>
       </div>

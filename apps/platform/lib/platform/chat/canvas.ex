@@ -23,6 +23,8 @@ defmodule Platform.Chat.Canvas do
 
   schema "chat_canvases" do
     field(:space_id, :binary_id)
+    # Ownership generation; never accepted through public attrs.
+    field(:location_epoch, :integer, default: 0)
     field(:created_by, :binary_id)
     field(:cloned_from, :binary_id)
     field(:title, :string)

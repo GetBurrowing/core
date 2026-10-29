@@ -4,6 +4,8 @@ import Foundation
 enum NavigationDecision: Equatable {
     /// Stay in the web view.
     case allow
+    /// Cancel the new window and load its request in the existing web view.
+    case loadInMainView
     /// Cancel and hand the URL to iOS (Safari, Mail, Phone...).
     case openExternally
     /// Cancel and sign in natively with ASWebAuthenticationSession.
@@ -31,7 +33,8 @@ struct NavigationPolicy {
 
     static let inViewSchemes: Set<String> = ["about", "data", "blob", "capacitor"]
 
-    func decide(url: URL?, isMainFrame: Bool) -> NavigationDecision {
+    func decide(url: URL?, isMainFrame: Bool, isNewWindow: Bool = false) -> NavigationDecision {
+        let isMainFrame = isMainFrame || isNewWindow
         guard let url, let scheme = url.scheme?.lowercased() else { return .allow }
         if Self.inViewSchemes.contains(scheme) { return .allow }
         guard scheme == "https" || scheme == "http" else { return .openExternally }
@@ -48,7 +51,7 @@ struct NavigationPolicy {
            !(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).contains(where: { $0.name == "app_challenge" }) {
             return .startNativeLogin
         }
-        return .allow
+        return isNewWindow ? .loadInMainView : .allow
     }
 
     /// Pull-to-refresh is off in chat views, where pulling down already

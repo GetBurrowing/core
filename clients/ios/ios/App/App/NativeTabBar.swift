@@ -361,6 +361,20 @@ enum NativeTabBarFactory {
 
 @MainActor
 final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegate {
+    typealias Animator = (TimeInterval, UIView.AnimationOptions, @escaping () -> Void, @escaping (Bool) -> Void) -> Void
+    private let animate: Animator
+
+    override convenience init() {
+        self.init { duration, options, changes, completion in
+            UIView.animate(withDuration: duration, delay: 0, options: options, animations: changes, completion: completion)
+        }
+    }
+
+    init(animate: @escaping Animator) {
+        self.animate = animate
+        super.init()
+    }
+
     let bar = UITabBar()
     var onTap: ((String) -> Void)?
     private var state = NativeTabBarState()
@@ -371,6 +385,7 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     /// Where the bar is heading; a hide finishing after a newer show does
     /// not hide it.
     private var shownTarget = false
+    private var visibilityEpoch = 0
     /// The style of the web content under the bar, once sampled.
     private(set) var backdropStyle: UIUserInterfaceStyle?
 
@@ -379,6 +394,7 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         bar.delegate = self
         NativeTabBarFactory.configure(bar)
         bar.isHidden = true
+        bar.accessibilityElementsHidden = true
         bar.translatesAutoresizingMaskIntoConstraints = false
         // A Dynamic Type change re-scales the labels (a bar item's title
         // font does not follow it on its own).
@@ -433,23 +449,53 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     private func setShown(_ shown: Bool) {
         guard shown != shownTarget else { return }
         shownTarget = shown
+        visibilityEpoch += 1
+        let epoch = visibilityEpoch
+        // Moving offscreen controls must not enter the accessibility tree.
+        // Reveal them only when the current show animation has settled.
+        bar.accessibilityElementsHidden = true
+        #if DEBUG
+            if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                WebLoadLog.event("tabbar-transition animation-start shown=\(shown) hidden=\(bar.isHidden)")
+            }
+        #endif
         let offset = CGAffineTransform(translationX: 0, y: max(bar.bounds.height, 100))
         if shown {
             if bar.isHidden {
                 bar.transform = offset
                 bar.isHidden = false
             }
-            UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
-                self.bar.transform = .identity
-            }
+            animate(
+                0.3, [.beginFromCurrentState, .curveEaseOut],
+                {
+                    self.bar.transform = .identity
+                },
+                { finished in
+                    if self.shownTarget, self.visibilityEpoch == epoch {
+                        self.bar.accessibilityElementsHidden = false
+                    }
+                    #if DEBUG
+                        if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                            WebLoadLog.event("tabbar-transition show-completion finished=\(finished) target=\(self.shownTarget) hidden=\(self.bar.isHidden)")
+                        }
+                    #endif
+                })
         } else {
-            UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
-                self.bar.transform = offset
-            } completion: { _ in
-                guard !self.shownTarget else { return }
-                self.bar.isHidden = true
-                self.bar.transform = .identity
-            }
+            animate(
+                0.25, [.beginFromCurrentState, .curveEaseIn],
+                {
+                    self.bar.transform = offset
+                },
+                { finished in
+                    #if DEBUG
+                        if UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil {
+                            WebLoadLog.event("tabbar-transition hide-completion finished=\(finished) target=\(self.shownTarget) hidden=\(self.bar.isHidden)")
+                        }
+                    #endif
+                    guard !self.shownTarget else { return }
+                    self.bar.isHidden = true
+                    self.bar.transform = .identity
+                })
         }
     }
 
