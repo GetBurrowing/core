@@ -1446,6 +1446,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/meetings/synthesis_findings.ex" => 1,
     # Task 01a16974 stage 2: citation ids are UUID-guarded in readable_by?/2.
     "platform/meetings/synthesis/visibility.ex" => 1,
+    # Native completion calls only: meeting/run ids originate in persisted
+    # CompletionRun rows; the responsibility refuses agent dispatch input.
+    "platform/meetings/synthesis.ex" => 3,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
