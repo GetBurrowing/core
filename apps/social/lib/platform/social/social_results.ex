@@ -12,18 +12,27 @@ defmodule Platform.Social.Results do
   @metrics ~w(views likes comments shares saves reach)a
   @engagement ~w(likes comments shares saves)a
 
-  @doc "Published versions grouped by idea within an elapsed UTC day window."
+  @doc """
+  Published versions grouped by idea within an elapsed UTC day window.
+  `start_at` and `end_at` may instead supply an explicit inclusive-start,
+  exclusive-end UTC interval (both are required). Defaults retain the existing
+  inclusive `now` endpoint. Calendar-week callers must resolve local boundaries
+  before calling; subtracting seven elapsed days is incorrect across DST.
+  """
   def by_idea(profiles, period, opts \\ []) when period in [7, 30, 90] do
     ids = Enum.map(profiles, fn %Profile{id: id} -> id end)
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
-    from(p in Post,
-      join: a in assoc(p, :account),
-      where: a.profile_id in ^ids,
-      where: p.status == "published" and p.published_at >= ^DateTime.add(now, -period, :day),
-      where: p.published_at <= ^now,
-      preload: [:idea, account: :profile]
-    )
+    query =
+      from(p in Post,
+        join: a in assoc(p, :account),
+        where: a.profile_id in ^ids,
+        where: p.status == "published",
+        preload: [:idea, account: :profile]
+      )
+
+    query
+    |> published_window(opts, DateTime.add(now, -period, :day), now)
     |> Repo.all()
     |> Enum.group_by(fn p -> if p.idea_id, do: "idea:#{p.idea_id}", else: "post:#{p.id}" end)
     |> Enum.map(fn {key, posts} ->
@@ -246,7 +255,11 @@ defmodule Platform.Social.Results do
   @doc "The exact usable sample count used by best_times/2, including below ten."
   def best_times_count(%Account{} = account, opts \\ []), do: time_sample(account, opts).count
 
-  @doc "Published progress through now for the profile-local Monday week; nil without a goal."
+  @doc """
+  Published progress through now for the profile-local Monday week; nil without
+  a goal. Paired `start_at`/`end_at` bounds select another completed local week
+  with inclusive start and exclusive end; all existing defaults stay unchanged.
+  """
   def weekly_progress(%Account{weekly_goal: nil}, _opts), do: nil
 
   def weekly_progress(%Account{} = account, opts) do
@@ -254,8 +267,14 @@ defmodule Platform.Social.Results do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     today = now |> DateTime.shift_zone!(profile.timezone) |> DateTime.to_date()
     monday = Date.add(today, 1 - Date.day_of_week(today))
-    start = local_midnight(monday, profile.timezone)
-    finish = local_midnight(Date.add(monday, 7), profile.timezone)
+    start = Keyword.get_lazy(opts, :start_at, fn -> local_midnight(monday, profile.timezone) end)
+
+    finish =
+      Keyword.get_lazy(opts, :end_at, fn ->
+        local_midnight(Date.add(monday, 7), profile.timezone)
+      end)
+
+    validate_bounds!(opts)
 
     count =
       Repo.aggregate(
@@ -278,6 +297,32 @@ defmodule Platform.Social.Results do
   end
 
   def weekly_progress(account), do: weekly_progress(account, [])
+
+  defp published_window(query, opts, start, now) do
+    validate_bounds!(opts)
+
+    case {Keyword.get(opts, :start_at), Keyword.get(opts, :end_at)} do
+      {nil, nil} ->
+        where(query, [p], p.published_at >= ^start and p.published_at <= ^now)
+
+      {start, finish} ->
+        where(query, [p], p.published_at >= ^start and p.published_at < ^finish)
+    end
+  end
+
+  defp validate_bounds!(opts) do
+    case {Keyword.get(opts, :start_at), Keyword.get(opts, :end_at)} do
+      {nil, nil} ->
+        :ok
+
+      {%DateTime{} = start, %DateTime{} = finish} ->
+        if DateTime.compare(start, finish) != :lt,
+          do: raise(ArgumentError, "start_at must precede end_at")
+
+      _ ->
+        raise ArgumentError, "start_at and end_at must both be DateTimes"
+    end
+  end
 
   defp time_sample(account, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
