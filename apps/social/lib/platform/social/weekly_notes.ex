@@ -1,6 +1,6 @@
 defmodule Platform.Social.WeeklyNotes do
   @moduledoc """
-  Scoped weekly-note reads and submission (task 01a16c52).
+  Scoped weekly-note submission and human decisions (task 01a16c52).
 
   The caller supplies its authenticated `{:agent, id}` identity or the internal
   `{:system, nil}` identity, never a model's authorship fields. Agent identity is
@@ -50,6 +50,17 @@ defmodule Platform.Social.WeeklyNotes do
   No published posts in the reporting week returns `{:error, :no_published_posts}`.
   """
   def submit(scope, profile_id, week_start, summary, items, author) do
+    Repo.transaction(fn ->
+      with {:ok, _} <- lock_profile(scope, profile_id),
+           {:ok, note} <- do_submit(scope, profile_id, week_start, summary, items, author) do
+        note
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp do_submit(scope, profile_id, week_start, summary, items, author) do
     with %Profile{} = profile <- Social.get_profile(scope, profile_id) || {:error, :not_found},
          {:ok, kind, author_id} <- author(profile, author),
          {:ok, week_start} <- delivery_monday(week_start),
@@ -68,10 +79,277 @@ defmodule Platform.Social.WeeklyNotes do
     end
   end
 
+  @doc "Apply a human decision once; timing use requires confirmed: true."
+  def decide(scope, note_id, item_id, decision, user_id, opts \\ []) do
+    if decision in ["use", "ignore"] do
+      change_item(scope, note_id, item_id, user_id, fn note, profile, item ->
+        cond do
+          item.decision == decision ->
+            {:ok, note}
+
+          item.decision != nil ->
+            {:error, :already_decided}
+
+          true ->
+            now = Keyword.get(opts, :now, DateTime.utc_now())
+
+            with {:ok, effect} <-
+                   apply_effect(scope, profile, note, item, decision, user_id, now, opts) do
+              save_item(note, %{
+                item
+                | decision: decision,
+                  decided_by_user_id: user_id,
+                  decided_at: now,
+                  effect: effect
+              })
+            end
+        end
+      end)
+    else
+      {:error, :invalid_decision}
+    end
+  end
+
+  @doc "Undo within the delivery week; refuse effects changed downstream atomically."
+  def undo(scope, note_id, item_id, user_id, opts \\ []) do
+    change_item(scope, note_id, item_id, user_id, fn note, profile, item ->
+      today =
+        Keyword.get(opts, :now, DateTime.utc_now())
+        |> DateTime.shift_zone!(profile.timezone)
+        |> DateTime.to_date()
+
+      cond do
+        Date.compare(today, note.week_start) == :lt or
+            Date.compare(today, Date.add(note.week_start, 7)) != :lt ->
+          {:error, :undo_expired}
+
+        item.decision == nil ->
+          {:ok, note}
+
+        true ->
+          with :ok <- reverse_effect(scope, profile, item) do
+            save_item(note, %{
+              item
+              | decision: nil,
+                decided_by_user_id: nil,
+                decided_at: nil,
+                effect: %{}
+            })
+          end
+      end
+    end)
+  end
+
+  defp lock_profile(scope, profile_id) do
+    with %Profile{} <- Social.get_profile(scope, profile_id),
+         %Profile{} = profile <-
+           Repo.one(from(p in Profile, where: p.id == ^profile_id, lock: "FOR UPDATE")),
+         %Profile{} <- Social.get_profile(scope, profile_id) do
+      {:ok, profile}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp change_item(scope, note_id, item_id, user_id, fun) do
+    Repo.transaction(fn ->
+      with %WeeklyNote{} = initial <- get(scope, note_id) || {:error, :not_found},
+           {:ok, profile} <- lock_profile(scope, initial.profile_id),
+           :ok <- Social.approver_check(profile.org_id, profile, user_id),
+           %WeeklyNote{} = note <-
+             Repo.one(from(n in WeeklyNote, where: n.id == ^initial.id, lock: "FOR UPDATE")),
+           %WeeklyNote.Item{} = item <-
+             Enum.find(note.items, &(&1.id == item_id)) || {:error, :not_found},
+           {:ok, changed} <- fun.(note, profile, item) do
+        changed
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        _ -> Repo.rollback(:not_found)
+      end
+    end)
+  end
+
+  defp save_item(note, changed) do
+    note
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.put_embed(
+      :items,
+      Enum.map(note.items, fn item ->
+        if item.id == changed.id,
+          do:
+            Ecto.Changeset.change(
+              item,
+              Map.take(changed, [:decision, :decided_at, :decided_by_user_id, :effect])
+            ),
+          else: Ecto.Changeset.change(item)
+      end)
+    )
+    |> Repo.update()
+  end
+
+  defp apply_effect(_, _, _, _, "ignore", _, _, _), do: {:ok, %{}}
+  defp apply_effect(_, _, _, %{kind: "other"}, _, _, _, _), do: {:ok, %{}}
+
+  defp apply_effect(_, profile, note, %{kind: "voice", payload: payload}, _, user_id, now, _) do
+    learning =
+      Ecto.Changeset.apply_changes(
+        Platform.Social.VoiceLearning.changeset(
+          %Platform.Social.VoiceLearning{id: Ecto.UUID.generate()},
+          %{
+            text: payload["text"],
+            source_note_id: note.id,
+            accepted_by_user_id: user_id,
+            accepted_at: now
+          }
+        )
+      )
+
+    voice = Platform.Social.Voice.of(profile)
+
+    voice = %{learnings: voice.learnings ++ [learning]}
+
+    with {:ok, _} <-
+           profile
+           |> Ecto.Changeset.change()
+           |> Ecto.Changeset.put_embed(:voice, voice)
+           |> Repo.update() do
+      {:ok, %{"kind" => "voice", "id" => learning.id, "snapshot" => snapshot(learning)}}
+    end
+  end
+
+  defp apply_effect(scope, profile, _, %{kind: "timing", payload: payload}, _, _, _, opts) do
+    with true <- Keyword.get(opts, :confirmed, false) == true || {:error, :confirmation_required},
+         :ok <- validate_payload(scope, profile, "timing", payload) do
+      account =
+        Repo.one!(from(a in Account, where: a.id == ^payload["account_id"], lock: "FOR UPDATE"))
+
+      if account.profile_id != profile.id or account.archived_at != nil,
+        do: Repo.rollback(:invalid_timing)
+
+      slot = %{"weekday" => payload["weekday"], "time" => payload["time"]}
+
+      slots =
+        Enum.map(account.posting_slots, &Map.take(Map.from_struct(&1), [:weekday, :time]))
+        |> stringify()
+
+      if slot in slots do
+        {:ok, %{}}
+      else
+        with {:ok, updated} <-
+               Social.update_account_schedule(scope, account, %{posting_slots: slots ++ [slot]}) do
+          {:ok,
+           %{
+             "kind" => "timing",
+             "account_id" => account.id,
+             "slot" => slot,
+             "snapshot" => snapshot(updated.posting_slots)
+           }}
+        end
+      end
+    end
+  end
+
+  defp apply_effect(scope, profile, _, %{kind: "recycle", payload: payload}, _, user_id, _, _) do
+    with :ok <- validate_payload(scope, profile, "recycle", payload),
+         {:ok, child} <-
+           Platform.Social.Results.recycle(scope, payload["idea_id"], user_id,
+             profiles: [profile]
+           ) do
+      {:ok,
+       %{
+         "kind" => "recycle",
+         "id" => child.id,
+         "snapshot" => snapshot(child),
+         "notes" => notes_snapshot(child.id)
+       }}
+    end
+  end
+
+  defp reverse_effect(_, _, %{effect: effect}) when map_size(effect) == 0, do: :ok
+
+  defp reverse_effect(_, profile, %{effect: %{"kind" => "voice"} = effect}) do
+    voice = Platform.Social.Voice.of(profile)
+
+    case Enum.find(voice.learnings, &(&1.id == effect["id"])) do
+      nil ->
+        :ok
+
+      learning ->
+        if snapshot(learning) == effect["snapshot"] do
+          voice = %{learnings: Enum.reject(voice.learnings, &(&1.id == learning.id))}
+
+          profile
+          |> Ecto.Changeset.change()
+          |> Ecto.Changeset.put_embed(:voice, voice)
+          |> Repo.update()
+          |> ok()
+        else
+          {:error, :effect_changed}
+        end
+    end
+  end
+
+  defp reverse_effect(scope, profile, %{effect: %{"kind" => "timing"} = effect}) do
+    account =
+      Repo.one(
+        from(a in Account,
+          where: a.id == ^effect["account_id"] and a.profile_id == ^profile.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if account && snapshot(account.posting_slots) == effect["snapshot"] do
+      slots =
+        account.posting_slots
+        |> Enum.map(&Map.take(Map.from_struct(&1), [:weekday, :time]))
+        |> stringify()
+        |> Enum.reject(&(&1 == effect["slot"]))
+
+      Social.update_account_schedule(scope, account, %{posting_slots: slots}) |> ok()
+    else
+      {:error, :effect_changed}
+    end
+  end
+
+  defp reverse_effect(_, profile, %{effect: %{"kind" => "recycle"} = effect}) do
+    child =
+      Repo.one(
+        from(i in Platform.Social.Idea,
+          where: i.id == ^effect["id"] and i.profile_id == ^profile.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if child && snapshot(child) == effect["snapshot"] &&
+         notes_snapshot(child.id) == effect["notes"] &&
+         not Repo.exists?(from(p in Platform.Social.Post, where: p.idea_id == ^child.id)) &&
+         not Repo.exists?(
+           from(i in Platform.Social.Idea, where: i.recycled_from_idea_id == ^child.id)
+         ) do
+      Repo.delete(child) |> ok()
+    else
+      {:error, :effect_changed}
+    end
+  end
+
+  defp reverse_effect(_, _, _), do: {:error, :effect_changed}
+  defp ok({:ok, _}), do: :ok
+  defp ok(error), do: error
+  defp stringify(value), do: value |> Jason.encode!() |> Jason.decode!()
+
+  defp snapshot(value),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(value)) |> Base.encode16()
+
+  defp notes_snapshot(id),
+    do:
+      Repo.all(from(n in Platform.Social.IdeaNote, where: n.idea_id == ^id, order_by: n.id))
+      |> snapshot()
+
   defp author(profile, {:agent, id}) do
     with {:ok, id} <- Ecto.UUID.cast(id),
          %Platform.Agents.Agent{status: "active"} = agent <- Repo.get(Platform.Agents.Agent, id),
-         true <- Social.org_visible?(Platform.Experiments.Tools.home_org(agent), profile.org_id) do
+         true <- Social.org_visible?(Platform.Experiments.Tools.home_org(agent), profile.org_id),
+         true <- profile.drafting_agent_id == id do
       {:ok, "agent", id}
     else
       _ -> {:error, :invalid_author}

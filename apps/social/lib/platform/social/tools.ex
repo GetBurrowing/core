@@ -59,7 +59,7 @@ defmodule Platform.Social.Tools do
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
   @agent_tools ~w(social_idea_create social_idea_list social_idea_note_add social_draft_create
-                  social_draft_update)
+                  social_draft_update social_weekly_note_submit)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -340,6 +340,31 @@ defmodule Platform.Social.Tools do
 
   # The agent is ALWAYS the caller (context): it is the idea's creator and
   # the change log's actor, never an argument.
+  defp agent_tool("social_weekly_note_submit", args, scope, agent) do
+    case Platform.Social.WeeklyNotes.submit(
+           scope,
+           args["profile_id"],
+           args["week_start"],
+           args["summary"],
+           args["items"],
+           {:agent, agent.id}
+         ) do
+      {:ok, note} ->
+        {:ok, weekly_note_json(note)}
+
+      {:error, reason} ->
+        message = if is_atom(reason), do: Atom.to_string(reason), else: "invalid_note"
+
+        {:error,
+         err(
+           :invalid_argument,
+           message,
+           true,
+           "Check the assigned drafting agent, Monday delivery week and item payloads; humans decide separately."
+         )}
+    end
+  end
+
   defp agent_tool("social_draft_create", args, scope, agent) do
     attrs = Map.drop(args, ["profile_id", "org_id"])
 
@@ -495,6 +520,30 @@ defmodule Platform.Social.Tools do
     end
   end
 
+  defp weekly_note_json(note) do
+    %{
+      id: note.id,
+      profile_id: note.profile_id,
+      week_start: Date.to_iso8601(note.week_start),
+      author_kind: note.author_kind,
+      author_id: note.author_id,
+      summary: note.summary,
+      inserted_at: DateTime.to_iso8601(note.inserted_at),
+      items:
+        Enum.map(note.items, fn item ->
+          %{
+            id: item.id,
+            kind: item.kind,
+            text: item.text,
+            payload: item.payload,
+            decision: item.decision,
+            decided_by_user_id: item.decided_by_user_id,
+            decided_at: if(item.decided_at, do: DateTime.to_iso8601(item.decided_at))
+          }
+        end)
+    }
+  end
+
   defp agent(%{agent: %Platform.Agents.Agent{} = agent}), do: agent
 
   defp agent(%{agent_id: id}) when is_binary(id) do
@@ -541,6 +590,19 @@ defmodule Platform.Social.Tools do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile -> {:ok, profile_json(profile, scope, true)}
       nil -> {:error, not_found("profile")}
+    end
+  end
+
+  defp run("social_weekly_note_list", args, scope) do
+    case Social.get_profile(scope, args["profile_id"]) do
+      %Profile{} ->
+        notes = Platform.Social.WeeklyNotes.list(scope, args["profile_id"])
+        {limit, offset} = ResultBound.page(args)
+        page = notes |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&weekly_note_json/1)
+        {:ok, ResultBound.paged(:notes, page, length(notes), offset)}
+
+      nil ->
+        {:error, not_found("profile")}
     end
   end
 

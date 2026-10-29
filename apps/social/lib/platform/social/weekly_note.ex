@@ -8,6 +8,7 @@ defmodule Platform.Social.WeeklyNote.Item do
     field(:kind, :string)
     field(:text, :string)
     field(:payload, :map, default: %{})
+    field(:effect, :map, default: %{})
     field(:decision, :string)
     field(:decided_by_user_id, :binary_id)
     field(:decided_at, :utc_datetime_usec)

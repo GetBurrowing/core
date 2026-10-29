@@ -9,6 +9,7 @@ defmodule Platform.Social.WeeklyNoteTest do
     org = org_id!()
     {profile, account} = social_account!(org, "linkedin")
     agent = pinned_agent!(org)
+    profile = profile |> Ecto.Changeset.change(drafting_agent_id: agent.id) |> Repo.update!()
     %{org: org, profile: profile, account: account, agent: agent}
   end
 
@@ -293,6 +294,7 @@ defmodule Platform.Social.WeeklyNoteTest do
     c.agent |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
     assert {:error, :invalid_author} = submit(c, [voice()])
     assert {:error, :invalid_author} = submit(c, [voice()], author: {:system, c.agent.id})
+    c.profile |> Ecto.Changeset.change(drafting_agent_id: nil) |> Repo.update!()
     assert {:ok, note} = submit(c, [voice()], author: {:system, nil})
     assert note.author_kind == "system" and note.author_id == nil
   end
