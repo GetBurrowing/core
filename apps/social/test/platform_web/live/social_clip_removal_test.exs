@@ -106,6 +106,24 @@ defmodule PlatformWeb.SocialClipRemovalTest do
 
   test "a new render closes an older deletion confirmation", %{conn: conn, w: w} do
     clip = clip!(w, "Original")
+    # Keep the Files browser and its canvas-presence subscriptions mounted too.
+    participant = join!(w.profile.space_id, :user, w.approver.id)
+
+    {:ok, canvas} =
+      Platform.Chat.create_canvas(%{
+        space_id: w.profile.space_id,
+        created_by: participant.id,
+        title: "Review context",
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{"id" => "root", "type" => "text", "props" => %{"value" => "Review context"}}
+        }
+      })
+
+    files_conn = Plug.Test.init_test_session(conn, current_user_id: w.approver.id)
+    {:ok, files, _} = live(files_conn, "/files?space=#{w.profile.space_id}&type=canvas")
+    assert has_element?(files, "[data-kind=canvas][data-item-id='#{canvas.id}']")
     child = open(conn, w.approver)
     child |> element("[data-role=clip-delete]") |> render_click()
     assert has_element?(child, "[data-role=clip-delete-dialog]")
@@ -118,6 +136,9 @@ defmodule PlatformWeb.SocialClipRemovalTest do
       end)
 
     Social.broadcast_clip(updated)
+    # The broadcast handler queues send_update to itself. Flush that first hop
+    # before the assertion's ping observes the component's updated render.
+    render(child)
     assert has_element?(child, "#clip-player-#{clip.id}-r2")
     refute has_element?(child, "[data-role=clip-delete-dialog]")
     assert Social.get_clip(w.org_id, clip.id).rev == 2
