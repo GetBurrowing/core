@@ -352,6 +352,26 @@ defmodule Platform.Social.WeeklyNotesTest do
 
     parent = self()
 
+    holder =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          import Ecto.Query
+
+          Repo.transaction(fn ->
+            Repo.one!(from(p in Social.Profile, where: p.id == ^c.profile.id, lock: "FOR UPDATE"))
+            send(parent, :profile_locked)
+
+            receive do
+              :release -> :ok
+            after
+              5000 -> raise "profile lock barrier timeout"
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :profile_locked, 5000
+
     tasks =
       for _ <- 1..2 do
         Task.async(fn ->
@@ -372,6 +392,9 @@ defmodule Platform.Social.WeeklyNotesTest do
       send(pid, :go)
     end
 
+    for task <- tasks, do: assert(Task.yield(task, 100) == nil)
+    send(holder.pid, :release)
+    assert {:ok, :ok} = Task.await(holder)
     for task <- tasks, do: assert({:ok, _} = Task.await(task, 10000))
 
     unboxed(fn ->
