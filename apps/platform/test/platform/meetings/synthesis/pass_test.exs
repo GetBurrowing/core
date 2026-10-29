@@ -186,6 +186,29 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     assert {:error, :stale_or_claimed} = Synthesis.run(a.id, r.id, r.snapshot_hash)
   end
 
+  test "stage 4: the pass places its finding in both named briefings and files no task", %{
+    a: {a, r},
+    b: {b, _},
+    user: u
+  } do
+    count_tasks = fn -> Repo.aggregate(Platform.Tasks.Task, :count) end
+    meeting_tasks = fn m -> Repo.aggregate(Meetings.meeting_tasks_query(m), :count) end
+    before = {count_tasks.(), meeting_tasks.(a), meeting_tasks.(b)}
+
+    assert {:ok, [f]} = Synthesis.run(a.id, r.id, r.snapshot_hash)
+    assert Enum.sort(f.meeting_ids) == Enum.sort([a.id, b.id])
+    {key, _} = SynthesisFindings.item(f)
+
+    for m <- [a, b] do
+      briefing = MeetingBriefings.get_for_attendee(m.id, u.id)
+      assert %{"kind" => "finding"} = briefing.items[key]
+      view = MeetingBriefings.view(briefing, Platform.Access.Scope.for_user(u))
+      assert Enum.any?(view.open, &(&1.key == key))
+    end
+
+    assert {count_tasks.(), meeting_tasks.(a), meeting_tasks.(b)} == before
+  end
+
   for mode <- [:unknown, :one_side, :unrelated] do
     test "drops #{mode} output", %{a: {a, r}} do
       Application.put_env(:platform, :synthesis_test_mode, unquote(mode))

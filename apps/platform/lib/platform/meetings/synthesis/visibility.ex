@@ -21,6 +21,70 @@ defmodule Platform.Meetings.Synthesis.Visibility do
 
   def readable_by?(_, _), do: false
 
+  @kinds %{
+    "task" => :task,
+    "canvas" => :canvas,
+    "message" => :message,
+    "meeting_candidate" => :meeting_candidate,
+    "meeting_briefing" => :meeting_briefing,
+    "memory_page" => :memory_page,
+    "memory_journal" => :memory_journal,
+    "mail" => :mail
+  }
+
+  @doc """
+  Parse a stored `"kind:id"` citation ref into the `{kind, id}` tuple
+  `readable_by?/2` takes. Only the closed set of source kinds parses; any
+  other string is `:error` (never `String.to_atom/1`).
+  """
+  @spec parse_ref(term()) :: {:ok, {atom(), binary()}} | :error
+  def parse_ref(ref) when is_binary(ref) do
+    with [kind, id] <- String.split(ref, ":", parts: 2),
+         {:ok, atom} <- Map.fetch(@kinds, kind) do
+      {:ok, {atom, id}}
+    else
+      _ -> :error
+    end
+  end
+
+  def parse_ref(_ref), do: :error
+
+  @doc """
+  Whether `user_id` can read a STORED finding citation
+  (`%{"ref" => "kind:id", "requires" => ["kind:id", ...]}`) right now: the
+  cited source and every required ref. An unparseable ref fails closed.
+  """
+  @spec citation_readable_by?(term(), map()) :: boolean()
+  def citation_readable_by?(user_id, %{"ref" => ref} = citation) do
+    Enum.all?([ref | List.wrap(citation["requires"])], fn r ->
+      case parse_ref(r) do
+        {:ok, tuple} -> readable_by?(user_id, tuple)
+        :error -> false
+      end
+    end)
+  end
+
+  def citation_readable_by?(_user_id, _citation), do: false
+
+  @doc """
+  The `user_id`'s EXISTING participant row in `space_id`, when they can read
+  that space right now (same checks as a chat citation). Never creates a
+  participant: `:error` for anyone who is not already in the space.
+  """
+  @spec readable_participant(term(), binary()) :: {:ok, Chat.Participant.t()} | :error
+  def readable_participant(user_id, space_id) when is_binary(space_id) do
+    with %{} = user <- Accounts.get_user(user_id),
+         scope = Access.scope_for(user),
+         {:ok, participant} <- Chat.SpaceAccess.authorize_writer(space_id, user),
+         true <- space_readable?(user, scope, space_id) do
+      {:ok, participant}
+    else
+      _ -> :error
+    end
+  end
+
+  def readable_participant(_user_id, _space_id), do: :error
+
   defp readable?(_user, scope, :task, id),
     do: match?({:ok, _}, Access.task_target(scope, {:task, id}, "tasks.read"))
 

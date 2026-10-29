@@ -102,7 +102,10 @@ defmodule Platform.Meetings.Synthesis do
         Parser.parse(text, sources, payload["min_confidence"])
         |> Enum.filter(&(meeting.id in &1.meeting_ids))
 
-      persist(meeting, run_id, hash, findings)
+      with {:ok, written} <- persist(meeting, run_id, hash, findings) do
+        place_findings(written)
+        {:ok, written}
+      end
     else
       false -> {:ok, :skipped}
       {:error, _} = error -> error
@@ -140,16 +143,30 @@ defmodule Platform.Meetings.Synthesis do
           if recipients == [] do
             []
           else
+            # Sources sharing a ref may carry different dependency checks;
+            # the stored citation keeps the union, so the render-time
+            # re-check (MeetingBriefings.view/2) is as strict as gathering.
             citations =
-              Enum.uniq_by(finding.citations, &Parser.ref/1)
-              |> Enum.map(fn s ->
+              finding.citations
+              |> Enum.group_by(&Parser.ref/1)
+              |> Enum.map(fn {ref, [s | _] = group} ->
                 {kind, _id} = s.ref
+
+                requires =
+                  group
+                  |> Enum.flat_map(&Map.get(&1, :required_refs, []))
+                  |> Enum.map(fn {k, id} -> "#{k}:#{id}" end)
+                  |> Enum.uniq()
 
                 %{
                   "source_kind" => to_string(kind),
-                  "ref" => Parser.ref(s),
-                  "title" => String.slice(s.text, 0, 200)
+                  "ref" => ref,
+                  "title" => String.slice(s.text, 0, 200),
+                  "requires" => requires
                 }
+              end)
+              |> Enum.sort_by(fn c ->
+                Enum.find_index(finding.citations, &(Parser.ref(&1) == c["ref"]))
               end)
 
             attrs = %{
@@ -174,6 +191,39 @@ defmodule Platform.Meetings.Synthesis do
       else
         _ -> Repo.rollback(:stale_snapshot)
       end
+    end)
+  end
+
+  @doc """
+  Stage 4 placement: every finding becomes a `"finding"` item in the
+  briefing of EVERY meeting in its `meeting_ids`
+  (`MeetingBriefings.add_finding/2`). Synthesis files nothing; this only
+  adds briefing items. Each touched meeting is then re-delivered through
+  `MeetingBriefings.deliver/2`'s Inbox upsert with the new keys, so only a
+  person who can SEE a new item has their row relisted, and the row count
+  is their own. `deliver/2` pushes only on a CREATED Inbox row, so anyone
+  who already had a meeting's brief gets no second push (the
+  `Triage.refresh_meeting_briefing/1` rule). The origin meeting is still
+  gated on synthesis when this runs, so its deliver waits for
+  `Completion.synthesis_changed/4`, unless its deadline already passed.
+  Must run outside a transaction (deliver answers `:pending` inside one).
+  """
+  @spec place_findings([Platform.Meetings.SynthesisFinding.t()]) :: :ok
+  def place_findings(findings) when is_list(findings) do
+    findings
+    |> Enum.flat_map(fn finding ->
+      Enum.flat_map(finding.meeting_ids || [], fn meeting_id ->
+        case Platform.Meetings.MeetingBriefings.add_finding(meeting_id, finding) do
+          {:ok, _briefing, %{new_keys: keys}} -> [{meeting_id, keys}]
+          {:error, _} -> []
+        end
+      end)
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.each(fn {meeting_id, keys} ->
+      Platform.Meetings.MeetingBriefings.deliver(%Meeting{id: meeting_id},
+        new_keys: List.flatten(keys)
+      )
     end)
   end
 

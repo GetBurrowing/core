@@ -105,6 +105,36 @@ defmodule Platform.Meetings.SynthesisFindingsTest do
     a = concluded!([r, j])
     b = concluded!([c, k])
 
+    # Stage 4 re-checks every citation for the viewer at render and click,
+    # so the citations are real messages all four can read: everyone is a
+    # participant in both meetings' spaces.
+    for u <- [r, j, c, k], m <- [a, b] do
+      {:ok, _} =
+        Platform.Chat.add_participant(m.chat_space_id, %{
+          participant_type: "user",
+          participant_id: u.id,
+          display_name: u.name,
+          joined_at: DateTime.utc_now()
+        })
+    end
+
+    msg = fn meeting, user, text ->
+      p =
+        Repo.get_by!(Platform.Chat.Participant,
+          space_id: meeting.chat_space_id,
+          participant_id: user.id
+        )
+
+      m =
+        Repo.insert!(%Platform.Chat.Message{
+          space_id: meeting.chat_space_id,
+          participant_id: p.id,
+          content: text
+        })
+
+      "message:" <> m.id
+    end
+
     {:ok, finding, :created} =
       SynthesisFindings.upsert(%{
         org_id: acme_org_id(),
@@ -114,8 +144,8 @@ defmodule Platform.Meetings.SynthesisFindingsTest do
         confidence: "high",
         body: "Meeting A drops Stripe; meeting B ships billing on Stripe.",
         citations: [
-          citation("candidate:a-1", "Drop Stripe; move billing to Paddle"),
-          citation("candidate:b-1", "Ship billing on Stripe by Friday")
+          citation(msg.(a, r, "Drop Stripe"), "Drop Stripe; move billing to Paddle"),
+          citation(msg.(b, c, "Stripe Friday"), "Ship billing on Stripe by Friday")
         ],
         recipient_user_ids: [r.id, j.id, c.id, k.id]
       })

@@ -65,6 +65,13 @@ defmodule Platform.Meetings.MeetingBriefings do
   `{:error, :already_resolved, briefing}`. A finding item whose finding row
   no longer exists is left out of `view/2`.
 
+  Per viewer (stage 4): a finding item is shown to, counted for, and
+  actionable by a person only while `finding_visible?/2` holds for them:
+  they are in `recipient_user_ids` AND can still read every citation
+  (re-checked at every render and inside every act transaction). The Inbox
+  row's item count is per person through the same predicate, so a count
+  never reveals an item its reader cannot see.
+
   ## Pure merge
 
   `build/1` never removes or overwrites: an existing item key keeps its
@@ -87,12 +94,22 @@ defmodule Platform.Meetings.MeetingBriefings do
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.SynthesisFinding
   alias Platform.Meetings.SynthesisFindings
+  alias Platform.Meetings.Synthesis.Visibility
   alias Platform.Meetings.Transcript
   alias Platform.Repo
 
   @content_key "_content"
-  @verbs [:revert, :confirm, :ask]
-  @receipt_verbs %{revert: "reverted", confirm: "confirmed", ask: "asked"}
+  @verbs [:revert, :confirm, :ask, :align, :dismiss]
+  @item_verbs [:revert, :confirm, :ask]
+  @finding_verbs [:revert, :align, :confirm, :dismiss]
+  @revert_finding_kinds ["duplicates", "conflicts_with"]
+  @receipt_verbs %{
+    revert: "reverted",
+    confirm: "confirmed",
+    ask: "asked",
+    align: "aligned",
+    dismiss: "dismissed"
+  }
   @withdrawn_reasons [:retracted, :duplicate, :vetoed]
 
   @type build_result ::
@@ -419,15 +436,18 @@ defmodule Platform.Meetings.MeetingBriefings do
   only for a `:created` row. Each Inbox write broadcasts
   `{:inbox_changed, user_id}` on that user's topic.
   """
-  @spec deliver(Meeting.t()) ::
+  @spec deliver(Meeting.t(), keyword()) ::
           {:ok, %{created: non_neg_integer(), updated: non_neg_integer()}}
           | {:ok, :pending}
           | {:error, :not_concluded}
-  def deliver(%Meeting{} = meeting) do
-    if Repo.in_transaction?(), do: {:ok, :pending}, else: deliver_committed(meeting)
+  def deliver(%Meeting{} = meeting, opts \\ []) do
+    if Repo.in_transaction?(), do: {:ok, :pending}, else: deliver_committed(meeting, opts)
   end
 
-  defp deliver_committed(%Meeting{id: id}) do
+  # `:new_keys` names items added outside `build/1` (synthesis findings via
+  # `add_finding/2`). A person's row is relisted only when a new key is one
+  # they can see; the count in their row is their own visible count.
+  defp deliver_committed(%Meeting{id: id}, opts) do
     # Lock in the same order as completion callbacks. Inbox insert uniqueness
     # arbitrates pushes; push only AFTER the transaction which writes the row.
     {:ok, outcome} =
@@ -445,24 +465,28 @@ defmodule Platform.Meetings.MeetingBriefings do
 
             if gates.ready? or gates.deadline? do
               {:ok, briefing, delta} = build(meeting)
-              count = briefing |> item_keys() |> length()
-
-              fields = %{
-                title: meeting.name,
-                body: items_label(count),
-                url: inbox_url(meeting),
-                new_items?: delta.new_keys != []
-              }
+              new_keys = Enum.uniq(delta.new_keys ++ Keyword.get(opts, :new_keys, []))
+              findings = briefing_findings(briefing)
 
               outcomes =
                 Enum.map(briefing.attendee_user_ids, fn user_id ->
+                  visible = visible_item_keys(briefing, findings, user_id)
+                  count = length(visible)
+
+                  fields = %{
+                    title: meeting.name,
+                    body: items_label(count),
+                    url: inbox_url(meeting),
+                    new_items?: Enum.any?(new_keys, &(&1 in visible))
+                  }
+
                   case Inbox.upsert_meeting_briefing_item(briefing, user_id, fields) do
-                    {:ok, _, status} -> {user_id, status}
-                    {:error, _} -> {user_id, :error}
+                    {:ok, _, status} -> {user_id, status, count}
+                    {:error, _} -> {user_id, :error, count}
                   end
                 end)
 
-              {:delivered, meeting, count, outcomes}
+              {:delivered, meeting, outcomes}
             else
               {:ok, :pending}
             end
@@ -470,9 +494,9 @@ defmodule Platform.Meetings.MeetingBriefings do
       end)
 
     case outcome do
-      {:delivered, meeting, count, outcomes} ->
+      {:delivered, meeting, outcomes} ->
         Enum.each(outcomes, fn
-          {user_id, :created} -> push(user_id, meeting, count)
+          {user_id, :created, count} -> push(user_id, meeting, count)
           _ -> :ok
         end)
 
@@ -540,8 +564,60 @@ defmodule Platform.Meetings.MeetingBriefings do
   def inbox_url(%Meeting{id: id}), do: inbox_url(id)
   def inbox_url(meeting_id) when is_binary(meeting_id), do: "/inbox/meeting/" <> meeting_id
 
-  defp item_keys(%MeetingBriefing{items: items}) do
-    (items || %{}) |> Map.delete(@content_key) |> Map.keys()
+  @doc """
+  Whether `user_id` may see `finding` right now: they are one of its
+  `recipient_user_ids` AND can read every citation (its ref and every
+  `"requires"` ref), checked live through
+  `Platform.Meetings.Synthesis.Visibility`. A finding with no citations, or
+  a nil user, is never visible. This ONE predicate filters `view/2` items
+  and counts, the Inbox row count in `deliver/2`, and `act/5`.
+  """
+  @spec finding_visible?(SynthesisFinding.t() | nil, term()) :: boolean()
+  def finding_visible?(%SynthesisFinding{} = finding, user_id) when is_binary(user_id) do
+    citations = finding.citations || []
+
+    user_id in (finding.recipient_user_ids || []) and citations != [] and
+      Enum.all?(citations, &Visibility.citation_readable_by?(user_id, &1))
+  end
+
+  def finding_visible?(_finding, _user_id), do: false
+
+  @doc """
+  The number of items `user_id` can see in `briefing`: every non-finding
+  item plus each finding item for which `finding_visible?/2` holds.
+  """
+  @spec visible_item_count(MeetingBriefing.t(), term()) :: non_neg_integer()
+  def visible_item_count(%MeetingBriefing{} = briefing, user_id) do
+    briefing |> visible_item_keys(briefing_findings(briefing), user_id) |> length()
+  end
+
+  defp briefing_findings(%MeetingBriefing{items: items}) do
+    ids = for {_key, %{"kind" => "finding", "ref" => "finding:" <> id}} <- items || %{}, do: id
+    SynthesisFindings.get_many(ids)
+  end
+
+  defp visible_item_keys(%MeetingBriefing{items: items}, findings, user_id) do
+    (items || %{})
+    |> Map.delete(@content_key)
+    |> visible_items(findings, user_id)
+    |> Map.keys()
+  end
+
+  # Drop every finding item the viewer may not see, and any finding item
+  # whose row is gone or whose ref is malformed. Other items pass through.
+  defp visible_items(items, findings, user_id) do
+    items
+    |> Enum.filter(fn
+      {_key, %{"kind" => "finding", "ref" => "finding:" <> id}} ->
+        finding_visible?(Map.get(findings, id), user_id)
+
+      {_key, %{"kind" => "finding"}} ->
+        false
+
+      _ ->
+        true
+    end)
+    |> Map.new()
   end
 
   defp items_label(1), do: "1 item"
@@ -649,7 +725,13 @@ defmodule Platform.Meetings.MeetingBriefings do
       still this meeting's under THE rule) and is still `"backlog"`.
     * `actions` is `[]` once resolved; otherwise
       `[:revert, :ask]` for a revertible task, `[:ask]` for other filed tasks,
-      and `[:confirm, :ask]` for non-task changes.
+      `[:align, :confirm, :dismiss]` for a finding (with `:revert` first
+      when it offers one), and `[:confirm, :ask]` for other changes.
+    * `finding` is nil, or for a finding item `%{id, kind, confidence, body,
+      meeting_ids, citations, revert_ref}`. A finding item is present only
+      when `finding_visible?/2` holds for the viewer, so every citation
+      listed is one they can read; `revert_ref` is the `"task:<id>"` Revert
+      would remove, or nil.
 
   `scope` is the viewer's and controls whether Revert is offered. The action
   re-checks task access and current revertibility inside its transaction.
@@ -660,8 +742,15 @@ defmodule Platform.Meetings.MeetingBriefings do
     meeting = briefing.meeting
     content = Map.get(briefing.items || %{}, @content_key, %{})
 
+    viewer_id = scope_user_id(scope)
+    findings = briefing_findings(briefing)
+
     {items, receipts} =
-      resolve_findings(Map.delete(briefing.items || %{}, @content_key), briefing.receipts || %{})
+      briefing.items
+      |> Kernel.||(%{})
+      |> Map.delete(@content_key)
+      |> visible_items(findings, viewer_id)
+      |> resolve_findings(findings, briefing.receipts || %{})
 
     revertible = revertible_task_ids(meeting, items)
 
@@ -676,7 +765,13 @@ defmodule Platform.Meetings.MeetingBriefings do
       items
       |> Enum.map(fn {key, item} ->
         receipt = receipt_view(receipts[key], names)
-        revertible? = item_revertible?(item, revertible) and task_write_allowed?(item, scope)
+        finding = item_finding(item, findings)
+        revert_ref = finding_revert_ref(meeting, finding)
+
+        revertible? =
+          if finding,
+            do: revert_ref != nil and task_write_allowed?(%{"ref" => revert_ref}, scope),
+            else: item_revertible?(item, revertible) and task_write_allowed?(item, scope)
 
         %{
           key: key,
@@ -686,6 +781,7 @@ defmodule Platform.Meetings.MeetingBriefings do
           receipt: receipt,
           revertible?: revertible?,
           availability: task_availability(item, meeting),
+          finding: finding_view(finding, revert_ref),
           actions: actions(receipt, revertible?, item["kind"])
         }
       end)
@@ -708,12 +804,7 @@ defmodule Platform.Meetings.MeetingBriefings do
 
   # Finding items take their receipt from the shared finding row, never from
   # this briefing's receipts map; a finding item whose row is gone is dropped.
-  defp resolve_findings(items, receipts) do
-    finding_ids =
-      for {_key, %{"kind" => "finding", "ref" => "finding:" <> id}} <- items, do: id
-
-    findings = SynthesisFindings.get_many(finding_ids)
-
+  defp resolve_findings(items, findings, receipts) do
     Enum.reduce(items, {%{}, receipts}, fn
       {key, %{"kind" => "finding", "ref" => "finding:" <> id} = item}, {acc, rcpts} ->
         case Map.get(findings, id) do
@@ -730,10 +821,53 @@ defmodule Platform.Meetings.MeetingBriefings do
     end)
   end
 
+  defp actions(nil, true, "finding"), do: [:revert, :align, :confirm, :dismiss]
+  defp actions(nil, false, "finding"), do: [:align, :confirm, :dismiss]
   defp actions(nil, true, "task"), do: [:revert, :ask]
   defp actions(nil, false, "task"), do: [:ask]
   defp actions(nil, _revertible?, _kind), do: [:confirm, :ask]
   defp actions(_receipt, _revertible?, _kind), do: []
+
+  defp item_finding(%{"kind" => "finding", "ref" => "finding:" <> id}, findings),
+    do: Map.get(findings, id)
+
+  defp item_finding(_item, _findings), do: nil
+
+  # Only called for a finding the viewer may see (visible_items/3 ran first),
+  # so every citation here is one they can read.
+  defp finding_view(nil, _revert_ref), do: nil
+
+  defp finding_view(%SynthesisFinding{} = finding, revert_ref) do
+    %{
+      id: finding.id,
+      kind: finding.kind,
+      confidence: finding.confidence,
+      body: finding.body,
+      meeting_ids: finding.meeting_ids || [],
+      citations:
+        Enum.map(finding.citations || [], fn c ->
+          %{source_kind: c["source_kind"], ref: c["ref"], title: c["title"], url: c["url"]}
+        end),
+      revert_ref: revert_ref
+    }
+  end
+
+  # Filing interplay (stage 4): synthesis never files. A duplicates /
+  # conflicts_with finding that cites a task THIS meeting filed and that is
+  # still revertible (revertible_task_ids/2: still this meeting's, still
+  # backlog) offers Revert on that task: the first such citation, in
+  # citation order. Nothing is reverted unless a person clicks.
+  defp finding_revert_ref(%Meeting{} = meeting, %SynthesisFinding{kind: kind} = finding)
+       when kind in @revert_finding_kinds do
+    task_refs =
+      for %{"ref" => "task:" <> _ = ref} <- finding.citations || [], uniq: true, do: ref
+
+    items = Map.new(task_refs, &{&1, %{"kind" => "task", "ref" => &1}})
+    revertible = revertible_task_ids(meeting, items)
+    Enum.find(task_refs, fn "task:" <> id -> MapSet.member?(revertible, id) end)
+  end
+
+  defp finding_revert_ref(_meeting, _finding), do: nil
 
   defp receipt_view(nil, _names), do: nil
 
@@ -877,9 +1011,19 @@ defmodule Platform.Meetings.MeetingBriefings do
   For a `"finding"` item, step 4 and step 6 use the shared
   `Platform.Meetings.SynthesisFinding` row instead of this briefing's
   `receipts`: the finding is locked `FOR UPDATE` after the briefing,
-  `{:error, :not_found}` unless it still lists this meeting and the clicker
-  as a recipient, `:already_resolved` when `finding.receipt` is set, and the
-  receipt is written to the finding. After the commit `{:inbox_changed, _}`
+  `{:error, :not_found}` unless it still lists this meeting and
+  `finding_visible?/2` holds for the clicker (recipient AND every citation
+  still readable, re-checked under the lock), `:already_resolved` when
+  `finding.receipt` is set, and the receipt is written to the finding.
+  Finding items take `:align` ("Seek alignment": one message per named
+  meeting's chat space, posted as the clicker through a participant row
+  they already have, citations quoted as inert text; receipt `"aligned"`),
+  `:confirm` ("Looks right"), `:dismiss` ("Not a conflict"; receipt
+  `"dismissed"`) and `:revert` (only when `view/2` offers it: the cited
+  backlog task this meeting filed is soft-deleted; receipt `"reverted"`).
+  Other verbs on a finding, and `:align` / `:dismiss` on other items, are
+  `{:error, :unsupported}`. After the commit one experiment signal is
+  recorded (`SynthesisFindings.record_outcome_signal/1`). After the commit `{:inbox_changed, _}`
   goes to every recipient and `{:meeting_briefing_changed, _}` to every
   briefing of a meeting in `finding.meeting_ids`.
 
@@ -908,7 +1052,8 @@ defmodule Platform.Meetings.MeetingBriefings do
              {:ok, item} <- fetch_item(row, key),
              {:ok, finding} <- lock_finding(row, item, user_id),
              :ok <- ensure_unresolved(row, key, finding),
-             {:ok, ref} <- run_verb(verb, row, item, scope, user_id, params || %{}) do
+             :ok <- ensure_verb(verb, finding),
+             {:ok, ref} <- run_verb(verb, row, item, scope, user_id, params || %{}, finding) do
           receipt = %{
             "verb" => Map.fetch!(@receipt_verbs, verb),
             "at" => DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -928,6 +1073,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     case result do
       {:ok, {briefing, %SynthesisFinding{} = finding}} ->
         broadcast_finding_changed(briefing, finding)
+        SynthesisFindings.record_outcome_signal(finding)
         {:ok, briefing}
 
       {:ok, briefing} ->
@@ -979,10 +1125,11 @@ defmodule Platform.Meetings.MeetingBriefings do
   defp lock_finding(row, %{"kind" => "finding", "ref" => "finding:" <> finding_id}, user_id) do
     case SynthesisFindings.lock(finding_id) do
       %SynthesisFinding{} = finding ->
-        if row.meeting_id in (finding.meeting_ids || []) and
-             user_id in (finding.recipient_user_ids || []),
-           do: {:ok, finding},
-           else: {:error, :not_found}
+        # Recipient membership AND citation readability, re-checked under
+        # the lock: a person who lost access since render is :not_found.
+        if row.meeting_id in (finding.meeting_ids || []) and finding_visible?(finding, user_id),
+          do: {:ok, finding},
+          else: {:error, :not_found}
 
       nil ->
         {:error, :not_found}
@@ -1011,9 +1158,46 @@ defmodule Platform.Meetings.MeetingBriefings do
     |> Repo.update!()
   end
 
-  defp run_verb(:confirm, _row, item, _scope, _user_id, _params), do: {:ok, item["ref"]}
+  # Finding items take align / confirm / dismiss / revert; other items take
+  # revert / confirm / ask. Checked after the resolved guard, so a stale
+  # click on a resolved item still answers :already_resolved.
+  defp ensure_verb(verb, %SynthesisFinding{}),
+    do: if(verb in @finding_verbs, do: :ok, else: {:error, :unsupported})
 
-  defp run_verb(:revert, row, %{"kind" => "task", "ref" => "task:" <> task_id}, scope, _uid, _p) do
+  defp ensure_verb(verb, nil), do: if(verb in @item_verbs, do: :ok, else: {:error, :unsupported})
+
+  defp run_verb(verb, _row, item, _scope, _user_id, _params, _finding)
+       when verb in [:confirm, :dismiss],
+       do: {:ok, item["ref"]}
+
+  defp run_verb(:align, _row, _item, _scope, user_id, _params, %SynthesisFinding{} = finding),
+    do: post_alignment(finding, user_id)
+
+  defp run_verb(:revert, row, %{"kind" => "finding"}, scope, _uid, _p, %SynthesisFinding{} = f) do
+    case finding_revert_ref(row.meeting, f) do
+      "task:" <> task_id -> revert_task(row, task_id, scope)
+      nil -> {:error, :not_revertible}
+    end
+  end
+
+  defp run_verb(
+         :revert,
+         row,
+         %{"kind" => "task", "ref" => "task:" <> task_id},
+         scope,
+         _uid,
+         _p,
+         _f
+       ),
+       do: revert_task(row, task_id, scope)
+
+  defp run_verb(:revert, _row, _item, _scope, _user_id, _params, _finding),
+    do: {:error, :not_revertible}
+
+  defp run_verb(:ask, row, item, _scope, user_id, params, _finding),
+    do: ask(row, item, user_id, params)
+
+  defp revert_task(row, task_id, scope) do
     with :ok <- ensure_revertible(row.meeting, task_id),
          {:ok, _typed} <- authorize_task_write(scope, task_id),
          %Platform.Tasks.Task{} = task <- Platform.Tasks.get_task_record(task_id),
@@ -1025,9 +1209,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     end
   end
 
-  defp run_verb(:revert, _row, _item, _scope, _user_id, _params), do: {:error, :not_revertible}
-
-  defp run_verb(:ask, row, item, _scope, user_id, params) do
+  defp ask(row, item, user_id, params) do
     question = params |> Map.get("question", Map.get(params, :question, "")) |> to_string()
 
     if String.trim(question) == "" do
@@ -1083,12 +1265,86 @@ defmodule Platform.Meetings.MeetingBriefings do
   # posts. A word joiner between `@` and `[` breaks the token and renders
   # invisibly.
   defp ask_content(item, question) do
-    title =
-      (item["title"] || "")
-      |> String.replace("@[", "@\u2060[")
-      |> String.replace("\n", " ")
+    "> " <> inert(item["title"]) <> "\n\n" <> String.trim(question)
+  end
 
-    "> " <> title <> "\n\n" <> String.trim(question)
+  defp inert(text) do
+    (text || "")
+    |> to_string()
+    |> String.replace("@[", "@\u2060[")
+    |> String.replace("\n", " ")
+  end
+
+  # "Seek alignment": ONE message into the chat space of each meeting the
+  # finding names, posted as the clicker through the participant row they
+  # ALREADY have (Visibility.readable_participant/2 never creates one, so
+  # nobody is added to a space they cannot read). A named meeting whose
+  # space the clicker cannot read is skipped; none readable is
+  # :unauthorized and the click rolls back.
+  defp post_alignment(%SynthesisFinding{} = finding, user_id) do
+    ids = finding.meeting_ids || []
+
+    meetings =
+      from(m in Meeting, where: m.id in ^ids)
+      |> Repo.all()
+      |> Enum.sort_by(fn m -> Enum.find_index(ids, &(&1 == m.id)) end)
+
+    posts =
+      Enum.flat_map(meetings, fn meeting ->
+        case Visibility.readable_participant(user_id, meeting.chat_space_id) do
+          {:ok, participant} ->
+            [
+              Platform.Chat.post_message(%{
+                space_id: meeting.chat_space_id,
+                participant_id: participant.id,
+                content_type: "text",
+                content: alignment_content(meeting, finding)
+              })
+            ]
+
+          :error ->
+            []
+        end
+      end)
+
+    cond do
+      posts == [] ->
+        {:error, :unauthorized}
+
+      error = Enum.find(posts, &(not match?({:ok, _}, &1))) ->
+        error
+
+      true ->
+        {:ok, Enum.map_join(posts, ",", fn {:ok, message} -> "message:" <> message.id end)}
+    end
+  end
+
+  # Citations are quoted as inert text, and only those EVERY human in the
+  # target space can read: the clicker can read them all, but the space's
+  # other members may not. The finding body is model text that can describe
+  # any cited source, so it is included only when every citation is
+  # shareable there; otherwise a neutral line plus the briefing link.
+  defp alignment_content(%Meeting{} = meeting, %SynthesisFinding{} = finding) do
+    readers =
+      meeting.chat_space_id
+      |> Platform.Chat.list_participants(participant_type: "user")
+      |> Enum.map(& &1.participant_id)
+
+    citations = finding.citations || []
+
+    shareable =
+      Enum.filter(citations, fn c ->
+        Enum.all?(readers, &Visibility.citation_readable_by?(&1, c))
+      end)
+
+    head =
+      if length(shareable) == length(citations),
+        do: "Seeking alignment: " <> inert(finding.body),
+        else: "Seeking alignment on a finding from this meeting's briefing."
+
+    quotes = Enum.map(shareable, &("> " <> inert(&1["title"])))
+
+    Enum.join([head | quotes] ++ [inbox_url(meeting)], "\n\n")
   end
 
   # A finding resolution changes every briefing carrying it: tell every

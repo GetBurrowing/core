@@ -140,6 +140,57 @@ defmodule Platform.Meetings.SynthesisFindings do
     end
   end
 
+  @signal_source_type "meeting_synthesis_finding"
+  @surface_key "meetings.brief_synthesis"
+
+  @doc "The signal `source_type` finding resolutions are recorded under."
+  @spec signal_source_type() :: String.t()
+  def signal_source_type, do: @signal_source_type
+
+  @doc """
+  Record ONE experiment signal for a resolved `finding` (stage 4): for every
+  live `meetings.brief_synthesis` assignment of its origin meeting, a
+  `labelled` signal whose label is the receipt verb (`"aligned"`,
+  `"confirmed"`, `"dismissed"`, `"reverted"`). Idempotent on the finding id
+  (`Platform.Experiments.Signals.record/1`), so a retry cannot count one
+  resolution twice. Id + label only, never the body. Called after the
+  receipt commits; a failure is logged and never fails the click.
+  """
+  @spec record_outcome_signal(SynthesisFinding.t()) :: :ok
+  def record_outcome_signal(%SynthesisFinding{receipt: %{"verb" => verb}} = finding)
+      when is_binary(verb) do
+    origin = finding.origin_meeting_id
+
+    from(a in Platform.Experiments.Assignment,
+      join: e in Platform.Experiments.Experiment,
+      on: e.id == a.experiment_id,
+      where:
+        a.subject_type == "meeting" and a.subject_id == ^origin and
+          e.surface_key == @surface_key and is_nil(a.excluded_reason),
+      select: a.experiment_id
+    )
+    |> Repo.all()
+    |> Enum.each(fn experiment_id ->
+      Platform.Experiments.Signals.record(%{
+        experiment_id: experiment_id,
+        subject_type: "meeting",
+        subject_id: origin,
+        label: verb,
+        source_type: @signal_source_type,
+        source_id: finding.id,
+        labeler: @surface_key,
+        status: "labelled"
+      })
+    end)
+  rescue
+    error ->
+      require Logger
+      Logger.warning("[meetings.synthesis] outcome signal failed: " <> Exception.message(error))
+      :ok
+  end
+
+  def record_outcome_signal(_finding), do: :ok
+
   @doc false
   # Lock the finding row inside the caller's transaction (MeetingBriefings.act/5).
   @spec lock(binary()) :: SynthesisFinding.t() | nil

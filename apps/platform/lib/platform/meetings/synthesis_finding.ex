@@ -16,7 +16,11 @@ defmodule Platform.Meetings.SynthesisFinding do
 
     * `kind` — `conflicts_with | duplicates | contradicts | depends_on`.
     * `confidence` — `Platform.Memory.Insight.confidences/0`.
-    * `citations` — `[%{"source_kind", "ref", "title", "url"}]`.
+    * `citations` — `[%{"source_kind", "ref", "title", "url", "requires"}]`.
+      `"requires"` (optional) lists further `"kind:id"` refs a reader must
+      also be able to read (a filed task seen through its meeting's
+      briefing); `Platform.Meetings.MeetingBriefings` re-checks the ref and
+      every required ref for the viewer at render and at click.
     * `recipient_user_ids` — who the finding is for.
     * `receipt` — nil until resolved, then the briefing receipt shape
       `%{"verb", "at", "by", "ref", "kind"}`. Written once.
@@ -114,7 +118,7 @@ defmodule Platform.Meetings.SynthesisFinding do
 
   defp stringify(%{} = citation) do
     Map.new(citation, fn {k, v} -> {to_string(k), v} end)
-    |> Map.take(~w(source_kind ref title url))
+    |> Map.take(~w(source_kind ref title url requires))
   end
 
   defp stringify(other), do: other
