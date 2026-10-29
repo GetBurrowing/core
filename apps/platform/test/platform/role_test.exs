@@ -154,6 +154,7 @@ defmodule Platform.RoleTest do
                Platform.Canvas.ScriptEngine.Slots,
                Platform.CodeMode.Store,
                Platform.Push.RelayRateLimit,
+               Platform.Calendar.BookingRateLimit,
                Platform.Push.APNsFinch,
                Platform.Chat.ContextPlane,
                Platform.Chat.ContextSummaryCache,

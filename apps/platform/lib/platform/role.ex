@@ -211,6 +211,7 @@ defmodule Platform.Role do
     Platform.Canvas.ScriptEngine.Slots,
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
+    Platform.Calendar.BookingRateLimit,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
