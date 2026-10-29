@@ -200,6 +200,7 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     }
 
     assert Context.filter_sources([source], [c.allowed.id]) == []
+    assert Context.filter_sources([%{source | transcript_derived?: false}], [c.allowed.id]) == []
 
     assert [_] =
              Context.filter_sources([%{source | text: "Checkout ships Friday"}], [c.allowed.id])

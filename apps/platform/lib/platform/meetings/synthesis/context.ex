@@ -123,7 +123,7 @@ defmodule Platform.Meetings.Synthesis.Context do
     sources
     |> Enum.reject(fn s ->
       not is_binary(s.text) or String.trim(s.text) == "" or
-        (s.transcript_derived? and IntentPrivacy.candid_register(s.text) != :ok)
+        IntentPrivacy.candid_register(s.text) != :ok
     end)
     |> Enum.map(fn s ->
       Map.put(s, :reader_ids, Enum.filter(recipient_ids, &Visibility.readable_by?(&1, s)))
