@@ -995,6 +995,34 @@ defmodule Platform.ExtensionsTest do
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
 
+      # Calendar task 01a16991 adds two owner-grant tools. Pin their contract
+      # explicitly and retain the existing byte oracle for every older tool.
+      {calendar, defs} =
+        Enum.split_with(defs, &(&1.name in ["calendar_list", "calendar_propose"]))
+
+      assert Enum.map(calendar, &{&1.name, &1.bundle}) == [
+               {"calendar_list", "context_read"},
+               {"calendar_propose", "context_read"}
+             ]
+
+      by_name = Map.new(calendar, &{&1.name, &1})
+
+      for {name, required} <- [
+            {"calendar_list", ~w(owner_id from to)a},
+            {"calendar_propose", ~w(owner_id operation attributes request_key)a}
+          ] do
+        actual =
+          for {key, parameter} <- by_name[name].parameters, parameter[:required] == true, do: key
+
+        assert MapSet.new(actual) == MapSet.new(required)
+
+        for field <- [:description, :returns, :limitations, :when_to_use],
+            do: assert(is_binary(Map.fetch!(by_name[name], field)))
+      end
+
+      assert by_name["calendar_propose"].parameters.operation.enum == ["create", "move"]
+      assert by_name["calendar_propose"].parameters.attributes.type == "object"
+
       # Task 01a18305 stage 2 adds owning-runtime dependency verification.
       # Pin the additions while retaining the frozen oracle for all old fields.
       {dependency, defs} =
