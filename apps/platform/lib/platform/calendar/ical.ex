@@ -97,6 +97,7 @@ defmodule Platform.Calendar.ICal do
              true <- zone == end_zone and is_nil(date) == is_nil(end_date),
              true <- DateTime.compare(first, last) == :lt,
              rule <- value(props["RRULE"]),
+             true <- is_nil(rule) or byte_size(rule) <= 256,
              {:ok, recurrence} <- Recurrence.parse(rule),
              true <- supported_recurrence?(recurrence, zone, first),
              {:ok, exceptions} <- exceptions(props["EXDATE"]),
@@ -137,9 +138,9 @@ defmodule Platform.Calendar.ICal do
   defp supported_recurrence?(_, _, _), do: false
   defp sequence(nil), do: 0
 
-  defp sequence({[], value}) do
+  defp sequence({[], value}) when byte_size(value) <= 10 do
     {n, ""} = Integer.parse(value)
-    if n < 0, do: raise(ArgumentError), else: n
+    if n < 0 or n > 2_147_483_647, do: raise(ArgumentError), else: n
   end
 
   defp value(nil), do: nil
@@ -184,9 +185,9 @@ defmodule Platform.Calendar.ICal do
   defp exceptions(nil), do: {:ok, []}
 
   defp exceptions({["VALUE=DATE"], value}) do
-    dates = String.split(value, ",")
+    dates = String.split(value, ",", parts: 1001)
 
-    if Enum.all?(dates, &match?({:ok, _}, date(&1))),
+    if length(dates) <= 1000 and Enum.all?(dates, &match?({:ok, _}, date(&1))),
       do:
         {:ok,
          Enum.map(dates, fn v ->

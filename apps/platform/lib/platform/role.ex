@@ -409,6 +409,13 @@ defmodule Platform.Role do
     # :http. Req and Finch.
     %{
       kind: :http,
+      file: "lib/platform/calendar/external_fetch.ex",
+      class: :follows_caller,
+      note:
+        "HTTPS GET only; caller is an owner refresh task or the full-role Calendar.RefreshWorker"
+    },
+    %{
+      kind: :http,
       file: "lib/platform/accounts/user_avatar_cache.ex",
       class: :request,
       note: "read-only avatar GET on render"

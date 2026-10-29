@@ -279,6 +279,22 @@ defmodule Platform.Calendar.SubscriptionsTest do
                )
              )
 
+    assert {:ok, [_]} = ICal.parse(feed(event("\r\nSEQUENCE:2147483647")))
+    assert {:error, _} = ICal.parse(feed(event("\r\nSEQUENCE:2147483648")))
+    assert {:error, _} = ICal.parse(feed(event("\r\nSEQUENCE:" <> String.duplicate("9", 1000))))
+
+    assert {:error, _} =
+             ICal.parse(feed(event("\r\nRRULE:FREQ=DAILY;COUNT=" <> String.duplicate("9", 1000))))
+
+    assert {:error, _} =
+             ICal.parse(
+               feed(
+                 event(
+                   "\r\nEXDATE;VALUE=DATE:" <> Enum.join(List.duplicate("20261030", 1001), ",")
+                 )
+               )
+             )
+
     old = event("\r\nSEQUENCE:1")
 
     newer =
