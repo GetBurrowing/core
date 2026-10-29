@@ -662,6 +662,7 @@ defmodule Platform.Meetings.MeetingBriefings do
 
     {items, receipts} =
       resolve_findings(Map.delete(briefing.items || %{}, @content_key), briefing.receipts || %{})
+
     revertible = revertible_task_ids(meeting, items)
 
     names =
@@ -1100,9 +1101,7 @@ defmodule Platform.Meetings.MeetingBriefings do
       |> Repo.all()
 
     users =
-      Enum.uniq(
-        (finding.recipient_user_ids || []) ++ (briefing.attendee_user_ids || [])
-      )
+      Enum.uniq((finding.recipient_user_ids || []) ++ (briefing.attendee_user_ids || []))
 
     Enum.each(users, fn user_id ->
       Phoenix.PubSub.broadcast(Platform.PubSub, Inbox.topic(user_id), {:inbox_changed, user_id})

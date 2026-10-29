@@ -88,17 +88,18 @@ defmodule Platform.Meetings.SynthesisFindings do
   end
 
   defp merge!(existing, changeset) do
-    meeting_ids = union(existing.meeting_ids, Ecto.Changeset.get_field(changeset, :meeting_ids))
-
-    recipients =
-      union(existing.recipient_user_ids, Ecto.Changeset.get_field(changeset, :recipient_user_ids))
+    incoming_meetings = Ecto.Changeset.get_field(changeset, :meeting_ids)
+    incoming_recipients = Ecto.Changeset.get_field(changeset, :recipient_user_ids)
 
     existing
-    |> Ecto.Changeset.change(meeting_ids: meeting_ids, recipient_user_ids: recipients)
+    |> Ecto.Changeset.change(
+      meeting_ids: merge_ids(existing.meeting_ids, incoming_meetings),
+      recipient_user_ids: merge_ids(existing.recipient_user_ids, incoming_recipients)
+    )
     |> Repo.update!()
   end
 
-  defp union(a, b), do: Enum.uniq((a || []) ++ (b || []))
+  defp merge_ids(a, b), do: Enum.uniq((a || []) ++ (b || []))
 
   @doc "The finding with `id`, or nil (malformed ids answer nil)."
   @spec get(term()) :: SynthesisFinding.t() | nil
@@ -130,8 +131,7 @@ defmodule Platform.Meetings.SynthesisFindings do
   def list_for_meeting(meeting_id) when is_binary(meeting_id) do
     if Platform.UUID.valid?(meeting_id) do
       from(f in SynthesisFinding,
-        where:
-          fragment("? @> ?", f.meeting_ids, type(^[meeting_id], {:array, :binary_id})),
+        where: fragment("? @> ?", f.meeting_ids, type(^[meeting_id], {:array, :binary_id})),
         order_by: [asc: f.inserted_at, asc: f.id]
       )
       |> Repo.all()
