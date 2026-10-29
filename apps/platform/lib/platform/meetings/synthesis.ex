@@ -93,7 +93,8 @@ defmodule Platform.Meetings.Synthesis do
          payload <- arm(meeting, project, control),
          {:ok, _, _} <- Platform.Meetings.MeetingBriefings.build(meeting),
          context <- Context.gather(meeting, lookback_days: payload["lookback_days"]),
-         sources <- Enum.take(context.sources, payload["max_sources"]),
+         {current, related} <- Enum.split_with(context.sources, &(meeting.id in &1.meeting_ids)),
+         sources <- Enum.take(current ++ related, payload["max_sources"]),
          true <- sources != [],
          {:ok, system} <- PromptTemplates.render_template("meetings.brief_synthesis.v1", %{}),
          {:ok, text} <- call_provider(cfg, payload, system, meeting.id, sources) do

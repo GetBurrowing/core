@@ -286,7 +286,9 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     assert id == a.id
   end
 
-  test "org-promoted default reaches the native provider", %{a: {a, r}} do
+  test "org-promoted default reaches the native provider and bounds context around its origin", %{
+    b: {a, r}
+  } do
     Repo.insert!(
       Platform.Experiments.SurfaceDefault.changeset(%Platform.Experiments.SurfaceDefault{}, %{
         surface_key: "meetings.brief_synthesis",
@@ -294,13 +296,15 @@ defmodule Platform.Meetings.Synthesis.PassTest do
         org_id: acme_org_id(),
         seq: 1,
         kind: "promote",
-        payload: %{"provider" => "openai", "model" => "org-default-model"}
+        payload: %{"provider" => "openai", "model" => "org-default-model", "max_sources" => 1}
       })
     )
 
-    assert {:ok, [_]} = Synthesis.run(a.id, r.id, r.snapshot_hash)
-    assert_receive {:provider, _, opts}
+    assert {:ok, []} = Synthesis.run(a.id, r.id, r.snapshot_hash)
+    assert_receive {:provider, content, opts}
     assert opts[:model] == "org-default-model"
+    assert [%{"meeting_ids" => [id]}] = Jason.decode!(content)["sources"]
+    assert id == a.id
   end
 
   test "a conflict can have an independent task side, but two citations from one meeting are one side" do
