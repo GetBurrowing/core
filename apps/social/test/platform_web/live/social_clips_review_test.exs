@@ -91,6 +91,30 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
   defp bay(child), do: with_target(child, "#social-clips-review")
 
+  test "the decision footer is outside the keyboard-accessible details scroll region", %{
+    conn: conn,
+    w: w
+  } do
+    clip!(w, "Keep decisions on screen")
+    child = open(conn, w.approver)
+
+    assert has_element?(
+             child,
+             "[data-role='clips-details-body'][role='region'][tabindex='0'][aria-label='Clip details'] [data-role='clip-caption']"
+           )
+
+    assert has_element?(child, "[data-role='clips-details-body'] [data-role='clip-note']")
+
+    assert has_element?(
+             child,
+             "[data-role='clips-details'] > [data-role='clips-decide'] [data-role='clip-approve']"
+           )
+
+    refute has_element?(child, "[data-role='clips-details-body'] [data-role='clips-decide']")
+    assert has_element?(child, "[data-role='clips-player-stack'] [data-role='clip-frame']")
+    assert has_element?(child, "[data-role='clips-pbar'] [data-role='clips-pbar-approve']")
+  end
+
   test "each bay element is present with its copy", %{conn: conn, w: w} do
     [first, second, _] = three!(w)
     render_job!(w, 0.5, 30)

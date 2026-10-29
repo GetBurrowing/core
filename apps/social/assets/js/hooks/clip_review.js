@@ -81,6 +81,14 @@ const ClipReview = {
 
     this.onKey = (e) => this.key(e)
     window.addEventListener("keydown", this.onKey)
+    this.onLayout = () => {
+      if (this.layoutFrame) cancelAnimationFrame(this.layoutFrame)
+      this.layoutFrame = requestAnimationFrame(() => this.fitViewport())
+    }
+    window.addEventListener("resize", this.onLayout)
+    window.visualViewport?.addEventListener("resize", this.onLayout)
+    this.layoutObserver = new ResizeObserver(this.onLayout)
+    this.layoutObserver.observe(this.el)
 
     // Media events do not bubble; capture them on the bay root so a swapped
     // player (a new clip) needs no re-binding.
@@ -105,15 +113,21 @@ const ClipReview = {
 
     this.sync()
     this.tickToast()
+    this.onLayout()
   },
 
   updated() {
     this.sync()
     this.tickToast()
+    this.onLayout()
   },
 
   destroyed() {
     window.removeEventListener("keydown", this.onKey)
+    window.removeEventListener("resize", this.onLayout)
+    window.visualViewport?.removeEventListener("resize", this.onLayout)
+    this.layoutObserver.disconnect()
+    if (this.layoutFrame) cancelAnimationFrame(this.layoutFrame)
     for (const type of ["play", "pause", "timeupdate", "loadedmetadata"])
       this.el.removeEventListener(type, this.onMedia, true)
     this.el.removeEventListener("click", this.onClick)
@@ -122,6 +136,25 @@ const ClipReview = {
 
   active() {
     return this.el.offsetParent !== null
+  },
+
+  fitViewport() {
+    this.layoutFrame = null
+    const bay = this.el.querySelector('[data-role="clips-bay"]')
+    if (!bay || !this.active() || !window.matchMedia("(min-width: 761px)").matches) {
+      this.el.style.removeProperty("--clips-bay-height")
+      return
+    }
+    // The desktop desk uses the actual remaining space, not a guessed
+    // shell/header height. Leave one spacing token below the bay.
+    const bottomGap = parseFloat(getComputedStyle(document.documentElement).fontSize)
+    const viewportBottom = window.visualViewport
+      ? window.visualViewport.height + window.visualViewport.offsetTop
+      : window.innerHeight
+    const height = Math.max(0, viewportBottom - bay.getBoundingClientRect().top - bottomGap)
+    const value = `${Math.floor(height)}px`
+    if (this.el.style.getPropertyValue("--clips-bay-height") !== value)
+      this.el.style.setProperty("--clips-bay-height", value)
   },
 
   video() {

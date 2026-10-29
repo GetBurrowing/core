@@ -53,6 +53,8 @@ defmodule PlatformWeb.SocialClipsReview do
   """
   use PlatformWeb, :live_component
 
+  import PlatformWeb.SocialClipsReviewActions, only: [pbar: 1, decision_bar: 1]
+
   alias Platform.Social
 
   alias Platform.Social.{
@@ -712,7 +714,7 @@ defmodule PlatformWeb.SocialClipsReview do
           data-clip-id={@clip && @clip.id}
           class={[
             "grid grid-cols-1 overflow-hidden rounded-box border border-base-300 bg-base-100",
-            "min-[761px]:grid-cols-[150px_1fr_360px] min-[1181px]:grid-cols-[208px_minmax(0,1fr)_404px]",
+            "min-[761px]:grid-cols-[150px_minmax(0,1fr)_360px] min-[1181px]:grid-cols-[208px_minmax(0,1fr)_404px]",
             "max-[760px]:block max-[760px]:pb-[calc(84px+env(safe-area-inset-bottom))]"
           ]}
         >
@@ -747,6 +749,7 @@ defmodule PlatformWeb.SocialClipsReview do
 
         <.pbar
           :if={@view == "review" and @can_decide? and @clip != nil}
+          render_id={render_id(@clip)}
           clip={@clip}
           note={@note}
           ticked={@ticked}
@@ -755,58 +758,6 @@ defmodule PlatformWeb.SocialClipsReview do
 
         <.toast :if={@toast} toast={@toast} myself={@myself} />
       </div>
-    </div>
-    """
-  end
-
-  # [reviewHTML .pbar] the phone bottom bar: the same approve/reject events
-  # and enabled rules as the desktop footer. Rendered only for an approver
-  # with a clip selected; hidden above 760px.
-  attr :clip, :any, required: true
-  attr :note, :string, required: true
-  attr :ticked, :list, required: true
-  attr :myself, :any, required: true
-
-  defp pbar(assigns) do
-    assigns = assign(assigns, :blank?, String.trim(assigns.note) == "")
-
-    ~H"""
-    <div
-      class={
-        [
-          "fixed inset-x-0 bottom-0 z-30 hidden gap-2.5 border-t border-base-300 bg-base-100/80 backdrop-blur",
-          "px-3 pt-2.5 pb-[calc(10px+env(safe-area-inset-bottom))] max-[760px]:flex",
-          # Clears Burrow's own mobile tab bar (core's --bottom-nav-height,
-          # 56px below lg, 0 elsewhere); the prototype has no host nav.
-          "mb-[var(--bottom-nav-height,0px)]"
-        ]
-      }
-      data-role="clips-pbar"
-    >
-      <button
-        type="button"
-        class="btn btn-outline h-[46px] w-[112px] flex-none rounded-full text-base"
-        disabled={@blank?}
-        title={if @blank?, do: "Add a note first"}
-        phx-click="reject"
-        phx-value-id={@clip.id}
-        phx-target={@myself}
-        data-role="clips-pbar-reject"
-      >
-        Reject
-      </button>
-      <button
-        type="button"
-        class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
-        disabled={@ticked == []}
-        phx-click="approve"
-        phx-value-render_id={render_id(@clip)}
-        phx-value-id={@clip.id}
-        phx-target={@myself}
-        data-role="clips-pbar-approve"
-      >
-        {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
-      </button>
     </div>
     """
   end
@@ -1086,10 +1037,13 @@ defmodule PlatformWeb.SocialClipsReview do
         </div>
       </div>
 
-      <div class={[
-        "flex w-[min(100%,calc(min(448px,calc(100vh-340px))*9/16))] min-w-[169px] flex-col gap-2",
-        "max-[760px]:w-full max-[760px]:min-w-0"
-      ]}>
+      <div
+        class={[
+          "flex w-[min(100%,calc(min(448px,calc(100vh-340px))*9/16))] min-w-[169px] flex-col gap-2",
+          "max-[760px]:w-full max-[760px]:min-w-0"
+        ]}
+        data-role="clips-player-stack"
+      >
         <div class="flex justify-center gap-2.5" data-role="clips-pv-row">
           <div
             id={"clip-player-#{@clip.id}-r#{@clip.rev}"}
@@ -1262,256 +1216,242 @@ defmodule PlatformWeb.SocialClipsReview do
 
     ~H"""
     <aside
-      class="flex min-w-0 flex-col gap-4 border-base-300 p-4 max-[760px]:p-3 min-[761px]:border-l"
+      class="flex min-w-0 flex-col border-base-300 max-[760px]:gap-4 max-[760px]:p-3 min-[761px]:border-l"
       data-role="clips-details"
     >
-      <div>
-        <form
-          :if={@editing_title?}
-          phx-submit="save_title"
-          phx-target={@myself}
-          data-role="clip-title-form"
-        >
-          <input
-            type="text"
-            name="title"
-            value={@clip.title}
-            maxlength="200"
-            class="input input-bordered w-full bg-base-100 text-base font-semibold"
-            aria-label="Title"
-            phx-blur="save_title"
+      <div
+        class="contents"
+        data-role="clips-details-body"
+        role="region"
+        tabindex="0"
+        aria-label="Clip details"
+      >
+        <div>
+          <form
+            :if={@editing_title?}
+            phx-submit="save_title"
             phx-target={@myself}
-            phx-mounted={Phoenix.LiveView.JS.focus()}
-            data-role="clip-title-input"
-          />
-        </form>
-        <button
-          :if={!@editing_title?}
-          type="button"
-          class="group flex w-full items-start gap-2 rounded-box border border-base-300 px-3 py-2 text-left text-lg font-bold leading-snug text-base-content disabled:cursor-default"
-          phx-click="edit_title"
-          phx-target={@myself}
-          disabled={!@can_decide?}
-          data-role="clip-title"
-        >
-          <span class="flex-1" data-role="clips-selected-title">
-            {@clip.title || "Untitled clip"}
-          </span>
-          <.icon
-            :if={@can_decide?}
-            name="hero-pencil-square"
-            class="mt-0.5 size-4 shrink-0 text-subtle"
-          />
-        </button>
-        <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
-          {join_dot([
-            @clip.episode_code,
-            mmss(@clip.duration_s),
-            @clip.source_label,
-            "v#{@clip.rev}"
-          ])}
-        </p>
-        <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
-          <span
-            :if={@agent}
-            class="flex size-5 shrink-0 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content"
-            aria-hidden="true"
+            data-role="clip-title-form"
           >
-            {String.first(@agent) |> String.upcase()}
-          </span>
-          <span>
-            <span :if={@byline.source_label} class="font-mono">{@byline.source_label}</span><span :if={
-              @agent
-            }> · rendered by <b class="font-semibold text-base-content">{@agent}</b></span>
-          </span>
-        </p>
-        <div class="mt-3 hidden flex-wrap gap-2 max-[760px]:flex" data-role="clip-platform-chips">
-          <button
-            :for={platform <- @accounts |> Enum.map(& &1.platform) |> Enum.uniq()}
-            type="button"
-            role="checkbox"
-            aria-checked={to_string(platform in @ticked)}
-            class={[
-              "btn btn-sm rounded-full",
-              if(platform in @ticked, do: "btn-primary", else: "btn-outline border-base-300")
-            ]}
-            disabled={!@can_decide?}
-            phx-click="toggle_platform"
-            phx-value-platform={platform}
-            phx-target={@myself}
-            data-role="clip-platform-chip"
-            data-platform={platform}
-          >
-            {Approvals.platform_label(platform)}
-          </button>
-        </div>
-      </div>
-
-      <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
-        <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
-          <input type="hidden" name="base_render_id" value={@selected_render && @selected_render.id} />
-          <label for="clip-headline" class="text-xs font-semibold text-base-content">Headline</label>
-          <input
-            id="clip-headline"
-            name="headline"
-            type="text"
-            maxlength="200"
-            value={(@selected_render && @selected_render.headline) || ""}
-            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-            aria-describedby="clip-headline-help"
-            class="input input-bordered mt-1 w-full bg-base-100 text-sm"
-            data-role="clip-headline-input"
-          />
-          <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
-            Headlines are generated automatically. Enter new text to render another version.
-            Local generated text stays on the clip runner.
-          </p>
-          <button
-            type="submit"
-            class="btn btn-primary btn-sm mt-2 min-h-11"
-            disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-            phx-disable-with="Rendering…"
-            data-role="clip-headline-render"
-          >
-            {if @headline_pending?, do: "Rendering…", else: "Render headline"}
-          </button>
-        </form>
-        <p
-          :if={@headline_pending?}
-          role="status"
-          class="text-xs text-subtle"
-          data-role="clip-headline-pending"
-        >
-          Rendering a new version. You can keep playing this one.
-        </p>
-        <p
-          :if={@headline_error}
-          role="alert"
-          class="text-xs text-error"
-          data-role="clip-headline-error"
-        >
-          {@headline_error}
-        </p>
-        <p
-          :if={@headline_attempt && @headline_attempt.status == "failed"}
-          role="alert"
-          class="text-xs text-error"
-          data-role="clip-headline-failure"
-        >
-          Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
-          Check the clip runner, then enter a headline and try again.
-        </p>
-      </section>
-
-      <form phx-change="save_caption" phx-target={@myself}>
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <label for="clip-caption" class="font-semibold text-base-content">Caption</label>
-          <span class="tabular-nums text-subtle" data-role="clip-caption-count">
-            {String.length(@caption)}/2200
-          </span>
-        </div>
-        <textarea
-          id="clip-caption"
-          name="caption"
-          rows="4"
-          maxlength="2200"
-          phx-debounce="600"
-          disabled={!@can_decide?}
-          class="textarea textarea-bordered w-full bg-base-100 text-sm"
-          data-role="clip-caption"
-        >{@caption}</textarea>
-      </form>
-
-      <div class="max-[760px]:hidden" data-role="clip-post-to">
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <span class="font-semibold text-base-content">Post to</span>
-          <span class="text-subtle">publishes on approve</span>
-        </div>
-        <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
-          <li
-            :for={account <- @accounts}
-            class="flex items-center gap-2 px-3 py-2"
-            data-role="clip-platform-row"
-            data-platform={account.platform}
-          >
-            <span class="flex size-6 shrink-0 items-center justify-center rounded-md border border-base-300">
-              <.icon name="hero-globe-alt" class="size-3.5 text-base-content" />
-            </span>
-            <span class="text-sm font-semibold text-base-content">
-              {Approvals.platform_label(account.platform)}
-            </span>
-            <span class="min-w-0 flex-1 truncate text-xs text-subtle">{account.handle}</span>
             <input
-              type="checkbox"
-              class="toggle toggle-primary toggle-sm"
-              role="switch"
-              aria-label={Approvals.platform_label(account.platform)}
-              checked={account.platform in @ticked}
+              type="text"
+              name="title"
+              value={@clip.title}
+              maxlength="200"
+              class="input input-bordered w-full bg-base-100 text-base font-semibold"
+              aria-label="Title"
+              phx-blur="save_title"
+              phx-target={@myself}
+              phx-mounted={Phoenix.LiveView.JS.focus()}
+              data-role="clip-title-input"
+            />
+          </form>
+          <button
+            :if={!@editing_title?}
+            type="button"
+            class="group flex w-full items-start gap-2 rounded-box border border-base-300 px-3 py-2 text-left text-lg font-bold leading-snug text-base-content disabled:cursor-default"
+            phx-click="edit_title"
+            phx-target={@myself}
+            disabled={!@can_decide?}
+            data-role="clip-title"
+          >
+            <span class="flex-1" data-role="clips-selected-title">
+              {@clip.title || "Untitled clip"}
+            </span>
+            <.icon
+              :if={@can_decide?}
+              name="hero-pencil-square"
+              class="mt-0.5 size-4 shrink-0 text-subtle"
+            />
+          </button>
+          <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
+            {join_dot([
+              @clip.episode_code,
+              mmss(@clip.duration_s),
+              @clip.source_label,
+              "v#{@clip.rev}"
+            ])}
+          </p>
+          <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
+            <span
+              :if={@agent}
+              class="flex size-5 shrink-0 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content"
+              aria-hidden="true"
+            >
+              {String.first(@agent) |> String.upcase()}
+            </span>
+            <span>
+              <span :if={@byline.source_label} class="font-mono">{@byline.source_label}</span><span :if={
+                @agent
+              }> · rendered by <b class="font-semibold text-base-content">{@agent}</b></span>
+            </span>
+          </p>
+          <div class="mt-3 hidden flex-wrap gap-2 max-[760px]:flex" data-role="clip-platform-chips">
+            <button
+              :for={platform <- @accounts |> Enum.map(& &1.platform) |> Enum.uniq()}
+              type="button"
+              role="checkbox"
+              aria-checked={to_string(platform in @ticked)}
+              class={[
+                "btn btn-sm rounded-full",
+                if(platform in @ticked, do: "btn-primary", else: "btn-outline border-base-300")
+              ]}
               disabled={!@can_decide?}
               phx-click="toggle_platform"
-              phx-value-platform={account.platform}
+              phx-value-platform={platform}
               phx-target={@myself}
-              data-role="clip-platform-toggle"
+              data-role="clip-platform-chip"
+              data-platform={platform}
+            >
+              {Approvals.platform_label(platform)}
+            </button>
+          </div>
+        </div>
+
+        <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
+          <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
+            <input
+              type="hidden"
+              name="base_render_id"
+              value={@selected_render && @selected_render.id}
             />
-          </li>
-        </ul>
+            <label for="clip-headline" class="text-xs font-semibold text-base-content">
+              Headline
+            </label>
+            <input
+              id="clip-headline"
+              name="headline"
+              type="text"
+              maxlength="200"
+              value={(@selected_render && @selected_render.headline) || ""}
+              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+              aria-describedby="clip-headline-help"
+              class="input input-bordered mt-1 w-full bg-base-100 text-sm"
+              data-role="clip-headline-input"
+            />
+            <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
+              Headlines are generated automatically. Enter new text to render another version.
+              Local generated text stays on the clip runner.
+            </p>
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm mt-2 min-h-11"
+              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
+              phx-disable-with="Rendering…"
+              data-role="clip-headline-render"
+            >
+              {if @headline_pending?, do: "Rendering…", else: "Render headline"}
+            </button>
+          </form>
+          <p
+            :if={@headline_pending?}
+            role="status"
+            class="text-xs text-subtle"
+            data-role="clip-headline-pending"
+          >
+            Rendering a new version. You can keep playing this one.
+          </p>
+          <p
+            :if={@headline_error}
+            role="alert"
+            class="text-xs text-error"
+            data-role="clip-headline-error"
+          >
+            {@headline_error}
+          </p>
+          <p
+            :if={@headline_attempt && @headline_attempt.status == "failed"}
+            role="alert"
+            class="text-xs text-error"
+            data-role="clip-headline-failure"
+          >
+            Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
+            Check the clip runner, then enter a headline and try again.
+          </p>
+        </section>
+
+        <form phx-change="save_caption" phx-target={@myself}>
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <label for="clip-caption" class="font-semibold text-base-content">Caption</label>
+            <span class="tabular-nums text-subtle" data-role="clip-caption-count">
+              {String.length(@caption)}/2200
+            </span>
+          </div>
+          <textarea
+            id="clip-caption"
+            name="caption"
+            rows="4"
+            maxlength="2200"
+            phx-debounce="600"
+            disabled={!@can_decide?}
+            class="textarea textarea-bordered w-full bg-base-100 text-sm"
+            data-role="clip-caption"
+          >{@caption}</textarea>
+        </form>
+
+        <div class="max-[760px]:hidden" data-role="clip-post-to">
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <span class="font-semibold text-base-content">Post to</span>
+            <span class="text-subtle">publishes on approve</span>
+          </div>
+          <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
+            <li
+              :for={account <- @accounts}
+              class="flex items-center gap-2 px-3 py-2"
+              data-role="clip-platform-row"
+              data-platform={account.platform}
+            >
+              <span class="flex size-6 shrink-0 items-center justify-center rounded-md border border-base-300">
+                <.icon name="hero-globe-alt" class="size-3.5 text-base-content" />
+              </span>
+              <span class="text-sm font-semibold text-base-content">
+                {Approvals.platform_label(account.platform)}
+              </span>
+              <span class="min-w-0 flex-1 truncate text-xs text-subtle">{account.handle}</span>
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+                role="switch"
+                aria-label={Approvals.platform_label(account.platform)}
+                checked={account.platform in @ticked}
+                disabled={!@can_decide?}
+                phx-click="toggle_platform"
+                phx-value-platform={account.platform}
+                phx-target={@myself}
+                data-role="clip-platform-toggle"
+              />
+            </li>
+          </ul>
+        </div>
+
+        <form phx-change="note" phx-target={@myself}>
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <label for="clip-note" class="font-semibold text-base-content">Note</label>
+            <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
+          </div>
+          <textarea
+            id="clip-note"
+            name="note"
+            rows="3"
+            maxlength="2000"
+            phx-debounce="200"
+            disabled={!@can_decide?}
+            placeholder={"Why not? #{@agent || @byline.source_label || "the clip tool"} reads this for the next cut…"}
+            class="textarea textarea-bordered w-full bg-base-100 text-sm"
+            data-role="clip-note"
+          >{@note}</textarea>
+        </form>
       </div>
 
-      <form phx-change="note" phx-target={@myself}>
-        <div class="mb-1 flex items-center justify-between text-xs">
-          <label for="clip-note" class="font-semibold text-base-content">Note</label>
-          <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
-        </div>
-        <textarea
-          id="clip-note"
-          name="note"
-          rows="3"
-          maxlength="2000"
-          phx-debounce="200"
-          disabled={!@can_decide?}
-          placeholder={"Why not? #{@agent || @byline.source_label || "the clip tool"} reads this for the next cut…"}
-          class="textarea textarea-bordered w-full bg-base-100 text-sm"
-          data-role="clip-note"
-        >{@note}</textarea>
-      </form>
-
-      <div
+      <.decision_bar
         :if={@can_decide?}
-        class="-mx-4 mt-auto flex flex-col gap-2 border-t border-base-300 px-4 pt-3 max-[760px]:hidden"
-        data-role="clips-decide"
-      >
-        <div class="flex gap-2">
-          <button
-            type="button"
-            class="btn btn-outline rounded-full"
-            disabled={String.trim(@note) == ""}
-            title={
-              if String.trim(@note) == "", do: "Add a note to reject", else: "Reject with your note"
-            }
-            phx-click="reject"
-            phx-value-id={@clip.id}
-            phx-target={@myself}
-            data-role="clip-reject"
-          >
-            Reject
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary flex-1 rounded-full"
-            disabled={@ticked == []}
-            phx-click="approve"
-            phx-value-render_id={render_id(@clip)}
-            phx-value-id={@clip.id}
-            phx-target={@myself}
-            data-role="clip-approve"
-          >
-            {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
-          </button>
-        </div>
-        <p class="text-center text-xs text-subtle" data-role="clip-why">
-          {why_line(@ticked)}
-        </p>
-      </div>
+        clip={@clip}
+        note={@note}
+        ticked={@ticked}
+        render_id={render_id(@clip)}
+        why_line={why_line(@ticked)}
+        myself={@myself}
+      />
     </aside>
     """
   end
