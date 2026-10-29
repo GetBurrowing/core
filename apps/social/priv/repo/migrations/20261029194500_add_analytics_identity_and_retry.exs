@@ -1,4 +1,7 @@
 defmodule Platform.Repo.Migrations.AddAnalyticsIdentityAndRetry do
+  @moduledoc """
+  Task 01a16664: persist the vendor analytics identity separately from the publisher ID and retain replay cursors plus retry deadlines across worker restarts.
+  """
   use Ecto.Migration
 
   def change do

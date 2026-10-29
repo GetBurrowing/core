@@ -1,4 +1,7 @@
 defmodule Platform.Repo.Migrations.ResumePendingAnalyticsBaselines do
+  @moduledoc """
+  Task 01a16664: retain unfinished per-post baselines and their retry deadline so pending analytics can recover without delaying established delta feeds.
+  """
   use Ecto.Migration
 
   def change do
