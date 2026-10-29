@@ -323,6 +323,11 @@ defmodule Platform.Access.Registry do
         ]
       },
       %{
+        module: "calendar",
+        permissions: ~w(calendar.read calendar.write),
+        rail: [%{key: :calendar, permission: "calendar.read"}]
+      },
+      %{
         module: "mail",
         permissions: ~w(mail.use mail.manage),
         rail: [%{key: :email, permission: "mail.use"}]

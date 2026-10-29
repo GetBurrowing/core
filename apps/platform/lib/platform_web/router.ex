@@ -439,6 +439,7 @@ defmodule PlatformWeb.Router do
     pipe_through(:calendar_feed)
 
     get("/meetings/:id/invite.ics", MeetingCalendarController, :show)
+    get("/calendar/feed/:token", CalendarFeedController, :show, log: false)
   end
 
   # HOST-AGNOSTIC (deliberate — task 019fcf22 stage 3), and the most

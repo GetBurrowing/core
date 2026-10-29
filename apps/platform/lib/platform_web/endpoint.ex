@@ -98,5 +98,6 @@ defmodule PlatformWeb.Endpoint do
   @doc false
   # Plug.Telemetry `log:` callback; see the plug above.
   def request_log_level(%Plug.Conn{path_info: ["vault", "fetch" | _]}), do: false
+  def request_log_level(%Plug.Conn{path_info: ["calendar", "feed" | _]}), do: false
   def request_log_level(_conn), do: :info
 end
