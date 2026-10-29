@@ -108,6 +108,50 @@ defmodule Platform.CalendarTest do
     refute foreign.id in ids
   end
 
+  test "a private space event is visible to its members and absent from another member's feed" do
+    owner = user()
+    member = user()
+    outsider = user()
+    org_id = Platform.TenancyFixtures.acme_org_id()
+
+    for actor <- [owner, member, outsider] do
+      Repo.insert!(%Platform.Tenancy.OrgMembership{
+        user_id: actor.id,
+        org_id: org_id,
+        role: "member"
+      })
+    end
+
+    n = System.unique_integer([:positive])
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Private calendar conversation",
+        slug: "calendar-private-#{n}",
+        kind: "dm",
+        org_id: org_id
+      })
+
+    for actor <- [owner, member] do
+      {:ok, _} =
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: actor.id,
+          joined_at: DateTime.utc_now()
+        })
+    end
+
+    {:ok, event} =
+      Calendar.create_event(
+        Scope.for_user(owner),
+        attrs(%{title: "Private DM appointment", space_id: space.id})
+      )
+
+    assert {:ok, _} = Calendar.get_event(Scope.for_user(member), event.id)
+    assert {:error, :not_found} = Calendar.get_event(Scope.for_user(outsider), event.id)
+    refute Calendar.Feed.render(Scope.for_user(outsider)) =~ "Private DM appointment"
+  end
+
   test "all-day dates preserve exclusive end across DST" do
     owner = Scope.for_user(user())
 
