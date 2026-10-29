@@ -538,13 +538,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/memory/telemetry_handler.ex", :get, "Platform.Org.WikiJournalEntry", 1,
      :safe_internal,
      "`metadata.memory_entry_id` comes off the telemetry event `Org.Wiki` emits with the PK it just inserted"},
+    {"platform/orchestration/execution_status.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "Agent assignee ids and typed dependency ids are filtered through Platform.UUID.valid?/1 before batched UUID queries; malformed references are omitted and project as unknown."},
+    {"platform_web/live/chat/execution_activity_hooks.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "Execution-space metadata task_id is checked with Platform.UUID.valid?/1 before scoped authorization and Tasks.get_task_record/1; invalid metadata produces no fragment."},
     # ── Orchestration ──────────────────────────────────────────────────
     {"platform/orchestration/blocker_reassessment.ex", :get, "Platform.Tasks.Project", 2,
      :safe_internal,
      "both ids are project_id foreign keys read from persisted Tasks.Task structs; validate_spec requires the owning task project_id to be binary and valid_reference?/2 pattern-matches a persisted non-nil dependency project_id before these lookups"},
-    {"platform/orchestration/blocker_reassessment.ex", :platform_uuid_guard, "-", 3,
+    {"platform/orchestration/blocker_reassessment.ex", :platform_uuid_guard, "-", 6,
      :safe_internal,
-     "current_task/2 guards the external task_id and stage_id with Platform.UUID.valid?/1 before task/plan reads; valid_reference?/2 guards the typed external dependency task_id before Tasks.get_task_record/1"},
+     "current_task/2 guards the external task_id and stage_id with Platform.UUID.valid?/1 before task/plan reads; valid_reference?/2 guards the typed external dependency task_id before Tasks.get_task_record/1; request_from_user/6 guards task, stage and lease ids before the FOR UPDATE query, with tenant authorization and current hold revision checks"},
     {"platform/orchestration/context_assembler.ex", :get, "TaskSchema", 1, :safe_internal,
      "`load_parent_plan_entry/1` uses `parent_id` read off the `%Task{}` it already loaded"},
     {"platform/orchestration/execution_space.ex", :get_by, "Participant", 1, :safe_internal,
@@ -1025,6 +1030,7 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    "platform/orchestration/blocker_reassessment.ex" => 1,
     # 0 → 3 for task 01a114a8 stage 1's attribution ladder in
     # `ToolCallLedger`: stage -> task, plan -> task and execution space ->
     # task. Triaged by hand: each `where:` pins an id that arrives as a tool
