@@ -1184,8 +1184,9 @@ defmodule Platform.Orchestration.PromptTemplates do
         kind is conflicts_with, duplicates, contradicts or depends_on.
         confidence is high, medium or low. Every named meeting must be covered by a
         cited source whose trusted meeting_ids includes that meeting. conflicts_with
-        requires at least two distinct cited refs covering at least two named meetings;
-        cite evidence for both sides. Never infer a conflict from missing information.
+        requires at least two distinct cited refs covering two sides. Sources from
+        the same meeting are one side; an independent task, memory, mail or chat
+        source can be another side. Cite evidence for both sides. Never infer a conflict from missing information.
         If no grounded finding is useful, return no blocks. Do not create tasks.
         """
       },

@@ -25,6 +25,14 @@ defmodule Platform.Meetings.Synthesis.Parser do
       citations = Enum.flat_map(refs, &Map.get(index, &1, []))
       covered = citations |> Enum.flat_map(& &1.meeting_ids) |> Enum.uniq() |> Enum.sort()
 
+      sides =
+        refs
+        |> Enum.flat_map(fn ref ->
+          meetings = Map.get(index, ref, []) |> Enum.flat_map(& &1.meeting_ids) |> Enum.uniq()
+          if meetings == [], do: [ref], else: meetings
+        end)
+        |> Enum.uniq()
+
       named =
         String.split(attrs["meetings"] || Enum.join(covered, ","), ",", trim: true)
         |> Enum.map(&String.trim/1)
@@ -38,7 +46,7 @@ defmodule Platform.Meetings.Synthesis.Parser do
           Map.get(@rank, attrs["confidence"], -1) >= Map.get(@rank, min_confidence, 3) and
           refs != [] and Enum.all?(refs, &Map.has_key?(index, &1)) and
           named != [] and Enum.all?(named, &(&1 in covered)) and
-          (attrs["kind"] != "conflicts_with" or (length(refs) >= 2 and length(named) >= 2)) and
+          (attrs["kind"] != "conflicts_with" or (length(refs) >= 2 and length(sides) >= 2)) and
           body != "" and IntentPrivacy.candid_register(body) == :ok
 
       if valid,

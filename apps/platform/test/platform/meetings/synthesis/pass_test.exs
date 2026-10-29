@@ -234,6 +234,19 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     assert {:ok, %{value: 0.0, n: 1}} = metric.compute(experiment.id, "control")
   end
 
+  test "a conflict can have an independent task side, but two citations from one meeting are one side" do
+    a = Ecto.UUID.generate()
+    task_id = Ecto.UUID.generate()
+    summary = %{ref: {:meeting_briefing, a}, text: "Release Friday", meeting_ids: [a]}
+    task = %{ref: {:task, task_id}, text: "Release Monday", meeting_ids: []}
+
+    text =
+      "<meeting-finding kind=\"conflicts_with\" confidence=\"high\" meetings=\"#{a}\">The release dates conflict.<cite ref=\"meeting_briefing:#{a}\"/><cite ref=\"task:#{task_id}\"/></meeting-finding>"
+
+    assert [_] = Parser.parse(text, [summary, task])
+    assert [] = Parser.parse(text, [summary, %{task | meeting_ids: [a]}])
+  end
+
   test "parser requires named sides and minimum confidence" do
     a = Ecto.UUID.generate()
     b = Ecto.UUID.generate()
