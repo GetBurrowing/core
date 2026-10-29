@@ -126,6 +126,8 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
   #                  `Responsibilities.fire/2`. Names the public entry point
   #                  that reaches the fire, asserted exported below so
   #                  renaming the hook out from under the row goes red.
+  #   :native_direct_provider — a lifecycle calls a tool-less handler directly;
+  #                  names that handler's exported entry point.
   #
   # `:pubsub` entries default to an arity-2 publisher taking
   # `(room_id, payload)`. An entry may declare `arg_shape: :payload_only`
@@ -238,6 +240,12 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       mode: :sweeper_only,
       owner: Platform.Feedback.Intake
     },
+    # Completion calls the native handler directly after triage commits.
+    # No Router dispatch: its provider only sees pre-filtered context.
+    "platform.meetings.synthesis_only" => %{
+      mode: :native_direct_provider,
+      entry_point: {Platform.Responsibilities.Handlers.MeetingBriefSynthesis, :run, 1}
+    },
     "plan:submitted" => %{
       mode: :direct_fire,
       entry_point: {Platform.Tasks, :submit_plan_for_review, 1}
@@ -316,6 +324,8 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
                :sweeper_only — nothing broadcasts; a sweeper owns the key.
                :direct_fire  — a lifecycle hook calls Responsibilities.fire/2;
                                name its public entry point.
+               :native_direct_provider — a lifecycle calls the tool-less handler;
+                                         name its public entry point.
 
              If you cannot name any of the three, the responsibility is
              unfireable — which is the bug this task exists to close.
@@ -491,15 +501,17 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       assert keys == [Platform.Feedback.Classifier.responsibility_key()]
     end
 
-    test ":direct_fire topics name an exported lifecycle entry point" do
-      for {topic, %{mode: :direct_fire, entry_point: {module, fun, arity}}} <-
-            Enum.filter(@topic_delivery, fn {_t, e} -> e.mode == :direct_fire end) do
+    test "direct delivery topics name an exported lifecycle entry point" do
+      for {topic, %{mode: mode, entry_point: {module, fun, arity}}} <-
+            Enum.filter(@topic_delivery, fn {_t, e} ->
+              e.mode in [:direct_fire, :native_direct_provider]
+            end) do
         assert Code.ensure_loaded?(module),
                "#{topic} names a firing module that does not load: #{inspect(module)}"
 
         assert function_exported?(module, fun, arity),
                """
-               #{topic} is classified :direct_fire but its named entry point
+               #{topic} is classified #{inspect(mode)} but its named entry point
                #{inspect(module)}.#{fun}/#{arity} is not exported. Nothing
                broadcasts on this topic, so if the lifecycle hook was renamed or
                removed the responsibility is now unfireable.
