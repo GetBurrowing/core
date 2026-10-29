@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.AddRecycledFromIdeaId do
+  @moduledoc """
+  Task 01a16c51: links recycled Inbox ideas to their measured original and
+  prevents duplicate children when concurrent recycle requests race.
+  """
   use Ecto.Migration
 
   def change do
