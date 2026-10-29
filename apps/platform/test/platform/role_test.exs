@@ -119,6 +119,7 @@ defmodule Platform.RoleTest do
                Platform.Chat.AttachmentStorage.BootCheck,
                Platform.Vault.Encryption,
                Platform.Repo,
+               Platform.Calendar.RefreshWorker,
                PlatformWeb.Telemetry,
                DNSCluster,
                Phoenix.PubSub.Supervisor,

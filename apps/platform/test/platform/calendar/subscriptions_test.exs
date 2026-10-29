@@ -130,8 +130,8 @@ defmodule Platform.Calendar.SubscriptionsTest do
                ends_at: ~U[2026-10-30 22:00:00Z]
              })
 
-    assert {:ok, [%{starts_at: ~U[2026-10-30 21:00:00Z]}]} =
-             Subscriptions.availability(owner, @from, @to)
+    assert {:ok, [native_window]} = Subscriptions.availability(owner, @from, @to)
+    assert DateTime.compare(native_window.starts_at, ~U[2026-10-30 21:00:00Z]) == :eq
 
     Repo.update!(
       Ecto.Changeset.change(sub, refreshed_at: DateTime.add(DateTime.utc_now(), -3601))
