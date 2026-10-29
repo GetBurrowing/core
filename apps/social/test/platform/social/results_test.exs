@@ -319,6 +319,53 @@ defmodule Platform.Social.ResultsTest do
     assert ordinary.recycled_from_idea_id == nil
   end
 
+  test "recycle rechecks displayed cross-brand cohort and rejects forged scope", c do
+    {other_profile, other_account} = social_account!(c.org, "x")
+    old = DateTime.add(DateTime.utc_now(), -31, :day)
+
+    own =
+      for score <- [100, 90, 80, 70, 60, 50] do
+        source = idea(c, "Score #{score}")
+        post(c, %{"likes" => score}, idea_id: source.id, at: old)
+        source
+      end
+
+    for score <- 1..5 do
+      source = idea(%{c | profile: other_profile}, "Other #{score}")
+      post(%{c | account: other_account}, %{"likes" => score}, idea_id: source.id, at: old)
+    end
+
+    target = Enum.at(own, 2)
+    profiles = [c.profile, other_profile]
+
+    assert Enum.map(Results.recycle_candidates(profiles), & &1.idea_id) ==
+             Enum.map(Enum.take(own, 3), & &1.id)
+
+    user = make_approver!(c.org, c.profile, user!())
+
+    assert {:error, :not_eligible} =
+             Results.recycle(c.org, target.id, user.id, profiles: [c.profile])
+
+    {foreign, _} = social_account!(org_id!(), "youtube")
+
+    assert {:error, :not_found} =
+             Results.recycle(c.org, target.id, user.id, profiles: profiles ++ [foreign])
+
+    assert {:error, :not_found} =
+             Results.recycle(c.org, target.id, user.id, profiles: [other_profile])
+
+    assert {:error, :not_found} =
+             Results.recycle(c.org, target.id, user.id, profiles: [c.profile.id])
+
+    assert Repo.aggregate(from(i in Idea, where: i.recycled_from_idea_id == ^target.id), :count) ==
+             0
+
+    assert {:ok, child} = Results.recycle(c.org, target.id, user.id, profiles: profiles)
+    assert child.recycled_from_idea_id == target.id
+    # A separate candidate exercises the /3 All brands default.
+    assert {:ok, _} = Results.recycle(c.org, hd(own).id, user.id)
+  end
+
   defp unboxed(fun) do
     Task.async(fn -> Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fun) end) |> Task.await(30_000)
   end

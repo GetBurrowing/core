@@ -112,8 +112,14 @@ defmodule Platform.Social.Results do
     |> Enum.map(&Map.delete(&1, :idea))
   end
 
-  @doc "Creates a fresh Inbox idea and reference notes; no posts are copied."
-  def recycle(scope, idea_id, user_id) do
+  @doc """
+  Creates a fresh Inbox idea and reference notes; no posts are copied.
+  `profiles: authorized_profiles` selects the same cohort shown by the caller's
+  brand filter. Every supplied Profile is freshly re-read through scope; an
+  inaccessible/malformed cohort or a source outside it is not_found. Without
+  options the cohort is all profiles visible through scope (All brands).
+  """
+  def recycle(scope, idea_id, user_id, opts \\ []) do
     with %Idea{} = source <- Ideas.get(scope, idea_id) || {:error, :not_found} do
       Repo.transaction(fn ->
         # Serialize requests for the same parent, then re-read authorization and eligibility.
@@ -124,8 +130,9 @@ defmodule Platform.Social.Results do
              %Profile{} = profile <-
                Social.get_profile(scope, source.profile_id) || {:error, :not_found},
              :ok <- Social.approver_check(profile.org_id, profile, user_id),
+             {:ok, profiles} <- recycle_cohort(scope, profile, opts),
              true <-
-               Enum.any?(recycle_candidates([profile]), &(&1.idea_id == source.id)) ||
+               Enum.any?(recycle_candidates(profiles), &(&1.idea_id == source.id)) ||
                  {:error, :not_eligible},
              {:ok, child} <-
                Ideas.create(
@@ -167,6 +174,25 @@ defmodule Platform.Social.Results do
         error ->
           error
       end
+    end
+  end
+
+  defp recycle_cohort(scope, source_profile, opts) do
+    profiles = Keyword.get_lazy(opts, :profiles, fn -> Social.list_profiles(scope) end)
+
+    if is_list(profiles) do
+      fresh =
+        Enum.map(profiles, fn
+          %Profile{id: id} -> Social.get_profile(scope, id)
+          _ -> nil
+        end)
+
+      if Enum.all?(fresh, &match?(%Profile{}, &1)) and
+           Enum.any?(fresh, &(&1.id == source_profile.id)),
+         do: {:ok, Enum.uniq_by(fresh, & &1.id)},
+         else: {:error, :not_found}
+    else
+      {:error, :not_found}
     end
   end
 
