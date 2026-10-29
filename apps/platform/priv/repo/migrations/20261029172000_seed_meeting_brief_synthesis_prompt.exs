@@ -9,6 +9,12 @@ defmodule Platform.Repo.Migrations.SeedMeetingBriefSynthesisPrompt do
   """
   @slug "meetings.brief_synthesis.v1"
   def up do
+    Platform.Repo.insert!(
+      %Platform.Roles.RoleResponsibility{
+        role_key: "meeting_scribe",
+        responsibility_key: "meetings.brief_synthesis"
+      }, on_conflict: :nothing, conflict_target: [:role_key, :responsibility_key])
+
     alias Platform.Orchestration.PromptTemplates
 
     descriptor =
@@ -27,5 +33,9 @@ defmodule Platform.Repo.Migrations.SeedMeetingBriefSynthesisPrompt do
     :ok
   end
 
-  def down, do: :ok
+  def down do
+    execute(
+      "DELETE FROM role_responsibilities WHERE role_key = 'meeting_scribe' AND responsibility_key = 'meetings.brief_synthesis'"
+    )
+  end
 end
