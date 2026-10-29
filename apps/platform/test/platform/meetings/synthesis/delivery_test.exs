@@ -263,7 +263,7 @@ defmodule Platform.Meetings.Synthesis.DeliveryTest do
     test "only a person who can see the new item has their Inbox row relisted", c do
       for u <- [c.c, c.k] do
         row = inbox_row(c.b, u)
-        Repo.update!(Ecto.Changeset.change(row, read_at: DateTime.utc_now(:second)))
+        Repo.update!(Ecto.Changeset.change(row, read_at: DateTime.utc_now()))
       end
 
       in_a = message!(c.a.chat_space_id, c.r, "Paddle")
@@ -451,7 +451,15 @@ defmodule Platform.Meetings.Synthesis.DeliveryTest do
     end
 
     test "Seek alignment never adds the clicker to a space they are not already in", c do
-      finding = shared_conflict!(c)
+      # Both citations live in A's space, so J can still read them after
+      # leaving B's space; the finding still names both meetings.
+      m1 = message!(c.a.chat_space_id, c.r, "Paddle")
+      m2 = message!(c.a.chat_space_id, c.c, "Stripe")
+
+      finding =
+        finding!(c.a, [c.a, c.b], [citation(m1, "Paddle"), citation(m2, "Stripe")], [c.r, c.j])
+
+      :ok = Synthesis.place_findings([finding])
 
       # J leaves B's space.
       Repo.delete_all(
