@@ -407,6 +407,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     ig =
       post!(w, clip, w.ig, "published",
         published_at: DateTime.utc_now(),
+        external_id: "published-instagram-stays-unchanged",
         external_url: "https://example.com/ig"
       )
 
@@ -437,7 +438,10 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
 
     assert id == tt.id
     assert Repo.get!(Platform.Social.Post, ig.id) == ig
-    assert Repo.get!(Platform.Social.Post, tt.id).status == "scheduled"
+    retried = Repo.get!(Platform.Social.Post, tt.id)
+    assert retried.status == "scheduled"
+    assert retried.publish_attempts == tt.publish_attempts + 1
+    assert retried.approved_by_user_id == w.approver.id
     refute has_element?(view, "[data-role=library-retry]")
   end
 
@@ -500,15 +504,17 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     refute has_element?(view, "[data-post-id='#{failed.id}']", "signed us out")
     refute has_element?(view, "[data-post-id='#{failed.id}'] [data-role=library-reconnect]")
 
-    button =
-      view
-      |> element("[data-post-id='#{scheduled.id}'] [data-role=library-reschedule]")
-      |> render()
+    view
+    |> element("[data-post-id='#{scheduled.id}'] [data-role=library-reschedule]")
+    |> render_click()
 
-    assert button =~ "select_tab"
-    assert button =~ "calendar"
-    assert button =~ "open_post"
-    assert button =~ scheduled.id
+    assert has_element?(
+             view,
+             "[data-role=social-tab-button][data-tab=calendar][aria-selected=true]"
+           )
+
+    assert has_element?(view, "[data-role=social-post-detail]", "Post caption")
+    assert has_element?(view, "[data-role=social-post-detail]", w.ig.handle)
   end
 
   test "a reader sees no Retry and forged retry makes no writes", %{conn: conn, w: w} do
@@ -632,5 +638,280 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     |> render_click()
 
     refute has_element?(view, "#library-detail")
+  end
+
+  defp option_counts(view, key) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-role=library-filter-option][data-key='#{key}']")
+    |> Map.new(fn node ->
+      [value] = LazyHTML.attribute(node, "data-value")
+      count = node |> LazyHTML.query("[data-role=library-option-count]") |> LazyHTML.text()
+      {value, count |> String.trim() |> String.to_integer()}
+    end)
+  end
+
+  test "all six states and exact faceted counts survive real Show navigation", %{conn: conn, w: w} do
+    today = Date.utc_today() |> DateTime.new!(~T[00:00:00.000000], "Etc/UTC")
+    recent = DateTime.add(today, -2, :day)
+    older = DateTime.add(today, -14, :day)
+    pending = clip!(w, "Beacon pending", %{}, rendered_at: today)
+    rejected = clip!(w, "Beacon rejected", %{}, review_status: "rejected", rendered_at: older)
+
+    published =
+      clip!(w, "Beacon published", %{platforms: ["instagram"], episode_code: "S2E15"},
+        review_status: "approved",
+        rendered_at: recent
+      )
+
+    post!(w, published, w.ig, "published", published_at: recent, external_id: "untouched-ig")
+
+    scheduled =
+      clip!(w, "Beacon scheduled", %{platforms: ["instagram"], episode_code: "S2E15"},
+        review_status: "approved",
+        rendered_at: today
+      )
+
+    post!(w, scheduled, w.ig, "scheduled", scheduled_at: DateTime.add(today, 2, :day))
+
+    publishing =
+      clip!(w, "Beacon publishing", %{platforms: ["tiktok"]},
+        review_status: "approved",
+        rendered_at: recent
+      )
+
+    post!(w, publishing, w.tiktok, "approved")
+    failed = clip!(w, "Beacon failed", %{}, review_status: "approved", rendered_at: older)
+    post!(w, failed, w.ig, "published", published_at: recent)
+    post!(w, failed, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+
+    {:ok, profile} =
+      Social.create_profile(w.org_id, %{
+        name: "Second beacon show",
+        project_id: w.project.id,
+        approver_user_ids: [w.approver.id]
+      })
+
+    {:ok, _} =
+      Social.create_account(w.org_id, profile, %{platform: "instagram", handle: "@second"})
+
+    second =
+      clip!(
+        %{w | profile: profile},
+        "Beacon second",
+        %{episode_code: "S2E15", platforms: ["instagram"]},
+        rendered_at: today
+      )
+
+    foreign_world = render_world!()
+    foreign = clip!(foreign_world, "Beacon foreign", %{platforms: ["tiktok"]})
+    view = open(conn, w.approver, w.profile)
+    count(view, "6 of 6 clips")
+
+    for {clip, state} <- [
+          {pending, "In review"},
+          {rejected, "Rejected"},
+          {published, "Published"},
+          {scheduled, "Scheduled"},
+          {publishing, "Publishing"},
+          {failed, "Failed"}
+        ] do
+      assert has_element?(view, "#library-clip-#{clip.id} [data-role=library-state]", state)
+    end
+
+    refute card?(view, foreign)
+
+    assert option_counts(view, "status") ==
+             Map.new(
+               ["In review", "Rejected", "Published", "Scheduled", "Publishing", "Failed"],
+               &{&1, 1}
+             )
+
+    assert option_counts(view, "date") == %{"today" => 2, "this_week" => 2, "older" => 2}
+    search(view, "beacon")
+    filter(view, "episode", "S2E15")
+    filter(view, "platform", "instagram")
+    filter(view, "date", "today")
+    filter(view, "status", "Scheduled")
+    count(view, "1 of 6 clips")
+    assert option_counts(view, "date") == %{"today" => 1, "this_week" => 0, "older" => 0}
+    assert option_counts(view, "episode") == %{"S2E14" => 0, "S2E15" => 1}
+
+    assert option_counts(view, "status") == %{
+             "In review" => 0,
+             "Rejected" => 0,
+             "Published" => 0,
+             "Scheduled" => 1,
+             "Publishing" => 0,
+             "Failed" => 0
+           }
+
+    assert option_counts(view, "platform")["instagram"] == 1
+    assert option_counts(view, "platform")["tiktok"] == 0
+    clear(view, "status")
+    assert option_counts(view, "date") == %{"today" => 1, "this_week" => 1, "older" => 0}
+    detail(view, scheduled)
+
+    view
+    |> element("[data-role=library-show-option][data-value='#{profile.id}']")
+    |> render_click()
+
+    assert card?(view, second)
+    refute has_element?(view, "#library-detail")
+    count(view, "1 of 1 clips")
+    assert has_element?(view, "[data-role=library-chip][data-key=episode]", "S2E15")
+
+    for old <- [pending, rejected, published, scheduled, publishing, failed, foreign],
+        do: refute(card?(view, old))
+
+    ids =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role=library-clip]")
+      |> LazyHTML.attribute("data-clip-id")
+
+    assert ids == [second.id]
+    search(view, "no-match")
+    count(view, "0 of 1 clips")
+    view |> element("[data-role=library-empty] button") |> render_click()
+    count(view, "1 of 1 clips")
+    assert card?(view, second)
+  end
+
+  test "Reconnect executes Connections for the failed account and no other account", %{
+    conn: conn,
+    w: w
+  } do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    {:ok, account} = Social.update_account(w.org_id, w.tiktok, %{status: "reauth_needed"})
+    clip = clip!(w, "Connections target", %{}, review_status: "approved")
+    post = post!(w, clip, account, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    url = "https://fake-publisher.example.test/library-reconnect"
+    Fake.put_next(:connect_url, {:ok, url})
+    view |> element("[data-post-id='#{post.id}'] [data-role=library-reconnect]") |> render_click()
+    assert_redirect(view, url)
+    assert [{:connect_url, [connected, opts], _}] = Fake.calls(:connect_url)
+    assert connected.id == account.id
+    assert opts[:profile].id == w.profile.id
+    assert Repo.get!(Platform.Social.Post, post.id) == post
+    assert Fake.calls(:publish) == []
+  end
+
+  test "invalid event shapes preserve the valid filter and expose no detail", %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    clip = clip!(w, "Robust event")
+    view = open(conn, w.approver, w.profile)
+    search(view, "Robust")
+
+    for {name, payload} <- [
+          {"filter", %{}},
+          {"filter", %{key: %{}, option: []}},
+          {"filter", %{key: "date", option: "yesterday"}},
+          {"search", %{q: %{unexpected: true}}},
+          {"select_show", %{profile_id: []}},
+          {"clear_filter", %{key: %{}}},
+          {"open_detail", %{}},
+          {"retry", %{post_id: [clip.id]}},
+          {"reconnect", %{clip_id: %{}}}
+        ] do
+      event(view, name, payload)
+      assert Process.alive?(view.pid)
+      assert card?(view, clip)
+      assert has_element?(view, "[data-role=library-chip][data-key=q]", "Search: Robust ×")
+      refute has_element?(view, "#library-detail")
+    end
+
+    assert Fake.calls(:publish) == []
+  end
+
+  test "real agent identity has no Library or Retry and forged parent events publish nothing", %{
+    conn: conn,
+    w: w
+  } do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    clip = clip!(w, "Human-only retry", %{}, review_status: "approved")
+    post = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+    agent_conn = Plug.Test.init_test_session(conn, current_user_id: w.agent.id)
+
+    assert {:error, {:redirect, %{to: "/auth/login"}}} =
+             live(agent_conn, "/m/social?tab=clips&view=library")
+
+    # The real authenticated route rejects an agent ID. Exercise SocialLive's
+    # nil-human guard as well, using its normal session contract, not assigns.
+    {:ok, view, _} =
+      live_isolated(build_conn(), PlatformWeb.SocialLive, session: %{"user_id" => w.agent.id})
+
+    refute has_element?(view, "[data-role=library-retry]")
+    refute has_element?(view, "[data-role=clips-library]")
+    render_hook(view, "retry", %{clip_id: clip.id, post_id: post.id})
+    render_hook(view, "open_detail", %{id: clip.id})
+    assert Process.alive?(view.pid)
+    assert Repo.get!(Platform.Social.Post, post.id) == post
+    assert Fake.calls(:publish) == []
+  end
+
+  test "same-org wrong-profile posts and forged mixed IDs cannot be retried", %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    own = clip!(w, "Current profile", %{}, review_status: "approved")
+    own_post = post!(w, own, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+
+    {:ok, profile} =
+      Social.create_profile(w.org_id, %{
+        name: "Other authorized show",
+        project_id: w.project.id,
+        approver_user_ids: [w.approver.id]
+      })
+
+    {:ok, account} =
+      Social.create_account(w.org_id, profile, %{platform: "tiktok", handle: "@other-show"})
+
+    other_w = %{w | profile: profile}
+
+    other =
+      clip!(other_w, "Other profile secret", %{platforms: ["tiktok"]}, review_status: "approved")
+
+    other_post = post!(other_w, other, account, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, own)
+    event(view, "open_detail", %{id: other.id})
+    refute has_element?(view, "#library-detail")
+
+    for {clip_id, post_id} <- [
+          {own.id, other_post.id},
+          {other.id, own_post.id},
+          {other.id, other_post.id},
+          {own.id, %{}},
+          {own.id, []},
+          {own.id, nil}
+        ] do
+      event(view, "retry", %{clip_id: clip_id, post_id: post_id})
+      assert Repo.get!(Platform.Social.Post, own_post.id) == own_post
+      assert Repo.get!(Platform.Social.Post, other_post.id) == other_post
+      assert Fake.calls(:publish) == []
+      refute render(view) =~ "Other profile secret"
+    end
+  end
+
+  test "revoking profile approver permission after mount denies stale Retry", %{conn: conn, w: w} do
+    alias Platform.Social.Publisher.Fake
+    Fake.reset()
+    clip = clip!(w, "Revoked approver", %{}, review_status: "approved")
+    post = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED")
+    view = open(conn, w.approver, w.profile)
+    detail(view, clip)
+    assert has_element?(view, "[data-role=library-retry]")
+    w.profile |> Ecto.Changeset.change(approver_user_ids: []) |> Repo.update!()
+    event(view, "retry", %{clip_id: clip.id, post_id: post.id})
+    refute has_element?(view, "[data-role=library-retry]")
+    assert Repo.get!(Platform.Social.Post, post.id) == post
+    assert Fake.calls(:publish) == []
   end
 end
