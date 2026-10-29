@@ -141,6 +141,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:show_versions_panel, false)
     |> assign(:canvas_versions, [])
     |> assign(:restore_confirm_revision, nil)
+    |> assign(:restore_confirm_base, nil)
     |> assign(:canvas_rooms, %{})
     |> assign_new_form()
     |> attach_hook(:canvas_events, :handle_event, &handle_event/3)
@@ -236,6 +237,18 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @doc "Remove a canvas from the socket's local list (paired with `{:canvas_deleted, canvas}` broadcasts)."
   @spec remove(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
   def remove(socket, canvas) do
+    if Map.has_key?(socket.assigns[:canvases_by_id] || %{}, canvas.id),
+      do: clear_canvas_engagement(socket, canvas)
+
+    socket =
+      Enum.reduce(socket.assigns[:canvas_rooms] || %{}, socket, fn
+        {{canvas_id, _node_id} = key, entry}, acc when canvas_id == canvas.id ->
+          Enum.reduce(entry.hooks, acc, &untrack_room(&2, key, &1))
+
+        _, acc ->
+          acc
+      end)
+
     # Use safe assigns access — a {:canvas_deleted, _} broadcast can race with
     # mount and arrive before :canvases / :canvases_by_id are initialized.
     canvases =
@@ -314,7 +327,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   policy question, not a refactor. Recorded so the next person does not have
   to rediscover it.
 
-  Both halves are unauthorized:
+  Ownership moves are the exception: a canvas with a nonzero location epoch
+  is always refetched through the viewer's current grant before it is returned.
+  Old-space readers cannot reopen one through this previously unchecked event.
+
+  For unmoved canvases both halves remain the existing unauthorized path:
 
     * `Chat.get_canvas/1` is the documented UNAUTHORIZED primitive — it
       resolves any live canvas by id, in any space, in any org.
@@ -337,6 +354,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   def find(socket, canvas_id) do
     canvas =
       Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+
+    canvas =
+      case Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
+        {:ok, canvas} -> canvas
+        _ -> nil
+      end
 
     case {canvas, socket.assigns[:access_scope]} do
       {nil, _} ->
@@ -710,8 +733,24 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_event("canvas_versions_restore_prompt", %{"revision" => rev_str}, socket) do
     case Integer.parse(to_string(rev_str)) do
-      {rev, ""} -> {:halt, assign(socket, :restore_confirm_revision, rev)}
-      _ -> {:halt, socket}
+      {rev, ""} ->
+        base =
+          case socket.assigns[:active_canvas] do
+            %{id: id} ->
+              case CanvasServer.describe(id) do
+                {:ok, %{revision: current}} -> current
+                _ -> nil
+              end
+
+            _ ->
+              nil
+          end
+
+        {:halt,
+         socket |> assign(:restore_confirm_revision, rev) |> assign(:restore_confirm_base, base)}
+
+      _ ->
+        {:halt, socket}
     end
   end
 
@@ -722,42 +761,25 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_event("canvas_versions_restore_confirm", %{"revision" => rev_str}, socket) do
     canvas = socket.assigns.active_canvas
 
-    # Restore is a full-document overwrite — the most destructive canvas write
-    # there is — so it gates on WRITE, not on whatever let the viewer open the
-    # panel. `find/2` admits `:task_reader` and `:org_reader`; neither may edit.
     with {rev, ""} <- Integer.parse(to_string(rev_str)),
-         %{} <- canvas,
-         {:ok, _writable} <- CanvasAccess.fetch_for_writer(canvas.id, viewer(socket)),
-         %{} = version <- CanvasVersions.get(canvas.id, rev) do
-      attribution = caller_attribution(socket, canvas.space_id)
+         %{id: id} <- canvas,
+         {:ok, _} <- CanvasAccess.fetch_for_writer(id, viewer(socket)),
+         ^rev <- socket.assigns[:restore_confirm_revision],
+         base when is_integer(base) <- socket.assigns[:restore_confirm_base] do
+      case Platform.Chat.Canvas.Restore.restore(viewer(socket), id, rev, base) do
+        {:ok, new_rev} ->
+          {:halt,
+           socket
+           |> assign(:canvas_versions, load_versions(canvas))
+           |> assign(:restore_confirm_revision, nil)
+           |> assign(:restore_confirm_base, nil)
+           |> put_flash(:info, "Restored revision #{rev} as v#{new_rev}.")}
 
-      case CanvasServer.describe(canvas.id) do
-        {:ok, %{revision: current_rev}} ->
-          ops = [{:replace_document, version.document}]
-
-          case CanvasServer.apply_patches(canvas.id, ops, current_rev, attribution) do
-            {:ok, new_rev} ->
-              # Re-tag the just-written ops to mark this as a restore (best
-              # effort — async write may race; ignore failure).
-              tag_restore_ops(canvas.id, new_rev, rev)
-
-              versions = load_versions(canvas)
-
-              {:halt,
-               socket
-               |> assign(:canvas_versions, versions)
-               |> assign(:restore_confirm_revision, nil)
-               |> put_flash(:info, "Restored revision #{rev} as v#{new_rev}.")}
-
-            {:conflict, _} ->
-              {:halt, put_flash(socket, :error, "Restore failed: canvas state changed.")}
-
-            {:error, reason} ->
-              {:halt, put_flash(socket, :error, "Restore failed: #{inspect(reason)}")}
-          end
+        {:conflict, _} ->
+          {:halt, put_flash(socket, :error, "Restore failed: canvas state changed.")}
 
         _ ->
-          {:halt, put_flash(socket, :error, "Could not load current canvas state.")}
+          {:halt, put_flash(socket, :error, "Restore failed: revision not available.")}
       end
     else
       {:error, :forbidden} ->
@@ -1062,9 +1084,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp rejoin_room(socket, {canvas_id, node_id} = key, entry) do
     rooms = socket.assigns.canvas_rooms
 
-    with {:ok, actor} <- room_actor(socket),
+    with {:ok, _canvas, level} <- room_canvas(socket, canvas_id),
+         {:ok, actor} <- room_actor(socket),
          {:ok, snap} <- CanvasRoom.join(canvas_id, node_id, self(), actor) do
-      entry = %{entry | pid: snap.room_pid, ref: Process.monitor(snap.room_pid)}
+      entry = %{
+        entry
+        | pid: snap.room_pid,
+          ref: Process.monitor(snap.room_pid),
+          writable: level == :member
+      }
 
       socket
       |> assign(:canvas_rooms, Map.put(rooms, key, entry))
@@ -1398,16 +1426,32 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # close, and it would only half work: `MessagesHooks` would still refuse to
   # reinsert the message row, so the canvas pane would update while the inline
   # card in the stream stayed frozen. Half-live is worse than not-live.
+  defp handle_info({:canvas_arrived, location}, socket) do
+    socket =
+      with true <- MessagesHooks.same_active_space?(socket, location),
+           {:ok, canvas} <- Platform.Files.CanvasMove.fetch_arrival(viewer(socket), location) do
+        put(socket, canvas)
+      else
+        {:error, _} -> remove(socket, location)
+        _ -> socket
+      end
+
+    {:halt, socket}
+  end
+
   defp handle_info({:canvas_created, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       {:halt, put(socket, canvas)}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
   defp handle_info({:canvas_updated, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       socket = put(socket, canvas)
 
       socket =
@@ -1419,7 +1463,8 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
       {:halt, socket}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
@@ -1433,10 +1478,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # merges it into both `@canvases_by_id` and `@canvases`, and the Live Canvases
   # panel renders that second list with no message row involved.
   defp handle_info({:canvas_restored, canvas}, socket) do
-    if MessagesHooks.same_active_space?(socket, canvas) do
+    with true <- MessagesHooks.same_active_space?(socket, canvas),
+         {:ok, canvas} <- Platform.Files.CanvasMove.read_event(viewer(socket), canvas) do
       {:halt, put(socket, canvas)}
     else
-      {:halt, socket}
+      {:error, _} -> {:halt, remove(socket, canvas)}
+      _ -> {:halt, socket}
     end
   end
 
@@ -1469,17 +1516,23 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
           socket
 
         %{} = existing ->
-          case CanvasServer.describe(canvas_id) do
-            {:ok, %{document: document}} ->
-              put(socket, %{existing | document: document, updated_at: DateTime.utc_now()})
+          case Platform.Files.CanvasMove.read_event(viewer(socket), existing) do
+            {:ok, existing} ->
+              case CanvasServer.describe(canvas_id) do
+                {:ok, %{document: document}} ->
+                  put(socket, %{existing | document: document, updated_at: DateTime.utc_now()})
+
+                _ ->
+                  # GenServer gone — fall back to a DB read, accepting that this
+                  # may briefly show the pre-patch document until persist lands.
+                  case Chat.get_canvas(canvas_id) do
+                    %{} = canvas -> put(socket, canvas)
+                    _ -> socket
+                  end
+              end
 
             _ ->
-              # GenServer gone — fall back to a DB read, accepting that this
-              # may briefly show the pre-patch document until persist lands.
-              case Chat.get_canvas(canvas_id) do
-                %{} = canvas -> put(socket, canvas)
-                _ -> socket
-              end
+              remove(socket, existing)
           end
       end
 
@@ -2126,77 +2179,6 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     case socket.assigns[:active_canvas] do
       %{id: id} -> id
       _ -> nil
-    end
-  end
-
-  defp caller_attribution(socket, space_id) do
-    case socket.assigns do
-      %{current_participant: %{} = p} ->
-        CanvasVersions.attribution_for_participant(p)
-
-      %{current_user: %{id: uid} = u} ->
-        CanvasVersions.attribution_from_fields(%{
-          type: "user",
-          id: uid,
-          display_name: Map.get(u, :name) || Map.get(u, :email)
-        })
-
-      _ ->
-        # Fall back to nothing — version row records system attribution.
-        _ = space_id
-        %{}
-    end
-  end
-
-  # The version row is written async by Canvas.Server. Briefly poll for it
-  # then update the ops field to reflect the restore intent. Best effort.
-  #
-  # Task 01a089e5 stage 3: was a bare `Task.start`. `canvas_versions_restore_confirm`
-  # is exercised for real by LiveView tests under the shared DataCase sandbox
-  # (chat_live_test.exs, canvas_versions_panel_test.exs), and the retry loop
-  # below can still be polling up to ~520ms (26 * 20ms) after the triggering
-  # test itself returns — exactly the outlive-the-checkin shape
-  # `Task.Supervisor` + the shared-mode `on_exit` drain
-  # (`Platform.SandboxHelpers.await_supervised_writes/1`) exists to catch.
-  defp tag_restore_ops(canvas_id, revision, source_revision) do
-    # `start_child`, not `async_nolink` — fire-and-forget, nothing awaits
-    # this. See `WorkspaceBootstrap.boot_async/1`'s comment for why
-    # `async_nolink`'s reply message is a real crash risk for a caller
-    # with no catch-all `handle_info/2` (ChatLive itself has one, but this
-    # follows the same convention as the other stage-3 conversions).
-    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-      safe_tag_restore_ops(canvas_id, revision, source_revision, 0)
-    end)
-  end
-
-  defp safe_tag_restore_ops(canvas_id, revision, source_revision, attempt) do
-    do_tag_restore_ops(canvas_id, revision, source_revision, attempt)
-  rescue
-    DBConnection.OwnershipError ->
-      Logger.debug(
-        "[CanvasHooks] tag_restore_ops sandbox-owned DB call from Task.Supervised child — dropping canvas_id=#{canvas_id} revision=#{revision}"
-      )
-
-      :ok
-  end
-
-  defp do_tag_restore_ops(_canvas_id, _revision, _source_revision, attempt) when attempt > 25,
-    do: :ok
-
-  defp do_tag_restore_ops(canvas_id, revision, source_revision, attempt) do
-    case CanvasVersions.get(canvas_id, revision) do
-      nil ->
-        Process.sleep(20)
-        do_tag_restore_ops(canvas_id, revision, source_revision, attempt + 1)
-
-      version ->
-        version
-        |> Ecto.Changeset.change(%{
-          ops: %{"ops" => [["restore_from_revision", source_revision]]}
-        })
-        |> Platform.Repo.update()
-
-        :ok
     end
   end
 

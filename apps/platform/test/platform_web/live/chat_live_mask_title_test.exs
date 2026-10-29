@@ -120,6 +120,18 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
     # per-section reveal went with it, so the reveal/re-mask title test is gone.
   end
 
+  test "empty conversation masks its org-named channel alongside the header", %{conn: conn} do
+    {view, _html} = fixture(conn, "empty-channel")
+    selector = "#chat-message-scroller .empty-conversational"
+    assert_name_anywhere(view |> element(selector) |> render(), @org)
+
+    toggle_mask(view)
+
+    masked = view |> element(selector) |> render()
+    refute_name_anywhere(masked, @org)
+    assert masked =~ "workspace-"
+  end
+
   describe "chat header" do
     test "MATCHED PAIR: unmasked, the header spells the channel name", %{conn: conn} do
       {_view, html} = fixture(conn, "header-pair")

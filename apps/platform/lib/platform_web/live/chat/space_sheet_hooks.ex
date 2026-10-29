@@ -78,7 +78,7 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
   """
 
   import Phoenix.Component, only: [assign: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, push_patch: 2]
+  import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, push_patch: 2, push_navigate: 2]
 
   alias Platform.Chat
   alias PlatformWeb.ChatLive.DetailsPanelHooks
@@ -136,6 +136,29 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
 
   # Opening reads the thread summaries once: the Space page's Threads count
   # is their length, and the Threads page lists them.
+  defp handle_event("space_canvases_browser", _params, socket) do
+    actor = %{id: socket.assigns[:current_user_id]}
+    space = socket.assigns[:active_space]
+
+    with %{} <- space,
+         {:ok, viewer} <- Platform.Files.BrowserActions.viewer(actor),
+         {:ok, items} <- Platform.Files.Browser.in_space(viewer, space.id) do
+      source = socket.assigns[:active_canvas]
+
+      highlight =
+        if source && Enum.any?(items, &(&1.kind == :canvas && &1.id == source.id)), do: source.id
+
+      path =
+        PlatformWeb.Files.BrowserView.browser_path(%{"space" => space.id, "type" => "canvas"}, %{
+          "highlight" => highlight
+        })
+
+      {:halt, socket |> reset() |> push_navigate(to: path)}
+    else
+      _ -> {:halt, reset(socket)}
+    end
+  end
+
   defp handle_event("open_space_sheet", _params, socket) do
     if socket.assigns[:active_space] do
       {:halt, socket |> assign(:space_sheet, {:links, :all}) |> load_threads() |> load_links()}

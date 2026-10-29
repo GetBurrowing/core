@@ -369,20 +369,13 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
         label="Search in space"
         click={JS.push(page_event(@surface), value: %{page: "search"})}
       />
-      <%!-- Opens the existing canvases drawer. Already open: the sheet just
-           shuts, because `canvas_panel_toggle` would close the drawer; the
-           panel does nothing. --%>
       <.sheet_row
         surface={@surface}
         role={@prefix <> "-canvases"}
-        icon="hero-puzzle-piece"
+        icon="hero-rectangle-group"
         label="Canvases in this space"
         preview={count_preview(@canvases)}
-        click={
-          if @show_canvases,
-            do: lead(@surface),
-            else: lead(@surface) |> JS.push("canvas_panel_toggle")
-        }
+        click={lead(@surface) |> JS.push("space_canvases_browser")}
       />
       <%!-- The phone way into the Members sheet (task 01a1557a-8f80 stage
            3): every space but a DM, like the header entry; the meta is the

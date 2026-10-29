@@ -124,11 +124,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   @topics [
     # ── space ──
     {"active_agent:<id>", :space},
-    {"chat:canvas:<id>", :space},
+    {"chat:canvas:<id>:<id>", :space},
     # canvas_id + node_id (task 01a1316b-84fa). A room belongs to one canvas,
     # and a canvas to one space; the only subscriber (stage 2's CanvasHooks)
     # joins after `find/2` has resolved the canvas for the viewing session.
-    {"chat:canvas_room:<id>:<id>", :space},
+    {"chat:canvas_room:<id>:<id>:<id>", :space},
     {"chat:space:<id>", :space},
     # meeting-keyed. A Meeting has a chat_space_id, and a room belongs to a
     # meeting, so the reachable set is the meeting's space either way. The KEY
@@ -153,6 +153,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # row is one user in one space, so the reachable set is that one user's
     # sessions. The payload is that participant's own thread read cursor.
     {"chat:thread_reads:<id>", :user},
+    {"files:stars:<id>", :user},
     {"external_admission:<id>", :user},
     {"inbox:<id>", :user},
     {"meeting:state:<id>", :user},

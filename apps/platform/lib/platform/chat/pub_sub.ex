@@ -6,9 +6,9 @@ defmodule Platform.Chat.PubSub do
 
     * `"chat:space:{space_id}"` — per-space event stream (messages, reactions,
       pins, participant changes, canvas lifecycle events).
-    * `"chat:canvas:{canvas_id}"` — per-canvas event stream (state updates,
+    * `"chat:canvas:{canvas_id}:{location_epoch}"` — per-canvas event stream (state updates,
       focused canvas subscribers).
-    * `"chat:canvas_room:{canvas_id}:{node_id}"` — one canvas room's
+    * `"chat:canvas_room:{canvas_id}:{node_id}:{location_epoch}"` — one canvas room's
       shared-state diffs, presence and ephemeral broadcasts
       (`Platform.Chat.CanvasRoom`).
 
@@ -53,7 +53,17 @@ defmodule Platform.Chat.PubSub do
 
   @doc "Returns the PubSub topic for a specific canvas."
   @spec canvas_topic(binary()) :: String.t()
-  def canvas_topic(canvas_id), do: "chat:canvas:#{canvas_id}"
+  def canvas_topic(canvas_id), do: canvas_topic(canvas_id, location_epoch(canvas_id))
+
+  @doc false
+  def canvas_topic(canvas_id, epoch), do: "chat:canvas:#{canvas_id}:#{epoch}"
+
+  defp location_epoch(canvas_id) do
+    case Platform.Chat.get_canvas_with_deleted(canvas_id) do
+      %{location_epoch: epoch} -> epoch
+      _ -> 0
+    end
+  end
 
   @doc """
   Returns the PubSub topic for one canvas room (`Platform.Chat.CanvasRoom`,
@@ -62,7 +72,8 @@ defmodule Platform.Chat.PubSub do
   (cursors included) on it would reach every viewer of the space.
   """
   @spec canvas_room_topic(binary(), binary()) :: String.t()
-  def canvas_room_topic(canvas_id, node_id), do: "chat:canvas_room:#{canvas_id}:#{node_id}"
+  def canvas_room_topic(canvas_id, node_id),
+    do: "chat:canvas_room:#{canvas_id}:#{node_id}:#{location_epoch(canvas_id)}"
 
   @doc """
   Returns the global topic for space-lifecycle events (creation, archival).
@@ -110,6 +121,23 @@ defmodule Platform.Chat.PubSub do
   @spec thread_reads_topic(binary()) :: String.t()
   def thread_reads_topic(participant_id), do: "chat:thread_reads:#{participant_id}"
 
+  # Retain exact subscribed epochs, so a move away and back never revives an
+  # old reader, and unsubscribe still clears all pre-move registrations.
+  defp subscribe_location(key, topic) do
+    topics = Process.get({__MODULE__, key}, MapSet.new())
+    Process.put({__MODULE__, key}, MapSet.put(topics, topic))
+    Phoenix.PubSub.subscribe(@pubsub, topic)
+  end
+
+  defp unsubscribe_location(key, fallback) do
+    case Process.delete({__MODULE__, key}) do
+      nil -> Phoenix.PubSub.unsubscribe(@pubsub, fallback)
+      topics -> Enum.each(topics, &Phoenix.PubSub.unsubscribe(@pubsub, &1))
+    end
+
+    :ok
+  end
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -131,25 +159,28 @@ defmodule Platform.Chat.PubSub do
   @doc "Subscribe the calling process to a specific canvas topic."
   @spec subscribe_canvas(binary()) :: :ok | {:error, term()}
   def subscribe_canvas(canvas_id) do
-    Phoenix.PubSub.subscribe(@pubsub, canvas_topic(canvas_id))
+    subscribe_location({:canvas, canvas_id}, canvas_topic(canvas_id))
   end
 
   @doc "Unsubscribe the calling process from a canvas topic."
   @spec unsubscribe_canvas(binary()) :: :ok
   def unsubscribe_canvas(canvas_id) do
-    Phoenix.PubSub.unsubscribe(@pubsub, canvas_topic(canvas_id))
+    unsubscribe_location({:canvas, canvas_id}, canvas_topic(canvas_id))
   end
 
   @doc "Subscribe the calling process to one canvas room's topic."
   @spec subscribe_canvas_room(binary(), binary()) :: :ok | {:error, term()}
   def subscribe_canvas_room(canvas_id, node_id) do
-    Phoenix.PubSub.subscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
+    subscribe_location({:canvas_room, canvas_id, node_id}, canvas_room_topic(canvas_id, node_id))
   end
 
   @doc "Unsubscribe the calling process from one canvas room's topic."
   @spec unsubscribe_canvas_room(binary(), binary()) :: :ok
   def unsubscribe_canvas_room(canvas_id, node_id) do
-    Phoenix.PubSub.unsubscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
+    unsubscribe_location(
+      {:canvas_room, canvas_id, node_id},
+      canvas_room_topic(canvas_id, node_id)
+    )
   end
 
   @doc """
@@ -267,6 +298,12 @@ defmodule Platform.Chat.PubSub do
   def broadcast_canvas(canvas_id, event) do
     Phoenix.PubSub.broadcast(@pubsub, canvas_topic(canvas_id), event)
   end
+
+  @doc false
+  # A room pins its location topic at startup. Cursor and presence traffic
+  # stays query-free, and a retired room can never broadcast into a new epoch.
+  def broadcast_canvas_room_topic(topic, event) when is_binary(topic),
+    do: Phoenix.PubSub.broadcast(@pubsub, topic, event)
 
   @doc "Broadcast an event to every subscriber of one canvas room."
   @spec broadcast_canvas_room(binary(), binary(), term()) :: :ok

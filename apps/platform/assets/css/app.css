@@ -9341,3 +9341,38 @@ body.screen-share-fullscreen-active {
 #terminal-host[data-dimmed="true"] .xterm-screen {
   opacity: 0.5;
 }
+
+/* Personal stars stay neutral. Controls reveal only on hover-capable desktops. */
+@media (hover: hover) and (pointer: fine) and (min-width: 1024px) {
+  .browser-item-actions { opacity: 0; }
+  [data-item-id]:hover > .browser-item-actions,
+  [data-item-id]:focus-within > .browser-item-actions { opacity: 1; }
+}
+.browser-source-ring { outline: 3px solid var(--color-base-300); outline-offset: -3px; }
+
+/* Canvas cards use passive content and the existing live status palette. */
+.canvas-card-presence { opacity: 1; transition: opacity 180ms ease-out; }
+.canvas-card-presence[data-leaving="true"] { animation: canvas-card-leave 30s linear forwards; }
+@keyframes canvas-card-leave { 0%, 99.3% { opacity: 1; } 100% { opacity: 0; } }
+.canvas-card-agent { outline: 1px solid var(--ag); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) {
+  .canvas-card-presence { transition: none !important; }
+  .canvas-card-presence[data-leaving="true"] { animation: none !important; }
+}
+
+/* Rung 17 history: one state, phone sheet and desktop side panel. */
+@media (max-width: 1023px) {
+  #canvas-history-sheet.sheet-right .sheet-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 80dvh;
+    border-radius: var(--radius-box) var(--radius-box) 0 0;
+    transform: translateY(100%);
+  }
+  #canvas-history-sheet.sheet-right.sheet-open .sheet-panel {
+    transform: translateY(0);
+  }
+}

@@ -277,6 +277,13 @@ defmodule Platform.Files.Browser do
     |> cap(limit)
   end
 
+  def of_type(viewer, :file, opts) do
+    limit = Keyword.get(opts, :limit, @type_limit)
+    docs = of_type(viewer, :doc, limit: limit + 1)
+    images = of_type(viewer, :image, limit: limit + 1)
+    sort(docs.items ++ images.items, :recent) |> cap(limit)
+  end
+
   def of_type(viewer, type, opts) when type in [:doc, :image] do
     limit = Keyword.get(opts, :limit, @type_limit)
     ctx = context(viewer)
@@ -350,11 +357,127 @@ defmodule Platform.Files.Browser do
     file_item(file, %{projects_by_id: %{file.project_id => %{org_id: org_id}}})
   end
 
+  @doc "Displayed game locations, authorized in one metadata-only batch."
+  def game_space_ids(viewer, items) do
+    ids = items |> Enum.filter(&(&1.type == :game)) |> Enum.map(& &1.id)
+
+    if ids == [] do
+      []
+    else
+      ctx = context(viewer)
+
+      Chat.list_browser_canvases(ctx.space_ids,
+        ids: ids,
+        type: :game,
+        limit: @space_limit,
+        access_scope: viewer.access_scope
+      )
+      |> Enum.map(& &1.space_id)
+      |> Enum.uniq()
+    end
+  end
+
+  @doc "Batch passive previews for displayed authorized canvas items."
+  defdelegate canvas_previews(viewer, items), to: Platform.Files.CanvasPreview, as: :batch
+
+  @doc "Personal stars, newest-starred first; inaccessible targets are omitted."
+  defdelegate starred(actor, opts \\ []), to: Platform.Files.Stars, as: :list_items
+
+  @doc "Resolve one browser target against the viewer's current readable locations."
+  def fetch_source(viewer, target, opts \\ [])
+
+  def fetch_source(viewer, {kind, id}, opts) when kind in [:file, :canvas, :space_file] do
+    if Platform.UUID.valid?(id) do
+      resolve_source(
+        context(viewer),
+        viewer,
+        kind,
+        id,
+        Keyword.get(opts, :include_deleted, false)
+      )
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def fetch_source(_viewer, _target, _opts), do: {:error, :not_found}
+
+  defp resolve_source(ctx, viewer, :file, id, include_deleted) do
+    case Platform.Repo.get(Files.File, id) do
+      %Files.File{} = file ->
+        project = Map.get(ctx.projects_by_id, file.project_id)
+
+        if project && is_nil(project.archived_at) && (include_deleted || is_nil(file.deleted_at)) &&
+             Platform.Access.check(viewer.access_scope, "files.read", {:project, file.project_id}) ==
+               :ok,
+           do: {:ok, file},
+           else: {:error, :not_found}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp resolve_source(ctx, viewer, :canvas, id, include_deleted) do
+    with {:ok, canvas, _level} <-
+           Chat.CanvasAccess.fetch_for_viewer(id, viewer.user,
+             audit: false,
+             access_scope: viewer.access_scope
+           ),
+         true <- Map.has_key?(ctx.spaces_by_id, canvas.space_id),
+         true <- include_deleted || is_nil(canvas.deleted_at) do
+      {:ok, canvas}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp resolve_source(ctx, viewer, :space_file, id, _include_deleted) do
+    with %Chat.Attachment{state: "ready"} = attachment <- Platform.Repo.get(Chat.Attachment, id),
+         true <- Map.has_key?(ctx.spaces_by_id, attachment.space_id),
+         %Chat.Attachment{} <-
+           Chat.get_visible_attachment_for_principal(id, {:user, viewer.user.id}) do
+      {:ok, attachment}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc "One freshly authorized row in the same shape as the browser listings."
+  def fetch_item(viewer, target) do
+    with {:ok, source} <- fetch_source(viewer, target) do
+      ctx = context(viewer)
+
+      case target do
+        {:file, _} ->
+          {:ok, file_item(source, ctx)}
+
+        {:space_file, _} ->
+          {:ok,
+           space_file_item(
+             Map.put(source, :author, nil),
+             Map.fetch!(ctx.spaces_by_id, source.space_id)
+           )}
+
+        {:canvas, id} ->
+          case Chat.list_browser_canvases([source.space_id],
+                 ids: [id],
+                 access_scope: viewer.access_scope
+               )
+               |> canvas_items(ctx) do
+            [item] -> {:ok, item}
+            _ -> {:error, :not_found}
+          end
+      end
+    end
+  end
+
   # ── Pure helpers ──────────────────────────────────────────────────────────
 
   @doc "Keeps the items of one type; `nil` or `:all` keeps everything."
   @spec filter([Item.t()], item_type() | :all | nil) :: [Item.t()]
   def filter(items, type) when type in [nil, :all], do: items
+  def filter(items, :file), do: Enum.reject(items, &(&1.kind == :canvas))
   def filter(items, type), do: Enum.filter(items, &(&1.type == type))
 
   @doc """
