@@ -41,6 +41,8 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"task_detail_component", "plan_reject"},
     {"task_detail_component", "plan_submit_reject_with_feedback"},
     # task detail (server-held selection)
+    # Re-check uses Selection.writable_selected_task then revision-fenced, authorized verification.
+    {"task_detail_component", "execution_recheck"},
     {"task_detail_component", "detail_detach_canvas"},
     {"task_detail_component", "detail_attach_canvas"},
     {"task_detail_component", "detail_save_description"},
