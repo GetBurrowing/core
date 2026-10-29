@@ -200,10 +200,9 @@ defmodule Platform.Calendar.AgentAccess do
             |> CS.change(items: Map.put(briefing.items, key, "calendar:" <> consent.id))
             |> Repo.update!()
 
-            Platform.Inbox.upsert_briefing_item(Repo.get!(Briefing, briefing.id))
-            |> unwrap_inbox()
-
-            if grant.preapprove, do: approve(consent, grant, true), else: consent
+            consent = if grant.preapprove, do: approve(consent, grant, true), else: consent
+            refresh_inbox(Repo.get!(Briefing, briefing.id), owner_scope, true)
+            consent
         end
       end)
     end
@@ -266,7 +265,7 @@ defmodule Platform.Calendar.AgentAccess do
 
   def handle(_, _, _, _), do: {:error, :forbidden}
 
-  def view(%Briefing{user_id: id} = briefing, %Scope{actor: %Accounts.User{id: id}} = scope) do
+  def view(%Briefing{user_id: id} = briefing, %Scope{actor: %{id: id}} = scope) do
     if Access.can?(scope, "calendar.read") do
       Repo.all(
         from(c in Consent,
@@ -291,6 +290,7 @@ defmodule Platform.Calendar.AgentAccess do
           actions: [],
           section: if(c.state == "pending", do: :needs_call, else: :done),
           title: event.title,
+          agent_name: Repo.get!(Platform.Agents.Agent, c.agent_id).name,
           starts_at: event.starts_at,
           operation: c.operation,
           state: c.state,
@@ -315,6 +315,14 @@ defmodule Platform.Calendar.AgentAccess do
   end
 
   def view(_, _), do: []
+
+  def pending?(%Briefing{id: id, user_id: owner_id}) do
+    Repo.exists?(
+      from(c in Consent,
+        where: c.briefing_id == ^id and c.owner_id == ^owner_id and c.state == "pending"
+      )
+    )
+  end
 
   defp authority(%Scope{actor: %AgentRuntime{id: runtime_id}} = _scope, owner_id, permission) do
     with true <- Platform.UUID.valid?(owner_id),
@@ -433,8 +441,23 @@ defmodule Platform.Calendar.AgentAccess do
       "auto" => auto
     }
 
-    row |> CS.change(receipts: Map.put(row.receipts, key(consent), receipt)) |> Repo.update!()
+    row =
+      row |> CS.change(receipts: Map.put(row.receipts, key(consent), receipt)) |> Repo.update!()
+
+    refresh_inbox(row, Scope.for_user(Accounts.get_user(consent.owner_id)), false)
     consent
+  end
+
+  defp refresh_inbox(briefing, scope, new_items?) do
+    counts = Platform.Memory.Insights.Briefings.view(briefing, scope).counts
+
+    Platform.Inbox.upsert_briefing_item(briefing, %{
+      total: counts.total,
+      calls: counts.calls,
+      body: Platform.Inbox.briefing_summary(counts),
+      new_items?: new_items?
+    })
+    |> unwrap_inbox()
   end
 
   defp briefing(owner_id) do

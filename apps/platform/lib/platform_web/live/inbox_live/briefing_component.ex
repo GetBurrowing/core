@@ -446,7 +446,7 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
       <p class="text-xs text-subtle">Calendar · Tentative</p>
       <h3 class="mt-2 font-semibold">{@item.title}</h3>
       <p class="mt-1 text-sm">
-        Tentatively {if @item.operation == "move", do: "moving", else: "booking"} this time. OK?
+        {@item.agent_name} is tentatively {if @item.operation == "move", do: "moving", else: "booking"} this time. OK?
       </p>
       <p class="mt-1 text-sm text-subtle">
         {Calendar.strftime(@item.starts_at, "%b %-d, %H:%M UTC")}

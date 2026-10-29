@@ -100,7 +100,9 @@ defmodule Platform.Calendar do
 
   def list_events(_, _, _, _), do: []
 
-  def list_entries(scope, from, to, opts \\ []) do
+  def list_entries(scope, from, to, opts \\ [])
+
+  def list_entries(%Scope{actor: %Accounts.User{}} = scope, from, to, opts) do
     native =
       Enum.map(
         list_events(scope, from, to),
@@ -147,6 +149,8 @@ defmodule Platform.Calendar do
     )
   end
 
+  def list_entries(_, _, _, _), do: []
+
   def rotate_feed(%Scope{actor: %Accounts.User{id: id}} = scope) do
     with :ok <- Access.authorize(scope, "calendar.read") do
       token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
@@ -187,7 +191,7 @@ defmodule Platform.Calendar do
 
   def feed_scope(_), do: {:error, :not_found}
 
-  def feed_events(scope) do
+  def feed_events(%Scope{actor: %Accounts.User{}} = scope) do
     if Access.can?(scope, "calendar.read") do
       visible_query(scope)
       |> order_by([e], asc: e.starts_at, asc: e.id)
@@ -197,6 +201,8 @@ defmodule Platform.Calendar do
       []
     end
   end
+
+  def feed_events(_), do: []
 
   def subscribe(%Scope{actor: %Accounts.User{id: id}}),
     do: Phoenix.PubSub.subscribe(Platform.PubSub, "calendar:#{id}")

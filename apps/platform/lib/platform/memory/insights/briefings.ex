@@ -290,7 +290,7 @@ defmodule Platform.Memory.Insights.Briefings do
           Platform.Memory.Insights.Disseminator.local_date(DateTime.utc_now())
         end)
 
-      expired?(briefing, today)
+      expired?(briefing, today) and not Platform.Calendar.AgentAccess.pending?(briefing)
     else
       _ -> false
     end
@@ -318,8 +318,8 @@ defmodule Platform.Memory.Insights.Briefings do
           is_binary(id) and Platform.UUID.valid?(id),
           do: id
 
-    ids != [] and
-      Repo.exists?(from(i in Insight, where: i.id in ^ids and i.state == "open"))
+    (ids != [] and Repo.exists?(from(i in Insight, where: i.id in ^ids and i.state == "open"))) or
+      Platform.Calendar.AgentAccess.pending?(briefing)
   end
 
   def open_item?(_briefing), do: false
@@ -351,7 +351,11 @@ defmodule Platform.Memory.Insights.Briefings do
   """
   @spec view(Briefing.t(), Scope.t()) :: map()
   def view(%Briefing{} = briefing, %Scope{} = scope) do
-    items = briefing.items || %{}
+    items =
+      Map.reject(briefing.items || %{}, fn {_key, value} ->
+        is_binary(value) and String.starts_with?(value, "calendar:")
+      end)
+
     receipts = briefing.receipts || %{}
     insights = load_insights(Map.values(items))
     settings = Settings.get()

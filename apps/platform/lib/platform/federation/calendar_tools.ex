@@ -11,7 +11,9 @@ defmodule Platform.Federation.CalendarTools do
         parameters: %{
           owner_id: %{type: "string", required: true},
           from: %{type: "string", required: true},
-          to: %{type: "string", required: true}
+          to: %{type: "string", required: true},
+          limit: %{type: "integer"},
+          offset: %{type: "integer"}
         }
       },
       %{
@@ -27,6 +29,21 @@ defmodule Platform.Federation.CalendarTools do
         }
       }
     ]
+    |> Enum.map(fn tool ->
+      Map.merge(tool, %{
+        returns:
+          if(tool.name == "calendar_list",
+            do:
+              "%{events, total, has_more}; total is the complete bounded-window count, with default limit50 and maximum100.",
+            else:
+              "%{id, state, inbox_url}; state is pending or approved according to owner policy."
+          ),
+        limitations:
+          "Authenticated active runtime, owner Calendar permission and live per-agent grant required. Private reads require read_private. Create/move require corresponding grant; booked, recurring and all-day moves are refused. Consent actions remain owner-only in Inbox.",
+        when_to_use:
+          "When the Calendar owner explicitly delegated reading or scheduling to this agent. Use a stable request_key to retry changes safely."
+      })
+    end)
   end
 
   def execute(tool, args, context) do
@@ -40,7 +57,18 @@ defmodule Platform.Federation.CalendarTools do
           with {:ok, first, _} <- DateTime.from_iso8601(args["from"] || ""),
                {:ok, last, _} <- DateTime.from_iso8601(args["to"] || ""),
                {:ok, events} <- AgentAccess.read(scope, args["owner_id"], first, last),
-               do: {:ok, %{events: events}}
+               limit = Map.get(args, "limit", 50),
+               offset = Map.get(args, "offset", 0),
+               true <-
+                 is_integer(limit) and limit in 1..100 and is_integer(offset) and offset >= 0 do
+            {:ok,
+             Platform.Federation.ResultBound.paged(
+               :events,
+               Enum.slice(events, offset, limit),
+               length(events),
+               offset
+             )}
+          end
 
         "calendar_propose" ->
           with {:ok, consent} <-

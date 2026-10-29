@@ -133,6 +133,7 @@ defmodule Platform.Federation.ToolSurface do
   # row; `memory_search`'s degraded path (`:partial_results`) is handled where
   # that path is built.
   @list_envelope_tools %{
+    "calendar_list" => :events,
     "file_list" => :files,
     "skill_list" => :skills,
     "review_item_list" => :items,

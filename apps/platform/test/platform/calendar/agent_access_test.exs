@@ -90,6 +90,11 @@ defmodule Platform.Calendar.AgentAccessTest do
              )
 
     assert [] =
+             Calendar.list_entries(ctx.scope, ~U[2026-11-01 00:00:00Z], ~U[2026-11-10 00:00:00Z])
+
+    assert [] = Calendar.feed_events(ctx.scope)
+
+    assert [] =
              Calendar.list_events(ctx.scope, ~U[2026-11-01 00:00:00Z], ~U[2026-11-10 00:00:00Z])
   end
 
@@ -131,6 +136,7 @@ defmodule Platform.Calendar.AgentAccessTest do
     grant(ctx)
     assert {:ok, c} = propose(ctx)
     assert Repo.get!(Event, c.hold_id).tentative
+    assert Calendar.Feed.render(ctx.owner) =~ "STATUS:TENTATIVE"
 
     assert {:ok, duplicate} =
              AgentAccess.propose(
@@ -148,9 +154,20 @@ defmodule Platform.Calendar.AgentAccessTest do
     view = Briefings.view(row(c), ctx.owner)
     assert [%{kind: :calendar, state: "pending"}] = view.needs_call
     assert view.counts.calls == 1
+    assert Briefings.view(row(c), Scope.for_user(%{id: ctx.owner.actor.id})).counts.calls == 1
+    assert Briefings.open_item?(row(c))
+    refute Briefings.inbox_row_stale?(c.briefing_id, today: Date.add(row(c).digest_date, 8))
     assert {:ok, approved} = Briefings.handle(row(c), key(c), "approve", ctx.owner)
     refute Repo.get!(Event, c.hold_id).tentative
     assert approved.receipts[key(c)]["verb"] == "approve"
+
+    assert Briefings.view(approved, ctx.owner).counts == %{
+             total: 1,
+             open: 0,
+             calls: 0,
+             handled: 1
+           }
+
     assert {:ok, _} = Briefings.handle(approved, key(c), "approve", ctx.owner)
     assert Repo.get!(Event, c.hold_id).sequence == 1
     assert {:ok, _} = Briefings.handle(row(c), key(c), "revert", ctx.owner)
@@ -280,5 +297,87 @@ defmodule Platform.Calendar.AgentAccessTest do
              )
 
     assert Repo.get!(Consent, c.id).state == "revoked"
+  end
+
+  test "invalid intent rolls back every durable reservation and Inbox write", ctx do
+    grant(ctx)
+
+    assert {:error, %Ecto.Changeset{}} =
+             AgentAccess.propose(
+               ctx.scope,
+               ctx.owner.actor.id,
+               "create",
+               attrs(%{ends_at: ~U[2026-11-05 09:00:00Z]}),
+               "invalid"
+             )
+
+    assert Repo.aggregate(Consent, :count) == 0
+    assert Repo.aggregate(Event, :count) == 0
+    assert Repo.get_by(Briefing, user_id: ctx.owner.actor.id) == nil
+  end
+
+  test "public-booked events cannot be moved behind their reservation buffers", ctx do
+    grant(ctx)
+    day = Date.add(Date.utc_today(), 7)
+
+    {:ok, link} =
+      Calendar.BookingLinks.create(ctx.owner, %{
+        title: "Public",
+        start_date: day,
+        end_date: day,
+        time_zone: "Etc/UTC",
+        duration_minutes: 30,
+        windows: [%{"weekday" => Date.day_of_week(day), "start" => "10:00", "end" => "11:00"}]
+      })
+
+    {:ok, [slot | _]} = Calendar.BookingLinks.slots(link.token, day)
+
+    {:ok, booking} =
+      Calendar.BookingLinks.book(
+        link.token,
+        %{"name" => "Guest", "starts_at" => DateTime.to_iso8601(slot.starts_at)},
+        "agent-booked"
+      )
+
+    assert {:error, :unsupported_move} =
+             AgentAccess.propose(
+               ctx.scope,
+               ctx.owner.actor.id,
+               "move",
+               %{
+                 starts_at: DateTime.add(slot.starts_at, 3600),
+                 ends_at: DateTime.add(slot.starts_at, 5400)
+               },
+               "move-booked",
+               booking.event_id
+             )
+
+    assert Repo.get!(Event, booking.event_id).starts_at == slot.starts_at
+    assert Repo.aggregate(Consent, :count) == 0
+  end
+
+  test "shared busy-only events do not expose private details through a read grant", ctx do
+    grant(ctx, %{read_private: false})
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Calendar privacy",
+        slug: "calendar-privacy-#{System.unique_integer([:positive])}",
+        org_id: Platform.Tenancy.get_org_by_slug!("globex").id
+      })
+
+    {:ok, _} =
+      Calendar.create_event(
+        ctx.owner,
+        attrs(%{project_id: project.id, visibility: "busy", description: "Private notes"})
+      )
+
+    assert {:ok, [%{title: "Busy", description: nil}]} =
+             AgentAccess.read(
+               ctx.scope,
+               ctx.owner.actor.id,
+               ~U[2026-11-01 00:00:00Z],
+               ~U[2026-11-10 00:00:00Z]
+             )
   end
 end
