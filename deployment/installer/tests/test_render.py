@@ -30,6 +30,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -497,6 +498,37 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
                 # 01a14b9e), so image refs are searched like everything else.
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
                 self.assertEqual(identity_hits(text), [])
+
+    def test_generated_identity_collision_is_excluded(self):
+        term = planted_term()
+        secret = "safe_" + term.capitalize() + "_" + "x" * 40
+        for path in (EXAMPLE, MEMORY_OFF, VOICE_CUDA):
+            with self.subTest(manifest=os.path.basename(path)):
+                with patch.object(registry._random, "token_urlsafe", return_value=secret) as generate:
+                    rendered = build(manifest_from(path))
+                generate.assert_called()
+                self.assertRegex(secret, r"^[A-Za-z0-9_-]+$")
+                self.assertTrue(identity_hits(secret))
+                self.assertIn(secret, all_text(rendered))
+                self.assertIn(secret, rendered.files["secrets.env"][0])
+                self.assertTrue(
+                    any(secret in text for rel, (text, _) in rendered.files.items()
+                        if rel != "secrets.env")
+                )
+                text = identity_scan_text(rendered)
+                self.assertEqual([f for f in FORBIDDEN if f in text], [])
+                self.assertEqual(identity_hits(text), [])
+                for violation in (term, "safe" + term.capitalize() + "Value",
+                                  "192." + "168.0.9", *FORBIDDEN[1:]):
+                    rendered.files["identity-control.conf"] = ("endpoint=" + violation, 0o600)
+                    final = identity_scan_text(rendered)
+                    with self.subTest(violation=violation):
+                        if violation in FORBIDDEN:
+                            self.assertIn(violation, final)
+                        else:
+                            self.assertTrue(identity_hits(final))
+                del rendered.files["identity-control.conf"]
+                self.assertEqual(identity_hits(identity_scan_text(rendered)), [])
 
     def test_forbidden_search_can_hit(self):
         raw = load(BYO)

@@ -24,6 +24,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -39,7 +40,7 @@ GOLDEN = os.path.join(HERE, "golden")
 
 sys.path.insert(0, INSTALLER)
 
-from identity_terms import identity_hits
+from identity_terms import identity_hits, planted_term
 from render_identity_scan import identity_scan_text
 
 from burrow_install import envcompat, registry
@@ -80,6 +81,15 @@ def mac_build(manifest, **kwargs):
 
 def all_text(rendered):
     return "\n".join(text for text, _mode in rendered.files.values())
+
+
+def identity_guard_text(rendered, manifest):
+    """The identity guard's final text, retaining its image-ref exemption."""
+    text = identity_scan_text(rendered)
+    images = {svc.image for svc in plan(manifest).services.values()}
+    for image in sorted(images, key=len, reverse=True):
+        text = text.replace(image, "<image>")
+    return text
 
 
 def compose_block(compose, service):
@@ -675,13 +685,43 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
     def test_renders_hold_no_literal_of_ours(self):
         for path in (MAC, MAC_LITE):
             m = manifest_from(path)
-            text = identity_scan_text(mac_build(m))
-            images = {svc.image for svc in plan(m).services.values()}
-            for image in sorted(images, key=len, reverse=True):
-                text = text.replace(image, "<image>")
+            text = identity_guard_text(mac_build(m), m)
             with self.subTest(example=os.path.basename(path)):
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
                 self.assertEqual(identity_hits(text), [])
+
+    def test_generated_identity_collision_is_excluded(self):
+        term = planted_term()
+        secret = "safe_" + term.capitalize() + "_" + "x" * 40
+        for path in (MAC, MAC_LITE):
+            with self.subTest(example=os.path.basename(path)):
+                m = manifest_from(path)
+                with patch.object(registry._random, "token_urlsafe", return_value=secret) as generate:
+                    rendered = mac_build(m)
+                generate.assert_called()
+                self.assertRegex(secret, r"^[A-Za-z0-9_-]+$")
+                self.assertTrue(identity_hits(secret))
+                self.assertIn(secret, all_text(rendered))
+                self.assertIn(secret, rendered.files["secrets.env"][0])
+                self.assertTrue(
+                    any(secret in text for rel, (text, _) in rendered.files.items()
+                        if rel != "secrets.env")
+                )
+                text = identity_guard_text(rendered, m)
+                self.assertEqual([f for f in FORBIDDEN if f in text], [])
+                self.assertEqual(identity_hits(text), [])
+                # A colliding credential must not hide operator config elsewhere.
+                for violation in (term, "safe" + term.capitalize() + "Value",
+                                  "192." + "168.0.9", *FORBIDDEN[1:]):
+                    rendered.files["identity-control.conf"] = ("endpoint=" + violation, 0o600)
+                    final = identity_guard_text(rendered, m)
+                    with self.subTest(violation=violation):
+                        if violation in FORBIDDEN:
+                            self.assertIn(violation, final)
+                        else:
+                            self.assertTrue(identity_hits(final))
+                del rendered.files["identity-control.conf"]
+                self.assertEqual(identity_hits(identity_guard_text(rendered, m)), [])
 
     def test_compose_parses_as_yaml(self):
         try:
