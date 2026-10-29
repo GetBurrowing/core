@@ -182,8 +182,8 @@ defmodule Platform.Meetings.Synthesis.Context do
             ref_kind = if kind == "task", do: :task, else: :canvas
 
             [
-              source(:meeting_briefing, b.meeting_id, item["title"], [b.meeting_id], true)
-              |> Map.put(:required_refs, [{ref_kind, id}])
+              source(ref_kind, id, item["title"], [b.meeting_id], true)
+              |> Map.put(:required_refs, [{:meeting_briefing, b.meeting_id}])
             ]
 
           _ ->
@@ -196,7 +196,7 @@ defmodule Platform.Meetings.Synthesis.Context do
         summary
         | Enum.map(
             entries,
-            &source(:meeting_briefing, b.meeting_id, &1["text"], [b.meeting_id], true)
+            &source(:meeting_candidate, &1["id"], &1["text"], [b.meeting_id], true)
           )
       ]
   end

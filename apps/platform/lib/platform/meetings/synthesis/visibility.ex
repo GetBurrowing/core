@@ -48,6 +48,16 @@ defmodule Platform.Meetings.Synthesis.Visibility do
     end
   end
 
+  defp readable?(user, scope, :meeting_candidate, id) do
+    case fetch(Platform.Meetings.MeetingCandidate, id) do
+      %{meeting_id: meeting_id, disposition: :accepted} ->
+        readable?(user, scope, :meeting_briefing, meeting_id)
+
+      _ ->
+        false
+    end
+  end
+
   defp readable?(user, scope, :meeting_briefing, meeting_id) do
     case MeetingBriefings.get_for_attendee(meeting_id, user.id) do
       %{meeting: meeting} ->

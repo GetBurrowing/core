@@ -79,12 +79,25 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
       )
     end
 
+    candidate =
+      Repo.insert!(%Platform.Meetings.MeetingCandidate{
+        meeting_id: meeting.id,
+        org_id: acme_org_id(),
+        disposition: :accepted,
+        classified_intent: "open_question",
+        evidence_quote: "Which checkout region?"
+      })
+
     Repo.insert!(
       MeetingBriefing.changeset(%MeetingBriefing{}, %{
         meeting_id: meeting.id,
         attendee_user_ids: Enum.map(users, & &1.id),
         summary: "Checkout release is Friday",
-        items: %{"_content" => %{"open_questions" => [%{"text" => "Which checkout region?"}]}}
+        items: %{
+          "_content" => %{
+            "open_questions" => [%{"id" => candidate.id, "text" => "Which checkout region?"}]
+          }
+        }
       })
     )
 
@@ -357,6 +370,16 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
              Context.gather(c.meeting, lookback_days: 7).sources,
              &(&1.text == task.title)
            )
+  end
+
+  test "accepted outcomes have their own citation identity and attendee gate", c do
+    context = Context.gather(c.meeting, lookback_days: 7)
+    question = Enum.find(context.sources, &(&1.text == "Which checkout region?"))
+    assert {:meeting_candidate, id} = question.ref
+    assert id != c.meeting.id
+    assert Visibility.readable_by?(c.allowed.id, question)
+    refute Visibility.readable_by?(c.denied.id, question)
+    assert Enum.any?(context.sources, &(&1.ref == {:meeting_briefing, c.meeting.id}))
   end
 
   test "unknown and malformed references fail closed", c do
