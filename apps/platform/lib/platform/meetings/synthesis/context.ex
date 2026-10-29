@@ -112,8 +112,7 @@ defmodule Platform.Meetings.Synthesis.Context do
     %{
       meeting_id: meeting.id,
       candidate_recipient_ids: recipients,
-      sources: filter_sources(sources, recipients),
-      meetings: meetings
+      sources: filter_sources(sources, recipients)
     }
   end
 

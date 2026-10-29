@@ -174,6 +174,7 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
 
     {:ok, _} = Grants.deny(%{principal: c.allowed, permission: "tasks.read", resource: c.project})
     result = Context.gather(c.meeting, lookback_days: 7)
+    refute Map.has_key?(result, :meetings)
     assert Enum.any?(result.sources, &(&1.ref == {:meeting_briefing, c.meeting.id}))
     refute Enum.any?(result.sources, &(&1.ref == {:task, task.id}))
 
