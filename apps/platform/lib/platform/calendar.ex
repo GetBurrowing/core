@@ -212,8 +212,6 @@ defmodule Platform.Calendar do
     end
   end
 
-  defp owned_event(_, _), do: {:error, :not_found}
-
   defp authorize_scope(scope, changeset) do
     space = Ecto.Changeset.get_field(changeset, :space_id)
     project = Ecto.Changeset.get_field(changeset, :project_id)

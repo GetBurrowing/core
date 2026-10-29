@@ -100,20 +100,37 @@ defmodule Platform.Calendar.AgentAccess do
           do: events,
           else: Enum.reject(events, &(is_nil(&1.space_id) and is_nil(&1.project_id)))
 
-      {:ok,
-       Enum.map(
-         events,
-         &Map.take(&1, [
-           :id,
-           :title,
-           :description,
-           :starts_at,
-           :ends_at,
-           :time_zone,
-           :tentative,
-           :sequence
-         ])
-       )}
+      events =
+        Enum.map(events, fn event ->
+          event =
+            if not grant.read_private and event.visibility == "busy",
+              do: %{event | title: "Busy", description: nil},
+              else: event
+
+          event
+          |> Map.take([
+            :id,
+            :title,
+            :description,
+            :starts_at,
+            :ends_at,
+            :time_zone,
+            :tentative,
+            :sequence
+          ])
+          |> Map.put(:kind, :event)
+        end)
+
+      overlays =
+        if grant.read_private do
+          Platform.Calendar.list_entries(owner_scope, from, to)
+          |> Enum.reject(&(&1.kind == :event))
+          |> Enum.map(&Map.take(&1, [:kind, :id, :title, :starts_at, :ends_at]))
+        else
+          []
+        end
+
+      {:ok, Enum.sort_by(events ++ overlays, & &1.starts_at, DateTime)}
     else
       _ -> {:error, :forbidden}
     end
@@ -340,8 +357,8 @@ defmodule Platform.Calendar.AgentAccess do
         from(e in Event, where: e.id == ^id and e.owner_id == ^owner_id, lock: "FOR UPDATE")
       ) || Repo.rollback(:not_found)
 
-    if event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
-         (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id)) or
+    if (event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
+          (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id))) or
          Repo.exists?(from(b in Booking, where: b.event_id == ^id)),
        do: Repo.rollback(:unsupported_move)
 
