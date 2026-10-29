@@ -22,13 +22,16 @@ defmodule Platform.Calendar.AgentAccess do
 
   def list(_), do: []
 
-  def agents(%Scope{actor: %Accounts.User{id: id}} = scope) do
+  def agents(%Scope{actor: %Accounts.User{}} = scope) do
     if Access.can?(scope, "calendar.write") do
       Repo.all(
-        from(r in AgentRuntime,
-          where: r.owner_user_id == ^id and r.status == "active" and not is_nil(r.agent_id),
-          select: %{id: r.agent_id, name: r.display_name},
-          distinct: true
+        from(a in Platform.Agents.Agent,
+          join: r in AgentRuntime,
+          on: r.agent_id == a.id,
+          where: a.status == "active" and r.status == "active",
+          select: %{id: a.id, name: a.name},
+          distinct: true,
+          order_by: a.name
         )
       )
     else
@@ -329,10 +332,11 @@ defmodule Platform.Calendar.AgentAccess do
 
   defp authority(%Scope{actor: %AgentRuntime{id: runtime_id}} = _scope, owner_id, permission) do
     with true <- Platform.UUID.valid?(owner_id),
-         %AgentRuntime{status: "active", agent_id: agent_id, owner_user_id: ^owner_id} = runtime <-
+         %AgentRuntime{status: "active", agent_id: agent_id} = runtime <-
            Repo.get(AgentRuntime, runtime_id),
          scope <- Scope.for_runtime(runtime),
          true <- is_binary(agent_id),
+         %Platform.Agents.Agent{status: "active"} <- Repo.get(Platform.Agents.Agent, agent_id),
          %AgentGrant{revoked_at: nil} = grant <-
            Repo.get_by(AgentGrant, owner_id: owner_id, agent_id: agent_id),
          true <- Map.get(grant, permission) == true,

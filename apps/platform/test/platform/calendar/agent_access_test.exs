@@ -416,4 +416,39 @@ defmodule Platform.Calendar.AgentAccessTest do
                %{runtime_id: ctx.runtime.runtime_id}
              )
   end
+
+  test "each Calendar owner may explicitly delegate the same active agent, independently of runtime ownership",
+       ctx do
+    grant(ctx)
+    other = Platform.ExternalUserFixtures.create_user!()
+
+    Platform.ExternalUserFixtures.plain_member!(
+      other,
+      Platform.Tenancy.get_org_by_slug!("globex")
+    )
+
+    other_scope = Scope.for_user(other)
+
+    assert {:error, :forbidden} =
+             AgentAccess.propose(ctx.scope, other.id, "create", attrs(), "second-owner")
+
+    assert {:ok, _} =
+             AgentAccess.grant(other_scope, ctx.agent.id, %{
+               read: true,
+               read_private: true,
+               create: true
+             })
+
+    assert {:ok, intent} =
+             AgentAccess.propose(ctx.scope, other.id, "create", attrs(), "second-owner")
+
+    assert Repo.get!(Event, intent.hold_id).owner_id == other.id
+    assert intent.agent_id == ctx.agent.id
+    assert {:ok, _} = AgentAccess.revoke(other_scope, ctx.agent.id)
+
+    assert {:error, :forbidden} =
+             AgentAccess.propose(ctx.scope, other.id, "create", attrs(), "second-after-revoke")
+
+    assert {:ok, _} = propose(ctx, "first-still-granted")
+  end
 end
