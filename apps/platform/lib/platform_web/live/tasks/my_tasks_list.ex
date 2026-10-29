@@ -176,6 +176,7 @@ defmodule PlatformWeb.Tasks.MyTasksList do
           class="flex min-h-14 items-start gap-3 rounded-box px-[18px] py-3 active:bg-base-100 focus-visible-ring"
         >
           <span
+            :if={task.status != "in_progress"}
             data-role="tasks-my-dot"
             class={["mt-1.5 size-2.5 shrink-0 rounded-full", StatusLabels.dot_class(task.status)]}
             aria-hidden="true"
@@ -190,8 +191,14 @@ defmodule PlatformWeb.Tasks.MyTasksList do
             >
               {task.title}
             </b>
+            <PlatformWeb.ExecutionStatus.line
+              :if={task.status == "in_progress"}
+              status={Map.get(task, :execution_activity)}
+            />
             <span class="flex min-w-0 gap-1 text-xs text-subtle">
-              <span class="shrink-0">{StatusLabels.status_sentence(task.status)}</span>
+              <span :if={task.status != "in_progress"} class="shrink-0">
+                {StatusLabels.status_sentence(task.status)}
+              </span>
               <%= if project = loaded_project(task) do %>
                 <span aria-hidden="true">·</span>
                 <span data-role="tasks-my-project" class="min-w-0 truncate">

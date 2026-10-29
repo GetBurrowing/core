@@ -14,7 +14,7 @@ defmodule PlatformWeb.ExecutionStatus do
       data-role="execution-status"
       data-state={@status.state}
       class={[
-        "execution-status inline-flex items-center gap-1.5 text-sm font-medium shrink-0 whitespace-nowrap",
+        "execution-status inline-flex min-w-0 max-w-full items-center gap-1.5 text-sm font-medium shrink-0 whitespace-nowrap",
         @class
       ]}
     >
@@ -27,11 +27,14 @@ defmodule PlatformWeb.ExecutionStatus do
         ]}
       >
       </span>
-      <span class={@status.state == :human && "execution-human-chip rounded px-1.5 py-0.5"}>
+      <span class={[
+        "min-w-0 truncate",
+        @status.state == :human && "execution-human-chip rounded px-1.5 py-0.5"
+      ]}>
         {@status.label}
       </span>
       <span
-        class="execution-utility text-xs text-subtle"
+        class="execution-utility shrink-0 text-xs text-subtle"
         title={iso(@status.activity_at || @status.blocked_at)}
       >
         · {time_copy(@status)}

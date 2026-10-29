@@ -80,6 +80,12 @@ defmodule PlatformWeb.ExecutionActivityTest do
   test "board and header expose hold; clock updates freshness without resetting detail", c do
     {:ok, view, _} = live(c.conn, "/tasks?task_id=#{c.task.id}")
     assert has_element?(view, "[data-role=execution-status][data-state=human]")
+
+    assert has_element?(
+             view,
+             "[data-role=tasks-my-row] [data-role=execution-status][data-state=human]"
+           )
+
     # Open through the actual navigation event, independent of URL filter aliases.
     render_click(view, "select_task", %{"id" => c.task.id})
     assert has_element?(view, "[data-role=execution-header][data-state=human]")
