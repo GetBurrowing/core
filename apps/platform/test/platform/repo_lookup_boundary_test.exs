@@ -544,6 +544,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a16974 stage 1: public `get/1` takes a finding id that later stages read from a briefing item's `finding:<id>` ref; it is guarded with Platform.UUID.valid?/1 and answers nil for a malformed id, the same as a missing row"},
     {"platform/meetings/synthesis_findings.ex", :platform_uuid_guard, "-", 4, :safe_internal,
      "task 01a16974 stage 1: `get/1`, `get_many/1` (filters ids parsed out of briefing items' `finding:<id>` refs), `list_for_meeting/1` and `lock/1` (the id parsed out of the clicked item's ref in MeetingBriefings.act/5) each check Platform.UUID.valid?/1 before any `where:`, answering nil / %{} / [] for a malformed id. Each guard is a BOOLEAN; the value is never rewritten"},
+    {"platform/meetings/synthesis/visibility.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a16974 stage 2: readable_by?/2 validates the typed citation id before its shared private fetch query; user ids go through Accounts.get_user/1"},
+    {"platform/meetings/synthesis/context.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a16974 stage 2: recipients_for/1 validates meeting ids from citation metadata before querying their attendee sets"},
     # ── Memory ─────────────────────────────────────────────────────────
     {"platform/memory/insights/briefings.ex", :get_by, "Briefing", 3, :safe_internal,
      "task 01a13867 stage 4: `get_by_canvas/1` looks up `canvas_id:` with the id of a canvas row the caller already loaded (canvas_hooks.ex `insight_card_action/5` passes the clicked `%Canvas{}.id` from `find/2`), behind this file's Platform.UUID.valid?/1 guard; the briefing's insight id is then read out of that row's `items`, never from the click Count 1 -> 3 at task 01a15ee1 stages 4-5: `for_user_on/2` (`user_id:` + `digest_date:`) and `get_for_user/2` (`id:` + `user_id:`) each check every id with Platform.UUID.valid?/1 before the lookup. The briefing id reaches `get_for_user/2` from an InboxLive event and the date from the `/inbox/briefing/:date` path, so these are the :must_cast end, and the guard keeps a malformed id a nil (the same as another person's row) rather than a CastError"},
@@ -1440,6 +1444,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # briefing item's `finding:<id>` ref, behind this file's
     # Platform.UUID.valid?/1 guard (nil for a malformed id).
     "platform/meetings/synthesis_findings.ex" => 1,
+    # Task 01a16974 stage 2: citation ids are UUID-guarded in readable_by?/2.
+    "platform/meetings/synthesis/visibility.ex" => 1,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
