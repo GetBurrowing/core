@@ -1,4 +1,12 @@
 defmodule Platform.Repo.Migrations.CreateCalendarBooking do
+  @moduledoc """
+  Adds owner-scoped public booking policies and idempotent reservation receipts.
+
+  Task 01a16991-b7ae-7000-923f-54cd0b8cd7f7, stage 4. The owner row lock
+  serializes reservations across links; persisted buffer bounds let a later
+  policy edit preserve the space reserved by an existing booking. Event and
+  meeting references reuse their established calendar and guest-invite paths.
+  """
   use Ecto.Migration
 
   def change do
