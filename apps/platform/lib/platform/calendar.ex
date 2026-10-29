@@ -94,7 +94,11 @@ defmodule Platform.Calendar do
     meetings =
       if Access.can?(scope, "calendar.read") and Access.can?(scope, "meetings.join") do
         Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to)
-        |> Enum.reject(&(&1.status == "cancelled"))
+        |> Enum.reject(fn meeting ->
+          meeting.status == "cancelled" and
+            (is_nil(meeting.cancelled_at) or
+               DateTime.diff(DateTime.utc_now(), meeting.cancelled_at) > 86_400)
+        end)
         |> Enum.map(
           &%{
             kind: :meeting,

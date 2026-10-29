@@ -1,0 +1,444 @@
+<div
+  class="flex h-full min-h-0 flex-col bg-base-200 text-base-content lg:bg-base-100"
+  data-page="calendar"
+>
+  <header class="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-3 lg:px-5">
+    <h1 class="mr-auto text-sm font-semibold">Calendar</h1>
+    <button id="calendar-today" phx-click="today" class="btn btn-ghost btn-sm min-h-11">
+      Today
+    </button>
+    <button
+      id="calendar-subscribe"
+      phx-click="subscribe"
+      class="btn btn-ghost btn-sm min-h-11"
+      aria-label="Subscribe to your calendar"
+    >
+      <.icon name="hero-rss" class="size-4" /><span class="hidden sm:inline">Subscribe</span>
+    </button>
+    <button id="calendar-new" phx-click="new" class="btn btn-primary btn-sm min-h-11">
+      <.icon name="hero-plus" class="size-4" /> New
+    </button>
+    <div class="flex w-full items-center gap-2">
+      <button
+        phx-click="navigate_date"
+        phx-value-direction="previous"
+        class="btn btn-ghost btn-sm min-h-11"
+        aria-label="Previous"
+      >
+        <.icon name="hero-chevron-left" class="size-4" />
+      </button>
+      <span class="min-w-0 flex-1 text-sm font-semibold">
+        {Calendar.strftime(@anchor, "%B %Y")}
+      </span>
+      <button
+        phx-click="navigate_date"
+        phx-value-direction="next"
+        class="btn btn-ghost btn-sm min-h-11"
+        aria-label="Next"
+      >
+        <.icon name="hero-chevron-right" class="size-4" />
+      </button>
+      <nav class="hidden gap-1 lg:flex" aria-label="Calendar view">
+        <.link
+          :for={view <- ~w(week month agenda)}
+          patch={~p"/calendar?#{%{view: view}}"}
+          class={[
+            "btn btn-sm min-h-11",
+            @view == view && "btn-neutral",
+            @view != view && "btn-ghost"
+          ]}
+          aria-current={@view == view && "page"}
+        >
+          {String.capitalize(view)}
+        </.link>
+      </nav>
+    </div>
+    <p class="w-full text-xs text-subtle">Times in {@zone}</p>
+  </header>
+
+  <div class="min-h-0 flex-1 overflow-auto p-3 lg:p-5">
+    <section
+      :if={@up_next}
+      class="mb-4 rounded-xl border border-edge bg-base-100 p-4 lg:bg-base-200"
+      data-role="calendar-up-next"
+    >
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <h2 class="text-xs font-semibold text-subtle">Up next</h2>
+        <span class="font-mono text-xs">{countdown(@up_next.starts_at)}</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <button
+          style={scope_style(@up_next)}
+          class="min-w-0 flex-1 border-l-[3px] border-primary pl-3 text-left"
+          phx-click="select"
+          phx-value-id={@up_next.id}
+          phx-value-kind={@up_next.kind}
+        >
+          <span class="flex items-center gap-2 text-[15px] font-semibold">
+            <.icon
+              :if={@up_next.kind == :meeting}
+              name="hero-video-camera"
+              class="size-4 shrink-0"
+            />{@up_next.title}
+          </span>
+          <span class="font-mono text-xs text-subtle">
+            {time_label(@up_next.starts_at, @zone)} · {scope_label(@up_next, @spaces, @projects)}
+          </span>
+        </button>
+        <.link
+          :if={joinable?(@up_next)}
+          navigate={~p"/meetings/#{@up_next.meeting.slug}"}
+          class="btn btn-primary min-h-11"
+        >
+          Join
+        </.link>
+      </div>
+    </section>
+
+    <div
+      :if={@entries == []}
+      class="rounded-xl border border-edge bg-base-100 p-5 text-center"
+      data-role="calendar-empty"
+    >
+      <p>Nothing scheduled this week.</p>
+      <button phx-click="new_event" class="btn btn-ghost mt-2 min-h-11">+ New event</button>
+    </div>
+
+    <section class={[@view != "agenda" && "lg:hidden"]} data-role="calendar-agenda">
+      <div class="mb-4 grid grid-cols-7 gap-1" aria-label="Week strip">
+        <span
+          :for={date <- Enum.take(@days, 7)}
+          class={[
+            "rounded-lg py-2 text-center text-xs",
+            date == @anchor && "bg-base-content text-base-100"
+          ]}
+        >
+          {Calendar.strftime(date, "%a")}<br />{date.day}
+        </span>
+      </div>
+      <section :for={date <- @days} class="mb-5">
+        <h2 class="mb-2 text-sm font-semibold">{date_label(date)}</h2>
+        <div :for={entry <- entries_on(@entries, date, @zone)} class="mb-2 flex items-start gap-2">
+          <span class="w-12 shrink-0 pt-3 font-mono text-xs">
+            {if entry.all_day, do: "all day", else: time_label(entry.starts_at, @zone)}
+          </span>
+          <button
+            id={"agenda-#{date}-#{entry.kind}-#{entry.id}"}
+            phx-click="select"
+            phx-value-kind={entry.kind}
+            phx-value-id={entry.id}
+            style={scope_style(entry)}
+            class="min-h-14 min-w-0 flex-1 rounded-lg border border-edge border-l-[3px] border-l-primary bg-base-100 p-3 text-left"
+          >
+            <span class="flex items-center gap-2 text-[15px]">
+              <.icon
+                :if={entry.kind == :meeting}
+                name="hero-video-camera"
+                class="size-4 shrink-0"
+              />
+              <span class={["line-clamp-2", cancelled?(entry) && "line-through"]}>
+                {entry.title}
+              </span>
+            </span>
+            <span class="text-xs text-subtle">{scope_label(entry, @spaces, @projects)}</span>
+          </button>
+        </div>
+      </section>
+    </section>
+
+    <section :if={@view == "week"} class="hidden lg:block" data-role="calendar-week">
+      <div class="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] overflow-hidden rounded-xl border border-edge">
+        <div class="border-b border-edge p-2 text-xs text-subtle">All day</div>
+        <div :for={date <- @days} class="min-w-0 border-b border-l border-edge p-2">
+          <h2 class="mb-2 text-xs font-semibold">{Calendar.strftime(date, "%a %-d")}</h2>
+          <button
+            :for={entry <- Enum.filter(entries_on(@entries, date, @zone), & &1.all_day)}
+            phx-click="select"
+            phx-value-kind={entry.kind}
+            phx-value-id={entry.id}
+            style={scope_style(entry)}
+            class="mb-1 block w-full truncate rounded border-l-[3px] border-primary bg-base-200 px-2 py-1 text-left text-xs"
+          >
+            {entry.title}
+          </button>
+        </div>
+        <div class="relative h-[72rem] bg-base-100">
+          <span
+            :for={hour <- 0..23}
+            style={"top: #{hour / 24 * 100}%;"}
+            class="absolute right-2 font-mono text-[10px] text-subtle"
+          >
+            {String.pad_leading(to_string(hour), 2, "0")}:00
+          </span>
+        </div>
+        <div
+          :for={date <- @days}
+          class="relative h-[72rem] min-w-0 border-l border-edge bg-base-100"
+        >
+          <div
+            :for={hour <- 0..23}
+            class="absolute inset-x-0 border-t border-edge"
+            style={"top: #{hour / 24 * 100}%;"}
+          >
+          </div>
+          <button
+            :for={{entry, position} <- day_blocks(@entries, date, @zone)}
+            id={"week-#{date}-#{entry.kind}-#{entry.id}"}
+            style={block_style(position) <> scope_style(entry)}
+            phx-click="select"
+            phx-value-kind={entry.kind}
+            phx-value-id={entry.id}
+            style={scope_style(entry)}
+            class="absolute z-10 overflow-hidden rounded-md border-l-[3px] border-primary bg-base-200 px-1.5 text-left"
+          >
+            <span class="block truncate font-mono text-[10px]">
+              {time_label(entry.starts_at, @zone)}
+            </span>
+            <span class="flex items-center gap-1 text-[15px]">
+              <.icon
+                :if={entry.kind == :meeting}
+                name="hero-video-camera"
+                class="size-3 shrink-0"
+              />
+              <span class={["truncate", cancelled?(entry) && "line-through"]}>
+                {entry.title}
+              </span>
+            </span>
+            <span class="block truncate text-[10px] text-subtle">
+              {scope_label(entry, @spaces, @projects)}
+            </span>
+          </button>
+          <div
+            :if={now_style(date, @zone)}
+            style={now_style(date, @zone)}
+            class="pointer-events-none absolute inset-x-0 z-20 border-t-2 border-base-content"
+            data-role="calendar-now"
+          >
+            <span class="absolute -left-1 -top-1 size-2 rounded-full bg-base-content"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section :if={@view == "month"} class="hidden lg:block" data-role="calendar-month">
+      <div class="grid grid-cols-7 overflow-hidden rounded-xl border border-edge">
+        <section
+          :for={date <- @days}
+          class="min-h-36 min-w-0 border-b border-r border-edge bg-base-100 p-2"
+        >
+          <h2 class="mb-3 text-xs font-semibold">{Calendar.strftime(date, "%a %-d")}</h2>
+          <button
+            :for={entry <- entries_on(@entries, date, @zone)}
+            id={"grid-#{date}-#{entry.kind}-#{entry.id}"}
+            phx-click="select"
+            phx-value-kind={entry.kind}
+            phx-value-id={entry.id}
+            style={scope_style(entry)}
+            class="mb-2 block w-full min-w-0 rounded-md border-l-[3px] border-primary bg-base-200 p-2 text-left"
+          >
+            <span class="block font-mono text-[11px]">
+              {if entry.all_day, do: "all day", else: time_label(entry.starts_at, @zone)}
+            </span>
+            <span class="flex items-center gap-1 text-[15px]">
+              <.icon
+                :if={entry.kind == :meeting}
+                name="hero-video-camera"
+                class="size-3 shrink-0"
+              />
+              <span class={["truncate", cancelled?(entry) && "line-through"]}>
+                {entry.title}
+              </span>
+            </span>
+            <span class="block truncate text-xs text-subtle">
+              {scope_label(entry, @spaces, @projects)}
+            </span>
+          </button>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <.sheet
+    id="calendar-sheet"
+    open={@sheet != nil}
+    on_close="close_sheet"
+    placement={:bottom}
+    handle_close
+    swipe_dismiss
+  >
+    <:title>Calendar</:title>
+    <div class="space-y-4">
+      <p :if={@error} role="alert" class="text-sm text-error">{@error}</p>
+      <%= case @sheet do %>
+        <% :choose -> %>
+          <h2 class="text-lg font-semibold">New</h2>
+          <button
+            id="calendar-create-event"
+            phx-click="new_event"
+            class="btn btn-outline w-full min-h-11"
+          >
+            Event
+          </button>
+          <.link
+            :if={Platform.Access.module_access?(@access_scope, :meetings)}
+            navigate={~p"/meetings?#{%{schedule: "true"}}"}
+            class="btn btn-outline w-full min-h-11"
+          >
+            Meeting
+          </.link>
+        <% :edit -> %>
+          <h2 class="text-lg font-semibold">
+            {if @selected.id, do: "Edit event", else: "New event"}
+          </h2>
+          <.form
+            for={@form}
+            id="calendar-event-form"
+            phx-submit="save"
+            phx-change="event_change"
+            class="space-y-3"
+          >
+            <.input field={@form[:title]} label="Title" required maxlength="300" />
+            <.input field={@form[:all_day]} type="checkbox" label="All day" />
+            <div :if={@form[:all_day].value not in [true, "true"]} class="grid grid-cols-2 gap-3">
+              <.input field={@form[:starts_at]} type="datetime-local" label="Start" /><.input
+                field={@form[:ends_at]}
+                type="datetime-local"
+                label="End"
+              />
+            </div>
+            <div :if={@form[:all_day].value in [true, "true"]} class="grid grid-cols-2 gap-3">
+              <.input field={@form[:start_date]} type="date" label="All-day start" /><.input
+                field={@form[:end_date]}
+                type="date"
+                label="All-day end"
+              />
+            </div>
+            <.input field={@form[:time_zone]} label="Time zone" required />
+            <.input
+              field={@form[:repeat]}
+              type="select"
+              label="Repeat"
+              options={[
+                {"Doesn't repeat", ""},
+                {"Daily", "FREQ=DAILY"},
+                {"Weekly", "FREQ=WEEKLY"},
+                {"Monthly", "FREQ=MONTHLY"},
+                {"Custom", "custom"}
+              ]}
+            />
+            <div
+              :if={@form[:repeat].value == "custom"}
+              class="space-y-3 rounded-lg border border-edge p-3"
+            >
+              <div class="grid grid-cols-2 gap-3">
+                <.input
+                  field={@form[:custom_interval]}
+                  type="number"
+                  label="Every"
+                  min="1"
+                  max="365"
+                /><.input
+                  field={@form[:custom_frequency]}
+                  type="select"
+                  label="Period"
+                  options={[{"Days", "DAILY"}, {"Weeks", "WEEKLY"}, {"Months", "MONTHLY"}]}
+                />
+              </div>
+              <.input field={@form[:custom_until]} type="date" label="Last date (optional)" />
+              <.input
+                field={@form[:custom_count]}
+                type="number"
+                min="1"
+                max="10000"
+                label="Number of events (optional)"
+              />
+            </div>
+            <.input
+              field={@form[:where]}
+              type="select"
+              label="Where"
+              options={where_options(@spaces, @projects)}
+            />
+            <p class="text-xs text-subtle">
+              {visibility_label(@form[:where].value, @spaces, @projects)}
+            </p>
+            <.input
+              field={@form[:visibility]}
+              type="select"
+              label="Shared visibility"
+              options={[{"Event details", "details"}, {"Busy only", "busy"}]}
+            />
+            <.input field={@form[:description]} type="textarea" label="Description" />
+            <button type="submit" class="btn btn-primary w-full min-h-11">Save event</button>
+          </.form>
+        <% :detail -> %>
+          <h2 class="text-lg font-semibold">{@selected.title}</h2>
+          <p :if={!@selected.all_day} class="font-mono text-sm">
+            {time_label(@selected.starts_at, @zone)}–{time_label(@selected.ends_at, @zone)}
+          </p>
+          <p :if={@selected.all_day} class="text-sm">
+            All day · {@selected.start_date}–{Date.add(@selected.end_date, -1)}
+          </p>
+          <p class="text-xs text-subtle">Created in {@selected.time_zone}</p>
+          <p class="whitespace-pre-wrap text-sm">{@selected.description}</p>
+          <div :if={@selected.owner_id == @current_user_record.id} class="flex gap-2">
+            <button phx-click="edit" class="btn min-h-11">Edit event</button><button
+              phx-click="delete"
+              data-confirm="Delete this event?"
+              class="btn btn-ghost min-h-11 text-error"
+            >Delete event</button>
+          </div>
+        <% :meeting -> %>
+          <h2 class="text-lg font-semibold">{@selected.title}</h2>
+          <p class="text-sm">Meetings edit where they live.</p>
+          <.link
+            navigate={~p"/meetings/#{@selected.meeting.slug}"}
+            class="btn btn-primary min-h-11"
+          >
+            Open in Meetings
+          </.link>
+        <% :subscribe -> %>
+          <h2 class="text-lg font-semibold">Subscribe to your calendar</h2>
+          <p class="text-sm">Shows every event you can see. Anyone with this link can read it.</p>
+          <%= if @feed_url do %>
+            <p class="font-mono text-sm">webcal://••••••••</p>
+            <button
+              id="calendar-copy-feed"
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={@feed_url}
+              class="btn min-h-11"
+            >
+              Copy link
+            </button>
+            <.link href={String.replace(@feed_url, ~r/^https?:/, "webcal:")} class="btn min-h-11">
+              Add to Apple Calendar
+            </.link>
+            <p class="text-sm">
+              Google and Outlook: paste the link under "Add calendar › From URL"
+            </p>
+          <% else %>
+            <p class="text-sm">
+              Create a new link to subscribe. Existing links stay active until you regenerate or revoke them.
+            </p>
+            <button phx-click="confirm_rotate" class="btn min-h-11">
+              Create subscription link
+            </button>
+          <% end %>
+          <button phx-click="confirm_rotate" class="btn btn-ghost min-h-11 text-error">
+            Regenerate link
+          </button>
+          <button phx-click="revoke_feed" class="btn btn-ghost min-h-11 text-error">
+            Revoke link
+          </button>
+          <div :if={@confirm_rotate} class="rounded-lg border border-edge p-3">
+            <p class="mb-3 text-sm">
+              The old link will stop working in every calendar app that uses it.
+            </p>
+            <button phx-click="rotate_feed" class="btn btn-primary min-h-11">
+              Confirm regeneration
+            </button>
+          </div>
+        <% _ -> %>
+      <% end %>
+    </div>
+  </.sheet>
+</div>

@@ -122,7 +122,7 @@ defmodule PlatformWeb.MeetingLiveGuestHostFlashTest do
   # The whole flow a host performs, ending in the click that calls
   # `invite_guest/2`. Returns the HTML rendered by that final click.
   defp submit_guest_invite(conn, meeting, address) do
-    {:ok, view, _html} = live(conn, ~p"/meetings")
+    {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
     view
     |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))

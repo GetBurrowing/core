@@ -457,13 +457,13 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       {:ok, archive_view, _html} = live(conn, ~p"/meetings?view=archive")
 
       assert has_element?(archive_view, "[data-region='meetings-archive']")
-      refute has_element?(archive_view, "[data-region='meetings-list']")
+      refute has_element?(archive_view, "[data-region='meetings-workspace']")
 
       # Both directions in the same run. A pane conditional that was always
       # true would pass either half of this on its own.
       {:ok, calendar_view, _html} = live(conn, ~p"/meetings")
 
-      assert has_element?(calendar_view, "[data-region='meetings-list']")
+      assert has_element?(calendar_view, "[data-region='meetings-workspace']")
       refute has_element?(calendar_view, "[data-region='meetings-archive']")
     end
 
@@ -473,7 +473,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       for path <- [~p"/meetings", ~p"/meetings?view=archive"] do
         {:ok, view, _html} = live(conn, path)
 
-        assert has_element?(view, "[data-role='meetings-view-toggle'] [data-view='calendar']")
+        assert has_element?(view, "[data-role='meetings-view-toggle'] [data-view='list']")
         assert has_element?(view, "[data-role='meetings-view-toggle'] [data-view='archive']")
       end
     end
@@ -489,7 +489,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       shelf_ids =
         PlatformWeb.MeetingLive.meetings_view_shelf() |> Enum.map(& &1.id)
 
-      assert shelf_ids == [:calendar, :archive]
+      assert shelf_ids == [:list, :archive]
 
       for id <- shelf_ids do
         assert has_element?(view, "[data-role='meetings-view-toggle'] [data-view='#{id}']")
@@ -514,7 +514,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       # inside its own segment, each announced by an aria-label.
       assert has_element?(
                view,
-               "[data-view='calendar'][aria-label='Calendar'] .hero-calendar-days"
+               "[data-view='list'][aria-label='Calendar'] .hero-calendar-days"
              )
 
       assert has_element?(
@@ -527,12 +527,12 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       {conn, _world} = archive_conn(conn)
 
       {:ok, calendar_view, _html} = live(conn, ~p"/meetings")
-      assert has_element?(calendar_view, "[data-view='calendar'][aria-current='page']")
+      assert has_element?(calendar_view, "[data-view='list'][aria-current='page']")
       refute has_element?(calendar_view, "[data-view='archive'][aria-current='page']")
 
       {:ok, archive_view, _html} = live(conn, ~p"/meetings?view=archive")
       assert has_element?(archive_view, "[data-view='archive'][aria-current='page']")
-      refute has_element?(archive_view, "[data-view='calendar'][aria-current='page']")
+      refute has_element?(archive_view, "[data-view='list'][aria-current='page']")
     end
 
     test "the search box pushes its query into the URL so a result set is linkable", %{conn: conn} do
