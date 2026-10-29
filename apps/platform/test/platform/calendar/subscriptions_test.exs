@@ -228,6 +228,18 @@ defmodule Platform.Calendar.SubscriptionsTest do
     assert {:error, _} =
              ICal.parse(feed("UID:floating\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000"))
 
+    old = event("\r\nSEQUENCE:1")
+
+    newer =
+      event("\r\nSEQUENCE:2") |> String.replace("External appointment", "Updated appointment")
+
+    multiple =
+      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <>
+        newer <>
+        "\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n" <> old <> "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+    assert {:ok, [%{"title" => "Updated appointment"}]} = ICal.parse(multiple)
+    assert {:error, _} = ICal.parse(String.replace(multiple, "SEQUENCE:1", "SEQUENCE:2"))
     assert {:error, _} = ICal.parse(feed(event("\r\nUID:duplicate")))
   end
 end

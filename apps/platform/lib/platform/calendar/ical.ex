@@ -22,7 +22,12 @@ defmodule Platform.Calendar.ICal do
       rows
       |> Enum.reduce(%{}, fn row, acc ->
         Map.update(acc, row["uid"], row, fn old ->
-          if row["sequence"] >= old["sequence"], do: row, else: old
+          cond do
+            row["sequence"] > old["sequence"] -> row
+            row["sequence"] < old["sequence"] -> old
+            row == old -> old
+            true -> raise ArgumentError, "ambiguous duplicate UID"
+          end
         end)
       end)
       |> Map.values()
