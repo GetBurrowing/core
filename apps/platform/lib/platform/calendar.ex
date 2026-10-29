@@ -272,8 +272,6 @@ defmodule Platform.Calendar do
     )
   end
 
-  defp visible_query(_), do: from(e in Event, where: false)
-
   # Preserve Calendar's membership-only project boundary, including for root
   # members, while composing the shared org predicate instead of copying it.
   defp member_projects_query(user_id) do

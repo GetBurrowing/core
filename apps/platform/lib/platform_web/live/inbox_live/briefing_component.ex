@@ -442,7 +442,11 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   defp open_card(%{item: %{kind: :calendar}} = assigns) do
     ~H"""
-    <article data-kind="calendar" class="rounded-xl border border-edge bg-base-100 p-4">
+    <article
+      data-kind="calendar"
+      data-consent-key={@item.key}
+      class="rounded-xl border border-edge bg-base-100 p-4"
+    >
       <p class="text-xs text-subtle">Calendar · Tentative</p>
       <h3 class="mt-2 font-semibold">{@item.title}</h3>
       <p class="mt-1 text-sm">
@@ -961,7 +965,11 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   defp done_card(%{item: %{kind: :calendar}} = assigns) do
     ~H"""
-    <article data-kind="calendar" class="rounded-xl border border-edge bg-base-100 p-4">
+    <article
+      data-kind="calendar"
+      data-consent-key={@item.key}
+      class="rounded-xl border border-edge bg-base-100 p-4"
+    >
       <h3 class="font-semibold">{@item.title}</h3>
       <p class="mt-2 text-sm text-subtle">
         {cond do

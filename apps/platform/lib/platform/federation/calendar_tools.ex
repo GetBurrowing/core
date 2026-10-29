@@ -54,8 +54,8 @@ defmodule Platform.Federation.CalendarTools do
 
       case tool do
         "calendar_list" ->
-          with {:ok, first, _} <- DateTime.from_iso8601(args["from"] || ""),
-               {:ok, last, _} <- DateTime.from_iso8601(args["to"] || ""),
+          with {:ok, first, _} <- instant(args["from"]),
+               {:ok, last, _} <- instant(args["to"]),
                {:ok, events} <- AgentAccess.read(scope, args["owner_id"], first, last),
                limit = Map.get(args, "limit", 50),
                offset = Map.get(args, "offset", 0),
@@ -91,4 +91,7 @@ defmodule Platform.Federation.CalendarTools do
       _ -> {:error, %{error: "Calendar grant denied or change unavailable", recoverable: false}}
     end
   end
+
+  defp instant(value) when is_binary(value), do: DateTime.from_iso8601(value)
+  defp instant(_), do: {:error, :invalid_date}
 end

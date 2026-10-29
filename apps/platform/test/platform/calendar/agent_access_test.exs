@@ -380,4 +380,39 @@ defmodule Platform.Calendar.AgentAccessTest do
                ~U[2026-11-10 00:00:00Z]
              )
   end
+
+  test "federation rejects malformed input and uses runtime identity over client agent ids",
+       ctx do
+    grant(ctx)
+
+    assert {:error, %{}} =
+             Platform.Federation.ToolSurface.execute(
+               "calendar_list",
+               %{"owner_id" => ctx.owner.actor.id, "from" => [], "to" => "2026-11-10T00:00:00Z"},
+               %{runtime_id: ctx.runtime.runtime_id, agent_id: Ecto.UUID.generate()}
+             )
+
+    assert {:ok, %{events: [], total: 0, has_more: false}} =
+             Platform.Federation.ToolSurface.execute(
+               "calendar_list",
+               %{
+                 "owner_id" => ctx.owner.actor.id,
+                 "from" => "2026-11-01T00:00:00Z",
+                 "to" => "2026-11-10T00:00:00Z"
+               },
+               %{runtime_id: ctx.runtime.runtime_id, agent_id: Ecto.UUID.generate()}
+             )
+
+    assert {:error, %{}} =
+             Platform.Federation.ToolSurface.execute(
+               "calendar_propose",
+               %{
+                 "owner_id" => ctx.owner.actor.id,
+                 "operation" => "create",
+                 "attributes" => [],
+                 "request_key" => "malformed"
+               },
+               %{runtime_id: ctx.runtime.runtime_id}
+             )
+  end
 end

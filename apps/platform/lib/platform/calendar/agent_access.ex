@@ -177,7 +177,10 @@ defmodule Platform.Calendar.AgentAccess do
               end
 
             hold = Platform.Calendar.create_event(owner_scope, event_attrs) |> unwrap()
-            hold = hold |> CS.change(tentative: true) |> Repo.update!()
+
+            hold =
+              hold |> CS.change(tentative: true, space_id: nil, project_id: nil) |> Repo.update!()
+
             briefing = briefing(owner_id)
 
             consent =
