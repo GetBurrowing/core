@@ -1055,6 +1055,10 @@ defmodule Platform.RepoLookupBoundaryTest do
   @repo_one_counts %{
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
+    # Subscription refresh locks by the UUID from a loaded owner-scoped row;
+    # the periodic worker selects one persisted row without caller-supplied ids.
+    "platform/calendar/subscriptions.ex" => 1,
+    "platform/calendar/refresh_worker.ex" => 1,
     "platform/orchestration/blocker_reassessment.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.

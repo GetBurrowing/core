@@ -1,8 +1,10 @@
 defmodule Platform.Calendar.ExternalFetch do
-  @moduledoc "HTTPS-only, DNS-pinned, bounded calendar fetches. Redirects are rejected."
+  @moduledoc "HTTPS-only, DNS-pinned, bounded calendar fetches. Up to two redirects are revalidated and pinned."
   alias Platform.Federation.Peers.{Client, PinnedAdapter}
   @max_bytes 1_048_576
-  def fetch(url) do
+  def fetch(url), do: fetch(url, 2)
+
+  defp fetch(url, redirects) do
     with {:ok, %{url: target, hostname: hostname}} <- pin(url),
          {:ok, response} <-
            Req.request(
@@ -28,11 +30,26 @@ defmodule Platform.Calendar.ExternalFetch do
              )
            ) do
       cond do
-        Req.Response.get_private(response, :peer_too_large) -> {:error, :too_large}
-        response.status != 200 -> {:error, :http_status}
-        not is_binary(response.body) -> {:error, :invalid_body}
-        byte_size(response.body) > @max_bytes -> {:error, :too_large}
-        true -> {:ok, response.body}
+        Req.Response.get_private(response, :peer_too_large) ->
+          {:error, :too_large}
+
+        response.status in [301, 302, 303, 307, 308] and redirects > 0 ->
+          case Req.Response.get_header(response, "location") do
+            [location] -> fetch(url |> URI.merge(location) |> URI.to_string(), redirects - 1)
+            _ -> {:error, :invalid_redirect}
+          end
+
+        response.status != 200 ->
+          {:error, :http_status}
+
+        not is_binary(response.body) ->
+          {:error, :invalid_body}
+
+        byte_size(response.body) > @max_bytes ->
+          {:error, :too_large}
+
+        true ->
+          {:ok, response.body}
       end
     else
       _ -> {:error, :fetch_failed}

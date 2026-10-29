@@ -52,6 +52,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
   defp stub(body, status \\ 200) do
     Req.Test.stub(ExternalFetch, fn conn ->
       assert conn.method == "GET"
+      assert conn.host == "93.184.216.34"
       Plug.Conn.send_resp(conn, status, body)
     end)
   end
@@ -129,7 +130,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
     assert {:error, :external_coverage_unknown} = Subscriptions.availability(owner, @from, @to)
   end
 
-  test "URL validation rejects private/mixed DNS and never follows redirects" do
+  test "URL validation rejects private/mixed DNS and revalidates bounded redirects" do
     for url <- [
           "http://calendar.example/feed",
           "https://127.0.0.1/feed",
@@ -155,6 +156,24 @@ defmodule Platform.Calendar.SubscriptionsTest do
       conn
       |> Plug.Conn.put_resp_header("location", "https://127.0.0.1/secrets")
       |> Plug.Conn.send_resp(302, "")
+    end)
+
+    assert {:error, :fetch_failed} = ExternalFetch.fetch("https://calendar.example/feed")
+
+    Req.Test.stub(ExternalFetch, fn conn ->
+      case conn.request_path do
+        "/feed" ->
+          conn |> Plug.Conn.put_resp_header("location", "/final") |> Plug.Conn.send_resp(302, "")
+
+        "/final" ->
+          Plug.Conn.send_resp(conn, 200, "calendar bytes")
+      end
+    end)
+
+    assert {:ok, "calendar bytes"} = ExternalFetch.fetch("https://calendar.example/feed")
+
+    Req.Test.stub(ExternalFetch, fn conn ->
+      conn |> Plug.Conn.put_resp_header("location", "/loop") |> Plug.Conn.send_resp(302, "")
     end)
 
     assert {:error, :http_status} = ExternalFetch.fetch("https://calendar.example/feed")

@@ -378,6 +378,9 @@ defmodule PlatformWeb.CalendarLive do
 
   def scope_label(%{kind: :meeting}, _, _), do: "Meeting"
 
+  def scope_label(%{kind: :external, subscription: name, stale: stale}, _, _),
+    do: name <> if(stale, do: " · Refresh required", else: " · Read-only")
+
   def scope_label(%{event: %{space_id: id}}, spaces, _) when not is_nil(id),
     do: "#" <> (Enum.find(spaces, &(&1.id == id)) || %{name: "Space"}).name
 

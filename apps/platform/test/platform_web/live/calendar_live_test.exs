@@ -220,4 +220,30 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert midnight_position.top == 0
     assert midnight_position.height > 0
   end
+
+  test "external calendars are owner-only and never render the bearer URL", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, view, _} = live(conn, "/calendar")
+    render_click(view, "subscribe")
+
+    view
+    |> form("#external-calendar-form",
+      subscription: %{
+        name: "My external calendar",
+        url: "https://calendar.example/private-secret"
+      }
+    )
+    |> render_submit()
+
+    [sub] = Calendar.Subscriptions.list(scope)
+    html = render(view)
+    assert html =~ "My external calendar"
+    assert html =~ "Availability unknown"
+    assert html =~ "Read-only"
+    refute html =~ "private-secret"
+    view |> element("#external-calendar-#{sub.id} button", "Remove") |> render_click()
+    assert [] == Calendar.Subscriptions.list(scope)
+  end
 end

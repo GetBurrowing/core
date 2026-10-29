@@ -93,7 +93,7 @@ defmodule Platform.Calendar.ICal do
              true <- DateTime.compare(first, last) == :lt,
              rule <- value(props["RRULE"]),
              {:ok, recurrence} <- Recurrence.parse(rule),
-             true <- supported_recurrence?(recurrence, zone),
+             true <- supported_recurrence?(recurrence, zone, first),
              {:ok, exceptions} <- exceptions(props["EXDATE"]),
              true <- props["STATUS"] in [nil, {[], "CONFIRMED"}, {[], "TENTATIVE"}],
              true <- props["TRANSP"] in [nil, {[], "OPAQUE"}, {[], "TRANSPARENT"}] do
@@ -121,12 +121,15 @@ defmodule Platform.Calendar.ICal do
     end
   end
 
-  defp supported_recurrence?(nil, _), do: true
+  defp supported_recurrence?(nil, _, _), do: true
 
-  defp supported_recurrence?(%{count: count}, "Etc/UTC") when is_integer(count) and count <= 1000,
-    do: true
+  # A conservative year bound keeps the native expansion inside Date's domain,
+  # including monthly rules that skip nonexistent days before counting.
+  defp supported_recurrence?(%{count: count, interval: interval}, "Etc/UTC", first)
+       when is_integer(count) and count <= 1000,
+       do: first.year + (count - 1) * interval <= 9999
 
-  defp supported_recurrence?(_, _), do: false
+  defp supported_recurrence?(_, _, _), do: false
   defp sequence(nil), do: 0
 
   defp sequence({[], value}) do
