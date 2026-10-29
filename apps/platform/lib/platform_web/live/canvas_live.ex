@@ -122,7 +122,8 @@ defmodule PlatformWeb.CanvasLive do
     viewer = viewer_actor(socket)
     # Extension kinds' events (e.g. a `game_stream` node's, task 01a0db5f
     # stage 4; ADR 0055). See the moduledoc's read-only section.
-    socket = Extensions.attach_live_hooks(socket)
+    socket =
+      socket |> PlatformWeb.Canvases.VersionHistory.attach() |> Extensions.attach_live_hooks()
 
     # `audit: false` on the connected mount — see the moduledoc. The
     # disconnected render already recorded this arrival.
@@ -146,6 +147,7 @@ defmodule PlatformWeb.CanvasLive do
          |> assign(:revision, CanvasDocument.revision(canvas.document))
          |> assign_provenance(canvas, space)
          |> assign_close_path(space, level)
+         |> PlatformWeb.Canvases.VersionHistory.refresh()
          |> PlatformWeb.Files.CanvasStarHooks.attach()
          |> PlatformWeb.Files.CanvasEngagement.attach()}
 
@@ -196,7 +198,11 @@ defmodule PlatformWeb.CanvasLive do
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
-  defdelegate on_access_changed(socket), to: PlatformWeb.Files.CanvasEngagement, as: :refresh
+  def on_access_changed(socket) do
+    socket
+    |> PlatformWeb.Files.CanvasEngagement.refresh()
+    |> PlatformWeb.Canvases.VersionHistory.refresh()
+  end
 
   # ── Denial context (stage 4) ──────────────────────────────────────────────
 

@@ -156,6 +156,18 @@
               revision={@canvas_star_version}
             />
 
+            <button
+              id="canvas-history-open"
+              type="button"
+              phx-click="canvas_history_open"
+              class="btn btn-ghost btn-xs order-3 shrink-0 text-base-content"
+              aria-controls="canvas-history-sheet"
+              aria-expanded={@history_open}
+            >
+              <.icon name="hero-clock" class="size-4" />
+              <span>History</span>
+            </button>
+
             <%!-- `--color-primary` on hover and active only, never as text on
                white. --%>
             <button
@@ -198,6 +210,14 @@
           </div>
         </header>
 
+        <PlatformWeb.Canvases.HistoryComponents.banner
+          preview={@history_preview}
+          can_restore={@history_can_restore}
+          error={@history_error}
+        />
+        <PlatformWeb.Canvases.HistoryComponents.panel rows={@history_rows} open={@history_open} />
+        <PlatformWeb.Canvases.HistoryComponents.confirmation confirm={@history_confirm} />
+
         <%!-- The document sits DIRECTLY on `--color-base-100`: no card, no grey
            backdrop. Card-on-grey reads as an embedded preview of something
            living elsewhere, which is the wrong message for a page whose job is
@@ -222,7 +242,19 @@
           class="canvas-inert mx-auto w-full max-w-[880px] px-4 py-8 sm:px-6"
           data-role="canvas-body"
         >
+          <div
+            :if={@history_preview}
+            id="canvas-historical-document"
+            inert
+            data-preview-revision={@history_preview.revision}
+          >
+            <PlatformWeb.Chat.CanvasRenderer.canvas_document
+              canvas={@history_preview.canvas}
+              dom_id_base={"canvas-history-#{@history_preview.revision}"}
+            />
+          </div>
           <PlatformWeb.Chat.CanvasRenderer.canvas_document
+            :if={!@history_preview}
             canvas={@canvas}
             dom_id_base="canvas-standalone"
           />
@@ -234,7 +266,7 @@
             class="mt-10 text-center font-mono text-xs text-neutral"
             data-role="canvas-revision-stamp"
           >
-            rev {@revision} · {@canvas.id}
+            rev {if @history_preview, do: @history_preview.revision, else: @revision} · {@canvas.id}
           </p>
         </article>
       </div>

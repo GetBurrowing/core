@@ -9359,3 +9359,20 @@ body.screen-share-fullscreen-active {
   .canvas-card-presence { transition: none !important; }
   .canvas-card-presence[data-leaving="true"] { animation: none !important; }
 }
+
+/* Rung 17 history: one state, phone sheet and desktop side panel. */
+@media (max-width: 1023px) {
+  #canvas-history-sheet.sheet-right .sheet-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 80dvh;
+    border-radius: var(--radius-box) var(--radius-box) 0 0;
+    transform: translateY(100%);
+  }
+  #canvas-history-sheet.sheet-right.sheet-open .sheet-panel {
+    transform: translateY(0);
+  }
+}
