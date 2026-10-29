@@ -6,7 +6,7 @@ function setup(href, kind = "path", attrs = {}) {
   const doc = {addEventListener: vi.fn((_, fn) => { click = fn }), removeEventListener: vi.fn()}
   const win = {location: {href: "https://app.example.test/chat/general", origin: "https://app.example.test", assign: vi.fn()}}
   const anchor = {getAttribute: key => key === "href" ? href : attrs[key], hasAttribute: key => key in attrs}
-  const event = {button: 0, target: {closest: selector => kind === "path" ? anchor : null}, preventDefault: vi.fn(), stopPropagation: vi.fn()}
+  const event = {button: 0, target: {closest: selector => selector === "a[href]" || kind === "path" ? anchor : null}, preventDefault: vi.fn(), stopPropagation: vi.fn()}
   const socket = {historyRedirect: vi.fn()}
   const remove = installInAppLinks(socket, doc, win)
   return {doc, win, socket, event, anchor, click: () => click(event), remove}
@@ -45,14 +45,22 @@ describe("shared in-app link delegation", () => {
     t.click()
     expect(t.win.location.assign).toHaveBeenCalledWith("/chat/attachments/abc")
   })
-  it("leaves blocked links, downloads, and secondary or handled clicks alone", () => {
+  it("leaves downloads and secondary or handled clicks alone", () => {
     for (const configure of [t => { t.event.button = 1 }, t => { t.event.defaultPrevented = true }]) {
       const t = setup("/tasks/abc"); configure(t); t.click()
       expect(t.event.preventDefault).not.toHaveBeenCalled()
     }
-    for (const t of [setup("#blocked"), setup("/files/abc", "path", {download: ""})]) {
+    for (const t of [setup("/files/abc", "path", {download: ""})]) {
       t.click(); expect(t.event.preventDefault).not.toHaveBeenCalled()
     }
+  })
+  it.each(["#blocked", "#blocked:alert(1)"])("prevents sanitized unsafe link %s from opening a tab", href => {
+    const t = setup(href, null, {target: "_blank"})
+    t.click()
+    expect(t.event.preventDefault).toHaveBeenCalledOnce()
+    expect(t.event.stopPropagation).toHaveBeenCalledOnce()
+    expect(t.socket.historyRedirect).not.toHaveBeenCalled()
+    expect(t.win.location.assign).not.toHaveBeenCalled()
   })
   it("installs one document listener and provides cleanup", () => {
     const t = setup("/tasks/abc")
