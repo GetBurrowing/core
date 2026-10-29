@@ -186,6 +186,56 @@ defmodule Platform.Social.ClipJobs do
     end
   end
 
+  @doc "Queues an appearance change against an exact immutable current render."
+  def enqueue_appearance(org_id, clip_id, user_id, attrs) do
+    attrs = normalize(attrs)
+
+    with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found} do
+      Repo.transaction(fn ->
+        clip =
+          Repo.one(
+            from(c in Clip, where: c.id == ^found.id and is_nil(c.removed_at), lock: "FOR UPDATE")
+          )
+
+        if is_nil(clip), do: Repo.rollback(:not_found)
+        profile = ok_or_rollback(human_profile(org_id, clip.profile_id, user_id))
+
+        base =
+          ok_or_rollback(ClipVersions.get(org_id, profile.id, clip.id, attrs["base_render_id"]))
+
+        if base.rev != clip.rev, do: Repo.rollback(:stale_version)
+
+        unless is_binary(base.file_id) && Platform.Files.get_file(base.file_id),
+          do: Repo.rollback(:version_unplayable)
+
+        requested = ok_or_rollback(validate_look(attrs["look"] || %{}))
+        look = ClipLook.effective(ClipLook.merge(base.look, requested))
+        ok_or_rollback(validate_look(look))
+        source = base.source || %{}
+        in_s = base.actual_start_s || base.trim_in_s || base.requested_start_s
+        out_s = base.actual_end_s || base.trim_out_s || base.requested_end_s
+
+        payload =
+          payload("rerender", profile, clip, look, in_s, out_s, nil, ClipVersions.next_rev(clip))
+          |> Map.merge(%{
+            "appearance" => true,
+            "base_render_id" => base.id,
+            "candidate_id" => base.candidate_id,
+            "title" => base.headline,
+            "caption" => base.caption,
+            "caption_fixes" => base.caption_fixes,
+            "episode" => source
+          })
+          # Always send an explicit style, even when it equals the show default:
+          # the CLI's saved process-time style otherwise takes precedence.
+          |> put_in(["clip_overrides", "mapped", "captions.style"], ClipLook.caption_style(look))
+
+        insert_job!(profile, clip, "rerender", payload, user_id)
+      end)
+      |> notify_job()
+    end
+  end
+
   defp maybe_headline(payload, %{"headline" => headline}),
     do: payload |> Map.put("headline", headline) |> Map.delete("fix")
 
@@ -756,7 +806,7 @@ defmodule Platform.Social.ClipJobs do
       if platforms, do: Map.put(render_attrs, "platforms", platforms), else: render_attrs
 
     effective_result =
-      if payload["fix"] || payload["headline"],
+      if payload["fix"] || payload["headline"] || payload["appearance"],
         do:
           Map.merge(
             Map.take(payload, ~w(title caption)),

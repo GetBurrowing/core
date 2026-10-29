@@ -95,6 +95,7 @@ defmodule PlatformWeb.SocialClipsReview do
        selected_render: nil,
        headline_attempt: nil,
        headline_error: nil,
+       appearance_dirty: false,
        jobs_timer?: false
      )}
   end
@@ -102,6 +103,14 @@ defmodule PlatformWeb.SocialClipsReview do
   @impl true
   def update(%{clip_event: %Clip{} = clip}, socket),
     do: {:ok, socket |> clip_event(clip) |> schedule_jobs_refresh()}
+
+  def update(%{appearance_clip_id: id, appearance_dirty: dirty}, socket) do
+    {:ok,
+     if(socket.assigns.clip && socket.assigns.clip.id == id,
+       do: assign(socket, :appearance_dirty, dirty),
+       else: socket
+     )}
+  end
 
   # Timers this component scheduled for itself with send_update_after/4.
   # None of them decides, commits or publishes anything.
@@ -274,7 +283,7 @@ defmodule PlatformWeb.SocialClipsReview do
   def handle_event("approve", %{"id" => id, "render_id" => render_id}, socket) do
     socket = authorize(socket)
 
-    with true <- socket.assigns.can_decide?,
+    with true <- socket.assigns.can_decide? and not socket.assigns.appearance_dirty,
          %{profile: profile, user_id: user_id} = socket.assigns,
          {:ok, %Clip{} = clip} <- ClipReviewFeed.fetch_clip(profile.org_id, profile.id, id),
          [_ | _] = accounts <- ticked_accounts(profile, clip),
@@ -561,7 +570,13 @@ defmodule PlatformWeb.SocialClipsReview do
 
   defp select_clip(socket, %Clip{} = clip) do
     socket
-    |> assign(clip: clip, selected_id: clip.id, editing_title?: false, note: "")
+    |> assign(
+      clip: clip,
+      selected_id: clip.id,
+      editing_title?: false,
+      note: "",
+      appearance_dirty: false
+    )
     |> assign(:byline, ClipReviewFeed.byline(socket.assigns.profile.org_id, clip))
     |> assign(:headline_error, nil)
     |> headline_state()
@@ -732,6 +747,9 @@ defmodule PlatformWeb.SocialClipsReview do
             <.details
               clip={@clip}
               profile={@profile}
+              appearance_jobs={@jobs}
+              review_id={@id}
+              appearance_dirty={@appearance_dirty}
               user_id={@user_id}
               byline={@byline}
               accounts={@accounts}
@@ -753,6 +771,7 @@ defmodule PlatformWeb.SocialClipsReview do
         <.pbar
           :if={@view == "review" and @can_decide? and @clip != nil}
           render_id={render_id(@clip)}
+          appearance_dirty={@appearance_dirty}
           clip={@clip}
           note={@note}
           ticked={@ticked}
@@ -1205,6 +1224,9 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :selected_render, :any, default: nil
   attr :headline_attempt, :any, default: nil
   attr :headline_error, :any, default: nil
+  attr :review_id, :string, required: true
+  attr :appearance_dirty, :boolean, default: false
+  attr :appearance_jobs, :list, default: []
 
   attr :profile, :any, required: true
   attr :user_id, :any, required: true
@@ -1320,6 +1342,16 @@ defmodule PlatformWeb.SocialClipsReview do
             </button>
           </div>
         </div>
+
+        <.live_component
+          module={PlatformWeb.SocialClipAppearance}
+          id={"appearance-#{@clip.id}"}
+          refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}
+          review_id={@review_id}
+          clip={@clip}
+          profile={@profile}
+          user_id={@user_id}
+        />
 
         <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
           <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
@@ -1462,6 +1494,7 @@ defmodule PlatformWeb.SocialClipsReview do
         note={@note}
         ticked={@ticked}
         render_id={render_id(@clip)}
+        appearance_dirty={@appearance_dirty}
         why_line={why_line(@ticked)}
         myself={@myself}
       />

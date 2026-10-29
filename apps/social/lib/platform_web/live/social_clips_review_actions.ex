@@ -10,6 +10,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
   attr :ticked, :list, required: true
   attr :myself, :any, required: true
   attr :render_id, :any, required: true
+  attr :appearance_dirty, :boolean, default: false
 
   def pbar(assigns) do
     assigns = assign(assigns, :blank?, String.trim(assigns.note) == "")
@@ -42,7 +43,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
       <button
         type="button"
         class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
-        disabled={@ticked == []}
+        disabled={@ticked == [] or @appearance_dirty}
         phx-click="approve"
         phx-value-render_id={@render_id}
         phx-value-id={@clip.id}
@@ -60,6 +61,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
   attr :ticked, :list, required: true
   attr :myself, :any, required: true
   attr :render_id, :any, required: true
+  attr :appearance_dirty, :boolean, default: false
   attr :why_line, :string, required: true
 
   def decision_bar(assigns) do
@@ -86,7 +88,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
         <button
           type="button"
           class="btn btn-primary flex-1 rounded-full"
-          disabled={@ticked == []}
+          disabled={@ticked == [] or @appearance_dirty}
           phx-click="approve"
           phx-value-render_id={@render_id}
           phx-value-id={@clip.id}

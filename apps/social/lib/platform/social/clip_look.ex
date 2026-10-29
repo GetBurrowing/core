@@ -25,7 +25,8 @@ defmodule Platform.Social.ClipLook do
 
   | studio key    | clip profile key | translation |
   |---------------|------------------|-------------|
-  | cap.preset    | captions.preset | same values |
+  | cap.preset    | captions.preset | same values (legacy visual presets) |
+  | cap.style     | captions.style | plain, phrase-pop or karaoke; an explicit finalize --captions overrides saved process-time style |
   | cap.font      | captions.font | Anton -> Anton-Regular.ttf; Inter SemiBold -> Inter-SemiBold.ttf. PARTIAL: Inter Black and Georgia Bold are not bundled (fonts/ holds only Anton-Regular and Inter-SemiBold), so they go in unmapped |
   | cap.size      | captions.size_frac | size / 100 (5.8 -> 0.058, the HTC value) |
   | cap.color     | captions.primary_color | hex |
@@ -45,6 +46,7 @@ defmodule Platform.Social.ClipLook do
   """
 
   @presets ~w(bold-pop podcast-clean speaker-color)
+  @styles ~w(plain phrase-pop karaoke)
   @fonts ["Anton", "Inter Black", "Inter SemiBold", "Georgia Bold"]
   @reframes ~w(shots splits fit)
 
@@ -86,6 +88,11 @@ defmodule Platform.Social.ClipLook do
   @spec presets() :: [String.t()]
   def presets, do: @presets
 
+  @doc "Renderer-supported caption styles; independent of legacy visual presets."
+  def styles, do: @styles
+
+  def caption_style(look), do: get_in(look || %{}, ["cap", "style"]) || "phrase-pop"
+
   @doc "Accepted fonts (caption and title)."
   @spec fonts() :: [String.t()]
   def fonts, do: @fonts
@@ -126,6 +133,9 @@ defmodule Platform.Social.ClipLook do
 
   defp cap_error("preset", v),
     do: unless(v in @presets, do: "preset must be one of #{list(@presets)}")
+
+  defp cap_error("style", v),
+    do: unless(v in @styles, do: "style must be one of #{list(@styles)}")
 
   defp cap_error("font", v), do: font_error(v)
 
@@ -238,6 +248,8 @@ defmodule Platform.Social.ClipLook do
       {k, v} -> [{Enum.join(prefix ++ [k], "."), v}]
     end)
   end
+
+  defp translate("cap.style", v), do: {:mapped, [{"captions.style", v}]}
 
   defp translate("cap.preset", v), do: {:mapped, [{"captions.preset", v}]}
 

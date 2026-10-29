@@ -1080,6 +1080,7 @@ defmodule Platform.Social.Tools do
         :attempts,
         :rendered_at
       ])
+      |> Map.put(:next_rev, Platform.Social.ClipVersions.next_rev(c))
 
   defp job_json(%ClipJob{} = j),
     do:
