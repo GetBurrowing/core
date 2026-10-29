@@ -1,5 +1,6 @@
 defmodule Platform.Meetings.Synthesis.PassTest do
   use Platform.DataCase, async: false
+  import Ecto.Query
   import Platform.TenancyFixtures
   alias Platform.{Repo, Meetings, Tasks}
 
@@ -240,6 +241,59 @@ defmodule Platform.Meetings.Synthesis.PassTest do
     f = Repo.get!(Platform.Meetings.SynthesisFinding, f.id)
     Repo.update!(Ecto.Changeset.change(f, receipt: %{"verb" => "dismissed"}))
     assert {:ok, %{value: 0.0, n: 1}} = metric.compute(experiment.id, "control")
+  end
+
+  test "project-scoped experiment chooses a sticky meeting model", %{a: {a, r}} do
+    {:ok, experiment} =
+      Platform.Experiments.create_experiment(%{
+        slug: "meeting-arm-#{System.unique_integer([:positive])}",
+        name: "Meeting model",
+        project_id: a.project_id,
+        surface_key: "meetings.brief_synthesis",
+        surface_target: "meetings.brief_synthesis"
+      })
+
+    {:ok, _} =
+      Platform.Experiments.add_variant(experiment, %{
+        slug: "treatment",
+        weight: 1,
+        payload: %{"provider" => "openai", "model" => "scoped-model"}
+      })
+
+    {:ok, running} = Platform.Experiments.start(experiment, root_admin!())
+
+    Repo.update_all(
+      from(v in Platform.Experiments.Variant,
+        where: v.experiment_id == ^running.id and v.slug == "control"
+      ), set: [weight: 0])
+
+    assert {:ok, [_]} = Synthesis.run(a.id, r.id, r.snapshot_hash)
+    assert_receive {:provider, _, opts}
+    assert opts[:model] == "scoped-model"
+
+    assert [%{subject_type: "meeting", subject_id: id}] =
+             Repo.all(
+               from(x in Platform.Experiments.Assignment, where: x.experiment_id == ^running.id)
+             )
+
+    assert id == a.id
+  end
+
+  test "org-promoted default reaches the native provider", %{a: {a, r}} do
+    Repo.insert!(
+      Platform.Experiments.SurfaceDefault.changeset(%Platform.Experiments.SurfaceDefault{}, %{
+        surface_key: "meetings.brief_synthesis",
+        surface_target: "meetings.brief_synthesis",
+        org_id: acme_org_id(),
+        seq: 1,
+        kind: "promote",
+        payload: %{"provider" => "openai", "model" => "org-default-model"}
+      })
+    )
+
+    assert {:ok, [_]} = Synthesis.run(a.id, r.id, r.snapshot_hash)
+    assert_receive {:provider, _, opts}
+    assert opts[:model] == "org-default-model"
   end
 
   test "a conflict can have an independent task side, but two citations from one meeting are one side" do

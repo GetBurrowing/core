@@ -82,7 +82,9 @@ defmodule Platform.Meetings.Synthesis do
     with true <- cfg.provider != :none,
          {:ok, control} <- Surface.control_payload(@key, []),
          %Meeting{} = meeting <- Repo.one(from(m in Meeting, where: m.id == ^meeting_id)),
-         payload <- arm(meeting_id, control),
+         project <-
+           Repo.one!(from(p in Platform.Tasks.Project, where: p.id == ^meeting.project_id)),
+         payload <- arm(meeting, project, control),
          {:ok, _, _} <- Platform.Meetings.MeetingBriefings.build(meeting),
          context <- Context.gather(meeting, lookback_days: payload["lookback_days"]),
          sources <- Enum.take(context.sources, payload["max_sources"]),
@@ -101,8 +103,11 @@ defmodule Platform.Meetings.Synthesis do
     end
   end
 
-  defp arm(id, control) do
-    case Surfaces.resolve(@key, @key, Subject.new("meeting", id, %{})) do
+  defp arm(meeting, project, control) do
+    subject =
+      Subject.new("meeting", meeting.id, %{org_id: project.org_id, project_id: project.id})
+
+    case Surfaces.resolve(@key, @key, subject, org_id: project.org_id) do
       {:variant, _experiment, _slug, payload} -> Map.merge(control, payload)
       {:default, payload} -> Map.merge(control, payload)
       :none -> control
