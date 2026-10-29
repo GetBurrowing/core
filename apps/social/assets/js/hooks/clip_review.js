@@ -111,6 +111,13 @@ const ClipReview = {
       window.history.replaceState(window.history.state, "", url)
     })
 
+    this.handleEvent("clips:focus", ({ clip }) => {
+      requestAnimationFrame(() => {
+        const row = this.el.querySelector(`[data-role="clips-queue-item"][phx-value-id="${clip}"]`)
+        row?.focus()
+      })
+    })
+
     this.sync()
     this.tickToast()
     this.onLayout()
@@ -162,7 +169,7 @@ const ClipReview = {
   },
 
   key(e) {
-    if (!this.active()) return
+    if (!this.active() || this.el.querySelector('[data-role="clip-delete-dialog"]')) return
     const action = keyAction(e.key, e.target, e)
     if (!action) return
     e.preventDefault()

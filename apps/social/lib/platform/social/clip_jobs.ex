@@ -138,7 +138,12 @@ defmodule Platform.Social.ClipJobs do
     with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found},
          {:ok, profile} <- human_profile(org_id, found.profile_id, user_id) do
       Repo.transaction(fn ->
-        clip = Repo.one!(from(c in Clip, where: c.id == ^found.id, lock: "FOR UPDATE"))
+        clip =
+          Repo.one(
+            from(c in Clip, where: c.id == ^found.id and is_nil(c.removed_at), lock: "FOR UPDATE")
+          )
+
+        if is_nil(clip), do: Repo.rollback(:not_found)
 
         base =
           ok_or_rollback(ClipVersions.get(org_id, profile.id, clip.id, attrs["base_render_id"]))
@@ -152,7 +157,16 @@ defmodule Platform.Social.ClipJobs do
         look = ClipLook.effective(base.look)
 
         payload =
-          payload("rerender", profile, clip, look, fix["in_s"], fix["out_s"], nil, clip.rev + 1)
+          payload(
+            "rerender",
+            profile,
+            clip,
+            look,
+            fix["in_s"],
+            fix["out_s"],
+            nil,
+            ClipVersions.next_rev(clip)
+          )
           |> Map.merge(%{
             "base_render_id" => base.id,
             "candidate_id" => base.candidate_id,
@@ -248,30 +262,53 @@ defmodule Platform.Social.ClipJobs do
   def enqueue_rerender(org_id, clip_id, user_id, attrs) do
     attrs = normalize(attrs)
 
-    with %Clip{} = clip <- Social.get_clip(org_id, clip_id) || {:error, :not_found},
-         {:ok, profile} <- human_profile(org_id, clip.profile_id, user_id),
-         {:ok, requested} <- validate_look(attrs["look"] || %{}),
-         look = ClipLook.effective(ClipLook.merge(clip.look, requested)),
-         {:ok, look} <- validate_look(look),
-         in_s = number_or(attrs["trim_in_s"], clip.trim_in_s || clip.requested_start_s),
-         out_s = number_or(attrs["trim_out_s"], clip.trim_out_s || clip.requested_end_s),
-         :ok <- check_optional_range(in_s, out_s) do
-      note = if clip.review_status == "rejected", do: clip.review_note
-      payload = payload("rerender", profile, clip, look, in_s, out_s, note, clip.rev + 1)
+    with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found} do
+      Repo.transaction(fn ->
+        clip =
+          Repo.one(
+            from(c in Clip, where: c.id == ^found.id and is_nil(c.removed_at), lock: "FOR UPDATE")
+          )
 
-      %ClipJob{}
-      |> ClipJob.enqueue_changeset(%{
-        profile_id: profile.id,
-        clip_id: clip.id,
-        kind: "rerender",
-        payload: payload,
-        requested_by_user_id: user_id
-      })
-      |> Repo.insert()
-      |> case do
-        {:ok, job} -> {:ok, job}
-        {:error, changeset} -> {:error, in_flight_or(changeset)}
-      end
+        if is_nil(clip), do: Repo.rollback(:not_found)
+
+        with {:ok, profile} <- human_profile(org_id, clip.profile_id, user_id),
+             {:ok, requested} <- validate_look(attrs["look"] || %{}),
+             look = ClipLook.effective(ClipLook.merge(clip.look, requested)),
+             {:ok, look} <- validate_look(look),
+             in_s = number_or(attrs["trim_in_s"], clip.trim_in_s || clip.requested_start_s),
+             out_s = number_or(attrs["trim_out_s"], clip.trim_out_s || clip.requested_end_s),
+             :ok <- check_optional_range(in_s, out_s) do
+          note = if clip.review_status == "rejected", do: clip.review_note
+
+          payload =
+            payload(
+              "rerender",
+              profile,
+              clip,
+              look,
+              in_s,
+              out_s,
+              note,
+              ClipVersions.next_rev(clip)
+            )
+
+          %ClipJob{}
+          |> ClipJob.enqueue_changeset(%{
+            profile_id: profile.id,
+            clip_id: clip.id,
+            kind: "rerender",
+            payload: payload,
+            requested_by_user_id: user_id
+          })
+          |> Repo.insert()
+          |> case do
+            {:ok, job} -> job
+            {:error, changeset} -> Repo.rollback(in_flight_or(changeset))
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
     end
   end
 
@@ -692,7 +729,7 @@ defmodule Platform.Social.ClipJobs do
     platforms = ok_or_rollback(check_platforms(result, profile))
 
     clip =
-      from(c in Clip, where: c.id == ^job.clip_id, lock: "FOR UPDATE")
+      from(c in Clip, where: c.id == ^job.clip_id and is_nil(c.removed_at), lock: "FOR UPDATE")
       |> Repo.one()
       |> case do
         nil -> Repo.rollback(:not_found)
@@ -701,7 +738,7 @@ defmodule Platform.Social.ClipJobs do
 
     payload = job.payload || %{}
 
-    if payload["base_render_id"] && payload["expected_rev"] != clip.rev + 1,
+    if payload["base_render_id"] && payload["expected_rev"] != ClipVersions.next_rev(clip),
       do: Repo.rollback(:stale_version)
 
     look = payload["look"] || clip.look

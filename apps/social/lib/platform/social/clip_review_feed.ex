@@ -59,7 +59,7 @@ defmodule Platform.Social.ClipReviewFeed do
   defp queue_query(%Profile{id: profile_id}) do
     from(c in Clip,
       where:
-        c.profile_id == ^profile_id and c.review_status == "pending" and
+        c.profile_id == ^profile_id and is_nil(c.removed_at) and c.review_status == "pending" and
           not is_nil(c.render_file_id),
       order_by: [asc: c.inserted_at, asc: c.id]
     )

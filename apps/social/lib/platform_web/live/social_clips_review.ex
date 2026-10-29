@@ -406,7 +406,7 @@ defmodule PlatformWeb.SocialClipsReview do
         if selected && selected.id == clip_id do
           case Enum.at(rest, min(i, length(rest) - 1)) do
             %Clip{} = next when rest != [] ->
-              select_clip(socket, next)
+              select_clip(socket, next) |> push_event("clips:focus", %{clip: next.id})
 
             _ ->
               socket
@@ -581,8 +581,9 @@ defmodule PlatformWeb.SocialClipsReview do
     )
   end
 
-  defp reviewable?(%Clip{review_status: "pending", render_file_id: id}) when not is_nil(id),
-    do: true
+  defp reviewable?(%Clip{review_status: "pending", render_file_id: id, removed_at: nil})
+       when not is_nil(id),
+       do: true
 
   defp reviewable?(_), do: false
 
@@ -730,6 +731,8 @@ defmodule PlatformWeb.SocialClipsReview do
             />
             <.details
               clip={@clip}
+              profile={@profile}
+              user_id={@user_id}
               byline={@byline}
               accounts={@accounts}
               ticked={@ticked}
@@ -1203,6 +1206,9 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :headline_attempt, :any, default: nil
   attr :headline_error, :any, default: nil
 
+  attr :profile, :any, required: true
+  attr :user_id, :any, required: true
+
   defp details(assigns) do
     assigns =
       assigns
@@ -1226,6 +1232,13 @@ defmodule PlatformWeb.SocialClipsReview do
         tabindex="0"
         aria-label="Clip details"
       >
+        <.live_component
+          module={PlatformWeb.SocialClipRemoval}
+          id={"review-remove-#{@clip.id}"}
+          clip={@clip}
+          profile={@profile}
+          user_id={@user_id}
+        />
         <div>
           <form
             :if={@editing_title?}
