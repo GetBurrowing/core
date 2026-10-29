@@ -56,7 +56,9 @@ defmodule Platform.Meetings.Synthesis.Parser do
             confidence: attrs["confidence"],
             body: body,
             citations: citations,
-            meeting_ids: named
+            # A cited meeting is named by the finding even if the model
+            # omitted it from the optional meetings attribute.
+            meeting_ids: covered
           }
         ],
         else: []
