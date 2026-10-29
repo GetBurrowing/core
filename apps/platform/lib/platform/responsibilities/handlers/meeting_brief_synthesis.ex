@@ -16,15 +16,18 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefSynthesis do
         feature: "meetings",
         trigger_kind: "event_topic",
         trigger_config: %{
-          "topic" => "platform.meetings.synthesis_only",
-          "event_match" => "meeting_triage_filed"
+          "topic" => "platform.meetings.synthesis_only"
         },
         scope: "per_meeting",
         context_provided: [],
         output_contract: %{},
         default_prompt_template: "meetings.brief_synthesis.v1",
         cost_profile: "low_freq_capable",
-        metadata: %{"execution" => "native_direct_provider", "owner" => "platform.meetings"}
+        metadata: %{
+          "execution" => "native_direct_provider",
+          "executor" => "platform.meetings.completion",
+          "owner" => "platform.meetings"
+        }
       }
     ]
   end
