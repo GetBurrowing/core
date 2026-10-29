@@ -369,7 +369,11 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
         {BriefingCopy.all_caught_up()}
       </p>
 
-      <.settings_note settings={@settings} admin?={@admin?} />
+      <.settings_note
+        settings={@settings}
+        admin?={@admin?}
+        calendar?={Enum.any?(@view.needs_call ++ @view.done, &(&1.kind == :calendar))}
+      />
     </div>
     """
   end
@@ -1140,9 +1144,21 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   attr(:settings, :map, required: true)
   attr(:admin?, :boolean, required: true)
+  attr(:calendar?, :boolean, default: false)
 
   defp settings_note(assigns) do
-    assigns = assign(assigns, :note, BriefingCopy.settings_note(assigns.settings))
+    note = BriefingCopy.settings_note(assigns.settings)
+
+    note =
+      if assigns.calendar?,
+        do: %{
+          note
+          | lead:
+              "Briefings arrive in your Inbox each morning. Insight items expire after 7 days. Calendar proposals keep their tentative time until you resolve them."
+        },
+        else: note
+
+    assigns = assign(assigns, :note, note)
 
     ~H"""
     <p
