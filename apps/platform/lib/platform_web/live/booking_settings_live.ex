@@ -162,7 +162,6 @@ defmodule PlatformWeb.BookingSettingsLive do
           <.input
             field={@form[:time_zone]}
             label="Owner timezone"
-            placeholder="America/Chicago"
             required
           />
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">

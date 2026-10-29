@@ -17,7 +17,7 @@ defmodule Platform.Calendar.BookingLinksTest do
     )
   end
 
-  defp attrs(extra \\ %{}) do
+  defp attrs(extra) do
     date = Date.add(Date.utc_today(), 7)
 
     Map.merge(

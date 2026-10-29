@@ -112,6 +112,16 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/calendar/booking_confirmation.ex", :get, "Platform.Tasks.Project", 1,
+     :safe_internal,
+     "enqueue/5 receives the persisted Meeting created by BookingLinks; meeting.project_id is a UUID foreign key already checked against the owner's current project list"},
+    {"platform/calendar/booking_links.ex", :get!, "BookingLink", 1, :safe_internal,
+     "update/3 selects link from list(scope)'s owner-constrained Repo.all before re-reading link.id under the owner row lock; the URL id is compared as a string, never passed directly to Repo"},
+    {"platform/calendar/booking_links.ex", :get_by, "Booking", 1, :safe_internal,
+     "book/3 uses link.id from resolve/1's persisted BookingLink; idempotency_key is a string field constrained to 16-128 bytes, not a UUID cast"},
+    {"platform/calendar/booking_links.ex", :get_by, "BookingLink", 1, :safe_internal,
+     "resolve/1 accepts a 43-byte random bearer token and queries the token string field; no UUID column is cast from external input"},
+
     # Calendar task 01a16991: boundary UUIDs are checked before typed lookups.
     {"platform/calendar.ex", :get, "Platform.Chat.Space", 1, :must_cast,
      "authorize_scope/2 checks the form's space_id with Platform.UUID.valid?/1 before Repo.get and then requires chat.write plus SpaceAccess membership"},
