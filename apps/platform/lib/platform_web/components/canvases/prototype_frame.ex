@@ -55,7 +55,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   The frame then shows the one version the projection pinned, sealed and
   NOT connected: no `CanvasRoom.frame_attrs` on the room element, no version
   menu, Pin, fullscreen or Open. An info strip ("Preview · vN · read-only")
-  replaces the bar and the edge is dashed `border-base-300`; the frame is
+  replaces the bar and the edge is dashed `border-edge`; the frame is
   not dimmed, so the prototype's colours stay true. A retention-removed
   version shows the removed panel without its View action. `toggle`, `pin`
   and `fullscreen` are no-ops.
@@ -255,7 +255,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     ~H"""
     <div
       id={@id}
-      class="relative rounded-xl border border-dashed border-base-300"
+      class="relative rounded-xl border border-dashed border-edge"
       data-role="prototype-canvas"
       data-preview="true"
     >

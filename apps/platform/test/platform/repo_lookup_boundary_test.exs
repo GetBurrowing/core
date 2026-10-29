@@ -1022,8 +1022,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/federation/tool_surface.ex", :get, "~schema", 1, :safe_internal,
      "the single Repo.get inside get_by_uuid/2, the module's boundary-safe lookup helper: every id reaching it has already passed Platform.UUID.valid?/1. The load_agent/1, plan_approve, stage_complete, agent_home_org/1 and list_org_descendants/1 sites were all rewritten onto it"},
     # ── Prototypes (task 01a1316b-4e46 stage 1, ADR 0057) ─────────────
-    {"platform/prototypes.ex", :platform_uuid_guard, "-", 4, :safe_internal,
-     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns. The second call (task 01a1316b-4e46 stage 2, counted here by 01a1316b-677a) is publisher_names/1's filter on the ids read out of `published_by` jsonb before `where: u.id in ^ids` / `a.id in ^ids`, so a malformed stored id is dropped rather than raising. Calls three and four (task 01a1557a-a74b, rung 13) are list_readable/2's filters on the `:ids` / `:canvas_ids` read out of chat message URLs before `where: p.id in ^ids` / `p.canvas_id in ^canvas_ids`, so a malformed id is dropped rather than raising"},
+    {"platform/prototypes.ex", :platform_uuid_guard, "-", 6, :safe_internal,
+     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns. The second call (task 01a1316b-4e46 stage 2, counted here by 01a1316b-677a) is publisher_names/1's filter on the ids read out of `published_by` jsonb before `where: u.id in ^ids` / `a.id in ^ids`, so a malformed stored id is dropped rather than raising. Calls three and four (task 01a1557a-a74b, rung 13) are list_readable/2's filters on the `:ids` / `:canvas_ids` read out of chat message URLs before `where: p.id in ^ids` / `p.canvas_id in ^canvas_ids`, so a malformed id is dropped rather than raising. Calls five and six (task 01a18834-3ecd) are embed_html/2's and version_at/2's guards on a `prototype_id` read out of an agent-written canvas node (a scripted embed's `prototype_ref` or a prototype node's props); a malformed id answers {:error, :not_found} / nil instead of raising"},
+    {"platform_web/live/canvases/version_history.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "inert_node/2 (task 01a18834-3ecd stage 2): the `prototype_ref.prototype_id` of a stored scripted embed is agent-written canvas JSON, so the guard sends a malformed ref to the 'unavailable' fallback instead of building a sealed frame for it. No Repo call in this file"},
     {"platform/chat/canvas/kinds/prototype.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "validate_prototype_id/1 (task 01a1316b-4e46 stage 2, classified by 01a1316b-677a): the `prototype_id` node prop is agent-written, and the guard refuses a malformed one at validation, so no non-UUID ever reaches Prototypes.frame_view/3. No Repo call in this file"},
     {"platform/chat/canvas/kinds/embed.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1690,7 +1692,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # pins `canvas_id` to the id of a loaded `%Canvas{}` (the canvas server's
     # state, or the row the create Multi just inserted) and `canvas_node_id`,
     # a `:string` column, so no cast and no CastError is reachable.
-    "platform/prototypes.ex" => 3,
+    # Task 01a18834-3ecd stage 2: 3 -> 4, triaged by hand. version_at/2 pins
+    # `v.prototype_id` behind its own Platform.UUID.valid?/1 guard (counted in
+    # the inventory above), and `inserted_at` is a %DateTime{} matched in the
+    # function head, so no cast and no CastError is reachable.
+    "platform/prototypes.ex" => 4,
     # Task 01a1316b-84fa stage 1: 0 -> 1, triaged by hand. `load/2` pins
     # `r.canvas_id` and `r.node_id`; the canvas id passed `validate_key/2`'s
     # Platform.UUID.valid?/1 guard before the room process was started (the

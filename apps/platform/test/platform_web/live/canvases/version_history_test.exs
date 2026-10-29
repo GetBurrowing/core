@@ -393,7 +393,7 @@ defmodule PlatformWeb.Canvases.VersionHistoryTest do
       for root <- roots do
         [class] = LazyHTML.attribute(root, "class")
         assert class =~ "border-dashed"
-        assert class =~ "border-base-300"
+        assert class =~ "border-edge"
         refute class =~ "opacity"
       end
     end
