@@ -147,6 +147,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"canvas_restore", "canvas"},
       {"send_media", "messaging"},
       {"react", "messaging"},
+      {"blocker_recheck", "task"},
+      {"blocker_verify", "task"},
       {"project_list", "task"},
       {"org_list_descendants", "task"},
       {"project_update", "task"},
@@ -399,8 +401,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # now requires accepted candidate_ids and stable provenance on replay.
     # Tool names, parameter shapes and kind digests are unchanged. The full
     # Play rig measured these at 9b254a93a; main 1f0f4486b retained old pins.
-    @main_tool_digest_off "dff665299e4c24d012ac05ec49397723e76e3aff604f1e5cc78f405dbc4117f3"
-    @main_tool_digest_on "c2cc67cfd4d3d15ae18852e2ca34bd3bc97cc974fc7ba091679cc340c9b5b14f"
+    # Task 01a18305: add blocker_recheck/blocker_verify before project_list,
+    # and the typed dependency fields on report_blocker. Measured at 5a289a564;
+    # removing just those additions recovers both previous digests exactly.
+    @main_tool_digest_off "7aca2e98981962a2c77f4967f5fa429fa995c4baceb0d30ded53e9ce335645fe"
+    @main_tool_digest_on "c5fa92a1117a86778d813e4da43fc88e836ed61381c9f73bea5755a4ab732850"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
