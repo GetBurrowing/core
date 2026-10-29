@@ -62,7 +62,7 @@ defmodule PlatformWeb.BookingLiveTest do
     {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
     render_click(view, "select", %{"start" => DateTime.to_iso8601(slot.starts_at)})
 
-    html =
+    _html =
       render_submit(view, "book", %{
         "guest" => %{
           "name" => "Guest",
@@ -72,7 +72,7 @@ defmodule PlatformWeb.BookingLiveTest do
         }
       })
 
-    assert html =~ "You're booked"
+    assert has_element?(view, "h2", "You're booked")
     [receipt] = BookingLinks.receipts(scope)
     assert receipt.event_id
     refute receipt.meeting_id
@@ -152,6 +152,66 @@ defmodule PlatformWeb.BookingLiveTest do
     conn = %{conn | remote_ip: ip} |> get("/book/not-a-valid-token")
     assert response(conn, 429) =~ "Too many requests"
     assert get_resp_header(conn, "retry-after") == ["60"]
+  end
+
+  test "UTC+14 date picker and slot selection use the same owner timezone", %{
+    conn: conn,
+    scope: scope,
+    link: link
+  } do
+    {:ok, link} =
+      BookingLinks.update(scope, link.id, %{
+        time_zone: "Pacific/Kiritimati",
+        windows: [
+          %{"weekday" => Date.day_of_week(link.start_date), "start" => "00:00", "end" => "01:00"}
+        ]
+      })
+
+    {:ok, view, _} = live(conn, "/book/#{link.token}")
+    html = render_change(view, "date", %{"date" => Date.to_iso8601(link.start_date)})
+    assert html =~ "Date in Pacific/Kiritimati"
+    assert has_element?(view, "#booking-date[value='#{link.start_date}']")
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    assert DateTime.to_date(slot.starts_at) == Date.add(link.start_date, -1)
+    render_click(view, "select", %{"start" => DateTime.to_iso8601(slot.starts_at)})
+
+    assert has_element?(
+             view,
+             "#public-booking-form h2",
+             Calendar.strftime(link.start_date, "%b %d") <> " at 00:00"
+           )
+
+    refute has_element?(view, "#public-booking-form input[type='email'][required]")
+    render_submit(view, "book", %{"guest" => %{"name" => "Island guest"}})
+    assert render(view) =~ Calendar.strftime(link.start_date, "%b %d, %Y") <> " at 00:00"
+    [receipt] = BookingLinks.receipts(scope)
+    assert DateTime.compare(receipt.starts_at, slot.starts_at) == :eq
+  end
+
+  test "meeting policy marks public email required before submission", %{
+    conn: conn,
+    scope: scope,
+    link: link
+  } do
+    old = Application.get_env(:platform, :meetings_enabled)
+    Application.put_env(:platform, :meetings_enabled, true)
+    on_exit(fn -> Application.put_env(:platform, :meetings_enabled, old) end)
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Booking UI meetings",
+        slug: "booking-ui-project-#{System.unique_integer([:positive])}",
+        org_id: Platform.TenancyFixtures.acme_org_id()
+      })
+
+    {:ok, link} =
+      BookingLinks.update(scope, link.id, %{create_meeting: true, project_id: project.id})
+
+    {:ok, view, _} = live(conn, "/book/#{link.token}")
+    render_change(view, "date", %{"date" => Date.to_iso8601(link.start_date)})
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    render_click(view, "select", %{"start" => DateTime.to_iso8601(slot.starts_at)})
+    assert has_element?(view, "#public-booking-form input[type='email'][required]")
   end
 
   test "Meetings disabled hides optional meeting controls", %{auth: conn} do

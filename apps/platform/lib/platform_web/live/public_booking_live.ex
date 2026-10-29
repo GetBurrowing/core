@@ -7,12 +7,20 @@ defmodule PlatformWeb.PublicBookingLive do
     peer = get_connect_info(socket, :peer_data)
     ip = if peer, do: peer.address, else: :http
 
+    policy =
+      case BookingLinks.public_policy(token) do
+        {:ok, policy} -> policy
+        _ -> %{time_zone: "Etc/UTC", requires_email: false}
+      end
+
     {:ok,
      assign(socket,
        page_title: "Book a time",
        token: token,
        ip: ip,
-       date: Date.utc_today(),
+       zone: policy.time_zone,
+       requires_email: policy.requires_email,
+       date: DateTime.utc_now() |> DateTime.shift_zone!(policy.time_zone) |> DateTime.to_date(),
        slots: [],
        selected: nil,
        error: nil,
@@ -70,11 +78,18 @@ defmodule PlatformWeb.PublicBookingLive do
   defp load_slots(socket) do
     result =
       with :ok <- check_rate(socket),
-           do: BookingLinks.slots(socket.assigns.token, socket.assigns.date)
+           {:ok, policy} <- BookingLinks.public_policy(socket.assigns.token),
+           {:ok, slots} <- BookingLinks.slots(socket.assigns.token, socket.assigns.date),
+           do: {:ok, policy, slots}
 
     case result do
-      {:ok, slots} ->
-        assign(socket, slots: slots, error: nil)
+      {:ok, policy, slots} ->
+        assign(socket,
+          slots: slots,
+          error: nil,
+          zone: policy.time_zone,
+          requires_email: policy.requires_email
+        )
 
       _ ->
         assign(socket,
@@ -86,23 +101,26 @@ defmodule PlatformWeb.PublicBookingLive do
     end
   end
 
+  defp local_time(datetime, zone, format),
+    do: datetime |> DateTime.shift_zone!(zone) |> Calendar.strftime(format)
+
   def render(assigns) do
     ~H"""
     <main class="min-h-screen bg-base-200 px-4 py-8 text-base-content">
       <div class="mx-auto max-w-xl space-y-5 rounded-2xl border border-edge bg-base-100 p-5 sm:p-8">
         <h1 class="text-2xl font-semibold">Book a time</h1>
-        <p class="text-sm text-subtle">Choose an available time. Times below are shown in UTC.</p>
+        <p class="text-sm text-subtle">Choose an available time. All dates and times are in {@zone}.</p>
         <p :if={@error} role="alert" class="rounded-lg bg-error/10 p-3 text-error">{@error}</p>
         <section :if={@receipt} aria-label="Booking confirmation" class="space-y-3">
           <h2 class="text-xl font-semibold">You're booked</h2>
-          <p>{Calendar.strftime(@receipt.starts_at, "%b %d, %Y at %H:%M UTC")}</p>
+          <p>{local_time(@receipt.starts_at, @zone, "%b %d, %Y at %H:%M")}</p>
           <p :if={@receipt.delivery_error} role="alert" class="text-error">
             Your booking is saved, but the guest email could not be delivered. Contact the organizer for your invitation.
           </p>
         </section>
         <div :if={!@receipt} class="space-y-5">
           <form id="booking-date-form" phx-change="date">
-            <label for="booking-date" class="block text-sm font-medium">Date</label>
+            <label for="booking-date" class="block text-sm font-medium">Date in {@zone}</label>
             <input
               id="booking-date"
               name="date"
@@ -125,7 +143,7 @@ defmodule PlatformWeb.PublicBookingLive do
               ]}
               aria-pressed={@selected == slot}
             >
-              {Calendar.strftime(slot.starts_at, "%H:%M")}
+              {local_time(slot.starts_at, @zone, "%H:%M")}
             </button>
           </div>
           <.form
@@ -136,12 +154,13 @@ defmodule PlatformWeb.PublicBookingLive do
             class="space-y-4 border-t border-edge pt-4"
           >
             <h2 class="font-semibold">
-              {Calendar.strftime(@selected.starts_at, "%b %d at %H:%M UTC")}
+              {local_time(@selected.starts_at, @zone, "%b %d at %H:%M")}
             </h2>
             <.input field={@form[:name]} label="Your name" required maxlength="120" />
             <.input
               field={@form[:email]}
-              label="Email (required for meeting invitations)"
+              label={if @requires_email, do: "Email (required for meeting invitation)", else: "Email (optional)"}
+              required={@requires_email}
               type="email"
               maxlength="254"
             />

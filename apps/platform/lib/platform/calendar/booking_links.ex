@@ -87,6 +87,13 @@ defmodule Platform.Calendar.BookingLinks do
     end)
   end
 
+  def public_policy(token) do
+    with {:ok, link, scope} <- resolve(token),
+         :ok <- meeting_policy(scope, link) do
+      {:ok, %{time_zone: link.time_zone, requires_email: link.create_meeting}}
+    end
+  end
+
   def slots(token, date) when is_binary(date) do
     with {:ok, date} <- Date.from_iso8601(date), do: slots(token, date)
   end

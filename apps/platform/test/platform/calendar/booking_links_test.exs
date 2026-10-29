@@ -337,6 +337,12 @@ defmodule Platform.Calendar.BookingLinksTest do
     owner = scope()
     org_id = Platform.TenancyFixtures.acme_org_id()
 
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: owner.actor.id,
+      org_id: org_id,
+      role: "member"
+    })
+
     project =
       Repo.insert!(%Platform.Tasks.Project{
         name: "Confirmation",

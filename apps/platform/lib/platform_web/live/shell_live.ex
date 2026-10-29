@@ -1027,6 +1027,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.ChangelogLive ->
         "Changelog"
 
+      PlatformWeb.BookingSettingsLive ->
+        "Booking links"
+
       PlatformWeb.SettingsLive ->
         "Settings"
 
