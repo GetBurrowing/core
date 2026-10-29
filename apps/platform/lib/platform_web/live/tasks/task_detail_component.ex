@@ -129,7 +129,23 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         socket
       end
 
-    {:ok, socket |> assign_can_promote() |> assign_can_attach_canvas()}
+    status =
+      case assigns[:selected_task] do
+        %{status: "in_progress"} = task ->
+          Map.get(task, :execution_activity) ||
+            Platform.Orchestration.ExecutionStatus.for_task(task, socket.assigns[:access_scope])
+
+        _ ->
+          nil
+      end
+
+    {:ok,
+     socket
+     |> assign(:execution_activity, status)
+     |> assign_new(:execution_recheck_error, fn -> nil end)
+     |> assign(:execution_recheck_pending, status && status[:request_state] == "verifying")
+     |> assign_can_promote()
+     |> assign_can_attach_canvas()}
   end
 
   # Whether to RENDER the '+ Attach canvas' row (task 01a1559a stage 3): the
@@ -230,6 +246,41 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   defp request_refresh, do: send(self(), {:detail_refresh})
 
   # ── Panel lifecycle ─────────────────────────────────────────────────────
+
+  def handle_event("execution_recheck", %{"lease" => lease, "revision" => revision}, socket) do
+    task = Selection.writable_selected_task(socket)
+    activity = socket.assigns[:execution_activity]
+
+    result =
+      if task && activity && !socket.assigns.execution_recheck_pending do
+        Platform.Orchestration.BlockerReassessment.request_from_user(
+          task.id,
+          activity.stage_id,
+          lease,
+          revision,
+          socket.assigns[:access_scope],
+          socket.assigns[:current_user_id]
+        )
+      else
+        {:error, :not_authorized_or_pending}
+      end
+
+    case result do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> assign(:execution_recheck_pending, true)
+         |> assign(:execution_recheck_error, nil)}
+
+      _ ->
+        {:noreply,
+         assign(
+           socket,
+           :execution_recheck_error,
+           "Re-check unavailable: the hold or permissions changed. Refresh and try again."
+         )}
+    end
+  end
 
   def handle_event("detail_close", _params, socket) do
     send(self(), {:detail_closed})
@@ -1291,6 +1342,14 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             </div>
           </div>
 
+          <PlatformWeb.ExecutionStatus.header
+            :if={@execution_activity}
+            status={@execution_activity}
+            target={@myself}
+            can_write={@can_attach_canvas?}
+            pending={@execution_recheck_pending}
+            error={@execution_recheck_error}
+          />
           <%!-- Status + Priority --%>
           <div class="flex flex-wrap items-center gap-2">
             <%!-- One decider (task 01a01a4a stage 5): the status chip is keyed

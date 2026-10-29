@@ -128,6 +128,69 @@ defmodule Platform.Orchestration.BlockerReassessment do
     end
   end
 
+  @doc "A user may request verification of existing typed evidence, never attest capability or release a hold."
+  def request_from_user(task_id, stage_id, lease_id, revision, scope, user_id) do
+    with true <-
+           Platform.UUID.valid?(task_id) and Platform.UUID.valid?(stage_id) and
+             Platform.UUID.valid?(lease_id),
+         true <- is_binary(user_id) and is_struct(scope, Platform.Access.Scope),
+         true <- is_map(scope.actor) and scope.actor.id == user_id,
+         true <- Platform.Access.can?(scope, "tasks.write", {:task, task_id}),
+         {:ok, _} <- current_task(task_id, stage_id) do
+      result =
+        Repo.transaction(fn ->
+          lease =
+            Repo.one(
+              from(l in ExecutionLease,
+                where: l.id == ^lease_id and l.task_id == ^task_id and l.stage_id == ^stage_id,
+                lock: "FOR UPDATE"
+              )
+            )
+
+          unless lease && RuntimeSupervision.needs_human_hold?(lease),
+            do: Repo.rollback(:stale_hold)
+
+          wait = ExecutionLease.dependency_wait(lease)
+
+          unless is_map(wait) && RuntimeSupervision.hold_revision(lease) == revision,
+            do: Repo.rollback(:typed_evidence_required_or_stale)
+
+          unless runtime_owner?(Tasks.get_task_record(task_id), stage_id, lease.runtime_id),
+            do: Repo.rollback(:stale_owner)
+
+          unless ready(lease, wait) == :ok, do: Repo.rollback(:dependency_changed)
+
+          if wait["state"] == "verifying" do
+            :already_requested
+          else
+            wait =
+              wait
+              |> Map.put("next_due_at", DateTime.to_iso8601(DateTime.utc_now()))
+              |> Map.put("requested_by_user", user_id)
+
+            wait =
+              if wait["state"] == "exhausted",
+                do:
+                  wait
+                  |> Map.put("state", "waiting")
+                  |> Map.put("attempts", 0)
+                  |> Map.put("revision", Ecto.UUID.generate()),
+                else: wait
+
+            save(lease, Map.put(lease.metadata, "dependency_wait", wait))
+            :requested
+          end
+        end)
+
+      case result do
+        {:ok, _} -> reassess(task_id)
+        error -> error
+      end
+    else
+      _ -> {:error, :not_authorized_or_stale}
+    end
+  end
+
   @doc "Queue a matching completion immediately without resetting an in-flight request or budget."
   def dependency_completed(task_id, dependency_id) do
     Repo.all(from(l in ExecutionLease, where: l.task_id == ^task_id and l.status == "blocked"))

@@ -551,4 +551,92 @@ defmodule Platform.Orchestration.BlockerReassessmentTest do
     assert {:ok, %{released: true}} =
              Platform.Federation.ToolSurface.execute("blocker_verify", result, permitted)
   end
+
+  test "user recheck is authorized, revision fenced and duplicate safe", ctx do
+    user =
+      Repo.insert!(%Platform.Accounts.User{
+        email: "recheck#{System.unique_integer([:positive])}@example.com",
+        name: "Rechecker",
+        oidc_sub: Ecto.UUID.generate()
+      })
+      |> Platform.TenancyFixtures.member_of_all_orgs!()
+
+    scope = Platform.Access.Scope.for_user(user)
+    assert {:ok, _} = block(ctx)
+    complete(ctx)
+    l = hold(ctx)
+    revision = RuntimeSupervision.hold_revision(l)
+
+    assert {:error, _} =
+             BlockerReassessment.request_from_user(
+               ctx.task.id,
+               ctx.stage.id,
+               l.id,
+               revision,
+               %Platform.Access.Scope{},
+               user.id
+             )
+
+    assert {:error, _} =
+             BlockerReassessment.request_from_user(
+               ctx.task.id,
+               ctx.stage.id,
+               l.id,
+               "stale",
+               scope,
+               user.id
+             )
+
+    assert {:ok, _} =
+             BlockerReassessment.request_from_user(
+               ctx.task.id,
+               ctx.stage.id,
+               l.id,
+               revision,
+               scope,
+               user.id
+             )
+
+    first = hold(ctx).metadata["dependency_wait"]
+    assert first["state"] == "verifying"
+    assert first["requested_by_user"] == user.id
+
+    assert {:ok, _} =
+             BlockerReassessment.request_from_user(
+               ctx.task.id,
+               ctx.stage.id,
+               l.id,
+               revision,
+               scope,
+               user.id
+             )
+
+    assert hold(ctx).metadata["dependency_wait"] == first
+    assert hold(ctx).status == "blocked"
+  end
+
+  test "UI recheck never reclassifies an explicit human hold", ctx do
+    user =
+      Repo.insert!(%Platform.Accounts.User{
+        email: "humanrecheck#{System.unique_integer([:positive])}@example.com",
+        name: "Rechecker",
+        oidc_sub: Ecto.UUID.generate()
+      })
+      |> Platform.TenancyFixtures.member_of_all_orgs!()
+
+    assert {:ok, _} = block(ctx, "human")
+    l = hold(ctx)
+
+    assert {:error, _} =
+             BlockerReassessment.request_from_user(
+               ctx.task.id,
+               ctx.stage.id,
+               l.id,
+               RuntimeSupervision.hold_revision(l),
+               Platform.Access.Scope.for_user(user),
+               user.id
+             )
+
+    assert hold(ctx).status == "blocked"
+  end
 end

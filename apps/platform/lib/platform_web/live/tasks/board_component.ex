@@ -1151,6 +1151,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         >
           {@member.title}
         </span>
+        <PlatformWeb.ExecutionStatus.line
+          :if={@member.status == "in_progress"}
+          status={Map.get(@member, :execution_activity)}
+        />
         <div class="flex flex-wrap items-center gap-2">
           <span
             class="badge badge-ghost badge-xs capitalize"
@@ -1281,7 +1285,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             aria-hidden="true"
           >
           </span>
-          <span class="text-sm font-medium leading-snug flex-1">{@task.title}</span>
+          <span class="text-sm font-medium leading-snug flex-1 min-w-0 truncate">{@task.title}</span>
+        </div>
+        <div :if={@task.status == "in_progress"} class="overflow-x-auto">
+          <PlatformWeb.ExecutionStatus.line status={Map.get(@task, :execution_activity)} />
         </div>
         <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-subtle">
           <%= if @assignee do %>
@@ -1579,6 +1586,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         >
           {@member.title}
         </span>
+        <PlatformWeb.ExecutionStatus.line
+          :if={@member.status == "in_progress"}
+          status={Map.get(@member, :execution_activity)}
+        />
         <div class="flex items-center gap-2">
           <span
             class="badge badge-ghost badge-xs capitalize"
@@ -1684,6 +1695,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
         phx-value-id={@task.id}
       >
         <div class="card-body gap-1 p-3">
+          <PlatformWeb.ExecutionStatus.line
+            :if={@task.status == "in_progress"}
+            status={Map.get(@task, :execution_activity)}
+          />
           <%!-- Project name --%>
           <p
             :if={@task.project}
@@ -1704,7 +1719,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           <div class="flex items-start justify-between gap-2">
             <h3
               id={"card-title-#{@task.id}"}
-              class="text-sm font-medium leading-snug flex-1"
+              class="text-sm font-medium leading-snug flex-1 min-w-0 truncate"
               data-role="card-title"
             >
               {@task.title}

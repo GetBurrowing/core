@@ -77,6 +77,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     socket
     # The External Feedback lane (task 01a11ec3 stage 4). Defaulted here, not
     # in the budgeted shell; `apply_url_filters/3` is its only other writer.
+    |> schedule_activity_tick()
     |> assign(:origin_filter, :all)
     # Task 01a161fd stage 1: the multi-value URL filters, likewise defaulted
     # here and written only by `apply_url_filters/3`.
@@ -118,7 +119,68 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   defp load_pending_for_task_route(_params, _uri, socket), do: {:cont, socket}
 
+  defp schedule_activity_tick(socket) do
+    if connected?(socket), do: Process.send_after(self(), :execution_activity_tick, 1_000)
+    socket
+  end
+
+  # A clock tick never resets edits, collapses stacks or reloads review lists.
+  defp refresh_activity(socket) do
+    tasks = socket.assigns[:all_tasks] || []
+    data = socket.assigns[:stack_board_data] || %{}
+    members = Enum.flat_map(Map.values(data), & &1.members)
+    selected = List.wrap(socket.assigns[:selected_task])
+
+    statuses =
+      Platform.Orchestration.ExecutionStatus.load(
+        tasks ++ members ++ selected,
+        DateTime.utc_now(),
+        socket.assigns[:access_scope]
+      )
+
+    keys = [
+      :all_tasks,
+      :filtered_tasks,
+      :columns,
+      :board_items,
+      :stack_board_data,
+      :my_tasks,
+      :my_needs_you,
+      :selected_task
+    ]
+
+    Enum.reduce(keys, socket, fn key, acc ->
+      if Map.has_key?(acc.assigns, key),
+        do: assign(acc, key, activity_tree(acc.assigns[key], statuses)),
+        else: acc
+    end)
+  end
+
+  defp activity_tree(%Platform.Tasks.Task{} = task, statuses),
+    do: Map.put(task, :execution_activity, statuses[task.id])
+
+  defp activity_tree(%_{} = struct, _), do: struct
+
+  defp activity_tree(map, statuses) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, activity_tree(v, statuses)} end)
+
+  defp activity_tree(list, statuses) when is_list(list),
+    do: Enum.map(list, &activity_tree(&1, statuses))
+
+  defp activity_tree(tuple, statuses) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&activity_tree(&1, statuses)) |> List.to_tuple()
+
+  defp activity_tree(value, _), do: value
+
   # ── PubSub ─────────────────────────────────────────────────────────────
+
+  defp handle_info(:execution_activity_tick, socket),
+    do: {:halt, socket |> schedule_activity_tick() |> refresh_activity()}
+
+  defp handle_info({:runtime_event, _event}, socket), do: {:halt, refresh_activity(socket)}
+
+  defp handle_info({:blocker_verification_requested, _request}, socket),
+    do: {:halt, full_refresh(socket)}
 
   defp handle_info({:task_updated, _task}, socket), do: {:halt, full_refresh(socket)}
   defp handle_info({:plan_updated, _plan}, socket), do: {:halt, full_refresh(socket)}
@@ -465,6 +527,23 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> maybe_put_map(:access_scope, access_scope(socket))
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
+    members = Enum.flat_map(stack_entries, fn {_, data} -> data.members end)
+
+    activity =
+      Platform.Orchestration.ExecutionStatus.load(
+        tasks ++ members,
+        DateTime.utc_now(),
+        socket.assigns[:access_scope]
+      )
+
+    tasks = Platform.Orchestration.ExecutionStatus.attach(tasks, activity)
+
+    stack_entries =
+      Enum.map(stack_entries, fn {stack, data} ->
+        {stack,
+         %{data | members: Platform.Orchestration.ExecutionStatus.attach(data.members, activity)}}
+      end)
+
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
     board_sort = board_sort(socket)
 
