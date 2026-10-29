@@ -1020,7 +1020,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
       <div
         :for={%{org: org, projects: projects, spaces: spaces} <- @tree.orgs}
         data-role="files-tree-org"
-        data-org-slug={org.slug}
+        data-org-slug={if !Map.get(@labels, :masked?, true), do: org.slug}
         data-org-id={org.id}
         class="mt-2"
       >

@@ -422,6 +422,26 @@ defmodule PlatformWeb.FilesBrowserTest do
         refute tree =~ name
       end
     end
+
+    test "masking hides workspace slugs in tree attributes on toggle and fresh mount", ctx do
+      {:ok, view, _} = live(ctx.conn, "/files?tab=browse")
+      assert has_element?(view, "[data-role=files-tree-org][data-org-slug='#{ctx.org_a.slug}']")
+
+      render_click(view, "toggle_mask_names", %{"masked" => "true"})
+      {:ok, fresh, _} = live(ctx.conn, "/files?tab=browse")
+
+      for masked <- [view, fresh] do
+        tree = masked |> element("[data-role=files-tree]") |> render()
+
+        for org <- [ctx.org_a, ctx.org_b] do
+          Platform.MaskAssertions.refute_name_anywhere(tree, org.name)
+          Platform.MaskAssertions.refute_name_anywhere(tree, org.slug)
+        end
+      end
+
+      render_click(view, "toggle_mask_names", %{"masked" => "false"})
+      assert has_element?(view, "[data-role=files-tree-org][data-org-slug='#{ctx.org_a.slug}']")
+    end
   end
 
   # ── Project node behaviour kept ─────────────────────────────────────────

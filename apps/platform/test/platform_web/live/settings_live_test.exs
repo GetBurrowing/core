@@ -280,7 +280,7 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert SettingsLive.mask_until_label(Accounts.get_user(user.id), nil, now) == nil
     end
 
-    test "turning it on in Settings masks a fresh /chat and /tasks; B is unaffected" do
+    test "turning it on in Settings masks fresh chat, tasks and files; B is unaffected" do
       {:ok, _} = Platform.Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
 
       for {slug, name} <- [{"initech", "Initech Storefront"}, {"globex", "Globex Onboarding"}] do
@@ -299,14 +299,21 @@ defmodule PlatformWeb.SettingsLiveTest do
       {:ok, settings, _} = live(authed(a), "/settings")
       settings |> element("[data-role=settings-mask-names]") |> render_click()
 
-      for path <- ["/chat", "/tasks"] do
+      for path <- ["/chat", "/tasks", "/files?tab=browse"] do
         {:ok, _, masked} = follow(authed(a), path)
         {:ok, _, unmasked} = follow(authed(b), path)
         masked = strip_scope_stylesheet(masked)
 
-        for name <- names, path == "/tasks" or name in ["Initech", "Globex"] do
+        for name <- names, path != "/chat" or name in ["Initech", "Globex"] do
           assert_name_anywhere(unmasked, name)
-          refute_name_anywhere(masked, name, ~w(value))
+
+          try do
+            refute_name_anywhere(masked, name, ~w(value))
+          rescue
+            error in ExUnit.AssertionError ->
+              reraise %{error | message: "At #{path}:\n" <> Exception.message(error)},
+                      __STACKTRACE__
+          end
         end
       end
     end

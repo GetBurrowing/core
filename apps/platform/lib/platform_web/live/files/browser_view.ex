@@ -75,6 +75,7 @@ defmodule PlatformWeb.Files.BrowserView do
     spaces = Enum.flat_map(tree.orgs, & &1.spaces) ++ tree.other.spaces
 
     %{
+      masked?: masked?,
       orgs: orgs,
       projects:
         Map.new(projects, fn project ->
