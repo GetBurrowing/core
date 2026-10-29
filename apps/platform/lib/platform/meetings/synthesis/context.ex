@@ -89,7 +89,13 @@ defmodule Platform.Meetings.Synthesis.Context do
     sources =
       Enum.flat_map(briefings, &briefing_sources/1) ++
         Enum.map(Enum.uniq_by(meeting_tasks ++ open_tasks, & &1.id), fn t ->
-          source(:task, t.id, Enum.join([t.title, t.description], "\n"), [], true)
+          source(
+            :task,
+            t.id,
+            Enum.join([t.title, t.description], "\n"),
+            if(Enum.any?(meeting_tasks, &(&1.id == t.id)), do: [meeting.id], else: []),
+            true
+          )
         end) ++
         Enum.map(messages, &source(:message, &1.id, &1.content, [], true)) ++
         Enum.map(
@@ -166,13 +172,34 @@ defmodule Platform.Meetings.Synthesis.Context do
     entries =
       Map.get(content, "open_questions", []) ++ Map.get(content, "unfiled_action_items", [])
 
-    [
-      summary
-      | Enum.map(
-          entries,
-          &source(:meeting_briefing, b.meeting_id, &1["text"], [b.meeting_id], true)
-        )
-    ]
+    filed =
+      b.items
+      |> Kernel.||(%{})
+      |> Map.delete("_content")
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.flat_map(fn {_key, item} ->
+        case String.split(item["ref"] || "", ":", parts: 2) do
+          [kind, id] when kind in ["task", "canvas"] ->
+            ref_kind = if kind == "task", do: :task, else: :canvas
+
+            [
+              source(:meeting_briefing, b.meeting_id, item["title"], [b.meeting_id], true)
+              |> Map.put(:required_refs, [{ref_kind, id}])
+            ]
+
+          _ ->
+            []
+        end
+      end)
+
+    filed ++
+      [
+        summary
+        | Enum.map(
+            entries,
+            &source(:meeting_briefing, b.meeting_id, &1["text"], [b.meeting_id], true)
+          )
+      ]
   end
 
   defp source(kind, id, text, meetings, derived),

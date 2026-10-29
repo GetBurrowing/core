@@ -224,6 +224,111 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
     refute Visibility.readable_by?(guest.id, {:meeting_briefing, other.id})
   end
 
+  test "memory uses path denies and linked mail needs both mail and chat access", c do
+    page =
+      Repo.insert!(
+        Platform.Org.WikiPage.changeset(%Platform.Org.WikiPage{}, %{
+          file_key: "org/page/checkout.md",
+          content: "Checkout release plan",
+          org_id: acme_org_id()
+        })
+      )
+
+    journal =
+      Repo.insert!(
+        Platform.Org.WikiJournalEntry.changeset(%Platform.Org.WikiJournalEntry{}, %{
+          date: Date.utc_today(),
+          content: "Checkout release update",
+          org_id: acme_org_id()
+        })
+      )
+
+    assert Visibility.readable_by?(c.allowed.id, {:memory_page, page.id})
+    assert Visibility.readable_by?(c.allowed.id, {:memory_journal, journal.id})
+
+    {:ok, _} =
+      Grants.deny(%{principal: c.denied, permission: "memory.read", resource: {:memory, "org/"}})
+
+    refute Visibility.readable_by?(c.denied.id, {:memory_page, page.id})
+    refute Visibility.readable_by?(c.denied.id, {:memory_journal, journal.id})
+
+    p =
+      Repo.get_by!(Chat.Participant,
+        space_id: c.meeting.chat_space_id,
+        participant_id: c.allowed.id
+      )
+
+    message =
+      Repo.insert!(%Chat.Message{
+        space_id: c.meeting.chat_space_id,
+        participant_id: p.id,
+        content: "Checkout mail"
+      })
+
+    account =
+      Repo.insert!(%Platform.Mail.Account{
+        org_id: acme_org_id(),
+        name: "Checkout",
+        smtp_host: "smtp.example.com",
+        smtp_port: 587,
+        smtp_tls: "starttls"
+      })
+
+    mail =
+      Repo.insert!(%Platform.Mail.InboundMessage{
+        org_id: acme_org_id(),
+        account_id: account.id,
+        folder: "INBOX",
+        uidvalidity: 1,
+        uid: 1,
+        message_id_key: "synthesis-mail",
+        subject: "Checkout",
+        text_body: "Release Friday",
+        chat_message_id: message.id
+      })
+
+    assert Visibility.readable_by?(c.allowed.id, {:mail, mail.id})
+    refute Visibility.readable_by?(c.denied.id, {:mail, mail.id})
+    result = Context.gather(c.meeting, lookback_days: 7)
+    assert Enum.any?(result.sources, &(&1.ref == {:memory_page, page.id}))
+    assert Enum.any?(result.sources, &(&1.ref == {:memory_journal, journal.id}))
+    assert Enum.any?(result.sources, &(&1.ref == {:mail, mail.id}))
+
+    {:ok, _} =
+      Grants.deny(%{
+        principal: c.allowed,
+        permission: "mail.use",
+        resource: {:org, acme_org_id()}
+      })
+
+    refute Visibility.readable_by?(c.allowed.id, {:mail, mail.id})
+  end
+
+  test "briefing item titles also require access to their referenced resource", c do
+    {:ok, task} = Tasks.create_task(%{project_id: c.project.id, title: "Hidden checkout task"})
+    briefing = Repo.get_by!(MeetingBriefing, meeting_id: c.meeting.id)
+
+    items =
+      Map.put(briefing.items, "filed", %{
+        "ref" => "task:" <> task.id,
+        "title" => "Hidden checkout task"
+      })
+
+    Repo.update!(Ecto.Changeset.change(briefing, items: items))
+
+    assert Enum.any?(
+             Context.gather(c.meeting, lookback_days: 7).sources,
+             &(&1.text == task.title)
+           )
+
+    {:ok, _} = Grants.deny(%{principal: c.allowed, permission: "tasks.read", resource: c.project})
+
+    refute Enum.any?(
+             Context.gather(c.meeting, lookback_days: 7).sources,
+             &(&1.text == task.title)
+           )
+  end
+
   test "unknown and malformed references fail closed", c do
     refute Visibility.readable_by?(c.allowed.id, {:message, "bad"})
     refute Visibility.readable_by?("bad", {:task, c.project.id})

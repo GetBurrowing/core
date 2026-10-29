@@ -5,7 +5,10 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   alias Platform.Meetings.MeetingBriefings
 
   @doc "Resolve the referenced row and check the recipient's current permissions."
-  def readable_by?(user_id, %{ref: ref}), do: readable_by?(user_id, ref)
+  def readable_by?(user_id, %{ref: ref} = source) do
+    readable_by?(user_id, ref) and
+      Enum.all?(Map.get(source, :required_refs, []), &readable_by?(user_id, &1))
+  end
 
   def readable_by?(user_id, {kind, id}) do
     with true <- Platform.UUID.valid?(id),
@@ -72,8 +75,14 @@ defmodule Platform.Meetings.Synthesis.Visibility do
 
   defp readable?(_user, scope, :memory_journal, id) do
     case fetch(Platform.Org.WikiJournalEntry, id) do
-      nil -> false
-      entry -> memory_readable?(scope, entry)
+      nil ->
+        false
+
+      entry ->
+        path = journal_path(entry)
+
+        memory_readable?(scope, entry) and
+          Access.within?(scope, "memory.read", {:memory, path}, true)
     end
   end
 
@@ -89,6 +98,11 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   end
 
   defp readable?(_, _, _, _), do: false
+
+  defp journal_path(%{project_id: project_id, date: date}) do
+    namespace = if project_id, do: "project/" <> project_id, else: "org"
+    namespace <> "/journal/" <> Date.to_iso8601(date) <> ".md"
+  end
 
   defp memory_readable?(scope, %{org_id: org_id, project_id: project_id}) do
     target = if project_id, do: {:project, project_id}, else: {:org, org_id}
