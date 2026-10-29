@@ -340,7 +340,7 @@ defmodule Platform.Calendar.AgentAccess do
         from(e in Event, where: e.id == ^id and e.owner_id == ^owner_id, lock: "FOR UPDATE")
       ) || Repo.rollback(:not_found)
 
-    if event.tentative or event.cancelled_at or event.recurrence or event.all_day or
+    if event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
          (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id)) or
          Repo.exists?(from(b in Booking, where: b.event_id == ^id)),
        do: Repo.rollback(:unsupported_move)
@@ -350,7 +350,7 @@ defmodule Platform.Calendar.AgentAccess do
 
   defp approve(consent, grant, auto \\ false) do
     hold = Repo.get!(Event, consent.hold_id)
-    if hold.cancelled_at or not hold.tentative, do: Repo.rollback(:stale)
+    if hold.cancelled_at || not hold.tentative, do: Repo.rollback(:stale)
 
     {event_id, sequence} =
       if consent.operation == "move" do
