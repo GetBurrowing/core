@@ -50,14 +50,25 @@ defmodule Platform.Social.WeeklyNotes do
   No published posts in the reporting week returns `{:error, :no_published_posts}`.
   """
   def submit(scope, profile_id, week_start, summary, items, author) do
-    Repo.transaction(fn ->
-      with {:ok, _} <- lock_profile(scope, profile_id),
-           {:ok, note} <- do_submit(scope, profile_id, week_start, summary, items, author) do
-        note
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    result =
+      Repo.transaction(fn ->
+        with {:ok, _} <- lock_profile(scope, profile_id),
+             {:ok, note} <- do_submit(scope, profile_id, week_start, summary, items, author) do
+          note
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, %WeeklyNote{author_kind: "agent"} = note} ->
+        Platform.Social.WeeklyNoteSweep.note_submitted(note)
+
+      _ ->
+        :ok
+    end
+
+    result
   end
 
   defp do_submit(scope, profile_id, week_start, summary, items, author) do

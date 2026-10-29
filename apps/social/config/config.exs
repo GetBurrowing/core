@@ -107,3 +107,6 @@ end
 
 # Analytics has no timer, boot query or network outside production.
 config :social, :analytics_sync, start: config_env() == :prod
+
+# No weekly generation, messages or timers outside production.
+config :social, :weekly_note_sweep, start: config_env() == :prod
