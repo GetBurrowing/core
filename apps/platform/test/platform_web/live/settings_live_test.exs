@@ -286,7 +286,7 @@ defmodule PlatformWeb.SettingsLiveTest do
       {:ok, empty_channel} =
         Platform.Chat.create_space(%{
           name: "Initech",
-          slug: "settings-mask-initech-#{System.unique_integer([:positive])}",
+          slug: "initech-settings-mask-#{System.unique_integer([:positive])}",
           kind: "channel",
           org_id: Tenancy.get_org_by_slug!("initech").id
         })
