@@ -117,7 +117,7 @@ defmodule PlatformWeb.Canvases.VersionHistory do
          true <- revision > 0 and revision < socket.assigns.revision,
          %{} = version <- Versions.get(id, revision) do
       preview = %{
-        canvas: %{canvas | document: inert_document(version.document)},
+        canvas: %{canvas | document: inert_document(version.document, version.written_at)},
         revision: revision,
         at: version.written_at
       }
@@ -210,15 +210,84 @@ defmodule PlatformWeb.Canvases.VersionHistory do
   defp restore_error(_),
     do: "This version could not be restored. Check your access and try again."
 
-  @doc "Keep canonical static rendering, replacing executable/extension nodes with inert text."
-  def inert_document(document), do: Map.update!(document, "root", &inert_node/1)
+  @doc """
+  Keep canonical static rendering, replacing executable/extension nodes with
+  inert text. Sealed prototype frames survive as read-only previews (task
+  01a18834 stage 2): a scripted `embed` with a well-formed `prototype_ref`
+  becomes a `prototype` node pinned to that ref's version, and a `prototype`
+  node is pinned to the version that was latest at `written_at` (nil leaves
+  a follow-latest node following latest). Both carry `"preview" => true`,
+  which `Kinds.Prototype.validate_props/1` refuses on any write, so only
+  this projection can produce it. The rewrite is in DATA rather than an attr
+  threaded through every container kind: a container that forgot to forward
+  the attr would silently re-attach the room bridge; this fails closed.
+  """
+  def inert_document(document, written_at \\ nil),
+    do: Map.update!(document, "root", &inert_node(&1, written_at))
 
-  defp inert_node(%{"type" => type} = node)
-       when type in ~w(stack row card text markdown heading badge image code mermaid table checklist checklist_item form action_row) do
-    Map.update(node, "children", [], &Enum.map(&1, fn child -> inert_node(child) end))
+  @static ~w(stack row card text markdown heading badge image code mermaid table checklist checklist_item form action_row)
+
+  defp inert_node(%{"type" => type} = node, at) when type in @static do
+    Map.update(node, "children", [], &Enum.map(&1, fn child -> inert_node(child, at) end))
   end
 
-  defp inert_node(node),
+  # A plain embed renders `sandbox=""` srcdoc: no scripts, no room bridge.
+  defp inert_node(%{"type" => "embed", "props" => props} = node, _at)
+       when is_map(props) and not is_map_key(props, "scripts"),
+       do: node
+
+  defp inert_node(%{"type" => "embed", "props" => %{"scripts" => scripts}} = node, _at)
+       when scripts != true,
+       do: node
+
+  defp inert_node(
+         %{
+           "type" => "embed",
+           "props" =>
+             %{
+               "scripts" => true,
+               "prototype_ref" => %{"prototype_id" => prototype_id, "version" => version}
+             } = props
+         } = node,
+         _at
+       )
+       when is_binary(prototype_id) and is_integer(version) and version > 0 do
+    if Platform.UUID.valid?(prototype_id) do
+      %{
+        "id" => node["id"],
+        "type" => "prototype",
+        "props" =>
+          props
+          |> Map.take(["height", "width", "min_scale"])
+          |> Map.merge(%{
+            "prototype_id" => prototype_id,
+            "version" => version,
+            "preview" => true
+          })
+      }
+    else
+      unavailable(node)
+    end
+  end
+
+  defp inert_node(%{"type" => "prototype", "props" => %{} = props} = node, at) do
+    version =
+      case {props["version"], at} do
+        {nil, %DateTime{}} -> Platform.Prototypes.version_at(props["prototype_id"], at)
+        {version, _} -> version
+      end
+
+    props =
+      props
+      |> Map.put("preview", true)
+      |> then(&if(is_nil(version), do: &1, else: Map.put(&1, "version", version)))
+
+    Map.put(node, "props", props)
+  end
+
+  defp inert_node(node, _at), do: unavailable(node)
+
+  defp unavailable(node),
     do: %{
       "id" => node["id"],
       "type" => "text",

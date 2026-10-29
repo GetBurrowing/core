@@ -13,6 +13,9 @@ defmodule Platform.Chat.Canvas.Kinds.Prototype do
     * `height` / `width` / `min_scale` — exactly `embed`'s defaults and ranges
       (height 400 in 100..2000, width 1080 in 320..2400, min_scale 0.0..1.0),
       read by the same `EmbedCanvasScale` auto-scale hook.
+    * `preview` — NOT writable. The canvas history projection sets it on the
+      nodes it renders read-only (task 01a18834 stage 2); any write carrying
+      it is refused with "preview is set by the server".
 
   ## Where the data comes from: a LiveComponent, not a preload
 
@@ -114,13 +117,22 @@ defmodule Platform.Chat.Canvas.Kinds.Prototype do
 
   @impl true
   def validate_props(props) when is_map(props) do
-    with :ok <- validate_prototype_id(Map.get(props, "prototype_id")),
+    with :ok <- validate_not_preview(props),
+         :ok <- validate_prototype_id(Map.get(props, "prototype_id")),
          :ok <- validate_version(Map.get(props, "version")),
          :ok <- validate_height(Map.get(props, "height")),
          :ok <- validate_width(Map.get(props, "width")) do
       validate_min_scale(Map.get(props, "min_scale"))
     end
   end
+
+  # `preview` is set only by the history projection
+  # (`PlatformWeb.Canvases.VersionHistory.inert_document/2`), never stored: a
+  # live node carrying it would render without its room bridge and controls.
+  defp validate_not_preview(props) when is_map_key(props, "preview"),
+    do: {:error, "preview is set by the server"}
+
+  defp validate_not_preview(_props), do: :ok
 
   defp validate_prototype_id(id) do
     if Platform.UUID.valid?(id),

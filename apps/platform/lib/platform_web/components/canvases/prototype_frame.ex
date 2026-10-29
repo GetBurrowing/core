@@ -1,7 +1,17 @@
 defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   @moduledoc """
   The rendered body of a `prototype` canvas node (task 01a1316b-4e46 stage 2;
-  `Platform.Chat.Canvas.Kinds.Prototype` renders this and nothing else).
+  `Platform.Chat.Canvas.Kinds.Prototype` renders this and nothing else), and
+  of a `scripts: true` `embed` node with a well-formed `prototype_ref` (task
+  01a18834 stage 1; `Platform.Chat.Canvas.Kinds.Embed` renders this for it).
+
+  ## Sources
+
+  `source/1` is the one place that reads the node: a `prototype` node shows
+  `{prototype_id, version}` from its props (nil version = follow latest); a
+  scripted embed shows `{ref.prototype_id, ref.version}` from its
+  server-stamped `prototype_ref`, so it is "pinned" exactly when its ref is
+  older than the canvas-owned prototype's latest version.
 
   ## Why a LiveComponent
 
@@ -31,6 +41,25 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   re-checked on the write. A host that passes no viewer (read-only surfaces)
   shows the list without the Pin buttons.
 
+  A scripted embed has no `version` prop, and `ScriptedEmbeds.stamp/2`
+  replaces any client-sent `prototype_ref` from the srcdoc's sha256. So its
+  pin patches the node's `srcdoc` with the target version's HTML
+  (`Prototypes.embed_html/2`); `Prototypes.publish_embed/1` finds the live
+  version with that sha and re-stamps the ref to it, publishing nothing.
+
+  ## Preview
+
+  `props["preview"] == true` is set only by the canvas history projection
+  (`PlatformWeb.Canvases.VersionHistory.inert_document/2`, task 01a18834
+  stage 2; `Kinds.Prototype.validate_props/1` refuses it on every write).
+  The frame then shows the one version the projection pinned, sealed and
+  NOT connected: no `CanvasRoom.frame_attrs` on the room element, no version
+  menu, Pin, fullscreen or Open. An info strip ("Preview · vN · read-only")
+  replaces the bar and the edge is dashed `border-edge`; the frame is
+  not dimmed, so the prototype's colours stay true. A retention-removed
+  version shows the removed panel without its View action. `toggle`, `pin`
+  and `fullscreen` are no-ops.
+
   ## Org scoping
 
   The canvas's space org is resolved here and handed to `frame_view/3`, which
@@ -55,7 +84,8 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
        load_key: nil,
        view: nil,
        pin_error: nil,
-       retention_days: nil
+       retention_days: nil,
+       preview?: false
      )}
   end
 
@@ -64,7 +94,8 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     node = assigns.node
     props = node["props"] || %{}
     canvas_id = assigns[:canvas_id]
-    key = {props["prototype_id"], props["version"], canvas_id}
+    {prototype_id, version} = source(node)
+    key = {prototype_id, version, canvas_id}
 
     socket =
       socket
@@ -73,6 +104,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:props, props)
       |> assign(:canvas_id, canvas_id)
       |> assign(:viewer, assigns[:viewer])
+      |> assign(:preview?, props["preview"] == true)
 
     socket = if socket.assigns.load_key == key, do: socket, else: load(socket, key)
     {:ok, socket}
@@ -100,6 +132,22 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     )
   end
 
+  # The one reader of WHICH prototype version a node shows (see "Sources").
+  defp source(%{"type" => "embed", "props" => %{"scripts" => true} = props}) do
+    case props["prototype_ref"] do
+      %{} = ref -> {ref["prototype_id"], ref["version"]}
+      _ -> {nil, nil}
+    end
+  end
+
+  defp source(node) do
+    props = node["props"] || %{}
+    {props["prototype_id"], props["version"]}
+  end
+
+  defp scripted_embed?(node),
+    do: match?(%{"type" => "embed", "props" => %{"scripts" => true}}, node)
+
   defp canvas_org_id(canvas_id) do
     with %{space_id: space_id} <- Chat.get_canvas(canvas_id),
          %{org_id: org_id} <- Chat.get_space(space_id) do
@@ -109,7 +157,13 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     end
   end
 
+  # A history preview renders none of these controls and sits under an
+  # `inert` subtree; a forged event is still a no-op (defence in depth).
   @impl true
+  def handle_event(event, _params, %{assigns: %{preview?: true}} = socket)
+      when event in ~w(toggle pin fullscreen),
+      do: {:noreply, socket}
+
   def handle_event("toggle", %{"panel" => panel}, socket) when panel in ~w(versions menu) do
     panel = String.to_existing_atom(panel)
     open = if socket.assigns.open == panel, do: nil, else: panel
@@ -135,16 +189,28 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     with {:user, _} = actor <- socket.assigns.viewer,
          {version, ""} <- Integer.parse(to_string(raw)),
          true <- live_version?(socket.assigns.view, version),
+         {:ok, props} <- pin_props(socket.assigns.node, socket.assigns.view, version),
          %{} = canvas <- Chat.get_canvas(socket.assigns.canvas_id),
          {:ok, _canvas} <-
-           Chat.patch_canvas(actor, canvas, [
-             {:set_props, socket.assigns.node["id"], %{"version" => version}}
-           ]) do
+           Chat.patch_canvas(actor, canvas, [{:set_props, socket.assigns.node["id"], props}]) do
       # The patch re-renders the host, which hands this component the new node;
       # update/2 then reloads for the pinned version.
       {:noreply, assign(socket, open: nil)}
     else
       _ -> {:noreply, assign(socket, pin_error: "Could not pin that version.")}
+    end
+  end
+
+  # A scripted embed is pinned by its HTML, never a `version` prop (see
+  # "Pin this version").
+  defp pin_props(node, view, version) do
+    if scripted_embed?(node) do
+      case Prototypes.embed_html(view.prototype.id, version) do
+        {:ok, html} -> {:ok, %{"srcdoc" => html}}
+        {:error, _} -> :error
+      end
+    else
+      {:ok, %{"version" => version}}
     end
   end
 
@@ -172,6 +238,75 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     """
   end
 
+  # History preview (task 01a18834 stage 2; see "Preview"): the sealed frame
+  # of one pinned version, with no room bridge and no controls.
+  def render(%{preview?: true} = assigns) do
+    view = assigns.view
+    props = assigns.props
+
+    assigns =
+      assigns
+      |> assign(:url, Prototypes.url(view.prototype.id, view.shown))
+      |> assign(:height, Kind.height(props))
+      |> assign(:width, Kind.width(props))
+      |> assign(:min_scale, Kind.min_scale(props))
+      |> assign(:title, title(assigns.node, view))
+
+    ~H"""
+    <div
+      id={@id}
+      class="relative rounded-xl border border-dashed border-edge"
+      data-role="prototype-canvas"
+      data-preview="true"
+    >
+      <.chip
+        tone="info"
+        class="flex w-full items-start rounded-b-none rounded-t-xl border-0 px-3 py-2 text-sm"
+        data-role="prototype-preview-strip"
+      >
+        <span class="hero-information-circle mt-0.5 size-4 shrink-0" aria-hidden="true"></span>
+        <span class="min-w-0">
+          Preview · <span class="font-mono text-xs">v{@view.shown}</span>
+          · read-only — not connected to the room
+        </span>
+      </.chip>
+      <%= if @view.state == :removed do %>
+        <div
+          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content"
+          data-role="prototype-removed"
+        >
+          <span>
+            {removed_text(@retention_days)} Latest is v{@view.latest}.
+          </span>
+        </div>
+      <% else %>
+        <div id={"#{@id}-room-v#{@view.shown}"}>
+          <div
+            id={"#{@id}-frame-v#{@view.shown}"}
+            phx-hook="EmbedCanvasScale"
+            phx-update="ignore"
+            data-declared-width={@width}
+            data-declared-height={@height}
+            data-min-scale={@min_scale}
+            class="relative overflow-hidden rounded-b-xl"
+            style={"height: #{@height}px;"}
+            data-role="prototype-frame"
+          >
+            <iframe
+              src={@url}
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title={@title}
+              style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
+            >
+            </iframe>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
   def render(assigns) do
     view = assigns.view
     props = assigns.props
@@ -184,6 +319,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:width, Kind.width(props))
       |> assign(:min_scale, Kind.min_scale(props))
       |> assign(:can_pin?, match?({:user, _}, assigns.viewer) and is_binary(assigns.canvas_id))
+      |> assign(:title, title(assigns.node, view))
 
     ~H"""
     <div
@@ -226,9 +362,9 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         <p
           class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content"
           data-role="prototype-title"
-          title={@view.prototype.name}
+          title={@title}
         >
-          {@view.prototype.name}
+          {@title}
         </p>
         <%!-- By BAR width: from 32rem the full "v1 pinned · latest v4"; from
              24rem only "latest v4" (the stamp beside it already names the
@@ -369,7 +505,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
               src={@url}
               sandbox="allow-scripts"
               referrerpolicy="no-referrer"
-              title={@view.prototype.name}
+              title={@title}
               style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
             >
             </iframe>
@@ -465,6 +601,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     </div>
     """
   end
+
+  # A canvas-owned prototype's stored name is `Canvas embed <node_id>`.
+  defp title(node, view),
+    do: if(scripted_embed?(node), do: "Scripted embed", else: view.prototype.name)
 
   defp stamp_label(%{pinned?: true, shown: shown, latest: latest}),
     do: "Version #{shown}, pinned (latest is v#{latest}), show versions"

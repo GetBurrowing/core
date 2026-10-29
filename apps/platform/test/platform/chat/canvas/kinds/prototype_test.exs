@@ -84,6 +84,22 @@ defmodule Platform.Chat.Canvas.Kinds.PrototypeTest do
       assert Prototype.width(%{"width" => 800}) == 800
     end
 
+    test "refuses any preview key: only the history projection sets it (task 01a18834 stage 2)" do
+      for value <- [true, false, nil, "true"] do
+        assert Prototype.validate_props(%{"prototype_id" => @id, "preview" => value}) ==
+                 {:error, "preview is set by the server"}
+      end
+
+      node = %{
+        "id" => "p",
+        "type" => "prototype",
+        "props" => %{"prototype_id" => @id, "version" => 2, "preview" => true}
+      }
+
+      assert {:error, [reason]} = Kinds.validate_node(node)
+      assert reason =~ "preview is set by the server"
+    end
+
     test "a node with a bad prototype_id fails whole-node validation" do
       node = %{"id" => "p", "type" => "prototype", "props" => %{"prototype_id" => "x"}}
       assert {:error, [reason]} = Kinds.validate_node(node)

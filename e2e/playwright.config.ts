@@ -7,6 +7,10 @@ const IPHONE_ONLY = /prototype_fullscreen_touch\.spec\.ts/
 // and its own desktop Chromium project, never under `chromium`, so that
 // project's test list is unchanged.
 const DRAG_ONLY = /prototype_fullscreen_drag\.spec\.ts/
+// Task 01a18834 stage 3: scripted embed versions, history previews and the
+// iPhone fullscreen case. WebKit only; the spec makes every context itself
+// with an explicit viewport (390x844 touch, or 1280x800).
+const EMBED_HISTORY = /scripted_embed_history\.spec\.ts/
 // iPadOS Safari's default desktop-class UA: it claims a Mac. The spec adds
 // navigator.maxTouchPoints = 5, which is what tells an iPad apart.
 const IPADOS_SAFARI_UA =
@@ -43,7 +47,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       // The iPhone touch spec is WebKit-only (task 01a1389f); every other
       // spec keeps running here exactly as before.
-      testIgnore: [IPHONE_ONLY, DRAG_ONLY],
+      testIgnore: [IPHONE_ONLY, DRAG_ONLY, EMBED_HISTORY],
     },
     {
       // Task 01a1389f: the prototype fullscreen overlay under a held press on
@@ -53,7 +57,7 @@ export default defineConfig({
       // mic/camera grants are reset here: WebKit refuses to launch with them.
       // No retry: the probes are deterministic geometry, a retry only repeats.
       name: "webkit-iphone",
-      testMatch: [IPHONE_ONLY, DRAG_ONLY],
+      testMatch: [IPHONE_ONLY, DRAG_ONLY, EMBED_HISTORY],
       retries: 0,
       use: {
         ...devices["iPhone 15"],

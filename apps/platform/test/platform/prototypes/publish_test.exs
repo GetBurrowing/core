@@ -183,4 +183,50 @@ defmodule Platform.Prototypes.PublishTest do
     assert {:error, {:version_not_found, _}} =
              Prototypes.rollback(agent_publisher(ctx.agent), p, 2)
   end
+
+  describe "embed_html/2 (task 01a18834 stage 1)" do
+    test "returns a live version's entry bytes, and :not_found once retention removed it", ctx do
+      {:ok, %{prototype: p}} =
+        publish(ctx.agent, %{org_id: ctx.org_id, name: "H"}, {:files, bundle_files("v1")})
+
+      {:ok, %{prototype: p}} = publish(ctx.agent, %{prototype: p}, {:files, bundle_files("v2")})
+
+      assert {:ok, html} = Prototypes.embed_html(p.id, 2)
+      assert html == bundle_files("v2")["index.html"]["content"]
+      assert {:ok, v1} = Prototypes.embed_html(p.id, 1)
+      assert v1 =~ "<!-- v1 -->"
+      refute v1 == html
+
+      Prototypes.get_live_version(p.id, 2)
+      |> Ecto.Changeset.change(removed_at: DateTime.utc_now())
+      |> Platform.Repo.update!()
+
+      assert Prototypes.embed_html(p.id, 2) == {:error, :not_found}
+      assert Prototypes.embed_html(p.id, 9) == {:error, :not_found}
+      assert Prototypes.embed_html("not-a-uuid", 1) == {:error, :not_found}
+      assert Prototypes.embed_html(p.id, "1") == {:error, :not_found}
+    end
+  end
+
+  describe "version_at/2 (task 01a18834 stage 2)" do
+    test "the newest version inserted at or before the instant, removed ones included", ctx do
+      {:ok, %{prototype: p, version: v1}} =
+        publish(ctx.agent, %{org_id: ctx.org_id, name: "At"}, {:files, bundle_files("v1")})
+
+      {:ok, %{prototype: p, version: v2}} =
+        publish(ctx.agent, %{prototype: p}, {:files, bundle_files("v2")})
+
+      v2
+      |> Ecto.Changeset.change(removed_at: DateTime.utc_now())
+      |> Platform.Repo.update!()
+
+      assert Prototypes.version_at(p.id, DateTime.add(v1.inserted_at, -1, :second)) == nil
+      assert Prototypes.version_at(p.id, v1.inserted_at) == 1
+      assert Prototypes.version_at(p.id, DateTime.add(v2.inserted_at, -1, :microsecond)) == 1
+      assert Prototypes.version_at(p.id, v2.inserted_at) == 2
+      assert Prototypes.version_at(p.id, DateTime.add(v2.inserted_at, 1, :hour)) == 2
+      assert Prototypes.version_at("not-a-uuid", DateTime.utc_now()) == nil
+      assert Prototypes.version_at(Ecto.UUID.generate(), DateTime.utc_now()) == nil
+    end
+  end
 end

@@ -44,11 +44,15 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
   kind does, so the script runs under the serve route's sealed CSP: opaque
   origin, no network, no Burrow cookies, no access to the page around it.
 
-  The scripted wrapper carries `data-scripted-src` and NO `data-srcdoc`: the
-  `EmbedCanvasScale` hook writes `srcdoc` into its iframe on update, and
-  `srcdoc` wins over `src`, so a script-bearing `data-srcdoc` would run in an
-  `allow-scripts` frame under the SUITE page's CSP instead of the sealed one.
-  Its wrapper id also differs (`embed-canvas-scripted-...`), so toggling
+  A scripted node with a well-formed ref renders through
+  `PlatformWeb.Components.Canvases.PrototypeFrame` (task 01a18834 stage 1),
+  the same LiveComponent as the `prototype` kind: one version bar (stamp,
+  version list, Pin for editors), the in-app fullscreen overlay and the room
+  bridge. Its frame carries NO `data-srcdoc`: the `EmbedCanvasScale` hook
+  writes `srcdoc` into its iframe on update, and `srcdoc` wins over `src`, so
+  a script-bearing `data-srcdoc` would run in an `allow-scripts` frame under
+  the SUITE page's CSP instead of the sealed one. The component id is
+  `embed-canvas-scripted-...`, unlike the plain wrapper's, so toggling
   `scripts` replaces the element instead of reusing an iframe whose sandbox
   belongs to the other mode. A scripted node with no ref (the stamp has not
   run, or a hand-written document) renders a neutral panel and no iframe;
@@ -57,7 +61,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
 
   use Platform.Chat.Canvas.Kind
 
-  alias Platform.Chat.CanvasRoom
+  alias PlatformWeb.Components.Canvases.PrototypeFrame
 
   @max_srcdoc_bytes 256 * 1024
   @default_height 400
@@ -203,6 +207,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
   attr(:node, :map, required: true)
   attr(:dom_id_scope, :string, default: nil)
   attr(:canvas_id, :string, default: nil)
+  attr(:viewer, :any, default: nil)
 
   @impl Platform.Chat.Canvas.Kind
   def render(assigns) do
@@ -229,7 +234,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     node_id = assigns.node["id"] || "embed"
 
     if props["scripts"] == true do
-      render_scripted(assigns, props, node_id, width, height, min_scale)
+      render_scripted(assigns, props, node_id)
     else
       render_srcdoc(assigns, props, node_id, width, height, min_scale)
     end
@@ -299,7 +304,9 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     """
   end
 
-  defp render_scripted(assigns, props, node_id, width, height, min_scale) do
+  # Size props reach the frame through PrototypeFrame, which reads them off
+  # the node with the same clamps (`Kinds.Prototype.height/1` & co).
+  defp render_scripted(assigns, props, node_id) do
     wrapper_id =
       case assigns[:dom_id_scope] do
         scope when is_binary(scope) and scope != "" -> "embed-canvas-scripted-#{node_id}-#{scope}"
@@ -309,16 +316,10 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     assigns =
       assigns
       |> assign(:src, scripted_src(props["prototype_ref"]))
-      |> assign(:room_attrs, CanvasRoom.frame_attrs(assigns[:canvas_id], assigns.node["id"]))
-      |> assign(:declared_width, width)
-      |> assign(:declared_height, height)
-      |> assign(:min_scale, min_scale)
       |> assign(:wrapper_id, wrapper_id)
-      |> assign(
-        :iframe_style,
-        "width: #{width}px; height: #{height}px; border: 0; display: block;"
-      )
-      |> assign(:wrapper_style, "height: #{height}px;")
+      |> assign(:frame_module, PrototypeFrame)
+      |> assign_new(:canvas_id, fn -> nil end)
+      |> assign_new(:viewer, fn -> nil end)
 
     ~H"""
     <div
@@ -329,43 +330,17 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     >
       Scripted embed unavailable
     </div>
-    <%!-- The room bridge (task 01a1316b-84fa) wraps the scale wrapper, as in
-         PrototypeFrame, because an element carries one phx-hook. --%>
-    <div :if={@src} id={"#{@wrapper_id}-room"} {@room_attrs}>
-      <div
-        id={@wrapper_id}
-        phx-hook="EmbedCanvasScale"
-        phx-update="ignore"
-        data-declared-width={@declared_width}
-        data-declared-height={@declared_height}
-        data-min-scale={@min_scale}
-        data-scripted-src={@src}
-        class="group relative overflow-hidden rounded-xl border border-edge"
-        style={@wrapper_style}
-      >
-        <iframe
-          src={@src}
-          sandbox="allow-scripts"
-          referrerpolicy="no-referrer"
-          title="Scripted embed"
-          style={@iframe_style}
-        >
-        </iframe>
-        <button
-          type="button"
-          data-embed-expand
-          aria-label="Expand canvas to full screen"
-          title="Expand"
-          class={
-            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content shadow-md " <>
-              "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
-              "hover:bg-base-100 hover:text-base-content"
-          }
-        >
-          <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
-        </button>
-      </div>
-    </div>
+    <%!-- No wrapper: PrototypeFrame's root, room and frame elements already
+         carry one phx-hook each (PrototypeFullscreen, CanvasRoomBridge,
+         EmbedCanvasScale), as in Kinds.Prototype. --%>
+    <.live_component
+      :if={@src}
+      module={@frame_module}
+      id={@wrapper_id}
+      node={@node}
+      canvas_id={@canvas_id}
+      viewer={@viewer}
+    />
     """
   end
 

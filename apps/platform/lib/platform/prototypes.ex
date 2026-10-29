@@ -122,6 +122,49 @@ defmodule Platform.Prototypes do
     )
   end
 
+  @doc """
+  The entry file's bytes of a live version (task 01a18834 stage 1).
+
+  Pinning a scripted canvas embed reads the target version's HTML here and
+  patches it into the embed's `srcdoc`; `publish_embed/1` then reuses that
+  version by sha, so the pin publishes nothing. A version retention removed,
+  an unknown id or a version with no entry file is `{:error, :not_found}`.
+  """
+  @spec embed_html(term(), term()) :: {:ok, binary()} | {:error, :not_found}
+  def embed_html(prototype_id, version) when is_integer(version) do
+    with true <- Platform.UUID.valid?(prototype_id),
+         %Version{} = v <- get_live_version(prototype_id, version),
+         %{"storage_key" => key} when is_binary(key) <- Version.file(v, v.entry_path),
+         {:ok, html} <- Storage.read(key) do
+      {:ok, html}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  def embed_html(_prototype_id, _version), do: {:error, :not_found}
+
+  @doc """
+  The version number that was newest at `at` (task 01a18834 stage 2): the
+  highest version with `inserted_at <= at`, removed ones included, so a
+  history preview of a follow-latest `prototype` node shows what was live
+  when that canvas version was written (and retention shows as removed).
+  nil when no version existed yet, or for a non-UUID id.
+  """
+  @spec version_at(term(), DateTime.t()) :: integer() | nil
+  def version_at(prototype_id, %DateTime{} = at) do
+    if Platform.UUID.valid?(prototype_id) do
+      Repo.one(
+        from(v in Version,
+          where: v.prototype_id == ^prototype_id and v.inserted_at <= ^at,
+          select: max(v.version)
+        )
+      )
+    end
+  end
+
+  def version_at(_prototype_id, _at), do: nil
+
   @doc "Every version of a prototype, newest first, removed ones included."
   @spec list_versions(Prototype.t()) :: [Version.t()]
   def list_versions(%Prototype{id: id}) do
@@ -170,7 +213,9 @@ defmodule Platform.Prototypes do
              %{
                version: v.version,
                inserted_at: v.inserted_at,
-               publisher: Map.get(names, publisher_key(v.published_by), "unknown"),
+               publisher:
+                 Map.get(names, publisher_key(v.published_by)) ||
+                   publisher_fallback(v.published_by),
                removed?: not is_nil(v.removed_at)
              }
            end)
@@ -217,7 +262,22 @@ defmodule Platform.Prototypes do
   end
 
   defp publisher_key(%{"kind" => kind, "id" => id}), do: {kind, id}
+
+  # A scripted canvas embed's version is published by the canvas write; its
+  # author is that write's attribution (task 01a18834 stage 1).
+  defp publisher_key(%{"kind" => "canvas_embed", "author" => %{"type" => type, "id" => id}})
+       when type in ["user", "agent"],
+       do: {type, id}
+
   defp publisher_key(_), do: nil
+
+  # The attribution's own name when its id is not a user or agent row (a
+  # canvas created with a message is attributed to the space participant).
+  defp publisher_fallback(%{"author" => %{"display_name" => name}})
+       when is_binary(name) and name != "",
+       do: name
+
+  defp publisher_fallback(_), do: "unknown"
 
   # ── Policy ─────────────────────────────────────────────────────────────
 

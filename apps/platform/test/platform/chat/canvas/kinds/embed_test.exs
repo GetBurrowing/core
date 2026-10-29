@@ -376,29 +376,8 @@ defmodule Platform.Chat.Canvas.Kinds.EmbedTest do
       assert Embed.validate_props(%{"srcdoc" => "<p>x</p>", "prototype_ref" => @ref}) == :ok
     end
 
-    test "a scripted render frames /proto with sandbox allow-scripts and never srcdoc" do
-      html =
-        render_node(scripted_node(%{"srcdoc" => @script_doc, "prototype_ref" => @ref}))
-
-      doc = LazyHTML.from_fragment(html)
-      [iframe] = Enum.to_list(LazyHTML.query(doc, "iframe"))
-      src = "/proto/01a1316b-677a-7001-b686-b8fd67455686/3/"
-
-      assert LazyHTML.attribute(iframe, "src") == [src]
-      assert LazyHTML.attribute(iframe, "sandbox") == ["allow-scripts"]
-      assert LazyHTML.attribute(iframe, "referrerpolicy") == ["no-referrer"]
-      assert LazyHTML.attribute(iframe, "srcdoc") == []
-
-      [wrapper] = Enum.to_list(LazyHTML.query(doc, ~s([phx-hook="EmbedCanvasScale"])))
-      assert LazyHTML.attribute(wrapper, "data-scripted-src") == [src]
-      assert LazyHTML.attribute(wrapper, "data-srcdoc") == []
-      assert LazyHTML.attribute(wrapper, "id") == ["embed-canvas-scripted-s1"]
-
-      refute html =~ "allow-same-origin"
-      refute html =~ "srcdoc"
-      refute html =~ "<script"
-      refute html =~ "&lt;script"
-    end
+    # The framed (ref present) render is a LiveComponent that reads the
+    # database; its seal assertions live in EmbedScriptedFrameTest below.
 
     test "a scripted node without a valid ref renders the panel and no iframe" do
       for ref <- [
@@ -416,6 +395,200 @@ defmodule Platform.Chat.Canvas.Kinds.EmbedTest do
         refute html =~ "srcdoc"
         assert html =~ "bg-base-200"
       end
+    end
+  end
+end
+
+defmodule Platform.Chat.Canvas.Kinds.EmbedScriptedFrameTest do
+  @moduledoc """
+  A `scripts: true` embed with a ref renders through PrototypeFrame (task
+  01a18834 stage 1): the shared version bar, the same seal as the
+  `prototype` kind, and one phx-hook per element. Driven through a real
+  canvas whose embed was written three times (v1..v3).
+  """
+
+  use PlatformWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import Platform.PrototypeFixtures
+  import Platform.TenancyFixtures
+
+  alias Platform.Chat
+  alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.CanvasDocument
+
+  setup do
+    prev_sync = Application.get_env(:platform, :canvas_persist_sync)
+    Application.put_env(:platform, :canvas_persist_sync, true)
+    on_exit(fn -> Application.put_env(:platform, :canvas_persist_sync, prev_sync) end)
+
+    scratch_storage!("embed_scripted_frame_test")
+    set_settings!(%{enabled: true, retention_days: 90})
+
+    n = System.unique_integer([:positive])
+    org_id = tenant_org_id("embed-scripted-#{n}")
+
+    {:ok, space} =
+      Chat.create_space(%{name: "ES #{n}", slug: "es-#{n}", kind: "channel", org_id: org_id})
+
+    editor = user!("Embed Editor")
+
+    {:ok, author} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: editor.id,
+        display_name: editor.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, canvas} =
+      Chat.create_canvas(%{
+        "space_id" => space.id,
+        "created_by" => author.id,
+        "title" => "Scripted",
+        "document" => %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "children" => [
+              %{
+                "id" => "s1",
+                "type" => "embed",
+                "props" => %{"srcdoc" => html(1), "scripts" => true}
+              }
+            ]
+          }
+        }
+      })
+
+    on_exit(fn -> CanvasServer.stop(canvas.id) end)
+
+    for v <- [2, 3] do
+      {:ok, _} =
+        Chat.patch_canvas({:user, editor.id}, canvas, [{:set_props, "s1", %{"srcdoc" => html(v)}}])
+    end
+
+    node = scripted_node(canvas.id)
+    %{"prototype_id" => pid, "version" => 3} = node["props"]["prototype_ref"]
+
+    {:ok, canvas: canvas, node: node, prototype_id: pid, editor: editor}
+  end
+
+  defp html(v),
+    do:
+      ~s(<!doctype html><html><body><p>VERSION=#{v}</p><script>document.title="v#{v}"</script></body></html>)
+
+  defp scripted_node(canvas_id) do
+    {:ok, %{document: doc}} = CanvasServer.describe(canvas_id)
+    CanvasDocument.get_node(doc, "s1")
+  end
+
+  defp mount!(ctx, extra \\ %{}) do
+    session = Map.merge(%{"canvas_id" => ctx.canvas.id, "node" => ctx.node}, extra)
+    {:ok, view, _html} = live_isolated(build_conn(), __MODULE__.Host, session: session)
+    view
+  end
+
+  defp find(html, selector), do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector)
+
+  test "the scripted render is PrototypeFrame's root, keyed embed-canvas-scripted-<node>", ctx do
+    view = mount!(ctx)
+
+    assert has_element?(
+             view,
+             ~s(#embed-canvas-scripted-s1[data-role="prototype-canvas"][phx-hook="PrototypeFullscreen"])
+           )
+
+    [stamp] = Enum.to_list(find(render(view), ~s([data-role="prototype-version-stamp"])))
+    assert String.trim(LazyHTML.text(stamp)) =~ ~r/\Av3 · \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}Z\z/
+    assert has_element?(view, ~s([data-role="prototype-fullscreen"]))
+
+    assert has_element?(
+             view,
+             ~s([data-role="prototype-open"][href="/proto/#{ctx.prototype_id}/3/"])
+           )
+
+    view |> element(~s([data-role="prototype-version-stamp"])) |> render_click()
+    rows = find(render(view), ~s([data-role="prototype-version-row"])) |> Enum.to_list()
+    assert Enum.flat_map(rows, &LazyHTML.attribute(&1, "data-version")) == ~w(3 2 1)
+
+    scoped = mount!(ctx, %{"dom_id_scope" => "panel"})
+
+    assert has_element?(
+             scoped,
+             ~s(#embed-canvas-scripted-s1-panel[data-role="prototype-canvas"])
+           )
+  end
+
+  test "the seal: /proto src, allow-scripts only, no-referrer, and no srcdoc anywhere", ctx do
+    html = render(mount!(ctx))
+
+    [iframe] = Enum.to_list(find(html, "iframe"))
+    assert LazyHTML.attribute(iframe, "src") == ["/proto/#{ctx.prototype_id}/3/"]
+    assert LazyHTML.attribute(iframe, "sandbox") == ["allow-scripts"]
+    assert LazyHTML.attribute(iframe, "referrerpolicy") == ["no-referrer"]
+    assert LazyHTML.attribute(iframe, "srcdoc") == []
+    assert Enum.to_list(find(html, "[data-srcdoc]")) == []
+    assert Enum.to_list(find(html, "[srcdoc]")) == []
+
+    refute html =~ "srcdoc"
+    refute html =~ "allow-same-origin"
+    refute html =~ "<script"
+    refute html =~ "&lt;script"
+    refute html =~ "VERSION="
+  end
+
+  test "one phx-hook per element, and no hooked element wraps the frame's root", ctx do
+    html = render(mount!(ctx))
+
+    # Raw tags: an element with two phx-hook attributes would be collapsed by
+    # any parser, so count them in the markup itself.
+    for tag <- Regex.scan(~r/<[a-zA-Z][^>]*>/, html) |> List.flatten() do
+      assert length(Regex.scan(~r/\sphx-hook=/, tag)) <= 1, "two hooks on one element: #{tag}"
+    end
+
+    hooks =
+      html
+      |> find("[phx-hook]")
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-hook"))
+      |> Enum.sort()
+
+    assert hooks == Enum.sort(~w(PrototypeFullscreen CanvasRoomBridge EmbedCanvasScale))
+
+    [root] = Enum.to_list(find(html, ~s([data-role="prototype-canvas"])))
+    assert LazyHTML.attribute(root, "phx-hook") == ["PrototypeFullscreen"]
+    assert Enum.to_list(find(html, ~s([phx-hook] [data-role="prototype-canvas"]))) == []
+
+    [room] = Enum.to_list(find(html, ~s([phx-hook="CanvasRoomBridge"])))
+    assert LazyHTML.attribute(room, "data-canvas-id") == [ctx.canvas.id]
+    assert LazyHTML.attribute(room, "data-node-id") == ["s1"]
+  end
+
+  defmodule Host do
+    @moduledoc false
+    use Phoenix.LiveView
+
+    def mount(_params, session, socket) do
+      {:ok,
+       assign(socket,
+         canvas_id: session["canvas_id"],
+         node: session["node"],
+         viewer: session["viewer"],
+         dom_id_scope: session["dom_id_scope"]
+       )}
+    end
+
+    def render(assigns) do
+      ~H"""
+      <Platform.Chat.Canvas.Renderer.render_node
+        node={@node}
+        canvas_id={@canvas_id}
+        viewer={@viewer}
+        dom_id_scope={@dom_id_scope}
+      />
+      """
     end
   end
 end
