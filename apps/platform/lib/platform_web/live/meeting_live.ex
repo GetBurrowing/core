@@ -1280,6 +1280,10 @@ defmodule PlatformWeb.MeetingLive do
             socket.assigns[:in_meeting] ->
               socket
 
+            socket.assigns[:meeting].status == "ended" ->
+              # Viewing a past meeting must not enter its call lifecycle.
+              socket
+
             socket.assigns[:chrome_mode] == :none ->
               # Set on both the disconnected and connected render so the
               # static first paint and the live view agree; the join itself
@@ -4645,6 +4649,10 @@ defmodule PlatformWeb.MeetingLive do
       socket.assigns[:in_meeting] ->
         {:noreply, socket}
 
+      socket.assigns[:meeting] && socket.assigns.meeting.status == "ended" ->
+        # Also reject an auto-join already queued before the meeting ended.
+        {:noreply, socket}
+
       not is_binary(socket.assigns[:user_id]) ->
         # Guest ingress (task 019f498d stage 3): mount already minted the
         # bundle and pushed `join-meeting`. MeetingHooks.join/1 assumes a
@@ -5582,10 +5590,8 @@ defmodule PlatformWeb.MeetingLive do
   # `Meetings.resume_meeting/2`: the chat page's Meet button, the webhooks
   # and the native app all leave an ended meeting ended.
   #
-  # Both join sites reach it: `:auto_join` (which fires on any connected
-  # shell mount, so merely opening a past meeting from the list resumes it)
-  # and the lobby's `"join_meeting"`. To gate resumption behind an explicit
-  # Join later, change only this clause.
+  # Ended meetings reach this only through an explicit Join. Both the
+  # mount scheduler and :auto_join handler keep past-page views out.
   defp maybe_start_meeting(%{assigns: %{meeting: %{status: "ended"} = m}} = socket) do
     case Meetings.resume_meeting(m, started_by_user_id: socket.assigns[:user_id]) do
       {:ok, resumed} -> assign(socket, :meeting, resumed)
