@@ -100,7 +100,10 @@ defmodule Platform.Repo.Migrations.AddRunIdentityToMeetingCompletionTemplatesTes
 
   describe "up/0" do
     test "(d) live rows carry run_id and the tool name, including after up on stale edited rows" do
-      # Migrations ran before ExUnit: the rows as migrated must already carry the block.
+      # The rows as this database holds them must carry the block. NOTE: this half
+      # does NOT discriminate the migration: the mutation probe (rewrite/2 returning
+      # its input) left it green, because these rows carry the descriptor content.
+      # The stale-row half below is the assertion on the migration itself.
       :ok = PromptTemplates.seed_defaults()
 
       for slug <- @slugs do
