@@ -195,7 +195,8 @@ defmodule Platform.Installs.DigitalOceanTest do
 
       :persistent_term.put({__MODULE__, :records}, [%{"id" => 7, "data" => "203.0.113.5"}])
       assert :ok = DigitalOcean.ensure_a_record("installs.example.test", "acme", "203.0.113.5")
-      refute_received {:req, method, _, _, _, _} when method in ["POST", "PUT"]
+      refute_received {:req, "POST", _, _, _, _}
+      refute_received {:req, "PUT", _, _, _, _}
 
       assert :ok = DigitalOcean.ensure_a_record("installs.example.test", "acme", "203.0.113.6")
       assert_received {:req, "PUT", "/v2/domains/installs.example.test/records/7", _, put, _}
