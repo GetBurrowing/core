@@ -254,6 +254,64 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  # Task 01a18d0a stage 1: "Going to Meetings opens the meetings top-level
+  # page every time. It must never restore or redirect to the last-visited
+  # meeting route." The client half (RouteResume never saving or restoring a
+  # Meetings route, including a stale `route_resume:meetings` value) is pinned
+  # in `assets/test/hooks/route_resume.test.js`; LiveViewTest has no
+  # localStorage or history. These pin the server half: having opened a
+  # meeting in this session changes nothing about `/meetings`, and every
+  # Meetings tile the shell renders points at the index.
+  describe "Meetings index after visiting a meeting (task 01a18d0a)" do
+    test "a fresh /meetings mount in the same session renders the index, not the prior meeting",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "prior-room", name: "Prior Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _show, show_html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert show_html =~ ~s(data-intent-panel-host="true")
+
+      # Same session cookie, new mount: a redirect would surface here as
+      # `{:error, {:live_redirect | :redirect, _}}`.
+      assert {:ok, view, html} = live(conn, ~p"/meetings")
+      assert html =~ ~s(data-role="meetings-count")
+      refute html =~ ~s(data-intent-panel-host="true")
+      assert render(view) =~ "Prior Room"
+    end
+
+    test "patching from a meeting back to /meetings lands on the index on the same pid",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "patch-room", name: "Patch Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html = render_patch(view, ~p"/meetings")
+      assert_patched(view, ~p"/meetings")
+      assert html =~ ~s(data-role="meetings-count")
+      refute html =~ ~s(data-intent-panel-host="true")
+    end
+
+    test "every Meetings tile the shell renders on a meeting page links to the bare index",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "tile-room", name: "Tile Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Every `<a ... data-module-id="meetings" ...>` opening tag on the page.
+      tags =
+        ~r/<a\b[^>]*data-module-id="meetings"[^>]*>/
+        |> Regex.scan(html)
+        |> List.flatten()
+      assert tags != [], "expected at least one Meetings tile on the meeting page"
+
+      for tag <- tags do
+        assert tag =~ ~s(href="/meetings"), "Meetings tile is not the bare index: #{tag}"
+      end
+    end
+  end
+
   describe "route authorization (:show)" do
     # The gate is `Meetings.fetch_meeting_for_user/2`, keyed off
     # `:current_user_record` (the real User with `:org_memberships`), NOT the

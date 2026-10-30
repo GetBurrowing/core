@@ -1,9 +1,11 @@
 import ClientState from "../client_state.js";
 
 /**
- * RouteResume — per-module last-URL tracking so a click on the Chat / Tasks /
- * Meetings (etc.) top-nav tile returns the user to their last URL within that
- * module rather than the module's root (task 019f3e9a stage 2).
+ * RouteResume — per-module last-URL tracking so a click on the Chat / Tasks
+ * (etc.) top-nav tile returns the user to their last URL within that module
+ * rather than the module's root (task 019f3e9a stage 2). Meetings is the
+ * exception: its tile always opens `/meetings` (NO_RESUME_MODULES, task
+ * 01a18d0a stage 1).
  *
  * Contract:
  *   - On every LiveView navigation completion (`phx:page-loading-stop` on
@@ -67,6 +69,25 @@ const PATH_MODULE_MAP = [
 const MODULE_TO_PATH = Object.fromEntries(
   PATH_MODULE_MAP.map(([path, mod]) => [mod, path])
 );
+
+// Modules whose tile must ALWAYS land on the module root, never on a saved
+// subpage (task 01a18d0a stage 1). Ryan: "Going to Meetings opens the
+// meetings top-level page every time. It must never restore or redirect to
+// the last-visited meeting route." A meeting route is a live room or an
+// ended meeting's record — resuming one from the tile re-enters a call or a
+// stale page the reader already left. These modules stay in
+// PATH_MODULE_MAP (so `moduleFromPath` still classifies their URLs, e.g. for
+// the active-tab check), but the hook never PERSISTS a value for them and
+// never READS one on a tile click. Any value already in localStorage from
+// before this change (`route_resume:meetings`, 3h TTL) is removed on mount,
+// on every navigation inside the module, and on a tile click, so a stale
+// entry can never redirect. Direct `/meetings/<slug>` URLs are untouched:
+// this only governs the tile click intercept.
+const NO_RESUME_MODULES = new Set(["meetings"]);
+
+function resumesModule(moduleId) {
+  return typeof moduleId === "string" && !NO_RESUME_MODULES.has(moduleId);
+}
 
 // Resume entries expire after 3 hours (task 019f62c8). Without a TTL the
 // saved subpage lived in localStorage indefinitely — across hours and across
@@ -210,6 +231,10 @@ const RouteResume = {
     };
     window.addEventListener("phx:route_resume_stale", this._onStale);
 
+    // Drop any resume entry a no-resume module (NO_RESUME_MODULES) saved
+    // before it was excluded, so it cannot outlive its TTL in storage.
+    for (const mod of NO_RESUME_MODULES) ClientState.remove("route_resume", mod);
+
     // Persist the URL we mounted on — covers the case where the shell was
     // rendered by a full-page load and no LV nav has fired yet.
     this._persistCurrentPath();
@@ -226,6 +251,10 @@ const RouteResume = {
     const search = window.location.search || "";
     const mod = moduleFromPath(path);
     if (!mod) return;
+    if (!resumesModule(mod)) {
+      ClientState.remove("route_resume", mod);
+      return;
+    }
     // Persist path + query so deep-link filter state (e.g. `?sponsor=mine`
     // on Tasks) round-trips through a top-nav click that leaves and returns
     // to the module. Fragment intentionally excluded — LV navigations don't
@@ -275,6 +304,13 @@ const RouteResume = {
     // to the /chat list. Arriving from another tab still resumes. Scoped to
     // the tab bar (`data-bottom-rail`): the desktop icon rail keeps resuming.
     if (isActiveBottomTab(anchor, moduleId)) return;
+
+    // Meetings (NO_RESUME_MODULES) always goes to its root: let LiveView
+    // follow the anchor's href, and clear any stale saved value.
+    if (!resumesModule(moduleId)) {
+      ClientState.remove("route_resume", moduleId);
+      return;
+    }
 
     const saved = ClientState.get("route_resume", moduleId);
     if (typeof saved !== "string" || saved.length === 0) return;
@@ -342,6 +378,8 @@ export {
   sameModulePrefix,
   stripQueryAndFragment,
   stripTransientParams,
+  resumesModule,
+  NO_RESUME_MODULES,
   PATH_MODULE_MAP,
   TRANSIENT_QUERY_PARAMS,
   RESUME_TTL_MS,
