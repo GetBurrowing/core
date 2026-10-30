@@ -522,6 +522,72 @@ defmodule Platform.Meetings.CompletionTest do
            ) == 1
   end
 
+  for priority <- ["high", "low", "medium", "critical", nil] do
+    @priority priority
+    test "authenticated filing persists priority #{inspect(priority)}", ctx do
+      {meeting, run, seg} = ready!(ctx.meeting)
+      canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+      args = params(meeting, run, canvas)
+      assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+      item = %{
+        "item_id" => "repair-completion",
+        "title" => "Preserve meeting action priority",
+        "description" => "Preserve priority as agreed in the cited transcript segment.",
+        "source_segment_ids" => [seg["id"]],
+        "candidate_ids" => []
+      }
+
+      item = if @priority, do: Map.put(item, "priority", @priority), else: item
+      scope = %Platform.Access.Scope{actor: :system, permissions: %{"meetings.join" => :all}}
+
+      assert {:ok, %{status: "filed", task_ids: [task_id]}} =
+               Platform.Federation.ToolArguments.dispatch(
+                 "meeting_triage_file",
+                 Map.put(args, "action_items", [item]),
+                 %{agent_id: ctx.triage.id, access_scope: scope}
+               )
+
+      assert Repo.get!(Task, task_id).priority == (@priority || "medium")
+    end
+  end
+
+  test "invalid explicit priorities reject the entire authenticated batch before creating tasks",
+       ctx do
+    {meeting, run, seg} = ready!(ctx.meeting)
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    item = %{
+      "item_id" => "repair-completion",
+      "title" => "Preserve valid priority",
+      "description" => "Preserve priority from the cited segment.",
+      "source_segment_ids" => [seg["id"]],
+      "priority" => "high"
+    }
+
+    scope = %Platform.Access.Scope{actor: :system, permissions: %{"meetings.join" => :all}}
+
+    for priority <- ["urgent", "HIGH", "", nil, 5] do
+      invalid = item |> Map.put("item_id", "invalid") |> Map.put("priority", priority)
+
+      assert {:error, _} =
+               Platform.Federation.ToolArguments.dispatch(
+                 "meeting_triage_file",
+                 Map.put(args, "action_items", [item, invalid]),
+                 %{agent_id: ctx.triage.id, access_scope: scope}
+               )
+
+      assert run!(meeting).item_results == %{}
+
+      assert Repo.aggregate(
+               from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id),
+               :count
+             ) == 0
+    end
+  end
+
   test "resuming a meeting clears the old capture fence", ctx do
     {meeting, run, _} = ready!(ctx.meeting)
     assert run.capture_finished_at

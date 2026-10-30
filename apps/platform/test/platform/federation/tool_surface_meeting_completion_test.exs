@@ -1,5 +1,9 @@
 defmodule Platform.Federation.ToolSurfaceMeetingCompletionTest do
-  use Platform.DataCase, async: true
+  use PlatformWeb.ConnCase, async: false
+
+  import Platform.TenancyFixtures
+  alias Platform.Repo
+  alias Platform.Agents.{Agent, AgentRuntime}
 
   alias Platform.Federation.{ReturnSchemas, ToolArguments, ToolSurface}
 
@@ -36,5 +40,66 @@ defmodule Platform.Federation.ToolSurfaceMeetingCompletionTest do
     for name <- @tools do
       assert {:error, _} = ToolArguments.dispatch(name, %{}, %{})
     end
+  end
+
+  test "priority item schema survives the hosted MCP export", %{conn: conn} do
+    token = full_surface_token!()
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer " <> token)
+      |> put_req_header("content-type", "application/json")
+      |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+      |> json_response(200)
+
+    tool = Enum.find(response["result"]["tools"], &(&1["name"] == "meeting_triage_file"))
+    schema = tool["inputSchema"]["properties"]["action_items"]
+    assert schema["type"] == "array"
+    assert schema["items"]["type"] == "object"
+    properties = schema["items"]["properties"]
+    assert properties["priority"]["enum"] == ["low", "medium", "high", "critical"]
+    assert properties["priority"]["default"] == "medium"
+    refute "priority" in schema["items"]["required"]
+
+    for field <-
+          ~w(item_id title description source_segment_ids candidate_ids decision assignee_id assignee_type epic_id metadata) do
+      assert Map.has_key?(properties, field)
+    end
+  end
+
+  defp full_surface_token! do
+    n = System.unique_integer([:positive])
+
+    user = root_admin!()
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "tool-doc-wire-#{n}",
+        name: "ToolDoc Wire Agent #{n}",
+        status: "active"
+      })
+
+    raw = AgentRuntime.generate_token()
+
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        runtime_id: "tool-doc-wire-rt-#{n}",
+        owner_user_id: user.id,
+        agent_id: agent.id,
+        auth_token_hash: AgentRuntime.hash_token(raw),
+        status: "active",
+        transport: "http",
+        trust_level: "participant",
+        metadata: %{}
+      })
+
+    Repo.insert!(%Platform.Access.RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: ToolSurface.all_bundles(),
+      restricted_permissions:
+        Platform.Access.RuntimeProfiles.translated_permissions(ToolSurface.all_bundles())
+    })
+
+    raw
   end
 end

@@ -161,6 +161,7 @@ defmodule Platform.Meetings.Completion do
              run.status in ["triage_pending", "triage_dispatched", "filed"] ||
                {:error, :scribe_incomplete},
            items when is_list(items) <- params["action_items"],
+           :ok <- validate_priorities(items),
            :ok <- validate_items(items, run, canvas),
            :ok <- validate_candidate_provenance(items, run, meeting) do
         {ledger, errors} =
@@ -311,10 +312,20 @@ defmodule Platform.Meetings.Completion do
       else: {:error, :ungrounded_action_item}
   end
 
+  defp validate_priorities(items) do
+    if Enum.all?(items, fn item ->
+         is_map(item) and
+           (not Map.has_key?(item, "priority") or
+              item["priority"] in ~w(low medium high critical))
+       end),
+       do: :ok,
+       else: {:error, :invalid_priority}
+  end
+
   defp triage_item(item) do
     # The validated association is authoritative; do not let a separate,
     # unvalidated singular identity redirect the existing reconciler.
-    item = Map.delete(item, "candidate_id")
+    item = item |> Map.delete("candidate_id") |> Map.put_new("priority", "medium")
 
     case item["candidate_ids"] do
       [id] -> Map.put(item, "candidate_id", id)
