@@ -644,7 +644,6 @@ RUNTIME_SOCKET = "/var/run/docker.sock"
 def _agent_host_env(ctx):
     env = {
         "BURROW_CORE_URL": AGENT_HOST_CORE_URL,
-        "SUITE_CORE_URL": AGENT_HOST_CORE_URL,
         "AGENT_HOST_PROFILE": "contained",
         "AGENT_HOST_TOKEN": "{secret:AGENT_HOST_TOKEN}",
     }

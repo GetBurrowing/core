@@ -5,8 +5,7 @@ Two classes run the SAME assertions:
 - ``PocketIdFakeTest`` against the http.server fake (always runs);
 - ``PocketIdRealTest`` against a REAL pocket-id v2 container, skipped unless
   ``BURROW_INSTALL_TEST_POCKETID_URL`` and ``BURROW_INSTALL_TEST_POCKETID_KEY``
-  are set (legacy ``SUITE_INSTALL_TEST_POCKETID_URL`` and
-  ``SUITE_INSTALL_TEST_POCKETID_KEY`` are still read). For stage 4 it ran
+  are set. For stage 4 it ran
   against the throwaway container ``pocketid-01a0d6ab``
   (ghcr.io/pocket-id/pocket-id:v2, sqlite, bound to 127.0.0.1 on test-host,
   reached from build-host through an ssh -L forward).
@@ -38,7 +37,6 @@ from setup_fakes import (
     run_cli,
 )
 
-from burrow_install import envcompat
 from burrow_install.setup import cli, pocketid
 from burrow_install.setup.host import Result
 from burrow_install.setup.state import Install
@@ -219,8 +217,8 @@ class PocketIdFakeV216Test(PocketIdCases, unittest.TestCase):
         self.assertNotIn("DELETE", [m for m, _p in self.fake.requests])
 
 
-REAL_POCKETID_URL = envcompat.get("BURROW_INSTALL_TEST_POCKETID_URL", "SUITE_INSTALL_TEST_POCKETID_URL")
-REAL_POCKETID_KEY = envcompat.get("BURROW_INSTALL_TEST_POCKETID_KEY", "SUITE_INSTALL_TEST_POCKETID_KEY")
+REAL_POCKETID_URL = os.environ.get("BURROW_INSTALL_TEST_POCKETID_URL")
+REAL_POCKETID_KEY = os.environ.get("BURROW_INSTALL_TEST_POCKETID_KEY")
 
 
 @unittest.skipUnless(

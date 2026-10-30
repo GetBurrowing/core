@@ -21,7 +21,6 @@ import json
 import os
 import tempfile
 
-from .. import envcompat
 from .. import render as render_mod
 from ..manifest import ManifestLoadError, load
 from ..validate import validate
@@ -74,13 +73,13 @@ def installs_under(root):
 
 
 def resolve_dir(explicit=None, environ=None):
-    """``--dir``, else ``$BURROW_INSTALL_DIR`` (legacy ``$SUITE_INSTALL_DIR``),
+    """``--dir``, else ``$BURROW_INSTALL_DIR`` (blank is unset),
     else the single install under ~/burrow, else the single install under the
     legacy ~/suite."""
     environ = os.environ if environ is None else environ
     if explicit:
         return os.path.abspath(os.path.expanduser(explicit))
-    env_dir = envcompat.get("BURROW_INSTALL_DIR", "SUITE_INSTALL_DIR", environ=environ)
+    env_dir = (environ.get("BURROW_INSTALL_DIR") or "").strip()
     if env_dir:
         return os.path.abspath(os.path.expanduser(env_dir))
     root = default_root()

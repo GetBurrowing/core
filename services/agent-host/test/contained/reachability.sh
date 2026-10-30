@@ -66,7 +66,7 @@ podman run -d --name "$CORE" \
   docker.io/library/python:3.12-slim python3 -m http.server 4000 >/dev/null
 TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
 podman run -d --name "$AH" --systemd=always --network "$AGENTS_NET" \
-  -e AGENT_HOST_TOKEN="$TOKEN" -e BURROW_CORE_URL=http://core-platform:4000 -e SUITE_CORE_URL=http://core-platform:4000 "$IMG" >/dev/null
+  -e AGENT_HOST_TOKEN="$TOKEN" -e BURROW_CORE_URL=http://core-platform:4000 "$IMG" >/dev/null
 
 for _ in $(seq 1 60); do
   state="$(podman exec "$AH" systemctl is-system-running 2>/dev/null || true)"
@@ -100,9 +100,9 @@ tcp_from_ah "$CORE_SUITE_IP" 4000; expect "agent-host -> core-platform's suite-n
 
 # The daemon got its env through systemd (PassEnvironment), names only.
 pid="$(podman exec "$AH" systemctl show -p MainPID --value suite-agent-host.service)"
-names="$(podman exec "$AH" sh -c "tr '\\0' '\\n' < /proc/$pid/environ | cut -d= -f1 | grep -E '^(AGENT_HOST_TOKEN|AGENT_HOST_PROFILE|BURROW_CORE_URL|SUITE_CORE_URL)\$' | sort | tr '\\n' ' '")"
+names="$(podman exec "$AH" sh -c "tr '\\0' '\\n' < /proc/$pid/environ | cut -d= -f1 | grep -E '^(AGENT_HOST_TOKEN|AGENT_HOST_PROFILE|BURROW_CORE_URL)\$' | sort | tr '\\n' ' '")"
 echo "agent-host daemon env names: $names"
-[ "$names" = "AGENT_HOST_PROFILE AGENT_HOST_TOKEN BURROW_CORE_URL SUITE_CORE_URL " ]; expect "daemon received its four env names" ok $?
+[ "$names" = "AGENT_HOST_PROFILE AGENT_HOST_TOKEN BURROW_CORE_URL " ]; expect "daemon received its three env names" ok $?
 podman exec "$AH" journalctl -u suite-agent-host --no-pager -o cat | grep -m1 'dialling' || true
 podman exec "$AH" journalctl -u suite-agent-host --no-pager -o cat | grep -q 'as profile contained'; expect "daemon reports profile contained" ok $?
 

@@ -37,8 +37,8 @@ MAC_DEPRECATION = "suite-install is now burrow-install\n"
 
 
 def clean_env():
-    """The caller's env minus every BURROW_*/SUITE_* name, so no envcompat line leaks in."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("BURROW_", "SUITE_", "PYTHON"))}
+    """The caller's env minus every BURROW_* name, so the caller's install dir cannot leak in."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("BURROW_", "PYTHON"))}
     env["PYTHONPATH"] = INSTALLER
     return env
 

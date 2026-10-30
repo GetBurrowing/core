@@ -15,14 +15,12 @@
  *
  * Environment:
  *   BURROW_CORE_URL      core's base URL, e.g. http://core-platform:4000
- *                        (legacy SUITE_CORE_URL is still read, with a deprecation line)
  *   AGENT_HOST_TOKEN     the install's shared agent-host secret
  *   AGENT_HOST_PROFILE   "full_machine" | "contained", reported to core as is
  *   AGENT_HOST_FULL_ROOT "true" only when the install set [agents] full_root; reported in the
  *                        hello. The runtime socket (AGENT_HOST_RUNTIME_SOCKET) is mounted only then.
  */
 import { resolve } from "node:path";
-import { readEnv } from "./env.ts";
 import { SecretRegistry, liveRunner } from "./exec.ts";
 import { Host, WATCH_MS } from "./host.ts";
 import { liveDockerFetch, socketPath } from "./docker.ts";
@@ -40,17 +38,8 @@ function required(name: string): string {
   return v.trim();
 }
 
-function coreUrlFromEnv(): string {
-  const v = readEnv("BURROW_CORE_URL", "SUITE_CORE_URL");
-  if (v === undefined) {
-    console.error("agent-host: BURROW_CORE_URL (or legacy SUITE_CORE_URL) is not set");
-    process.exit(2);
-  }
-  return v.trim();
-}
-
 if (import.meta.main) {
-  const coreUrl = coreUrlFromEnv();
+  const coreUrl = required("BURROW_CORE_URL");
   const token = required("AGENT_HOST_TOKEN");
   const profile = process.env.AGENT_HOST_PROFILE?.trim() ?? "";
   if (!PROFILES.has(profile)) {

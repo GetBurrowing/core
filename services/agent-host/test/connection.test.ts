@@ -142,12 +142,13 @@ describe("refreshedClaudeJson", () => {
     expect(refreshedClaudeJson("{}", "/w", TOKEN_2)).toBeNull();
   });
 
-  test("an env reference is left alone; a pre-0.11 SUITE_TOKEN copy is refreshed too", () => {
+  test("an env reference is left alone; only BURROW_TOKEN is refreshed, never another env entry", () => {
     const j = claudeJson("/w", TOKEN_1) as { projects: Record<string, { mcpServers: Record<string, { env?: Record<string, string>; headers?: Record<string, string> }> }> };
-    j.projects["/w"]!.mcpServers[CHANNEL_SERVER]!.env!.SUITE_TOKEN = TOKEN_1;
+    j.projects["/w"]!.mcpServers[CHANNEL_SERVER]!.env!.OTHER_TOKEN = TOKEN_1;
     j.projects["/w"]!.mcpServers[TOOLS_SERVER]!.headers!.Authorization = "Bearer ${BURROW_TOKEN}";
     const out = JSON.parse(refreshedClaudeJson(JSON.stringify(j), "/w", TOKEN_2)!);
-    expect(out.projects["/w"].mcpServers[CHANNEL_SERVER].env.SUITE_TOKEN).toBe(TOKEN_2);
+    expect(out.projects["/w"].mcpServers[CHANNEL_SERVER].env.BURROW_TOKEN).toBe(TOKEN_2);
+    expect(out.projects["/w"].mcpServers[CHANNEL_SERVER].env.OTHER_TOKEN).toBe(TOKEN_1);
     expect(out.projects["/w"].mcpServers[TOOLS_SERVER].headers.Authorization).toBe("Bearer ${BURROW_TOKEN}");
   });
 

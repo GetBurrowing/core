@@ -4,8 +4,8 @@
  *
  * THE DEFECT. The owner edits an agent's work-dir CLAUDE.md in Agent files,
  * and that file is the agent's own. suite-cli never overwrites an existing
- * CLAUDE.md: it writes its conventions to SUITE_CONVENTIONS.md instead, which
- * loads only if CLAUDE.md says `@SUITE_CONVENTIONS.md`. Core's seeded identity
+ * CLAUDE.md: it writes its conventions to BURROW_CONVENTIONS.md instead, which
+ * loads only if CLAUDE.md says `@BURROW_CONVENTIONS.md`. Core's seeded identity
  * file does not, and an owner who replaces it will not, so the agent never
  * read "Always respond in channel": it heard the mention and answered in its
  * own terminal (gate case 7008, measured: the same agent with the import line
@@ -17,7 +17,7 @@
  * relative to the work dir (files.ts), and `~` is refused. No import line is
  * involved, so nothing the owner deletes can unload it.
  *
- * ONE COPY OF THE PROSE. The text is suite-cli's own `SUITE_CONVENTIONS`, read
+ * ONE COPY OF THE PROSE. The text is burrow-cli's own `BURROW_CONVENTIONS`, read
  * from the pinned install (install-tools.sh puts burrow-cli's sources under
  * /usr/local/share/burrow/cli), not a second copy kept here. The image build
  * fails if that export cannot be loaded (Dockerfile). If it still cannot be
@@ -57,13 +57,13 @@ export const FALLBACK = [
 ].join("\n");
 
 /**
- * suite-cli's `SUITE_CONVENTIONS`, or null when `lib` has no loadable
+ * burrow-cli's `BURROW_CONVENTIONS`, or null when `lib` has no loadable
  * `src/claude_md.ts` exporting a non-empty string.
  */
-export async function loadSuiteConventions(lib: string = BURROW_CLI_LIB): Promise<string | null> {
+export async function loadBurrowConventions(lib: string = BURROW_CLI_LIB): Promise<string | null> {
   try {
-    const mod = (await import(join(lib, "src", "claude_md.ts"))) as { SUITE_CONVENTIONS?: unknown };
-    const text = mod.SUITE_CONVENTIONS;
+    const mod = (await import(join(lib, "src", "claude_md.ts"))) as { BURROW_CONVENTIONS?: unknown };
+    const text = mod.BURROW_CONVENTIONS;
     return typeof text === "string" && text.trim() !== "" ? text : null;
   } catch {
     return null;
@@ -101,9 +101,9 @@ export async function writeUserMemory(runner: Runner, user: AgentUser, content: 
  * of shipping agents that fall back to {@link FALLBACK}.
  */
 if (import.meta.main && process.argv.includes("--check")) {
-  const text = await loadSuiteConventions();
+  const text = await loadBurrowConventions();
   if (text === null || !text.includes("suite_reply")) {
-    console.error(`conventions: could not load SUITE_CONVENTIONS from ${BURROW_CLI_LIB}/src/claude_md.ts`);
+    console.error(`conventions: could not load BURROW_CONVENTIONS from ${BURROW_CLI_LIB}/src/claude_md.ts`);
     process.exit(1);
   }
   console.error(`conventions: ${text.length} characters from ${BURROW_CLI_LIB}`);
