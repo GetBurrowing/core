@@ -625,6 +625,11 @@ defmodule Platform.Federation do
   Dispatch failures return `{:error, reason}` and emit role-specific telemetry.
   The persisted completion run retries these failures; delivery is not filing.
 
+  A payload whose `:prompt` is missing or whitespace-only is refused with
+  `{:error, :empty_prompt}` before the runtime is resolved: the channel
+  plugins read the frame's body from `signal.prompt`, and drop a frame
+  without one.
+
   The broadcast goes through `Platform.Federation.AttentionDispatch`, which
   first puts the target agent in a writable posture in `payload.space_id` —
   see that module on why the invite must commit before the signal leaves, and
@@ -633,20 +638,24 @@ defmodule Platform.Federation do
   @spec dispatch_scribe_attention(binary(), map()) :: :ok | {:error, term()}
   def dispatch_scribe_attention(agent_id, payload)
       when is_binary(agent_id) and is_map(payload) do
-    case Repo.get(Agent, agent_id) do
+    with false <- blank_prompt?(payload),
+         %Agent{} = agent <- Repo.get(Agent, agent_id) do
+      case get_runtime_for_agent(agent) do
+        nil ->
+          emit_scribe_dispatch_fallback(agent_id, :runtime_unresolvable)
+          {:error, :runtime_unresolvable}
+
+        %AgentRuntime{runtime_id: runtime_id} ->
+          broadcast_scribe_attention(agent_id, runtime_id, payload)
+      end
+    else
+      true ->
+        emit_scribe_dispatch_fallback(agent_id, :empty_prompt)
+        {:error, :empty_prompt}
+
       nil ->
         emit_scribe_dispatch_fallback(agent_id, :agent_not_found)
         {:error, :agent_not_found}
-
-      %Agent{} = agent ->
-        case get_runtime_for_agent(agent) do
-          nil ->
-            emit_scribe_dispatch_fallback(agent_id, :runtime_unresolvable)
-            {:error, :runtime_unresolvable}
-
-          %AgentRuntime{runtime_id: runtime_id} ->
-            broadcast_scribe_attention(agent_id, runtime_id, payload)
-        end
     end
   end
 
@@ -697,6 +706,18 @@ defmodule Platform.Federation do
     )
   end
 
+  # The frame's body. Every channel plugin reads `message.content ??
+  # signal.prompt`, and these frames carry no message, so a missing or blank
+  # prompt is a frame the plugin drops silently. Refuse it here instead, before
+  # the runtime is resolved, so the completion run records `:empty_prompt` and
+  # retries (task 01a18ab4 stage 2).
+  defp blank_prompt?(payload) do
+    case Map.get(payload, :prompt) do
+      prompt when is_binary(prompt) -> String.trim(prompt) == ""
+      _ -> true
+    end
+  end
+
   @doc """
   Dispatch a meeting-triage attention signal to the given agent's linked runtime.
 
@@ -709,6 +730,7 @@ defmodule Platform.Federation do
 
   Dispatch failures return `{:error, reason}` and emit role-specific telemetry.
   The persisted completion run retries these failures; delivery is not filing.
+  The same blank-prompt guard applies: no `:prompt`, `{:error, :empty_prompt}`.
 
   Broadcasts through `Platform.Federation.AttentionDispatch`, same as its two
   siblings, tagged `source: :meeting_triage` so an auto-invite into a meeting
@@ -717,20 +739,24 @@ defmodule Platform.Federation do
   @spec dispatch_triage_attention(binary(), map()) :: :ok | {:error, term()}
   def dispatch_triage_attention(agent_id, payload)
       when is_binary(agent_id) and is_map(payload) do
-    case Repo.get(Agent, agent_id) do
+    with false <- blank_prompt?(payload),
+         %Agent{} = agent <- Repo.get(Agent, agent_id) do
+      case get_runtime_for_agent(agent) do
+        nil ->
+          emit_triage_dispatch_fallback(agent_id, :runtime_unresolvable)
+          {:error, :runtime_unresolvable}
+
+        %AgentRuntime{runtime_id: runtime_id} ->
+          broadcast_triage_attention(agent_id, runtime_id, payload)
+      end
+    else
+      true ->
+        emit_triage_dispatch_fallback(agent_id, :empty_prompt)
+        {:error, :empty_prompt}
+
       nil ->
         emit_triage_dispatch_fallback(agent_id, :agent_not_found)
         {:error, :agent_not_found}
-
-      %Agent{} = agent ->
-        case get_runtime_for_agent(agent) do
-          nil ->
-            emit_triage_dispatch_fallback(agent_id, :runtime_unresolvable)
-            {:error, :runtime_unresolvable}
-
-          %AgentRuntime{runtime_id: runtime_id} ->
-            broadcast_triage_attention(agent_id, runtime_id, payload)
-        end
     end
   end
 

@@ -60,9 +60,13 @@ defmodule Platform.Meetings.SummaryPrompt do
     "[#{timestamp}] #{speaker}: #{text}"
   end
 
-  defp format_timestamp(nil), do: "00:00:00"
+  @doc """
+  `HH:MM:SS` for a segment's `start_time` in milliseconds; `"00:00:00"` for
+  nil or a non-number. Shared with `Platform.Meetings.CompletionPrompt`.
+  """
+  def format_timestamp(nil), do: "00:00:00"
 
-  defp format_timestamp(ms) when is_number(ms) do
+  def format_timestamp(ms) when is_number(ms) do
     total_seconds = div(trunc(ms), 1000)
     hours = div(total_seconds, 3600)
     minutes = div(rem(total_seconds, 3600), 60)
@@ -72,5 +76,5 @@ defmodule Platform.Meetings.SummaryPrompt do
     |> IO.iodata_to_binary()
   end
 
-  defp format_timestamp(_), do: "00:00:00"
+  def format_timestamp(_), do: "00:00:00"
 end

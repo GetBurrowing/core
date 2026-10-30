@@ -6029,15 +6029,25 @@ defmodule Platform.Meetings do
         {:error, :role_unassigned}
 
       agent_id when is_binary(agent_id) ->
-        Platform.Federation.dispatch_triage_attention(
-          agent_id,
-          Map.merge(Platform.Meetings.Completion.dispatch_payload(transcript.id), %{
+        {base, meeting} =
+          Platform.Meetings.Completion.dispatch_payload_with_meeting(transcript.id)
+
+        payload =
+          Map.merge(base, %{
             reason: "meeting_triage_dispatch",
             space_id: transcript.space_id,
             room_id: transcript.room_id,
             transcript_id: transcript.id,
             canvas_id: canvas.id
           })
+
+        # The body every channel plugin reads (`signal.prompt`), rendered
+        # after the merge so it names this canvas (task 01a18ab4 stage 2).
+        {:ok, prompt} = Platform.Meetings.CompletionPrompt.render(:triage, payload, meeting)
+
+        Platform.Federation.dispatch_triage_attention(
+          agent_id,
+          Map.put(payload, :prompt, prompt)
         )
     end
   end

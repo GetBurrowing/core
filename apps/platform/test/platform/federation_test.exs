@@ -500,6 +500,7 @@ defmodule Platform.FederationTest do
       assert :ok =
                Federation.dispatch_scribe_attention(agent.id, %{
                  reason: "meeting_scribe_completion",
+                 prompt: "Render the meeting completion.",
                  space_id: space.id,
                  room_id: "space-scribe-invite",
                  transcript_id: Ecto.UUID.generate()
@@ -527,6 +528,7 @@ defmodule Platform.FederationTest do
       assert :ok =
                Federation.dispatch_scribe_attention(agent.id, %{
                  reason: "meeting_scribe_completion",
+                 prompt: "Render the meeting completion.",
                  space_id: nil,
                  room_id: "space-scribe-nil",
                  transcript_id: Ecto.UUID.generate()
@@ -562,6 +564,7 @@ defmodule Platform.FederationTest do
 
       payload = %{
         reason: "meeting_scribe_completion",
+        prompt: "Render the meeting completion.",
         space_id: space_id,
         room_id: "space-scribe",
         transcript_id: transcript_id
@@ -574,6 +577,7 @@ defmodule Platform.FederationTest do
                        payload: %{
                          signal: %{
                            reason: "meeting_scribe_completion",
+                           prompt: "Render the meeting completion.",
                            space_id: ^space_id,
                            room_id: "space-scribe",
                            transcript_id: ^transcript_id
@@ -596,7 +600,8 @@ defmodule Platform.FederationTest do
 
       assert {:error, :agent_not_found} =
                Federation.dispatch_scribe_attention(missing_id, %{
-                 reason: "meeting_scribe_completion"
+                 reason: "meeting_scribe_completion",
+                 prompt: "Render the meeting completion."
                })
 
       assert_receive {:telemetry, @scribe_event, %{count: 1},
@@ -621,7 +626,8 @@ defmodule Platform.FederationTest do
 
       assert {:error, :runtime_unresolvable} =
                Federation.dispatch_scribe_attention(agent.id, %{
-                 reason: "meeting_scribe_completion"
+                 reason: "meeting_scribe_completion",
+                 prompt: "Render the meeting completion."
                })
 
       assert_receive {:telemetry, @scribe_event, %{count: 1},
@@ -678,6 +684,7 @@ defmodule Platform.FederationTest do
       assert :ok =
                Federation.dispatch_triage_attention(agent.id, %{
                  reason: "meeting_triage_dispatch",
+                 prompt: "Render the meeting completion.",
                  space_id: space.id,
                  room_id: "space-triage-invite",
                  transcript_id: Ecto.UUID.generate(),
@@ -712,6 +719,7 @@ defmodule Platform.FederationTest do
 
       payload = %{
         reason: "meeting_triage_dispatch",
+        prompt: "Render the meeting completion.",
         space_id: space_id,
         room_id: "space-triage",
         transcript_id: transcript_id,
@@ -725,6 +733,7 @@ defmodule Platform.FederationTest do
                        payload: %{
                          signal: %{
                            reason: "meeting_triage_dispatch",
+                           prompt: "Render the meeting completion.",
                            space_id: ^space_id,
                            room_id: "space-triage",
                            transcript_id: ^transcript_id,
@@ -748,7 +757,8 @@ defmodule Platform.FederationTest do
 
       assert {:error, :agent_not_found} =
                Federation.dispatch_triage_attention(missing_id, %{
-                 reason: "meeting_triage_dispatch"
+                 reason: "meeting_triage_dispatch",
+                 prompt: "Render the meeting completion."
                })
 
       assert_receive {:telemetry, @triage_event, %{count: 1},
@@ -769,7 +779,8 @@ defmodule Platform.FederationTest do
 
       assert {:error, :runtime_unresolvable} =
                Federation.dispatch_triage_attention(agent.id, %{
-                 reason: "meeting_triage_dispatch"
+                 reason: "meeting_triage_dispatch",
+                 prompt: "Render the meeting completion."
                })
 
       assert_receive {:telemetry, @triage_event, %{count: 1},
