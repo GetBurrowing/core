@@ -32,7 +32,15 @@ defmodule Platform.Installs.SshKeyTest do
     {pub, section} = str(section)
     {priv_pub, section} = str(section)
     {comment, padding} = str(section)
-    %{blob: blob, check: {c1, c2}, pub: pub, priv_pub: priv_pub, comment: comment, padding: padding}
+
+    %{
+      blob: blob,
+      check: {c1, c2},
+      pub: pub,
+      priv_pub: priv_pub,
+      comment: comment,
+      padding: padding
+    }
   end
 
   test "the public line and the private container describe one key that signs" do

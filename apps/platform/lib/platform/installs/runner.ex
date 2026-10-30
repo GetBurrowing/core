@@ -51,8 +51,16 @@ defmodule Platform.Installs.Runner do
 
   @doc "A fresh step list, every step pending."
   def initial_steps do
-    Enum.map(@steps, &%{"key" => &1, "state" => "pending", "started_at" => nil,
-                        "finished_at" => nil, "error" => nil})
+    Enum.map(
+      @steps,
+      &%{
+        "key" => &1,
+        "state" => "pending",
+        "started_at" => nil,
+        "finished_at" => nil,
+        "error" => nil
+      }
+    )
   end
 
   @doc "Start a run under `Platform.TaskSupervisor` (a no-op if one is running)."
@@ -321,7 +329,9 @@ defmodule Platform.Installs.Runner do
 
   defp timeouts, do: Map.merge(@default_timeouts, Map.new(config(:step_timeouts_ms, %{})))
   defp poll_interval, do: config(:poll_interval_ms, :timer.seconds(10))
-  defp config(key, default), do: Keyword.get(Application.get_env(:platform, Installs, []), key, default)
+
+  defp config(key, default),
+    do: Keyword.get(Application.get_env(:platform, Installs, []), key, default)
 
   defp now, do: DateTime.utc_now()
   defp iso(datetime), do: DateTime.to_iso8601(datetime)

@@ -91,7 +91,8 @@ defmodule Platform.Installs do
     %{
       default_size: config(:default_size, "s-2vcpu-4gb"),
       sizes: sizes,
-      regions: Enum.filter(config(:regions, DigitalOcean.regions()), &(&1 in DigitalOcean.regions()))
+      regions:
+        Enum.filter(config(:regions, DigitalOcean.regions()), &(&1 in DigitalOcean.regions()))
     }
   end
 
@@ -145,13 +146,29 @@ defmodule Platform.Installs do
     mode = attrs["domain_mode"] || "ours"
 
     cond do
-      not valid_business_name?(name) -> {:error, {:invalid, :business_name}}
-      not (is_binary(email) and Regex.match?(@email, email)) -> {:error, {:invalid, :owner_email}}
-      attrs["region"] not in defaults.regions -> {:error, {:invalid, :region}}
-      size not in defaults.sizes -> {:error, {:invalid, :size}}
-      mode not in ["ours", "customer"] -> {:error, {:invalid, :domain_mode}}
-      true -> with_primary(mode, attrs, %{business_name: name, owner_email: email,
-                                          region: attrs["region"], size: size, domain_mode: mode})
+      not valid_business_name?(name) ->
+        {:error, {:invalid, :business_name}}
+
+      not (is_binary(email) and Regex.match?(@email, email)) ->
+        {:error, {:invalid, :owner_email}}
+
+      attrs["region"] not in defaults.regions ->
+        {:error, {:invalid, :region}}
+
+      size not in defaults.sizes ->
+        {:error, {:invalid, :size}}
+
+      mode not in ["ours", "customer"] ->
+        {:error, {:invalid, :domain_mode}}
+
+      true ->
+        with_primary(mode, attrs, %{
+          business_name: name,
+          owner_email: email,
+          region: attrs["region"],
+          size: size,
+          domain_mode: mode
+        })
     end
   end
 
@@ -180,7 +197,11 @@ defmodule Platform.Installs do
         %{primary_host: host} -> host
       end
 
-    attrs = fields |> Map.drop([:dns_zone]) |> Map.merge(extra) |> Map.merge(%{slug: slug, primary_host: primary})
+    attrs =
+      fields
+      |> Map.drop([:dns_zone])
+      |> Map.merge(extra)
+      |> Map.merge(%{slug: slug, primary_host: primary})
 
     case %Install{} |> Install.create_changeset(attrs) |> Repo.insert(@no_query_log) do
       {:ok, install} ->
@@ -239,7 +260,9 @@ defmodule Platform.Installs do
 
   @doc "The install with `slug`, or nil."
   @spec get_by_slug(term()) :: Install.t() | nil
-  def get_by_slug(slug) when is_binary(slug), do: Repo.one(from(i in Install, where: i.slug == ^slug))
+  def get_by_slug(slug) when is_binary(slug),
+    do: Repo.one(from(i in Install, where: i.slug == ^slug))
+
   def get_by_slug(_), do: nil
 
   @doc """
@@ -297,7 +320,13 @@ defmodule Platform.Installs do
         steps =
           Enum.map(install.steps, fn
             %{"state" => "failed"} = step ->
-              %{step | "state" => "pending", "started_at" => nil, "finished_at" => nil, "error" => nil}
+              %{
+                step
+                | "state" => "pending",
+                  "started_at" => nil,
+                  "finished_at" => nil,
+                  "error" => nil
+              }
 
             step ->
               step
@@ -326,7 +355,10 @@ defmodule Platform.Installs do
   """
   @spec resume_all() :: :ok
   def resume_all do
-    from(i in Install, where: i.status in ["queued", "provisioning", "destroying"], select: {i.id, i.status})
+    from(i in Install,
+      where: i.status in ["queued", "provisioning", "destroying"],
+      select: {i.id, i.status}
+    )
     |> Repo.all()
     |> Enum.each(fn
       {id, "destroying"} ->
@@ -433,9 +465,15 @@ defmodule Platform.Installs do
     install = get(install.id)
 
     cond do
-      install.handover_acknowledged_at -> {:ok, install}
-      install.status != "ready" -> {:error, :not_ready}
-      true -> {:ok, update!(install, %{handover_sealed: nil, handover_acknowledged_at: DateTime.utc_now()})}
+      install.handover_acknowledged_at ->
+        {:ok, install}
+
+      install.status != "ready" ->
+        {:error, :not_ready}
+
+      true ->
+        {:ok,
+         update!(install, %{handover_sealed: nil, handover_acknowledged_at: DateTime.utc_now()})}
     end
   end
 
@@ -478,7 +516,12 @@ defmodule Platform.Installs do
   @doc "The decoded hand-over blob, or `{:error, :handover_missing}`."
   @spec unseal(Install.t()) :: {:ok, map()} | {:error, :handover_missing}
   def unseal(%Install{handover_sealed: sealed}) when is_binary(sealed),
-    do: Jason.decode(sealed) |> then(fn {:ok, map} -> {:ok, map}; _ -> {:error, :handover_missing} end)
+    do:
+      Jason.decode(sealed)
+      |> then(fn
+        {:ok, map} -> {:ok, map}
+        _ -> {:error, :handover_missing}
+      end)
 
   def unseal(_), do: {:error, :handover_missing}
 
@@ -499,7 +542,9 @@ defmodule Platform.Installs do
   @doc "Subscribe to `{:install_updated, id}` for one install."
   def subscribe(id), do: Phoenix.PubSub.subscribe(Platform.PubSub, topic(id))
 
-  defp broadcast(id), do: Phoenix.PubSub.broadcast(Platform.PubSub, topic(id), {:install_updated, id})
+  defp broadcast(id),
+    do: Phoenix.PubSub.broadcast(Platform.PubSub, topic(id), {:install_updated, id})
+
   defp topic(id), do: "install:#{id}"
 
   @doc """
@@ -529,10 +574,13 @@ defmodule Platform.Installs do
   @doc "A short, secret-free code for a failure reason, for logs."
   @spec reason_code(term()) :: String.t()
   def reason_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+
   def reason_code({kind, detail}) when is_atom(kind) and (is_atom(detail) or is_integer(detail)),
     do: "#{kind}:#{detail}"
+
   def reason_code({kind, _}) when is_atom(kind), do: Atom.to_string(kind)
   def reason_code(_), do: "error"
 
-  defp config(key, default), do: Keyword.get(Application.get_env(:platform, __MODULE__, []), key, default)
+  defp config(key, default),
+    do: Keyword.get(Application.get_env(:platform, __MODULE__, []), key, default)
 end

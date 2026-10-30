@@ -50,11 +50,17 @@ defmodule Platform.Installs.RunnerTest do
 
       # Ours mode: <slug>.<zone> and auth.<slug>.<zone> point at the droplet.
       names = Fake.all(:record) |> Enum.map(&{&1["name"], &1["data"]}) |> Enum.sort()
-      assert names == [{"auth." <> install.slug, install.droplet_ip}, {install.slug, install.droplet_ip}]
+
+      assert names == [
+               {"auth." <> install.slug, install.droplet_ip},
+               {install.slug, install.droplet_ip}
+             ]
 
       # The render's two kept values were sealed before the droplet existed.
       assert {:ok, sealed} = Installs.unseal(install)
-      assert Map.keys(sealed) |> Enum.sort() == ~w(oidc_client_secret ssh_private_key static_api_key)
+
+      assert Map.keys(sealed) |> Enum.sort() ==
+               ~w(oidc_client_secret ssh_private_key static_api_key)
 
       assert_received {:install_updated, id} when id == install.id
     end
@@ -141,7 +147,9 @@ defmodule Platform.Installs.RunnerTest do
       {install, _} = create_install!()
 
       assert Runner.run(install.id) == :failed
-      assert step(Installs.get(install.id), "reserve")["error"] == "This step took longer than expected."
+
+      assert step(Installs.get(install.id), "reserve")["error"] ==
+               "This step took longer than expected."
     end
 
     test "a refused droplet create fails reserve and names no infrastructure" do
@@ -169,7 +177,10 @@ defmodule Platform.Installs.RunnerTest do
 
     test "waits in connect until both hosts resolve, then completes" do
       {install, _} =
-        create_install!(%{"domain_mode" => "customer", "primary_host" => "Suite.Acme.example.test"})
+        create_install!(%{
+          "domain_mode" => "customer",
+          "primary_host" => "Suite.Acme.example.test"
+        })
 
       assert install.primary_host == "suite.acme.example.test"
 
@@ -235,7 +246,10 @@ defmodule Platform.Installs.RunnerTest do
       # It found its droplet by tag: no new POST.
       assert posts() == calls_before
       assert Installs.get(install.id).status == "ready"
-      tagged = Enum.filter(Fake.all(:droplet), &(DigitalOcean.install_tag(stuck.id) in &1["tags"]))
+
+      tagged =
+        Enum.filter(Fake.all(:droplet), &(DigitalOcean.install_tag(stuck.id) in &1["tags"]))
+
       assert [%{"id" => id}] = tagged
       assert Installs.get(stuck.id).droplet_id == id
     end

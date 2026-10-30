@@ -23,7 +23,8 @@ defmodule Platform.Installs.Probe do
 
   @doc "The configured implementation."
   def impl,
-    do: Keyword.get(Application.get_env(:platform, Platform.Installs, []), :probe, __MODULE__.Live)
+    do:
+      Keyword.get(Application.get_env(:platform, Platform.Installs, []), :probe, __MODULE__.Live)
 end
 
 defmodule Platform.Installs.Probe.Live do

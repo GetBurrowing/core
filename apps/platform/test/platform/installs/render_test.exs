@@ -12,8 +12,11 @@ defmodule Platform.Installs.RenderTest do
   alias Platform.Installs.SshKey
 
   @python_ok (case System.find_executable("python3") do
-                nil -> false
-                py -> match?({_, 0}, System.cmd(py, ["-c", "import tomllib"], stderr_to_stdout: true))
+                nil ->
+                  false
+
+                py ->
+                  match?({_, 0}, System.cmd(py, ["-c", "import tomllib"], stderr_to_stdout: true))
               end)
 
   defp install do
@@ -65,7 +68,9 @@ defmodule Platform.Installs.RenderTest do
         "# c\nSTATIC_API_KEY=fake-static\nSECRET_KEY_BASE=fake-skb\nOIDC_CLIENT_SECRET=fake-oidc\n"
       )
 
-      assert {:ok, %{user_data: "#cloud-config\n", secrets: secrets}} = Render.Python.read_render(dir)
+      assert {:ok, %{user_data: "#cloud-config\n", secrets: secrets}} =
+               Render.Python.read_render(dir)
+
       assert secrets == %{"STATIC_API_KEY" => "fake-static", "OIDC_CLIENT_SECRET" => "fake-oidc"}
 
       File.write!(Path.join(dir, "secrets.env"), "STATIC_API_KEY=fake-static\n")

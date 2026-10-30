@@ -112,7 +112,10 @@ defmodule Platform.Installs.DigitalOceanTest do
     end
 
     test "a 403 is :forbidden and other statuses are {:http, status}" do
-      stub(fn conn -> conn |> Plug.Conn.put_status(403) |> Req.Test.json(%{"id" => "forbidden"}) end)
+      stub(fn conn ->
+        conn |> Plug.Conn.put_status(403) |> Req.Test.json(%{"id" => "forbidden"})
+      end)
+
       assert {:error, :forbidden} = DigitalOcean.get_droplet(1)
 
       stub(fn conn -> conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{}) end)
@@ -172,7 +175,9 @@ defmodule Platform.Installs.DigitalOceanTest do
 
         case conn.method do
           "GET" ->
-            Req.Test.json(conn, %{"domain_records" => :persistent_term.get({__MODULE__, :records})})
+            Req.Test.json(conn, %{
+              "domain_records" => :persistent_term.get({__MODULE__, :records})
+            })
 
           _ ->
             Req.Test.json(conn, %{"domain_record" => %{"id" => 7}})

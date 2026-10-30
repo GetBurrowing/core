@@ -22,7 +22,12 @@ defmodule Platform.Installs.Render do
 
   @doc "The configured implementation."
   def impl,
-    do: Keyword.get(Application.get_env(:platform, Platform.Installs, []), :render, __MODULE__.Python)
+    do:
+      Keyword.get(
+        Application.get_env(:platform, Platform.Installs, []),
+        :render,
+        __MODULE__.Python
+      )
 
   @doc "The registry the images are pulled from (`images.registry`)."
   def image_registry,

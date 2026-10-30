@@ -75,6 +75,7 @@ defmodule Platform.Installs.TeardownTest do
 
   test "a customer-domain install deletes no DNS record of ours" do
     use_fake_backend()
+
     {install, _} =
       create_install!(%{"domain_mode" => "customer", "primary_host" => "shop.example.test"})
 

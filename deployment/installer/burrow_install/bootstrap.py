@@ -171,9 +171,7 @@ def run(args):
     key = read_api_key(args.api_key_file)
     oidc_secret = None
     if args.oidc_secret_file is not None:
-        oidc_secret = read_api_key(
-            args.oidc_secret_file, "--oidc-secret-file", "oidc_secret_file"
-        )
+        oidc_secret = read_api_key(args.oidc_secret_file, "--oidc-secret-file", "oidc_secret_file")
     client = pocketid.Client(args.base, key)
     username = args.username or pocketid.default_username(args.email)
     user, action = pocketid.ensure_admin(client, args.email, username)

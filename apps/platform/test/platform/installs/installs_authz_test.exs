@@ -74,7 +74,10 @@ defmodule Platform.Installs.InstallsAuthzTest do
       end
 
       assert {:ok, _} =
-               Installs.create(admin, Map.merge(@attrs, %{"size" => "s-4vcpu-8gb", "region" => "sfo3"}))
+               Installs.create(
+                 admin,
+                 Map.merge(@attrs, %{"size" => "s-4vcpu-8gb", "region" => "sfo3"})
+               )
     end
 
     test "a subdomain of ours needs SUITE_INSTALLS_DNS_ZONE; a customer domain does not" do
@@ -84,7 +87,10 @@ defmodule Platform.Installs.InstallsAuthzTest do
       assert {:ok, %{install: install}} =
                Installs.create(
                  admin!(),
-                 Map.merge(@attrs, %{"domain_mode" => "customer", "primary_host" => "acme.example.test"})
+                 Map.merge(@attrs, %{
+                   "domain_mode" => "customer",
+                   "primary_host" => "acme.example.test"
+                 })
                )
 
       assert install.primary_host == "acme.example.test"

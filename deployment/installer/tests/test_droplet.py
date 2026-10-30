@@ -540,9 +540,7 @@ class BootstrapAdminTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["oidc_client"], "created")
         client = self.fake.clients[pocketid.CLIENT_ID]
-        self.assertEqual(
-            client["callbackURLs"], ["https://acme.example.test/auth/oidc/callback"]
-        )
+        self.assertEqual(client["callbackURLs"], ["https://acme.example.test/auth/oidc/callback"])
         self.assertTrue(client["pkceEnabled"])
         # pocket-id's auto-created secret is dropped; ours is the only one.
         listed = self.fake.secrets[pocketid.CLIENT_ID]
