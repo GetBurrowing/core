@@ -658,9 +658,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert class_of(email) =~ "truncate"
     end
 
-    test "the guest row is set off by a base-300 divider and uses the info badge", %{html: html} do
+    test "the guest row is set off by a border-edge divider and uses the info badge", %{html: html} do
       guest = one(html, "[data-role=meeting-human-invite-guest]")
-      assert class_of(guest) =~ "border-t border-base-300"
+      assert class_of(guest) =~ "border-t border-edge"
       assert attr(guest, "phx-click") == ["meeting_human_invite_guest"]
 
       badge = one(html, "[data-role=meeting-human-invite-guest-badge]")

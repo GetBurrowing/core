@@ -674,7 +674,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
   Typing a name opens a list in flow directly under the field: the matching
   members from `Meetings.resolve_invite_candidates/2`, then, ALWAYS LAST and
-  set off by a `base-300` divider, `Invite "<name>" as guest`. The guest row
+  set off by a divider, `Invite "<name>" as guest`. The canvas names
+  `base-300` for borders; this repo draws borders with `border-edge`
+  (`BorderTokenDirectionTest`: base-300 is a fill token here). The guest row
   is rendered from the typed string, not from any query, whenever the
   trimmed query is non-blank and a guest host is configured. So a name that
   matches a member offers both, and an already-invited member (excluded by
@@ -708,7 +710,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         phx-submit="meeting_human_invite_search"
         autocomplete="off"
       >
-        <label class="flex min-h-11 items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+        <label class="flex min-h-11 items-center gap-2 rounded-lg border border-edge bg-base-100 px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
           <span class="hero-plus size-4 shrink-0 text-subtle" aria-hidden="true"></span>
           <span class="shrink-0 text-sm font-medium text-base-content">Invite</span>
           <input
@@ -740,7 +742,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
       <div
         :if={@name != "" and (@state.users != [] or @state.guest_host?)}
-        class="mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+        class="mt-1 overflow-hidden rounded-lg border border-edge bg-base-100"
         data-role="meeting-human-invite-dropdown"
       >
         <button
@@ -777,10 +779,10 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           phx-click="meeting_human_invite_guest"
           class={[
             "flex min-h-11 w-full min-w-0 items-center gap-2.5 px-2.5 py-2 text-left lg:hover:bg-base-200 phx-click-loading:opacity-60",
-            @state.users != [] && "border-t border-base-300"
+            @state.users != [] && "border-t border-edge"
           ]}
         >
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full border border-base-300">
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full border border-edge">
             <span class="hero-plus size-4 text-subtle" aria-hidden="true"></span>
           </span>
           <span class="min-w-0 flex-1">
@@ -813,7 +815,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   defp human_invite_result(assigns) do
     ~H"""
     <div
-      class="mt-1 rounded-lg border border-base-300 bg-base-100 px-2.5 py-2"
+      class="mt-1 rounded-lg border border-edge bg-base-100 px-2.5 py-2"
       data-role="meeting-human-invite-result"
       data-invite-id={@result.invite.id}
     >
@@ -894,12 +896,12 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           placeholder="name@example.com"
           aria-label="Guest email (optional)"
           autocomplete="off"
-          class="min-h-11 w-full min-w-0 rounded-lg border border-base-300 bg-base-100 px-2.5 text-sm text-base-content focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          class="min-h-11 w-full min-w-0 rounded-lg border border-edge bg-base-100 px-2.5 text-sm text-base-content focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
         />
         <button
           type="submit"
           data-role="meeting-human-invite-email-save"
-          class="min-h-11 shrink-0 rounded-lg border border-base-300 px-3 text-sm font-medium text-base-content lg:hover:bg-base-200 phx-submit-loading:opacity-60"
+          class="min-h-11 shrink-0 rounded-lg border border-edge px-3 text-sm font-medium text-base-content lg:hover:bg-base-200 phx-submit-loading:opacity-60"
         >
           Save
         </button>
