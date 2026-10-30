@@ -11,18 +11,20 @@
  *      json as HUMAN_INVITE_FIXTURE.
  *   3. A reachable LiveKit (LIVEKIT_URL / KEY / SECRET on the server). The
  *      quickmeet rail exists only while `:in_meeting`, and "the call stays
- *      connected" is read off `#meeting-client[data-room-state]`.
- *   4. MEETING_GUEST_HOST set to a host Chromium can reach. Pass the same
- *      host as HUMAN_INVITE_GUEST_HOST and, when it has no DNS, a
- *      HUMAN_INVITE_HOST_RULES value for `--host-resolver-rules`
- *      (e.g. `MAP meet.e2e.test 192.0.2.10`).
+ *      connected" is read off the LiveKit room (`window.__livekitRoom.state`).
+ *   4. MEETING_GUEST_HOST set to a host Chromium can reach, passed again as
+ *      HUMAN_INVITE_GUEST_HOST. Serve both on `localhost` (BASE_URL
+ *      `http://localhost:<port>`, guest host `meet.localhost:<port>`; Chromium
+ *      resolves `*.localhost` to loopback): only then is the page a secure
+ *      context, which `navigator.clipboard` and `getUserMedia` require.
+ *      HUMAN_INVITE_HOST_RULES (`--host-resolver-rules`) is there for a
+ *      guest host with no DNS.
  *
  * Dev has no TLS, so the anonymous case opens the short link with its
  * scheme swapped to http, after asserting the full https link as shown.
  *
- * CLIPBOARD. Both origins are marked secure for Chromium
- * (`--unsafely-treat-insecure-origin-as-secure`), so `navigator.clipboard`
- * exists. "Granted" grants clipboard-read/write and reads the copied text
+ * CLIPBOARD. On a secure origin `navigator.clipboard` exists. "Granted"
+ * grants clipboard-read/write and reads the copied text
  * back. "Denied" makes `writeText` reject and the `execCommand` fallback
  * fail, which is what a browser that refuses both looks like to the hook.
  *
@@ -47,7 +49,6 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:4000"
 const GUEST_HOST = process.env.HUMAN_INVITE_GUEST_HOST ?? "meet.localhost:4000"
 const HOST_RULES = process.env.HUMAN_INVITE_HOST_RULES
 
-const secureOrigins = [BASE_URL, `http://${GUEST_HOST}`].join(",")
 
 test.use({
   launchOptions: {
@@ -55,7 +56,6 @@ test.use({
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
       "--autoplay-policy=no-user-gesture-required",
-      `--unsafely-treat-insecure-origin-as-secure=${secureOrigins}`,
       ...(HOST_RULES ? [`--host-resolver-rules=${HOST_RULES}`] : []),
     ],
   },
@@ -74,18 +74,28 @@ const SHORT_LINK = (host: string) =>
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
+/** The socket being up is not enough: a click that lands before the MAIN
+ *  view has joined its channel is dropped, so a Join pressed that early does
+ *  nothing (measured: 4 of 4 fresh-page Joins lost without this wait). The
+ *  main view's container carries `phx-connected` once it has joined. */
 async function provePageLive(page: Page) {
   await expect
-    .poll(() => page.evaluate(() => !!(window as any).liveSocket?.isConnected()), {
-      message: "liveSocket must be connected before anything is measured",
-    })
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            !!(window as any).liveSocket?.isConnected() &&
+            !!document.querySelector("[data-phx-main]")?.classList.contains("phx-connected"),
+        ),
+      { message: "liveSocket and the main view must be connected before anything is measured" },
+    )
     .toBe(true)
 }
 
+/** The LiveKit room's own state. `MeetingClient` exposes the connected room
+ *  as `window.__livekitRoom` (the same handle `meeting_av.spec.ts` reads). */
 async function roomState(page: Page): Promise<string | null> {
-  return page.evaluate(
-    () => document.querySelector<HTMLElement>("#meeting-client")?.dataset.roomState ?? null,
-  )
+  return page.evaluate(() => (window as any).__livekitRoom?.state ?? null)
 }
 
 async function expectConnected(page: Page) {
@@ -169,6 +179,21 @@ function uniqueName(prefix: string) {
 test.describe("human invite control", () => {
   test.skip(!FIX, "seed with e2e/scripts/seed-meeting-human-invite-fixture.exs first")
 
+  // Every case signs in as the same seeded participant, so each one LEAVES the
+  // call it joined. A page that is merely closed stays "in the call" on the
+  // server for a moment, and the next case's Join then does nothing.
+  test.afterEach(async ({ page }) => {
+    if ((await roomState(page).catch(() => null)) !== "connected") return
+    // On a phone the open participant sheet covers the call controls; Escape
+    // closes it through the sheet's own handler.
+    await page.keyboard.press("Escape")
+    const leave = page.locator('[phx-click="meeting_leave"]:visible').first()
+    if ((await leave.count()) === 1) {
+      await leave.click({ timeout: 15_000 })
+      await expect.poll(() => roomState(page).catch(() => null)).not.toBe("connected")
+    }
+  })
+
   for (const vp of VIEWPORTS) {
     for (const surface of SURFACES) {
       test.describe(`${surface} @ ${vp.width}x${vp.height}`, () => {
@@ -196,7 +221,9 @@ test.describe("human invite control", () => {
 
           const rows = dropdown.locator(":scope > button")
           await expect(rows.last()).toHaveAttribute("data-role", "meeting-human-invite-guest")
-          for (const key of ["first", "second", "long"] as const) {
+          // `first` is invited by whichever case runs first, and the resolver
+          // drops an invited user, so only the other two are always offered.
+          for (const key of ["second", "long"] as const) {
             await expect(
               dropdown.locator(
                 `[data-role="meeting-human-invite-user"][data-user-id="${fix.users[key].id}"]`,
@@ -261,9 +288,14 @@ test.describe("human invite control", () => {
           await expect(rail.locator('[data-role="meeting-human-invite-search"]')).toHaveValue("")
 
           const copy = rail.locator('[data-role="meeting-human-invite-copy"]')
+          await expect(copy).toHaveClass(/copy-ready/)
           await choose(copy, vp.touch)
           await expect(copy).toHaveText("Copied")
-          await expect(copy).toHaveAttribute("data-copy-state", "copied")
+          await expect(copy).toHaveClass(/copy-copied/)
+          // Still "Copied" after the rail's next 1s re-render.
+          await page.waitForTimeout(1_200)
+          await expect(copy).toHaveText("Copied")
+          await expect(copy).toHaveClass(/copy-copied/)
           expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link)
 
           // Optional email: invalid first, then valid.
@@ -302,8 +334,10 @@ test.describe("human invite control", () => {
 
           const copy = rail.locator('[data-role="meeting-human-invite-copy"]')
           const seen: string[] = []
+          await expect(copy).toHaveClass(/copy-ready/)
           await choose(copy, vp.touch)
-          await expect(copy).toHaveAttribute("data-copy-state", "failed")
+          await expect(copy).toHaveClass(/copy-failed/)
+          await expect(copy).not.toHaveClass(/copy-copied/)
           for (let i = 0; i < 5; i++) {
             seen.push((await copy.innerText()).trim())
             await page.waitForTimeout(100)
