@@ -365,4 +365,77 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
       assert event.op["via"] == "handler:vote"
     end
   end
+
+  # Task 01a18d38 stage 1, gap 4: the room join resolves through
+  # `CanvasAccess.fetch_for_viewer/3` WITH the viewer's Access scope, so a
+  # `canvas.read` deny refuses it like a missing canvas. Each deny test sits
+  # next to a participant on the SAME canvas who still joins and writes.
+  describe "canvas_room_join honours canvas.read denies (task 01a18d38 stage 1)" do
+    alias Platform.Access.Grants
+    alias PlatformWeb.ChatLive.CanvasHooks
+
+    defp deny!(user, resource) do
+      {:ok, _} =
+        Grants.deny(%{principal: user, permission: "canvas.read", resource: resource})
+
+      :ok
+    end
+
+    defp refused_join!(view, ctx) do
+      render_hook(view, "canvas_room_join", ids(ctx))
+      assert_reply(view, %{ok: false, error: "not_found"})
+    end
+
+    test "a participant denied on the CANVAS is refused; an allowed participant joins and writes",
+         ctx do
+      deny!(ctx.bob, {:canvas, ctx.canvas.id})
+
+      denied = open(ctx, ctx.bob)
+      refused_join!(denied, ctx)
+      # No join reached the room: none was started for this node.
+      assert CanvasRoom.whereis(ctx.canvas.id, @node) == nil
+
+      # A refused join holds no writable grant, so an op is still not_joined.
+      op(denied, ctx, %{"type" => "state.set", "key" => "label", "value" => "x"})
+      assert_reply(denied, %{ok: false, error: "not_joined"})
+
+      # Positive control on the same canvas: alice joins writable and writes.
+      allowed = open(ctx, ctx.alice)
+      assert %{writable: true} = join!(allowed, ctx)
+      op(allowed, ctx, %{"type" => "state.increment", "key" => "count"})
+      assert_reply(allowed, %{ok: true, seq: 1, result: 1})
+    end
+
+    test "a participant denied on the canvas's SPACE is refused; an allowed participant joins",
+         ctx do
+      carol = insert_user!("Carol")
+      participant!(ctx.space, carol)
+      deny!(carol, {:space, ctx.space.id})
+
+      refused_join!(open(ctx, carol), ctx)
+      assert %{writable: true} = join!(open(ctx, ctx.bob), ctx)
+    end
+
+    test "with NO :access_scope assign the socket's own user record still carries the deny",
+         ctx do
+      deny!(ctx.bob, {:canvas, ctx.canvas.id})
+
+      denied = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, current_user_record: ctx.bob}
+      }
+
+      allowed = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, current_user_record: ctx.alice}
+      }
+
+      assert CanvasHooks.room_canvas(denied, ctx.canvas.id) == {:error, :not_found}
+      assert {:ok, %{id: id}, :member} = CanvasHooks.room_canvas(allowed, ctx.canvas.id)
+      assert id == ctx.canvas.id
+    end
+
+    test "a socket with no resolvable user is refused, never read as an unscoped viewer", ctx do
+      bare = %Phoenix.LiveView.Socket{assigns: %{__changed__: %{}}}
+      assert CanvasHooks.room_canvas(bare, ctx.canvas.id) == {:error, :not_found}
+    end
+  end
 end

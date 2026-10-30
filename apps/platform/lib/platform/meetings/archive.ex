@@ -794,19 +794,36 @@ defmodule Platform.Meetings.Archive do
   # the liveness and identity conditions here; a local clone is how this
   # codebase ends up with six copies of one filter helper with incompatible
   # nil semantics.
+  #
+  # After the branch, the `chat.read` deny on the meeting's chat space applies
+  # to every viewer, root admin included (task 01a18d38 stage 1), exactly as in
+  # `Meetings.viewer_listing_query/1`. The root binding is `Meeting`, so
+  # `%{id: :chat_space_id}` addresses `m.chat_space_id`. No `:base`: only a
+  # deny narrows. A NULL `chat_space_id` fails closed under any deny
+  # (`NULL NOT IN (...)`). A nil viewer's scope carries no grants, and its
+  # org branch already selects nothing.
   defp narrow_to_viewer(query, viewer) do
-    cond do
-      Tenancy.root_admin?(viewer) ->
-        query
+    query =
+      cond do
+        Tenancy.root_admin?(viewer) ->
+          query
 
-      Tenancy.external_user?(viewer) ->
-        from([m, _p] in query,
-          where: m.id in subquery(Platform.Meetings.invited_meeting_ids_query(viewer))
-        )
+        Tenancy.external_user?(viewer) ->
+          from([m, _p] in query,
+            where: m.id in subquery(Platform.Meetings.invited_meeting_ids_query(viewer))
+          )
 
-      true ->
-        narrow_to_viewer_orgs(query, viewer)
-    end
+        true ->
+          narrow_to_viewer_orgs(query, viewer)
+      end
+
+    Platform.Access.Query.restrict(
+      query,
+      Platform.Access.Scope.for_user(viewer),
+      "chat.read",
+      :space,
+      %{id: :chat_space_id}
+    )
   end
 
   defp narrow_to_viewer_orgs(query, viewer) do

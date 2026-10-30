@@ -955,14 +955,46 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # `find/2` resolves canvases the viewer has no claim on (its KNOWN GAP), so
   # the room resolves through `CanvasAccess` instead: a read grant joins, and
   # only space participation (`:member`) writes.
-  defp room_canvas(socket, canvas_id) do
+  #
+  # The viewer's `%Platform.Access.Scope{}` rides along (task 01a18d38 stage
+  # 1), so a `canvas.read` deny on the canvas, its space or a project above it
+  # refuses the join exactly like a missing canvas. `room_scope/1` never
+  # yields nil: with no resolvable user it is `:none`, and that refuses.
+  #
+  # Public (`@doc false`) only so a test can drive it with a socket that
+  # carries no `:access_scope` assign.
+  @doc false
+  def room_canvas(socket, canvas_id) do
     with true <- Platform.UUID.valid?(canvas_id),
+         %Platform.Access.Scope{} = scope <- room_scope(socket),
          {:ok, %{deleted_at: nil} = canvas, level} <-
-           CanvasAccess.fetch_for_viewer(canvas_id, viewer(socket), audit: false) do
+           CanvasAccess.fetch_for_viewer(canvas_id, viewer(socket),
+             audit: false,
+             access_scope: scope
+           ) do
       {:ok, canvas, level}
     else
       {:error, code} -> {:error, code}
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Fails closed: the mount's `@access_scope` when present, else a Scope
+  # built from the socket's own user record, else `:none`. Never nil, which
+  # `CanvasAccess.fetch_for_viewer/3` would read as "no deny applies".
+  defp room_scope(socket) do
+    case socket.assigns do
+      %{access_scope: %Platform.Access.Scope{} = scope} ->
+        scope
+
+      %{current_user_record: %{id: id} = user} when is_binary(id) ->
+        Platform.Access.scope_for(user)
+
+      %{current_user: %{id: id} = user} when is_binary(id) ->
+        Platform.Access.scope_for(user)
+
+      _ ->
+        :none
     end
   end
 

@@ -170,7 +170,9 @@ defmodule Platform.Meetings do
         {:error, :not_found}
 
       [meeting] ->
-        if ExternalScope.visible_space_id?(meeting.chat_space_id, Access.Scope.for_user(user)) do
+        scope = Access.Scope.for_user(user)
+
+        if space_readable?(meeting.chat_space_id, scope) do
           {:ok, Repo.preload(meeting, :chat_space)}
         else
           {:error, :not_found}
@@ -182,6 +184,15 @@ defmodule Platform.Meetings do
   end
 
   def fetch_meeting_for_user(_user, _slug), do: {:error, :not_found}
+
+  # Fails CLOSED on a meeting with no chat space when `chat.read` grants apply
+  # to the viewer (task 01a18d38 stage 1): `visible_space_id?(nil, scope)`
+  # falls through to `true`, so a deny could never reach such a row. The
+  # column is NOT NULL today; this guards a future nullable path. A grant-less
+  # scope keeps the pre-grant behaviour.
+  defp space_readable?(nil, scope), do: not Access.grants_apply?(scope, "chat.read")
+
+  defp space_readable?(space_id, scope), do: ExternalScope.visible_space_id?(space_id, scope)
 
   @doc """
   Fetch a meeting BY ID that `user` may see, under the same viewer rule as
@@ -740,21 +751,34 @@ defmodule Platform.Meetings do
   #
   #   * Internal user — org membership, mirroring `viewer_meeting_query/3`:
   #     join the project and require its `org_id` among the viewer's orgs.
+  #
+  # Every branch, root admin included, then passes through the `chat.read`
+  # deny on the meeting's chat space (task 01a18d38 stage 1), the same
+  # deny-wins condition the by-slug path reaches through
+  # `ExternalScope.visible_space_id?/2`. No `:base`: an allow must not widen
+  # the listing, only a deny narrows it. A meeting whose `chat_space_id` is
+  # NULL is excluded whenever any `chat.read` deny applies, because
+  # `NULL NOT IN (...)` is not true — the fail-closed answer.
   defp viewer_listing_query(user) do
-    cond do
-      Platform.Tenancy.root_admin?(user) ->
-        from(m in Meeting)
+    query =
+      cond do
+        Platform.Tenancy.root_admin?(user) ->
+          from(m in Meeting)
 
-      Platform.Tenancy.external_user?(user) ->
-        from(m in Meeting, where: m.id in subquery(invited_meeting_ids_query(user)))
+        Platform.Tenancy.external_user?(user) ->
+          from(m in Meeting, where: m.id in subquery(invited_meeting_ids_query(user)))
 
-      true ->
-        from(m in Meeting,
-          join: p in Platform.Tasks.Project,
-          on: p.id == m.project_id,
-          where: p.org_id in subquery(Platform.Tenancy.viewer_org_ids_query(user.id))
-        )
-    end
+        true ->
+          from(m in Meeting,
+            join: p in Platform.Tasks.Project,
+            on: p.id == m.project_id,
+            where: p.org_id in subquery(Platform.Tenancy.viewer_org_ids_query(user.id))
+          )
+      end
+
+    Access.Query.restrict(query, Access.Scope.for_user(user), "chat.read", :space, %{
+      id: :chat_space_id
+    })
   end
 
   @doc """

@@ -659,4 +659,122 @@ defmodule Platform.Meetings.ArchiveTest do
     result = Archive.search(viewer, [])
     ids(result.matches) ++ ids(result.others)
   end
+
+  # ── Task 01a18d38 stage 1: chat.read denies narrow the archive ─────────────
+  #
+  # `narrow_to_viewer/2` applies the `chat.read` deny on each meeting's chat
+  # space after its branch, root admin included. Fixture stand-ins: acme plays
+  # the operator's root org, one project in it plays the shared project, and
+  # "Nettlefold" plays the client under the hold. Every deny assertion is
+  # paired with the allowed viewer on the same fixture and the same call.
+
+  describe "search/2 and artifacts_for/2 under chat.read denies (task 01a18d38 stage 1)" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Shared Project #{System.unique_integer([:positive])}",
+          org_id: acme_org_id()
+        })
+
+      meeting = fn name, days ->
+        {:ok, m} = Meetings.create_meeting(%{project_id: project.id, name: name})
+        canvas!(m, "Notes for #{name}")
+        end_meeting!(m, ago(days))
+      end
+
+      held = [
+        meeting.("Catchup on Nettlefold asks", 4),
+        meeting.("Follow up: Nettlefold Debrief", 3)
+      ]
+
+      other = meeting.("Quarterly roadmap", 2)
+
+      denied = viewer_in_acme!()
+      denied_admin = admin_in_acme!()
+
+      for user <- [denied, denied_admin], m <- held do
+        {:ok, _} =
+          Platform.Access.Grants.deny(%{
+            principal: user,
+            permission: "chat.read",
+            resource: {:space, m.chat_space_id}
+          })
+      end
+
+      %{
+        project: project,
+        held: held,
+        held_ids: MapSet.new(held, & &1.id),
+        other: other,
+        denied: denied,
+        denied_admin: denied_admin,
+        allowed: viewer_in_acme!(),
+        admin: admin_in_acme!()
+      }
+    end
+
+    defp admin_in_acme! do
+      user = create_user!()
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "admin"})
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp seen(result), do: MapSet.new(ids(result.matches) ++ ids(result.others))
+
+    test "a blank query: the denied viewer sees only the unrelated meeting, and totals exclude the denied two",
+         ctx do
+      denied = Archive.search(ctx.denied, query: "")
+      allowed = Archive.search(ctx.allowed, query: "")
+
+      assert MapSet.disjoint?(seen(denied), ctx.held_ids)
+      assert ctx.other.id in seen(denied)
+      assert MapSet.subset?(ctx.held_ids, seen(allowed))
+
+      assert allowed.total - denied.total == 2
+      assert allowed.unfiltered_total - denied.unfiltered_total == 2
+    end
+
+    test "a title query: the denied viewer matches nothing it may not see; the allowed viewer matches both",
+         ctx do
+      denied = Archive.search(ctx.denied, query: "Nettlefold")
+      allowed = Archive.search(ctx.allowed, query: "Nettlefold")
+
+      assert denied.matches == []
+      assert denied.matched == 0
+      assert MapSet.disjoint?(seen(denied), ctx.held_ids)
+      assert MapSet.new(ids(allowed.matches)) == ctx.held_ids
+      assert allowed.matched == 2
+      assert allowed.total - denied.total == 2
+    end
+
+    test ":unfiltered_total under a project filter excludes the denied meetings too", ctx do
+      denied = Archive.search(ctx.denied, project_id: ctx.project.id)
+      allowed = Archive.search(ctx.allowed, project_id: ctx.project.id)
+
+      assert denied.total == 1
+      assert allowed.total == 3
+      assert allowed.unfiltered_total - denied.unfiltered_total == 2
+    end
+
+    test "a ROOT ADMIN holding the deny is narrowed too; an admin with none sees all three",
+         ctx do
+      assert MapSet.disjoint?(seen(Archive.search(ctx.denied_admin, [])), ctx.held_ids)
+      assert ctx.other.id in seen(Archive.search(ctx.denied_admin, []))
+      assert MapSet.subset?(ctx.held_ids, seen(Archive.search(ctx.admin, [])))
+    end
+
+    test "artifacts_for/2 returns no key for a denied meeting", ctx do
+      page = [ctx.other | ctx.held]
+
+      denied = Archive.artifacts_for(ctx.denied, page)
+      allowed = Archive.artifacts_for(ctx.allowed, page)
+
+      assert Map.keys(denied) == [ctx.other.id]
+      assert MapSet.new(Map.keys(allowed)) == MapSet.put(ctx.held_ids, ctx.other.id)
+    end
+  end
 end

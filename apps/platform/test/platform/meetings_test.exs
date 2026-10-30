@@ -3068,4 +3068,158 @@ defmodule Platform.MeetingsTest do
       assert failure_audit_count(transcript.id) == 2
     end
   end
+
+  # Task 01a18d38 stage 1, gap 1: the meeting LISTING (`viewer_listing_query/1`,
+  # under `list_meetings_in_range_for_user/4`, `list_meetings_for_user/1` and
+  # `get_meeting_for_user/2`) honours a `chat.read` deny on the meeting's chat
+  # space, for a root admin too, as the by-slug path already did.
+  #
+  # Fixture stand-ins: the root org (acme) plays the operator's org, a project
+  # in it plays the shared project, "Nettlefold" plays the client under the
+  # hold. `denied` is a plain member holding the two denies, `allowed` a plain
+  # member with none, `admin` a root admin with none, `denied_admin` a root
+  # admin holding the same two denies. Every deny assertion has a positive
+  # control on the same fixture and through the same function.
+  describe "chat.read denies on the meeting listing (task 01a18d38 stage 1)" do
+    alias Platform.Access.Grants
+    alias Platform.Accounts.User
+    alias Platform.Meetings.Meeting
+    alias Platform.Tenancy.OrgMembership
+
+    @window_from ~U[2033-04-01 00:00:00Z]
+    @window_to ~U[2033-05-01 00:00:00Z]
+
+    setup do
+      org_id = Platform.TenancyFixtures.acme_org_id()
+
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Shared Project #{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      held_a = ended_meeting!(project, "Catchup on Nettlefold asks", ~U[2033-04-03 10:00:00Z])
+      held_b = ended_meeting!(project, "Follow up: Nettlefold Debrief", ~U[2033-04-04 10:00:00Z])
+      other = ended_meeting!(project, "Quarterly roadmap", ~U[2033-04-05 10:00:00Z])
+
+      denied = listing_user!(org_id, "member")
+      denied_admin = listing_user!(org_id, "admin")
+
+      for user <- [denied, denied_admin], m <- [held_a, held_b] do
+        {:ok, _} =
+          Grants.deny(%{
+            principal: user,
+            permission: "chat.read",
+            resource: {:space, m.chat_space_id}
+          })
+      end
+
+      %{
+        held: [held_a, held_b],
+        other: other,
+        denied: denied,
+        denied_admin: denied_admin,
+        allowed: listing_user!(org_id, "member"),
+        admin: listing_user!(org_id, "admin")
+      }
+    end
+
+    defp listing_user!(org_id, role) do
+      n = System.unique_integer([:positive])
+
+      # `@example.com`: an install-domain address would derive an admin role.
+      user =
+        Repo.insert!(%User{
+          email: "deny-listing-#{n}@example.com",
+          name: "Listing Fixture #{n}",
+          oidc_sub: "oidc-deny-listing-#{n}"
+        })
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: role})
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp ended_meeting!(project, name, start) do
+      {:ok, meeting} =
+        Meetings.create_meeting(%{
+          project_id: project.id,
+          name: name,
+          scheduled_start_at: start,
+          scheduled_end_at: DateTime.add(start, 1800, :second)
+        })
+
+      {:ok, live} =
+        meeting |> Meeting.status_changeset("live", %{started_at: start}) |> Repo.update()
+
+      {:ok, ended} =
+        live
+        |> Meeting.status_changeset("ended", %{ended_at: DateTime.add(start, 1800, :second)})
+        |> Repo.update()
+
+      ended
+    end
+
+    defp in_range(user),
+      do: user |> Meetings.list_meetings_in_range_for_user(@window_from, @window_to) |> ids()
+
+    defp ids(meetings), do: MapSet.new(meetings, & &1.id)
+
+    defp all_ids(ctx), do: MapSet.new([ctx.other.id | Enum.map(ctx.held, & &1.id)])
+
+    test "list_meetings_in_range_for_user/4: the denied member loses exactly the two denied meetings",
+         ctx do
+      assert in_range(ctx.denied) == MapSet.new([ctx.other.id])
+      assert in_range(ctx.allowed) == all_ids(ctx)
+    end
+
+    test "a ROOT ADMIN holding the deny loses them too; an admin with none sees all three", ctx do
+      assert in_range(ctx.denied_admin) == MapSet.new([ctx.other.id])
+      assert in_range(ctx.admin) == all_ids(ctx)
+
+      denied_index = ids(Meetings.list_meetings_for_user(ctx.denied_admin))
+      refute Enum.any?(ctx.held, &(&1.id in denied_index))
+      assert ctx.other.id in denied_index
+    end
+
+    test "list_meetings_for_user/1 applies the same deny", ctx do
+      denied = ids(Meetings.list_meetings_for_user(ctx.denied))
+      allowed = ids(Meetings.list_meetings_for_user(ctx.allowed))
+
+      refute Enum.any?(ctx.held, &(&1.id in denied))
+      assert ctx.other.id in denied
+      assert MapSet.subset?(all_ids(ctx), allowed)
+    end
+
+    test "get_meeting_for_user/2 (by id) answers a denied meeting exactly like a missing one",
+         ctx do
+      for m <- ctx.held, user <- [ctx.denied, ctx.denied_admin] do
+        assert Meetings.get_meeting_for_user(user, m.id) == {:error, :not_found}
+      end
+
+      assert Meetings.get_meeting_for_user(ctx.denied, Ecto.UUID.generate()) ==
+               {:error, :not_found}
+
+      assert {:ok, %{id: id}} = Meetings.get_meeting_for_user(ctx.denied, ctx.other.id)
+      assert id == ctx.other.id
+
+      for m <- ctx.held, user <- [ctx.allowed, ctx.admin] do
+        assert {:ok, %{id: id}} = Meetings.get_meeting_for_user(user, m.id)
+        assert id == m.id
+      end
+    end
+
+    test "fetch_meeting_for_user/2 (by slug) agrees with the listing", ctx do
+      for m <- ctx.held do
+        assert Meetings.fetch_meeting_for_user(ctx.denied, m.slug) == {:error, :not_found}
+        assert Meetings.fetch_meeting_for_user(ctx.denied_admin, m.slug) == {:error, :not_found}
+        assert {:ok, %{id: id}} = Meetings.fetch_meeting_for_user(ctx.allowed, m.slug)
+        assert id == m.id
+      end
+
+      assert {:ok, _} = Meetings.fetch_meeting_for_user(ctx.denied, ctx.other.slug)
+    end
+  end
 end
