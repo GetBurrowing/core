@@ -78,13 +78,19 @@ defmodule Platform.Meetings.CompletionTest do
         "title" => "Final meeting actions"
       })
 
-    document = %{
-      "type" => "stack",
-      "children" =>
-        Enum.map(~w(repair-completion invalid duplicate conflict), fn id ->
-          %{"type" => "checklist_item", "id" => id, "label" => id}
-        end)
-    }
+    document =
+      Platform.Chat.CanvasDocument.new()
+      |> put_in(["root", "children"], [
+        %{
+          "id" => "actions",
+          "type" => "checklist",
+          "props" => %{"title" => "actions"},
+          "children" =>
+            Enum.map(~w(repair-completion invalid duplicate conflict), fn id ->
+              %{"type" => "checklist_item", "id" => id, "props" => %{"label" => id}}
+            end)
+        }
+      ])
 
     canvas |> Ecto.Changeset.change(document: document) |> Repo.update!()
   end
