@@ -1,0 +1,222 @@
+{
+  "test_only": true,
+  "executable": "/home/jordan/openai/rig/closing-s3/clip",
+  "python": "/home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
+  "imported_module": "/home/jordan/openai/rig/closing-s3/tool/clip-agent/src/clip_agent/config.py",
+  "source_revision": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "cli_version": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/clip-agent",
+    "commit": "58960577337d5682761e1538ff4365d4ba0b4e18",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1
+  },
+  "source_file_sha256": {
+    "config.py": "e6d423ed0034b79cd15ac3290681b3ec17e27125d51d7d252551cb5aecf186fa",
+    "render.py": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
+    "cli.py": "01b348df26b2b99993c90a1a847335260d62dc0f345f9de0973614f8cc4020ed",
+    "review.py": "a6a9b98e0534333c06971041a725a3992a78fea918b36b3a0e225b50a25d518d",
+    "headline.py": "eca12d6221c205afae31fc1f6c3800bb9fe43347f444610146d3e665df9e3b4c"
+  },
+  "source_patch_sha256": "2f5b4c8196fdd11039847b0eb995a7cfc7e4ef4d854bfd4b603a6d85cea58d30",
+  "executable_sha256": "bd1e4bb160164ac98b58e5854df7070b7c809b15e0f1ed6ce4cfe908bcbf46e3",
+  "helper_sha256": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077",
+  "seeded": "Deterministic transcript/proposal, no customer media; real process/resume/review/finalize",
+  "renders": [
+    {
+      "name": "clip1-A-keep",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3444583656269624,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "0d6298399761d0a2834a6f3cba9b08f078aae2886f2003e98c44c357941293e0",
+      "closing_997hz_amplitude": 0.13953478460637048,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "clip2-A-mute",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "774706940b231f9660f1504fb2b678aa5357c16985c30ea72abbe3cc5e4f219d",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "replacement-B",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "f008284c483d86633a51a4e7bae1bd060d13296606bcff1dd4a61df0b4a5a3f9",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.08343171296296296,
+      "closing_frames": 36
+    },
+    {
+      "name": "disabled",
+      "duration_s": 5.0,
+      "expected_s": 5.0,
+      "source_440hz_amplitude": 0.30652379143905023,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123",
+        "duration_s": 5.0
+      },
+      "sha256": "8cd0347e8be94557c509dd8300b94628eb9648de2dcb5b15dba981c925f311f0"
+    },
+    {
+      "name": "headline",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3444583656269624,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "de98bed0fbf130e80abc654843ed7b5995748b433945e9a19f97797f1908e033",
+      "closing_997hz_amplitude": 0.13953478460637048,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "caption",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123",
+        "actual_in_s": 0.0,
+        "actual_out_s": 5.0
+      },
+      "sha256": "9c9050639ef9c560b08dbe42a7116bec37d20d5245e94eea3d5f1187e8e7603a",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "music",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3172988162165476,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "0aad126dd9cee91bc6759bafff7df2c0eea349e0f861564f8616ad16cb6bf92e",
+      "closing_997hz_amplitude": 1.0816659365314571e-06,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    }
+  ],
+  "calls": [
+    {
+      "argv": [
+        "profile",
+        "import",
+        "/home/jordan/openai/rig/closing-s3/real-final3/fixture-profile.toml",
+        "--name",
+        "burrow-fixture",
+        "--force",
+        "--yes"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "version",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "process",
+        "/home/jordan/openai/rig/closing-s3/real-final3/source-test-only.mp4",
+        "--project",
+        "closing-fixture",
+        "--profile",
+        "burrow-fixture",
+        "--resume"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "review",
+        "/home/jordan/openai/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
+        "--overwrite",
+        "--profile",
+        "burrow-fixture"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "review",
+        "/home/jordan/openai/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
+        "--apply",
+        "--profile",
+        "burrow-fixture"
+      ],
+      "exit": 0
+    }
+  ],
+  "source_requests": [
+    {
+      "job_id": "closing-clip1-A-keep",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-clip2-A-mute",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-replacement-B",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-headline",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-caption",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-music",
+      "asset": "music"
+    },
+    {
+      "job_id": "closing-music",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-invalid",
+      "asset": "closing_video"
+    }
+  ],
+  "invalid_video_failure": "CLIP_EXIT_1"
+}
