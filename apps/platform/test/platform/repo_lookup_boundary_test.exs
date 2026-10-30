@@ -1528,7 +1528,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `existing_user_participant_id/2` pins `space_id` (the `chat_space_id`
     # FK of a loaded `%Meeting{}`) and `user_id` (the signed-in user's own
     # struct id) — neither is a raw boundary value.
-    "platform/meetings.ex" => 25,
+    # 25 -> 26 at task 01a18d0a-ec37 stage 1: `resolve_guest_short_code/1`
+    # pins `i.short_code == ^code`, a text column, so there is no uuid cast to
+    # raise; the code is also refused by `GuestShortCode.valid_format?/1`
+    # before the query runs. No id from the boundary reaches a `where:`.
+    "platform/meetings.ex" => 26,
     # Task01a17f00: row locks/retries pin persisted meeting/transcript FK ids;
     # legacy transcript hook resolves a schema space_id and capture timestamp.
     # Task01a1830b synthesis hook also locks its validated meeting identity.
