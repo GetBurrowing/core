@@ -28,7 +28,12 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePriorities do
     if String.contains?(content, @heading) do
       content
     else
-      anchor = Enum.find(["## Idempotency", "### Idempotency contract", "{{skills_reference}}"], &String.contains?(content, &1))
+      anchor =
+        Enum.find(
+          ["### Idempotency contract", "## Idempotency", "{{skills_reference}}"],
+          &String.contains?(content, &1)
+        )
+
       if anchor do
         String.replace(content, anchor, @block <> "\n" <> anchor, global: false)
       else
@@ -39,7 +44,10 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePriorities do
 
   def rewrite_skill(content) do
     content
-    |> String.replace(~S(`"high" | "medium" | "low"`), ~S(`"low" | "medium" | "high" | "critical"`))
+    |> String.replace(
+      ~S(`"high" | "medium" | "low"`),
+      ~S(`"low" | "medium" | "high" | "critical"`)
+    )
     |> String.replace("`high|medium|low`", "`low|medium|high|critical`")
     |> add_critical_mapping()
     |> rewrite()
@@ -49,25 +57,39 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePriorities do
     if String.contains?(content, ~S(- `"critical"` → `critical`)) do
       content
     else
-      String.replace(content, ~S(- `"low"` → `low`), ~S(- `"low"` → `low`) <> "\n" <> ~S(- `"critical"` → `critical`))
+      String.replace(
+        content,
+        ~S(- `"low"` → `low`),
+        ~S(- `"low"` → `low`) <> "\n" <> ~S(- `"critical"` → `critical`)
+      )
     end
   end
 
   def up do
     alias Platform.Orchestration.PromptTemplates
+
     case PromptTemplates.get_template_by_slug("dispatch.triage_dispatch") do
       %{content: content} = row ->
         updated = rewrite(content)
-        if updated != content, do: PromptTemplates.update_template(row, %{content: updated}) |> ensure_updated!()
-      _ -> :ok
+
+        if updated != content,
+          do: PromptTemplates.update_template(row, %{content: updated}) |> ensure_updated!()
+
+      _ ->
+        :ok
     end
 
     case Platform.Skills.get_skill_by_slug("meeting-triage-officer") do
       %{content: content} = row ->
         updated = rewrite_skill(content)
-        if updated != content, do: Platform.Skills.update_skill(row, %{content: updated}) |> ensure_updated!()
-      _ -> :ok
+
+        if updated != content,
+          do: Platform.Skills.update_skill(row, %{content: updated}) |> ensure_updated!()
+
+      _ ->
+        :ok
     end
+
     :ok
   end
 
