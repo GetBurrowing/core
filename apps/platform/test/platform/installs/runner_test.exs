@@ -101,7 +101,7 @@ defmodule Platform.Installs.RunnerTest do
       assert crashed.droplet_id == nil, "the kill must land between the POST and the save"
       assert crashed.status == "provisioning"
       assert posts() == 1
-      eventually(fn -> Runner.whereis(install.id) == nil end)
+      wait_until(fn -> Runner.whereis(install.id) == nil end)
 
       # What resume_all/0 does at boot for a provisioning install.
       assert Runner.run(install.id) == :ready
@@ -187,7 +187,7 @@ defmodule Platform.Installs.RunnerTest do
       {pid, ref} = spawn_monitor(fn -> Runner.run(install.id) end)
 
       waiting =
-        eventually(fn ->
+        wait_until(fn ->
           i = Installs.get(install.id)
           step(i, "connect")["state"] == "running" && i
         end)
@@ -218,21 +218,21 @@ defmodule Platform.Installs.RunnerTest do
       put_installs_env(fake_delay_ms: 60_000)
 
       {pid, ref} = spawn_monitor(fn -> Runner.run(install.id) end)
-      eventually(fn -> Runner.whereis(install.id) end)
+      wait_until(fn -> Runner.whereis(install.id) end)
       assert Runner.run(install.id) == :already_running
 
       Runner.stop(install.id)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
-      eventually(fn -> Runner.whereis(install.id) == nil end)
+      wait_until(fn -> Runner.whereis(install.id) == nil end)
     end
 
     test "resume_all restarts provisioning installs and leaves ready ones" do
       put_installs_env(start_runs: true)
       {install, _} = create_install!()
-      eventually(fn -> Installs.get(install.id).status == "ready" end)
+      wait_until(fn -> Installs.get(install.id).status == "ready" end)
 
       {stuck, _} = create_install!(%{"business_name" => "Second Shop"})
-      eventually(fn -> Installs.get(stuck.id).status == "ready" end)
+      wait_until(fn -> Installs.get(stuck.id).status == "ready" end)
       # As if the node died mid-run, before droplet_id was saved.
       Installs.update!(Installs.get(stuck.id), %{
         status: "provisioning",
@@ -242,7 +242,7 @@ defmodule Platform.Installs.RunnerTest do
 
       calls_before = posts()
       assert :ok = Installs.resume_all()
-      eventually(fn -> Installs.get(stuck.id).status == "ready" end)
+      wait_until(fn -> Installs.get(stuck.id).status == "ready" end)
       # It found its droplet by tag: no new POST.
       assert posts() == calls_before
       assert Installs.get(install.id).status == "ready"

@@ -91,7 +91,7 @@ defmodule Platform.Installs.TeardownTest do
     use_fake_backend(fake_delay_ms: 60_000)
     {install, _} = create_install!()
     {pid, ref} = spawn_monitor(fn -> Runner.run(install.id) end)
-    eventually(fn -> Installs.get(install.id).droplet_id end)
+    wait_until(fn -> Installs.get(install.id).droplet_id end)
 
     assert :ok = Installs.teardown(install.slug)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000

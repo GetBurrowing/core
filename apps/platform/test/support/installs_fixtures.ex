@@ -68,19 +68,19 @@ defmodule Platform.InstallsFixtures do
   end
 
   @doc "Wait until `fun.()` is truthy (or fail after `timeout_ms`)."
-  def eventually(fun, timeout_ms \\ 5_000) do
+  def wait_until(fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_eventually(fun, deadline)
+    do_wait_until(fun, deadline)
   end
 
-  defp do_eventually(fun, deadline) do
+  defp do_wait_until(fun, deadline) do
     case fun.() do
       falsy when falsy in [nil, false] ->
         if System.monotonic_time(:millisecond) > deadline do
           ExUnit.Assertions.flunk("condition never held")
         else
           Process.sleep(10)
-          do_eventually(fun, deadline)
+          do_wait_until(fun, deadline)
         end
 
       value ->

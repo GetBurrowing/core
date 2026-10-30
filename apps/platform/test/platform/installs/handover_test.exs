@@ -148,7 +148,7 @@ defmodule Platform.Installs.HandoverTest do
       install = ready_install!() |> age!(8)
       start_supervised!({Platform.Installs.Sweeper, interval_ms: 60_000})
 
-      eventually(fn -> Installs.get(install.id).handover_sealed == nil end)
+      wait_until(fn -> Installs.get(install.id).handover_sealed == nil end)
       assert Installs.get(install.id).handover_expired_at
     end
   end
