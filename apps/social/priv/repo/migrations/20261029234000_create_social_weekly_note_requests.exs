@@ -1,4 +1,5 @@
 defmodule Platform.Repo.Migrations.CreateSocialWeeklyNoteRequests do
+  @moduledoc "Task 01a16c52: durable profile/week claims deduplicate weekly-note requests and approval-space links across retries."
   use Ecto.Migration
 
   def change do
