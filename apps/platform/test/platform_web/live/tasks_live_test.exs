@@ -3958,8 +3958,14 @@ defmodule PlatformWeb.TasksLiveTest do
     html = render(element(view, "#tasks-detail"))
     assert html =~ "Review Flow Task"
 
-    refute html =~ "phx-value-status=\"done\""
-    refute html =~ "phx-value-status=\"in_progress\""
+    # Task 01a18e02 stage 3 flipped the two status refutes deliberately: a
+    # person may close a task from in_review ("Mark Done") and may move it
+    # back to in_progress, which is listed in the "Move to…" menu rather
+    # than as a button. Review OUTCOMES (approve / return) still flow
+    # through validations, never through status buttons.
+    assert html =~ ~s(data-role="status-move-in_progress")
+    assert has_element?(view, "#tasks-detail button[phx-value-status='done']", "Mark Done")
+    refute has_element?(view, "#tasks-detail button[phx-value-status='in_progress']", "Return")
     refute html =~ ">Approve<"
     refute html =~ ">Return<"
   end

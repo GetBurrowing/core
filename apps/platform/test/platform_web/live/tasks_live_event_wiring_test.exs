@@ -97,7 +97,11 @@ defmodule PlatformWeb.TasksLiveEventWiringTest do
     "plan_submit_reject_with_feedback" => "GatePanelComponent phx-target={@target}",
     "plan_toggle_reject_feedback" => "GatePanelComponent phx-target={@target}",
     "plan_update_reject_feedback_text" => "GatePanelComponent phx-target={@target}",
-    "detail_open_deploy_target_config" => "rendered with phx-target={@target}"
+    "detail_open_deploy_target_config" => "rendered with phx-target={@target}",
+    # Task 01a18e02 stage 3: one shared confirm, rendered by both the board
+    # and the task panel with phx-target={@target}; both handle the two events.
+    "cancel_move" => "AgentWithoutPlanConfirm phx-target={@target} (board and detail)",
+    "confirm_plan_first" => "AgentWithoutPlanConfirm phx-target={@target} (board and detail)"
   }
 
   describe "every event pushed from the /tasks surface has a handler" do
