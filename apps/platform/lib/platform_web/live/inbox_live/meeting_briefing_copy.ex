@@ -58,6 +58,10 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingCopy do
   def action_label(:revert), do: "Revert"
   def action_label(:confirm), do: "Looks right"
   def action_label(:ask), do: "Ask"
+  # Task 01a18d37 stage 2 bridge: `MeetingBriefings.view/2` now offers
+  # `:follow_up`, and without a label the card raises on render. Stage 3
+  # replaces this with the agent-named "Follow up with <Agent>" button.
+  def action_label(:follow_up), do: "Follow up"
   def action_label(:align), do: "Seek alignment"
   def action_label(:dismiss), do: "Not a conflict"
 
