@@ -1400,6 +1400,14 @@ defmodule PlatformWeb.SocialClipsReview do
         <span :if={@selected} class="shrink-0">
           v{@selected.rev} · {version_state(@selected, @clip)}
         </span>
+        <span
+          :if={@selected}
+          class="min-w-0 truncate"
+          data-role="selected-render-style"
+          title={Platform.Social.ClipCaptionPreviews.version_label(@selected)}
+        >
+          {Platform.Social.ClipCaptionPreviews.version_label(@selected)}
+        </span>
         <span :if={@ending} class="min-w-0 truncate" title={@ending}>Ends with: {@ending}</span>
         <span :if={!@ending} class="min-w-0 truncate">No closing video</span>
       </div>
@@ -1407,7 +1415,7 @@ defmodule PlatformWeb.SocialClipsReview do
         <button
           :for={r <- @versions}
           type="button"
-          class="btn btn-ghost btn-xs shrink-0"
+          class="btn btn-ghost btn-xs h-auto min-h-6 max-w-full shrink-0 whitespace-normal text-left"
           aria-pressed={to_string(@selected && r.id == @selected.id)}
           phx-click="pick_version"
           phx-value-render_id={r.id}
@@ -1415,7 +1423,7 @@ defmodule PlatformWeb.SocialClipsReview do
           data-role="pick-render-version"
           data-render-id={r.id}
         >
-          v{r.rev} · {version_state(r, @clip)}
+          v{r.rev} · {version_state(r, @clip)} · {Platform.Social.ClipCaptionPreviews.version_label(r)}
         </button>
       </div>
       <form

@@ -50,6 +50,140 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
   defp job(w),
     do: Repo.one!(from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"))
 
+  defp qualify_renderer do
+    previous = Application.get_env(:platform, :clip_caption_renderer)
+
+    receipt =
+      File.read!("../../docs/integrations/clip-captions/qualification-example.json")
+      |> Jason.decode!()
+
+    Application.put_env(:platform, :clip_caption_renderer, receipt)
+    on_exit(fn -> Application.put_env(:platform, :clip_caption_renderer, previous) end)
+  end
+
+  test "six actual preview cards keep server qualification separate from draft and current", %{
+    conn: conn,
+    w: w
+  } do
+    qualify_renderer()
+    child = open(conn, w)
+
+    for style <- ~w(plain phrase-pop karaoke type-on focus-word editorial-punch) do
+      assert has_element?(
+               child,
+               "[data-style='#{style}']:not([disabled]) video[data-preview-video][src$='#{style}.mp4'][muted][loop]"
+             )
+
+      for phase <- ~w(entry mid hold) do
+        assert has_element?(
+                 child,
+                 "[data-style='#{style}'] [data-preview-stills] img[src$='#{style}-#{phase}.jpg']"
+               )
+      end
+    end
+
+    assert has_element?(child, "[phx-hook='SyncedVideoPreviews']")
+    assert has_element?(child, "[data-role='caption-metadata']", "CLI 0.9.0")
+
+    assert has_element?(
+             child,
+             "[data-role='caption-applied']",
+             "Existing render (style not recorded)"
+           )
+
+    choose(child, "type-on")
+
+    assert has_element?(
+             child,
+             "[data-style='type-on'][aria-pressed='true'].caption-preview-selected"
+           )
+
+    refute has_element?(child, "[data-style='type-on'] [data-role='caption-current']")
+
+    assert has_element?(
+             child,
+             "[data-role='caption-render']",
+             "Apply Type-on — queues a new render; approval resets"
+           )
+
+    preview(child, w.base.id)
+    j = job(w)
+    assert j.payload["look"]["cap"]["style"] == "type-on"
+    assert has_element?(child, "[data-role='caption-render'][disabled]")
+    assert has_element?(child, "[data-style='type-on'][disabled]")
+    {:ok, _} = ClipJobs.claim(w.scope, j.id, w.agent.id)
+    file = stored_file!(w.project, "new-caption #{unique()}", "new.mp4", "video/mp4")
+    {:ok, _} = ClipJobs.complete(w.scope, j.id, w.agent.id, %{file_id: file.id})
+    render(child)
+    assert has_element?(child, "[data-style='type-on'] [data-role='caption-current']", "Current")
+
+    assert has_element?(
+             child,
+             "[data-style='type-on'][aria-describedby='appearance-#{w.clip.id}-current-type-on']"
+           )
+
+    choose(child, "focus-word")
+    assert has_element?(child, "[data-style='focus-word'][aria-pressed='true']")
+    assert has_element?(child, "[data-style='type-on'] [data-role='caption-current']")
+
+    assert has_element?(
+             child,
+             "[data-role='pick-render-version'][data-render-id='#{w.base.id}']",
+             "Existing render (style not recorded)"
+           )
+
+    child
+    |> element("[data-role='pick-render-version'][data-render-id='#{w.base.id}']")
+    |> render_click()
+
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+    assert has_element?(child, "[data-role='pick-render-version']", "Type-on")
+    refute has_element?(child, "[data-role='clip-appearance']")
+  end
+
+  test "qualification removed between selection and apply cannot queue a silent fallback", %{
+    conn: conn,
+    w: w
+  } do
+    qualify_renderer()
+    child = open(conn, w)
+    choose(child, "focus-word")
+    Application.delete_env(:platform, :clip_caption_renderer)
+    preview(child, w.base.id)
+    assert has_element?(child, "[data-role='caption-error']", "unavailable")
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+
+    assert Repo.aggregate(
+             from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"),
+             :count
+           ) == 0
+  end
+
+  test "unqualified treatments remain disabled and a forged choose cannot select one", %{
+    conn: conn,
+    w: w
+  } do
+    previous = Application.get_env(:platform, :clip_caption_renderer)
+    Application.delete_env(:platform, :clip_caption_renderer)
+    on_exit(fn -> Application.put_env(:platform, :clip_caption_renderer, previous) end)
+    child = open(conn, w)
+
+    for style <- ~w(type-on focus-word editorial-punch) do
+      assert has_element?(
+               child,
+               "[data-style='#{style}'][disabled] [data-role='caption-unavailable']"
+             )
+    end
+
+    child
+    |> with_target("#appearance-#{w.clip.id}")
+    |> render_click("choose", %{"style" => "type-on"})
+
+    refute has_element?(child, "[data-style='type-on'][aria-pressed='true']")
+    assert has_element?(child, "[data-role='caption-render'][disabled]")
+    assert has_element?(child, "[data-style='plain']:not([disabled])")
+  end
+
   test "real styles bind immutable base, block stale approval, complete without losing history",
        %{conn: conn, w: w} do
     child = open(conn, w)
@@ -79,7 +213,7 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
     {:ok, %{clip: clip}} = ClipJobs.complete(w.scope, j.id, w.agent.id, %{file_id: file.id})
     render(child)
     assert has_element?(child, "video[src='/files/blob/#{file.id}']")
-    assert has_element?(child, "[data-role='caption-applied']", "karaoke")
+    assert has_element?(child, "[data-role='caption-applied']", "Karaoke")
     refute has_element?(child, "[data-role='caption-dirty']")
     {:ok, [new, old]} = ClipVersions.recent(w.scope, w.profile.id, clip.id)
     assert new.look["cap"]["style"] == "karaoke"

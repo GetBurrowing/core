@@ -1,0 +1,270 @@
+{
+  "task_id": "01a18d1b-a5c1-7000-947c-7931a3ec53e5",
+  "stage": 3,
+  "runtime": "executor-owned Linux WSL2 rig; OTP28.1 / Elixir1.20.4 / PostgreSQL16",
+  "renderer": {
+    "cli_version": "0.9.0",
+    "upstream_base": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "renderer_sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+    "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
+    "helper_version": "0.9.0"
+  },
+  "checks": {
+    "social_full": {
+      "command": "apps/social: mix test with a fresh private PLATFORM_TEST_DATABASE",
+      "passed": 1562,
+      "failed": 0
+    },
+    "social_final_affected": {
+      "command": "apps/social: mix test test/platform_web/live/social_clip_appearance_test.exs test/platform_web/live/social_clips_review_phone_test.exs test/platform_web/live/social_clips_review_test.exs",
+      "passed": 34,
+      "failed": 0
+    },
+    "javascript": {
+      "command": "apps/platform/assets: npm test",
+      "vitest_files": 101,
+      "vitest_passed": 1541,
+      "node_passed": 102,
+      "failed": 0
+    },
+    "sync_mutation": {
+      "change": "Replace drift correction condition with false",
+      "observation": "Expected currentTime 1.0, observed 0.3; synchronization guard failed",
+      "mutant_killed": true,
+      "restored_focused_passed": 6
+    },
+    "assets": {
+      "same_excerpt_s": 3.336667,
+      "styles": 6,
+      "files": 24,
+      "all_video_sha256_reproduced_identically": true,
+      "builder": "docs/integrations/clip-captions/build_preview_assets.py"
+    },
+    "lint": {
+      "social_compile_warnings_as_errors": true,
+      "social_format_check": true,
+      "esbuild_with_social": true,
+      "tailwind_with_social": true,
+      "builder_ruff_check": true,
+      "builder_ruff_format": true
+    },
+    "core_precommit": {
+      "command": "apps/platform: mix precommit on a private PLATFORM_TEST_DATABASE",
+      "passed": 26030,
+      "total": 26031,
+      "failed": 1,
+      "doctests_passed": 52,
+      "skipped": 3,
+      "excluded": 13,
+      "seed": 740666,
+      "failure": "Platform.VaultTest get/2 access_denied telemetry: received mail-denied-448, expected deny-tel-447",
+      "source_unchanged_from_core_base": "a433cb9c: vault.ex and vault_test.exs unchanged",
+      "full_green_claim": false,
+      "initial_attempt": "Test compilation lost cached Mix task beams; force rebuild restored them. No pass claimed for the aborted attempt."
+    },
+    "core_controls": {
+      "command": "apps/platform: mix test test/platform/vault_test.exs test/platform/regression/install_identity_guard_test.exs test/platform/design/border_token_direction_test.exs test/platform/design/error_token_contrast_guard_test.exs test/platform/design/dark_token_diff_test.exs --seed 740666 (fresh private DB)",
+      "passed": 153,
+      "failed": 0,
+      "meaning": "Isolated controls pass; the full-suite Vault telemetry failure remains a failure, not a green full run."
+    },
+    "final_identity_guard": {
+      "passed": 15,
+      "failed": 0,
+      "initial_report_issue": "Deployment-specific canvas hosts were found in the new report; replaced with canvas IDs. Guard rules and allowlists were unchanged."
+    }
+  },
+  "browser": {
+    "viewport_desktop": [
+      1280,
+      800
+    ],
+    "viewport_phone": [
+      375,
+      812
+    ],
+    "max_pairwise_drift_s": 0.0007569999999998966,
+    "page_errors": [],
+    "reduced_motion": [
+      {
+        "paused": true,
+        "motion": "reduced"
+      },
+      {
+        "paused": true,
+        "motion": "reduced"
+      },
+      {
+        "paused": true,
+        "motion": "reduced"
+      },
+      {
+        "paused": true,
+        "motion": "reduced"
+      },
+      {
+        "paused": true,
+        "motion": "reduced"
+      },
+      {
+        "paused": true,
+        "motion": "reduced"
+      }
+    ],
+    "missing_still": {
+      "broken_still_reported": true,
+      "videos": [
+        {
+          "paused": true,
+          "muted": true
+        },
+        {
+          "paused": true,
+          "muted": true
+        },
+        {
+          "paused": true,
+          "muted": true
+        },
+        {
+          "paused": true,
+          "muted": true
+        },
+        {
+          "paused": true,
+          "muted": true
+        },
+        {
+          "paused": true,
+          "muted": true
+        }
+      ]
+    },
+    "unqualified_renderer": [
+      {
+        "style": "plain",
+        "disabled": false
+      },
+      {
+        "style": "phrase-pop",
+        "disabled": false
+      },
+      {
+        "style": "karaoke",
+        "disabled": false
+      },
+      {
+        "style": "type-on",
+        "disabled": true
+      },
+      {
+        "style": "focus-word",
+        "disabled": true
+      },
+      {
+        "style": "editorial-punch",
+        "disabled": true
+      }
+    ],
+    "painted_tokens": [
+      {
+        "controls": {
+          "white": [
+            255,
+            255,
+            255
+          ],
+          "black": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ground": [
+          25,
+          27,
+          32
+        ],
+        "ink": [
+          142,
+          143,
+          146
+        ],
+        "neutral": [
+          77,
+          70,
+          71
+        ],
+        "description_ratio": 5.32764024329855,
+        "neutral_ratio": 1.8725776863127543
+      },
+      {
+        "controls": {
+          "white": [
+            255,
+            255,
+            255
+          ],
+          "black": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ground": [
+          251,
+          250,
+          249
+        ],
+        "ink": [
+          113,
+          113,
+          112
+        ],
+        "neutral": [
+          90,
+          83,
+          85
+        ],
+        "description_ratio": 4.6866527498998725,
+        "neutral_ratio": 7.186047498241434
+      }
+    ],
+    "keyboard": "Tab moved Plain to Phrase pop; Enter selected; Current badge remained separate",
+    "liveview_patch": "Selection patches retain loaded media state inside ignored boundary"
+  },
+  "evidence": {
+    "videos": {
+      "type-on": "/chat/attachments/01a18d6f-92b2-7000-8a50-54599b7753be",
+      "focus-word": "/chat/attachments/01a18d6f-93f3-7000-9a83-de9467aab53b",
+      "editorial-punch": "/chat/attachments/01a18d6f-9528-7000-89d8-06441be8fab6"
+    },
+    "reference_canvas_id": "01a18d5e-37ff-7000-b0dc-39f229aa3c64",
+    "ui_canvas_id": "01a18d6f-66b1-7000-af78-f71d693e91ad",
+    "viewer_note": "Resolve canvas IDs through MCP; deployment-specific hosts stay outside the source tree."
+  },
+  "design_deviations": [
+    {
+      "canvas": "01a18d1c-57fd-7000-8ebd-6d0ad909fb33",
+      "node": "md",
+      "element": "description tokens",
+      "difference": "Use muted-content text-subtle instead of neutral",
+      "reason": "Painted contrast: neutral on dark1.8726:1; muted content dark5.3276:1 and light4.6867:1; white/black controls verified."
+    },
+    {
+      "canvas": "01a18d1c-57fd-7000-8ebd-6d0ad909fb33",
+      "node": "md",
+      "element": "desktop row",
+      "difference": "Horizontal scrolling retained inside existing review pane",
+      "reason": "Six approximately150px cards remain in one row while the surrounding player, closing-video and review controls retain their existing layout."
+    },
+    {
+      "canvas": "01a18d1c-57fd-7000-8ebd-6d0ad909fb33",
+      "node": "md",
+      "element": "loading/unavailable/error/pending/keyboard focus",
+      "difference": "not in canvas",
+      "reason": "Added truthful states and semantic tokens; native buttons and accessible Current association."
+    }
+  ],
+  "scope": "No PR, publication, production configuration, worker replacement or original project edits. The requested8\u201312s comparison clips are a later stage."
+}

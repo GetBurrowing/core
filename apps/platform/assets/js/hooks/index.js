@@ -4,6 +4,7 @@
 // it at the entry `mix platform.extensions.assets` generates from its
 // configured modules. Core never imports a module's hook by name.
 import extensionHooks from "@extensions"
+import SyncedVideoPreviews from "./synced_video_previews"
 import AppBadge from "./app_badge"
 import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
@@ -90,6 +91,7 @@ import ViewportBreakpoint from "./viewport_breakpoint"
 export default {
   // First, so a core hook of the same name wins over a module's.
   ...extensionHooks,
+  SyncedVideoPreviews,
   AppBadge,
   AttachFailedPreview,
   AttachSheet,
