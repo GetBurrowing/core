@@ -413,7 +413,7 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     {:ok, _} =
       Calendar.create_event(scope, %{
-        title: "Lunch with Ryan",
+        title: "Lunch with Alex",
         starts_at: at(zone, today, 12, 30),
         ends_at: at(zone, today, 13, 15),
         time_zone: zone,
@@ -428,14 +428,14 @@ defmodule PlatformWeb.CalendarLiveTest do
     {:ok, view, _} = live(zoned(conn, zone), "/calendar")
 
     native = chip_html(view, "native")
-    assert native =~ "Lunch with Ryan"
+    assert native =~ "Lunch with Alex"
     assert native =~ "12:30–13:15"
     assert native =~ "hero-eye-slash"
     assert native =~ "hero-arrow-path"
     assert native =~ "cal-k-native"
 
     assert native =~
-             ~s(aria-label="Event: Lunch with Ryan, #{Elixir.Calendar.strftime(today, "%a %-d %b")} 12:30 to 13:15")
+             ~s(aria-label="Event: Lunch with Alex, #{Elixir.Calendar.strftime(today, "%a %-d %b")} 12:30 to 13:15")
 
     meeting = chip_html(view, "meeting")
     assert meeting =~ "cal-live"

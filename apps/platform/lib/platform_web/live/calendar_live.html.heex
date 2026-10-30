@@ -63,7 +63,7 @@
       id="calendar-body"
       phx-hook="CalendarScroll"
       data-view={@view}
-      class="relative min-h-0 flex-1 overflow-y-auto pb-[var(--bottom-nav-clearance)] lg:pb-0"
+      class="clears-tab-bar relative min-h-0 flex-1 overflow-y-auto"
     >
       <.legend meetings_on={@meetings_on} />
       <%= if @view == "month" do %>
