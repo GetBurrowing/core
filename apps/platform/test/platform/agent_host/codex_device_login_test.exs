@@ -125,14 +125,20 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
     } do
       login = %{"step" => "login_url", "url" => @url, "code" => "QOHQ-5M34L"}
       :ok = Reconciler.agent_state(host, needs_login(agent.id, login))
-      assert %{state: :needs_login, detail: nil, login_code: nil, device_url: nil} = State.get(agent.id)
+
+      assert %{state: :needs_login, detail: nil, login_code: nil, device_url: nil} =
+               State.get(agent.id)
     end
 
     test "only needs_login keeps it", %{agent: agent, host: host} do
       login = %{"step" => "device_code", "url" => @url, "code" => "QOHQ-5M34L"}
 
       :ok =
-        Reconciler.agent_state(host, %{"agent_id" => agent.id, "state" => "running", "login" => login})
+        Reconciler.agent_state(host, %{
+          "agent_id" => agent.id,
+          "state" => "running",
+          "login" => login
+        })
 
       assert %{state: :running, login_code: nil} = State.get(agent.id)
     end
@@ -150,9 +156,19 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
   describe "State" do
     test "round-trips login_code and device_url" do
       id = Ecto.UUID.generate()
-      State.put(id, :needs_login, %{detail: "device_code", login_code: "AB12-CD34E", device_url: @url})
 
-      assert %{state: :needs_login, detail: "device_code", login_code: "AB12-CD34E", device_url: @url} =
+      State.put(id, :needs_login, %{
+        detail: "device_code",
+        login_code: "AB12-CD34E",
+        device_url: @url
+      })
+
+      assert %{
+               state: :needs_login,
+               detail: "device_code",
+               login_code: "AB12-CD34E",
+               device_url: @url
+             } =
                State.get(id)
 
       State.put(id, :starting)
@@ -179,7 +195,10 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
                %{kind: :device_code, url: nil, code: nil}
 
       assert NativeLogin.login_view("claude_code", observed, :api_key) == :api_key
-      assert NativeLogin.login_view("claude_code", observed, :operator) == :subscription_terminal_only
+
+      assert NativeLogin.login_view("claude_code", observed, :operator) ==
+               :subscription_terminal_only
+
       assert NativeLogin.login_view("gemini", nil, :api_key) == :unsupported
     end
 
@@ -209,13 +228,20 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       assert %{profile: "fake"} = State.host()
     end
 
-    test "a codex agent waits at the device code, then runs once completed", %{owner: owner, fake: fake} do
+    test "a codex agent waits at the device code, then runs once completed", %{
+      owner: owner,
+      fake: fake
+    } do
       {agent, runtime} = native!(owner, "Cody", "codex")
       {:ok, _} = NativeAgents.set_desired_state(runtime, "running")
       eventually(fn -> Reconciler.host_pid() == fake end)
       :ok = Reconciler.converge(agent.id)
 
-      entry = eventually(fn -> match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id) end)
+      entry =
+        eventually(fn ->
+          match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id)
+        end)
+
       assert %{login_code: "FAKE-1234", device_url: @url, detail: "device_code"} = entry
 
       assert NativeLogin.login_view(agent) == %{kind: :device_code, url: @url, code: "FAKE-1234"}
@@ -246,13 +272,20 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       assert unknown.status == 404
     end
 
-    test "a claude_code agent needs a key, and runs once one is saved", %{owner: owner, fake: fake} do
+    test "a claude_code agent needs a key, and runs once one is saved", %{
+      owner: owner,
+      fake: fake
+    } do
       {agent, runtime} = native!(owner, "Clio", "claude_code")
       {:ok, _} = NativeAgents.set_desired_state(runtime, "running")
       eventually(fn -> Reconciler.host_pid() == fake end)
       :ok = Reconciler.converge(agent.id)
 
-      entry = eventually(fn -> match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id) end)
+      entry =
+        eventually(fn ->
+          match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id)
+        end)
+
       # Never a Claude login URL or code.
       assert %{login_code: nil, device_url: nil, detail: "login"} = entry
       assert {:error, :not_device_login} = FakeHost.complete(agent.id)

@@ -371,7 +371,8 @@ defmodule Platform.AgentHost.Reconciler do
   (services/agent-host/src/codex_login.ts). Otherwise both are dropped: a
   code that does not fit is not shown with a URL, nor a URL without its code.
   """
-  @spec device_login(State.observed() | term(), term()) :: %{url: String.t(), code: String.t()} | %{}
+  @spec device_login(State.observed() | term(), term()) ::
+          %{url: String.t(), code: String.t()} | %{}
   def device_login(:needs_login, %{"step" => "device_code", "code" => code, "url" => url})
       when is_binary(code) and is_binary(url) do
     if Regex.match?(@device_code, code) and openai_device_url?(url),
@@ -383,7 +384,14 @@ defmodule Platform.AgentHost.Reconciler do
 
   defp openai_device_url?(url) do
     case URI.parse(url) do
-      %URI{scheme: "https", host: "auth.openai.com", port: 443, userinfo: nil, query: nil, fragment: nil} ->
+      %URI{
+        scheme: "https",
+        host: "auth.openai.com",
+        port: 443,
+        userinfo: nil,
+        query: nil,
+        fragment: nil
+      } ->
         true
 
       _ ->
