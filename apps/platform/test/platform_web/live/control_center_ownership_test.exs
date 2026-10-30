@@ -103,6 +103,83 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
     assert Repo.get_by(RoleAssignment, role_key: "designer") == assignment
   end
 
+  test "owner suspends with confirmation and unsuspends the selected runtime", %{conn: conn} do
+    user = member!()
+    {agent, runtime} = federated_agent!(user)
+    {:ok, runtime, token} = Federation.activate_runtime(runtime)
+    assert Federation.get_runtime_by_token(token).id == runtime.id
+    {:ok, view, _} = live(as_user(conn, user), ~p"/control/#{agent.slug}")
+
+    assert has_element?(
+             view,
+             ~s(button[phx-click="suspend_federated_runtime"][data-confirm="Suspend this runtime? This blocks runtime authentication until you unsuspend it."])
+           )
+
+    refute has_element?(view, ~s(button[phx-click="unsuspend_federated_runtime"]))
+    assert render_click(view, "suspend_federated_runtime", %{}) =~ "Runtime suspended."
+    assert has_element?(view, ~s(button[phx-click="unsuspend_federated_runtime"]), "Unsuspend")
+    refute has_element?(view, ~s(button[phx-click="suspend_federated_runtime"]))
+    assert render(view) =~ "Suspended"
+    suspended = Federation.get_runtime(runtime.id)
+    assert suspended.status == "suspended"
+    assert suspended.auth_token_hash == runtime.auth_token_hash
+    assert Federation.get_runtime_by_token(token) == nil
+
+    {_, other_runtime} = federated_agent!(user)
+    {:ok, other_runtime} = Federation.suspend_runtime(other_runtime)
+
+    assert render_click(view, "unsuspend_federated_runtime", %{"runtime_id" => other_runtime.id}) =~
+             "Runtime unsuspended."
+
+    assert Federation.get_runtime(other_runtime.id).status == "suspended"
+    restored = Federation.get_runtime(runtime.id)
+    assert restored.status == "active"
+    assert restored.auth_token_hash == runtime.auth_token_hash
+    assert Federation.get_runtime_by_token(token).id == runtime.id
+    assert has_element?(view, ~s(button[phx-click="suspend_federated_runtime"]))
+    refute has_element?(view, ~s(button[phx-click="unsuspend_federated_runtime"]))
+  end
+
+  test "non-manager cannot recover a suspended runtime through a forged event", %{conn: conn} do
+    owner = member!()
+    other = member!()
+    {agent, runtime} = federated_agent!(owner)
+    {:ok, runtime, token} = Federation.activate_runtime(runtime)
+    {:ok, runtime} = Federation.suspend_runtime(runtime)
+    {:ok, view, _} = live(as_user(conn, other), ~p"/control/#{agent.slug}")
+    refute has_element?(view, ~s(button[phx-click="unsuspend_federated_runtime"]))
+
+    assert render_click(view, "unsuspend_federated_runtime", %{}) =~
+             "You can only manage your own agents."
+
+    denied = Federation.get_runtime(runtime.id)
+    assert denied.status == "suspended"
+    assert denied.auth_token_hash == runtime.auth_token_hash
+    assert Federation.get_runtime_by_token(token) == nil
+  end
+
+  test "revoked runtime hides recovery and refuses a stale owner's event", %{conn: conn} do
+    user = member!()
+    {agent, runtime} = federated_agent!(user)
+    {:ok, runtime, token} = Federation.activate_runtime(runtime)
+    {:ok, runtime} = Federation.suspend_runtime(runtime)
+    {:ok, view, _} = live(as_user(conn, user), ~p"/control/#{agent.slug}")
+    assert has_element?(view, ~s(button[phx-click="unsuspend_federated_runtime"]))
+    {:ok, revoked} = Federation.revoke_runtime(runtime)
+    assert revoked.auth_token_hash == nil
+    assert Federation.get_runtime_by_token(token) == nil
+
+    assert render_click(view, "unsuspend_federated_runtime", %{}) =~
+             "Could not unsuspend runtime."
+
+    refused = Federation.get_runtime(runtime.id)
+    assert refused.status == "revoked"
+    assert refused.auth_token_hash == revoked.auth_token_hash
+    assert Federation.get_runtime_by_token(token) == nil
+    {:ok, refreshed, _} = live(as_user(conn, user), ~p"/control/#{agent.slug}")
+    refute has_element?(refreshed, ~s(button[phx-click="unsuspend_federated_runtime"]))
+  end
+
   test "unknown event is refused", %{conn: conn} do
     user = member!()
     {:ok, view, _} = live(as_user(conn, user), ~p"/control")

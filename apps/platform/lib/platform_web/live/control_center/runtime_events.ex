@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   @moduledoc """
-  Handle_event clauses for federated runtime management: suspend, revoke,
+  Handle_event clauses for federated runtime management: suspend, unsuspend, revoke,
   regenerate token, and dismiss regenerated token.
   """
   import Phoenix.Component, only: [assign: 3]
@@ -32,6 +32,29 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   end
 
   def handle("suspend_federated_runtime", _params, socket), do: {:noreply, socket}
+
+  def handle(
+        "unsuspend_federated_runtime",
+        _params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case Federation.unsuspend_runtime(socket.assigns.access_scope, runtime) do
+          {:ok, _} ->
+            {:noreply, socket |> put_flash(:info, "Runtime unsuspended.") |> reload(socket)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not unsuspend runtime.")}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle("unsuspend_federated_runtime", _params, socket), do: {:noreply, socket}
 
   def handle(
         "revoke_federated_runtime",

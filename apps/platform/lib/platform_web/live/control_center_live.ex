@@ -298,6 +298,7 @@ defmodule PlatformWeb.ControlCenterLive do
     "submit_external" => :create_ownerless,
     "set_vault_mode" => :vault,
     "suspend_federated_runtime" => :manage_selected,
+    "unsuspend_federated_runtime" => :manage_selected,
     "revoke_federated_runtime" => :manage_selected,
     "regenerate_federated_token" => :manage_selected,
     "dismiss_regenerated_token" => :ui,
@@ -740,6 +741,9 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("suspend_federated_runtime", params, socket),
     do: RuntimeEvents.handle("suspend_federated_runtime", params, socket)
 
+  defp handle_control_event("unsuspend_federated_runtime", params, socket),
+    do: RuntimeEvents.handle("unsuspend_federated_runtime", params, socket)
+
   defp handle_control_event("revoke_federated_runtime", params, socket),
     do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
 
@@ -1005,6 +1009,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
               <AgentDetail.federation_panels
                 agent={@selected_agent}
+                federation_runtime={@federation_runtime}
                 config_form={@config_form}
                 uploads={@uploads}
                 regenerated_token={@regenerated_token}
