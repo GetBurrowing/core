@@ -24,6 +24,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
   alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
+  alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListHooks
   alias PlatformWeb.ChatLive.Partials.ChatList
   alias PlatformWeb.SpaceTopics
@@ -600,6 +601,76 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       Repo.update!(Ecto.Changeset.change(agent, avatar_url: "/images/agent-blank.png"))
       {:ok, view2, _} = live(w.conn, ~p"/chat")
       assert has_element?(view2, "#{avatar} img[src='/images/agent-blank.png']")
+    end
+
+    # Task 01a18940 stage 1, measured on prod: Brosnan's DM row drew "B" on a
+    # blue ring while the message flow showed his image. `load_identities/1`
+    # resolves avatars and slots for every DM and group in ONE batch, and the
+    # Chat helpers keyed that batch `agent_id => participant.id`, keeping only
+    # the LAST row of an agent present in several listed spaces. Here the
+    # agent shares groups with the viewer listed before AND after the DM, so
+    # the DM row is never the one a last-wins map would keep, and the test
+    # asserts that precondition rather than trusting it.
+    test "an agent DM keeps its image and slot when the agent is also in listed groups",
+         %{conn: conn} do
+      w = world(conn)
+      url = "/agents/list-batch/avatar?v=BATCH"
+
+      agent =
+        Repo.insert!(%Agent{
+          slug: "list-batch-#{System.unique_integer([:positive])}",
+          name: "Batch Bot",
+          status: "active",
+          avatar_url: url,
+          color: "teal"
+        })
+
+      group_with_agent = fn ->
+        {:ok, group} = Chat.create_space(%{kind: "group"})
+        _ = join!(group, w.user.id, w.user.name)
+        {:ok, _} = Chat.add_agent_participant(group.id, agent)
+        group
+      end
+
+      before_group = group_with_agent.()
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(dm, w.user.id, w.user.name)
+      {:ok, dm_row} = Chat.add_agent_participant(dm.id, agent)
+      after_group = group_with_agent.()
+
+      batch =
+        [before_group.id, dm.id, after_group.id]
+        |> Chat.participants_by_space()
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.filter(&(&1.participant_id == agent.id))
+
+      assert length(batch) == 3
+      refute List.last(batch).id == dm_row.id
+
+      avatar = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-avatar']"
+
+      # Fresh /chat and direct entry into the DM (`ensure_loaded/1`) both
+      # load identities through the same batch.
+      for path <- [~p"/chat", ~p"/chat/#{ChatLive.space_nav_target(dm)}"] do
+        {:ok, view, _} = live(w.conn, path)
+
+        assert has_element?(view, "#{avatar}[data-avatar='agent'][data-agent-slot='teal']"),
+               "#{path}: the DM row lost the agent's slot"
+
+        assert has_element?(view, ~s(#{avatar} img[src="#{url}"])),
+               "#{path}: the DM row lost the agent's image"
+
+        refute view |> element(avatar) |> render() =~ ">B<"
+      end
+
+      # Negative arm on the same fixture: no avatar is the agent's initial on
+      # its own ring, with no image.
+      Repo.update!(Ecto.Changeset.change(agent, avatar_url: nil))
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, "#{avatar}[data-avatar='agent'][data-agent-slot='teal']")
+      refute has_element?(view, "#{avatar} img")
+      assert view |> element(avatar) |> render() =~ ">B<"
     end
 
     test "a restricted channel renders the restricted row with no excerpt and no link",

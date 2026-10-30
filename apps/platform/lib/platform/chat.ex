@@ -1737,15 +1737,16 @@ defmodule Platform.Chat do
   `ColorPalette.slot_for/1`. Used to give every agent surface its
   `data-agent-slot` (task 01a1557a rung 3; it replaced the OKLCH accent map
   in stage 2).
+
+  `participants` may span many spaces: every participant row of an agent gets
+  its own entry, so one agent in several batched spaces resolves in all of
+  them.
   """
   @spec agent_slot_map_for_participants([Participant.t()]) :: %{binary() => binary()}
   def agent_slot_map_for_participants(participants) do
     alias Platform.Agents.ColorPalette
 
-    agent_participant_ids =
-      participants
-      |> Enum.filter(&(&1.participant_type == "agent"))
-      |> Map.new(fn p -> {p.participant_id, p.id} end)
+    agent_participant_ids = participant_ids_by_agent(participants)
 
     cond do
       map_size(agent_participant_ids) == 0 ->
@@ -1759,10 +1760,13 @@ defmodule Platform.Chat do
 
         from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.color})
         |> Repo.all()
-        |> Map.new(fn {agent_id, color} ->
-          participant_id = Map.fetch!(agent_participant_ids, agent_id)
-          {participant_id, ColorPalette.slot_for(color)}
+        |> Enum.flat_map(fn {agent_id, color} ->
+          slot = ColorPalette.slot_for(color)
+
+          for participant_id <- Map.fetch!(agent_participant_ids, agent_id),
+              do: {participant_id, slot}
         end)
+        |> Map.new()
     end
   end
 
@@ -1784,14 +1788,13 @@ defmodule Platform.Chat do
   The stored URL carries a `?v=` cache token hashed from the storage key
   (the serving route does not change when the bytes do). It is passed
   through verbatim — never parsed or stripped.
+
+  `participants` may span many spaces (the Chat list batches every DM and
+  group): every participant row of an agent gets its own entry.
   """
   @spec agent_avatar_map_for_participants([Participant.t()]) :: %{binary() => binary()}
   def agent_avatar_map_for_participants(participants) do
-    # Build map: agent_id → participant.id (for agent participants only)
-    agent_participant_ids =
-      participants
-      |> Enum.filter(&(&1.participant_type == "agent"))
-      |> Map.new(fn p -> {p.participant_id, p.id} end)
+    agent_participant_ids = participant_ids_by_agent(participants)
 
     if map_size(agent_participant_ids) == 0 do
       %{}
@@ -1805,11 +1808,31 @@ defmodule Platform.Chat do
       |> Repo.all()
       |> Enum.reduce(%{}, fn {agent_id, avatar_url}, acc ->
         case String.trim(avatar_url) do
-          "" -> acc
-          url -> Map.put(acc, Map.fetch!(agent_participant_ids, agent_id), url)
+          "" ->
+            acc
+
+          url ->
+            agent_participant_ids
+            |> Map.fetch!(agent_id)
+            |> Enum.reduce(acc, &Map.put(&2, &1, url))
         end
       end)
     end
+  end
+
+  # `agent_id => [participant.id]` for the agent rows in `participants`.
+  #
+  # A LIST per agent, never one id: the same agent holds a participant row in
+  # every space it is in, and callers batch participants across spaces (the
+  # Chat list passes every DM and group at once). A one-id map kept only the
+  # last row per agent, so an agent present in two listed spaces lost its
+  # avatar and slot in all but one of them (task 01a18940: Brosnan's DM row
+  # rendered his initial on a blue ring while the message flow, which reads
+  # one space, showed his image).
+  defp participant_ids_by_agent(participants) do
+    participants
+    |> Enum.filter(&(&1.participant_type == "agent"))
+    |> Enum.group_by(& &1.participant_id, & &1.id)
   end
 
   @doc """
