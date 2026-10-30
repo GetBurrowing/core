@@ -52,6 +52,8 @@ ERROR_CODES = (
     "backup_incomplete",
     "backup_required_hosted",
     "duplicate_endpoint_name",
+    "invalid_org_name",
+    "invalid_ssh_authorized_key",
 )
 
 # Rules of install.target = "mac" (task 01a0d6ab). Kept apart from
@@ -65,6 +67,7 @@ MAC_ERROR_CODES = (
     "tailscale_authkey_ref_missing",
     "meetings_media_reach_required",
     "stt_endpoint_unknown",
+    "vapid_requires_single_host",
 )
 
 # The [agents] table is absent from every manifest written before task
@@ -89,6 +92,12 @@ _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _URL_RE = re.compile(r"^https?://[^/\s:]+(:[0-9]{1,5})?(/\S*)?$")
+# install.org_name lands in core-platform's env (ROOT_ORG_NAME): no newline,
+# and none of the characters a shell or compose would interpolate or unquote.
+ORG_NAME_MAX = 80
+_ORG_NAME_FORBIDDEN = ('"', "$", "`")
+# host.ssh_authorized_key: one OpenSSH public key of a modern type, optional comment.
+_SSH_KEY_RE = re.compile(r"(ssh-ed25519|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\n]*)?")
 _IPV4_RE = re.compile(
     r"^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$"
 )
@@ -215,6 +224,15 @@ def _is_bad(path, bad):
     return any(path == b or path.startswith((b + ".", b + "[")) for b in bad)
 
 
+def valid_org_name(value):
+    return (
+        0 < len(value) <= ORG_NAME_MAX
+        and value.isprintable()
+        and value == value.strip()
+        and not any(c in value for c in _ORG_NAME_FORBIDDEN)
+    )
+
+
 def valid_domain(value):
     if len(value) > 253 or value.endswith("."):
         return False
@@ -255,6 +273,23 @@ def _rules(m, bad, errors, present=frozenset()):
             add("missing_required", "install.name", "every install needs a name")
     elif not _NAME_RE.match(name):
         add("invalid_value", "install.name", "must match [a-z][a-z0-9-]{0,62}")
+
+    org_name = m["install"]["org_name"]
+    if org_name is not None and not valid_org_name(org_name):
+        add(
+            "invalid_org_name",
+            "install.org_name",
+            f"must be 1-{ORG_NAME_MAX} printable characters with no leading or trailing "
+            'space and no ", $ or backtick',
+        )
+    ssh_key = m["host"]["ssh_authorized_key"]
+    if ssh_key is not None and not _SSH_KEY_RE.fullmatch(ssh_key):
+        add(
+            "invalid_ssh_authorized_key",
+            "host.ssh_authorized_key",
+            "must be one OpenSSH public key: ssh-ed25519 or ecdsa-sha2-nistp256, the "
+            "base64 key, then an optional comment",
+        )
 
     if _is_bad("install.target", bad):
         # Every rule below depends on the target; an unknown one is its one line.
@@ -297,6 +332,19 @@ def _rules(m, bad, errors, present=frozenset()):
 
     if mac:
         _mac_rules(m, bad, present, add, check_url, check_ref)
+        if m["push"]["vapid"] == "generate-on-host":
+            add(
+                "vapid_requires_single_host",
+                "push.vapid",
+                'generate-on-host runs bin/burrow-vapid from the stack unit, which only '
+                'target = "single-host" renders',
+            )
+        if "host.ssh_authorized_key" in present:
+            add(
+                "field_not_applicable",
+                "host.ssh_authorized_key",
+                'only used with target = "single-host" (cloud-config ssh_authorized_keys)',
+            )
     elif services["meetings"] and not _is_bad("services.meetings", bad):
         add(
             "field_not_applicable",

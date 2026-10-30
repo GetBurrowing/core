@@ -591,6 +591,9 @@ def _core_env(ctx):
         # cloudflared / tailscale -> Caddy -> core: the client address is in
         # X-Forwarded-For (lib/platform_web/plugs/rewrite_remote_ip.ex).
         env["TRUST_PROXY_HEADERS"] = "true"
+    if ctx.m["install"].get("org_name") is not None:
+        # Task 01a10315: read once, by the first migrate (seed_root_orgs).
+        env["ROOT_ORG_NAME"] = ctx.m["install"]["org_name"]
     for module in sorted(ctx.m["install"]["modules"]):
         env.update(MODULE_CORE_ENV.get(module, {}))
     if ctx.agents != "off":

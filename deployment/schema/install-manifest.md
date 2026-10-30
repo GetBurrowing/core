@@ -36,6 +36,7 @@ validation instead of silently keeping its default.
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
 | `target` | `single-host` \| `mac` | `single-host` | Which renderer the manifest is for (task 01a0d6ab). The validator applies that target's rules; `render --target`, if given, must match (`target_mismatch`). |
 | `hosted` | bool | `false` | An install we provision. Requires a backup target; see `[backup]`. |
+| `org_name` | string | none | The root org's display name (core task 01a10315). Rendered into core-platform's env as `ROOT_ORG_NAME`, a plain env line (not a secret). core reads it only at FIRST migrate (`seed_root_orgs`), so it names the org of a fresh install; without it the root org is "Root Org". 1-80 printable characters, no newline, no leading or trailing space and none of `"`, `$` or a backtick, else `invalid_org_name`. |
 | `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `<registry>/core:core`, `["play"]` runs `<registry>/core:play` (legacy `image_namespace`: `suite-core:core` / `suite-core:play`). A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`
@@ -56,6 +57,7 @@ are `field_not_applicable` there and no `acme_email` is needed.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `gpu` | bool | `false` | The host has an NVIDIA GPU usable by containers. |
+| `ssh_authorized_key` | string | none | One OpenSSH public key, emitted as top-level cloud-config `ssh_authorized_keys: [<key>]` for the cloud image's default user (core task 01a10315): the customer's optional power-user path. Must match `^(ssh-ed25519\|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\n]*)?$` (one key, optional comment), else `invalid_ssh_authorized_key`. `target = "single-host"` only (`field_not_applicable` on `mac`, which has no cloud-init). |
 
 ## `[services]`
 
@@ -217,6 +219,20 @@ the whole install: other agents' homes, env files and tokens, and core-platform'
 and Postgres through docker. On `contained` an agent is root over the agent container (every
 agent's home), not over the host or Postgres.
 
+## `[push]` (Web Push)
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `vapid` | `off` \| `generate-on-host` | `off` | `off` renders nothing. `generate-on-host` (core task 01a10315) adds `bin/burrow-vapid` (mode 0755) and an `ExecStartPre=/opt/burrow/bin/burrow-vapid` line to `burrow-stack.service`, before compose up, and adds `openssl` to the cloud-init packages. `target = "single-host"` only (`vapid_requires_single_host` on `mac`). |
+
+`bin/burrow-vapid` is idempotent: if `secrets.env` already has a `VAPID_PUBLIC_KEY=` line it
+exits 0. Otherwise it generates a P-256 key with `openssl ecparam -name prime256v1 -genkey
+-noout` and appends `VAPID_PUBLIC_KEY=` (the 65-byte uncompressed point, leading `0x04`) and
+`VAPID_PRIVATE_KEY=` (the 32-byte raw scalar), both base64url without padding, to `secrets.env`,
+which stays mode 0600. core-platform reads both from its env (`Platform.Push`). The keys are made
+on the host because Python's standard library cannot generate EC keys, and a key made there never
+passes through whoever rendered the install: no render, golden or provisioner holds it.
+
 ---
 
 ## Secret refs
@@ -258,6 +274,9 @@ A valid manifest prints `ok` and exits `0`.
 | `tunnel_token_ref_missing` | `target = "mac"`, `access.mode = "cloudflare-tunnel"` without `tunnel_token_ref` |
 | `tailscale_authkey_ref_missing` | `target = "mac"`, `access.mode = "tailscale"` without `tailscale_authkey_ref` |
 | `meetings_media_reach_required` | meetings on without `meetings.media_reach` |
+| `invalid_org_name` | `install.org_name` is empty, longer than 80, not printable, padded, or has `"`, `$` or a backtick |
+| `invalid_ssh_authorized_key` | `host.ssh_authorized_key` is not one `ssh-ed25519` / `ecdsa-sha2-nistp256` public key |
+| `vapid_requires_single_host` | `push.vapid = "generate-on-host"` with `target = "mac"` |
 | `stt_endpoint_unknown` | transcription on and `meetings.stt_endpoint` names no `[[models.endpoints]]` entry |
 | `invalid_toml` | the file does not parse as TOML (loader) |
 | `unreadable_manifest` | the file cannot be read (loader) |
@@ -350,3 +369,22 @@ The renderer refuses in these cases:
 
 To compare two renders without printing a secret, run `burrow_install redact <dir> --out <dir>` on
 each and diff the copies. Do not diff the raw directories: `user-data` carries `secrets.env`.
+
+## First admin: `bootstrap-admin`
+
+```
+python3 -m burrow_install bootstrap-admin --base https://<auth host> \
+  --api-key-file <0600 file holding STATIC_API_KEY> --email <addr> [--username <u>] \
+  --link-file <path>
+```
+
+The non-interactive pocket-id bootstrap for an install provisioned by someone else (a droplet),
+where the Mac `setup` CLI does not apply (core task 01a10315; `burrow_install/bootstrap.py`). It
+finds or creates the first admin (`setup/pocketid.py` `ensure_admin`), mints a one-time sign-in
+code valid for `LOGIN_TTL` (30 minutes), and writes
+`https://<auth host>/lc/<code>?redirect=%2Fsettings%2Faccount` to `--link-file` with mode 0600.
+stdout is one JSON document, `{"ok": true, "admin": "created"|"exists", "link_file": ...}`; the
+link and the API key are never printed. A re-run mints a fresh link. Exit codes: `0` ok, `1`
+pocket-id unreachable or erroring (`{"ok": false, "error": ..., "kind": ...}`, `kind` being the
+connection class such as `connection_refused`, or `http`), `2` usage (including an API key file
+readable by anyone but its owner). `python3 -m suite_install bootstrap-admin` runs the same command.

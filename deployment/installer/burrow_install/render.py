@@ -112,6 +112,10 @@ class Plan:
         # [backup] (task 01a17b10 stage 5): None when target = "none".
         self.backup = None if manifest["backup"]["target"] == "none" else manifest["backup"]
         self.full_root = self.agents != "off" and manifest["agents"].get("full_root") is True
+        # Task 01a10315: VAPID keys generated on the host at stack start, and
+        # one SSH key for the cloud image's default user. Both off by default.
+        self.vapid_on_host = manifest.get("push", {}).get("vapid") == "generate-on-host"
+        self.ssh_authorized_key = manifest["host"].get("ssh_authorized_key")
 
     def routes(self):
         out = {}

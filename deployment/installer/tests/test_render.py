@@ -71,6 +71,12 @@ GOLDEN_CASES = {
     "single-host-agents-contained": os.path.join(
         RENDER_FIXTURES, "single-host-agents-contained.toml"
     ),
+    # One-click DigitalOcean droplet (task 01a10315 stage 1); test_droplet.py covers the rest.
+    "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
+}
+# images.source = "registry" cases need a (fake) pull credential to render.
+GOLDEN_REGISTRY_AUTH = {
+    "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -154,7 +160,9 @@ class PositiveControlMixin:
 
 class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
-        redacted = build(manifest_from(GOLDEN_CASES[case])).redacted()
+        redacted = build(
+            manifest_from(GOLDEN_CASES[case]), registry_auth=GOLDEN_REGISTRY_AUTH.get(case)
+        ).redacted()
         golden_dir = os.path.join(GOLDEN, case)
         if os.environ.get("BURROW_INSTALL_UPDATE_GOLDEN") == "1":
             shutil.rmtree(golden_dir, ignore_errors=True)
@@ -193,6 +201,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_single_host_agents_contained(self):
         self.check_golden("single-host-agents-contained")
+
+    def test_golden_do_droplet(self):
+        self.check_golden("do-droplet")
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES
