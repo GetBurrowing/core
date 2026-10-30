@@ -3477,6 +3477,30 @@ defmodule Platform.Federation.ToolSurface do
         Map.put(parameters, :action_items, %{
           type: "array",
           required: true,
+          schema: %{
+            type: "array",
+            items: %{
+              type: "object",
+              required: ["item_id"],
+              properties: %{
+                item_id: %{type: "string"},
+                title: %{type: "string"},
+                description: %{type: "string"},
+                source_segment_ids: %{type: "array", items: %{type: "string"}},
+                candidate_ids: %{type: "array", items: %{type: "string"}},
+                decision: %{type: "string", enum: ["exclude", "duplicate", "conflict"]},
+                priority: %{
+                  type: "string",
+                  enum: ["low", "medium", "high", "critical"],
+                  default: "medium"
+                },
+                assignee_type: %{type: "string"},
+                assignee_id: %{type: "string"},
+                epic_id: %{type: "string"},
+                metadata: %{type: "object"}
+              }
+            }
+          },
           description:
             "Officer-reviewed items with stable item_id, normalized imperative title, grounded description, transcript source_segment_ids and candidate_ids (accepted_action_candidates ids from dispatch; [] for novel transcript-only actions). Account for every accepted candidate with an item or explicit exclude/duplicate/conflict decision. Preserve candidate_ids on replay. Exclude duplicates, conflicts and questions."
         })

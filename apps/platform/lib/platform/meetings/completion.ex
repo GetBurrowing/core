@@ -155,74 +155,100 @@ defmodule Platform.Meetings.Completion do
   end
 
   def triage_file(agent_id, params) do
-    callback(agent_id, "triage_officer", params, fn run, meeting, canvas ->
-      with true <- run.canvas_id == canvas.id || {:error, :canvas_mismatch},
-           true <-
-             run.status in ["triage_pending", "triage_dispatched", "filed"] ||
-               {:error, :scribe_incomplete},
-           items when is_list(items) <- params["action_items"],
-           :ok <- validate_items(items, run, canvas),
-           :ok <- validate_candidate_provenance(items, run, meeting) do
-        {ledger, errors} =
-          Enum.reduce(items, {run.item_results, []}, fn item, {ledger, errors} ->
-            key = item["item_id"]
+    outcome =
+      callback(agent_id, "triage_officer", params, fn run, meeting, canvas ->
+        with true <- run.canvas_id == canvas.id || {:error, :canvas_mismatch},
+             true <-
+               run.status in ["triage_pending", "triage_dispatched", "filed"] ||
+                 {:error, :scribe_incomplete},
+             items when is_list(items) <- params["action_items"],
+             :ok <- validate_priorities(items),
+             :ok <- validate_items(items, run, canvas),
+             :ok <- validate_candidate_provenance(items, run, meeting) do
+          {ledger, errors} =
+            Enum.reduce(items, {run.item_results, []}, fn item, {ledger, errors} ->
+              key = item["item_id"]
 
-            cond do
-              Map.has_key?(ledger, key) ->
-                {ledger, errors}
+              cond do
+                Map.has_key?(ledger, key) ->
+                  {ledger, errors}
 
-              item["decision"] in ["duplicate", "conflict", "exclude"] ->
-                {Map.put(ledger, key, %{
-                   "status" => item["decision"],
-                   "candidate_ids" => item["candidate_ids"] || []
-                 }), errors}
+                item["decision"] in ["duplicate", "conflict", "exclude"] ->
+                  {Map.put(ledger, key, %{
+                     "status" => item["decision"],
+                     "candidate_ids" => item["candidate_ids"] || []
+                   }), errors}
 
-              true ->
-                case Triage.file_tasks_from_canvas(canvas,
-                       project_id: meeting.project_id,
-                       meeting_id: meeting.id,
-                       transcript_id: run.transcript_id,
-                       agent_id: agent_id,
-                       action_items: [triage_item(item)],
-                       extra_metadata: %{
-                         "completion_run_id" => run.id,
-                         "completion_item_id" => key,
-                         "source_segment_ids" => item["source_segment_ids"]
-                       }
-                     ) do
-                  {:ok, %{errors: []} = filed} ->
-                    entry = %{
-                      "status" => "processed",
-                      "candidate_ids" => item["candidate_ids"] || [],
-                      "task_ids" => Enum.map(filed.filed, & &1.id),
-                      "existing_task_ids" => Enum.map(filed.skipped, & &1.existing_task_id)
-                    }
+                true ->
+                  case Triage.file_tasks_from_canvas(canvas,
+                         project_id: meeting.project_id,
+                         meeting_id: meeting.id,
+                         transcript_id: run.transcript_id,
+                         agent_id: agent_id,
+                         action_items: [triage_item(item)],
+                         render_junk_control: false,
+                         extra_metadata: %{
+                           "completion_run_id" => run.id,
+                           "completion_item_id" => key,
+                           "source_segment_ids" => item["source_segment_ids"]
+                         }
+                       ) do
+                    {:ok, %{errors: []} = filed} ->
+                      entry = %{
+                        "status" => "processed",
+                        "candidate_ids" => item["candidate_ids"] || [],
+                        "task_ids" => Enum.map(filed.filed, & &1.id),
+                        "existing_task_ids" => Enum.map(filed.skipped, & &1.existing_task_id)
+                      }
 
-                    {Map.put(ledger, key, entry), errors}
+                      {Map.put(ledger, key, entry), errors}
 
-                  {:ok, failure} ->
-                    {ledger, [inspect(failure.errors) | errors]}
+                    {:ok, failure} ->
+                      {ledger, [inspect(failure.errors) | errors]}
 
-                  {:error, reason} ->
-                    {ledger, [inspect(reason) | errors]}
-                end
-            end
-          end)
+                    {:error, reason} ->
+                      {ledger, [inspect(reason) | errors]}
+                  end
+              end
+            end)
 
-        run =
-          save(run,
-            item_results: ledger,
-            status: if(errors == [], do: "filed", else: "triage_pending"),
-            last_error: if(errors == [], do: nil, else: Enum.join(errors, "; "))
-          )
+          run =
+            save(run,
+              item_results: ledger,
+              status: if(errors == [], do: "filed", else: "triage_pending"),
+              last_error: if(errors == [], do: nil, else: Enum.join(errors, "; "))
+            )
 
-        result(run)
-      else
-        {:error, _} = error -> error
-        _ -> {:error, :invalid_action_items}
-      end
-    end)
+          result(run)
+        else
+          {:error, _} = error -> error
+          _ -> {:error, :invalid_action_items}
+        end
+      end)
+
+    # CanvasServer may persist synchronously. Call it after the filing
+    # transaction commits, so its own connection can see the ledger and does
+    # not wait on the callback's checked-out database connection.
+    ensure_run_control(outcome)
   end
+
+  defp ensure_run_control({:ok, %{task_ids: [_ | _]} = response}) do
+    canvas = %{id: response.canvas_id}
+
+    case Triage.ensure_completion_batch_control(canvas, response.run_id) do
+      :ok ->
+        {:ok, response}
+
+      {:error, reason} ->
+        locked(response.meeting_id, fn run ->
+          run
+          |> save(status: "triage_pending", last_error: "batch control: #{inspect(reason)}")
+          |> result()
+        end)
+    end
+  end
+
+  defp ensure_run_control(outcome), do: outcome
 
   @doc "Register or complete an optional synthesis prerequisite for a specific captured snapshot."
   def synthesis_changed(meeting_id, run_id, snapshot_hash, status)
@@ -311,10 +337,20 @@ defmodule Platform.Meetings.Completion do
       else: {:error, :ungrounded_action_item}
   end
 
+  defp validate_priorities(items) do
+    if Enum.all?(items, fn item ->
+         is_map(item) and
+           (not Map.has_key?(item, "priority") or
+              item["priority"] in ~w(low medium high critical))
+       end),
+       do: :ok,
+       else: {:error, :invalid_priority}
+  end
+
   defp triage_item(item) do
     # The validated association is authoritative; do not let a separate,
     # unvalidated singular identity redirect the existing reconciler.
-    item = Map.delete(item, "candidate_id")
+    item = item |> Map.delete("candidate_id") |> Map.put_new("priority", "medium")
 
     case item["candidate_ids"] do
       [id] -> Map.put(item, "candidate_id", id)
