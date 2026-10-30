@@ -24,7 +24,6 @@ write_files:
       AGENT_HOST_PROFILE=full_machine
       AGENT_HOST_TOKEN=<secret:AGENT_HOST_TOKEN>
       BURROW_CORE_URL=https://burrow-01a0d69d.test
-      SUITE_CORE_URL=https://burrow-01a0d69d.test
   - path: "/etc/burrow-agent-host/versions.env"
     owner: "root:root"
     permissions: "0644"
@@ -49,7 +48,6 @@ write_files:
       CODEX_VERSION=0.162.0
       # burrow-cli v0.17.1 (GetBurrowing/burrow-cli 9a8ef75, PR #57): the plugin bun install is bounded (90 s per attempt, tree kill, two retries); 0.15.0 added --remote-terminal.
       BURROW_CLI_REF=9a8ef75be6961d4aa61c09ab35bec3d3accf922f
-      SUITE_CLI_REF=9a8ef75be6961d4aa61c09ab35bec3d3accf922f
   - path: "/etc/sudoers.d/burrow-agents"
     owner: "root:root"
     permissions: "0440"
@@ -97,7 +95,7 @@ write_files:
 
       [Service]
       Type=simple
-      PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE AGENT_HOST_FULL_ROOT
+      PassEnvironment=BURROW_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE AGENT_HOST_FULL_ROOT
       EnvironmentFile=-/etc/burrow-agent-host.env
       # Node and bun read only their bundled roots without this; the system bundle
       # carries an install's internal root CA once update-ca-certificates has run.
@@ -134,11 +132,8 @@ write_files:
       Type=simple
       EnvironmentFile=/etc/burrow-agents/%i.env
       Environment=BURROW_AGENT_ID=%i
-      Environment=SUITE_AGENT_ID=%i
       Environment=BURROW_AGENT_SESSION=suite-agent
-      Environment=SUITE_AGENT_SESSION=suite-agent
       Environment=BURROW_UNATTENDED=1
-      Environment=SUITE_UNATTENDED=1
       Environment=DISABLE_AUTOUPDATER=1
       Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
       ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/runner.ts
