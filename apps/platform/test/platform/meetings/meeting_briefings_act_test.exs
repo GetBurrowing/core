@@ -189,10 +189,11 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
       assert reverted.receipt.by_name == ctx.a.name
       assert reverted.receipt.ref == "task:" <> ctx.t1.id
 
-      # The other task is still open for B, with all three actions.
+      # The other task is still open for B. No agent resolves for it here
+      # (no filer stamp, no triage officer), so Revert is its only action.
       other = item(view, key(ctx.t2))
       assert other in view.open
-      assert other.actions == [:revert, :ask]
+      assert other.actions == [:revert]
       assert view.counts == %{total: 2, open: 1, resolved: 1}
 
       # B acts on its STALE copy: refused, with the fresh row.
@@ -302,13 +303,13 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
                MeetingBriefings.act(ctx.briefing, key(ctx.t1), :confirm, scope(guest), %{})
     end
 
-    test "an ack-done task is not revertible; its only action is Ask" do
+    test "an ack-done task is not revertible and, with no agent, offers no action" do
       ctx = concluded!(ack_done: true)
       k = key(ctx.done)
 
       view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
       assert item(view, k).revertible? == false
-      assert item(view, k).actions == [:ask]
+      assert item(view, k).actions == []
 
       assert {:error, :not_revertible} =
                MeetingBriefings.act(ctx.briefing, k, :revert, scope(ctx.a), %{})
@@ -377,10 +378,14 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
     |> Repo.update!()
 
     view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
-    assert item(view, key(ctx.t1)).actions == [:ask]
-    assert item(view, key(ctx.t1)).availability == "This task moved to another project."
-    assert item(view, key(ctx.t2)).actions == [:ask]
+    # Task 01a18d37 stage 2: a moved task shows the project it is in now
+    # instead of a "moved" sentence; its availability is just its status.
+    assert item(view, key(ctx.t1)).actions == []
+    assert item(view, key(ctx.t1)).availability == "backlog"
+    assert item(view, key(ctx.t1)).project == %{id: destination.id, name: "Moved destination"}
+    assert item(view, key(ctx.t2)).actions == []
     assert item(view, key(ctx.t2)).availability == "This task was removed."
+    assert item(view, key(ctx.t2)).project == nil
 
     assert {:error, :not_revertible} =
              MeetingBriefings.act(ctx.briefing, key(ctx.t1), :revert, scope(ctx.a), %{})
@@ -393,64 +398,24 @@ defmodule Platform.Meetings.MeetingBriefingsActTest do
     assert MeetingBriefings.card_for_task(ctx.t1.id, user!().id) == nil
   end
 
-  # ── Ask ───────────────────────────────────────────────────────────────────
+  # ── Ask is gone (task 01a18d37 stage 2) ─────────────────────────────────
 
-  describe "act/5 :ask" do
-    test "posts one message as the clicker; a blank question is refused" do
-      ctx = concluded!()
-      k = key(ctx.t1)
-
-      count = fn ->
-        Repo.aggregate(where(Message, space_id: ^ctx.meeting.chat_space_id), :count)
-      end
-
-      before = count.()
-
-      assert {:error, :blank} =
-               MeetingBriefings.act(ctx.briefing, k, :ask, scope(ctx.b), %{"question" => "   "})
-
-      assert count.() == before
-      assert Repo.get!(MeetingBriefing, ctx.briefing.id).receipts == %{}
-
-      assert {:ok, briefing} =
-               MeetingBriefings.act(ctx.briefing, k, :ask, scope(ctx.b), %{
-                 "question" => "Who owns this?"
-               })
-
-      assert count.() == before + 1
-      assert "message:" <> message_id = briefing.receipts[k]["ref"]
-      message = Repo.get!(Message, message_id)
-      poster = Repo.get!(Platform.Chat.Participant, message.participant_id)
-
-      assert poster.participant_type == "user"
-      assert poster.participant_id == ctx.b.id
-      assert message.content =~ "Who owns this?"
-      assert briefing.receipts[k]["verb"] == "asked"
-    end
-  end
-
-  test "an asker with no chat participant row gets one, with their display name" do
+  test ":ask is no longer a verb: not_found, no receipt, no message" do
     ctx = concluded!()
 
-    rows = fn ->
-      Repo.all(
-        from(p in Platform.Chat.Participant,
-          where:
-            p.space_id == ^ctx.meeting.chat_space_id and p.participant_type == "user" and
-              p.participant_id == ^ctx.b.id
-        )
-      )
+    count = fn ->
+      Repo.aggregate(where(Message, space_id: ^ctx.meeting.chat_space_id), :count)
     end
 
-    assert rows.() == []
+    before = count.()
 
-    assert {:ok, _} =
+    assert {:error, :not_found} =
              MeetingBriefings.act(ctx.briefing, key(ctx.t1), :ask, scope(ctx.b), %{
-               "question" => "Is this still needed?"
+               "question" => "Who owns this?"
              })
 
-    assert [participant] = rows.()
-    assert participant.display_name == ctx.b.name
+    assert count.() == before
+    assert Repo.get!(MeetingBriefing, ctx.briefing.id).receipts == %{}
   end
 
   # ── Archived actor ────────────────────────────────────────────────────────

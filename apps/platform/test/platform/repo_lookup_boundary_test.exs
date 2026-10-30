@@ -578,10 +578,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a16974 stage 1: `add_finding/2` reads the meeting only after checking its id is a member of the loaded finding's `meeting_ids` uuid[] column, so the id is a value Postgres already stored as a uuid. Task01a1830b delivery first reads the same loaded meeting id to acquire its space advisory lock. task 01a1694a stage 1: `build/1` re-reads the meeting by the `id` of the `%Meeting{}` struct its caller passes (end_meeting/1's updated row, refresh_for_transcript/1's query result, triage's guarded get), so the id is a primary key read off a loaded row, never a raw boundary value"},
     {"platform/meetings/meeting_briefings.ex", :get_by, "CompletionRun", 2, :safe_internal,
      "Task01a1830b readiness and filed_candidate_ids resolve the durable run by the meeting_id already read from the loaded meeting row; these are not raw tool or URL parameters. The latter reads ledger candidate provenance, intersected with canonical task scope."},
-    {"platform/meetings/meeting_briefings.ex", :get, "Platform.Tasks.Task", 1, :safe_internal,
-     "task 01a17f00 stage 3: task_availability/2 reads the task:<id> reference from briefing items only after Platform.UUID.valid?/1 has accepted the original id; a malformed ref returns unavailable without reaching Repo.get. Deleted/moved rows are read for honest historical status, not task authorization"},
-    {"platform/meetings/meeting_briefings.ex", :platform_uuid_guard, "-", 7, :safe_internal,
-     "task 01a1694a stages 1-4. `get_for_attendee/2` guards BOTH ids (the `:meeting_id` URL path segment of `/inbox/meeting/:meeting_id` and the viewer's user id) before its `where:`, answering nil for a malformed one exactly as for a non-attendee; `list_for_attendee/2` filters the Inbox rows' `source_id`s and guards the user id the same way; `inbox_row_stale?/2` guards the Inbox row's `source_id` (false, the row stays); `revertible_task_ids/2` keeps only uuid-shaped `task:<id>` refs out of the briefing's jsonb `items` before `where: t.id in ^ids`. task 01a17f00 stage 3 adds the seventh guard for task_availability/2 before reading the task referenced by an item. Each guard is a BOOLEAN; the value is never rewritten"},
+    {"platform/meetings/meeting_briefings.ex", :platform_uuid_guard, "-", 9, :safe_internal,
+     "task 01a1694a stages 1-4. `get_for_attendee/2` guards BOTH ids (the `:meeting_id` URL path segment of `/inbox/meeting/:meeting_id` and the viewer's user id) before its `where:`, answering nil for a malformed one exactly as for a non-attendee; `list_for_attendee/2` filters the Inbox rows' `source_id`s and guards the user id the same way; `inbox_row_stale?/2` guards the Inbox row's `source_id` (false, the row stays); `revertible_task_ids/2` keeps only uuid-shaped `task:<id>` refs out of the briefing's jsonb `items` before `where: t.id in ^ids`. task 01a17f00 stage 3 adds the seventh guard for task_availability/2 before reading the task referenced by an item. Count 7 -> 9 at task 01a18d37 stage 2: task_availability/2's `Repo.get(Platform.Tasks.Task, id)` (and its guard) is replaced by `task_rows/1`, which filters the briefing items' `task:<id>` refs through the guard before ONE `where: t.id in ^ids` query; `follow_up_agents/1` filters the stamped `filed_by_agent_id` metadata key (agent-written JSON) and the triage-officer id before `where: a.id in ^ids`; `follow_up_task_id/2` checks the clicked item's ref id before `follow_up/4` reads its task. Each guard is a BOOLEAN; the value is never rewritten"},
     {"platform/meetings/synthesis_findings.ex", :get, "SynthesisFinding", 1, :must_cast,
      "task 01a16974 stage 1: public `get/1` takes a finding id that later stages read from a briefing item's `finding:<id>` ref; it is guarded with Platform.UUID.valid?/1 and answers nil for a malformed id, the same as a missing row"},
     {"platform/meetings/synthesis_findings.ex", :platform_uuid_guard, "-", 6, :safe_internal,
@@ -1497,7 +1495,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # source_id) and reach `where:` only behind this file's
     # Platform.UUID.valid?/1 guards; `refresh_for_transcript/1` and
     # `summary_attrs/1` pin the `space_id` and `started_at` of loaded rows.
-    "platform/meetings/meeting_briefings.ex" => 5,
+    # 5 -> 7 with task 01a18d37 stage 2: `reread_briefing/1` pins the `id` of
+    # the `%MeetingBriefing{}` struct `follow_up/4` is handed (a loaded row),
+    # and `dm_participant/2` pins the `id` of the DM space
+    # `Chat.find_or_create_dm/3` just returned plus the sender's user id,
+    # which already passed `ensure_attendee/2` (a member of the row's
+    # `attendee_user_ids` uuid[] column).
+    "platform/meetings/meeting_briefings.ex" => 7,
     # Task 01a16974 stage 1 — `lock/1` pins a finding id parsed out of a
     # briefing item's `finding:<id>` ref, behind this file's
     # Platform.UUID.valid?/1 guard (nil for a malformed id).

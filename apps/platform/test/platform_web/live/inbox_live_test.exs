@@ -2175,7 +2175,7 @@ defmodule PlatformWeb.InboxLiveTest do
 
     defp detail_path(%Meeting{id: id}), do: "/inbox/meeting/" <> id
 
-    test "filed task actions are Revert / Ask on both actual Inbox routes", %{conn: conn} do
+    test "filed task actions are Revert, and no Ask, on both actual Inbox routes", %{conn: conn} do
       ctx = concluded_meeting!()
       k = mb_key(ctx.t1)
       selector = ~s([data-role="meeting-briefing-card"][data-key="#{k}"])
@@ -2221,7 +2221,8 @@ defmodule PlatformWeb.InboxLiveTest do
       {:ok, daily_lv, _} = live(auth(conn, ctx.a), "/inbox/briefing/" <> Date.to_iso8601(date))
       assert has_element?(daily_lv, "[data-role=meeting-briefing-task]")
       assert has_element?(daily_lv, selector <> " [data-action=revert]")
-      assert has_element?(daily_lv, selector <> " [data-action=ask]")
+      # Task 01a18d37 stage 2 removed the Ask verb from MeetingBriefings.
+      refute has_element?(daily_lv, selector <> " [data-action=ask]")
       refute daily_lv |> element(selector) |> render() =~ "File task"
       refute daily_lv |> element(selector) |> render() =~ "Looks right"
 
@@ -2284,9 +2285,6 @@ defmodule PlatformWeb.InboxLiveTest do
       assert length(ids) == 2
       assert Enum.uniq(ids) == ids
       [first, second] = ids
-      view |> element("##{first} [data-action=ask]") |> render_click()
-      assert has_element?(view, "##{first} [data-role=meeting-briefing-ask-form]")
-      refute has_element?(view, "##{second} [data-role=meeting-briefing-ask-form]")
       view |> element("##{second} [data-action=revert]") |> render_click()
 
       Platform.AsyncAssertions.assert_eventually(fn ->
@@ -2431,29 +2429,6 @@ defmodule PlatformWeb.InboxLiveTest do
       assert Repo.get!(TaskRecord, ctx.t1.id).deleted_at == deleted_at
     end
 
-    test "a blank Ask shows the hint and posts nothing", %{conn: conn} do
-      ctx = concluded_meeting!()
-      k = mb_key(ctx.t2)
-      card = ~s([data-role="meeting-briefing-card"][data-key="#{k}"])
-
-      {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
-
-      lv |> element(card <> ~s( [data-action="ask"])) |> render_click()
-      assert has_element?(lv, card <> ~s( [data-role="meeting-briefing-ask-form"]))
-
-      lv
-      |> form(card <> ~s( [data-role="meeting-briefing-ask-form"]), %{"question" => "  "})
-      |> render_submit()
-
-      assert has_element?(lv, card <> ~s( [data-role="meeting-briefing-blank-hint"]))
-      assert has_element?(lv, card <> ~s( [data-action="ask"]))
-
-      assert Repo.aggregate(
-               from(m in Platform.Chat.Message, where: m.space_id == ^ctx.meeting.chat_space_id),
-               :count
-             ) == 0
-    end
-
     # Review case 7003: every phone control is at least 44px tall. The
     # resolved card's "See the question" link was the one that measured 16px.
     test "the asked receipt's link, and every link and button in the detail, has the 44px phone target",
@@ -2462,14 +2437,21 @@ defmodule PlatformWeb.InboxLiveTest do
       k = mb_key(ctx.t1)
       briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
 
-      assert {:ok, _} =
-               MeetingBriefings.act(
-                 briefing,
-                 k,
-                 :ask,
-                 Scope.for_user(Repo.get!(User, ctx.a.id)),
-                 %{"question" => "Who owns this?"}
-               )
+      # A HISTORICAL "asked" receipt (rows exist in prod): task 01a18d37
+      # stage 2 removed the Ask verb, but such receipts still render.
+      briefing
+      |> Ecto.Changeset.change(
+        receipts: %{
+          k => %{
+            "verb" => "asked",
+            "at" => DateTime.to_iso8601(DateTime.utc_now()),
+            "by" => ctx.a.id,
+            "ref" => "message:" <> Ecto.UUID.generate(),
+            "kind" => "task"
+          }
+        }
+      )
+      |> Repo.update!()
 
       {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
 

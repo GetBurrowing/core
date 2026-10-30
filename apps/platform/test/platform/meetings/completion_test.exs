@@ -479,6 +479,9 @@ defmodule Platform.Meetings.CompletionTest do
     assert task.description =~ "verify replay behavior"
     assert task.metadata["source"] == "meetings.triage"
     assert task.metadata["completion_run_id"] == run.id
+    # Task 01a18d37 stage 2: the filer is stamped for the briefing card's
+    # "Follow up with <agent>".
+    assert task.metadata["filed_by_agent_id"] == ctx.triage.id
     task |> Ecto.Changeset.change(status: "done") |> Repo.update!()
     assert {:ok, %{task_ids: [^task_id]}} = Completion.triage_file(ctx.triage.id, args)
 

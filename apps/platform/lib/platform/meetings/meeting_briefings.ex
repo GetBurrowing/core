@@ -46,12 +46,25 @@ defmodule Platform.Meetings.MeetingBriefings do
   `get_for_attendee/2` is the ONLY way a caller loads a briefing for a
   person: the attendee check is in the query, so a non-attendee, a forged
   meeting id and a malformed id all answer `nil` and cannot be told apart.
-  `view/2` is a pure read. `act/5` resolves one item with one of three verbs
-  — `:revert`, `:confirm`, `:ask` — and writes ONE shared receipt: once an
+  `view/2` is a pure read. `act/5` resolves one item with one of two verbs
+  — `:revert`, `:confirm` — and writes ONE shared receipt: once an
   item has a receipt, every later act on it, by anyone, is
   `{:error, :already_resolved, briefing}` and does nothing. No receipt has an
   inverse (a declared deviation, matching the daily briefing's
   `revert`/`delete` `:no_inverse`).
+
+  ## Follow up (task 01a18d37)
+
+  A filed task names the agent to follow up with: the agent stamped in the
+  task's `metadata["filed_by_agent_id"]` by `Completion.triage_file/2` when
+  it is still active, else the active `triage_officer` role agent, else
+  nobody. The recipient is resolved on the server only, never read from
+  client params. `follow_up/4` posts the attendee's message into their 1:1
+  DM with that agent (a DM routes to its agent unconditionally) and writes
+  NO receipt: a follow-up does not resolve the item, so Revert stays and the
+  attendee can follow up again. The old `:ask` verb (a question posted into
+  the meeting's chat, which wakes no agent that is not already present) is
+  gone; historical `"asked"` receipts still render through `view/2`.
 
   ## Synthesis findings (task 01a16974)
 
@@ -85,6 +98,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   require Logger
 
   alias Platform.Access.Scope
+  alias Platform.Agents.Agent
+  alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Inbox
   alias Platform.Meetings
@@ -99,14 +114,13 @@ defmodule Platform.Meetings.MeetingBriefings do
   alias Platform.Repo
 
   @content_key "_content"
-  @verbs [:revert, :confirm, :ask, :align, :dismiss]
-  @item_verbs [:revert, :confirm, :ask]
+  @verbs [:revert, :confirm, :align, :dismiss]
+  @item_verbs [:revert, :confirm]
   @finding_verbs [:revert, :align, :confirm, :dismiss]
   @revert_finding_kinds ["duplicates", "conflicts_with"]
   @receipt_verbs %{
     revert: "reverted",
     confirm: "confirmed",
-    ask: "asked",
     align: "aligned",
     dismiss: "dismissed"
   }
@@ -718,7 +732,8 @@ defmodule Platform.Meetings.MeetingBriefings do
   Returns `%{meeting, summary, transcript_url, open_questions,
   unfiled_action_items, counts: %{total, open, resolved}, open, resolved}`.
   `open` and `resolved` are lists of
-  `%{key, kind, title, ref, receipt, revertible?, actions}`:
+  `%{key, kind, title, ref, receipt, revertible?, availability, project,
+  filed_by, follow_up_agent, finding, actions}`:
 
     * `receipt` is nil, or `%{verb, at, by, by_name, ref, kind}`. `by_name`
       is resolved through `Platform.Accounts.get_users_map/2` with
@@ -727,10 +742,20 @@ defmodule Platform.Meetings.MeetingBriefings do
     * `revertible?` is true only for a `task` item whose task is still
       returned by `Platform.Meetings.meeting_tasks_query/1` (not deleted,
       still this meeting's under THE rule) and is still `"backlog"`.
-    * `actions` is `[]` once resolved; otherwise
-      `[:revert, :ask]` for a revertible task, `[:ask]` for other filed tasks,
-      `[:align, :confirm, :dismiss]` for a finding (with `:revert` first
-      when it offers one), and `[:confirm, :ask]` for other changes.
+    * `availability` (task items only) is the task's live status, or
+      "This task was removed." / "This task is unavailable.".
+    * `project` (task items only) is `%{id, name}` of the project the task
+      is in NOW, read live. When the viewer cannot `tasks.read` that
+      project both are nil (rendered "in another project"); nil when the
+      task is removed or gone.
+    * `filed_by` and `follow_up_agent` (task items only) are the same
+      `%{id, name}` of the agent to follow up with (see "Follow up" in the
+      moduledoc), or nil. A removed or missing task has none.
+    * `actions` is `[]` once resolved; otherwise, for a task,
+      `[:revert, :follow_up]` / `[:follow_up]` when an agent resolves and
+      `[:revert]` / `[]` when none does; `[:align, :confirm, :dismiss]`
+      for a finding (with `:revert` first when it offers one); and
+      `[:confirm]` for other changes.
     * `finding` is nil, or for a finding item `%{id, kind, confidence, body,
       meeting_ids, citations, revert_ref}`. A finding item is present only
       when `finding_visible?/2` holds for the viewer, so every citation
@@ -757,6 +782,9 @@ defmodule Platform.Meetings.MeetingBriefings do
       |> resolve_findings(findings, briefing.receipts || %{})
 
     revertible = revertible_task_ids(meeting, items)
+    rows = task_rows(items)
+    agents = follow_up_agents(rows)
+    readable_projects = readable_project_ids(rows, scope)
 
     names =
       receipts
@@ -777,6 +805,8 @@ defmodule Platform.Meetings.MeetingBriefings do
             do: revert_ref != nil and task_write_allowed?(%{"ref" => revert_ref}, scope),
             else: item_revertible?(item, revertible) and task_write_allowed?(item, scope)
 
+        agent = item_agent(item, agents)
+
         %{
           key: key,
           kind: item["kind"],
@@ -784,9 +814,12 @@ defmodule Platform.Meetings.MeetingBriefings do
           ref: item["ref"],
           receipt: receipt,
           revertible?: revertible?,
-          availability: task_availability(item, meeting),
+          availability: task_availability(item, rows),
+          project: project_view(item, rows, readable_projects),
+          filed_by: agent,
+          follow_up_agent: agent,
           finding: finding_view(finding, revert_ref),
-          actions: actions(receipt, revertible?, item["kind"])
+          actions: actions(receipt, revertible?, item["kind"], agent != nil)
         }
       end)
       |> Enum.sort_by(&{&1.kind != "task", &1.title || "", &1.key})
@@ -825,12 +858,14 @@ defmodule Platform.Meetings.MeetingBriefings do
     end)
   end
 
-  defp actions(nil, true, "finding"), do: [:revert, :align, :confirm, :dismiss]
-  defp actions(nil, false, "finding"), do: [:align, :confirm, :dismiss]
-  defp actions(nil, true, "task"), do: [:revert, :ask]
-  defp actions(nil, false, "task"), do: [:ask]
-  defp actions(nil, _revertible?, _kind), do: [:confirm, :ask]
-  defp actions(_receipt, _revertible?, _kind), do: []
+  defp actions(nil, true, "finding", _agent?), do: [:revert, :align, :confirm, :dismiss]
+  defp actions(nil, false, "finding", _agent?), do: [:align, :confirm, :dismiss]
+  defp actions(nil, true, "task", true), do: [:revert, :follow_up]
+  defp actions(nil, true, "task", false), do: [:revert]
+  defp actions(nil, false, "task", true), do: [:follow_up]
+  defp actions(nil, false, "task", false), do: []
+  defp actions(nil, _revertible?, _kind, _agent?), do: [:confirm]
+  defp actions(_receipt, _revertible?, _kind, _agent?), do: []
 
   defp item_finding(%{"kind" => "finding", "ref" => "finding:" <> id}, findings),
     do: Map.get(findings, id)
@@ -902,23 +937,105 @@ defmodule Platform.Meetings.MeetingBriefings do
 
   defp task_write_allowed?(_item, _scope), do: false
 
-  defp task_availability(%{"kind" => "task", "ref" => "task:" <> id}, meeting) do
-    case Platform.UUID.valid?(id) && Repo.get(Platform.Tasks.Task, id) do
-      %{deleted_at: %DateTime{}} ->
-        "This task was removed."
-
-      %{project_id: project_id} when project_id != meeting.project_id ->
-        "This task moved to another project."
-
-      %{status: status} ->
-        "Filed task · " <> status
-
-      _ ->
-        "This task is unavailable."
+  # The task's live status: the card composes "in <Project> · filed by
+  # <Agent> · <status>". A task that left the meeting's project is not called
+  # out here any more; its project is shown instead.
+  defp task_availability(%{"kind" => "task", "ref" => "task:" <> id}, rows) do
+    case Map.get(rows, id) do
+      {%{deleted_at: %DateTime{}}, _project} -> "This task was removed."
+      {%{status: status}, _project} -> status
+      nil -> "This task is unavailable."
     end
   end
 
-  defp task_availability(_item, _meeting), do: nil
+  defp task_availability(_item, _rows), do: nil
+
+  defp project_view(%{"kind" => "task", "ref" => "task:" <> id}, rows, readable) do
+    case Map.get(rows, id) do
+      {%{deleted_at: nil}, %{id: project_id, name: name}} ->
+        if MapSet.member?(readable, project_id),
+          do: %{id: project_id, name: name},
+          else: %{id: nil, name: nil}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp project_view(_item, _rows, _readable), do: nil
+
+  defp item_agent(%{"kind" => "task", "ref" => "task:" <> id}, agents), do: Map.get(agents, id)
+  defp item_agent(_item, _agents), do: nil
+
+  # Every task the items reference, removed or not, with the project it is
+  # in NOW: ONE query for the whole briefing. Only uuid-shaped refs reach it.
+  defp task_rows(items) do
+    ids =
+      for {_key, %{"kind" => "task", "ref" => "task:" <> id}} <- items,
+          Platform.UUID.valid?(id),
+          uniq: true,
+          do: id
+
+    if ids == [] do
+      %{}
+    else
+      from(t in Platform.Tasks.Task,
+        left_join: p in Platform.Tasks.Project,
+        on: p.id == t.project_id,
+        where: t.id in ^ids,
+        select: {t, p}
+      )
+      |> Repo.all()
+      |> Map.new(fn {task, project} -> {task.id, {task, project}} end)
+    end
+  end
+
+  # The projects among `rows` the viewer may read: one check per project.
+  defp readable_project_ids(rows, scope) do
+    rows
+    |> Map.values()
+    |> Enum.flat_map(fn
+      {_task, %{id: project_id}} -> [project_id]
+      _ -> []
+    end)
+    |> Enum.uniq()
+    |> Enum.filter(&project_readable?(scope, &1))
+    |> MapSet.new()
+  end
+
+  defp project_readable?(scope, project_id),
+    do: match?({:ok, _}, Platform.Access.task_target(scope, {:project, project_id}, "tasks.read"))
+
+  # The agent to follow up with, per live task in `rows`: the stamped filer
+  # when it is an active agent, else the active triage officer, else nil.
+  # Resolved here only, never from client params. ONE agent query.
+  defp follow_up_agents(rows) when map_size(rows) == 0, do: %{}
+
+  defp follow_up_agents(rows) do
+    live = for {id, {%{deleted_at: nil} = task, _p}} <- rows, do: {id, filed_by_agent_id(task)}
+    officer_id = Platform.Roles.agent_id_for_role("triage_officer")
+
+    ids =
+      [officer_id | Enum.map(live, &elem(&1, 1))]
+      |> Enum.filter(&(is_binary(&1) and Platform.UUID.valid?(&1)))
+      |> Enum.uniq()
+
+    active =
+      if ids == [] do
+        %{}
+      else
+        from(a in Agent, where: a.id in ^ids and a.status == "active", select: {a.id, a.name})
+        |> Repo.all()
+        |> Map.new(fn {id, name} -> {id, %{id: id, name: name}} end)
+      end
+
+    Map.new(live, fn {task_id, filer_id} ->
+      {task_id, Map.get(active, filer_id) || Map.get(active, officer_id)}
+    end)
+  end
+
+  defp filed_by_agent_id(%{metadata: %{"filed_by_agent_id" => id}}) when is_binary(id), do: id
+  defp filed_by_agent_id(_task), do: nil
 
   defp item_revertible?(%{"kind" => "task", "ref" => "task:" <> id}, revertible),
     do: MapSet.member?(revertible, id)
@@ -982,7 +1099,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   # ── Acting ────────────────────────────────────────────────────────────────
 
   @doc """
-  Resolve item `key` of `briefing` with `verb` (`:revert | :confirm | :ask`)
+  Resolve item `key` of `briefing` with `verb` (`:revert | :confirm`)
   as the person `scope` is for. `scope` must be rebuilt per click.
 
   ONE transaction:
@@ -1004,17 +1121,6 @@ defmodule Platform.Meetings.MeetingBriefings do
          `Platform.Tasks.soft_delete_task/1`. Receipt `"reverted"`, ref
          `task:<id>`;
        * `:confirm` — no side effect. Receipt `"confirmed"`;
-       * `:ask` — `{:error, :blank}` for a blank `params["question"]`.
-         Otherwise posts the question as the clicker into the meeting's chat
-         space with `Platform.Chat.post_message/2`. `post_message/2` does NOT
-         ensure participation — it requires a `participant_id` and posts as
-         whoever that row is — so the clicker's row comes from
-         `Platform.Meetings.Membership.ensure_chat_space_participant/3`,
-         which returns it or, for an attendee who has none, adds one with
-         their display name (an attendee of the meeting belongs in its
-         space). The item's title is quoted as inert text: mention tokens in
-         it are broken so a task title can never summon anyone. Receipt
-         `"asked"`, ref `message:<id>`;
     6. the receipt `%{"verb", "at", "by", "ref", "kind"}` is written.
 
   For a `"finding"` item, step 4 and step 6 use the shared
@@ -1168,7 +1274,7 @@ defmodule Platform.Meetings.MeetingBriefings do
   end
 
   # Finding items take align / confirm / dismiss / revert; other items take
-  # revert / confirm / ask. Checked after the resolved guard, so a stale
+  # revert / confirm. Following up is `follow_up/4`, not a verb. Checked after the resolved guard, so a stale
   # click on a resolved item still answers :already_resolved.
   defp ensure_verb(verb, %SynthesisFinding{}),
     do: if(verb in @finding_verbs, do: :ok, else: {:error, :unsupported})
@@ -1203,9 +1309,6 @@ defmodule Platform.Meetings.MeetingBriefings do
   defp run_verb(:revert, _row, _item, _scope, _user_id, _params, _finding),
     do: {:error, :not_revertible}
 
-  defp run_verb(:ask, row, item, _scope, user_id, params, _finding),
-    do: ask(row, item, user_id, params)
-
   defp revert_task(row, task_id, scope) do
     with :ok <- ensure_revertible(row.meeting, task_id),
          {:ok, _typed} <- authorize_task_write(scope, task_id),
@@ -1218,30 +1321,152 @@ defmodule Platform.Meetings.MeetingBriefings do
     end
   end
 
-  defp ask(row, item, user_id, params) do
-    question = params |> Map.get("question", Map.get(params, :question, "")) |> to_string()
+  # ── Follow up ─────────────────────────────────────────────────────────────
 
-    if String.trim(question) == "" do
-      {:error, :blank}
-    else
-      space_id = row.meeting.chat_space_id
+  @doc """
+  Post the attendee's follow-up on task item `key` of `briefing` into their
+  1:1 DM with the agent to follow up with (see "Follow up" in the
+  moduledoc). `scope` must be rebuilt per click.
 
-      with {:ok, participant} <-
-             Platform.Meetings.Membership.ensure_chat_space_participant(
-               space_id,
-               user_id,
-               asker_display_name(user_id)
-             ),
-           {:ok, message} <-
-             Platform.Chat.post_message(%{
-               space_id: space_id,
-               participant_id: participant.id,
-               content_type: "text",
-               content: ask_content(item, question)
-             }) do
-        {:ok, "message:" <> message.id}
-      end
+  In order, and every error path posts nothing:
+
+    1. the row is re-read (no lock: nothing on it is written);
+    2. `{:error, :not_found}` unless the sender is an attendee who is not an
+       external member of the meeting's org;
+    3. `{:error, :not_found}` unless `key` names a `"task"` item with no
+       receipt (a forged key, `"_content"`, a canvas or a finding are all
+       `:not_found`) whose task still exists and is not removed;
+    4. `{:error, :blank}` for a blank `params["text"]`;
+    5. `{:error, :no_recipient}` when no agent resolves;
+    6. `Platform.Chat.find_or_create_dm/3` (sender, `"agent"`, agent id);
+       its `{:error, :dm_not_allowed}` passes through;
+    7. ONE `Platform.Chat.post_message/2` as the sender's participant row in
+       that DM, outside any transaction.
+
+  The message opens with the agent's `@[name]` token, then the task (title,
+  id, `/tasks/<id>`), its project and the briefing link, then the text as
+  typed. The title, meeting name and project name are inert; a project the
+  sender cannot read is named "another project".
+
+  No receipt is written: the item stays open and Revert stays offered.
+  Returns `{:ok, %{message_id, space_id, url, agent: %{id, name}}}`.
+  """
+  @spec follow_up(MeetingBriefing.t(), String.t(), Scope.t(), map()) ::
+          {:ok, %{message_id: binary(), space_id: binary(), url: String.t(), agent: map()}}
+          | {:error, :not_found | :blank | :no_recipient | :dm_not_allowed | term()}
+  def follow_up(%MeetingBriefing{id: id}, key, %Scope{} = scope, params)
+      when is_binary(key) and is_map(params) do
+    user_id = scope_user_id(scope)
+    text = params |> Map.get("text", Map.get(params, :text, "")) |> to_string()
+
+    with {:ok, row} <- reread_briefing(id),
+         :ok <- ensure_attendee(row, user_id),
+         {:ok, task_id} <- follow_up_task_id(row, key),
+         {:ok, task, project} <- live_task(task_id),
+         :ok <- ensure_text(text),
+         {:ok, agent} <- follow_up_recipient(task, project),
+         {:ok, dm} <- Chat.find_or_create_dm(user_id, "agent", agent.id),
+         {:ok, sender} <- dm_participant(dm.id, user_id),
+         {:ok, message} <-
+           Chat.post_message(%{
+             space_id: dm.id,
+             participant_id: sender.id,
+             content_type: "text",
+             content: follow_up_content(row.meeting, task, project, agent, text, scope)
+           }) do
+      {:ok,
+       %{
+         message_id: message.id,
+         space_id: dm.id,
+         url: "/chat/" <> Chat.space_path_segment(dm) <> "?message=" <> message.id,
+         agent: agent
+       }}
     end
+  end
+
+  def follow_up(_briefing, _key, _scope, _params), do: {:error, :not_found}
+
+  defp reread_briefing(id) do
+    case Repo.one(from(b in MeetingBriefing, where: b.id == ^id, preload: :meeting)) do
+      %MeetingBriefing{} = row -> {:ok, row}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  # A task item with no receipt. A follow-up writes none, so a resolved item
+  # (reverted, or confirmed before this change) takes no follow-up.
+  defp follow_up_task_id(%MeetingBriefing{receipts: receipts} = row, key) do
+    case fetch_item(row, key) do
+      {:ok, %{"kind" => "task", "ref" => "task:" <> task_id}} ->
+        if Map.has_key?(receipts || %{}, key) or not Platform.UUID.valid?(task_id),
+          do: {:error, :not_found},
+          else: {:ok, task_id}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp live_task(task_id) do
+    case Map.get(
+           task_rows(%{"live" => %{"kind" => "task", "ref" => "task:" <> task_id}}),
+           task_id
+         ) do
+      {%{deleted_at: nil} = task, project} -> {:ok, task, project}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp ensure_text(text), do: if(String.trim(text) == "", do: {:error, :blank}, else: :ok)
+
+  defp follow_up_recipient(task, project) do
+    case Map.get(follow_up_agents(%{task.id => {task, project}}), task.id) do
+      %{id: _, name: _} = agent -> {:ok, agent}
+      nil -> {:error, :no_recipient}
+    end
+  end
+
+  defp dm_participant(space_id, user_id) do
+    from(p in Chat.Participant,
+      where:
+        p.space_id == ^space_id and p.participant_type == "user" and
+          p.participant_id == ^user_id,
+      limit: 1
+    )
+    |> Repo.one()
+    |> case do
+      %Chat.Participant{} = participant -> {:ok, participant}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp follow_up_content(%Meeting{} = meeting, task, project, agent, text, scope) do
+    project_line =
+      case project do
+        %{id: project_id, name: name} ->
+          if project_readable?(scope, project_id),
+            do: inert(name) <> " (" <> project_id <> ")",
+            else: "another project"
+
+        nil ->
+          "none"
+      end
+
+    "@[" <>
+      agent.name <>
+      "] Follow-up on a task you filed from the meeting \"" <>
+      inert(meeting.name) <>
+      "\".\nTask: " <>
+      inert(task.title) <>
+      " (" <>
+      task.id <>
+      ") /tasks/" <>
+      task.id <>
+      "\nProject: " <>
+      project_line <>
+      "\nMeeting: " <>
+      inbox_url(meeting) <>
+      "\n\n" <> text
   end
 
   # Live re-check at click time: the build-time verdict may be stale (the
@@ -1261,22 +1486,10 @@ defmodule Platform.Meetings.MeetingBriefings do
     end
   end
 
-  defp asker_display_name(user_id) do
-    case Platform.Accounts.get_user(user_id) do
-      %{name: name} when is_binary(name) and name != "" -> name
-      %{email: email} when is_binary(email) -> email
-      _ -> nil
-    end
-  end
-
-  # The title is quoted, never interpreted: a mention token (`@[...]`) inside
-  # a task title would otherwise summon whoever it names when the clicker
-  # posts. A word joiner between `@` and `[` breaks the token and renders
-  # invisibly.
-  defp ask_content(item, question) do
-    "> " <> inert(item["title"]) <> "\n\n" <> String.trim(question)
-  end
-
+  # Quoted, never interpreted: a mention token (`@[...]`) inside a task title,
+  # meeting name or project name would otherwise summon whoever it names
+  # when the sender posts. A word joiner between `@` and `[` breaks the
+  # token and renders invisibly.
   defp inert(text) do
     (text || "")
     |> to_string()

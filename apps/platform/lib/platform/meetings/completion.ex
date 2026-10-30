@@ -214,7 +214,11 @@ defmodule Platform.Meetings.Completion do
                          extra_metadata: %{
                            "completion_run_id" => run.id,
                            "completion_item_id" => key,
-                           "source_segment_ids" => item["source_segment_ids"]
+                           "source_segment_ids" => item["source_segment_ids"],
+                           # Task 01a18d37 stage 2: the briefing card's
+                           # "Follow up with <agent>" recipient. A display
+                           # and routing hint only, never an authorization.
+                           "filed_by_agent_id" => agent_id
                          }
                        ) do
                     {:ok, %{errors: []} = filed} ->

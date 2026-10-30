@@ -522,10 +522,13 @@ defmodule Platform.Meetings.Synthesis.DeliveryTest do
       end
     end
 
-    test "verbs outside the finding set are unsupported", c do
+    # Task 01a18d37 stage 2 removed `:ask`; every remaining item verb is also
+    # a finding verb, so the retired verb is the one left outside the set,
+    # and it is no verb at all now.
+    test "a verb outside the finding set is refused and resolves nothing", c do
       finding = shared_conflict!(c)
 
-      assert {:error, :unsupported} =
+      assert {:error, :not_found} =
                MeetingBriefings.act(briefing(c.a, c.r), key(finding), :ask, scope(c.r), %{
                  "question" => "?"
                })
