@@ -82,7 +82,7 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePrioritiesTest do
   end
 
   test "additive rewrite preserves customized bodies byte for byte and guards duplicates" do
-    for original <- ["Human prefix\n{{skills_reference}}\nHuman suffix", "Unusual human text"] do
+    for original <- ["Human prefix\n{{skills_reference}}\nHuman suffix", "Unusual human text\n\n"] do
       updated = Migration.rewrite(original)
       assert Migration.rewrite(updated) == updated
       assert length(String.split(updated, "## Priority forwarding and batch control")) == 2

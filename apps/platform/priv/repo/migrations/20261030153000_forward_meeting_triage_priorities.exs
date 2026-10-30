@@ -37,7 +37,7 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePriorities do
       if anchor do
         String.replace(content, anchor, @block <> "\n" <> anchor, global: false)
       else
-        String.trim_trailing(content) <> "\n\n" <> @block
+        content <> "\n\n" <> @block
       end
     end
   end
