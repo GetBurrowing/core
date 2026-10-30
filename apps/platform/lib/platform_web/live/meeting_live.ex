@@ -1260,7 +1260,7 @@ defmodule PlatformWeb.MeetingLive do
         # EXPLICIT JOIN (task 01a18d0a stage 2). An ordinary visit to a
         # scheduled, live or ended meeting page, on either surface, renders
         # the page with its Join control and connects nothing: no room, no
-        # participant row, no token, no status change. Ryan's rule: "An open
+        # participant row, no token, no status change. The task's rule: "An open
         # meeting you navigate into also needs an explicit Join, unless you
         # arrived via an invite link or a ring that you accepted." Those
         # arrivals keep their own paths: a guest invite link mints on the

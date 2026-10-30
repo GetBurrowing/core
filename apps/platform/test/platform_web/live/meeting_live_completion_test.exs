@@ -93,7 +93,7 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
 
   # ── Explicit Join on ordinary visits (task 01a18d0a stage 2) ──────────
   #
-  # Ryan: "An open meeting you navigate into also needs an explicit Join,
+  # The task: "An open meeting you navigate into also needs an explicit Join,
   # unless you arrived via an invite link or a ring that you accepted." The
   # normal connected URL is an ordinary visit for a scheduled meeting and for
   # a live one alike. These tests replace "scheduled meetings still auto-join

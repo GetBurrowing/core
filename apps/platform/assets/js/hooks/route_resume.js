@@ -71,7 +71,7 @@ const MODULE_TO_PATH = Object.fromEntries(
 );
 
 // Modules whose tile must ALWAYS land on the module root, never on a saved
-// subpage (task 01a18d0a stage 1). Ryan: "Going to Meetings opens the
+// subpage (task 01a18d0a stage 1). The ask: "Going to Meetings opens the
 // meetings top-level page every time. It must never restore or redirect to
 // the last-visited meeting route." A meeting route is a live room or an
 // ended meeting's record — resuming one from the tile re-enters a call or a
