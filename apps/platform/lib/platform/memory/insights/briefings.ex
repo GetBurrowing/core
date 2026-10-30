@@ -290,7 +290,7 @@ defmodule Platform.Memory.Insights.Briefings do
           Platform.Memory.Insights.Disseminator.local_date(DateTime.utc_now())
         end)
 
-      expired?(briefing, today)
+      expired?(briefing, today) and not Platform.Calendar.AgentAccess.pending?(briefing)
     else
       _ -> false
     end
@@ -318,8 +318,8 @@ defmodule Platform.Memory.Insights.Briefings do
           is_binary(id) and Platform.UUID.valid?(id),
           do: id
 
-    ids != [] and
-      Repo.exists?(from(i in Insight, where: i.id in ^ids and i.state == "open"))
+    (ids != [] and Repo.exists?(from(i in Insight, where: i.id in ^ids and i.state == "open"))) or
+      Platform.Calendar.AgentAccess.pending?(briefing)
   end
 
   def open_item?(_briefing), do: false
@@ -351,7 +351,11 @@ defmodule Platform.Memory.Insights.Briefings do
   """
   @spec view(Briefing.t(), Scope.t()) :: map()
   def view(%Briefing{} = briefing, %Scope{} = scope) do
-    items = briefing.items || %{}
+    items =
+      Map.reject(briefing.items || %{}, fn {_key, value} ->
+        is_binary(value) and String.starts_with?(value, "calendar:")
+      end)
+
     receipts = briefing.receipts || %{}
     insights = load_insights(Map.values(items))
     settings = Settings.get()
@@ -373,10 +377,11 @@ defmodule Platform.Memory.Insights.Briefings do
 
     elsewhere = Enum.count(placed, fn {_, _, _, section} -> section == :elsewhere end)
     by_section = fn s -> for {^s, item} <- rendered, do: item end
-    needs_call = by_section.(:needs_call)
+    calendar = Platform.Calendar.AgentAccess.view(briefing, scope)
+    needs_call = by_section.(:needs_call) ++ Enum.filter(calendar, &(&1.section == :needs_call))
     fyi = by_section.(:fyi)
-    done = by_section.(:done)
-    total = length(rendered) + elsewhere
+    done = by_section.(:done) ++ Enum.filter(calendar, &(&1.section == :done))
+    total = length(rendered) + elsewhere + length(calendar)
     open = length(needs_call) + length(fyi)
 
     %{
@@ -621,7 +626,12 @@ defmodule Platform.Memory.Insights.Briefings do
   """
   @spec handle(Briefing.t(), term(), term(), Scope.t(), map()) ::
           {:ok, Briefing.t()} | {:error, term()}
-  def handle(%Briefing{id: briefing_id}, key, verb, %Scope{} = scope, params \\ %{}) do
+  def handle(briefing, key, verb, scope, params \\ %{})
+
+  def handle(%Briefing{} = briefing, "calendar:" <> _ = key, verb, %Scope{} = scope, _params),
+    do: Platform.Calendar.AgentAccess.handle(briefing, key, verb, scope)
+
+  def handle(%Briefing{id: briefing_id}, key, verb, %Scope{} = scope, params) do
     params = if is_map(params), do: params, else: %{}
 
     with %Briefing{} = briefing <- Repo.get(Briefing, briefing_id) || {:error, :not_found},

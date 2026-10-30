@@ -9,6 +9,8 @@ defmodule Platform.Access.ToolPermissions do
               {"access.manage", ~w(access_explain access_propose access_apply access_undo)},
               {"agents.manage_own",
                ~w(dm_create federation_status feedback_submit principal_search space_create space_leave space_list_agents)},
+              {"calendar.read", ~w(calendar_list)},
+              {"calendar.write", ~w(calendar_propose)},
               {"canvas.read",
                ~w(canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_get canvas_list)},
               {"canvas.write", ~w(canvas_create canvas_patch canvas_restore)},
@@ -59,7 +61,7 @@ defmodule Platform.Access.ToolPermissions do
       ~w(canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_restore),
     "code_mode" => ~w(burrow_run burrow_run_describe),
     "context_read" =>
-      ~w(space_get_context space_search_messages space_get_messages canvas_list canvas_get principal_search),
+      ~w(space_get_context space_search_messages space_get_messages canvas_list canvas_get principal_search calendar_list calendar_propose),
     "experiments" =>
       ~w(experiment_surface_list experiment_list experiment_get experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude experiment_results experiment_signals_list experiment_exclude experiment_goal_set experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report),
     "federation" => ~w(federation_status vault_fetch vault_list feedback_submit),

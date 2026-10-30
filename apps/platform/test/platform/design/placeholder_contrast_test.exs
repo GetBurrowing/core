@@ -100,6 +100,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    "platform_web/live/calendar_live.html.heex" => :global_default,
     "platform_web/components/action_patterns.ex" => :global_default,
     "platform_web/live/agent_config/agent_config_live.ex" => :global_default,
     "platform_web/components/chat_message.ex" => :rule_painted,

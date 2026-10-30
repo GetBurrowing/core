@@ -92,9 +92,9 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
     # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0),
     # dispatch_metrics_list (01a114a8 stage 1), code_mode_report (stage 4)
     # vault_list (01a131c5 stage 1) and mail_inbound_list (01a13ba5 stage 2).
-    test "the registry covers the 30 registered tools, each with an atom rows key" do
+    test "the registry covers the 31 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 30
+      assert map_size(tools) == 31
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -1321,6 +1321,73 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
       assert_unbounded("experiment_signals_list", env, 3)
       assert env.count == 3
+    end
+  end
+
+  describe "runtime conformance: calendar_list" do
+    setup do
+      user = Platform.ExternalUserFixtures.create_user!()
+
+      Platform.ExternalUserFixtures.plain_member!(
+        user,
+        Platform.Tenancy.get_org_by_slug!("globex")
+      )
+
+      agent = Repo.insert!(%Agent{name: "Calendar envelope", slug: "calendar-env-#{u()}"})
+
+      runtime =
+        Repo.insert!(%Platform.Agents.AgentRuntime{
+          runtime_id: "calendar-env-#{u()}",
+          owner_user_id: user.id,
+          agent_id: agent.id,
+          status: "active"
+        })
+
+      Repo.insert!(%Platform.Access.RuntimeProfile{
+        runtime_id: runtime.id,
+        tool_profile: ["context_read"],
+        restricted_permissions: nil
+      })
+
+      scope = Platform.Access.Scope.for_user(user)
+
+      {:ok, _} =
+        Platform.Calendar.AgentAccess.grant(scope, agent.id, %{read: true, read_private: true})
+
+      for hour <- 9..11 do
+        start = DateTime.add(~U[2026-11-05 00:00:00.000000Z], hour * 3600)
+
+        {:ok, _} =
+          Platform.Calendar.create_event(scope, %{
+            title: "Envelope",
+            starts_at: start,
+            ends_at: DateTime.add(start, 1800)
+          })
+      end
+
+      %{
+        calendar_context: %{runtime_id: runtime.runtime_id},
+        calendar_args: %{
+          "owner_id" => user.id,
+          "from" => "2026-11-05T00:00:00Z",
+          "to" => "2026-11-06T00:00:00Z",
+          "limit" => 2
+        }
+      }
+    end
+
+    test "truncated: explicit page2 of3 events reports total and continuation", ctx do
+      env = call("calendar_list", ctx.calendar_args, ctx.calendar_context)
+      assert_truncated("calendar_list", env, 3)
+      assert length(env.events) == 2
+    end
+
+    test "untruncated: final page reports complete bounded-window total", ctx do
+      env = call("calendar_list", Map.put(ctx.calendar_args, "offset", 2), ctx.calendar_context)
+      assert_envelope_keys(env)
+      assert env.total == 3
+      assert env.has_more == false
+      assert length(env.events) == 1
     end
   end
 

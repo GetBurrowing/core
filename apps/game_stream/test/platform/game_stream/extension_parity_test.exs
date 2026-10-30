@@ -437,6 +437,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :context,
       :prompts,
       :experiments,
+      # Native Calendar destination, task 01a16991 stage 2.
+      :calendar,
       :meetings,
       # The More-sheet-only Changelog (task 01a1557a-807f stage 2, `:sheet`).
       :changelog,
@@ -494,11 +496,28 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :ok
     end
 
+    # Calendar task 01a16991 is additive to both Play flag states. The frozen
+    # oracle below still checks every earlier definition byte for byte.
+    defp pre_calendar_tool_definitions do
+      {calendar, prior} =
+        Enum.split_with(
+          ToolSurface.tool_definitions(),
+          &(&1.name in ["calendar_list", "calendar_propose"])
+        )
+
+      assert Enum.map(calendar, &{&1.name, &1.bundle}) == [
+               {"calendar_list", "context_read"},
+               {"calendar_propose", "context_read"}
+             ]
+
+      prior
+    end
+
     test "flag off: tool_definitions/0 is main's, name for name and byte for byte" do
       # Task 01a17b10 stages 3 and 4: the `admin` and `voice_ask` bundles are
       # additive to main's list, set aside here (and asserted by name in the
       # core extensions_test).
-      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
+      defs = Enum.reject(pre_calendar_tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
       assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
       assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_off
       assert digest(defs) == @main_tool_digest_off
@@ -506,7 +525,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
     test "flag on: tool_definitions/0 is main's, byte for byte" do
       Application.put_env(:game_stream, :enabled, true)
-      defs = Enum.reject(ToolSurface.tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
+      defs = Enum.reject(pre_calendar_tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
 
       assert Enum.map(defs, &{&1.name, &1.bundle}) ==
                @main_tool_names_off ++

@@ -24,6 +24,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # the rest delegate to these ToolHandlers modules.
   @handler_sources [
     "lib/platform/federation/tool_surface.ex",
+    "lib/platform/federation/calendar_tools.ex",
     "lib/platform/chat/canvas/tool_handlers.ex",
     "lib/platform/chat/attachments/tool_handlers.ex",
     "lib/platform/skills/tool_handlers.ex"
@@ -224,7 +225,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # only from their declared keys, dependency/capability/verifier are checked
   # by validate_spec/4, and verify/4 refuses missing tokens, capability,
   # boolean result or evidence list. None is aliased or defaulted from context.
-  @surveyed_required_count 219
+  # 226 adds seven HONEST Calendar declarations (task 01a16991 stage 5):
+  # list requires owner_id/from/to; propose requires owner_id/operation/
+  # attributes/request_key. No handler default or context alias substitutes
+  # for these fields. instant/1 and AgentAccess.propose/6 refuse their absence.
+  @surveyed_required_count 226
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather
@@ -279,6 +284,27 @@ defmodule Platform.Federation.ToolArgumentsTest do
          "required_capability" => "headline_review:1",
          "verified" => false,
          "evidence_refs" => []
+       }}
+    ]
+
+    for {tool, args} <- cases do
+      assert :ok = ToolArguments.validate(tool, args)
+
+      for key <- Map.keys(args) do
+        assert {:error, _} = ToolArguments.validate(tool, Map.delete(args, key))
+      end
+    end
+  end
+
+  test "Calendar tools require every declared owner, window and intent field" do
+    cases = [
+      {"calendar_list", %{"owner_id" => "owner", "from" => "from", "to" => "to"}},
+      {"calendar_propose",
+       %{
+         "owner_id" => "owner",
+         "operation" => "create",
+         "attributes" => %{},
+         "request_key" => "request"
        }}
     ]
 

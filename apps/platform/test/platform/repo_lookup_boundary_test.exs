@@ -112,6 +112,46 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    # Calendar consent task 01a16991: principal and persisted intent UUID sources.
+    {"platform/calendar/agent_access.ex", :get, "AgentRuntime", 1, :safe_internal,
+     "authority/3 reads Scope.actor.id from the authenticated AgentRuntime row; CalendarTools resolves the runtime string to that persisted UUIDv7 primary key before building Scope"},
+    {"platform/calendar/agent_access.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "authority/3 reads agent_id from the persisted AgentRuntime.agent_id UUID foreign key after rejecting nil; caller-supplied agent_id is not used"},
+    {"platform/calendar/agent_access.ex", :get!, "AgentGrant", 1, :safe_internal,
+     "handle/4 loads Consent under the locked owner's Briefing and reads Consent.grant_id, a non-null UUID foreign key written by propose/6"},
+    {"platform/calendar/agent_access.ex", :get!, "Briefing", 2, :safe_internal,
+     "propose/6 re-reads the persisted Briefing.id selected by owner/date; handle/4 re-reads the Briefing.id returned by locked_briefing/2, never a client key"},
+    {"platform/calendar/agent_access.ex", :get!, "Event", 3, :safe_internal,
+     "view/2, approve/3 and cancel_hold/1 read Consent.hold_id, a non-null UUID foreign key assigned from the inserted Event.id in propose/6"},
+    {"platform/calendar/agent_access.ex", :get!, "Platform.Agents.Agent", 1, :safe_internal,
+     "view/2 reads Consent.agent_id, a non-null UUID foreign key copied from the live AgentGrant row at intent creation"},
+    {"platform/calendar/agent_access.ex", :get_by, "AgentGrant", 3, :must_cast,
+     "revoke/2 guards the incoming agent_id with Platform.UUID.valid?/1; grant/3 only accepts an id selected by agents/1; authority/3 guards owner_id and uses persisted Runtime.agent_id; owner ids otherwise come from User.id"},
+    {"platform/calendar/agent_access.ex", :get_by, "Consent", 2, :safe_internal,
+     "propose/6 uses UUID-validated owner_id, AgentGrant.agent_id UUID FK and a string request_key; handle/4 resolves Consent.id from Briefing.items written by propose/6 and constrains persisted owner/briefing UUIDs"},
+    {"platform/calendar/agent_access.ex", :get_by!, "Event", 1, :safe_internal,
+     "revert_approved/2 uses Consent.event_id, the UUID foreign key assigned by approve/3 before it marks the intent approved, plus Consent.owner_id UUID FK"},
+    {"platform/calendar/agent_access.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "revoke/2 guards the agent id, authority/3 guards the Calendar owner id, and target/4 guards the event id before their typed queries; malformed boundary values fail closed"},
+    {"platform/calendar/booking_confirmation.ex", :get, "Platform.Tasks.Project", 1,
+     :safe_internal,
+     "enqueue/5 receives the persisted Meeting created by BookingLinks; meeting.project_id is a UUID foreign key already checked against the owner's current project list"},
+    {"platform/calendar/booking_links.ex", :get!, "BookingLink", 1, :safe_internal,
+     "update/3 selects link from list(scope)'s owner-constrained Repo.all before re-reading link.id under the owner row lock; the URL id is compared as a string, never passed directly to Repo"},
+    {"platform/calendar/booking_links.ex", :get_by, "Booking", 1, :safe_internal,
+     "book/3 uses link.id from resolve/1's persisted BookingLink; idempotency_key is a string field constrained to 16-128 bytes, not a UUID cast"},
+    {"platform/calendar/booking_links.ex", :get_by, "BookingLink", 1, :safe_internal,
+     "resolve/1 accepts a 43-byte random bearer token and queries the token string field; no UUID column is cast from external input"},
+
+    # Calendar task 01a16991: boundary UUIDs are checked before typed lookups.
+    {"platform/calendar.ex", :get, "Platform.Chat.Space", 1, :must_cast,
+     "authorize_scope/2 checks the form's space_id with Platform.UUID.valid?/1 before Repo.get and then requires chat.write plus SpaceAccess membership"},
+    {"platform/calendar.ex", :get_by, "Event", 1, :must_cast,
+     "owned_event/2 guards the LiveView event id with Platform.UUID.valid?/1 before its owner-constrained Repo.get_by"},
+    {"platform/calendar.ex", :get_by, "FeedToken", 1, :safe_internal,
+     "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
+    {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
@@ -1057,6 +1097,16 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # target/4 guards the client event UUID; locked_briefing/2 uses a
+    # persisted Briefing.id and User.id; transaction/2 receives either
+    # authority/3's UUID-validated owner id or Scope.actor User.id.
+    "platform/calendar/agent_access.ex" => 3,
+    # get_event/2 validates the boundary event UUID before its visible-query read.
+    "platform/calendar.ex" => 1,
+    # Subscription refresh locks by the UUID from a loaded owner-scoped row;
+    # the periodic worker selects one persisted row without caller-supplied ids.
+    "platform/calendar/subscriptions.ex" => 1,
+    "platform/calendar/refresh_worker.ex" => 1,
     "platform/orchestration/blocker_reassessment.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.

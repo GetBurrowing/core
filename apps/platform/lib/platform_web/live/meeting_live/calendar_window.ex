@@ -5,8 +5,8 @@ defmodule PlatformWeb.MeetingLive.CalendarWindow do
   Deliberately holds NO LiveView imports and touches no socket: every
   function here is a total function of its arguments, so the week maths
   and the placement maths are unit-testable without mounting anything.
-  `PlatformWeb.MeetingLive` is the only caller; it owns the assigns, this
-  module owns the arithmetic.
+  `PlatformWeb.MeetingLive` and `PlatformWeb.CalendarLive` own their assigns;
+  this module owns the shared arithmetic.
 
   ## The week starts on Monday
 

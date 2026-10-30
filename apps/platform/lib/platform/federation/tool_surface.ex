@@ -133,6 +133,7 @@ defmodule Platform.Federation.ToolSurface do
   # row; `memory_search`'s degraded path (`:partial_results`) is handled where
   # that path is built.
   @list_envelope_tools %{
+    "calendar_list" => :events,
     "file_list" => :files,
     "skill_list" => :skills,
     "review_item_list" => :items,
@@ -253,7 +254,11 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("plan"), do: tag(plan_tools(), "plan")
   defp tools_for_bundle("review"), do: tag(review_tools(), "review")
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
-  defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
+
+  defp tools_for_bundle("context_read"),
+    do:
+      tag(context_read_tools() ++ Platform.Federation.CalendarTools.definitions(), "context_read")
+
   # `feedback_submit` (task 01a11ec3 stage 2) rides the `federation` bundle,
   # which every runtime holds by default, and is appended ONLY while
   # `Platform.Feedback.Policy.enabled?/0` is true. A disabled installation
@@ -4278,6 +4283,9 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # ── Messaging tools ──────────────────────────────────────────────────────
+
+  def execute(tool, args, context) when tool in ["calendar_list", "calendar_propose"],
+    do: Platform.Federation.CalendarTools.execute(tool, args, context)
 
   def execute("send_media", args, context) do
     space_id = Map.get(args, "space_id")

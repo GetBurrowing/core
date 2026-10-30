@@ -220,6 +220,7 @@ defmodule PlatformWeb.Components.IconRail do
   # kind is registered.
   @more_sheet_order [
     :inbox,
+    :calendar,
     :email,
     :files,
     :canvases,
@@ -653,6 +654,14 @@ defmodule PlatformWeb.Components.IconRail do
         label: "Experiments",
         path: "/control/experiments",
         hero_icon: "hero-beaker",
+        cluster: :working,
+        root_only?: false
+      },
+      %{
+        key: :calendar,
+        label: "Calendar",
+        path: "/calendar",
+        hero_icon: "hero-calendar-days",
         cluster: :working,
         root_only?: false
       },

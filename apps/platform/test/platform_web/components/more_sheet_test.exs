@@ -152,7 +152,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{root_user: true})
 
       assert row_keys(html) ==
-               ~w(inbox fixture email files canvases skills context agents experiments changelog)
+               ~w(inbox fixture calendar email files canvases skills context agents experiments changelog)
 
       footer = html |> doc() |> LazyHTML.query(".sheet-actions [data-destination=settings]")
       assert Enum.count(footer) == 1
@@ -167,6 +167,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       assert IconRail.more_sheet_order() ==
                [
                  :inbox,
+                 :calendar,
                  :email,
                  :files,
                  :canvases,
@@ -240,7 +241,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       put_env(:mail_enabled, false)
       keys = row_keys(render_more_sheet(%{root_user: true}))
       refute "email" in keys
-      assert Enum.take(keys, 2) == ["inbox", "files"]
+      assert Enum.take(keys, 3) == ["inbox", "calendar", "files"]
     end
 
     test "no bar tab, no Admin, no Prompts, no Activity row; no headings" do

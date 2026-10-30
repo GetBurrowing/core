@@ -211,6 +211,7 @@ defmodule Platform.Role do
     Platform.Canvas.ScriptEngine.Slots,
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
+    Platform.Calendar.BookingRateLimit,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
@@ -233,6 +234,7 @@ defmodule Platform.Role do
   ]
 
   @background [
+    Platform.Calendar.RefreshWorker,
     DNSCluster,
     # Subscribes to the relay topic and re-executes telemetry: it acts.
     Platform.Role.RelayReceiver,
@@ -406,6 +408,13 @@ defmodule Platform.Role do
       note: "Critique.request/1 from the design critique MCP tool, synchronous in the caller"
     },
     # :http. Req and Finch.
+    %{
+      kind: :http,
+      file: "lib/platform/calendar/external_fetch.ex",
+      class: :follows_caller,
+      note:
+        "HTTPS GET only; caller is an owner refresh task or the full-role Calendar.RefreshWorker"
+    },
     %{
       kind: :http,
       file: "lib/platform/accounts/user_avatar_cache.ex",

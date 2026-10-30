@@ -767,7 +767,9 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
     # +2 owning-runtime dependency verification tools (task 01a18305 stage 2);
     # these do not add a historian scheduler tool or change T6 triggers.
-    @t6_baseline_tool_count 151
+    # +2 owner-granted Calendar tools (task 01a16991 stage 5), which add
+    # no historian scheduler endpoint or T6 trigger.
+    @t6_baseline_tool_count 153
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 
@@ -823,6 +825,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     test "no new MCP tools — tool surface count matches the T6 stage-1 baseline" do
       tools = Platform.Federation.ToolSurface.tool_definitions()
       names = Enum.map(tools, & &1.name)
+      assert "calendar_list" in names
+      assert "calendar_propose" in names
 
       assert length(names) == @t6_baseline_tool_count,
              """

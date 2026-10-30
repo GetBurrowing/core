@@ -143,6 +143,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"space_agents:<id>", :space},
 
     # ── user ──
+    # Native event changes fan out only to the owner's user id. CalendarLive
+    # subscribes with its authenticated Access.Scope actor, never a client id,
+    # and reloads its own permission-scoped entries on receipt.
+    {"calendar:<id>", :user},
     # Only the user's authenticated LiveView sessions subscribe. The payload
     # is a change id; ShellLive reloads that user's own scope after commit.
     {"access:user:<id>", :user},

@@ -439,6 +439,7 @@ defmodule PlatformWeb.Router do
     pipe_through(:calendar_feed)
 
     get("/meetings/:id/invite.ics", MeetingCalendarController, :show)
+    get("/calendar/feed/:token", CalendarFeedController, :show, log: false)
   end
 
   # HOST-AGNOSTIC (deliberate — task 019fcf22 stage 3), and the most
@@ -850,6 +851,20 @@ defmodule PlatformWeb.Router do
   # Every route in the router is now one of three things — app-fenced (this
   # scope), host-scoped (`chat.` / `meet.`), or on the documented
   # host-agnostic list. Adding a route means picking one.
+  pipeline :booking_rate_limit do
+    plug(PlatformWeb.BookingRateLimitPlug)
+  end
+
+  # Public booking is intentionally app-host fenced, without account authentication.
+  # The opaque token reveals available slots only; no owner event details.
+  scope "/", PlatformWeb do
+    pipe_through([:browser, :require_app_surface, :booking_rate_limit])
+
+    live_session :public_booking, layout: false do
+      live("/book/:token", PublicBookingLive, :show, metadata: %{log: false})
+    end
+  end
+
   scope "/", PlatformWeb do
     pipe_through([:browser, :require_auth, :enforce_external_scope, :require_app_surface])
 
@@ -901,6 +916,8 @@ defmodule PlatformWeb.Router do
       live("/email/accounts", EmailLive, :accounts)
       live("/email/accounts/new", EmailLive, :new_account)
       live("/email/accounts/:id", EmailLive, :account)
+      live("/calendar", CalendarLive, :index)
+      live("/calendar/booking", BookingSettingsLive, :index)
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)

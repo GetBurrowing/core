@@ -369,7 +369,11 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
         {BriefingCopy.all_caught_up()}
       </p>
 
-      <.settings_note settings={@settings} admin?={@admin?} />
+      <.settings_note
+        settings={@settings}
+        admin?={@admin?}
+        calendar?={Enum.any?(@view.needs_call ++ @view.done, &(&1.kind == :calendar))}
+      />
     </div>
     """
   end
@@ -439,6 +443,48 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
   end
 
   # ── Open cards ────────────────────────────────────────────────────────
+
+  defp open_card(%{item: %{kind: :calendar}} = assigns) do
+    ~H"""
+    <article
+      data-kind="calendar"
+      data-consent-key={@item.key}
+      class="rounded-xl border border-edge bg-base-100 p-4"
+    >
+      <p class="text-xs text-subtle">Calendar · Tentative</p>
+      <h3 class="mt-2 font-semibold">{@item.title}</h3>
+      <p class="mt-1 text-sm">
+        {@item.agent_name} is tentatively {if @item.operation == "move", do: "moving", else: "booking"} this time. OK?
+      </p>
+      <p class="mt-1 text-sm text-subtle">
+        {Calendar.strftime(@item.starts_at, "%b %-d, %H:%M UTC")}
+      </p>
+      <div :if={@item.may_handle?} class="mt-3 flex gap-2">
+        <button
+          class="btn btn-primary btn-sm min-h-11"
+          phx-click="act"
+          phx-target={@ui.myself}
+          phx-value-key={@item.key}
+          phx-value-verb="approve"
+        >
+          Approve
+        </button>
+        <button
+          class="btn btn-ghost btn-sm min-h-11"
+          phx-click="act"
+          phx-target={@ui.myself}
+          phx-value-key={@item.key}
+          phx-value-verb="revert"
+        >
+          Revert
+        </button>
+      </div>
+      <p :if={@ui.errors[@item.key]} role="alert" class="mt-2 text-sm text-error">
+        {@ui.errors[@item.key]}
+      </p>
+    </article>
+    """
+  end
 
   defp open_card(assigns) do
     {title, body} = BriefingCopy.title_and_body(assigns.item.insight)
@@ -921,6 +967,39 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   # ── Done cards ────────────────────────────────────────────────────────
 
+  defp done_card(%{item: %{kind: :calendar}} = assigns) do
+    ~H"""
+    <article
+      data-kind="calendar"
+      data-consent-key={@item.key}
+      class="rounded-xl border border-edge bg-base-100 p-4"
+    >
+      <h3 class="font-semibold">{@item.title}</h3>
+      <p class="mt-2 text-sm text-subtle">
+        {cond do
+          @item.state == "approved" and @item.receipt.auto? -> "Preapproved by you"
+          @item.state == "approved" -> "Approved by you"
+          @item.state == "revoked" -> "Grant revoked · tentative hold removed"
+          true -> "Reverted by you"
+        end}
+      </p>
+      <button
+        :if={@item.state == "approved" and @item.may_handle?}
+        class="btn btn-ghost btn-sm min-h-11"
+        phx-click="act"
+        phx-target={@ui.myself}
+        phx-value-key={@item.key}
+        phx-value-verb="revert"
+      >
+        Revert
+      </button>
+      <p :if={@ui.errors[@item.key]} role="alert" class="mt-2 text-sm text-error">
+        {@ui.errors[@item.key]}
+      </p>
+    </article>
+    """
+  end
+
   defp done_card(assigns) do
     {title, _body} = BriefingCopy.title_and_body(assigns.item.insight)
 
@@ -1065,9 +1144,21 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   attr(:settings, :map, required: true)
   attr(:admin?, :boolean, required: true)
+  attr(:calendar?, :boolean, default: false)
 
   defp settings_note(assigns) do
-    assigns = assign(assigns, :note, BriefingCopy.settings_note(assigns.settings))
+    note = BriefingCopy.settings_note(assigns.settings)
+
+    note =
+      if assigns.calendar?,
+        do: %{
+          note
+          | lead:
+              "Briefings arrive in your Inbox each morning. Insight items expire after 7 days. Calendar proposals keep their tentative time until you resolve them."
+        },
+        else: note
+
+    assigns = assign(assigns, :note, note)
 
     ~H"""
     <p

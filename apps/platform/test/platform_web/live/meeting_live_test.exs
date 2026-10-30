@@ -2964,7 +2964,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "an empty index still draws the calendar, not a grouped list", %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # The deleted surface, named so a revert is loud rather than merely
       # duplicated on screen. NOTE (019f9cb7 stage 5): the two refutes that
@@ -3011,7 +3011,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 12, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # The grouped list's markers are gone in every form it had.
       refute html =~ ~s(data-section="live")
@@ -3047,7 +3047,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "an empty index tells an INTERNAL viewer their org's meetings land here",
          %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert html =~ ~s(data-empty-state="meetings-index")
       assert html =~ "No meetings yet."
@@ -3081,7 +3081,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 10, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, day_view(~s([data-role="calendar-event"])), "data-meeting-id") ==
                [only.id]
@@ -3106,7 +3106,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert flash["error"] == "Meeting not found."
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       empty =
         html
@@ -3127,7 +3127,7 @@ defmodule PlatformWeb.MeetingLiveTest do
          %{conn: conn} do
       # Review case 4: with a 34px safe area the day grid ended 16.5px under the
       # bar. `clears-tab-bar` pads the end by 1rem + --bottom-nav-clearance.
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+      {:ok, _view, html} = live(conn, ~p"/meetings?view=calendar")
 
       [class] =
         html
@@ -3144,7 +3144,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # hardcoded `data-theme="light"` as the `:show` shell — both must
       # now inherit the shell's `data-theme` from `<html>` in
       # `root.html.heex`.
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+      {:ok, _view, html} = live(conn, ~p"/meetings?view=calendar")
       # `<html>` itself now legitimately carries the signed-in person's
       # server-rendered `data-theme` (task 01a1557a stage 3), so the check
       # reads everything BELOW the root element.
@@ -3170,7 +3170,7 @@ defmodule PlatformWeb.MeetingLiveTest do
          %{conn: conn, project: project} do
       today = grid_today()
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # Empty to start — asserted on the calendar now that the empty-state
       # card is gone.
@@ -3211,7 +3211,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 16, 0)
         )
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       block = day_view(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"]))
 
@@ -3358,7 +3358,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # that used to read `refute html =~ ~s(data-region="meetings-list")` in
       # the empty-state describe above: the region is no longer conditional
       # on there being meetings to put in it.
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
                ["calendar-week-grid"]
@@ -3398,7 +3398,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(grid_today(), 11, 0)
         )
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       classes = fn html, selector ->
         html |> attrs_of(selector, "class") |> List.first() |> String.split()
@@ -3518,7 +3518,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(far, 11, 0)
       )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       chip =
         html |> doc() |> LazyHTML.query(~s([data-role="meetings-count"])) |> LazyHTML.text()
@@ -3552,7 +3552,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # NUMBER the rendered constraint resolves to, not that a constraint is
       # present: the element was present at 35px the entire time, and so was
       # `btn-circle`.
-      {:ok, _html, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _html, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       fab_classes =
         html |> attrs_of(~s([data-role="start-meeting-fab"]), "class") |> List.first()
@@ -3599,7 +3599,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 11, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # It is in TODAY's column, and it is the only event on the grid — so a
       # grid that renders every meeting in every column fails here.
@@ -3632,7 +3632,7 @@ defmodule PlatformWeb.MeetingLiveTest do
          %{conn: conn, project: project} do
       seed_grid_meeting(project, slug: "grid-adhoc", name: "Ad-hoc Meeting")
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # The grid still draws — an unplaceable meeting is not an error state.
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
@@ -3668,7 +3668,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: end_at
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
                [scheduled.id]
@@ -3698,7 +3698,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: end_at
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       live_selector =
         in_grid(~s([data-role="calendar-event"][data-meeting-id="#{live_meeting.id}"]))
@@ -3763,7 +3763,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 15, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert grid_lane_of(html, concurrent_a) == {"0", "2"}
       assert grid_lane_of(html, concurrent_b) == {"1", "2"}
@@ -3812,7 +3812,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 16, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, grid_selector(short), "data-compact") == ["true"]
       assert attrs_of(html, grid_selector(tall), "data-compact") == []
@@ -3855,7 +3855,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(today, now.hour, 30)
       )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # Exactly one, and it is in today's column. A now-line drawn in every
       # column would satisfy "it is in today's column" and fail the count.
@@ -3884,7 +3884,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # percentage both times and cannot tell a working line from a frozen
       # one. No meetings are seeded, so `hour_window/2` stays at its default
       # {8, 18} — 600 minutes — and the arithmetic below is exact.
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       today = grid_today()
 
@@ -3911,7 +3911,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "today's day heading is the only one marked, and it is the viewer's today",
          %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # Exactly one marked day…
       assert attrs_of(
@@ -3937,7 +3937,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the zone label renders the resolved zone when connected", %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert html
              |> doc()
@@ -3950,7 +3950,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The static render carries no connect params, so there is no resolved
       # zone. Printing `UTC` there would be a confident wrong answer that
       # nobody notices until they miss a call, so the label is ABSENT.
-      html = conn |> get(~p"/meetings") |> html_response(200)
+      html = conn |> get(~p"/meetings?view=calendar") |> html_response(200)
 
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
                ["calendar-week-grid"]
@@ -3960,7 +3960,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the week nav pages the label and Today returns to it", %{conn: conn} do
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       this_week = PlatformWeb.MeetingLive.calendar_week_label(grid_today())
       next_week = PlatformWeb.MeetingLive.calendar_week_label(Date.add(grid_today(), 7))
@@ -4007,7 +4007,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # itself. Asserting the connected-side assigns rather than the empty
       # page is what records that the nil arm was entered — an empty page
       # is what a genuinely empty week looks like too.
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       assigns = calendar_assigns(view)
 
@@ -4021,7 +4021,10 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "an unknown zone keeps the raw browser string, distinguishing it from no param",
          %{conn: conn} do
       {:ok, view, _html} =
-        live(put_connect_params(conn, %{"timezone" => "Mars/Olympus"}), ~p"/meetings")
+        live(
+          put_connect_params(conn, %{"timezone" => "Mars/Olympus"}),
+          ~p"/meetings?view=calendar"
+        )
 
       assigns = calendar_assigns(view)
 
@@ -4033,7 +4036,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "a resolvable zone is not unresolved (positive control)", %{conn: conn} do
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assigns = calendar_assigns(view)
 
@@ -4047,7 +4050,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # keeps saying nothing. There is no process to read assigns from on a
       # plain GET, so the claim is made where it is observable: the bytes.
       # This must stay true after stage 2 adds the connected-only affordance.
-      html = conn |> get(~p"/meetings") |> html_response(200)
+      html = conn |> get(~p"/meetings?view=calendar") |> html_response(200)
 
       assert attrs_of(html, ~s([data-role="calendar-week-grid"]), "data-role") ==
                ["calendar-week-grid"]
@@ -4068,8 +4071,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       # THE distinguishing assertion, both halves in one test — because the
       # claim is a DIFFERENCE, and two tests that each assert one side pass
       # independently even if the two renders are identical.
-      {:ok, _resolved, resolved_html} = live(grid_conn(conn), ~p"/meetings")
-      {:ok, _unresolved, unresolved_html} = live(conn, ~p"/meetings")
+      {:ok, _resolved, resolved_html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      {:ok, _unresolved, unresolved_html} = live(conn, ~p"/meetings?view=calendar")
 
       notice = ~s([data-empty-state="calendar-no-timezone"])
       count = ~s([data-role="calendar-day-count"])
@@ -4130,7 +4133,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           {meeting, date}
         end
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       for {meeting, date} <- seeded do
         assert attrs_of(
@@ -4150,7 +4153,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn
     } do
       {:ok, _view, with_raw} =
-        live(put_connect_params(conn, %{"timezone" => "Mars/Olympus"}), ~p"/meetings")
+        live(
+          put_connect_params(conn, %{"timezone" => "Mars/Olympus"}),
+          ~p"/meetings?view=calendar"
+        )
 
       assert with_raw
              |> doc()
@@ -4160,7 +4166,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # No param sent — there is no browser string to quote, and inventing
       # one would make the two nil-zone causes read the same again.
-      {:ok, _view, no_param} = live(conn, ~p"/meetings")
+      {:ok, _view, no_param} = live(conn, ~p"/meetings?view=calendar")
 
       assert attrs_of(no_param, ~s([data-role="calendar-no-timezone-raw"]), "data-role") == []
 
@@ -4175,7 +4181,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       injected = "</p><script>alert(1)</script>"
 
       {:ok, _view, html} =
-        live(put_connect_params(conn, %{"timezone" => injected}), ~p"/meetings")
+        live(put_connect_params(conn, %{"timezone" => injected}), ~p"/meetings?view=calendar")
 
       refute html =~ "<script>alert(1)</script>"
 
@@ -4208,7 +4214,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           {meeting, date}
         end
 
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       # Through the rendered control, not by pushing the event name — the
       # button being wired is part of the claim.
@@ -4236,7 +4242,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "a zone that resolved normally carries no assumed marker", %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, ~s([data-role="calendar-timezone"]), "data-zone-assumed") == []
 
@@ -4285,7 +4291,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           {meeting, date}
         end)
 
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       # The hazard first: the week is EMPTY while the zone is unresolved,
       # even though all three rows exist.
@@ -4317,7 +4323,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The event can be pushed from a console. Honouring it for a viewer
       # who already has a zone would silently move every block on their
       # calendar by an unstated offset.
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       render_click(view, "calendar_assume_utc", %{})
 
@@ -4385,7 +4391,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the strip is seven cells, Monday first", %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, ~s([data-role="calendar-strip-day"]), "data-date") ==
                monday_first_week(grid_today())
@@ -4405,7 +4411,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the strip opens on the viewer's today, selected and marked", %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       today = Date.to_iso8601(grid_today())
 
@@ -4427,7 +4433,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "clicking a strip day moves the heading and the selection to that day",
          %{conn: conn} do
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       today = grid_today()
       target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
@@ -4478,7 +4484,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(wednesday, 11, 0)
         )
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       html = click_strip_day(view, wednesday)
 
@@ -4526,7 +4532,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(wednesday, 12, 0)
         )
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       html = click_strip_day(view, wednesday)
 
@@ -4549,7 +4555,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(wednesday, 9, 30)
       )
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # A day with nothing on it says so in words. `0 meetings` under an
       # empty column reads like a failed load; this is the only sentence a
@@ -4605,7 +4611,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(today, 14, 5)
       )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       window = {8, 18}
 
@@ -4689,7 +4695,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(today, 15, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       # The concurrent pair: same vertical box, DIFFERENT horizontal one.
       assert lane_of(html, concurrent_a) == {"0", "2"}
@@ -4756,7 +4762,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         scheduled_end_at: zoned_utc(today, now.hour, 30)
       )
 
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, day_view(~s([data-role="calendar-now-line"])), "data-role") ==
                ["calendar-now-line"]
@@ -4778,7 +4784,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # an eighth date is not a request the UI can make. Honouring it would
       # select a day whose meetings were never queried — the week is loaded
       # per week — and draw a confidently empty column.
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       today = Date.to_iso8601(grid_today())
       assert day_heading_date(html) == today
@@ -4792,7 +4798,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "paging the week carries the selected day's weekday with it", %{conn: conn} do
-      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       today = grid_today()
       target = Enum.find(week_dates(today), &(Date.compare(&1, today) != :eq))
@@ -4901,7 +4907,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # never renders the detail surface at all.
       meeting = seed_detail_meeting(project)
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, in_grid(~s([data-role="calendar-event"])), "data-meeting-id") ==
                [meeting.id]
@@ -4916,7 +4922,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       meeting = seed_detail_meeting(project, name: "Quarterly Planning")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       # Both surfaces, both naming the meeting. Asserted per-surface rather
@@ -4974,7 +4980,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       [href] =
@@ -5009,7 +5015,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # ships a link that is dead on arrival.
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       [href] =
@@ -5049,7 +5055,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       live_invite = seed_invite!(meeting, "Still Invited")
       revoked = seed_invite!(meeting, "Revoked Invitee", DateTime.utc_now())
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5082,7 +5088,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           scheduled_end_at: zoned_utc(Date.add(grid_today(), 7), 15, 0)
         )
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       html = view |> element(~s([phx-click="calendar_next_week"])) |> render_click()
 
       week_before = week_label(view)
@@ -5139,7 +5145,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # the offset without re-adding a reason fails here.
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
 
       html = select_meeting(view, meeting)
 
@@ -5160,7 +5166,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "the sheet's backdrop closes it", %{conn: conn, project: project} do
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       _ = select_meeting(view, meeting)
 
       html =
@@ -5177,7 +5183,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       sheet_classes = doc |> detail_sheet() |> class_of() |> String.split()
@@ -5229,7 +5235,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       # The panel is the element itself; the sheet's cap lives on the panel
@@ -5294,7 +5300,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting = seed_detail_meeting(project)
       for index <- 1..12, do: seed_invite!(meeting, "Invitee #{index}")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [
@@ -5397,7 +5403,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       expected = Enum.map(Meetings.list_invites(meeting.id), & &1.id)
       assert length(expected) == 4
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5421,7 +5427,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       guest = seed_invite!(meeting, "Sam Ortiz")
       pending = seed_external_pending_invite!(meeting, "jess@doeco.example")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       tag = fn surface, invite ->
@@ -5472,7 +5478,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       sam = seed_invite!(meeting, "Sam Ortiz")
       jess = seed_invite!(meeting, "Jess Tran")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5528,7 +5534,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting = seed_detail_meeting(project)
       sam = seed_invite!(meeting, "Sam Ortiz")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       [url] =
@@ -5558,7 +5564,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       seed_external_pending_invite!(meeting, "jane@doeco.example")
       guest = seed_invite!(meeting, "Sam Ortiz")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5592,7 +5598,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting = seed_detail_meeting(project)
       seed_invite!(meeting, "Sam Ortiz")
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       ids = doc |> copy_controls() |> LazyHTML.attribute("id")
@@ -5614,7 +5620,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, agent} = SenderSeed.ensure!()
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5654,7 +5660,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert SenderSeed.get() == nil
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5678,7 +5684,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       seed_invite!(meeting, "Sam Ortiz")
       seed_user_invite!(meeting, seed_invitee_user!("Dalton Reyes"))
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       for surface <- [detail_panel(doc), detail_sheet(doc)] do
@@ -5698,7 +5704,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
 
       # There is deliberately no invite button in any toolbar: the row at
@@ -5763,7 +5769,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # to break a test, and the attribute is what the position MEANS.
       meeting = seed_detail_meeting(project)
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       _ = select_meeting(view, meeting)
 
       view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
@@ -5786,7 +5792,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # …and the create sheet, which has room to float over its own body,
       # still does. Asserted here so "inline everywhere" — which would be
       # the same edit with no measurement behind it — fails.
-      {:ok, create_view, _} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, create_view, _} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       create_view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
       create_doc =
@@ -5816,7 +5822,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           end_hour: 17
         )
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       _ = select_meeting(view, first)
 
       html =
@@ -5851,11 +5857,11 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> Invite.changeset(%{meeting_id: meeting.id, user_id: invitee.id})
         |> Repo.insert!()
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       _ = select_meeting(view, meeting)
 
       {bystander_conn, _bystander} = authenticated_conn(Phoenix.ConnTest.build_conn())
-      {:ok, bystander_view, _html} = live(grid_conn(bystander_conn), ~p"/meetings")
+      {:ok, bystander_view, _html} = live(grid_conn(bystander_conn), ~p"/meetings?view=calendar")
       _ = select_meeting(bystander_view, meeting)
 
       ring_tag =

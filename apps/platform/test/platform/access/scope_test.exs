@@ -103,6 +103,8 @@ defmodule Platform.Access.ScopeTest do
       "vault.use" => :all,
       "prompts.read" => :all,
       "meetings.join" => :all,
+      "calendar.read" => :all,
+      "calendar.write" => :all,
       "mail.use" => :all,
       "inbox.read" => :all,
       "activity.read" => :all

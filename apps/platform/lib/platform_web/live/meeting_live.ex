@@ -1413,8 +1413,14 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:meeting_invite_candidates, fn -> [] end)
      |> assign_new(:meeting_invite_email, fn -> nil end)
      |> assign_calendar_week(calendar_today(socket))
-     |> assign_archive(params)}
+     |> assign_archive(params)
+     |> maybe_open_scheduler(params)}
   end
+
+  defp maybe_open_scheduler(socket, %{"schedule" => "true"}),
+    do: assign(socket, :show_start_meeting_sheet, true)
+
+  defp maybe_open_scheduler(socket, _), do: socket
 
   # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
 
@@ -2275,7 +2281,8 @@ defmodule PlatformWeb.MeetingLive do
   # The calendar half pays for nothing the archive needs. `nil` rather than an
   # empty result map so a template that reads `@archive_result` on the
   # calendar half fails loudly instead of rendering a confident "0 of 0".
-  defp assign_archive_result(socket, :calendar, _query, _types, _person_id, _project_id) do
+  defp assign_archive_result(socket, view, _query, _types, _person_id, _project_id)
+       when view in [:calendar, :list] do
     socket
     |> assign(:archive_result, nil)
     |> assign(:archive_artifacts, %{})
@@ -2302,7 +2309,8 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp archive_view(%{"view" => "archive"}), do: :archive
-  defp archive_view(_params), do: :calendar
+  defp archive_view(%{"view" => "calendar"}), do: :calendar
+  defp archive_view(_params), do: :list
 
   defp archive_param(params, key) do
     case Map.get(params, key) do
@@ -2368,7 +2376,7 @@ defmodule PlatformWeb.MeetingLive do
   # The glyph names are string literals so Tailwind's `matchComponents`
   # scanner emits their CSS — a computed name would render blank.
   @meetings_view_shelf [
-    %{id: :calendar, label: "Calendar", short_label: "Cal", icon: "hero-calendar-days"},
+    %{id: :list, label: "Meetings", short_label: "List", icon: "hero-video-camera"},
     %{id: :archive, label: "Archive", short_label: "Archive", icon: "hero-archive-box"}
   ]
 
@@ -2378,7 +2386,7 @@ defmodule PlatformWeb.MeetingLive do
   # Each segment patches to its own URL: Calendar to the bare index (which
   # defaults to the calendar half and carries no dead `view=` param), Archive
   # through `archive_path/1` so it preserves whatever filters are active.
-  defp meetings_view_path(_assigns, :calendar), do: ~p"/meetings"
+  defp meetings_view_path(_assigns, :list), do: ~p"/meetings"
   defp meetings_view_path(assigns, :archive), do: archive_path(assigns)
 
   # A key the form did not send is left alone; a key it sent EMPTY is cleared
@@ -7774,6 +7782,7 @@ defmodule PlatformWeb.MeetingLive do
 
   defp status_bucket("live"), do: :live
   defp status_bucket("ended"), do: :ended
+  defp status_bucket("cancelled"), do: :ended
   defp status_bucket(_), do: :upcoming
 
   # Default create-sheet form values. When exactly one project exists we

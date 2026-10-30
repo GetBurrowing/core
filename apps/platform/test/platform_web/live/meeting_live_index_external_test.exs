@@ -212,7 +212,7 @@ defmodule PlatformWeb.MeetingLiveIndexExternalTest do
 
     # The calendar chrome the index is built around is present, i.e. the body
     # is a rendered page and not a stub.
-    assert html =~ ~s(data-role="calendar-week-nav")
+    assert html =~ ~s(data-region="meetings-workspace")
   end
 
   # ── Direction control ──────────────────────────────────────────────────

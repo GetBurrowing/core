@@ -633,3 +633,5 @@ config :platform, :native_reply_watchdog_ms, false
 config :platform, :chat_async_fault_injection, true
 
 config :platform, :start_meeting_completion_sweeper, false
+
+config :platform, :start_calendar_refresh, false

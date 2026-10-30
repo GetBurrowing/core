@@ -49,7 +49,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert :changelog in Enum.map(more_sheet_rows(nil, true), & &1.key)
     end
 
-    test "returns 10 destinations for a non-Acme user (Admin + Prompts filtered out)" do
+    test "returns 13 destinations for a non-Acme user (Admin + Prompts filtered out)" do
       # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
       # destination (working cluster, root_only?: false), 8 → 9 when
       # task 019fe6ba added Experiments, 9 → 10 when task 019fea0d added
@@ -61,7 +61,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       # and 11 -> 12 when task 01a1557a-eab7 stage 2 added Voice.
       # Any future destination addition should bump the matching guard below.
       list = destinations(root_user: false)
-      assert length(list) == 12
+      assert length(list) == 13
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -71,10 +71,10 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 14 destinations for an Acme user (Admin + Prompts included)" do
+    test "returns all 15 destinations for an Acme user (Admin + Prompts included)" do
       # 13 -> 14 when task 01a1557a-eab7 stage 2 added Voice.
       list = destinations(root_user: true)
-      assert length(list) == 14
+      assert length(list) == 15
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
@@ -197,6 +197,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert by_key[:context] == :working
       assert by_key[:prompts] == :working
       assert by_key[:meetings] == :working
+      assert by_key[:calendar] == :working
 
       refute Map.has_key?(by_key, :memory)
 
