@@ -80,7 +80,7 @@ defmodule Platform.Social.Publisher.Fake do
   The next call to `fun` whose account is `account_id` returns `result`
   (then the default again). Consulted before `put_next/2`; a call for any
   other account does not consume it. Only callbacks that take an account
-  (`publish`, `status`, `delete`, `disconnect_account`, `connect_url`) can
+  (`publish`, `retry`, `status`, `delete`, `disconnect_account`, `connect_url`) can
   match.
   """
   @spec put_next_for(Ecto.UUID.t(), atom(), term()) :: :ok
@@ -143,6 +143,13 @@ defmodule Platform.Social.Publisher.Fake do
          external_url: nil,
          platform_post_id: "fake_platform_" <> request.idempotency_key
        }}
+    end)
+  end
+
+  @impl Platform.Social.Publisher
+  def retry(account, external_id) do
+    record(:retry, [account, external_id], fn ->
+      {:ok, %{external_id: external_id, status: :scheduled, external_url: nil, error: nil}}
     end)
   end
 

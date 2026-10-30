@@ -79,6 +79,20 @@ defmodule Platform.Social.Publisher.Zernio do
   Each ASSUMPTION the docs do not settle is isolated in one private function
   or attribute, commented `ASSUMPTION`.
 
+  ## Existing-post retry (verified 2026-10-30)
+
+  `POST /v1/posts/{postId}/retry` immediately retries an existing failed post:
+  https://docs.zernio.com/llms-mdx/posts/retry-post lines 3-9. Lines 17-28
+  document 200 and 207: inspect `post.status` and `post.platforms`, since 207
+  also means failed/partial or scheduled for automatic transient retry.
+  OpenAPI https://zernio.com/openapi.json v1.417.0,
+  `/paths/~1v1~1posts~1{postId}~1retry/post`, defines no body or idempotency
+  parameter. We send neither, disable transport retries and select our account
+  by its id (including populated accountId._id). There is no documented
+  selective-platform parameter. Create's same-key replay returns the original
+  post; rotating the key can instead hit 24h content deduplication
+  (https://docs.zernio.com/posts/create-post#idempotency lines 71-80, 97-103).
+
   ## Secrets and transport
 
   The API key is ONE install-level key, read ONLY from the Vault
@@ -226,6 +240,24 @@ defmodule Platform.Social.Publisher.Zernio do
             {:error, :unexpected_response}
         end
       end)
+    end
+  end
+
+  # Existing-post publication is a separate operation from idempotent creation.
+  @impl true
+  def retry(account, external_id) do
+    with {:ok, key} <- api_key(account) do
+      result =
+        request(key)
+        |> Req.post(url: "/v1/posts/#{URI.encode(external_id)}/retry", retry: false)
+
+      case result do
+        {:ok, %Req.Response{status: 409, body: body}} ->
+          {:error, "Zernio refused the retry (HTTP 409): #{message(body)}"}
+
+        _ ->
+          handle(result, &retry_result(&1, account, external_id))
+      end
     end
   end
 
@@ -524,6 +556,55 @@ defmodule Platform.Social.Publisher.Zernio do
   defp resp_post(%{"post" => %{} = post}), do: post
   defp resp_post(%{} = post), do: post
   defp resp_post(_), do: %{}
+
+  defp retry_result(body, account, external_id) do
+    post = resp_post(body)
+    entries = post["platforms"]
+
+    entry =
+      if is_list(entries),
+        do:
+          Enum.find(
+            entries,
+            &(is_map(&1) and retry_account_id(&1["accountId"]) == account.provider_account_ref)
+          )
+
+    status =
+      cond do
+        is_nil(entry) -> nil
+        post["status"] in ["scheduled", "publishing"] -> :scheduled
+        entry["status"] == "published" -> :published
+        entry["status"] == "failed" -> :failed
+        post["status"] == "published" -> :published
+        post["status"] in ["failed", "partial", "cancelled"] -> :failed
+        true -> nil
+      end
+
+    if is_nil(status) do
+      {:error, :unexpected_response}
+    else
+      {:ok,
+       %{
+         external_id: external_id,
+         status: status,
+         external_url:
+           if(status == :published,
+             do: blank_to_nil(entry["platformPostUrl"] || entry["publishedUrl"])
+           ),
+         platform_post_id: platform_post_id(entry),
+         error:
+           if(status == :failed,
+             do:
+               blank_to_nil(entry["errorMessage"]) || blank_to_nil(entry["error"]) ||
+                 blank_to_nil(body["error"]) || "failed at the vendor"
+           )
+       }}
+    end
+  end
+
+  defp retry_account_id(%{"_id" => id}), do: id
+  defp retry_account_id(id) when is_binary(id), do: id
+  defp retry_account_id(_), do: nil
 
   defp publish_status(%{"status" => "published"} = post, account) do
     entry = account_entry(post, account)
