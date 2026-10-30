@@ -241,17 +241,21 @@ defmodule Platform.Orchestration.TaskRouterDeliveredButOpenHoldTest do
       assert Tasks.needs_human_action_reason(reloaded, 0) == nil
     end
 
-    test "CONTROL: the same drag on an unstamped task, and by automation, is still refused",
+    test "CONTROL: the same drag on an unstamped task is now open to a person, still refused to automation",
          ctx do
       task = planless_task!(ctx)
       refute Tasks.delivered_but_open?(task)
       user = create_user()
 
-      assert {:error, :no_approved_plan} =
-               Tasks.drop_task_to_column(task, "in_progress", {:user, user.id})
+      # Task 01a18e02 flipped these two deliberately: humans are never
+      # blocked by the plan gate, so a person moves an unstamped, planless,
+      # agent-assigned task too. Each move runs on its own fresh task so the
+      # automation refusal below still starts from `planning`.
+      assert {:ok, %{status: "in_progress"}} =
+               Tasks.drop_task_to_column(planless_task!(ctx), "in_progress", {:user, user.id})
 
-      assert {:error, :no_approved_plan} =
-               Tasks.transition_task(task, "in_progress", {:user, user.id})
+      assert {:ok, %{status: "in_progress"}} =
+               Tasks.transition_task(planless_task!(ctx), "in_progress", {:user, user.id})
 
       # Stamped, but moved by nobody: the gate exists so an agent cannot
       # close its own work, and a stamp does not change who is asking.

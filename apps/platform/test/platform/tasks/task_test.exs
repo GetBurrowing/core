@@ -1014,12 +1014,18 @@ defmodule Platform.Tasks.TaskTest do
       assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "in_progress")
     end
 
-    test "rejects drag-drop into in_review when no plan exists", %{task: task} do
-      assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "in_review")
+    # Task 01a18e02 flipped these two deliberately: `drop_task_to_column/2`
+    # drops as `:system`, which now gets the agent table instead of the
+    # removed permissive drop table. `backlog -> in_review` and
+    # `backlog -> done` are not agent edges, so the drop is refused as
+    # `:invalid_drop` before the plan gate is consulted. A human drop of the
+    # same task is accepted (see `human_transitions_test.exs`).
+    test "rejects a system drag-drop into in_review from backlog", %{task: task} do
+      assert {:error, :invalid_drop} = Tasks.drop_task_to_column(task, "in_review")
     end
 
-    test "rejects drag-drop into done when no plan exists", %{task: task} do
-      assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "done")
+    test "rejects a system drag-drop into done from backlog", %{task: task} do
+      assert {:error, :invalid_drop} = Tasks.drop_task_to_column(task, "done")
     end
 
     test "allows drag-drop into in_progress once a plan is approved", %{task: task} do

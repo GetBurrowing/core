@@ -57,13 +57,14 @@ defmodule Platform.Lifecycle.EdgeInventory do
 
     * `Platform.Tasks.drop_task_to_column/3` — the human drag-and-drop path.
       It writes `task |> Task.changeset(%{status: target_status})
-      |> Repo.update()` directly, as its own in-code comment states. It is
-      guarded by a SECOND transition table, `@valid_drop_transitions`, which
+      |> Repo.update()` directly, as its own in-code comment states. For a
+      user actor it is guarded by a SECOND transition table, the human table
+      behind `Platform.Tasks.allowed_next_statuses/2` (task 01a18e02), which
       contains edges absent from the pipeline table (`backlog -> done`,
       `planning -> done`, `in_review -> backlog`, `deploying -> in_review`,
-      `done -> in_progress`, `done -> backlog`) and contains no
-      `stack_pending` and no `cancelled`. Manual board drops therefore fire
-      NO hooks at all, and that whole second table is outside the pipeline.
+      `done -> in_progress`, `done -> backlog`, ...) and never targets
+      `stack_pending`. Manual board drops therefore fire NO hooks at all,
+      and that whole second table is outside the pipeline.
 
     * `Platform.Tasks.transition_task_status/2` — enforces the transition
       table and writes, but calls no finalizer. The MCP `task_update` status

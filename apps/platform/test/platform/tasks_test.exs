@@ -358,7 +358,15 @@ defmodule Platform.TasksTest do
       refute Tasks.sponsor_bypasses_plan_gate?(task, {:agent, agent_id})
       refute Tasks.sponsor_bypasses_plan_gate?(task, :system)
 
-      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+      # Task 01a18e02 flipped this deliberately: humans are never blocked by
+      # the plan gate, so a user actor passes even with an agent assigned.
+      # The agent and system actors below still meet the gate.
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) == :ok
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:agent, agent_id}) ==
+               {:error, :no_approved_plan}
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", :system) ==
                {:error, :no_approved_plan}
     end
 
@@ -388,7 +396,12 @@ defmodule Platform.TasksTest do
 
       refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
 
-      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+      # Task 01a18e02 flipped this deliberately: humans are never blocked by
+      # the plan gate, so a user actor passes even with an agent assigned.
+      # The agent and system actors below still meet the gate.
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) == :ok
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:agent, agent_id}) ==
                {:error, :no_approved_plan}
     end
 
@@ -448,11 +461,12 @@ defmodule Platform.TasksTest do
 
       refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
 
-      # And the gate stays closed on the actor-aware entry point — this
-      # is the failure mode the reviewer surfaced (dropping to
-      # `in_progress` from `planning` shouldn't sneak past the plan
-      # requirement when an agent is queued to do the execution work).
-      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+      # The predicate itself still says no (above). The gate's outcome for
+      # this shape changed with task 01a18e02, deliberately: a user actor is
+      # never plan-gated, while an agent queued for execution still is.
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) == :ok
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:agent, agent_id}) ==
                {:error, :no_approved_plan}
 
       # Symmetric check: a review-phase agent should also hold the gate.

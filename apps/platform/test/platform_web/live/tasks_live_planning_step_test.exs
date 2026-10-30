@@ -406,7 +406,8 @@ defmodule PlatformWeb.TasksLivePlanningStepTest do
 
       assert resolved_ids == [task.id]
 
-      # `in_progress -> backlog` is a legal drop (`@valid_drop_transitions`) and
+      # `in_progress -> backlog` is a legal human drop (the human table behind
+      # `Tasks.allowed_next_statuses/2`, task 01a18e02) and
       # `backlog` is not an execution-phase status, so it needs no approved
       # plan — the move is about the drag path, not the plan gate.
       render_hook(

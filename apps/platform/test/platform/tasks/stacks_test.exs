@@ -9030,8 +9030,13 @@ defmodule Platform.Tasks.StacksTest do
       assert ShipState.shipped?(stack)
       assert member.status == "done"
 
+      # Task 01a18e02: the board drag is a HUMAN move, so it carries a user
+      # actor. `drop_task_to_column/2` is `:system` and now gets the agent
+      # table, which has no `done -> in_progress` edge at all.
+      user = insert_sponsor_user()
+
       assert {:error, :stack_already_shipped, %{stack_id: stack_id}} =
-               Tasks.drop_task_to_column(member, "in_progress")
+               Tasks.drop_task_to_column(member, "in_progress", {:user, user.id})
 
       assert stack_id == stack.id
       assert Repo.get!(Task, member.id).status == "done"
@@ -9042,8 +9047,11 @@ defmodule Platform.Tasks.StacksTest do
 
       refute ShipState.shipped?(stack)
 
+      # Task 01a18e02: a human drag, so a user actor (see the test above).
+      user = insert_sponsor_user()
+
       assert {:ok, %Task{status: "in_progress"}} =
-               Tasks.drop_task_to_column(member, "in_progress")
+               Tasks.drop_task_to_column(member, "in_progress", {:user, user.id})
     end
 
     # `apply_dispatch_gate/1` parks a member whose gate is closed in

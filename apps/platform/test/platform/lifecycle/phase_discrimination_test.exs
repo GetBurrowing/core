@@ -364,7 +364,8 @@ defmodule Platform.Lifecycle.PhaseDiscriminationTest do
     test "a drop across a terminal edge fires nothing; the programmatic one fires" do
       # SCOPE BOUNDARY, PINNED AS A DECISION. `Platform.Tasks` holds TWO
       # transition tables: `@valid_task_transitions` (the pipeline path) and
-      # `@valid_drop_transitions` (the permissive human drag-and-drop path).
+      # the human table behind `allowed_next_statuses/2` (task 01a18e02; it
+      # replaced `@valid_drop_transitions`, the permissive drag-and-drop path).
       # `drop_task_to_column/3` writes `Task.changeset(%{status: target})
       # |> Repo.update()` directly, per its own in-code comment, so manual
       # board drops fire NO hooks at all. That is deliberate — a human

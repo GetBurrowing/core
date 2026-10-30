@@ -12830,8 +12830,8 @@ defmodule PlatformWeb.TasksLiveTest do
     end
 
     # Test case 1: sponsor-only, no plan, drag to done → move lands via
-    # sponsor-bypass. `backlog → done` is a valid drop
-    # (`@valid_drop_transitions[\"backlog\"]` allows it) and NEITHER
+    # sponsor-bypass. `backlog → done` is a valid human drop
+    # (the human table behind `Tasks.allowed_next_statuses/2`) and NEITHER
     # short-circuit branch in `require_approved_plan_for/3` fires from
     # `backlog`, so the predicate is actually consulted — the bypass
     # is what opens the gate here, not the intra-exec-phase rule.
@@ -12874,8 +12874,12 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Repo.get(Task, task.id).status == "done"
     end
 
-    # Test case 2: agent-assigned, no plan, drag to done → gate holds.
-    test "agent-assigned task with no plan stays blocked on drop to done", %{conn: conn} do
+    # Test case 2: agent-assigned, no plan, drag to done. Task 01a18e02
+    # flipped this deliberately: the gate held here before, and a human was
+    # left with no way to close the task. Humans are never plan-gated now;
+    # the agent's own `task_update` to done is still refused
+    # (`human_transitions_test.exs` (c)).
+    test "agent-assigned task with no plan drops to done for a human", %{conn: conn} do
       conn = authenticated_conn(conn)
       project = create_project()
       agent = create_agent()
@@ -12901,25 +12905,21 @@ defmodule PlatformWeb.TasksLiveTest do
 
       html = render(view)
 
-      # Exact error-flash copy from `tasks_live.ex` at ~line 2579 — if
-      # this string drifts, the test tells us before the sponsor sees
-      # a mystery toast.
-      assert html =~
-               "Cannot move task into Done: no approved plan exists. Create and approve a plan first."
+      assert html =~ "Task moved to Done"
+      refute html =~ "no approved plan"
 
-      # And the DB confirms the move did NOT persist.
-      assert Repo.get(Task, task.id).status == "backlog"
+      assert Repo.get(Task, task.id).status == "done"
     end
 
-    # Test case 3: mixed sponsor + agent, no plan, drag to done → gate
-    # holds. Agent involvement pulls the plan requirement back in even
-    # when a human sponsor is set (ADR 0042 §sponsor-bypass — the
-    # bypass only fires when no agent is in the loop). Both signals
+    # Test case 3: mixed sponsor + agent, no plan, drag to done. Task
+    # 01a18e02 flipped this deliberately: before it, agent involvement
+    # pulled the plan requirement back in even for a human. Humans are
+    # never plan-gated now, so the drop lands. Both signals
     # (top-level `assignee_type: "agent"` AND
     # `phase_assignees["planning"]`) are stamped so
     # `non_agent_assignment?/1` sees agent involvement no matter which
     # of its two branches evaluates first.
-    test "mixed sponsor + agent task with no plan stays blocked", %{conn: conn} do
+    test "mixed sponsor + agent task with no plan drops to done for a human", %{conn: conn} do
       {conn, user} = authenticated_conn_with_user(conn)
       project = create_project()
       agent = create_agent()
@@ -12944,9 +12944,8 @@ defmodule PlatformWeb.TasksLiveTest do
           "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
         })
 
-      # Precondition assertion: this shape must NOT trigger the bypass
-      # — if it does, the assertion after render_hook fires a false-
-      # negative pass.
+      # Precondition: this shape does NOT trigger the sponsor bypass, so
+      # the drop landing below is the human rule (task 01a18e02), not it.
       refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, user.id})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -12962,10 +12961,10 @@ defmodule PlatformWeb.TasksLiveTest do
 
       html = render(view)
 
-      assert html =~
-               "Cannot move task into Done: no approved plan exists. Create and approve a plan first."
+      assert html =~ "Task moved to Done"
+      refute html =~ "no approved plan"
 
-      assert Repo.get(Task, task.id).status == "backlog"
+      assert Repo.get(Task, task.id).status == "done"
     end
 
     # Test case 4: sponsor-only, no plan, phase-transition BUTTON (not
@@ -12973,8 +12972,8 @@ defmodule PlatformWeb.TasksLiveTest do
     # entry paths honor the bypass — a fix to `kanban_drop` alone
     # wouldn't get this test to pass. Starts at `blocked` because
     # `@valid_task_transitions["blocked"]` includes `in_review` (the
-    # button surface enforces the automated-pipeline table, unlike the
-    # drag surface's permissive `@valid_drop_transitions`) and `blocked`
+    # button surface enforced the automated-pipeline table until task
+    # 01a18e02 gave human actors the human table on both surfaces) and `blocked`
     # is a non-execution status so the gate actually consults the
     # predicate.
     test "phase-transition button on sponsor-only task with no plan succeeds", %{conn: conn} do

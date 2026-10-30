@@ -141,6 +141,58 @@ defmodule Platform.Tasks do
     "cancelled" => []
   }
 
+  # ── Human transition table (task 01a18e02) ───────────────────────────────
+  #
+  # "Agents need limits, humans generally don't" (Ryan, 2026-10-30). A
+  # `{:user, _}` actor may move a task from any status to any of the human
+  # targets below, `backlog`/`planning` -> `done` included. This is a
+  # SEPARATE table on purpose: `@valid_task_transitions` stays the agent and
+  # engine table, and `tool_surface_close_as_delivered_test.exs` pins that
+  # `done` is absent from its `backlog` row (task 01a0a552).
+  #
+  #   * `stack_pending` is never a human target and has no human row: it is
+  #     engine-owned and `Stacks.try_promote/1` is its only exit.
+  #   * `cancelled` stays absorbing (no human row; revival is
+  #     `reinstate_cancelled_task/3`), and as a TARGET it is reachable only
+  #     from the statuses the agent table already lets reach it.
+  #
+  # Read through `allowed_next_statuses/2`, never directly. It replaces the
+  # board-only `@valid_drop_transitions`.
+  @human_targets ~w(backlog planning in_progress in_review deploying done blocked)
+
+  human_transitions =
+    for from <- Task.statuses() -- ~w(cancelled stack_pending), into: %{} do
+      agent_exits = Map.get(@valid_task_transitions, from, [])
+      cancel = if "cancelled" in agent_exits, do: ["cancelled"], else: []
+      {from, (@human_targets -- [from]) ++ cancel}
+    end
+
+  @human_transitions human_transitions
+
+  @doc """
+  The statuses `actor` may move a task in status `from` to.
+
+  A human user actor (`TransitionActor.normalize/1` gives `{"user", id}`
+  with a binary id) gets the human table: any of backlog, planning,
+  in_progress, in_review, deploying, done and blocked other than `from`,
+  plus `cancelled` where the agent table already allows it. A
+  `stack_pending` or `cancelled` task has no human exits.
+
+  Every other actor — agents, `:system`, `:unattributed`, anything
+  unrecognised — gets the agent/engine table, `valid_task_transitions/0`.
+
+  This is the status chokepoint (task 01a18e02): `transition_task/3`,
+  `drop_task_to_column/3` and MCP `task_update` all enforce through it.
+  `transition_valid?/2` deliberately stays agent-table only.
+  """
+  @spec allowed_next_statuses(String.t(), actor() | term()) :: [String.t()]
+  def allowed_next_statuses(from, actor) do
+    case TransitionActor.normalize(actor) do
+      {"user", id} when is_binary(id) -> Map.get(@human_transitions, from, [])
+      _ -> Map.get(@valid_task_transitions, from, [])
+    end
+  end
+
   # ── Projects ─────────────────────────────────────────────────────────────
 
   @doc """
@@ -941,7 +993,7 @@ defmodule Platform.Tasks do
     # Transition table FIRST, so `:invalid_transition` is never masked by a
     # gate error (the plan gate in particular).
     with {:ok, status_changeset, pointer_attrs} <-
-           status_transition_changeset(projected, new_status),
+           status_transition_changeset(projected, new_status, actor),
          # Task 01a11ec3 stage 1: MCP `task_update` with a status change
          # is a status writer and must not be able to move a quarantined
          # external-feedback task into a dispatch-bearing status.
@@ -1962,12 +2014,25 @@ defmodule Platform.Tasks do
   @doc """
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
-  def transition_task_status(%Task{} = task, new_status) do
+  def transition_task_status(%Task{} = task, new_status),
+    do: transition_task_status(task, new_status, :system)
+
+  # Task 01a18e02: the actor picks the transition table
+  # (`allowed_next_statuses/2`). The public `/2` passes `:system`
+  # EXPLICITLY rather than reading the ambient `TransitionActor.current()`:
+  # engine writes such as `park_stack_pending/1` run inside a human's
+  # `with_actor` block when a person approves a plan, and must keep the
+  # agent table (planning -> stack_pending is not a human edge). Only the
+  # human entry points (`transition_task/3`, `apply_task_update/3`) thread
+  # their actor here, so ambient user context never widens an engine or
+  # agent write.
+  defp transition_task_status(%Task{} = task, new_status, actor) do
     with :ok <- require_not_quarantined_for_transition(task, new_status),
          :ok <- require_deploy_target_for(task, new_status),
          :ok <- require_stack_commencement_for(task, new_status),
          :ok <- require_stack_not_shipped_for(task, new_status),
-         {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
+         {:ok, changeset, pointer_attrs} <-
+           status_transition_changeset(task, new_status, actor) do
       case Repo.update(changeset) do
         {:ok, updated} -> after_status_transition(updated, new_status, pointer_attrs)
         error -> error
@@ -1985,8 +2050,8 @@ defmodule Platform.Tasks do
   This is `task_complete`'s guarded path; `task_update`'s is `apply_task_update/3`.
 
   The changeset is built by the SAME private builder `transition_task_status/2`
-  uses (`status_transition_changeset/2`) and the SAME post-write side effects
-  fire (`after_status_transition/3`), so the guarded and unguarded paths cannot
+  uses (`status_transition_changeset/3`, with the agent table) and the SAME
+  post-write side effects fire (`after_status_transition/3`), so the guarded and unguarded paths cannot
   drift in what they write or what they emit — the only difference is the WHERE
   clause.
 
@@ -2015,7 +2080,8 @@ defmodule Platform.Tasks do
          :ok <- require_deploy_target_for(task, new_status),
          :ok <- require_stack_commencement_for(task, new_status),
          :ok <- require_stack_not_shipped_for(task, new_status),
-         {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
+         {:ok, changeset, pointer_attrs} <-
+           status_transition_changeset(task, new_status, :system) do
       changeset
       |> update_if_unmodified(task.id, base_updated_at)
       |> case do
@@ -2031,8 +2097,12 @@ defmodule Platform.Tasks do
   # check, the flat phase pointer and the two metadata clears cannot diverge
   # between them. Returns the pointer attrs alongside the changeset because
   # `after_status_transition/3` needs them to decide whether to re-broadcast.
-  defp status_transition_changeset(%Task{} = task, new_status) do
-    allowed = Map.get(@valid_task_transitions, task.status, [])
+  #
+  # Task 01a18e02: `actor` selects the table through
+  # `allowed_next_statuses/2` — the human table for a user actor, the agent
+  # table for everyone else. Every caller passes it explicitly.
+  defp status_transition_changeset(%Task{} = task, new_status, actor) do
+    allowed = allowed_next_statuses(task.status, actor)
 
     if new_status in allowed do
       # Task 019fb977 stage 4: the flat pointer is derived BEFORE the
@@ -7342,6 +7412,11 @@ defmodule Platform.Tasks do
   Public because downstream UI (`tasks_live.ex` etc.) may want to hide
   the "requires plan" affordance for the current viewer when the bypass
   would apply.
+
+  Task 01a18e02: `require_approved_plan_for/3` now lets every user actor
+  through before it consults this predicate, so the predicate no longer
+  decides any outcome there (it only ever fired for user actors). It is
+  kept as a public, tested description of the old sponsor-only rule.
   """
   @spec sponsor_bypasses_plan_gate?(Task.t(), actor()) :: boolean()
   def sponsor_bypasses_plan_gate?(%Task{} = task, actor) do
@@ -7403,15 +7478,25 @@ defmodule Platform.Tasks do
   (task router, stack manager, webhook controller) stays on the same
   gate they had before task 019f6380 landed.
 
-  Three-arity form consults `sponsor_bypasses_plan_gate?/2`: when the
-  bypass fires (human sponsor, no agent, human actor) the gate opens
-  even without an approved plan.
+  Three-arity form: a human user actor (`{:user, id}`) always passes —
+  humans are never blocked by the plan gate (task 01a18e02). For every
+  other actor it consults `sponsor_bypasses_plan_gate?/2` and the
+  delivered-but-open bypass; both require a human actor, so for
+  non-user actors they never fire and the gate refuses without an
+  approved plan, as before. The quarantine, deploy-target and stack
+  guards are separate and still apply to humans.
   """
   def require_approved_plan_for(%Task{} = task, new_status),
     do: require_approved_plan_for(task, new_status, :system)
 
   def require_approved_plan_for(%Task{} = task, new_status, actor) do
     cond do
+      # Task 01a18e02: humans are never blocked by the plan gate. The gate
+      # exists so an AGENT cannot mark its own work complete; a person
+      # moving a task is the authority the gate defers to.
+      match?({"user", id} when is_binary(id), TransitionActor.normalize(actor)) ->
+        :ok
+
       new_status not in @execution_phase_statuses ->
         :ok
 
@@ -7898,11 +7983,13 @@ defmodule Platform.Tasks do
     do: transition_task(task, new_status, :system)
 
   @doc """
-  Actor-aware variant of `transition_task/2`. `actor` is threaded into
-  `require_approved_plan_for/3` so the sponsor-bypass rule can fire when
-  a human user is moving a sponsor-only task with no agent involvement
-  (see `sponsor_bypasses_plan_gate?/2`). Every other guard behaves
-  identically to `transition_task/2`.
+  Actor-aware variant of `transition_task/2`. `actor` picks the
+  transition table through `allowed_next_statuses/2` (a user gets the
+  human table, task 01a18e02) and is threaded into
+  `require_approved_plan_for/3`, which never blocks a user. A user move
+  to `done` from backlog, planning or blocked is recorded with
+  `via: "human_close"`. Every other guard behaves identically to
+  `transition_task/2`.
   """
   def transition_task(%Task{} = task, new_status, actor) do
     # Task 01a11ec3 stage 1: a quarantined external-feedback task cannot
@@ -7910,13 +7997,15 @@ defmodule Platform.Tasks do
     # persisted trust stamp is authoritative; this guard runs before any
     # other gate so a quarantined task can never enter `planning`,
     # `in_progress`, or any dispatch-bearing status.
-    TransitionActor.with_actor(actor, "transition_task", fn ->
+    via = human_close_via(task, new_status, actor) || "transition_task"
+
+    TransitionActor.with_actor(actor, via, fn ->
       with :ok <- require_not_quarantined_for_transition(task, new_status),
            :ok <- require_deploy_target_for(task, new_status),
            :ok <- require_approved_plan_for(task, new_status, actor),
            :ok <- maybe_prepare_transition(task, new_status),
            {:ok, %{updated: updated, frozen: frozen}} <-
-             transition_with_policy2_freeze(task, new_status) do
+             transition_with_policy2_freeze(task, new_status, actor) do
         # BEFORE the broadcast: `TaskRouter` reacts to `{:task_updated, _}`
         # by re-reading the lease, and it must see the hold already gone.
         maybe_release_needs_human_holds(task, new_status, actor)
@@ -7949,10 +8038,10 @@ defmodule Platform.Tasks do
   # the commencement gate is closed. We stash the whole tuple in the
   # transaction rollback value so the LiveView / MCP caller sees the
   # structured payload, not just the reason atom.
-  defp transition_with_policy2_freeze(%Task{} = task, "in_progress") do
+  defp transition_with_policy2_freeze(%Task{} = task, "in_progress", actor) do
     result =
       Repo.transaction(fn ->
-        case transition_task_status(task, "in_progress") do
+        case transition_task_status(task, "in_progress", actor) do
           {:ok, updated} ->
             case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
               {:ok, frozen_messages} ->
@@ -7979,28 +8068,34 @@ defmodule Platform.Tasks do
     end
   end
 
-  defp transition_with_policy2_freeze(%Task{} = task, new_status) do
-    case transition_task_status(task, new_status) do
+  defp transition_with_policy2_freeze(%Task{} = task, new_status, actor) do
+    case transition_task_status(task, new_status, actor) do
       {:ok, updated} -> {:ok, %{updated: updated, frozen: []}}
       error -> error
     end
   end
 
-  # ── Manual drag-and-drop transitions (permissive) ─────────────────────
+  # ── Manual drag-and-drop transitions ──────────────────────────────────
 
-  # Permissive transitions for manual drag-and-drop on the kanban board.
-  # Unlike @valid_task_transitions (used by the automated pipeline), this
-  # allows humans to override status from the UI — e.g. reopening a done
-  # task, skipping straight to in_progress, etc.
-  @valid_drop_transitions %{
-    "backlog" => ~w(in_progress in_review deploying done),
-    "planning" => ~w(backlog in_progress in_review deploying done),
-    "blocked" => ~w(backlog in_progress in_review deploying done),
-    "in_progress" => ~w(backlog in_review deploying done),
-    "in_review" => ~w(backlog in_progress deploying done),
-    "deploying" => ~w(backlog in_progress in_review done),
-    "done" => ~w(backlog in_progress)
-  }
+  # Task 01a18e02: a human closing a task that never went through execution
+  # (backlog, planning or blocked straight to done) is recorded with its
+  # own `via`, so `task_phase_transitions` tells a human close apart from
+  # an ordinary board drag or panel click. Every other move keeps the
+  # caller's default via (nil here).
+  @human_close_from ~w(backlog planning blocked)
+
+  defp human_close_via(%Task{status: from}, "done", actor) when from in @human_close_from do
+    case TransitionActor.normalize(actor) do
+      {"user", id} when is_binary(id) -> "human_close"
+      _ -> nil
+    end
+  end
+
+  defp human_close_via(_task, _new_status, _actor), do: nil
+
+  # Task 01a18e02: the board-only `@valid_drop_transitions` table is gone.
+  # A drop is checked against `allowed_next_statuses/2`, so a human drag
+  # gets the human table and a `:system` / agent drop gets the agent table.
 
   @drop_target_status %{
     "backlog" => "backlog",
@@ -8013,8 +8108,10 @@ defmodule Platform.Tasks do
   @doc """
   Move a task to a kanban column via manual drag-and-drop.
 
-  Uses permissive transition rules (broader than the automated pipeline)
-  since this represents an intentional human override from the board UI.
+  The two-arity form drops as `:system`, so it is checked against the
+  agent table (`allowed_next_statuses/2`). The board itself calls
+  `drop_task_to_column/3` with the signed-in user, which gets the human
+  table (task 01a18e02).
 
   Returns `{:ok, task}` or `{:error, :invalid_drop | :unknown_column | changeset}`.
   """
@@ -8022,16 +8119,19 @@ defmodule Platform.Tasks do
     do: drop_task_to_column(task, column, :system)
 
   @doc """
-  Actor-aware variant of `drop_task_to_column/2`. `actor` is threaded
-  into `require_approved_plan_for/3` so a human user dropping a
-  sponsor-only task (no agent involvement) can move it across execution
-  columns without an approved plan — see
-  `sponsor_bypasses_plan_gate?/2` for the full rule. Every other guard
-  and the underlying changeset write are unchanged from
-  `drop_task_to_column/2`.
+  Actor-aware variant of `drop_task_to_column/2`. `actor` picks the
+  transition table through `allowed_next_statuses/2` and is threaded into
+  `require_approved_plan_for/3`, which never blocks a human user (task
+  01a18e02). A human drop to `done` from backlog, planning or blocked is
+  recorded with `via: "human_close"`. The stack guards (commencement,
+  shipped) still apply to everyone.
   """
   def drop_task_to_column(%Task{} = task, column, actor) do
-    TransitionActor.with_actor(actor, "drop_task_to_column", fn ->
+    via =
+      human_close_via(task, Map.get(@drop_target_status, column), actor) ||
+        "drop_task_to_column"
+
+    TransitionActor.with_actor(actor, via, fn ->
       do_drop_task_to_column(task, column, actor)
     end)
   end
@@ -8046,7 +8146,7 @@ defmodule Platform.Tasks do
         {:ok, task}
 
       target_status ->
-        allowed = Map.get(@valid_drop_transitions, task.status, [])
+        allowed = allowed_next_statuses(task.status, actor)
 
         cond do
           target_status not in allowed ->
