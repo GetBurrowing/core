@@ -307,7 +307,7 @@ defmodule PlatformWeb.ConnectAiLive do
                 <p class="text-base text-base-content">1. Sign in to ChatGPT.</p>
                 <a
                   id="connect-ai-codex-open"
-                  href={(@login && is_map(@login) && @login.url) || device_url()}
+                  href={device_href(@login)}
                   target="_blank"
                   rel="noopener noreferrer"
                   class="btn btn-primary min-h-11"
@@ -486,7 +486,10 @@ defmodule PlatformWeb.ConnectAiLive do
   defp device_code(%{kind: :device_code, code: code}) when is_binary(code), do: code
   defp device_code(_), do: nil
 
-  defp device_url, do: @device_url
+  # The URL the host read from `codex login --device-auth`, else OpenAI's
+  # measured device page, so step 1 works before the code has arrived.
+  defp device_href(%{kind: :device_code, url: href}) when is_binary(href), do: href
+  defp device_href(_), do: @device_url
 
   defp claude_steps(host, os_user) do
     Enum.join(
