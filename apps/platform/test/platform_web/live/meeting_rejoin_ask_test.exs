@@ -3,7 +3,7 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
   Task 01a1265f stage 2: Ask in a REJOINED ended meeting.
 
   The room empties, `room_finished` ends the meeting and stamps `ended_at`.
-  Someone opens the meeting's page again and auto-joins. The new transcript
+  Someone explicitly joins the call again from the meeting's page. The new transcript
   starts after `ended_at`, so #902's bound in `Meetings.meeting_id_for_space/2`
   resolves it to nil. `MeetingLive`'s transcript clause matches on
   `^meeting_id`, so nothing reaches the ask veil, and the press closes as
@@ -11,7 +11,7 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
 
   The fix resumes the meeting from `maybe_start_meeting/1`, the helper both
   join sites on the meeting page already go through. These tests drive the
-  real path: a connected mount of an ENDED meeting, a real press, and a
+  real path: a connected mount of an ENDED meeting, an explicit Join, a real press, and a
   segment persisted through `Meetings.append_segment/2` on a transcript that
   began after the original end, so the `meeting_id` on the broadcast comes
   from production code, not from the test.
@@ -120,14 +120,15 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
   end
 
   describe "rejoining an ended meeting from its own page" do
-    test "auto-join resumes it; Ask hears the rejoined call, attributed to this meeting",
+    test "explicit Join resumes it; Ask hears the rejoined call, attributed to this meeting",
          %{conn: conn, user: user, meeting: meeting, started_at: started_at, ended_at: ended_at} do
       assert meeting.status == "ended"
 
       {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?tab=canvas")
-      # `:auto_join` is sent to self on the connected mount; a render is a
-      # call into the same process, so it returns after the join ran.
+      # A normal connected page view is read-only for an ended meeting.
       _ = render(view)
+      assert Repo.get!(Meeting, meeting.id).status == "ended"
+      view |> element(~s([data-role="meeting-join"])) |> render_click()
 
       resumed = Repo.get!(Meeting, meeting.id)
       assert resumed.status == "live"
