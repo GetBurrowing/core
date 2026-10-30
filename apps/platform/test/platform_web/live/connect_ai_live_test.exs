@@ -50,7 +50,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     |> Enum.map(&(&1 |> LazyHTML.attribute("data-provider") |> hd()))
   end
 
-  defp select(view, provider) do
+  defp choose(view, provider) do
     view |> form("#connect-ai-options") |> render_change(%{"provider" => provider})
   end
 
@@ -129,7 +129,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
   test "Claude Pro or Max: no input but the radios, no iframe, terminal steps for the agent's account",
        %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
-    html = select(view, "claude_subscription")
+    html = choose(view, "claude_subscription")
 
     assert has_element?(view, "#provider-panel-claude_subscription")
     # Positive control: the radios ARE inputs, outside the panel.
@@ -159,7 +159,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
 
   test "API key: a bad key is refused, a good one is stored and never shown", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
-    select(view, "api_key")
+    choose(view, "api_key")
 
     # A text input exists here (positive control for the Claude test above).
     assert has_element?(view, "#provider-panel-api_key input[type=password]")
