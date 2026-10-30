@@ -12,7 +12,18 @@ defmodule Platform.Social.ClipCaptionRenderer do
   @legacy ~w(plain phrase-pop karaoke)
   @renderer "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4"
   @temporal "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
-  @helper "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce"
+  @runner_artifact Path.expand(
+                     "../../../../../docs/integrations/clip-captions/runner-artifact.json",
+                     __DIR__
+                   )
+  @external_resource @runner_artifact
+  @runner_metadata @runner_artifact |> File.read!() |> Jason.decode!()
+  @helper Map.fetch!(@runner_metadata, "helper_sha256")
+  @helper_version Map.fetch!(@runner_metadata, "helper_version")
+
+  @doc "Release label for the pinned helper identity; ignores receipt annotations."
+  def helper_version(%{"helper_sha256" => @helper}), do: @helper_version
+  def helper_version(_), do: nil
 
   @doc "Selectable styles for the current server-configured executable/helper."
   def styles, do: if(receipt(), do: ClipLook.styles(), else: @legacy)

@@ -330,8 +330,14 @@ defmodule PlatformWeb.SocialClipAppearance do
       </p>
       <details class="text-xs text-subtle" data-role="caption-metadata">
         <summary>Render details</summary>
-        <p class="font-mono text-xs">Preview v1 · CLI 0.9.0 · caption-treatments/1</p>
-        <p :if={@renderer_receipt} class="font-mono text-xs">Qualified renderer · helper 0.9.0</p>
+        <p class="font-mono text-xs">
+          Preview v{ClipCaptionPreviews.metadata()["version"]} · CLI {ClipCaptionPreviews.metadata()[
+            "cli_version"
+          ]} · {ClipCaptionPreviews.metadata()["renderer_contract"]}
+        </p>
+        <p :if={@renderer_receipt} class="font-mono text-xs">
+          Qualified renderer · helper {ClipCaptionRenderer.helper_version(@renderer_receipt)}
+        </p>
         <p :if={!@renderer_receipt}>
           New treatments are unavailable until the renderer is qualified.
         </p>

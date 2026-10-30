@@ -61,6 +61,58 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
     on_exit(fn -> Application.put_env(:platform, :clip_caption_renderer, previous) end)
   end
 
+  test "render details identify the qualified helper artifact rather than stale or caller version copy",
+       %{
+         conn: conn,
+         w: w
+       } do
+    qualify_renderer()
+
+    artifact =
+      File.read!("../../docs/integrations/clip-captions/runner-artifact.json") |> Jason.decode!()
+
+    helper = File.read!("../../docs/integrations/clip-captions/runner/clip_runner.py")
+    assert Base.encode16(:crypto.hash(:sha256, helper), case: :lower) == artifact["helper_sha256"]
+    assert helper =~ ~s(VERSION = "#{artifact["helper_version"]}")
+
+    dockerfile = File.read!("../burrow_release/Dockerfile")
+
+    for file <- ~w(runner-artifact.json preview-assets.json) do
+      assert dockerfile =~
+               "COPY docs/integrations/clip-captions/#{file} /app/docs/integrations/clip-captions/#{file}"
+    end
+
+    # A configured receipt can carry arbitrary annotations; only its pinned helper
+    # digest identifies the release. Never echo an unverified version annotation.
+    receipt = Application.fetch_env!(:platform, :clip_caption_renderer)
+
+    Application.put_env(
+      :platform,
+      :clip_caption_renderer,
+      Map.put(receipt, "helper_version", "99.99.99")
+    )
+
+    child = open(conn, w)
+
+    assert has_element?(
+             child,
+             "[data-role='caption-metadata']",
+             "Qualified renderer · helper #{artifact["helper_version"]}"
+           )
+
+    refute has_element?(child, "[data-role='caption-metadata']", "helper 0.9.0")
+    refute has_element?(child, "[data-role='caption-metadata']", "99.99.99")
+
+    # Changing the pinned identity must change the outcome, not just the label.
+    Application.put_env(
+      :platform,
+      :clip_caption_renderer,
+      Map.put(receipt, "helper_sha256", String.duplicate("0", 64))
+    )
+
+    assert Platform.Social.ClipCaptionRenderer.receipt() == nil
+  end
+
   test "six actual preview cards keep server qualification separate from draft and current", %{
     conn: conn,
     w: w

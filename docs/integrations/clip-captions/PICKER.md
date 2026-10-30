@@ -82,3 +82,11 @@ loading state.
   not in canvas. They use semantic surface/content/muted/primary/error slots,
   truthful copy and native buttons. The canvas's named states and action string
   are retained. These additions do not change the video treatments.
+
+Render details derive preview version, CLI version and contract from
+`preview-assets.json`. The qualified helper label resolves the accepted helper
+digest through `runner-artifact.json`; caller-supplied version annotations are
+ignored. These manifests are embedded at compile time and included in the
+combined release's Docker build. Updating an artifact rebuilds the consuming
+module; no release needs to read repository documentation at runtime. Helper
+labels do not add fields to immutable job qualification snapshots.

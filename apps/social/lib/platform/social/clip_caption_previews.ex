@@ -1,5 +1,17 @@
 defmodule Platform.Social.ClipCaptionPreviews do
   @moduledoc "Actual CLI renders of one authorized excerpt, never simulated caption motion."
+  @manifest Path.expand(
+              "../../../../../docs/integrations/clip-captions/preview-assets.json",
+              __DIR__
+            )
+  @external_resource @manifest
+  @metadata @manifest
+            |> File.read!()
+            |> Jason.decode!()
+            |> Map.take(~w(version cli_version renderer_contract))
+
+  def metadata, do: @metadata
+
   @styles [
     {"plain", "Plain", "A steady, readable caption"},
     {"phrase-pop", "Phrase pop", "Short phrases replace together"},
