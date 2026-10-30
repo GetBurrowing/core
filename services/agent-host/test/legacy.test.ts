@@ -106,7 +106,7 @@ function legacyHost(ids: string[], groups = "root:x:0:\nsuite-agents:x:990:\n"):
   fs.put(`${UNIT_DIR}/suite-agent@.service`, "# legacy template\n");
   ids.forEach((id, i) => {
     fs.put(`${legacyDropInDir(id)}/10-agent.conf`, LEGACY_CONF);
-    fs.put(`${LEGACY_ENV_DIR}/${id}.env`, `SUITE_AGENT_ID=${id}\n`, 0o600, 1001 + i, 990);
+    fs.put(`${LEGACY_ENV_DIR}/${id}.env`, `LEGACY_AGENT_ID=${id}\n`, 0o600, 1001 + i, 990);
     fs.put(`${LEGACY_ENV_DIR}/${id}.files.json`, '{"CLAUDE.md":3}\n', 0o600, 0, 0);
   });
   return fs;
@@ -151,7 +151,7 @@ describe("legacy suite-agent@ adoption", () => {
     await adopt(fs);
     for (const [i, id] of [A, B].entries()) {
       expect(fs.exists(`${LEGACY_ENV_DIR}/${id}.env`)).toBe(false);
-      expect(fs.files.get(envFile(id))).toEqual({ content: `SUITE_AGENT_ID=${id}\n`, mode: 0o600, uid: 1001 + i, gid: 990 });
+      expect(fs.files.get(envFile(id))).toEqual({ content: `LEGACY_AGENT_ID=${id}\n`, mode: 0o600, uid: 1001 + i, gid: 990 });
       expect(fs.exists(`${LEGACY_ENV_DIR}/${id}.files.json`)).toBe(false);
       expect(fs.files.get(appliedFile(id))?.content).toBe('{"CLAUDE.md":3}\n');
     }

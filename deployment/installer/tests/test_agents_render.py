@@ -282,7 +282,6 @@ class FullMachineTest(unittest.TestCase):
                 "CLAUDE_CODE_VERSION",
                 "CODEX_VERSION",
                 "NODE_VERSION",
-                "SUITE_CLI_REF",
             ],
         )
         perms, text = self.files[agents.VERSIONS_PATH]
@@ -308,11 +307,8 @@ class FullMachineTest(unittest.TestCase):
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", text)
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", self.rendered.files["secrets.env"][0])
         self.assertIn("AGENT_HOST_PROFILE=full_machine\n", text)
-        self.assertIn(
-            "BURROW_CORE_URL=https://burrow-01a0d69d.test\n"
-            "SUITE_CORE_URL=https://burrow-01a0d69d.test\n",
-            text,
-        )
+        self.assertIn("BURROW_CORE_URL=https://burrow-01a0d69d.test\n", text)
+        self.assertNotIn("SUITE_", text)
         # Only that: no other secret of the install reaches the host daemon.
         others = [v for k, v in self.rendered.generated.items() if k != "AGENT_HOST_TOKEN"]
         self.assertTrue(others)
@@ -399,8 +395,7 @@ class ContainedTest(unittest.TestCase):
         )
         block = self.services["agent-host"]
         self.assertIn('BURROW_CORE_URL: "http://core-platform:4000"', block)
-        self.assertIn('SUITE_CORE_URL: "http://core-platform:4000"', block)
-        self.assertLess(block.index("BURROW_CORE_URL"), block.index("SUITE_CORE_URL"))
+        self.assertNotIn("SUITE_", block)
         self.assertIn('AGENT_HOST_PROFILE: "contained"', self.services["agent-host"])
 
     def test_agent_host_runs_systemd_with_persistent_homes(self):

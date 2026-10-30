@@ -9,36 +9,16 @@
 #   BURROW_RUNTIME_ID     e.g. dev-zip-rt
 #   BURROW_TOKEN          bearer minted by the Suite admin UI
 #
-# The legacy SUITE_PORT, SUITE_AGENT_SLUG, SUITE_RUNTIME_ID and SUITE_TOKEN
-# names still work and print a deprecation line on stderr.
-#
 # Idempotent: re-running with the same env will overwrite the channel account,
 # MCP server, and persona for BURROW_AGENT_SLUG.
 set -euo pipefail
 
-# compat BURROW_NAME LEGACY_NAME: set and export the BURROW_ variable from
-# itself, else from the legacy name with one deprecation line on stderr. An
-# empty value counts as unset; when both are set the BURROW_ value wins.
-compat() {
-  burrow=$1 suite=$2
-  eval "b=\${$burrow:-} s=\${$suite:-}"
-  if [ -z "$b" ]; then
-    if [ -z "$s" ]; then
-      echo "must export $burrow (or legacy $suite)" >&2
-      exit 1
-    fi
-    echo "deprecated: $suite is set; rename it to $burrow" >&2
-    eval "$burrow=\$s"
-  fi
-  export "${burrow?}"
-}
-
 : "${OPENCLAW_STATE_DIR:?must export OPENCLAW_STATE_DIR}"
 : "${OPENCLAW_GATEWAY_PORT:?must export OPENCLAW_GATEWAY_PORT}"
-compat BURROW_PORT SUITE_PORT
-compat BURROW_AGENT_SLUG SUITE_AGENT_SLUG
-compat BURROW_RUNTIME_ID SUITE_RUNTIME_ID
-compat BURROW_TOKEN SUITE_TOKEN
+: "${BURROW_PORT:?must export BURROW_PORT}"
+: "${BURROW_AGENT_SLUG:?must export BURROW_AGENT_SLUG}"
+: "${BURROW_RUNTIME_ID:?must export BURROW_RUNTIME_ID}"
+: "${BURROW_TOKEN:?must export BURROW_TOKEN}"
 
 mkdir -p "$OPENCLAW_STATE_DIR"
 

@@ -198,10 +198,6 @@ into the sandbox, wire the plugin from already-exported env vars (`BURROW_PORT`,
 the WebSocket + MCP path. Step 2 (creating the Burrow agent + runtime + bearer)
 remains a manual UI flow because it's a security boundary.
 
-The helper still accepts the legacy `SUITE_PORT`, `SUITE_AGENT_SLUG`,
-`SUITE_RUNTIME_ID` and `SUITE_TOKEN` names and prints one deprecation line per
-legacy name it falls back to.
-
 ## Common failures
 
 | Symptom | Likely cause | Fix |

@@ -15,7 +15,7 @@ Design:
 - Secret values are only ever compared in memory; no test prints one.
 
 Regenerate golden files after an intended change with
-``BURROW_INSTALL_UPDATE_GOLDEN=1`` (legacy ``SUITE_INSTALL_UPDATE_GOLDEN=1``)
+``BURROW_INSTALL_UPDATE_GOLDEN=1``
 and review the diff.
 """
 
@@ -43,7 +43,7 @@ sys.path.insert(0, INSTALLER)
 from identity_terms import identity_hits, planted_term
 from migrate_embed import cut_migrate_script
 
-from burrow_install import envcompat, registry
+from burrow_install import registry
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
@@ -156,7 +156,7 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
         redacted = build(manifest_from(GOLDEN_CASES[case])).redacted()
         golden_dir = os.path.join(GOLDEN, case)
-        if envcompat.get("BURROW_INSTALL_UPDATE_GOLDEN", "SUITE_INSTALL_UPDATE_GOLDEN") == "1":
+        if os.environ.get("BURROW_INSTALL_UPDATE_GOLDEN") == "1":
             shutil.rmtree(golden_dir, ignore_errors=True)
             for rel, text in redacted.items():
                 path = os.path.join(golden_dir, rel)

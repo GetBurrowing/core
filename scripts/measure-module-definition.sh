@@ -10,11 +10,10 @@
 #   RUNS=1 scripts/measure-module-definition.sh <ref> bogus     # positive control: every row exit != 0
 #
 # Variants default to `compiled interpreted`. Each name is passed straight
-# through as both BURROW_MODULE_DEFINITION and SUITE_MODULE_DEFINITION
-# (apps/platform/mix.exs module_definition_opts/0 reads BURROW_ first; a ref
-# older than task 01a14b9e reads only SUITE_, so both are always set and
-# carry the same value), so a new variant is an argument, not a code
-# change. An unknown name is NOT a fast win: the hook's Mix.raise makes that
+# through as BURROW_MODULE_DEFINITION (apps/platform/mix.exs
+# module_definition_opts/0), so a new variant is an argument, not a code
+# change. A ref older than task 01a14b9e reads only the pre-rename name and
+# is not measurable with this script since task 01a18dab. An unknown name is NOT a fast win: the hook's Mix.raise makes that
 # row's exit_code non-zero and it is excluded from the medians.
 #
 # METHOD
@@ -24,7 +23,7 @@
 #   * Every run is a fresh container that removes apps/platform/_build, rebuilds
 #     deps UNTIMED-but-recorded (`MIX_ENV=test mix deps.compile`; the option
 #     does not apply to deps, so timing them would dilute the ratio with a
-#     constant), then times `BURROW_MODULE_DEFINITION=<v> SUITE_MODULE_DEFINITION=<v>
+#     constant), then times `BURROW_MODULE_DEFINITION=<v>
 #     MIX_ENV=test mix compile`
 #     with `date +%s%N` (the slim image has no /usr/bin/time).
 #   * Rounds are INTERLEAVED: odd rounds run the variants in the given order,
@@ -148,7 +147,7 @@ for ((round = 1; round <= RUNS; round++)); do
             rm -rf _build
             t0=$(date +%s%N); mix deps.compile >/dev/null 2>&1; drc=$?; t1=$(date +%s%N)
             echo "@@DEPS $((t1 - t0)) $drc"
-            t0=$(date +%s%N); BURROW_MODULE_DEFINITION="$v" SUITE_MODULE_DEFINITION="$v" mix compile; rc=$?; t1=$(date +%s%N)
+            t0=$(date +%s%N); BURROW_MODULE_DEFINITION="$v" mix compile; rc=$?; t1=$(date +%s%N)
             n=$(find _build/test/lib/platform/ebin -name "*.beam" 2>/dev/null | wc -l)
             echo "@@COMPILE $((t1 - t0)) $rc $n"
         ' 2>&1)
@@ -196,7 +195,7 @@ if [ "${WARM_CHECK:-0}" = "1" ] && [ -n "${last_variant:-}" ]; then
         echo
         log "WARM_CHECK: _build is warm from '$last_variant'; compiling '$other' with no rm" | tee -a "$LOG"
         ctr "$CTR_PREFIX-warm-$$" '
-            t0=$(date +%s%N); BURROW_MODULE_DEFINITION='"$other"' SUITE_MODULE_DEFINITION='"$other"' mix compile 2>&1 | grep -E "^Compiling|^Generated|error" ; rc=${PIPESTATUS[0]}; t1=$(date +%s%N)
+            t0=$(date +%s%N); BURROW_MODULE_DEFINITION='"$other"' mix compile 2>&1 | grep -E "^Compiling|^Generated|error" ; rc=${PIPESTATUS[0]}; t1=$(date +%s%N)
             echo "@@WARM other='"$other"' exit $rc ns $((t1 - t0)) (no Compiling line above = NOT recompiled)"
         '
     fi

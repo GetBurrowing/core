@@ -1,23 +1,24 @@
 defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
   @moduledoc """
-  Text guard for the Burrow env-var rename (task 01a14b9e): every in-scope
-  `SUITE_X` env name is read BURROW_X first with a SUITE_X fallback, and every
-  writer emits both. Readers name both full literals at the call site, which
-  is what makes this text scan able to see them.
+  Text guard for the finished Burrow env-name rename (task 01a18dab, stage 2;
+  the bridge it replaces was task 01a14b9e's). No tracked file names a
+  `SUITE_` env name any more, and no reader falls back to one.
 
-  The three name lists below are RAW LITERALS, typed out by hand. They are
-  deliberately not derived from a scan, a config file or a list of call
-  sites: a derived set agrees with whatever the tree says, so it cannot see
-  an omission. A new `SUITE_` name, a name dropped from a list, or a reader
-  that loses its BURROW_ twin each fail here.
+  The invariant: every token matching `(?<![A-Z0-9_])SUITE_[A-Z0-9_]+` in a
+  tracked, non-exempt file is on @keep, a hand-typed list where each entry
+  carries its reason. Anything else fails, naming `path:line:token`.
 
-  What this guard does NOT see, stated as its scope: it is file-granular. It
-  checks that a file naming SUITE_X also names BURROW_X somewhere, not that
-  every SUITE_X occurrence has a BURROW_X partner beside it. A writer that
-  drops one of two emitted lines while the file still names BURROW_X
-  elsewhere passes here; the per-language unit tests own that case. It also
-  cannot see a name built from a suffix (`"SUITE_" <> x`), which the rename
-  contract forbids for that reason.
+  @keep holds SUFFIXES and the guard compares against `"SUITE" <> "_" <>
+  suffix`, so this file carries no `SUITE_` token of its own and does not
+  show up in the ticket's grep
+  (`grep -rhoE '\\bSUITE_[A-Z0-9_]{2,}' apps services deployment clients`).
+  Tests may build a legacy name this way to prove it is ignored; readers may
+  not, and a reader that builds one is invisible to this text scan. That is
+  the scope this guard covers, stated as scope: literal tokens in tracked
+  text, plus the one embedded Xcode spelling below.
+
+  The list is typed out, not derived from a scan: a derived list agrees
+  with whatever the tree says, so it cannot see an addition.
   """
   use ExUnit.Case, async: true
 
@@ -25,65 +26,57 @@ defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
   # adr_corpus_packaging_test.exs).
   @repo_root Path.expand("../../../../..", __DIR__)
 
-  # In-scope names: BURROW_ twin required wherever these appear. 34, exactly.
-  @fallback_names ~w(
-    SUITE_RUNNERD_BASE_URL SUITE_RUNNERD_TOKEN SUITE_RUNNERD_HOST SUITE_RUNNERD_PORT
-    SUITE_RUNNERD_STATE_DIR SUITE_RUNNER_IMAGE SUITE_RUNNER_NETWORK SUITE_MODULE_DEFINITION
-    SUITE_EXTENSIONS_JS SUITE_EXTENSION_LITERAL SUITE_HEROICONS_DIR SUITE_CORE_URL
-    SUITE_AGENT_ID SUITE_AGENT_SESSION SUITE_UNATTENDED SUITE_CLI_REF SUITE_INSTALL_DIR
-    SUITE_INSTALL_UPDATE_GOLDEN SUITE_INSTALL_TEST_POCKETID_URL SUITE_INSTALL_TEST_POCKETID_KEY
-    SUITE_RUNTIME_TOKEN SUITE_BASE_URL SUITE_URL SUITE_TOKEN SUITE_SPACE_ID SUITE_PORT
-    SUITE_AGENT_SLUG SUITE_RUNTIME_ID SUITE_MEETING_PROBE_URL SUITE_MEETING_PROBE_TOKEN
-    SUITE_MEETING_PROBE_ROOM SUITE_MEETING_PROBE_NAME SUITE_MEETING_PROBE_CALLKIT
-    SUITE_RENDER_DIR
-  )
-
-  # Names that keep their SUITE_ spelling: push category/action ids compiled
-  # into installed iOS apps (a follow-up owns them), SUITE_CONVENTIONS
-  # (suite-cli task 01a14b9f) and SUITE_CHANNEL_BUILD (the channel plugin's).
-  @out_of_scope ~w(
-    SUITE_MENTION SUITE_OPEN SUITE_RING_WAITING SUITE_REPLY SUITE_OPEN_ACTION
-    SUITE_MESSAGE SUITE_CONVENTIONS SUITE_CHANNEL_BUILD
-  )
-
-  # Renamed with no shim (shell locals, TS consts, Xcode build settings that
-  # no installed binary reads). The SUITE_ spelling must not come back.
-  @renamed_outright ~w(
-    SUITE_WS SUITE_MCP SUITE_NET SUITE_APS_ENVIRONMENT SUITE_PUSH_ENVIRONMENT
-    SUITE_CLI_LIB SUITE_CLI_KEY_VECTOR
-  )
-
-  # The Xcode test-runner form. Xcode strips `TEST_RUNNER_` and passes the
-  # rest, so the repo spells it TEST_RUNNER_SUITE_RENDER_DIR; a substring
-  # check on RUNNER_SUITE_RENDER_DIR covers both spellings. The token regex
-  # cannot see it (the `_` before SUITE_ is a word character).
-  @embedded_pairs [{"RUNNER_SUITE_RENDER_DIR", "RUNNER_BURROW_RENDER_DIR"}]
+  # Suffix => reason. Six entries, all mobile push category/action ids.
+  # Measured 2026-10-30 with Platform.Mobile.push_category_adoption() over
+  # prod rpc: legacy iOS rows were nonzero on each of the three prod
+  # installs (2, 1, 1), so renaming would stop those devices showing actions. Remove an entry only
+  # when ios.legacy == 0 and android.legacy == 0 on every install.
+  @keep %{
+    "MENTION" =>
+      "push category id compiled into installed iOS/Android builds; stored-data identifier, not an env name",
+    "OPEN" =>
+      "push category id compiled into installed iOS/Android builds; stored-data identifier, not an env name",
+    "RING_WAITING" =>
+      "push category id compiled into installed iOS builds; stored-data identifier, not an env name",
+    "REPLY" =>
+      "notification action id registered by installed iOS builds under the legacy categories",
+    "OPEN_ACTION" =>
+      "notification action id registered by installed iOS builds under the legacy categories",
+    "MESSAGE" =>
+      "legacy push category spelling used as an incoming-payload fixture in IntentsTests.swift"
+  }
 
   # Literal path prefixes, each with its reason.
   @exempt_prefixes [
-    # Historical audit records; their prose rebrand belongs to task A2.
+    # Historical audit records.
     "audit/",
-    # Dated engineering notes; historical, A2 owns them.
+    # Dated engineering notes; historical.
     "apps/platform/notes/",
-    # Accepted ADRs are records of what was decided at the time; A2 owns them.
+    # Accepted ADRs record what was decided at the time.
     "docs/decisions/",
-    # This file names every SUITE_ literal on purpose.
-    "apps/platform/test/platform/regression/burrow_env_fallback_guard_test.exs"
+    # Release notes record what shipped at the time.
+    "CHANGELOG"
   ]
 
   # A token starts at any character that is not an uppercase letter, digit or
-  # underscore. Stricter than `\b`: `\b` misses `\nSUITE_AGENT_ID` inside a
-  # JS template literal, because the `n` of `\n` is a word character.
+  # underscore. Stricter than `\b`: `\b` misses a token written right after
+  # a `\n` escape inside a JS template literal, because the `n` of `\n` is a
+  # word character.
   @suite_token ~r/(?<![A-Z0-9_])SUITE_[A-Z0-9_]+/
-  @burrow_token ~r/(?<![A-Z0-9_])BURROW_[A-Z0-9_]+/
+
+  # The Xcode test-runner form: Xcode strips `TEST_RUNNER_` and passes the
+  # rest, so the old spelling was TEST_RUNNER_ + legacy RENDER_DIR. The token
+  # regex cannot see it (the `_` before it is a word character), so it gets a
+  # substring check of its own.
+  @embedded_legacy ["RUNNER_" <> "SUITE" <> "_RENDER_DIR"]
+
+  defp keep_names, do: MapSet.new(Map.keys(@keep), &("SUITE" <> "_" <> &1))
 
   defp tracked_files do
     # CI's Test job runs as root in a container over a workspace the runner's
     # uid owns, so git refuses the repo as "dubious ownership" (exit 128).
-    # actions/checkout writes its safe.directory entry under a temporary HOME
-    # that later steps do not read. Command-line config is protected
-    # configuration, so git honours it here; the > 1000 positive control
-    # below still fires on any other failure to list the tree.
+    # Command-line config is protected configuration, so git honours it here;
+    # the > 1000 positive control below still fires on any other failure.
     {out, 0} =
       System.cmd("git", ["-c", "safe.directory=#{@repo_root}", "ls-files", "-z"], cd: @repo_root)
 
@@ -99,8 +92,6 @@ defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
     end)
   end
 
-  defp tokens(regex, body), do: regex |> Regex.scan(body) |> List.flatten() |> MapSet.new()
-
   defp suite_occurrences(body) do
     body
     |> String.split("\n")
@@ -115,76 +106,54 @@ defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
     # Positive control: the scan must have something to scan. An empty file
     # list (no .git, wrong root) would make every check below pass silently.
     assert length(files) > 1000, "git ls-files under #{@repo_root} returned #{length(files)}"
-    assert Enum.any?(files, fn {path, _} -> path == "scripts/suite_runnerd.py" end)
+
+    # The scan reaches every directory the rename covers, scripts/ included.
+    for path <- [
+          "apps/platform/config/runtime.exs",
+          "services/agent-host/src/main.ts",
+          "deployment/installer/burrow_install/setup/state.py",
+          "clients/ios/ios/App/App/BurrowBridgeViewController.swift",
+          "scripts/suite_runnerd.py",
+          "skills/openclaw-isolated-gateway/scripts/setup-isolated-gateway.sh"
+        ] do
+      assert Enum.any?(files, fn {p, _} -> p == path end), "#{path} is not in the scan"
+    end
+
     %{files: files}
   end
 
-  test "(A) the literal lists have their fixed sizes and are pairwise disjoint" do
-    assert length(@fallback_names) == 34
-    assert length(@out_of_scope) == 8
-    assert length(@renamed_outright) == 7
-
-    assert Enum.uniq(@fallback_names ++ @out_of_scope ++ @renamed_outright) ==
-             @fallback_names ++ @out_of_scope ++ @renamed_outright
-
-    for {a, b} <- [
-          {@fallback_names, @out_of_scope},
-          {@fallback_names, @renamed_outright},
-          {@out_of_scope, @renamed_outright}
-        ] do
-      assert MapSet.disjoint?(MapSet.new(a), MapSet.new(b))
-    end
+  test "the keep-list is the six push ids, each with a reason" do
+    assert map_size(@keep) == 6
+    for {suffix, reason} <- @keep, do: assert(String.length(reason) > 20, suffix)
   end
 
-  test "(B) every SUITE_ token in the tree is a listed fallback or out-of-scope name",
-       %{files: files} do
-    known = MapSet.new(@fallback_names ++ @out_of_scope)
+  test "every SUITE_ token in a tracked file is on the keep-list", %{files: files} do
+    keep = keep_names()
 
     unknown =
       for {path, body} <- files,
           {line, token} <- suite_occurrences(body),
-          not MapSet.member?(known, token),
+          not MapSet.member?(keep, token),
           do: "#{path}:#{line}:#{token}"
 
     assert unknown == [],
-           "SUITE_ tokens not in @fallback_names or @out_of_scope " <>
-             "(bridge them BURROW-first and add them to the literal list, " <>
-             "or rename them):\n" <> Enum.join(unknown, "\n")
+           "SUITE_ tokens not on the keep-list (rename them to BURROW_; a keep entry " <>
+             "needs a reason that it is not an env name):\n" <> Enum.join(unknown, "\n")
   end
 
-  test "(C) no file still names a SUITE_ spelling that was renamed outright",
-       %{files: files} do
-    renamed = MapSet.new(@renamed_outright)
-
+  test "the embedded Xcode test-runner spelling is gone", %{files: files} do
     hits =
       for {path, body} <- files,
-          {line, token} <- suite_occurrences(body),
-          MapSet.member?(renamed, token),
-          do: "#{path}:#{line}:#{token}"
+          old <- @embedded_legacy,
+          String.contains?(body, old),
+          do: "#{path}: names #{old}"
 
-    assert hits == [], "renamed-outright names reappeared:\n" <> Enum.join(hits, "\n")
+    assert hits == [], Enum.join(hits, "\n")
   end
 
-  test "(D) every file naming an in-scope SUITE_X also names BURROW_X", %{files: files} do
-    missing =
-      for {path, body} <- files,
-          suite = tokens(@suite_token, body),
-          burrow = tokens(@burrow_token, body),
-          name <- @fallback_names,
-          MapSet.member?(suite, name),
-          twin = "BURROW_" <> String.replace_prefix(name, "SUITE_", ""),
-          not MapSet.member?(burrow, twin),
-          do: "#{path}: names #{name} but not #{twin}"
-
-    embedded =
-      for {path, body} <- files,
-          {old, new} <- @embedded_pairs,
-          String.contains?(body, old),
-          not String.contains?(body, new),
-          do: "#{path}: names #{old} but not #{new}"
-
-    assert missing ++ embedded == [],
-           "SUITE_ names without their BURROW_ twin in the same file:\n" <>
-             Enum.join(missing ++ embedded, "\n")
+  test "runtime.exs has no compat_env bridge" do
+    body = File.read!(Path.join(@repo_root, "apps/platform/config/runtime.exs"))
+    refute body =~ "compat_env"
+    assert body =~ ~s{"BURROW_RUNNERD_BASE_URL"}
   end
 end

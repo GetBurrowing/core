@@ -71,9 +71,6 @@ LABEL="Tasks page renders without error" \
 skills/agent-screenshot-and-canvas/scripts/screenshot-to-review.sh
 ```
 
-The legacy `SUITE_URL`, `SUITE_TOKEN` and `SUITE_SPACE_ID` names still work;
-the script prints one deprecation line per legacy name it falls back to.
-
 What the script does, end to end:
 
 ```

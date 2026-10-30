@@ -253,7 +253,7 @@ defmodule Platform.Agents.AgentRuntime do
       See `client_started_at/1` for why it is a one-way test.
 
   Implementers: `claude-code-suite-channel` (git at module load, or the
-  docker image's `SUITE_CHANNEL_BUILD`) from 85e499f, and
+  docker image's `BURROW_CHANNEL_BUILD`) from 85e499f, and
   `openclaw-suite-channel` (a `build-info.json` stamped by
   install.sh/update.sh/`npm run build`) from 098cfec.
 

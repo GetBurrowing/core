@@ -19,13 +19,9 @@ for name in NODE_VERSION BUN_VERSION CLAUDE_CODE_VERSION CODEX_VERSION; do
 	eval "value=\${$name:-}"
 	[ -n "$value" ] || { echo "install-tools: $name is not set in $versions" >&2; exit 1; }
 done
-# suite-cli's pin: BURROW_CLI_REF, else the legacy SUITE_CLI_REF. Blank is unset.
+# burrow-cli's pin. Blank is unset.
 cli_ref="$(printf '%s' "${BURROW_CLI_REF:-}" | tr -d '[:space:]')"
-if [ -z "$cli_ref" ]; then
-	cli_ref="$(printf '%s' "${SUITE_CLI_REF:-}" | tr -d '[:space:]')"
-	[ -n "$cli_ref" ] || { echo "install-tools: BURROW_CLI_REF (or legacy SUITE_CLI_REF) is not set in $versions" >&2; exit 1; }
-	echo "deprecated: SUITE_CLI_REF is set; rename it to BURROW_CLI_REF" >&2
-fi
+[ -n "$cli_ref" ] || { echo "install-tools: BURROW_CLI_REF is not set in $versions" >&2; exit 1; }
 
 case "$(uname -m)" in
 x86_64) node_arch=x64 ;;
@@ -70,8 +66,8 @@ npm install --global --no-fund --no-audit --loglevel=error \
 curl -fsSL "https://raw.githubusercontent.com/GetBurrowing/burrow-cli/$cli_ref/install.sh" \
 	-o "$tmp/burrow-install.sh"
 rm -f /usr/local/bin/burrow /usr/local/bin/suite
-# suite-cli 969c6f7 reads only SUITE_CLI_REF, so pass both names.
-PATH="/usr/local/bin:$PATH" BURROW_CLI_REF="$cli_ref" SUITE_CLI_REF="$cli_ref" XDG_BIN_HOME=/usr/local/bin \
+# burrow-cli's install.sh (9a8ef75 and later) reads BURROW_CLI_REF.
+PATH="/usr/local/bin:$PATH" BURROW_CLI_REF="$cli_ref" XDG_BIN_HOME=/usr/local/bin \
 	XDG_DATA_HOME=/usr/local/share sh "$tmp/burrow-install.sh" </dev/null >/dev/null
 chmod -R a+rX /usr/local/share/burrow
 

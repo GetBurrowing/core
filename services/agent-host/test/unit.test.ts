@@ -22,7 +22,6 @@ import {
 } from "../src/ids.ts";
 import { loginScreenStatus, observe, parseShow, parseStart, renderEnvFile } from "../src/agents.ts";
 import { PACKAGED_RUNNER, dropIn, templateUnit } from "../src/units.ts";
-import { readEnv, resetEnvWarnings } from "../src/env.ts";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { PhoenixChannel, agentHostUrl, backoffMs, type SocketLike } from "../src/phoenix.ts";
@@ -31,7 +30,7 @@ import { READ_SCRIPT, detectDrift, isFileKey, parseFiles, redactForRead, sha256H
 import type { Runner } from "../src/exec.ts";
 import { LOGIN_MARKERS, captureArgv, redactPane, scrubLine } from "../src/pane.ts";
 import { Host, withAuth, type AuthDeps } from "../src/host.ts";
-import { FALLBACK, HEADER, loadSuiteConventions, renderUserMemory, userMemoryPath, writeUserMemory } from "../src/conventions.ts";
+import { FALLBACK, HEADER, loadBurrowConventions, renderUserMemory, userMemoryPath, writeUserMemory } from "../src/conventions.ts";
 import { ensureAgentUser } from "../src/users.ts";
 import { homeDir } from "../src/ids.ts";
 import { checkApiKey, parseEnvFile, type Fetch } from "../src/auth.ts";
@@ -72,19 +71,12 @@ describe("names", () => {
     for (const n of ["HOME", "PATH", "LD_PRELOAD", "TMUX_TMPDIR", "lower", "A-B"]) expect(isAgentEnvName(n)).toBe(false);
   });
 
-  test("the host-set agent id is reserved in both spellings, and so are the unit's BURROW_ twins", () => {
+  test("the unit's host-set names are reserved", () => {
     // systemd lets EnvironmentFile= override Environment=, so an owner env
-    // entry BURROW_AGENT_ID would beat the unit's id for every BURROW-first reader.
-    for (const n of ["BURROW_AGENT_ID", "SUITE_AGENT_ID", "BURROW_AGENT_SESSION", "BURROW_UNATTENDED"]) {
+    // entry BURROW_AGENT_ID would beat the unit's id.
+    for (const n of ["BURROW_AGENT_ID", "BURROW_AGENT_SESSION", "BURROW_UNATTENDED"]) {
       expect(isAgentEnvName(n)).toBe(false);
     }
-  });
-
-  test("the unit's SUITE_ session and unattended names are reserved too", () => {
-    // The unit writes both spellings; an owner SUITE_ entry would beat the
-    // unit's value for every reader still on the old name (suite-cli).
-    expect(isAgentEnvName("SUITE_AGENT_SESSION")).toBe(false);
-    expect(isAgentEnvName("SUITE_UNATTENDED")).toBe(false);
   });
 
   test("every reserved name is refused, and a near neighbour of each is not (A1's RESERVED_ENV, kept across the rename)", () => {
@@ -96,11 +88,8 @@ describe("names", () => {
       "TMUX",
       "TMUX_TMPDIR",
       "BURROW_AGENT_ID",
-      "SUITE_AGENT_ID",
       "BURROW_AGENT_SESSION",
-      "SUITE_AGENT_SESSION",
       "BURROW_UNATTENDED",
-      "SUITE_UNATTENDED",
       "LD_PRELOAD",
       "LD_LIBRARY_PATH",
     ];
@@ -142,18 +131,15 @@ describe("units", () => {
   });
 
   test("every agent launch is marked unattended, so suite-cli seeds Claude's onboarding", () => {
-    expect(templateUnit(PACKAGED_RUNNER)).toContain("Environment=SUITE_UNATTENDED=1\n");
+    expect(templateUnit(PACKAGED_RUNNER)).toContain("Environment=BURROW_UNATTENDED=1\n");
   });
 
-  test("the unit writes every host-set name as BURROW_ then SUITE_, same value", () => {
+  test("the unit writes every host-set name once, in its BURROW_ spelling only", () => {
     const unit = templateUnit(PACKAGED_RUNNER);
-    for (const [burrow, suite] of [
-      ["Environment=BURROW_AGENT_ID=%i\n", "Environment=SUITE_AGENT_ID=%i\n"],
-      ["Environment=BURROW_AGENT_SESSION=suite-agent\n", "Environment=SUITE_AGENT_SESSION=suite-agent\n"],
-      ["Environment=BURROW_UNATTENDED=1\n", "Environment=SUITE_UNATTENDED=1\n"],
-    ] as const) {
-      expect(unit).toContain(`${burrow}${suite}`);
-    }
+    expect(unit).toContain(
+      "Environment=BURROW_AGENT_ID=%i\nEnvironment=BURROW_AGENT_SESSION=suite-agent\nEnvironment=BURROW_UNATTENDED=1\n",
+    );
+    expect(unit).not.toMatch(/SUITE_/);
   });
 
   test("agents never auto-update the pinned CLIs and trust the system CA bundle", () => {
@@ -190,10 +176,9 @@ describe("agent.start payloads", () => {
     expect(parseStart({ ...good, runtime_id: "a b" })).toBeString();
     expect(parseStart({ ...good, core_url: "file:///etc/passwd" })).toBeString();
     expect(parseStart({ ...good, env: { PATH: "/tmp" } })).toBeString();
-    for (const n of ["BURROW_AGENT_ID", "SUITE_AGENT_ID", "BURROW_AGENT_SESSION", "SUITE_AGENT_SESSION", "BURROW_UNATTENDED", "SUITE_UNATTENDED"]) {
+    for (const n of ["BURROW_AGENT_ID", "BURROW_AGENT_SESSION", "BURROW_UNATTENDED"]) {
       expect(parseStart({ ...good, env: { [n]: "attacker" } })).toBe(`env name ${n} is not allowed`);
     }
-    expect(parseStart({ ...good, env: { SUITE_AGENT_ID: "attacker-id" } })).toBe("env name SUITE_AGENT_ID is not allowed");
     expect(parseStart({ ...good, env: { BURROW_AGENT_ID: "attacker-id" } })).toBe("env name BURROW_AGENT_ID is not allowed");
     expect(parseStart({ ...good, env: { X: "a\nB=c" } })).toBeString();
     expect(parseStart({ ...good, runtime_token: "" })).toBeString();
@@ -201,7 +186,7 @@ describe("agent.start payloads", () => {
 
   test("the env file carries only this agent's values, quoted", () => {
     expect(renderEnvFile(A, { ANTHROPIC_API_KEY: "sk-'x" })).toBe(
-      `# Managed by Suite's agent host. This agent's values only.\nBURROW_AGENT_ID=${A}\nSUITE_AGENT_ID=${A}\nANTHROPIC_API_KEY='sk-\\'x'\n`,
+      `# Managed by Suite's agent host. This agent's values only.\nBURROW_AGENT_ID=${A}\nANTHROPIC_API_KEY='sk-\\'x'\n`,
     );
   });
 });
@@ -564,7 +549,8 @@ describe("the API key reaches only its own agent's env file", () => {
     expect(typeof cmd).toBe("object");
     const file = renderEnvFile(A, (cmd as { env: Record<string, string> }).env);
     expect(file).toContain("ANTHROPIC_API_KEY='sk-ant-api03-ownkey'");
-    expect(file).toContain(`BURROW_AGENT_ID=${A}\nSUITE_AGENT_ID=${A}\n`);
+    expect(file).toContain(`BURROW_AGENT_ID=${A}\n`);
+    expect(file).not.toContain("SUITE_");
     // Positive control for the other agent: its file has no key.
     expect(renderEnvFile(B, {})).not.toContain("ANTHROPIC_API_KEY");
   });
@@ -597,13 +583,13 @@ describe("Burrow's conventions load whatever the owner's CLAUDE.md says (stage 7
     expect(FALLBACK).toContain("suite_reply");
   });
 
-  test("suite-cli's SUITE_CONVENTIONS is read from its installed sources; a missing lib is null", async () => {
+  test("burrow-cli's BURROW_CONVENTIONS is read from its installed sources; a missing lib is null", async () => {
     const lib = mkdtempSync(`${tmpdir()}/suite-cli-lib-`);
     try {
       mkdirSync(`${lib}/src`);
-      writeFileSync(`${lib}/src/claude_md.ts`, 'export const SUITE_CONVENTIONS = "## Always respond in channel\\n\\nsuite_reply STUB";\n');
-      expect(await loadSuiteConventions(lib)).toBe("## Always respond in channel\n\nsuite_reply STUB");
-      expect(await loadSuiteConventions(`${lib}/nope`)).toBeNull();
+      writeFileSync(`${lib}/src/claude_md.ts`, 'export const BURROW_CONVENTIONS = "## Always respond in channel\\n\\nsuite_reply STUB";\n');
+      expect(await loadBurrowConventions(lib)).toBe("## Always respond in channel\n\nsuite_reply STUB");
+      expect(await loadBurrowConventions(`${lib}/nope`)).toBeNull();
     } finally {
       rmSync(lib, { recursive: true, force: true });
     }
@@ -655,7 +641,7 @@ describe("the API key check (stage 7 round 2, case 7009)", () => {
     expect(parsed.ANTHROPIC_API_KEY).toBe(env.ANTHROPIC_API_KEY);
     expect(parsed.ANTHROPIC_BASE_URL).toBe(env.ANTHROPIC_BASE_URL);
     expect(parsed.BURROW_AGENT_ID).toBe(A);
-    expect(parsed.SUITE_AGENT_ID).toBe(A);
+    expect(Object.keys(parsed).filter((k) => k.startsWith("SUITE_"))).toEqual([]);
   });
 
   test("401 is rejected, 2xx ok, anything else unknown; one request, key in a header only", async () => {
@@ -674,7 +660,7 @@ describe("the API key check (stage 7 round 2, case 7009)", () => {
 
   test("no key (a subscription login) is never checked: unknown, no request", async () => {
     const { f, seen } = recording(200);
-    expect(await checkApiKey({ SUITE_AGENT_ID: A }, f)).toBe("unknown");
+    expect(await checkApiKey({ BURROW_AGENT_ID: A }, f)).toBe("unknown");
     expect(await checkApiKey(null, f)).toBe("unknown");
     expect(seen).toHaveLength(0);
   });
@@ -721,63 +707,35 @@ describe("the API key check (stage 7 round 2, case 7009)", () => {
   });
 });
 
-describe("BURROW_ env names with a SUITE_ fallback", () => {
-  const run = (env: Record<string, string | undefined>) => {
-    const lines: string[] = [];
-    const v = readEnv("BURROW_CORE_URL", "SUITE_CORE_URL", env, (l) => lines.push(l));
-    return { v, lines };
-  };
-
-  test("old name only: used, one deprecation line", () => {
-    resetEnvWarnings();
-    expect(run({ SUITE_CORE_URL: "http://old" })).toEqual({
-      v: "http://old",
-      lines: ["deprecated: SUITE_CORE_URL is set; rename it to BURROW_CORE_URL"],
+describe("core's URL comes from BURROW_CORE_URL only (task 01a18dab)", () => {
+  const main = resolve(import.meta.dir, "..", "src", "main.ts");
+  const start = (env: Record<string, string>) =>
+    Bun.spawnSync([process.execPath, "run", main], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", AGENT_HOST_TOKEN: "t", AGENT_HOST_PROFILE: "contained", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
     });
+
+  test("the legacy name alone is not read: exit 2, stderr names BURROW_CORE_URL", () => {
+    const legacy = ["SUITE", "CORE_URL"].join("_");
+    const r = start({ [legacy]: "http://127.0.0.1:9" });
+    expect(r.exitCode).toBe(2);
+    const err = r.stderr.toString();
+    expect(err).toContain("agent-host: BURROW_CORE_URL is not set");
+    expect(err).not.toContain("deprecated");
   });
 
-  test("new name only: used, no line", () => {
-    resetEnvWarnings();
-    expect(run({ BURROW_CORE_URL: "http://new" })).toEqual({ v: "http://new", lines: [] });
+  test("blank counts as unset", () => {
+    const r = start({ BURROW_CORE_URL: "   " });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("agent-host: BURROW_CORE_URL is not set");
   });
 
-  test("both set: BURROW_ wins, no line", () => {
-    resetEnvWarnings();
-    expect(run({ BURROW_CORE_URL: "http://new", SUITE_CORE_URL: "http://old" })).toEqual({ v: "http://new", lines: [] });
-  });
-
-  test("an empty or blank BURROW_ value counts as unset", () => {
-    for (const blank of ["", "   "]) {
-      resetEnvWarnings();
-      const r = run({ BURROW_CORE_URL: blank, SUITE_CORE_URL: "http://old" });
-      expect(r.v).toBe("http://old");
-      expect(r.lines).toHaveLength(1);
-    }
-  });
-
-  test("neither set (or SUITE_ blank): undefined, no line", () => {
-    resetEnvWarnings();
-    expect(run({})).toEqual({ v: undefined, lines: [] });
-    expect(run({ SUITE_CORE_URL: " " })).toEqual({ v: undefined, lines: [] });
-  });
-
-  test("warns once per SUITE_ name per process", () => {
-    resetEnvWarnings();
-    const lines: string[] = [];
-    const warn = (l: string) => lines.push(l);
-    readEnv("BURROW_CORE_URL", "SUITE_CORE_URL", { SUITE_CORE_URL: "a" }, warn);
-    readEnv("BURROW_CORE_URL", "SUITE_CORE_URL", { SUITE_CORE_URL: "a" }, warn);
-    readEnv("BURROW_AGENT_ID", "SUITE_AGENT_ID", { SUITE_AGENT_ID: "b" }, warn);
-    expect(lines).toEqual([
-      "deprecated: SUITE_CORE_URL is set; rename it to BURROW_CORE_URL",
-      "deprecated: SUITE_AGENT_ID is set; rename it to BURROW_AGENT_ID",
-    ]);
-  });
-
-  test("main.ts reads core's URL through readEnv with both full literals", () => {
-    const main = readFileSync(resolve(import.meta.dir, "..", "src", "main.ts"), "utf8");
-    expect(main).toContain('readEnv("BURROW_CORE_URL", "SUITE_CORE_URL")');
-    expect(main).not.toContain('required("SUITE_CORE_URL")');
+  test("main.ts reads it with required(), and the fallback module is gone", () => {
+    const src = readFileSync(main, "utf8");
+    expect(src).toContain('required("BURROW_CORE_URL")');
+    expect(src).not.toContain("readEnv");
+    expect(existsSync(resolve(import.meta.dir, "..", "src", "env.ts"))).toBe(false);
   });
 });
 

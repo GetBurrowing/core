@@ -268,8 +268,7 @@ class BurrowNamesGuardTest(unittest.TestCase):
         for name, text in samples.items():
             with self.subTest(pattern=name):
                 self.assertTrue(PATTERNS[name].search(text))
-        # Burrow names are not hits, nor is the test name of SUITE_INSTALL_DIR
-        # (the legacy twin of BURROW_INSTALL_DIR).
+        # Burrow names are not hits, nor is a test named after an install dir.
         for text in (
             "/opt/burrow burrow-stack.service burrow-agent@.service",
             "test_suite_install_dir",

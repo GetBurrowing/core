@@ -30,36 +30,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-_DEPRECATION_WARNED: set = set()
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Read ``name``, else ``default``. An empty string counts as unset.
 
-
-def _env(burrow: str, suite: str, default: Optional[str] = None) -> Optional[str]:
-    """Read ``burrow``, else the legacy ``suite`` name, else ``default``.
-
-    Burrow rename (task 01a14b9e). This script is standalone, so it cannot
-    import the installer's envcompat module; this is the same contract. An
-    empty string counts as unset. Falling back to the legacy name prints one
-    deprecation line per name per process to stderr. Call sites name both
-    full literals; never build a name from a suffix.
+    Only BURROW_ names are read; task 01a18dab removed the legacy fallback.
     """
-    value = os.environ.get(burrow)
+    value = os.environ.get(name)
     if value:
-        return value
-    value = os.environ.get(suite)
-    if value:
-        if suite not in _DEPRECATION_WARNED:
-            _DEPRECATION_WARNED.add(suite)
-            sys.stderr.write(f"deprecated: {suite} is set; rename it to {burrow}\n")
         return value
     return default
 
 
-HOST = _env("BURROW_RUNNERD_HOST", "SUITE_RUNNERD_HOST", "0.0.0.0")
-PORT = int(_env("BURROW_RUNNERD_PORT", "SUITE_RUNNERD_PORT", "4101"))
-TOKEN = _env("BURROW_RUNNERD_TOKEN", "SUITE_RUNNERD_TOKEN")
-STATE_DIR = Path(_env("BURROW_RUNNERD_STATE_DIR", "SUITE_RUNNERD_STATE_DIR", "/tmp/suite-runnerd"))
-DEFAULT_IMAGE = _env("BURROW_RUNNER_IMAGE", "SUITE_RUNNER_IMAGE", "suite-runner:dev")
-DEFAULT_NETWORK = _env("BURROW_RUNNER_NETWORK", "SUITE_RUNNER_NETWORK")
+HOST = _env("BURROW_RUNNERD_HOST", "0.0.0.0")
+PORT = int(_env("BURROW_RUNNERD_PORT", "4101"))
+TOKEN = _env("BURROW_RUNNERD_TOKEN")
+STATE_DIR = Path(_env("BURROW_RUNNERD_STATE_DIR", "/tmp/suite-runnerd"))
+DEFAULT_IMAGE = _env("BURROW_RUNNER_IMAGE", "suite-runner:dev")
+DEFAULT_NETWORK = _env("BURROW_RUNNER_NETWORK")
 
 RUNS_DIR = STATE_DIR / "runs"
 CONTAINERS_DIR = STATE_DIR / "containers"

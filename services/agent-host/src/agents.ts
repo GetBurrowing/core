@@ -55,7 +55,7 @@ import {
   type AgentFile,
   type FilesShas,
 } from "./files.ts";
-import { loadSuiteConventions, renderUserMemory, writeUserMemory } from "./conventions.ts";
+import { loadBurrowConventions, renderUserMemory, writeUserMemory } from "./conventions.ts";
 
 export type ObservedState = "starting" | "running" | "stopped" | "crashed" | "needs_login";
 
@@ -93,7 +93,7 @@ export interface AgentsDeps {
   /** The command the unit execs as the agent. */
   runnerCommand: string[];
   log(line: string): void;
-  /** suite-cli's conventions text, or null. Defaults to {@link loadSuiteConventions}. */
+  /** suite-cli's conventions text, or null. Defaults to {@link loadBurrowConventions}. */
   conventions?: () => Promise<string | null>;
 }
 
@@ -138,7 +138,6 @@ export async function writeAsUser(runner: Runner, user: AgentUser, path: string,
 export function renderEnvFile(agentId: string, env: Record<string, string>): string {
   const lines = ["# Managed by Suite's agent host. This agent's values only."];
   lines.push(`BURROW_AGENT_ID=${agentId}`);
-  lines.push(`SUITE_AGENT_ID=${agentId}`);
   for (const [k, v] of Object.entries(env)) {
     lines.push(`${k}='${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`);
   }
@@ -263,7 +262,7 @@ export function refreshedClaudeJson(text: string, work: string, token: string): 
     if (typeof servers !== "object" || servers === null) continue;
     const channel = (servers as Record<string, unknown>)[CHANNEL_SERVER] as { env?: Record<string, unknown> } | undefined;
     if (channel?.env !== undefined && typeof channel.env === "object" && channel.env !== null) {
-      for (const name of ["BURROW_TOKEN", "SUITE_TOKEN"]) {
+      for (const name of ["BURROW_TOKEN"]) {
         const v = channel.env[name];
         if (typeof v === "string" && !ENV_REFERENCE.test(v) && v !== token) {
           channel.env[name] = token;
@@ -380,7 +379,7 @@ export async function startAgent(deps: AgentsDeps, cmd: StartCommand): Promise<v
  * (SUPPORTED_HARNESSES), and it reads `~/.claude/CLAUDE.md`.
  */
 export async function writeConventions(deps: AgentsDeps, user: AgentUser, agentId: string): Promise<void> {
-  const text = await (deps.conventions ?? loadSuiteConventions)();
+  const text = await (deps.conventions ?? loadBurrowConventions)();
   if (text === null) {
     deps.log(`agent ${agentId}: suite-cli's conventions could not be loaded; wrote the reply rule only`);
   }

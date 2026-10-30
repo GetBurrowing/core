@@ -1,25 +1,12 @@
 import Config
 
-# Burrow rename (task 01a14b9e): read BURROW_<NAME> first and fall back to the old
-# SUITE_<NAME> name. An empty string counts as unset, because systemd
-# `Environment=X=` and compose `X: ""` both produce "" and treating that as
-# set would mask a real SUITE_ value. On fallback, print one deprecation line
-# to stderr; Logger is not running while config is evaluated. Every call site
-# names both full literals so the stage-5 text guard can see them.
-compat_env = fn burrow, suite, default ->
-  case System.get_env(burrow) do
-    value when is_binary(value) and value != "" ->
-      value
-
-    _ ->
-      case System.get_env(suite) do
-        value when is_binary(value) and value != "" ->
-          IO.puts(:stderr, "deprecated: #{suite} is set; rename it to #{burrow}")
-          value
-
-        _ ->
-          default
-      end
+# An empty string counts as unset, because systemd `Environment=X=` and
+# compose `X: ""` both produce "". Only BURROW_ names are read (task 01a18dab
+# removed the SUITE_ fallback).
+env_or = fn name, default ->
+  case System.get_env(name) do
+    value when is_binary(value) and value != "" -> value
+    _ -> default
   end
 end
 
@@ -583,17 +570,24 @@ config :platform, :chat_host, System.get_env("CHAT_HOST")
 # path. Unset leaves whatever compile-time config set (`[]` by default; the
 # test env sets an example.com alias). No default hostnames here: the real
 # values live in deploy config.
-case System.get_env("OWN_HOST_ALIASES") do
-  nil ->
-    :ok
+#
+# The same list also feeds prod's `check_origin` below (task 01a18dab stage
+# 3): one knob makes an alias both link-recognised and socket-accepted, so a
+# renamed primary host (PHX_HOST) keeps its old name working as an alias.
+own_host_aliases =
+  case System.get_env("OWN_HOST_ALIASES") do
+    nil ->
+      nil
 
-  aliases ->
-    config :platform,
-           :own_host_aliases,
-           aliases
-           |> String.split(",")
-           |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
-           |> Enum.reject(&(&1 == ""))
+    aliases ->
+      aliases
+      |> String.split(",")
+      |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+      |> Enum.reject(&(&1 == ""))
+  end
+
+if own_host_aliases do
+  config :platform, :own_host_aliases, own_host_aliases
 end
 
 config :platform, :execution,
@@ -605,9 +599,8 @@ config :platform, :execution,
     author_email: proof_author_email
   ],
   suite_runnerd: [
-    base_url:
-      compat_env.("BURROW_RUNNERD_BASE_URL", "SUITE_RUNNERD_BASE_URL", "http://127.0.0.1:4101"),
-    token: compat_env.("BURROW_RUNNERD_TOKEN", "SUITE_RUNNERD_TOKEN", nil)
+    base_url: env_or.("BURROW_RUNNERD_BASE_URL", "http://127.0.0.1:4101"),
+    token: env_or.("BURROW_RUNNERD_TOKEN", nil)
   ]
 
 config :platform, :proof_of_life,
@@ -686,22 +679,36 @@ if config_env() == :prod do
   # still used by `check_origin`, which is prod-only by nature.
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  base_origins =
+    [
+      "https://#{host}",
+      "https://www.#{host}",
+      "//*.#{host}"
+    ] ++
+      if(meet_host, do: ["https://#{meet_host}"], else: []) ++
+      if(chat_host, do: ["https://#{chat_host}"], else: []) ++
+      Enum.flat_map(extra_origin_apexes, fn apex ->
+        ["https://#{apex}", "https://www.#{apex}", "//*.#{apex}"]
+      end)
+
+  # OWN_HOST_ALIASES entries are exact hosts, so each admits exactly
+  # `https://<alias>`: no www. and no wildcard, unlike an EXTRA_ORIGIN_APEXES
+  # apex. Appended after, and only when not already present, so with the var
+  # unset `check_origin` is exactly `base_origins`, element for element.
+  alias_origins =
+    (own_host_aliases || [])
+    |> Enum.map(&"https://#{&1}")
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 in base_origins))
+
+  check_origin = base_origins ++ alias_origins
+
   config :platform, PlatformWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
-    check_origin:
-      [
-        "https://#{host}",
-        "https://www.#{host}",
-        "//*.#{host}"
-      ] ++
-        if(meet_host, do: ["https://#{meet_host}"], else: []) ++
-        if(chat_host, do: ["https://#{chat_host}"], else: []) ++
-        Enum.flat_map(extra_origin_apexes, fn apex ->
-          ["https://#{apex}", "https://www.#{apex}", "//*.#{apex}"]
-        end),
+    check_origin: check_origin,
     secret_key_base: secret_key_base
 end
 
@@ -719,9 +726,11 @@ end
 vapid_public = System.get_env("VAPID_PUBLIC_KEY")
 vapid_private = System.get_env("VAPID_PRIVATE_KEY")
 
+# No `:subject` here: `Platform.Push.vapid_subject/1` derives it from the
+# endpoint's host at call time, so the subject follows PHX_HOST through
+# `PlatformWeb.Endpoint` instead of a second reader with its own default.
 if vapid_public && vapid_private do
   config :web_push_encryption, :vapid_details,
-    subject: "mailto:push@#{System.get_env("PHX_HOST", "suite.app")}",
     public_key: vapid_public,
     private_key: vapid_private
 end

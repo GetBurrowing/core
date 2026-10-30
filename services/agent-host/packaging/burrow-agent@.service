@@ -11,11 +11,8 @@ StartLimitBurst=5
 Type=simple
 EnvironmentFile=/etc/burrow-agents/%i.env
 Environment=BURROW_AGENT_ID=%i
-Environment=SUITE_AGENT_ID=%i
 Environment=BURROW_AGENT_SESSION=suite-agent
-Environment=SUITE_AGENT_SESSION=suite-agent
 Environment=BURROW_UNATTENDED=1
-Environment=SUITE_UNATTENDED=1
 Environment=DISABLE_AUTOUPDATER=1
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/runner.ts
