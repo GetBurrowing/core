@@ -83,7 +83,8 @@ defmodule PlatformWeb.AdminInstallsLive do
       {:ok, installs} ->
         assign(socket, :installs, Enum.map(installs, &%{&1 | handover_sealed: nil}))
 
-      {:error, _} -> assign(socket, :installs, [])
+      {:error, _} ->
+        assign(socket, :installs, [])
     end
   end
 
