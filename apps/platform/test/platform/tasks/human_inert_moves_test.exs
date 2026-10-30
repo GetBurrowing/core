@@ -15,7 +15,8 @@ defmodule Platform.Tasks.HumanInertMovesTest do
 
   (a) is the POSITIVE CONTROL and comes first: the same rig, with an
   execution agent, a connected runtime and an approved plan, records an
-  `execution.dispatch_attempt` RuntimeEvent and an `ExecutionLease` row.
+  `execution.dispatch_attempt` RuntimeEvent and arms a `LeaseManager`
+  liveness lease.
   Without it, the zero counts in (b) and (c) could come from a rig that
   cannot dispatch at all. The counting mirrors
   `task_router_needs_human_hold_test.exs`; the linked agent/runtime fixture
@@ -217,7 +218,14 @@ defmodule Platform.Tasks.HumanInertMovesTest do
       :ok = sync_router(task.id)
 
       assert dispatch_attempts(task.id) >= 1
-      assert leases(task.id) >= 1
+
+      # The dispatch arms the liveness lease (`LeaseManager.record_dispatch`),
+      # which is what carries the no-ack and safety-net timers. The
+      # `execution_leases` TABLE is NOT written by a dispatch: its rows come
+      # from runtime events (ack, start, blocker), so a dispatch with no
+      # runtime reply leaves it empty (measured on moon for this stage). It
+      # is still counted in (b) and (c) as a zero, never as a control.
+      assert %{} = LeaseManager.get(task.id)
     end
   end
 
@@ -245,6 +253,7 @@ defmodule Platform.Tasks.HumanInertMovesTest do
       refute router_running?(task.id)
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
       assert runtime_events(task.id) == 0
+      assert LeaseManager.get(task.id) == nil
       assert leases(task.id) == 0
       assert stages(task.id) == stages_before
     end
@@ -267,6 +276,7 @@ defmodule Platform.Tasks.HumanInertMovesTest do
       refute router_running?(task.id)
       refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 300
       assert runtime_events(task.id) == 0
+      assert LeaseManager.get(task.id) == nil
       assert leases(task.id) == 0
       assert stages(task.id) == stages_before
     end
