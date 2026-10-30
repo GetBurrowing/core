@@ -85,9 +85,14 @@ defmodule PlatformWeb.SocialWeeklyNote do
           socket.assigns.expanded
       end
 
+    show? =
+      not is_nil(facts) or not is_nil(socket.assigns.error) or
+        Enum.any?(rows, &(&1.current != nil or &1.older != []))
+
     assign(socket,
       rows: rows,
       facts: facts,
+      show?: show?,
       expanded: expanded,
       opened_target: target["weekly_note_target"]
     )
@@ -187,6 +192,7 @@ defmodule PlatformWeb.SocialWeeklyNote do
     ~H"""
     <div
       id={@id}
+      hidden={not @show?}
       class="space-y-3 [font-family:'Public_Sans',sans-serif]"
       data-role="weekly-notes"
       aria-busy="false"

@@ -135,6 +135,13 @@ defmodule PlatformWeb.SocialWeeklyNoteTest do
     refute has_element?(view, "#social-weekly-notes button", "Undo")
   end
 
+  test "no current note or history leaves no visible note block", %{conn: c, w: w} do
+    view = open(c, w)
+    assert has_element?(view, "#social-weekly-notes[hidden]")
+    refute has_element?(view, "[data-role=weekly-note]")
+    refute has_element?(view, "[data-role=weekly-note-older]")
+  end
+
   test "All brands and scope switching exclude foreign notes; revoked access clears active component",
        %{conn: c, w: w, week: week} do
     note = note(w, week, [voice()])
