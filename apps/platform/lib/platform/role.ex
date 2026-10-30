@@ -212,6 +212,8 @@ defmodule Platform.Role do
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
     Platform.Calendar.BookingRateLimit,
+    # One-click installs' run registry (task 01a10315 stage 2): an inert Registry.
+    Platform.Installs.Registry,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
@@ -266,6 +268,9 @@ defmodule Platform.Role do
     Platform.Meetings.CandidateSweeper,
     Platform.Meetings.CompletionSweeper,
     Platform.Security.Sweeper,
+    # One-click installs (task 01a10315 stage 2): the hourly hand-over purge
+    # (a DB write on a timer) and the boot-time resume of unfinished runs.
+    Platform.Installs.Supervisor,
     Platform.Chat.SpacePurger,
     Platform.Experiments.Signals.MailSubscriber,
     Platform.Tenancy.ContainerPurger,
@@ -408,6 +413,19 @@ defmodule Platform.Role do
       note: "Critique.request/1 from the design critique MCP tool, synchronous in the caller"
     },
     # :http. Req and Finch.
+    %{
+      kind: :http,
+      file: "lib/platform/installs/digital_ocean.ex",
+      class: :follows_caller,
+      note:
+        "DigitalOcean API v2 (task 01a10315); callers are an install run or teardown under Platform.TaskSupervisor, or an admin screen reading sizes"
+    },
+    %{
+      kind: :http,
+      file: "lib/platform/installs/probe.ex",
+      class: :follows_caller,
+      note: "an install run's HTTP/HTTPS probes of its droplet (task 01a10315)"
+    },
     %{
       kind: :http,
       file: "lib/platform/calendar/external_fetch.ex",
