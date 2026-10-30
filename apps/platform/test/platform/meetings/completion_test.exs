@@ -540,6 +540,14 @@ defmodule Platform.Meetings.CompletionTest do
   end
 
   test "resume, sweep and duplicate capture finish preserve a filed run without new input", ctx do
+    meeting =
+      ctx.meeting
+      |> Ecto.Changeset.change(
+        livekit_room_name: Meetings.room_name_for_space(ctx.meeting.chat_space_id)
+      )
+      |> Repo.update!()
+
+    ctx = Map.put(ctx, :meeting, meeting)
     {meeting, run} = filed!(ctx)
 
     assert_receive %Phoenix.Socket.Broadcast{
@@ -618,7 +626,9 @@ defmodule Platform.Meetings.CompletionTest do
     assert reopened.canvas_id == run.canvas_id
     assert reopened.item_results == run.item_results
     {:ok, _} = Meetings.stop_recording(recording.id)
-    room |> Ecto.Changeset.change(status: "idle") |> Repo.update!()
+    Repo.get!(Platform.Meetings.Room, room.id)
+    |> Ecto.Changeset.change(status: "idle")
+    |> Repo.update!()
     {:ok, _} = Meetings.end_meeting(Meetings.get_meeting(meeting.id))
     Completion.capture_finished_for_space(meeting.chat_space_id)
     assert run!(meeting).status == "scribe_dispatched"
