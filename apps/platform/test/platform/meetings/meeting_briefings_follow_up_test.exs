@@ -496,22 +496,31 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
       assert %{id: _} = member.sponsor
     end
 
-    test "cost a fixed number of queries, not one per task" do
+    # The view already spends some queries per task (Revert's per-task
+    # tasks.write check), so the pin is on what assignee + sponsor ADD: the
+    # same small constant whatever the briefing's size.
+    test "add a fixed number of queries, not one per task" do
       small = concluded!()
       large = concluded!(extra_tasks: 4)
+      assert length(large.tasks) == length(small.tasks) + 4
+
+      view_queries = fn ctx ->
+        count_queries(fn -> MeetingBriefings.view(ctx.briefing, scope(ctx.a)) end)
+      end
+
+      [small_bare, large_bare] = Enum.map([small, large], view_queries)
 
       for ctx <- [small, large],
           task <- ctx.tasks,
           do: assign!(task, agent!().id, "agent", user!().id)
 
-      assert length(large.tasks) == length(small.tasks) + 4
-
-      small_count = count_queries(fn -> MeetingBriefings.view(small.briefing, scope(small.a)) end)
-      large_count = count_queries(fn -> MeetingBriefings.view(large.briefing, scope(large.a)) end)
+      [small_full, large_full] = Enum.map([small, large], view_queries)
 
       # Positive control: the counter sees the view's queries at all.
-      assert small_count > 0
-      assert large_count == small_count
+      assert small_bare > 0
+      added = small_full - small_bare
+      assert large_full - large_bare == added
+      assert added in 0..2
 
       view = MeetingBriefings.view(large.briefing, scope(large.a))
 
