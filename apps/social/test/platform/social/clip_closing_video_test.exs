@@ -330,6 +330,55 @@ defmodule Platform.Social.ClipClosingVideoTest do
     assert {:error, :ineligible_episode} = Task.await(discovery)
   end
 
+  test "default save and enqueue serialize on the profile so a job gets one complete committed choice",
+       %{bytes: bytes} do
+    w = committed_world!()
+    {:ok, %{file: a}} = unboxed(fn -> upload(w, bytes) end)
+    {:ok, %{file: b}} = unboxed(fn -> upload(w, bytes <> "replacement") end)
+    {:ok, _} = unboxed(fn -> save(w, %{file_id: a.id, enabled: true, audio: "keep"}) end)
+    parent = self()
+
+    saver =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            assert {:ok, _} = save(w, %{file_id: b.id, enabled: true, audio: "mute"})
+            send(parent, {:default_locked, self()})
+
+            receive do
+              :commit -> :ok
+            after
+              5000 -> raise "default commit barrier timed out"
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:default_locked, pid}, 5000
+
+    enqueuer =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          send(parent, :enqueuer_ready)
+
+          ClipJobs.enqueue_new_clip(w.org_id, w.profile.id, w.approver.id, %{
+            source_url: "https://example.com/episode",
+            in_s: 0,
+            out_s: 3
+          })
+        end)
+      end)
+
+    assert_receive :enqueuer_ready, 5000
+    assert Task.yield(enqueuer, 100) == nil
+    send(pid, :commit)
+    assert {:ok, :ok} = Task.await(saver)
+    assert {:ok, %{job: job}} = Task.await(enqueuer)
+    assert job.payload["closing_video"]["file_id"] == b.id
+    assert job.payload["closing_video"]["audio"] == "mute"
+    assert job.payload["closing_video"]["content_hash"] == b.content_hash
+  end
+
   test "revocation or project reassignment during probing rejects upload completion and save",
        %{bytes: bytes} do
     original = Application.get_env(:social, :ffprobe_path)

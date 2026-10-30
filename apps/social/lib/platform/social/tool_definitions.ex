@@ -551,7 +551,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_job_source",
         description:
-          "Download the episode source or selected project music asset of a job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
+          "Download the episode source, selected project music asset or pinned closing video of a job you claimed, using a short-lived Files signed GET URL. No local file copying is required. " <>
             @runner_contract <> " " <> @human_approves,
         parameters: %{
           job_id: %{
@@ -562,14 +562,15 @@ defmodule Platform.Social.ToolDefinitions do
           asset: %{
             type: "string",
             required: false,
-            enum: ["episode", "music"],
+            enum: ["episode", "music", "closing_video"],
             description:
-              "Defaults to episode; music resolves only the persisted selected audio asset."
+              "Defaults to episode; music and closing_video resolve only their persisted job assets."
           }
         },
-        returns: "%{file_id, project_id, url, expires_at, content_type, byte_size}",
+        returns:
+          "%{file_id, project_id, url, expires_at, content_type, byte_size, content_hash, max_bytes}",
         limitations:
-          "Only the claimer of a claimed/running job. Music must be the persisted selected asset. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
+          "Only the claimer of a claimed/running job. Music and closing_video must be the persisted selected assets; caller file IDs, paths and URLs are not accepted. Source readiness, provenance, project and org are rechecked. source_unavailable if deleted, incomplete, moved, or not an episode job. URL expires in 15 minutes; use immediately and never log or persist the bearer URL. " <>
             @job_errors <> " " <> @privacy_null,
         when_to_use:
           "After claiming an episode, to fetch its source automatically; call again if a download URL expired."

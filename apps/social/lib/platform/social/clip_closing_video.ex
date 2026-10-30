@@ -31,39 +31,60 @@ defmodule Platform.Social.ClipClosingVideo do
   end
 
   def save(org_id, profile_id, user_id, attrs) when is_map(attrs) do
-    Repo.transaction(fn ->
-      {profile, _project} = authorized!(org_id, profile_id, user_id)
+    # Decode before taking the profile lock. Human revocation/project changes
+    # during a slow probe must remain observable at the final authorization.
+    with {:ok, initial, _} <- authorize(org_id, profile_id, user_id),
+         {:ok, requested} <- settings(initial, attrs),
+         {:ok, verified} <- prepare_asset(initial, requested.file_id) do
+      Repo.transaction(fn ->
+        lock_profile(profile_id)
+        {profile, _project} = authorized!(org_id, profile_id, user_id)
+        if profile.project_id != initial.project_id, do: Repo.rollback(:project_changed)
 
-      changeset =
-        ClosingVideoSettings.changeset(profile.closing_video || %ClosingVideoSettings{}, attrs)
+        settings =
+          case settings(profile, attrs) do
+            {:ok, settings} -> settings
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
-      settings =
-        case Ecto.Changeset.apply_action(changeset, :update) do
-          {:ok, settings} -> settings
-          {:error, error} -> Repo.rollback(error)
+        if settings.file_id != requested.file_id, do: Repo.rollback(:settings_changed)
+
+        if settings.file_id do
+          case register(profile, lock_file(settings.file_id), verified) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
         end
 
-      if settings.file_id do
-        file = lock_file(settings.file_id)
+        {fresh_profile, _} = authorized!(org_id, profile_id, user_id)
 
-        case register(profile, file) do
-          {:ok, _} -> :ok
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end
-
-      # Probe/download can take time; do not rely on the initial human lookup.
-      {fresh_profile, _} = authorized!(org_id, profile_id, user_id)
-      if fresh_profile.project_id != profile.project_id, do: Repo.rollback(:project_changed)
-
-      fresh_profile
-      |> Ecto.Changeset.change()
-      |> Ecto.Changeset.put_embed(:closing_video, Map.from_struct(settings))
-      |> Repo.update!()
-    end)
+        fresh_profile
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.put_embed(:closing_video, Map.from_struct(settings))
+        |> Repo.update!()
+      end)
+    end
   end
 
   def save(_, _, _, _), do: {:error, :invalid_settings}
+
+  defp settings(profile, attrs) do
+    ClosingVideoSettings.changeset(profile.closing_video || %ClosingVideoSettings{}, attrs)
+    |> Ecto.Changeset.apply_action(:update)
+  end
+
+  defp prepare_asset(_profile, nil), do: {:ok, nil}
+
+  defp prepare_asset(profile, id) do
+    file = Files.get_file(id)
+
+    with :ok <- eligible_file(profile, file),
+         {:ok, measurements} <- measure(file) do
+      {:ok,
+       {Map.take(file, [:id, :project_id, :org_id, :content_hash, :byte_size, :content_type]),
+        measurements}}
+    end
+  end
 
   def remove(org_id, profile_id, user_id),
     do: save(org_id, profile_id, user_id, %{file_id: nil, enabled: false, audio: :mute})
@@ -92,14 +113,108 @@ defmodule Platform.Social.ClipClosingVideo do
     end
   end
 
-  defp register(profile, file) do
+  @doc "Serialize show-default changes and render enqueue on this profile row. Caller owns the transaction."
+  def lock_profile(id) do
+    unless Repo.in_transaction?(), do: raise("closing snapshot requires a transaction")
+    if uuid?(id), do: Repo.one(from(p in Profile, where: p.id == ^id, lock: "FOR UPDATE"))
+  end
+
+  @doc "Build a validated immutable contract from the locked current show default."
+  def snapshot(%Profile{} = profile) do
+    settings = profile.closing_video || %ClosingVideoSettings{}
+
+    base = %{
+      "file_id" => settings.file_id,
+      "enabled" => settings.enabled,
+      "audio" => to_string(settings.audio),
+      "org_id" => profile.org_id,
+      "project_id" => profile.project_id,
+      "profile_id" => profile.id
+    }
+
+    with {:ok, attrs} <- snapshot_asset(profile, settings, base),
+         {:ok, typed} <-
+           Ecto.Changeset.apply_action(
+             Platform.Social.ClosingVideoSnapshot.changeset(
+               %Platform.Social.ClosingVideoSnapshot{},
+               attrs
+             ),
+             :insert
+           ) do
+      {:ok, Platform.Social.ClosingVideoSnapshot.dump(typed)}
+    else
+      _ -> {:error, :closing_video_unavailable}
+    end
+  end
+
+  defp snapshot_asset(_profile, %{enabled: false}, base), do: {:ok, base}
+
+  defp snapshot_asset(profile, settings, base) do
+    file = Files.get_file(settings.file_id)
+    asset = Repo.get_by(ClosingAsset, profile_id: profile.id, file_id: settings.file_id)
+
+    with :ok <- eligible_file(profile, file),
+         %ClosingAsset{} <- asset,
+         true <- asset.org_id == profile.org_id and asset.project_id == profile.project_id,
+         true <- asset.content_hash == file.content_hash and asset.byte_size == file.byte_size do
+      {:ok,
+       Map.merge(base, %{
+         "content_hash" => asset.content_hash,
+         "content_type" => file.content_type,
+         "byte_size" => asset.byte_size,
+         "duration_s" => asset.duration_s,
+         "width" => asset.width,
+         "height" => asset.height
+       })}
+    else
+      _ -> {:error, :closing_video_unavailable}
+    end
+  end
+
+  @doc "Resolve only the exact pinned asset inside the claimer transaction; a changed default has no bearing on this check."
+  def resolve_snapshot(profile, snapshot) when is_map(snapshot) do
+    with %{"enabled" => true, "file_id" => id, "audio" => audio} <- snapshot,
+         true <- audio in ["keep", "mute"],
+         true <-
+           snapshot["org_id"] == profile.org_id and snapshot["profile_id"] == profile.id and
+             snapshot["project_id"] == profile.project_id,
+         %{org_id: org_id, archived_at: nil} <-
+           Repo.get(Platform.Tasks.Project, profile.project_id),
+         true <- org_id == profile.org_id,
+         true <- uuid?(id),
+         file when not is_nil(file) <- lock_file(id),
+         :ok <- eligible_file(profile, file),
+         %ClosingAsset{} = registered <-
+           Repo.get_by(ClosingAsset, profile_id: profile.id, file_id: id),
+         true <-
+           registered.org_id == profile.org_id and registered.project_id == profile.project_id,
+         true <-
+           file.content_hash == snapshot["content_hash"] and
+             file.byte_size == snapshot["byte_size"] and
+             file.content_type == snapshot["content_type"] and
+             registered.content_hash == snapshot["content_hash"],
+         {:ok, measurements} <- measure(file),
+         true <-
+           measurements.duration_s == snapshot["duration_s"] and
+             measurements.width == snapshot["width"] and measurements.height == snapshot["height"],
+         %{org_id: ^org_id, archived_at: nil} <-
+           Repo.get(Platform.Tasks.Project, profile.project_id) do
+      {:ok, file}
+    else
+      _ -> {:error, :closing_video_unavailable}
+    end
+  end
+
+  def resolve_snapshot(_, _), do: {:error, :closing_video_unavailable}
+
+  defp register(profile, file, verified \\ nil) do
     with :ok <- eligible_file(profile, file),
          true <-
            not Repo.exists?(
              from(j in ClipJob, where: j.source_file_id == ^file.id and j.kind == "episode")
            ) ||
              {:error, :already_an_episode},
-         {:ok, measurements} <- measure(file) do
+         {:ok, measurements} <- register_measurements(file, verified) do
       values =
         Map.merge(measurements, %{
           org_id: profile.org_id,
@@ -118,6 +233,14 @@ defmodule Platform.Social.ClipClosingVideo do
         error -> error
       end
     end
+  end
+
+  defp register_measurements(file, nil), do: measure(file)
+
+  defp register_measurements(file, {identity, measurements}) do
+    if Map.take(file, Map.keys(identity)) == identity,
+      do: {:ok, measurements},
+      else: {:error, :asset_unavailable}
   end
 
   defp eligible_file(profile, %SourceFile{} = file) do

@@ -51,7 +51,16 @@ defmodule Platform.Social.ClipJobs do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{AgentDrafts, Clip, ClipJob, ClipLook, ClipVersions, Profile}
+
+  alias Platform.Social.{
+    AgentDrafts,
+    Clip,
+    ClipJob,
+    ClipLook,
+    ClipVersions,
+    Profile,
+    ClipClosingVideo
+  }
 
   @base_profile "how-to-computer"
   @result_keys ~w(file_id title caption speaker episode_code platforms duration_s width height
@@ -78,7 +87,7 @@ defmodule Platform.Social.ClipJobs do
   def enqueue_episode(pipeline_id, source_file_id) do
     Repo.transaction(fn ->
       pipeline = Repo.get(Platform.Social.EpisodePipeline, pipeline_id)
-      profile = pipeline && Repo.get(Profile, pipeline.profile_id)
+      profile = pipeline && ClipClosingVideo.lock_profile(pipeline.profile_id)
 
       source = Platform.Social.ClipClosingVideo.lock_file(source_file_id)
 
@@ -99,7 +108,8 @@ defmodule Platform.Social.ClipJobs do
         "pipeline_id" => pipeline.id,
         "pipeline_version" => pipeline.version,
         "clip_user_profile" => clip_user_profile(profile),
-        "look" => ClipLook.effective(profile.show_look)
+        "look" => ClipLook.effective(profile.show_look),
+        "closing_video" => ok_or_rollback(ClipClosingVideo.snapshot(profile))
       }
 
       %ClipJob{}
@@ -136,7 +146,7 @@ defmodule Platform.Social.ClipJobs do
     attrs = normalize(attrs)
 
     with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found},
-         {:ok, profile} <- human_profile(org_id, found.profile_id, user_id) do
+         {:ok, _profile} <- human_profile(org_id, found.profile_id, user_id) do
       Repo.transaction(fn ->
         clip =
           Repo.one(
@@ -144,6 +154,7 @@ defmodule Platform.Social.ClipJobs do
           )
 
         if is_nil(clip), do: Repo.rollback(:not_found)
+        profile = ok_or_rollback(human_profile(org_id, clip.profile_id, user_id))
 
         base =
           ok_or_rollback(ClipVersions.get(org_id, profile.id, clip.id, attrs["base_render_id"]))
@@ -170,6 +181,7 @@ defmodule Platform.Social.ClipJobs do
           |> Map.merge(%{
             "base_render_id" => base.id,
             "candidate_id" => base.candidate_id,
+            "alternate_id" => base.alternate_id,
             "title" => base.headline,
             "caption" => base.caption,
             "episode" => base.source || %{},
@@ -188,6 +200,10 @@ defmodule Platform.Social.ClipJobs do
 
   @doc "Queues an appearance change against an exact immutable current render."
   def enqueue_appearance(org_id, clip_id, user_id, attrs) do
+    enqueue_appearance_request(org_id, clip_id, user_id, attrs, false)
+  end
+
+  defp enqueue_appearance_request(org_id, clip_id, user_id, attrs, closing_only) do
     attrs = normalize(attrs)
 
     with %Clip{} = found <- Social.get_clip(org_id, clip_id) || {:error, :not_found} do
@@ -205,10 +221,31 @@ defmodule Platform.Social.ClipJobs do
 
         if base.rev != clip.rev, do: Repo.rollback(:stale_version)
 
+        if closing_only and
+             (clip.review_status == "approved" or
+                Repo.exists?(
+                  from(p in Platform.Social.Post,
+                    where:
+                      p.clip_render_id == ^base.id and
+                        p.status in ["approved", "scheduled", "published"]
+                  )
+                )),
+           do: Repo.rollback(:version_approved)
+
+        if closing_only and
+             Repo.exists?(
+               from(j in ClipJob,
+                 where: j.clip_id == ^clip.id and j.status in ["queued", "claimed", "running"]
+               )
+             ),
+           do: Repo.rollback(:job_in_flight)
+
         unless is_binary(base.file_id) && Platform.Files.get_file(base.file_id),
           do: Repo.rollback(:version_unplayable)
 
-        requested = ok_or_rollback(validate_look(attrs["look"] || %{}))
+        requested =
+          ok_or_rollback(validate_look(if(closing_only, do: %{}, else: attrs["look"] || %{})))
+
         look = ClipLook.effective(ClipLook.merge(base.look, requested))
         ok_or_rollback(validate_look(look))
         source = base.source || %{}
@@ -221,6 +258,7 @@ defmodule Platform.Social.ClipJobs do
             "appearance" => true,
             "base_render_id" => base.id,
             "candidate_id" => base.candidate_id,
+            "alternate_id" => base.alternate_id,
             "title" => base.headline,
             "caption" => base.caption,
             "caption_fixes" => base.caption_fixes,
@@ -234,6 +272,11 @@ defmodule Platform.Social.ClipJobs do
       end)
       |> notify_job()
     end
+  end
+
+  @doc "Apply today's closing default to the exact current unapproved version via the existing rerender path."
+  def enqueue_closing_video(org_id, clip_id, user_id, attrs) do
+    enqueue_appearance_request(org_id, clip_id, user_id, attrs, true)
   end
 
   defp maybe_headline(payload, %{"headline" => headline}),
@@ -270,14 +313,17 @@ defmodule Platform.Social.ClipJobs do
     attrs = normalize(attrs)
 
     with {:ok, profile} <- human_profile(org_id, profile_id, user_id),
-         {:ok, source} <- episode_source(attrs, profile),
+         {:ok, _source} <- episode_source(attrs, profile),
          :ok <- check_range(attrs["in_s"], attrs["out_s"]),
          :ok <- AgentDrafts.check_title(Map.take(attrs, ["title"])) do
       in_s = attrs["in_s"] * 1.0
       out_s = attrs["out_s"] * 1.0
-      look = ClipLook.effective(profile.show_look)
 
       Repo.transaction(fn ->
+        profile = ok_or_rollback(human_profile(org_id, profile.id, user_id))
+        source = ok_or_rollback(episode_source(attrs, profile))
+        look = ClipLook.effective(profile.show_look)
+
         clip =
           %Clip{profile_id: profile.id}
           |> Clip.changeset(Map.merge(source, %{"title" => attrs["title"]}))
@@ -320,13 +366,22 @@ defmodule Platform.Social.ClipJobs do
           )
 
         if is_nil(clip), do: Repo.rollback(:not_found)
+        base = current_base!(org_id, clip, attrs["base_render_id"])
 
         with {:ok, profile} <- human_profile(org_id, clip.profile_id, user_id),
              {:ok, requested} <- validate_look(attrs["look"] || %{}),
              look = ClipLook.effective(ClipLook.merge(clip.look, requested)),
              {:ok, look} <- validate_look(look),
-             in_s = number_or(attrs["trim_in_s"], clip.trim_in_s || clip.requested_start_s),
-             out_s = number_or(attrs["trim_out_s"], clip.trim_out_s || clip.requested_end_s),
+             in_s =
+               number_or(
+                 attrs["trim_in_s"],
+                 (base && base.actual_start_s) || clip.trim_in_s || clip.requested_start_s
+               ),
+             out_s =
+               number_or(
+                 attrs["trim_out_s"],
+                 (base && base.actual_end_s) || clip.trim_out_s || clip.requested_end_s
+               ),
              :ok <- check_optional_range(in_s, out_s) do
           note = if clip.review_status == "rejected", do: clip.review_note
 
@@ -341,6 +396,7 @@ defmodule Platform.Social.ClipJobs do
               note,
               ClipVersions.next_rev(clip)
             )
+            |> pin_base(base)
 
           %ClipJob{}
           |> ClipJob.enqueue_changeset(%{
@@ -360,6 +416,34 @@ defmodule Platform.Social.ClipJobs do
         end
       end)
     end
+  end
+
+  defp current_base!(scope, clip, requested_id) do
+    base =
+      if requested_id do
+        ok_or_rollback(ClipVersions.get(scope, clip.profile_id, clip.id, requested_id))
+      else
+        Repo.one(
+          from(r in Platform.Social.ClipRender,
+            where: r.clip_id == ^clip.id and r.rev == ^clip.rev and is_nil(r.removed_at)
+          )
+        )
+      end
+
+    if base && base.rev != clip.rev, do: Repo.rollback(:stale_version)
+    base
+  end
+
+  defp pin_base(payload, nil), do: payload
+
+  defp pin_base(payload, base) do
+    Map.merge(payload, %{
+      "base_render_id" => base.id,
+      "candidate_id" => base.candidate_id,
+      "alternate_id" => base.alternate_id,
+      "caption_fixes" => base.caption_fixes,
+      "episode" => base.source || payload["episode"]
+    })
   end
 
   @doc """
@@ -401,7 +485,16 @@ defmodule Platform.Social.ClipJobs do
   defp human_profile(org_id, profile_id, user_id) do
     with %Profile{} = profile <- Social.get_profile(org_id, profile_id) || {:error, :not_found},
          :ok <- Social.approver_check(profile.org_id, profile, user_id) do
-      {:ok, profile}
+      profile =
+        if Repo.in_transaction?(), do: ClipClosingVideo.lock_profile(profile.id), else: profile
+
+      with :ok <- Social.approver_check(profile.org_id, profile, user_id),
+           {:ok, project} <- Social.render_project(profile),
+           true <- is_nil(project.archived_at) do
+        {:ok, profile}
+      else
+        _ -> {:error, :not_found}
+      end
     end
   end
 
@@ -483,7 +576,24 @@ defmodule Platform.Social.ClipJobs do
 
   # ── Payload ──────────────────────────────────────────────────────────
 
-  defp payload(kind, profile, clip, look, in_s, out_s, review_note, expected_rev) do
+  defp payload(
+         kind,
+         profile,
+         clip,
+         look,
+         in_s,
+         out_s,
+         review_note,
+         expected_rev,
+         closing \\ :current
+       ) do
+    profile = ClipClosingVideo.lock_profile(profile.id)
+
+    closing =
+      if closing == :current,
+        do: ok_or_rollback(ClipClosingVideo.snapshot(profile)),
+        else: closing
+
     delta = ClipLook.delta(look, ClipLook.effective(profile.show_look))
     music = ok_or_rollback(Platform.Social.ClipMusic.payload(profile, look))
 
@@ -492,7 +602,8 @@ defmodule Platform.Social.ClipJobs do
     |> Map.merge(%{
       "look_delta" => delta,
       "clip_overrides" => ClipLook.to_clip_overrides(delta),
-      "music" => music
+      "music" => music,
+      "closing_video" => closing
     })
   end
 
@@ -602,6 +713,11 @@ defmodule Platform.Social.ClipJobs do
           {:ok, map()} | error()
   def source_download(scope, job_id, agent_id, asset \\ "episode") do
     locked(scope, job_id, agent_id, fn job, profile ->
+      # Same profile -> file lock order as settings/enqueue: the pinned download
+      # cannot mint a URL while tenant identity or file metadata is changing.
+      profile =
+        if asset == "closing_video", do: ClipClosingVideo.lock_profile(profile.id), else: profile
+
       source =
         case asset do
           "episode" ->
@@ -612,8 +728,13 @@ defmodule Platform.Social.ClipJobs do
             unless music["enabled"] == true, do: Repo.rollback(:music_unavailable)
             ok_or_rollback(Platform.Social.ClipMusic.resolve(profile, music["file_id"]))
 
+          "closing_video" ->
+            ok_or_rollback(
+              ClipClosingVideo.resolve_snapshot(profile, job.payload["closing_video"])
+            )
+
           _ ->
-            Repo.rollback(:music_unavailable)
+            Repo.rollback(:invalid_asset)
         end
 
       expires_at = DateTime.add(DateTime.utc_now(), 900, :second)
@@ -625,7 +746,9 @@ defmodule Platform.Social.ClipJobs do
         url: url,
         expires_at: expires_at,
         content_type: source.content_type,
-        byte_size: source.byte_size
+        byte_size: source.byte_size,
+        content_hash: source.content_hash,
+        max_bytes: if(asset == "closing_video", do: ClipClosingVideo.max_bytes(), else: nil)
       }
     end)
   end
@@ -694,7 +817,8 @@ defmodule Platform.Social.ClipJobs do
                   pick["in_s"] * 1.0,
                   pick["out_s"] * 1.0,
                   nil,
-                  1
+                  1,
+                  job.payload["closing_video"]
                 )
                 |> Map.merge(%{
                   "episode_job_id" => job.id,
@@ -747,9 +871,12 @@ defmodule Platform.Social.ClipJobs do
   @spec complete(Social.scope(), term(), Ecto.UUID.t(), map()) ::
           {:ok, %{job: ClipJob.t(), clip: Clip.t() | nil}} | error()
   def complete(scope, job_id, agent_id, result) do
-    result = result |> normalize() |> Map.take(@result_keys)
+    result = normalize(result)
+    override? = Map.has_key?(result, "closing_video")
+    result = Map.take(result, @result_keys)
 
     locked(scope, job_id, agent_id, fn job, profile ->
+      if override?, do: Repo.rollback(:closing_video_override)
       clip = complete_clip(job, profile, agent_id, result)
 
       result =
@@ -811,7 +938,16 @@ defmodule Platform.Social.ClipJobs do
       do: Repo.rollback(:stale_version)
 
     look = payload["look"] || clip.look
-    meta = AgentDrafts.clip_file_meta(file, result)
+    # When a closing contract is enabled, only measured TOTAL output facts are
+    # accepted. Runner-reported content duration must never substitute for them.
+    closing_enabled = get_in(payload, ["closing_video", "enabled"]) == true
+    meta = AgentDrafts.clip_file_meta(file, if(closing_enabled, do: %{}, else: result))
+
+    if closing_enabled and
+         not (is_number(meta["duration_s"]) and meta["duration_s"] > 0 and
+                is_integer(meta["width"]) and meta["width"] > 0 and is_integer(meta["height"]) and
+                meta["height"] > 0),
+       do: Repo.rollback(:output_measurements_unavailable)
 
     render_attrs =
       Map.merge(meta, %{
@@ -875,6 +1011,7 @@ defmodule Platform.Social.ClipJobs do
       alternate_id: result["alternate_id"] || payload["alternate_id"],
       submitted_by_agent_id: agent_id,
       source: payload["episode"],
+      closing_video: payload["closing_video"],
       provenance: %{"kind" => "clip_job", "job_id" => job.id, "job_kind" => kind},
       completion_key: "clip_job:" <> job.id
     })
