@@ -1168,7 +1168,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "triage_dispatch must reference the tasks_created_from_meeting completion telemetry event"
     end
 
-    test "declares all seven variables in the descriptor" do
+    test "declares every planned variable in the descriptor" do
       descriptor =
         PromptTemplates.default_templates()
         |> Enum.find(&(&1.slug == "dispatch.triage_dispatch"))
@@ -1187,11 +1187,19 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
           "transcript_id",
           "canvas_id",
           "execution_space_id",
-          "skills_reference"
+          "skills_reference",
+          # Task 01a18ab4 stage 1: the run-identity block.
+          "meeting_id",
+          "run_id",
+          "snapshot_hash",
+          "source_transcript_ids",
+          "accepted_action_candidates",
+          "candidate_provenance_instructions",
+          "completion_transcript"
         ])
 
       assert Enum.sort(descriptor.variables) == expected_vars,
-             "dispatch.triage_dispatch must declare exactly the seven planned variables"
+             "dispatch.triage_dispatch must declare exactly the planned variables"
     end
   end
 

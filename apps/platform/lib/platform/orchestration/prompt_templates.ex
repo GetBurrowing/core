@@ -1917,10 +1917,33 @@ defmodule Platform.Orchestration.PromptTemplates do
           "meeting_name",
           "execution_space_id",
           "federation_preamble",
-          "skills_reference"
+          "skills_reference",
+          "meeting_id",
+          "run_id",
+          "snapshot_hash",
+          "canvas_id",
+          "source_transcript_ids",
+          "accepted_action_candidates",
+          "completion_transcript"
         ],
         content: """
         {{federation_preamble}}
+
+        ## This run — every identifier is in this message, not the tag attributes
+
+        - meeting_id={{meeting_id}}, run_id={{run_id}}, transcript_id={{transcript_id}}, snapshot_hash={{snapshot_hash}}
+        - canvas_id={{canvas_id}} (blank on the first run means canvas_create; otherwise update that canvas)
+        - source_transcript_ids={{source_transcript_ids}}
+
+        Complete this step by calling the MCP tool `meeting_scribe_complete` with meeting_id={{meeting_id}}, run_id={{run_id}}, transcript_id={{transcript_id}}, snapshot_hash={{snapshot_hash}} and the canvas_id you created.
+
+        ### Accepted action candidates
+
+        {{accepted_action_candidates}}
+
+        ### Full finalized transcript (segment_id | time | speaker: text)
+
+        {{completion_transcript}}
 
         Meeting `{{meeting_name}}` just ended — produce the 5-card scribe completion canvas.
 
@@ -1932,7 +1955,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `execution_space_id={{execution_space_id}}` — your working space for evidence + status updates.
 
         Read `meeting_id`, `run_id`, `snapshot_hash`, `completion_transcript` and
-        `source_transcript_ids` from the attention signal. `completion_transcript` is the full
+        `source_transcript_ids` from the `This run` block above. `completion_transcript` is the full
         ordered segment snapshot across the meeting's recordings. Use it, not the latest chunk
         or summary alone. Preserve these canonical identities unchanged in the callback.
         Use `space_get_context` for supporting context only. No task or stage ack is needed.
@@ -2063,10 +2086,37 @@ defmodule Platform.Orchestration.PromptTemplates do
           "transcript_id",
           "canvas_id",
           "execution_space_id",
-          "skills_reference"
+          "skills_reference",
+          "meeting_id",
+          "run_id",
+          "snapshot_hash",
+          "source_transcript_ids",
+          "accepted_action_candidates",
+          "candidate_provenance_instructions",
+          "completion_transcript"
         ],
         content: """
         {{federation_preamble}}
+
+        ## This run — every identifier is in this message, not the tag attributes
+
+        - meeting_id={{meeting_id}}, run_id={{run_id}}, transcript_id={{transcript_id}}, snapshot_hash={{snapshot_hash}}
+        - canvas_id={{canvas_id}} — the scribe canvas whose `actions` checklist you consume
+        - source_transcript_ids={{source_transcript_ids}}
+
+        Complete this step by calling the MCP tool `meeting_triage_file` with meeting_id={{meeting_id}}, run_id={{run_id}}, transcript_id={{transcript_id}}, canvas_id={{canvas_id}}, snapshot_hash={{snapshot_hash}} and action_items.
+
+        ### Candidate provenance
+
+        {{candidate_provenance_instructions}}
+
+        ### Accepted action candidates
+
+        {{accepted_action_candidates}}
+
+        ### Full finalized transcript (segment_id | time | speaker: text)
+
+        {{completion_transcript}}
 
         ## Signal context
 
@@ -2091,7 +2141,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         4. **Resolve the target project.** Call `project_list` to get every project the actor can see. Score each project's name against the parsed `project_hint` using `String.jaro_distance/2`. Accept the highest-scoring match if its score is `>= 0.85`; otherwise fall back to the project that owns the source canvas's space (via `space_id → project_id` lookup). Record which branch you took so the summary card can distinguish `filed` from `fallback_project`.
 
         5. **File through the authenticated completion tool.** Read `meeting_id`, `run_id`,
-           `snapshot_hash`, `completion_transcript` and `source_transcript_ids` from the signal.
+           `snapshot_hash`, `completion_transcript` and `source_transcript_ids` from the `This run` block above.
            Review the full ordered segments, including late final segments. For each real follow-up,
            submit `item_id` equal to its canonical checklist_item node id, a normalized imperative
            `title`, grounded `description`, and nonempty `source_segment_ids` from that snapshot.
