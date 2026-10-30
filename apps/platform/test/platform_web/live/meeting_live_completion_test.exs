@@ -255,6 +255,46 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert [%Participant{}] = active_participants(ctx)
   end
 
+  # Task 01a18d0a stage 4, round 2. A `?tab=` live patch re-enters
+  # handle_params on the same pid. It used to re-run the whole room setup,
+  # crash on `MeetingHooks.attach/2`'s already-attached hook, reload the
+  # page and drop the viewer's LiveKit connection: a tab patch left the call.
+  test "a ?tab= live patch while joined keeps the call on the same view", ctx do
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    assert_push_event(view, "join-meeting", %{})
+
+    space_id = ctx.meeting.chat_space_id
+    presence = Platform.Meetings.PubSub.presence_topic(space_id)
+    intents = Platform.Meetings.PubSub.intents_topic(ctx.meeting.id)
+    assert registrations(presence, view.pid) == 1
+    assert registrations(intents, view.pid) == 1
+
+    html = render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=transcript")
+    assert html =~ ~s(data-role="meeting-leave")
+
+    assert Process.alive?(view.pid)
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.in_meeting
+    assert assigns.active_meeting_tab == "transcript"
+    assert [%Participant{left_at: nil}] = active_participants(ctx)
+    refute_push_event(view, "join-meeting", %{}, 50)
+
+    # No second registration on the raw PubSub topics the setup subscribes,
+    # so a message broadcast after the patch is delivered to this view once.
+    assert registrations(presence, view.pid) == 1
+    assert registrations(intents, view.pid) == 1
+
+    # A second patch is no different.
+    render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=people")
+    assert :sys.get_state(view.pid).socket.assigns.in_meeting
+    assert registrations(presence, view.pid) == 1
+  end
+
+  defp registrations(topic, pid) do
+    Platform.PubSub |> Registry.lookup(topic) |> Enum.count(fn {p, _} -> p == pid end)
+  end
+
   test "a call held in ANOTHER meeting does not join this one", ctx do
     {:ok, other} =
       Meetings.create_meeting(%{project_id: ctx.meeting.project_id, name: "Other call"})

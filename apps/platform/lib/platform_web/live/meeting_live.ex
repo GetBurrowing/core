@@ -1000,6 +1000,20 @@ defmodule PlatformWeb.MeetingLive do
          )
          |> push_navigate(to: ~p"/meetings")}
 
+      # A LIVE PATCH WITHIN THE SAME MEETING (task 01a18d0a stage 4). A
+      # `?tab=` deep-link patch re-enters this clause on the SAME pid with
+      # the room already set up. Re-running the setup below crashed the view
+      # (`MeetingHooks.attach/2` raises on its already-attached
+      # `:meeting_events` hook) and, had it not, would have taken a second
+      # registration on every raw PubSub subscribe in it. The crash reloaded
+      # the page and the client dropped its LiveKit connection, so a tab
+      # patch took a joined viewer out of the call. Everything that block
+      # sets up is already in place for this meeting; the tab was assigned
+      # above, and access was re-checked by the fetch just made. The index
+      # clause sets `:meeting` to nil, so index -> room still runs the setup.
+      {:ok, %{id: id}} when is_binary(id) and id == socket.assigns.meeting.id ->
+        {:noreply, socket}
+
       {:ok, meeting} ->
         # RELEASE BEFORE HOLD (task 01a02c4e stage 3). `/meetings` and
         # `/meetings/:slug` are declared in ONE live_session on purpose
