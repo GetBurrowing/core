@@ -210,7 +210,7 @@ defmodule PlatformWeb.InstallStatusLive do
             <form
               id="handover-ack"
               phx-change="saved"
-              class="mt-6 flex flex-col gap-3 border-t border-base-300 pt-5 sm:flex-row sm:items-center sm:justify-between"
+              class="mt-6 flex flex-col gap-3 border-t border-edge pt-5 sm:flex-row sm:items-center sm:justify-between"
             >
               <label class="flex cursor-pointer items-center gap-3 text-base text-base-content">
                 <input type="hidden" name="saved" value="false" />
@@ -239,7 +239,7 @@ defmodule PlatformWeb.InstallStatusLive do
             class="rounded-box border border-error/40 bg-error/10 p-5 text-base-content"
           >
             <p class="font-medium text-error">We couldn't prepare your details just now.</p>
-            <p class="mt-1 text-sm text-base-content/70">
+            <p class="mt-1 text-sm text-subtle">
               Your server is ready and nothing was lost.
             </p>
             <button type="button" phx-click="reveal_again" class="btn btn-primary mt-4 min-h-11">
@@ -265,7 +265,7 @@ defmodule PlatformWeb.InstallStatusLive do
     ~H"""
     <section id="install-invalid" class="space-y-2">
       <h1 class="text-2xl font-semibold text-base-content">This link isn't valid</h1>
-      <p class="text-base text-base-content/70">
+      <p class="text-base text-subtle">
         Check that you copied the whole link, or ask whoever sent it for a new one.
       </p>
     </section>
@@ -276,7 +276,7 @@ defmodule PlatformWeb.InstallStatusLive do
     ~H"""
     <section id="install-removed" class="space-y-2">
       <h1 class="text-2xl font-semibold text-base-content">This install has been removed</h1>
-      <p class="text-base text-base-content/70">Its server and address no longer exist.</p>
+      <p class="text-base text-subtle">Its server and address no longer exist.</p>
     </section>
     """
   end
@@ -296,13 +296,13 @@ defmodule PlatformWeb.InstallStatusLive do
         Setting up {@install.business_name}
       </h1>
 
-      <ol id="install-steps" class="rounded-box border border-base-300 bg-base-100">
+      <ol id="install-steps" class="rounded-box border border-edge bg-base-100">
         <li
           :for={step <- @install.steps}
           id={"step-#{step["key"]}"}
           data-state={step["state"]}
           class={[
-            "flex items-center gap-3 border-base-300 px-4 py-3 [&:not(:first-child)]:border-t",
+            "flex items-center gap-3 border-edge px-4 py-3 [&:not(:first-child)]:border-t",
             step["state"] == "running" && "bg-info/10",
             step["state"] == "failed" && "bg-error/10"
           ]}
@@ -311,7 +311,7 @@ defmodule PlatformWeb.InstallStatusLive do
           <span class={["min-w-0 flex-1 break-words text-base", label_class(step["state"])]}>
             {step_label(step["key"], @install)}
           </span>
-          <span class="shrink-0 font-mono text-sm tabular-nums text-base-content/60">
+          <span class="shrink-0 font-mono text-sm tabular-nums text-subtle">
             {elapsed(step)}
           </span>
         </li>
@@ -340,17 +340,17 @@ defmodule PlatformWeb.InstallStatusLive do
         class="rounded-box border border-info/40 bg-info/10 p-4 text-base-content"
       >
         <p class="font-medium text-info">Point {@install.primary_host} at your server</p>
-        <p class="mt-1 text-sm text-base-content/80">
+        <p class="mt-1 text-sm text-subtle">
           Add these two records where you manage your domain. This step finishes by itself once they
           are live, which can take up to an hour.
         </p>
         <dl class="mt-3 space-y-2">
           <div
             :for={{record, i} <- Enum.with_index(@records)}
-            class="rounded-box border border-base-300 bg-base-100 p-3"
+            class="rounded-box border border-edge bg-base-100 p-3"
             data-record-type={record.type}
           >
-            <dt class="text-xs text-base-content/70">
+            <dt class="text-xs text-subtle">
               {record.type} record for
               <span class="font-mono text-sm text-base-content break-all">{record.name}</span>
             </dt>
@@ -373,7 +373,7 @@ defmodule PlatformWeb.InstallStatusLive do
         </dl>
       </div>
 
-      <div class="space-y-1 text-base text-base-content/70">
+      <div class="space-y-1 text-base text-subtle">
         <p>About 8 minutes. You can close this tab; this link keeps working.</p>
         <p id="install-plan" class="text-sm">
           {Installs.region_label(@install.region)} · {Installs.size_label(@install.size)}<span :if={
@@ -415,7 +415,7 @@ defmodule PlatformWeb.InstallStatusLive do
     """
   end
 
-  defp label_class("done"), do: "text-base-content/60"
+  defp label_class("done"), do: "text-subtle"
   defp label_class("running"), do: "font-medium text-info"
   defp label_class("failed"), do: "font-medium text-error"
   defp label_class(_pending), do: "text-base-content"
@@ -463,7 +463,7 @@ defmodule PlatformWeb.InstallStatusLive do
 
   defp credentials(%{handover: nil} = assigns) do
     ~H"""
-    <div id="handover-credentials" class="mt-5 text-base text-base-content/70">
+    <div id="handover-credentials" class="mt-5 text-base text-subtle">
       Preparing your details…
     </div>
     """
@@ -475,8 +475,8 @@ defmodule PlatformWeb.InstallStatusLive do
       <dl class="space-y-3">
         <.credential_row id="handover-burrow" label="Burrow" value={@handover.burrow_url} />
         <.credential_row id="handover-admin" label="Admin" value={@handover.admin_email} />
-        <div class="rounded-box border border-base-300 p-3">
-          <dt class="text-sm text-base-content/70">Sign-in link</dt>
+        <div class="rounded-box border border-edge p-3">
+          <dt class="text-sm text-subtle">Sign-in link</dt>
           <dd class="mt-1 flex items-center gap-2">
             <span
               id="handover-signin-masked"
@@ -513,23 +513,23 @@ defmodule PlatformWeb.InstallStatusLive do
               Copy
             </button>
           </dd>
-          <p class="mt-1 text-xs text-base-content/70">
+          <p class="mt-1 text-xs text-subtle">
             Opens once. You'll add a passkey. It works for 30 minutes; reopen this page for a fresh one
             until you tick the box below.
           </p>
         </div>
       </dl>
 
-      <details id="handover-ssh" class="group rounded-box border border-base-300">
+      <details id="handover-ssh" class="group rounded-box border border-edge">
         <summary class="flex min-h-11 cursor-pointer items-center gap-2 px-3 text-sm font-medium text-base-content">
           <.icon name="hero-chevron-right" class="size-4 transition-transform group-open:rotate-90" />
           For technical users (SSH)
         </summary>
-        <dl class="space-y-3 border-t border-base-300 p-3">
+        <dl class="space-y-3 border-t border-edge p-3">
           <.credential_row id="handover-ssh-host" label="Host" value={@handover.ssh.host} />
           <.credential_row id="handover-ssh-user" label="User" value={@handover.ssh.user} />
           <div>
-            <dt class="flex items-center justify-between text-sm text-base-content/70">
+            <dt class="flex items-center justify-between text-sm text-subtle">
               Private key
               <button
                 type="button"
@@ -573,8 +573,8 @@ defmodule PlatformWeb.InstallStatusLive do
 
   defp credential_row(assigns) do
     ~H"""
-    <div class="rounded-box border border-base-300 p-3">
-      <dt class="text-sm text-base-content/70">{@label}</dt>
+    <div class="rounded-box border border-edge p-3">
+      <dt class="text-sm text-subtle">{@label}</dt>
       <dd class="mt-1 flex items-center gap-2">
         <span
           id={@id}

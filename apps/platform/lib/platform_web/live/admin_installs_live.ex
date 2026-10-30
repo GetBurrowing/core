@@ -6,7 +6,7 @@ defmodule PlatformWeb.AdminInstallsLive do
   a list below shows every install with its status and a Destroy button that
   needs the slug typed before it calls `Platform.Installs.teardown/1`.
 
-  The marketing-site front door is Jordan's and out of scope here; it will
+  The marketing-site front door is owned elsewhere and out of scope here; it will
   call `Platform.Installs.create/2` too, and the customer lands on the same
   `/install-status/:token` page (`PlatformWeb.InstallStatusLive`).
 
@@ -248,7 +248,7 @@ defmodule PlatformWeb.AdminInstallsLive do
             id="install-form"
             phx-change="validate"
             phx-submit="create"
-            class="space-y-4 rounded-box border border-base-300 bg-base-100 p-4"
+            class="space-y-4 rounded-box border border-edge bg-base-100 p-4"
           >
             <.input field={@form[:business_name]} type="text" label="Business name" required />
             <.input field={@form[:owner_email]} type="email" label="Owner email" required />
@@ -262,7 +262,7 @@ defmodule PlatformWeb.AdminInstallsLive do
               <legend class="text-sm font-medium text-base-content">Size</legend>
               <label
                 :for={option <- @size_options}
-                class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-base-300 px-3"
+                class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-edge px-3"
               >
                 <input
                   type="radio"
@@ -276,7 +276,7 @@ defmodule PlatformWeb.AdminInstallsLive do
             </fieldset>
             <fieldset class="space-y-2">
               <legend class="text-sm font-medium text-base-content">Domain</legend>
-              <label class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-base-300 px-3">
+              <label class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-edge px-3">
                 <input
                   type="radio"
                   name="install[domain_mode]"
@@ -286,7 +286,7 @@ defmodule PlatformWeb.AdminInstallsLive do
                 />
                 <span class="text-sm text-base-content">Use a Burrow subdomain</span>
               </label>
-              <label class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-base-300 px-3">
+              <label class="flex min-h-11 cursor-pointer items-center gap-3 rounded-box border border-edge px-3">
                 <input
                   type="radio"
                   name="install[domain_mode]"
@@ -300,8 +300,7 @@ defmodule PlatformWeb.AdminInstallsLive do
                 :if={@form[:domain_mode].value == "customer"}
                 field={@form[:primary_host]}
                 type="text"
-                label="Domain"
-                placeholder="shop.example.com"
+                label="Domain (for example shop.example.com)"
               />
             </fieldset>
             <p :if={@form_error} id="install-form-error" class="text-sm text-error">
@@ -315,7 +314,7 @@ defmodule PlatformWeb.AdminInstallsLive do
           <section class="space-y-2">
             <h2 class="text-sm font-semibold text-base-content">Installs</h2>
             <p :if={@installs == []} class="text-sm text-subtle">None yet.</p>
-            <ul id="installs-list" class="divide-y divide-base-300 rounded-box border border-base-300">
+            <ul id="installs-list" class="divide-y divide-edge rounded-box border border-edge">
               <li :for={install <- @installs} id={"install-#{install.slug}"} class="space-y-2 p-3">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0 flex-1">
