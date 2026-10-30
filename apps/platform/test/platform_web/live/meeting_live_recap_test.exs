@@ -22,12 +22,15 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
+
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.Candidates
+  alias Platform.Meetings.{CompletionRun, Meeting, Participant, Room}
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.Meetings.CallRecap
@@ -273,8 +276,10 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       html = render_hook(view, "meeting_left", %{})
       assert count(html, @recap) == 1
 
-      html = render_hook(view, "dismiss_call_recap", %{})
-      assert count(html, @recap) == 0
+      # Dismissing ends the visit on the Meetings index (task 01a18d0a
+      # stage 3), so the recap is gone with the page.
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+               render_hook(view, "dismiss_call_recap", %{})
     end
 
     test "is rendered at a desktop viewport too (matches the prototype's .after-screen)",
@@ -298,8 +303,8 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       assert panel_class =~ "lg:max-w-[880px]"
 
       # Dismiss still works from the desktop surface.
-      html = render_hook(view, "dismiss_call_recap", %{})
-      assert count(html, @recap) == 0
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+               render_hook(view, "dismiss_call_recap", %{})
     end
 
     test "on the shell surface the bottom padding clears the safe area and the bottom nav",
@@ -310,5 +315,154 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       assert class =~ "env(safe-area-inset-bottom)"
       assert class =~ "var(--bottom-nav-height,0px)"
     end
+  end
+
+  # ── Leaving ends on the Meetings index (task 01a18d0a stage 3) ────────
+  #
+  # The after-action report stays up until its own close control is used,
+  # then the visit ends on the canonical `/meetings` index. It never sends
+  # the viewer back to the meeting they just left, and nothing navigates on
+  # a timer.
+
+  describe "closing the after-action report" do
+    setup %{user: user} do
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn ->
+        Application.put_env(:platform, :livekit, original)
+        Platform.Meetings.State.broadcast_left(user.id)
+      end)
+
+      :ok
+    end
+
+    test "join, leave, read the report, close it: lands on /meetings and never returns",
+         %{conn: conn, user: user, meeting: meeting} do
+      # Another participant is in the call; this viewer leaving must not
+      # take them out of it.
+      other = other_user!()
+      {:ok, _} = Meetings.join_for_user(meeting.chat_space_id, other.id, other.name)
+
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}")
+      view |> element(~s([data-role="meeting-join"])) |> render_click()
+      assert_push_event(view, "join-meeting", %{token: _})
+
+      html = view |> element(~s([data-role="meeting-leave"])) |> render_click()
+      assert count(html, @recap) == 1
+      assert_push_event(view, "leave-meeting", %{})
+
+      # The report is held until it is closed: no timer, no early redirect.
+      Process.sleep(100)
+      assert count(render(view), @recap) == 1
+
+      view |> element(~s([data-role="call-recap-dismiss"])) |> render_click()
+      assert {path, _flash} = assert_redirect(view)
+      assert path == "/meetings"
+
+      # The index renders, and is the index rather than the departed room.
+      {:ok, index, _} = live(conn, path)
+      refute has_element?(index, ~s([data-role="call-recap"]))
+      refute has_element?(index, ~s([data-role="meeting-join"]))
+      refute_redirected(index, "/meetings/#{meeting.slug}")
+
+      # This viewer is out of the call; the other participant is still in.
+      assert active?(meeting, other.id)
+      refute active?(meeting, user.id)
+      assert Platform.Meetings.State.get_for_user(user.id) == nil
+      assert Repo.get!(Meeting, meeting.id).status == "live"
+    end
+
+    test "a redundant meeting_left keeps the first report and closes once",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}")
+      view |> element(~s([data-role="meeting-join"])) |> render_click()
+
+      # The button's leave, then the client's RoomEvent.Disconnected
+      # acknowledgement, then a stray duplicate of it.
+      view |> element(~s([data-role="meeting-leave"])) |> render_click()
+      first = :sys.get_state(view.pid).socket.assigns.call_recap
+      assert %{left_at: %DateTime{}} = first
+
+      render_hook(view, "meeting_left", %{})
+      html = render_hook(view, "meeting_left", %{})
+
+      assert count(html, @recap) == 1
+      assert :sys.get_state(view.pid).socket.assigns.call_recap == first
+
+      # Nothing has navigated yet.
+      assert render(view) =~ ~s(data-role="call-recap")
+
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+               render_hook(view, "dismiss_call_recap", %{})
+    end
+
+    test "a close with no report showing does not navigate", %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}")
+
+      html = render_hook(view, "dismiss_call_recap", %{})
+      assert html =~ ~s(data-role="meeting-join")
+      refute_redirected(view, "/meetings")
+    end
+
+    test "reopening the ended meeting after the report does not join or reopen its filed run",
+         %{conn: conn, user: user, meeting: meeting} do
+      {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}")
+      view |> element(~s([data-role="meeting-join"])) |> render_click()
+      view |> element(~s([data-role="meeting-leave"])) |> render_click()
+      view |> element(~s([data-role="call-recap-dismiss"])) |> render_click()
+      assert_redirect(view, "/meetings")
+
+      {:ok, ended} = Meetings.end_meeting(Repo.get!(Meeting, meeting.id))
+      runs_before = Repo.all(from(r in CompletionRun, where: r.meeting_id == ^ended.id))
+
+      {:ok, reopened, _html} = live(conn, "/meetings/#{meeting.slug}")
+      render(reopened)
+
+      assert has_element?(reopened, ~s([data-role="meeting-join"]))
+      refute_push_event(reopened, "join-meeting", %{}, 50)
+      refute :sys.get_state(reopened.pid).socket.assigns.in_meeting
+      assert Repo.get!(Meeting, meeting.id).status == "ended"
+      refute active?(meeting, user.id)
+      assert Repo.all(from(r in CompletionRun, where: r.meeting_id == ^ended.id)) == runs_before
+    end
+  end
+
+  defp other_user! do
+    n = System.unique_integer([:positive])
+
+    user =
+      Repo.insert!(%User{
+        email: "recap_other_#{n}@example.com",
+        name: "Recap Other #{n}",
+        oidc_sub: "oidc-recap-other-#{n}"
+      })
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: Platform.TenancyFixtures.acme_org_id(),
+      role: "member"
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
+  defp active?(meeting, user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        join: r in Room,
+        on: r.id == p.room_id,
+        where:
+          r.space_id == ^meeting.chat_space_id and p.user_id == ^user_id and
+            is_nil(p.left_at)
+      )
+    )
   end
 end
