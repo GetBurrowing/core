@@ -51,10 +51,9 @@ defmodule Platform.Installs.RunnerTest do
       # Ours mode: <slug>.<zone> and auth.<slug>.<zone> point at the droplet.
       names = Fake.all(:record) |> Enum.map(&{&1["name"], &1["data"]}) |> Enum.sort()
 
-      assert names == [
-               {"auth." <> install.slug, install.droplet_ip},
-               {install.slug, install.droplet_ip}
-             ]
+      ip = install.droplet_ip
+      expected = [{"auth." <> install.slug, ip}, {install.slug, ip}]
+      assert names == Enum.sort(expected)
 
       # The render's two kept values were sealed before the droplet existed.
       assert {:ok, sealed} = Installs.unseal(install)
@@ -151,7 +150,9 @@ defmodule Platform.Installs.RunnerTest do
       assert step(Installs.get(install.id), "reserve")["error"] ==
                "This step took longer than expected."
     end
+  end
 
+  describe "a refused create" do
     test "a refused droplet create fails reserve and names no infrastructure" do
       wrap = fn conn, fake ->
         if conn.method == "POST" and conn.request_path == "/v2/droplets",

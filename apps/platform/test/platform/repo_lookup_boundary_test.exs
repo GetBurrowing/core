@@ -152,6 +152,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
     {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
      "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
+    {"platform/installs.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a10315 stage 2: get/1 guards the install id with Platform.UUID.valid?/1 before `where: i.id == ^id`, because teardown/1 takes an id OR a slug from a mix task or `bin/platform eval` argument; a malformed id is nil and teardown falls back to the slug lookup"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
@@ -1097,6 +1099,9 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Task 01a10315 stage 2: get/1 (Platform.UUID.valid?/1 first), get_by_slug/1
+    # (a string column) and get_by_token/2 (a sha256 binary) — no unguarded id.
+    "platform/installs.ex" => 3,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
