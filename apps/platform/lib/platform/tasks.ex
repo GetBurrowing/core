@@ -11,6 +11,40 @@ defmodule Platform.Tasks do
   `launch_proof_run/2` wires together the execution/context/artifact planes for
   an end-to-end proof that the product plumbing works. See
   `Platform.Execution.ProofRun` for the full orchestration details.
+
+  ## Human vs agent status moves (task 01a18e02)
+
+  Agents need limits; humans generally do not.
+
+    * **Two tables.** A human user actor (`{:user, id}`) is checked against
+      the human table: from any status except `cancelled` and
+      `stack_pending`, to any of backlog, planning, in_progress, in_review,
+      deploying, done and blocked, plus `cancelled` where the agent table
+      already allows it. Every other actor (agents, `:system`, the engine)
+      keeps `valid_task_transitions/0`. Both are read through
+      `allowed_next_statuses/2`, the one status chokepoint for
+      `transition_task/3`, `drop_task_to_column/3` and `apply_task_update/3`.
+      The actor is always passed explicitly, never read from the ambient
+      `TransitionActor` context, so engine work running inside a person's
+      request keeps the agent table.
+    * **The plan gate opens for users only.** `require_approved_plan_for/3`
+      passes every user actor. Agents still cannot start or finish work
+      without an approved plan. A human close (backlog, planning or blocked
+      straight to done) is recorded with `via: "human_close"`.
+    * **Guards that still apply to humans:** quarantine
+      (`require_not_quarantined_for_transition/2`), deploy target
+      (`require_deploy_target_for/2`), stack commencement
+      (`require_stack_commencement_for/2`) and shipped stack
+      (`require_stack_not_shipped_for/2`). They protect security and atomic
+      shipping, not agent discipline.
+    * **No-agent human moves are inert.** A human move into `in_progress`
+      or `in_review` whose target phase has no agent
+      (`agent_assigned_for_phase?/2`) clears a stale agent pointer on the
+      same changeset, so no router, dispatch, lease or alarm follows.
+    * **With an agent assigned, behaviour is unchanged**, except one
+      warning: moving a task with an execution agent and no approved plan
+      into `in_progress` (`human_move_needs_confirmation?/3`). Confirming
+      sends the task to `planning`, so the agent plans first.
   """
 
   import Ecto.Query
@@ -190,6 +224,110 @@ defmodule Platform.Tasks do
     case TransitionActor.normalize(actor) do
       {"user", id} when is_binary(id) -> Map.get(@human_transitions, from, [])
       _ -> Map.get(@valid_task_transitions, from, [])
+    end
+  end
+
+  @doc """
+  Is an AGENT assigned to `task` for `phase` ("planning", "execution" or
+  "review")?
+
+    * `phase_assignees[phase]` names an assignee: the answer is whether it
+      is an agent. A bare `%{"assignee_id" => id}` with no type counts as an
+      agent, mirroring `assignee_for_phase/2`.
+    * otherwise, when `phase_assignees` names an assignee for ANY phase
+      (granular mode), nobody owns this phase: `false`. The flat pointer is
+      NOT consulted, because in granular mode it is only the previous
+      phase's owner.
+    * otherwise (coarse mode, no phase entries): the flat pointer, `true`
+      iff `assignee_type == "agent"` and `assignee_id` is set.
+
+  Task 01a18e02 stage 2. Used by the inert-move branch and by
+  `human_move_needs_confirmation?/3`.
+  """
+  @spec agent_assigned_for_phase?(Task.t(), String.t()) :: boolean()
+  def agent_assigned_for_phase?(%Task{} = task, phase) when is_binary(phase) do
+    entries = phase_entries(task.phase_assignees)
+
+    case Map.fetch(entries, phase) do
+      {:ok, type} ->
+        type == "agent"
+
+      :error when map_size(entries) > 0 ->
+        false
+
+      :error ->
+        task.assignee_type == "agent" and is_binary(task.assignee_id)
+    end
+  end
+
+  # `phase => type` for every phase entry that names an assignee. Cleared
+  # slots (`%{}`, nil ids) are not entries.
+  defp phase_entries(pa) when is_map(pa) do
+    for {phase, entry} <- pa, type = phase_entry_type(entry), into: %{}, do: {phase, type}
+  end
+
+  defp phase_entries(_), do: %{}
+
+  defp phase_entry_type(%{"assignee_id" => id, "assignee_type" => type})
+       when is_binary(id) and is_binary(type),
+       do: type
+
+  defp phase_entry_type(%{"assignee_id" => id}) when is_binary(id), do: "agent"
+  defp phase_entry_type(_), do: nil
+
+  @doc """
+  Should the UI warn before `actor` moves `task` to `new_status`?
+
+  True iff the actor is a human user, the target is `in_progress`, the
+  task has no approved plan (`current_plan/1` is nil) and an agent is
+  assigned for the execution phase (`agent_assigned_for_phase?/2`): the
+  agent would start executing without a plan.
+
+  This is a WARNING predicate, not a refusal. The server still accepts the
+  move if it is made directly, because humans are never blocked.
+
+  Decided (task 01a18e02, 2026-10-30): when the human confirms the warning,
+  the UI moves the task to `planning`, not `in_progress`, so the agent gets
+  a planning dispatch first. Once its plan is approved, `approve_plan`
+  (ADR 0029) moves the task into `in_progress`, and that is the only way
+  the agent starts with a plan. Cancel changes nothing.
+  """
+  @spec human_move_needs_confirmation?(Task.t(), String.t(), actor() | term()) :: boolean()
+  def human_move_needs_confirmation?(%Task{} = task, new_status, actor) do
+    new_status == "in_progress" and user_actor?(actor) and is_nil(current_plan(task.id)) and
+      agent_assigned_for_phase?(task, "execution")
+  end
+
+  defp user_actor?(actor),
+    do: match?({"user", id} when is_binary(id), TransitionActor.normalize(actor))
+
+  # Task 01a18e02 stage 2: "if I move a ticket into development without an
+  # agent assigned, same with review, it should just do nothing." A HUMAN
+  # move into in_progress / in_review whose target phase has no agent
+  # clears the flat pointer, which is otherwise left on the previous
+  # phase's agent (`phase_pointer_attrs/2` returns `%{}` when the new phase
+  # has no entry, and `assignee_for_phase/2` falls back to the flat
+  # pointer). With the pointer nil, `TaskRouterWatcher.should_run?/1` is
+  # false at commit time, so no router, dispatch, lease or alarm follows.
+  #
+  # Left alone: agent, `:system` and engine moves (the engine's
+  # planning -> in_progress after plan approval keeps today's fallback), a
+  # pointer that is already a user (including one `derived` just put
+  # there), and a pointer that is already nil. The planning agent is not
+  # lost: `phase_pointer_attrs/2` re-derives it from `phase_assignees` on
+  # the next move back to planning.
+  @inert_human_targets ~w(in_progress in_review)
+
+  defp inert_pointer_attrs(%Task{} = task, new_status, actor, derived) do
+    pointer_id = Map.get(derived, :assignee_id, task.assignee_id)
+    pointer_type = Map.get(derived, :assignee_type, task.assignee_type)
+
+    if new_status in @inert_human_targets and user_actor?(actor) and
+         not is_nil(pointer_id) and pointer_type != "user" and
+         not agent_assigned_for_phase?(task, current_phase(new_status)) do
+      %{assignee_id: nil, assignee_type: nil}
+    else
+      %{}
     end
   end
 
@@ -2113,7 +2251,15 @@ defmodule Platform.Tasks do
       # `list_should_run_tasks/0` and `redispatch_for_runtime/1` are
       # exactly such readers — saw the new status paired with the
       # PREVIOUS phase's assignee.
-      pointer_attrs = phase_pointer_attrs(task, new_status)
+      #
+      # Task 01a18e02 stage 2: a HUMAN move into in_progress / in_review
+      # with no agent assigned for the target phase clears a stale agent
+      # pointer on the SAME changeset, so `TaskRouterWatcher.should_run?/1`
+      # is false the moment the status commits. See `inert_pointer_attrs/3`.
+      pointer_attrs =
+        task
+        |> phase_pointer_attrs(new_status)
+        |> then(&Map.merge(&1, inert_pointer_attrs(task, new_status, actor, &1)))
 
       # The awaiting-human-action stamp is scoped to the deploy park: it
       # says "this task is sitting in `deploying` on a gate only a person
@@ -8181,8 +8327,12 @@ defmodule Platform.Tasks do
             # own changeset, so the stamp clear `transition_task_status/2`
             # folds in is mirrored here — on the SAME changeset as the status
             # flip, for the reason documented there.
+            #
+            # Task 01a18e02 stage 2: the inert no-agent branch is mirrored
+            # here too, because this path builds its own changeset.
             attrs =
-              %{}
+              task
+              |> inert_pointer_attrs(target_status, actor, %{})
               |> delivered_but_open_clear_attrs(task, target_status)
               |> blocked_cause_clear_attrs(task, target_status)
               |> Map.put(:status, target_status)
