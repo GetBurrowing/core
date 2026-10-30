@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_rerender_uses_immutable_content_not_mutable_review ____________
+
+shim = <conftest.shim.<locals>.Shim object at 0x794d125278c0>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-94/test_rerender_uses_immutable_c0/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x794d1246d940>
+
+    def test_rerender_uses_immutable_content_not_mutable_review(shim, state_dir, monkeypatch):
+        configure(shim, monkeypatch)
+        first = first_new_clip(shim, state_dir, headline_template=contract())
+        receipt = first.named('complete')[0][2]['headline_render']
+        review = proj(shim) / 'review.toml'
+        review.write_text(review.read_text().replace('secret transcript words two', 'unrelated changed words'))
+        before = len(shim.calls())
+        client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
+             headline_template=contract(), headline_base=receipt['content'])])
+>       assert run(client, state_dir)['status'] == 'done'
+E       AssertionError: assert 'failed' == 'done'
+E         
+E         - done
+E         + failed
+
+.headline-runner/tests/test_templates.py:99: AssertionError
+=========================== short test summary info ============================
+FAILED .headline-runner/tests/test_templates.py::test_rerender_uses_immutable_content_not_mutable_review
+1 failed in 0.88s

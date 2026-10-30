@@ -1,0 +1,64 @@
+{
+  "task_id": "01a18ef6-f0aa-7000-84b2-0dbea407507a",
+  "stage": 2,
+  "runtime": "isolated-linux-runtime",
+  "elixir": "1.20.4",
+  "otp": "28.1",
+  "postgres": "16.15",
+  "database": "platform_test_htc_templates_s2_clean",
+  "helper_version": "0.10.0",
+  "helper_sha256": "2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1",
+  "skill_sha256": "7ba6e32876a7e9e31c20f0dddbccca7c94fac4e2aafd900f0993fbbd8e2ccf7b",
+  "skill_updated_at": "2026-10-30T23:35:44.869178Z",
+  "archive_byte_matches_published_skill": true,
+  "skill_source_concurrent_changes_checked": true,
+  "helper_tests": {
+    "passed": 172,
+    "new_template_tests": 14,
+    "materialized_template_tests": 14
+  },
+  "social_full": {
+    "passed": 1559,
+    "failed": 0,
+    "log": "evidence/runner-v1/social-full-clean.log",
+    "note": "Before the final whitespace-control guard refinement; final focused regression validates that final change."
+  },
+  "earlier_nonpasses": [
+    "Initial full run1558/1559: legacy provenance unexpectedly contained headline:null; fixed by omitting unknown receipt, immutable legacy snapshot assertion then passes.",
+    "Reused test database full run hit duplicate social-user fixture email; excluded from passing evidence. Fresh-database full1559 passed."
+  ],
+  "mutation": {
+    "change": "Remove _restore_headline invocation",
+    "guard": "test_rerender_uses_immutable_content_not_mutable_review unchanged",
+    "outcome": "killed; exit1; restored final172 pass"
+  },
+  "lint": {
+    "helper": "Ruff F/E9 passes; inherited source formatting preserved",
+    "materializer": "Ruff F/E9/I and format passes",
+    "elixir": "compile --warnings-as-errors; mix format --check-formatted"
+  },
+  "snapshot": "immutable render provenance.headline; content-addressed private canonical JSON; no generated wording exported",
+  "canonical_skill": "burrow-clip-runner",
+  "no_production_install": true,
+  "no_publication": true,
+  "preserved": [
+    "original source/project/candidate maps",
+    "headline-review/1 voice/evidence",
+    "selected+combined profile doctor",
+    "caption/music/closing/cleanup/privacy",
+    "old Files/approvals/published renders",
+    "packaged how-to-computer profile"
+  ],
+  "final_focused_social": {
+    "passed": 57,
+    "failed": 0,
+    "database": "platform_test_htc_templates_s2_focused_final",
+    "files": [
+      "clip_headlines_test.exs",
+      "clip_jobs_test.exs",
+      "clip_versions_test.exs",
+      "clip_fixes_test.exs",
+      "clip_look_test.exs"
+    ]
+  }
+}

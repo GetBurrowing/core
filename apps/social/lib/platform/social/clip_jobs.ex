@@ -64,7 +64,7 @@ defmodule Platform.Social.ClipJobs do
 
   @base_profile "how-to-computer"
   @result_keys ~w(file_id title caption speaker episode_code platforms duration_s width height
-                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id headline_applied)
+                  source_label actual_in_s actual_out_s caption_fixes candidate_id alternate_id headline_applied headline_render)
   @meta_keys ~w(title caption speaker episode_code)
 
   @type error :: {:error, atom() | tuple() | Ecto.Changeset.t()}
@@ -109,6 +109,10 @@ defmodule Platform.Social.ClipJobs do
         "pipeline_version" => pipeline.version,
         "clip_user_profile" => clip_user_profile(profile),
         "look" => ClipLook.effective(profile.show_look),
+        "headline_template" =>
+          ok_or_rollback(
+            Platform.Social.ClipHeadlines.snapshot(ClipLook.effective(profile.show_look))
+          ),
         "closing_video" => ok_or_rollback(ClipClosingVideo.snapshot(profile))
       }
 
@@ -180,6 +184,7 @@ defmodule Platform.Social.ClipJobs do
           )
           |> Map.merge(%{
             "base_render_id" => base.id,
+            "headline_base" => get_in(base.provenance || %{}, ["headline", "content"]),
             "candidate_id" => base.candidate_id,
             "alternate_id" => base.alternate_id,
             "title" => base.headline,
@@ -263,6 +268,7 @@ defmodule Platform.Social.ClipJobs do
           |> Map.merge(%{
             "appearance" => true,
             "base_render_id" => base.id,
+            "headline_base" => get_in(base.provenance || %{}, ["headline", "content"]),
             "candidate_id" => base.candidate_id,
             "alternate_id" => base.alternate_id,
             "title" => base.headline,
@@ -445,6 +451,7 @@ defmodule Platform.Social.ClipJobs do
   defp pin_base(payload, base) do
     Map.merge(payload, %{
       "base_render_id" => base.id,
+      "headline_base" => get_in(base.provenance || %{}, ["headline", "content"]),
       "candidate_id" => base.candidate_id,
       "alternate_id" => base.alternate_id,
       "caption_fixes" => base.caption_fixes,
@@ -472,6 +479,7 @@ defmodule Platform.Social.ClipJobs do
 
         full = ClipLook.effective(look)
         ok_or_rollback(Platform.Social.ClipMusic.payload(profile, full))
+        ok_or_rollback(Platform.Social.ClipHeadlines.snapshot(full))
         delta = ClipLook.delta(full, ClipLook.default())
 
         payload =
@@ -610,7 +618,8 @@ defmodule Platform.Social.ClipJobs do
       "look_delta" => delta,
       "clip_overrides" => ClipLook.to_clip_overrides(delta),
       "music" => music,
-      "closing_video" => closing
+      "closing_video" => closing,
+      "headline_template" => ok_or_rollback(Platform.Social.ClipHeadlines.snapshot(look))
     })
   end
 
@@ -810,7 +819,10 @@ defmodule Platform.Social.ClipJobs do
                 |> Clip.changeset(source)
                 |> Changeset.put_change(:status, "candidate")
                 |> Changeset.put_change(:rev, 1)
-                |> Changeset.put_change(:look, ClipLook.effective(profile.show_look))
+                |> Changeset.put_change(
+                  :look,
+                  job.payload["look"] || ClipLook.effective(profile.show_look)
+                )
                 |> Changeset.put_change(:requested_start_s, pick["in_s"] * 1.0)
                 |> Changeset.put_change(:requested_end_s, pick["out_s"] * 1.0)
                 |> insert_or_rollback()
@@ -828,6 +840,7 @@ defmodule Platform.Social.ClipJobs do
                   job.payload["closing_video"]
                 )
                 |> Map.merge(%{
+                  "headline_template" => job.payload["headline_template"],
                   "episode_job_id" => job.id,
                   "candidate_id" => pick["candidate_id"],
                   "source_id" => job.source_file_id,
@@ -944,6 +957,21 @@ defmodule Platform.Social.ClipJobs do
     if payload["base_render_id"] && payload["expected_rev"] != ClipVersions.next_rev(clip),
       do: Repo.rollback(:stale_version)
 
+    headline_receipt =
+      ok_or_rollback(
+        Platform.Social.ClipHeadlines.receipt(
+          payload["headline_template"],
+          result["headline_render"]
+        )
+      )
+
+    if headline_receipt && result["headline_applied"] != true,
+      do: Repo.rollback(:headline_not_applied)
+
+    if headline_receipt &&
+         (file.id == clip.render_file_id or file.content_hash != headline_receipt["output_sha256"]),
+       do: Repo.rollback(:headline_render_not_fresh)
+
     look = payload["look"] || clip.look
     # When a closing contract is enabled, only measured TOTAL output facts are
     # accepted. Runner-reported content duration must never substitute for them.
@@ -1019,7 +1047,16 @@ defmodule Platform.Social.ClipJobs do
       submitted_by_agent_id: agent_id,
       source: payload["episode"],
       closing_video: payload["closing_video"],
-      provenance: %{"kind" => "clip_job", "job_id" => job.id, "job_kind" => kind},
+      provenance:
+        Map.reject(
+          %{
+            "kind" => "clip_job",
+            "job_id" => job.id,
+            "job_kind" => kind,
+            "headline" => headline_receipt
+          },
+          fn {_key, value} -> is_nil(value) end
+        ),
       completion_key: "clip_job:" <> job.id
     })
   end
