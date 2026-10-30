@@ -290,6 +290,12 @@ config :platform, Platform.Installs,
   regions: ~w(nyc1 nyc2 nyc3 sfo2 sfo3 atl1 ric1),
   image_registry: "ghcr.io/getburrowing"
 
+# The "Connect your AI" first-run screen (task 01a10315 stage 5): the order its
+# three options are offered in. The experiment surface; ChatGPT (Codex) first,
+# because its device login is the only subscription path that needs no shell.
+config :platform, PlatformWeb.ConnectAiLive,
+  provider_order: [:codex, :api_key, :claude_subscription]
+
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to
 # `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header

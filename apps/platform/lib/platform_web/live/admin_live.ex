@@ -21,7 +21,14 @@ defmodule PlatformWeb.AdminLive do
     {:ok,
      socket
      |> assign(:page_title, "Admin")
-     |> assign(:sign_in_admin?, Platform.SignInAdmin.Config.enabled?())}
+     |> assign(:sign_in_admin?, Platform.SignInAdmin.Config.enabled?())
+     # Task 01a10315 stage 5: "Connect your AI" until the Setup agent is
+     # connected, for root admins (the only ones who can open it).
+     |> assign(
+       :connect_ai?,
+       Platform.Tenancy.root_admin?(socket.assigns[:current_user_record]) and
+         not Platform.Agents.SetupAgent.connected?()
+     )}
   end
 
   # Burrow redesign 24 stage 4: the index subscribes to nothing, but a stray

@@ -1102,6 +1102,9 @@ defmodule PlatformWeb.Router do
       # `Platform.Installs` re-checks the actor on create and list, and the
       # view re-checks it before a teardown.
       live("/admin/installs", AdminInstallsLive, :index)
+      # Task 01a10315 stage 5: "Connect your AI", where a new install's
+      # hand-over lands ("Open Burrow"). The view re-checks root admin.
+      live("/setup/connect-ai", ConnectAiLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end
