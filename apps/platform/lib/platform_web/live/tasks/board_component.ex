@@ -77,6 +77,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   alias Platform.Tasks.{Stack, Task}
   alias PlatformWeb.Tasks.BoardData
   alias PlatformWeb.Tasks.ExternalFeedbackComponents
+  alias PlatformWeb.Tasks.AgentWithoutPlanConfirm
   alias PlatformWeb.Tasks.Selection
   alias PlatformWeb.Tasks.SortControl
 
@@ -109,6 +110,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     {:ok,
      assign(socket,
        open_task_actions_id: nil,
+       pending_move: nil,
        done_expanded?: false,
        done_limit: @done_initial_limit
      )}
@@ -219,43 +221,87 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
     if is_nil(task) do
       send(self(), {:board_flash, :error, "Task not found."})
+      {:noreply, socket}
     else
-      # Thread the LiveView user actor into the drop so
-      # `Tasks.require_approved_plan_for/3` inside `drop_task_to_column/3`
-      # can fire the sponsor-bypass rule (ADR 0042 §sponsor-bypass, task
-      # 019f6380).
-      case Tasks.drop_task_to_column(task, column, {:user, socket.assigns[:current_user_id]}) do
-        {:ok, _updated} ->
-          send(
-            self(),
-            {:board_flash, :info, "Task moved to #{status_label(column_to_status(column))}."}
-          )
+      actor = {:user, socket.assigns[:current_user_id]}
 
-          send(self(), {:board_refresh_requested})
+      # Task 01a18e02 stage 3: the one human warning. An execution agent
+      # with no approved plan would start without one, so the move is held
+      # and the confirm asks first; the card snaps back on the refresh.
+      if Tasks.human_move_needs_confirmation?(task, column_to_status(column), actor) do
+        send(self(), {:board_refresh_requested})
 
-        {:error, :unknown_column} ->
-          send(self(), {:board_flash, :error, "Unknown column."})
-
-        {:error, :invalid_drop} ->
-          send(
-            self(),
-            {:board_flash, :error,
-             "Cannot move task from #{status_label(task.status)} to #{status_label(column_to_status(column))}."}
-          )
-
-        {:error, :no_approved_plan} ->
-          send(
-            self(),
-            {:board_flash, :error,
-             "Cannot move task into #{status_label(column_to_status(column))}: no approved plan exists. Create and approve a plan first."}
-          )
-
-        {:error, reason} ->
-          send(self(), {:board_flash, :error, "Move failed: #{inspect(reason)}"})
+        {:noreply,
+         assign(
+           socket,
+           :pending_move,
+           AgentWithoutPlanConfirm.pending_move(
+             task,
+             column_to_status(column),
+             socket.assigns[:agents_by_id]
+           )
+         )}
+      else
+        drop_as_user(task, column, actor)
+        {:noreply, socket}
       end
     end
+  end
 
-    {:noreply, socket}
+  # Confirmed: the task goes to planning, not in_progress (decided, task
+  # 01a18e02), so the agent plans first. Re-read under `tasks.write`.
+  def handle_event("confirm_plan_first", %{"id" => task_id}, socket) do
+    task = if Selection.permits?(socket, {:task, task_id}), do: Tasks.get_task_detail(task_id)
+
+    case task && AgentWithoutPlanConfirm.confirm(task, {:user, socket.assigns[:current_user_id]}) do
+      {:ok, _} ->
+        send(self(), {:board_flash, :info, AgentWithoutPlanConfirm.sent_to_planning_message()})
+
+      nil ->
+        send(self(), {:board_flash, :error, "Task not found."})
+
+      error ->
+        send(self(), {:board_flash, :error, "Move failed: #{inspect(error)}"})
+    end
+
+    send(self(), {:board_refresh_requested})
+    {:noreply, assign(socket, :pending_move, nil)}
+  end
+
+  def handle_event("cancel_move", _params, socket) do
+    send(self(), {:board_refresh_requested})
+    {:noreply, assign(socket, :pending_move, nil)}
+  end
+
+  defp drop_as_user(task, column, actor) do
+    # The actor picks the human transition table and opens the plan gate
+    # (task 01a18e02), so a user can no longer hit `:no_approved_plan` here;
+    # any other refusal falls through to the generic flash.
+    case Tasks.drop_task_to_column(task, column, actor) do
+      {:ok, _updated} ->
+        send(
+          self(),
+          {:board_flash, :info, "Task moved to #{status_label(column_to_status(column))}."}
+        )
+
+        send(self(), {:board_refresh_requested})
+
+      {:error, :unknown_column} ->
+        send(self(), {:board_flash, :error, "Unknown column."})
+
+      {:error, :invalid_drop} ->
+        send(
+          self(),
+          {:board_flash, :error,
+           "Cannot move task from #{status_label(task.status)} to #{status_label(column_to_status(column))}."}
+        )
+
+      {:error, reason} ->
+        send(self(), {:board_flash, :error, "Move failed: #{inspect(reason)}"})
+
+      {:error, reason, _detail} ->
+        send(self(), {:board_flash, :error, "Move failed: #{inspect(reason)}"})
+    end
   end
 
   # Only flash on an actual status change (backlog -> planning) so a
@@ -269,6 +315,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp maybe_flash_promotion_transition(_before, _after), do: :ok
 
   defp column_to_status("backlog"), do: "backlog"
+  defp column_to_status("planning"), do: "planning"
+  defp column_to_status("blocked"), do: "blocked"
   defp column_to_status("in_progress"), do: "in_progress"
   defp column_to_status("in_review"), do: "in_review"
   defp column_to_status("deploying"), do: "deploying"
@@ -281,6 +329,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   def render(assigns) do
     ~H"""
     <div id={@id} class="contents">
+      <AgentWithoutPlanConfirm.agent_without_plan_confirm
+        pending_move={@pending_move}
+        target={@myself}
+      />
       <%!-- Done-column memory (task 01a13884 stage 3): replays a stored
            expansion on mount and stores every server-side change. --%>
       <div
@@ -793,10 +845,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   # "Show 50 more (N older)" under an open Done list; renders nothing once
   # the window covers the whole column.
-  attr :total, :integer, required: true
-  attr :limit, :integer, required: true
-  attr :myself, :any, required: true
-  attr :role, :string, required: true
+  attr(:total, :integer, required: true)
+  attr(:limit, :integer, required: true)
+  attr(:myself, :any, required: true)
+  attr(:role, :string, required: true)
 
   defp done_more_button(assigns) do
     assigns = assign(assigns, :step, min(assigns.total - assigns.limit, @done_page_size))
@@ -862,14 +914,14 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # computed in the component function, which only runs when one of the
   # card's own attrs changed.
 
-  attr :item, :any, required: true
-  attr :col_key, :string, required: true
-  attr :review_count, :integer, default: 0
-  attr :assignee, :any, default: nil
-  attr :sponsor, :any, default: nil
-  attr :data, :any, default: nil
-  attr :member_review_counts, :map, default: %{}
-  attr :expanded?, :boolean, default: false
+  attr(:item, :any, required: true)
+  attr(:col_key, :string, required: true)
+  attr(:review_count, :integer, default: 0)
+  attr(:assignee, :any, default: nil)
+  attr(:sponsor, :any, default: nil)
+  attr(:data, :any, default: nil)
+  attr(:member_review_counts, :map, default: %{})
+  attr(:expanded?, :boolean, default: false)
 
   defp mobile_board_item(%{item: %Stack{}} = assigns) do
     ~H"""
@@ -895,17 +947,17 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :item, :any, required: true
-  attr :review_count, :integer, default: 0
-  attr :assignee, :any, default: nil
-  attr :assignee_name, :string, default: nil
-  attr :sponsor, :any, default: nil
-  attr :data, :any, default: nil
-  attr :member_review_counts, :map, default: %{}
-  attr :expanded?, :boolean, default: false
-  attr :myself, :any, required: true
-  attr :mask_labels, :map, default: %{}
-  attr :mask_names?, :boolean, default: false
+  attr(:item, :any, required: true)
+  attr(:review_count, :integer, default: 0)
+  attr(:assignee, :any, default: nil)
+  attr(:assignee_name, :string, default: nil)
+  attr(:sponsor, :any, default: nil)
+  attr(:data, :any, default: nil)
+  attr(:member_review_counts, :map, default: %{})
+  attr(:expanded?, :boolean, default: false)
+  attr(:myself, :any, required: true)
+  attr(:mask_labels, :map, default: %{})
+  attr(:mask_names?, :boolean, default: false)
 
   defp desktop_board_item(%{item: %Stack{}} = assigns) do
     ~H"""
@@ -950,11 +1002,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   defp member_review_counts(_stack_board_data, _task, _review_counts), do: %{}
 
-  attr :stack, Stack, required: true
-  attr :data, :map, required: true
-  attr :sponsor, :any, default: nil
-  attr :expanded?, :boolean, default: false
-  attr :member_review_counts, :map, default: %{}
+  attr(:stack, Stack, required: true)
+  attr(:data, :map, required: true)
+  attr(:sponsor, :any, default: nil)
+  attr(:expanded?, :boolean, default: false)
+  attr(:member_review_counts, :map, default: %{})
 
   defp mobile_stack_card(assigns) do
     ~H"""
@@ -1056,9 +1108,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :member, Task, required: true
-  attr :members, :list, required: true
-  attr :review_count, :integer, default: 0
+  attr(:member, Task, required: true)
+  attr(:members, :list, required: true)
+  attr(:review_count, :integer, default: 0)
 
   defp mobile_stack_member(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.member, assigns.review_count)
@@ -1225,11 +1277,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :task, Task, required: true
-  attr :col_key, :string, required: true
-  attr :review_count, :integer, default: 0
-  attr :assignee, :any, default: nil
-  attr :sponsor, :any, default: nil
+  attr(:task, Task, required: true)
+  attr(:col_key, :string, required: true)
+  attr(:review_count, :integer, default: 0)
+  attr(:assignee, :any, default: nil)
+  attr(:sponsor, :any, default: nil)
 
   defp mobile_task_card(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)
@@ -1374,11 +1426,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :stack, Stack, required: true
-  attr :data, :map, required: true
-  attr :sponsor, :any, default: nil
-  attr :expanded?, :boolean, default: false
-  attr :member_review_counts, :map, default: %{}
+  attr(:stack, Stack, required: true)
+  attr(:data, :map, required: true)
+  attr(:sponsor, :any, default: nil)
+  attr(:expanded?, :boolean, default: false)
+  attr(:member_review_counts, :map, default: %{})
 
   defp desktop_stack_card(assigns) do
     ~H"""
@@ -1523,9 +1575,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :member, Task, required: true
-  attr :members, :list, required: true
-  attr :review_count, :integer, default: 0
+  attr(:member, Task, required: true)
+  attr(:members, :list, required: true)
+  attr(:review_count, :integer, default: 0)
 
   defp desktop_stack_member(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.member, assigns.review_count)
@@ -1643,14 +1695,14 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     """
   end
 
-  attr :task, Task, required: true
-  attr :review_count, :integer, default: 0
-  attr :assignee, :any, default: nil
-  attr :assignee_name, :string, default: nil
-  attr :sponsor, :any, default: nil
-  attr :myself, :any, required: true
-  attr :mask_labels, :map, default: %{}
-  attr :mask_names?, :boolean, default: false
+  attr(:task, Task, required: true)
+  attr(:review_count, :integer, default: 0)
+  attr(:assignee, :any, default: nil)
+  attr(:assignee_name, :string, default: nil)
+  attr(:sponsor, :any, default: nil)
+  attr(:myself, :any, required: true)
+  attr(:mask_labels, :map, default: %{})
+  attr(:mask_names?, :boolean, default: false)
 
   defp desktop_task_card(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)

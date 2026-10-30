@@ -80,6 +80,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   alias Platform.Tasks.PayloadAmendmentChanges
   alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.{Plan, Task}
+  alias PlatformWeb.Tasks.AgentWithoutPlanConfirm
   alias PlatformWeb.Tasks.ExternalFeedbackComponents
   alias PlatformWeb.Tasks.Selection
   alias PlatformWeb.Tasks.TaskDisplay
@@ -232,6 +233,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
     |> assign(:confirm_delete, false)
     |> assign(:show_reopen_modal, false)
     |> assign(:reopen_reason, "")
+    |> assign(:pending_move, nil)
     |> assign(:expanded_plans, MapSet.new(default_expanded_plan_ids(task)))
     |> assign(:reject_plan_open, nil)
     |> assign(:reject_plan_feedback_text, "")
@@ -555,39 +557,54 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   def handle_event("detail_transition", %{"id" => task_id, "status" => new_status}, socket) do
     task = writable_detail(socket, task_id)
 
-    if task do
-      # LiveView is user-facing regardless of session state — thread the
-      # `{:user, _}` actor through so `Tasks.require_approved_plan_for/3`
-      # can fire the sponsor-bypass rule (ADR 0042 §sponsor-bypass).
-      case Tasks.transition_task(task, new_status, {:user, socket.assigns[:current_user_id]}) do
-        {:ok, updated} ->
-          flash(:info, "Task moved to #{new_status}.")
-          send(self(), {:detail_task_transitioned, Tasks.get_task_detail(updated.id)})
+    actor = {:user, socket.assigns[:current_user_id]}
 
-        {:error, :invalid_transition} ->
-          flash(:error, "Cannot transition to #{new_status} from #{task.status}.")
+    cond do
+      is_nil(task) ->
+        flash(:error, "Task not found.")
+        {:noreply, socket}
 
-        {:error, :no_approved_plan} ->
-          flash(
-            :error,
-            "Cannot start execution: this task has no approved plan. Create and approve a plan first."
-          )
+      # Task 01a18e02 stage 3: the same warning, markup and semantics as the
+      # board's (`AgentWithoutPlanConfirm`).
+      Tasks.human_move_needs_confirmation?(task, new_status, actor) ->
+        {:noreply,
+         assign(
+           socket,
+           :pending_move,
+           AgentWithoutPlanConfirm.pending_move(task, new_status, socket.assigns[:agents_by_id])
+         )}
 
-        {:error, :no_deploy_target_resolved} ->
-          flash(
-            :error,
-            "Cannot deploy: no deploy target set. Set one on this task or configure a project default."
-          )
+      true ->
+        detail_transition(task, new_status, actor)
+        {:noreply, socket}
+    end
+  end
 
-        {:error, reason} ->
-          flash(:error, "Transition failed: #{inspect(reason)}")
-      end
-    else
-      flash(:error, "Task not found.")
+  # Confirmed: the task goes to planning, not in_progress (decided, task
+  # 01a18e02), so the agent plans first. Re-read under `tasks.write`.
+  def handle_event("confirm_plan_first", %{"id" => task_id}, socket) do
+    actor = {:user, socket.assigns[:current_user_id]}
+
+    case writable_detail(socket, task_id) do
+      nil ->
+        flash(:error, "Task not found.")
+
+      task ->
+        case AgentWithoutPlanConfirm.confirm(task, actor) do
+          {:ok, updated} ->
+            flash(:info, AgentWithoutPlanConfirm.sent_to_planning_message())
+            send(self(), {:detail_task_transitioned, Tasks.get_task_detail(updated.id)})
+
+          error ->
+            flash(:error, "Transition failed: #{inspect(error)}")
+        end
     end
 
-    {:noreply, socket}
+    {:noreply, assign(socket, :pending_move, nil)}
   end
+
+  def handle_event("cancel_move", _params, socket),
+    do: {:noreply, assign(socket, :pending_move, nil)}
 
   # ── External feedback promotion (task 01a11ec3 stage 4) ────────────────
   #
@@ -1841,8 +1858,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                  transitions the task to in_progress automatically. No separate
                  manual "Start Task" button. --%>
 
-          <%!-- Transition buttons --%>
-          <div :if={available_transitions(@selected_task.status) != []} class="flex flex-wrap gap-2">
+          <%!-- Transition buttons, plus a "Move to…" menu for every other
+                 status a person may move this task to (task 01a18e02: the
+                 human table behind Tasks.allowed_next_statuses/2). --%>
+          <div
+            :if={
+              available_transitions(@selected_task.status) != [] or
+                move_menu_statuses(@selected_task.status, @current_user_id) != []
+            }
+            class="flex flex-wrap items-center gap-2"
+          >
             <button
               :for={{target_status, label} <- available_transitions(@selected_task.status)}
               class={transition_btn_class(target_status)}
@@ -1853,6 +1878,32 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             >
               {label}
             </button>
+            <div
+              :if={move_menu_statuses(@selected_task.status, @current_user_id) != []}
+              class="dropdown dropdown-end"
+              data-role="status-move-menu"
+            >
+              <div tabindex="0" role="button" class="btn btn-sm btn-ghost gap-1">
+                Move to… <span class="hero-chevron-down size-4"></span>
+              </div>
+              <ul
+                tabindex="0"
+                class="dropdown-content menu z-20 mt-1 w-48 rounded-box bg-base-100 p-2 shadow-lg"
+              >
+                <li :for={status <- move_menu_statuses(@selected_task.status, @current_user_id)}>
+                  <button
+                    type="button"
+                    phx-click="detail_transition"
+                    phx-target={@myself}
+                    phx-value-id={@selected_task.id}
+                    phx-value-status={status}
+                    data-role={"status-move-#{status}"}
+                  >
+                    {status_label(status)}
+                  </button>
+                </li>
+              </ul>
+            </div>
           </div>
 
           <%!-- Reopen-with-feedback button (done tasks only).
@@ -2069,6 +2120,11 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              >=sm). Submit is disabled client-side until the textarea has
              non-whitespace content; the server also re-validates and surfaces
              `:reason_required` as a flash if the client check is bypassed. --%>
+      <AgentWithoutPlanConfirm.agent_without_plan_confirm
+        pending_move={@pending_move}
+        target={@myself}
+      />
+
       <div
         :if={@show_reopen_modal && @selected_task}
         class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -2468,27 +2524,66 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
   # ── Per-phase assignee helpers (used by the assignee modal templates) ───
 
-  defp available_transitions("backlog"), do: [{"planning", "Start Planning"}]
-  # ADR 0029: plan approval is the start signal. From `planning`, the only
-  # manual transition is back to backlog to abandon. Entering execution is
-  # gated by `Tasks.require_approved_plan_for/2` and triggered by approving
-  # a plan, which transitions the task directly into `in_progress`.
-  defp available_transitions("planning"), do: [{"backlog", "Back"}]
+  # The actor picks the human transition table and opens the plan gate
+  # (task 01a18e02), so a signed-in user no longer reaches
+  # `:no_approved_plan`; that branch stays for clarity of the copy.
+  defp detail_transition(task, new_status, actor) do
+    case Tasks.transition_task(task, new_status, actor) do
+      {:ok, updated} ->
+        flash(:info, "Task moved to #{new_status}.")
+        send(self(), {:detail_task_transitioned, Tasks.get_task_detail(updated.id)})
+
+      {:error, :invalid_transition} ->
+        flash(:error, "Cannot transition to #{new_status} from #{task.status}.")
+
+      {:error, :no_approved_plan} ->
+        flash(
+          :error,
+          "Cannot start execution: this task has no approved plan. Create and approve a plan first."
+        )
+
+      {:error, :no_deploy_target_resolved} ->
+        flash(
+          :error,
+          "Cannot deploy: no deploy target set. Set one on this task or configure a project default."
+        )
+
+      {:error, reason} ->
+        flash(:error, "Transition failed: #{inspect(reason)}")
+
+      {:error, reason, _detail} ->
+        flash(:error, "Transition failed: #{inspect(reason)}")
+    end
+  end
+
+  # Task 01a18e02 stage 3: a person can close a task from any working
+  # status, so "Mark Done" sits beside the existing buttons. Every other
+  # human move is in the "Move to…" menu (`move_menu_statuses/2`).
+  defp available_transitions("backlog"),
+    do: [{"planning", "Start Planning"}, {"done", "Mark Done"}]
+
+  # ADR 0029: plan approval is the start signal for agents. From `planning`
+  # the agent's way into execution is approving a plan.
+  defp available_transitions("planning"), do: [{"backlog", "Back"}, {"done", "Mark Done"}]
 
   defp available_transitions("in_progress"),
     do: [{"in_review", "Submit for Review"}, {"done", "Mark Done"}]
 
-  # Review outcomes flow through validations / review requests, not blunt status buttons.
-  defp available_transitions("in_review"), do: []
-
-  # Deploying outcomes flow through deploy stage validations, not manual transitions.
-  defp available_transitions("deploying"), do: []
+  defp available_transitions("in_review"), do: [{"done", "Mark Done"}]
+  defp available_transitions("deploying"), do: [{"done", "Mark Done"}]
 
   defp available_transitions("blocked"),
-    do: [{"backlog", "To Backlog"}, {"in_progress", "Resume"}]
+    do: [{"backlog", "To Backlog"}, {"in_progress", "Resume"}, {"done", "Mark Done"}]
 
   defp available_transitions("done"), do: []
   defp available_transitions(_), do: []
+
+  # Every status the signed-in person may move this task to that has no
+  # button already. Read from the human table, never transcribed.
+  defp move_menu_statuses(status, user_id) do
+    buttons = Enum.map(available_transitions(status), &elem(&1, 0))
+    Tasks.allowed_next_statuses(status, {:user, user_id}) -- buttons
+  end
 
   defp transition_btn_class(status) do
     case status do

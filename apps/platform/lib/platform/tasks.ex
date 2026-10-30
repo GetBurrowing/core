@@ -8243,8 +8243,12 @@ defmodule Platform.Tasks do
   # A drop is checked against `allowed_next_statuses/2`, so a human drag
   # gets the human table and a `:system` / agent drop gets the agent table.
 
+  # Task 01a18e02 stage 3: every kanban column is a drop target, planning
+  # and blocked included.
   @drop_target_status %{
     "backlog" => "backlog",
+    "planning" => "planning",
+    "blocked" => "blocked",
     "in_progress" => "in_progress",
     "in_review" => "in_review",
     "deploying" => "deploying",
@@ -8330,9 +8334,16 @@ defmodule Platform.Tasks do
             #
             # Task 01a18e02 stage 2: the inert no-agent branch is mirrored
             # here too, because this path builds its own changeset.
+            #
+            # Stage 3: the flat pointer is derived for the target phase
+            # exactly as `status_transition_changeset/3` derives it, so a
+            # drag back to Planning restores the planning agent (the board
+            # used to leave the pointer wherever it was).
+            derived = phase_pointer_attrs(task, target_status)
+
             attrs =
-              task
-              |> inert_pointer_attrs(target_status, actor, %{})
+              derived
+              |> Map.merge(inert_pointer_attrs(task, target_status, actor, derived))
               |> delivered_but_open_clear_attrs(task, target_status)
               |> blocked_cause_clear_attrs(task, target_status)
               |> Map.put(:status, target_status)
