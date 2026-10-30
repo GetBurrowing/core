@@ -69,6 +69,10 @@ const VIEWPORTS = [
 const SURFACES = ["meetings", "quickmeet"] as const
 type Surface = (typeof SURFACES)[number]
 
+/** A whole class token. A bare `/copy-copied/` also matches the button's own
+ *  Tailwind variant `[&.copy-copied]:bg-success`, so it can never fail. */
+const HAS_CLASS = (name: string) => new RegExp(`(^|\\s)${name}(\\s|$)`)
+
 const SHORT_LINK = (host: string) =>
   new RegExp(`^https://${host.replace(/[.]/g, "\\.")}/g/[A-Za-z0-9_-]{22}$`)
 
@@ -288,14 +292,14 @@ test.describe("human invite control", () => {
           await expect(rail.locator('[data-role="meeting-human-invite-search"]')).toHaveValue("")
 
           const copy = rail.locator('[data-role="meeting-human-invite-copy"]')
-          await expect(copy).toHaveClass(/copy-ready/)
+          await expect(copy).toHaveClass(HAS_CLASS("copy-ready"))
           await choose(copy, vp.touch)
           await expect(copy).toHaveText("Copied")
-          await expect(copy).toHaveClass(/copy-copied/)
+          await expect(copy).toHaveClass(HAS_CLASS("copy-copied"))
           // Still "Copied" after the rail's next 1s re-render.
           await page.waitForTimeout(1_200)
           await expect(copy).toHaveText("Copied")
-          await expect(copy).toHaveClass(/copy-copied/)
+          await expect(copy).toHaveClass(HAS_CLASS("copy-copied"))
           expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link)
 
           // Optional email: invalid first, then valid.
@@ -334,10 +338,10 @@ test.describe("human invite control", () => {
 
           const copy = rail.locator('[data-role="meeting-human-invite-copy"]')
           const seen: string[] = []
-          await expect(copy).toHaveClass(/copy-ready/)
+          await expect(copy).toHaveClass(HAS_CLASS("copy-ready"))
           await choose(copy, vp.touch)
-          await expect(copy).toHaveClass(/copy-failed/)
-          await expect(copy).not.toHaveClass(/copy-copied/)
+          await expect(copy).toHaveClass(HAS_CLASS("copy-failed"))
+          await expect(copy).not.toHaveClass(HAS_CLASS("copy-copied"))
           for (let i = 0; i < 5; i++) {
             seen.push((await copy.innerText()).trim())
             await page.waitForTimeout(100)
