@@ -410,6 +410,8 @@ defmodule Platform.Social.ClipDecisions do
 
   @cancelled "cancelled before publishing"
 
+  # Retain external_id when reapproving: the guarded publishing path uses
+  # it to retry the existing vendor post rather than replaying its creation.
   defp retry_failed(org_id, post_id, user_id) do
     Repo.transaction(fn ->
       case Social.lock_post(org_id, post_id) do
