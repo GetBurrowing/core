@@ -711,7 +711,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert attr(copy, "data-copied-label") == ["Copied"]
       assert class_of(copy) =~ "bg-primary"
       assert class_of(copy) =~ "text-primary-content"
-      assert class_of(copy) =~ "data-[copy-state=copied]:bg-success"
+      assert class_of(copy) =~ "[&.copy-copied]:bg-success"
+      assert attr(copy, "phx-update") == ["ignore"]
 
       assert text_at(html, "[data-role=meeting-human-invite-add-email]") ==
                "+ Add email (optional)"

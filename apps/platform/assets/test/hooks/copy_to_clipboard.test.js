@@ -20,13 +20,26 @@ describe("copyText", () => {
 })
 
 describe("showCopyResult", () => {
-  const button = (dataset = {}) => ({ innerText: "Copy link", dataset: { ...dataset } })
+  const button = (dataset = {}) => {
+    const classes = new Set()
+    return {
+      innerText: "Copy link",
+      dataset: { ...dataset },
+      classList: {
+        add: (...c) => c.forEach((x) => classes.add(x)),
+        remove: (...c) => c.forEach((x) => classes.delete(x)),
+        contains: (c) => classes.has(c),
+      },
+    }
+  }
 
   it("marks copied and uses the button's own label only on success", () => {
     const el = button({ copiedLabel: "Copied" })
     expect(showCopyResult(el, true)).toBe("Copy link")
     expect(el.innerText).toBe("Copied")
     expect(el.dataset.copyState).toBe("copied")
+    expect(el.classList.contains("copy-copied")).toBe(true)
+    expect(el.classList.contains("copy-failed")).toBe(false)
   })
 
   it("never says copied on failure", () => {
@@ -34,6 +47,8 @@ describe("showCopyResult", () => {
     showCopyResult(el, false)
     expect(el.innerText).toBe("Couldn't copy")
     expect(el.dataset.copyState).toBe("failed")
+    expect(el.classList.contains("copy-failed")).toBe(true)
+    expect(el.classList.contains("copy-copied")).toBe(false)
   })
 
   it("keeps the old default label and restores the original", () => {
@@ -43,5 +58,6 @@ describe("showCopyResult", () => {
     resetCopyResult(el, original)
     expect(el.innerText).toBe("Copy link")
     expect(el.dataset.copyState).toBeUndefined()
+    expect(el.classList.contains("copy-copied")).toBe(false)
   })
 })

@@ -853,14 +853,26 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         >
           {@result.url}
         </code>
+        <%!-- `phx-update="ignore"`: the hook writes "Copied" / "Couldn't
+             copy" and `data-copy-state` into this button, and the call rail
+             re-renders every second (the agent-activity tick), which patched
+             the server's literal "Copy link" straight back over it. Measured
+             in a browser: the confirmation was gone before a person could
+             read it. The success colour keys on the hook's `copy-copied`
+             CLASS, not a `data-` attribute: LiveView still re-syncs and
+             strips `data-*` on an ignored element (see
+             `assets/js/hooks/copy_to_clipboard.js`). The id carries the
+             invite id, so a new invite is a new element and its link is never
+             stale. --%>
         <button
           type="button"
           id={"#{@prefix}-copy-#{@result.invite.id}"}
           phx-hook="CopyToClipboard"
+          phx-update="ignore"
           data-clipboard-text={@result.url}
           data-copied-label="Copied"
           data-role="meeting-human-invite-copy"
-          class="min-h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-content data-[copy-state=copied]:bg-success data-[copy-state=copied]:text-success-content"
+          class="min-h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-content [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
         >
           Copy link
         </button>

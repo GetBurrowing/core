@@ -76,7 +76,7 @@ second = user!.("Dana Cole #{tag}", "dana.cole.#{String.downcase(tag)}@example.c
 
 long =
   user!.(
-    "Dana Alexandria Montgomery-Whitfield #{tag}",
+    "Alexandria Montgomery #{tag}",
     "dana.alexandria.montgomery-whitfield.operations.#{String.downcase(tag)}@northwind-logistics-example.com"
   )
 
