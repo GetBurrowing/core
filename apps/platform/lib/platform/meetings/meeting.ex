@@ -98,6 +98,16 @@ defmodule Platform.Meetings.Meeting do
                   scheduled_start_at scheduled_end_at)a
   @required_fields ~w(project_id chat_space_id slug name livekit_room_name)a
 
+  # Slugs that would collide with a guest-host route of their own. `g` is the
+  # first segment of the short guest link `/g/<code>` (task 01a18d0a-ec37);
+  # the router declares that route before `/:slug/:token`, so a meeting
+  # slugged `g` would have unreachable guest links. Refused here instead.
+  @reserved_slugs ~w(g)
+
+  @doc "Slugs no meeting may take, because a guest-host route owns them."
+  @spec reserved_slugs() :: [String.t()]
+  def reserved_slugs, do: @reserved_slugs
+
   @doc """
   Changeset for creating a meeting.
 
@@ -113,6 +123,7 @@ defmodule Platform.Meetings.Meeting do
     |> cast(attrs, @cast_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
+    |> validate_exclusion(:slug, @reserved_slugs, message: "is reserved")
     |> validate_scheduled_window()
     |> unique_constraint([:project_id, :slug], name: :meetings_project_id_slug_index)
     |> unique_constraint(:livekit_room_name)

@@ -396,6 +396,35 @@ defmodule Platform.Meetings.GuestInviteTest do
     end
   end
 
+  # Task 01a18d0a-ec37: the short link stores no token and re-mints one from
+  # the invite row on every hit. That is only sound if two mints from the
+  # same row inputs MEAN the same thing even though the strings differ
+  # (`Plug.Crypto` stamps a `signed_at`).
+  describe "re-minting from the same row inputs" do
+    test "yields a different string with an identical payload" do
+      expires_at = future_ts(3600)
+      meeting_id = Ecto.UUID.generate()
+      invite_id = Ecto.UUID.generate()
+
+      mint = fn ->
+        GuestInvite.sign("standup-2026-07", expires_at, "Jane Doe",
+          meeting_id: meeting_id,
+          invite_id: invite_id
+        )
+      end
+
+      first = mint.()
+      Process.sleep(2)
+      second = mint.()
+
+      refute first == second
+      assert {:ok, payload} = GuestInvite.verify(first)
+      assert {:ok, ^payload} = GuestInvite.verify(second)
+      assert payload.invite_id == invite_id
+      assert payload.expires_at == expires_at
+    end
+  end
+
   # ---------------------------------------------------------------------
   # Helpers
 

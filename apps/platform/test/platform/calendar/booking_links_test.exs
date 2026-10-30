@@ -253,7 +253,10 @@ defmodule Platform.Calendar.BookingLinksTest do
       Repo.get_by!(Platform.Meetings.Invite, meeting_id: meeting.id, email: "guest@example.com")
 
     url = Platform.Meetings.guest_invite_link(meeting, invite)
-    token = url |> URI.parse() |> Map.fetch!(:path) |> String.split("/") |> List.last()
+    # The link is the short form (task 01a18d0a-ec37); the token behind it is
+    # re-minted from the row by resolve_guest_short_code/1.
+    assert "/g/" <> code = url |> URI.parse() |> Map.fetch!(:path)
+    assert {:ok, %{token: token}} = Platform.Meetings.resolve_guest_short_code(code)
     assert {:ok, _} = Platform.Meetings.resolve_guest_invite(meeting.slug, token)
     assert {:error, _} = Platform.Meetings.resolve_guest_invite("another-meeting", token)
 

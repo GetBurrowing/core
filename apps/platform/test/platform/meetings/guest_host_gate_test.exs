@@ -60,15 +60,14 @@ defmodule Platform.Meetings.GuestHostGateTest do
       assert {:ok, %{invite: %Invite{} = invite, token: token, url: url}} =
                Meetings.invite_guest(meeting, %{display_name: "Jane Doe"})
 
-      assert String.starts_with?(url, "https://meet.example.com/")
-      assert url =~ meeting.slug
-      assert url =~ token
+      # Short link (task 01a18d0a-ec37): host + /g/ + the row's code, and
+      # no token in the URL.
+      assert url == "https://meet.example.com/g/#{invite.short_code}"
+      assert is_binary(token)
+      refute url =~ token
 
       # And the re-derived link for the persisted row agrees.
-      assert String.starts_with?(
-               Meetings.guest_invite_link(meeting, invite),
-               "https://meet.example.com/#{meeting.slug}/"
-             )
+      assert Meetings.guest_invite_link(meeting, invite) == url
     end
   end
 
@@ -87,6 +86,19 @@ defmodule Platform.Meetings.GuestHostGateTest do
       # Fail closed all the way: nothing was written, so there is no
       # orphaned invite row (nor the guest chat space it would have owned).
       assert Meetings.list_invites(meeting.id) == []
+
+      # Asserted directly rather than through `list_invites/1`, which could
+      # filter: no row, no short code and no guest space for this meeting.
+      assert Repo.aggregate(from(i in Invite, where: i.meeting_id == ^meeting.id), :count) == 0
+
+      assert Repo.aggregate(
+               from(s in Platform.Chat.Space,
+                 where:
+                   s.kind == "guest_meeting" and
+                     fragment("?->>'meeting_id'", s.metadata) == ^meeting.id
+               ),
+               :count
+             ) == 0
     end
 
     test "blank string behaves exactly like unset" do
@@ -102,7 +114,8 @@ defmodule Platform.Meetings.GuestHostGateTest do
 
     test "guest_invite_link/2 returns nil rather than a host-less URL" do
       # An existing row minted while the host WAS configured must not turn
-      # into "https:///slug/token" once the host goes away.
+      # into "https:///slug/token" (or, now that the row carries a short
+      # code, "https:///g/<code>") once the host goes away.
       Application.put_env(:platform, :meeting_guest_host, "meet.example.com")
       meeting = create_meeting!()
 

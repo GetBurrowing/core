@@ -12,7 +12,7 @@ defmodule Platform.ParallelUI do
   the entry's `:cutover` string. A shim that is not written down here is a
   shim nobody will remember to delete.
 
-  Main ships with zero entries. `test/platform/parallel_ui_test.exs` enforces
+  Main shipped with zero entries. `test/platform/parallel_ui_test.exs` enforces
   both directions against the live tree:
 
     * every entry has at least one marker somewhere under the scanned roots
@@ -84,7 +84,27 @@ defmodule Platform.ParallelUI do
 
   @id_regex ~r/\A[a-z0-9][a-z0-9_.-]*\z/
 
-  @entries []
+  @entries [
+    %{
+      id: "meet-guest-long-token-route",
+      kind: :route,
+      legacy:
+        "The long guest link `https://<guest host>/<slug>/<signed token>`, served by " <>
+          "`live(\"/:slug/:token\", MeetingLive, :show)` on the `meet.` host. Every guest " <>
+          "invite minted before task 01a18d0a-ec37 was emailed and pasted in this form, " <>
+          "and the short link still redirects into it.",
+      replacement:
+        "The short guest link `https://<guest host>/g/<code>` " <>
+          "(`PlatformWeb.GuestShortLinkController`), whose code lives on the " <>
+          "`meeting_invites` row; the token is re-minted from the row on every hit.",
+      introduced_by: "01a18d0a-ec37-7000-8a47-108834f2efe2",
+      cutover:
+        "Once no long guest link can still be live (every guest invite minted before " <>
+          "short codes has passed its expires_at), make GuestShortLinkController admit " <>
+          "the guest directly instead of redirecting, then delete the `/:slug/:token` " <>
+          "guest route and its `parallel-ui` marker in router.ex."
+    }
+  ]
 
   @type kind :: :event | :field | :column | :dual_write | :route
   @type entry :: %{required(atom()) => term()}

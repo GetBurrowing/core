@@ -796,9 +796,20 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb, host: "meet." do
     pipe_through(:guest_browser)
 
+    # SHORT GUEST LINK (task 01a18d0a-ec37). `/g/<code>` looks the code up on
+    # its invite row, re-mints the guest token from that row and 302s to the
+    # `/:slug/:token` route below, so admission still happens in exactly one
+    # place (MeetingLive's guest mount). Declared BEFORE `/:slug/:token`:
+    # both are two segments, the first declared wins, and `g` must never be
+    # read as a meeting slug. `Meeting.changeset/2` refuses the slug `g` so
+    # no meeting can be shadowed by this. Pinned in
+    # `test/platform_web/router_meet_guest_placement_test.exs`.
+    get("/g/:code", GuestShortLinkController, :show)
+
     live_session :guest_meeting,
       layout: {PlatformWeb.Layouts, :guest},
       session: %{"chrome_mode" => "none"} do
+      # parallel-ui: meet-guest-long-token-route
       live("/:slug/:token", MeetingLive, :show)
     end
   end

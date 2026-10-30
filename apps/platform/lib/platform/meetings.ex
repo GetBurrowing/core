@@ -31,6 +31,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.GuestShortCode
   alias Platform.Meetings.IntentRuntimeAdapter
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Membership
@@ -2217,6 +2218,14 @@ defmodule Platform.Meetings do
   One call, one row, one token. Calling this twice for two guests on one
   meeting yields two distinct tokens; there is no shared meeting-wide link
   (see the section comment above for why that matters).
+
+  ## The returned `:url` is the short link (task 01a18d0a-ec37)
+
+  The row is inserted with a `short_code` from
+  `Platform.Meetings.GuestShortCode` on the same insert, and `:url` is
+  `https://<guest host>/g/<short_code>`. `:token` is still returned, for
+  callers that read the map, but it is never written anywhere: the short link
+  re-mints a token from the row on every hit (`resolve_guest_short_code/1`).
   """
   @spec invite_guest(Meeting.t(), map() | keyword()) ::
           {:ok, %{invite: Invite.t(), token: binary(), url: binary()}}
@@ -2237,6 +2246,12 @@ defmodule Platform.Meetings do
     end
   end
 
+  # How many fresh codes `insert_guest_invite/2` tries before giving up. A
+  # collision of two 128-bit random codes is not expected to happen at all;
+  # the bound exists so a unique-violation that is NOT a coincidence (a
+  # broken generator, say) fails with the changeset instead of looping.
+  @guest_short_code_attempts 3
+
   defp do_invite_guest(%Meeting{} = meeting, attrs) do
     attrs = normalize_attrs(attrs)
 
@@ -2254,7 +2269,7 @@ defmodule Platform.Meetings do
       })
       |> Ecto.Changeset.validate_required([:display_name])
 
-    with {:ok, invite} <- Repo.insert(changeset),
+    with {:ok, invite} <- insert_guest_invite(changeset, @guest_short_code_attempts),
          {:ok, guest_space} <-
            create_guest_chat_space(meeting, Map.get(attrs, :host_user_id)) do
       token =
@@ -2271,7 +2286,30 @@ defmodule Platform.Meetings do
 
       deliver_invite(invite, meeting)
 
-      {:ok, %{invite: invite, token: token, url: guest_invite_url(meeting, token)}}
+      # `token` is returned to the caller (booking links read the map) and
+      # written nowhere. The URL handed out is the short one; it re-mints a
+      # token from the row on every hit.
+      {:ok, %{invite: invite, token: token, url: guest_short_url(invite.short_code)}}
+    end
+  end
+
+  # The code goes on the SAME insert as the row, so the row and its code
+  # commit together: no second write, and no window in which a guest row
+  # exists without a short link. On a unique violation of the short_code
+  # index, try again with a new code; any other error is returned as is.
+  defp insert_guest_invite(changeset, attempts_left) do
+    changeset
+    |> Ecto.Changeset.put_change(:short_code, GuestShortCode.generate())
+    |> Repo.insert()
+    |> case do
+      {:error, %Ecto.Changeset{errors: errors} = failed}
+      when attempts_left > 1 ->
+        if Keyword.has_key?(errors, :short_code),
+          do: insert_guest_invite(changeset, attempts_left - 1),
+          else: {:error, failed}
+
+      result ->
+        result
     end
   end
 
@@ -2283,6 +2321,15 @@ defmodule Platform.Meetings do
   to answer "what link do I send this person?" long after that call
   returned, so the answer is re-derived from the row rather than looked
   up.
+
+  ## Short link first (task 01a18d0a-ec37)
+
+  A row carrying a `short_code` gets `https://<guest host>/g/<short_code>`,
+  which needs no token in the URL at all: `resolve_guest_short_code/1`
+  re-mints one on every hit through the same `guest_token_for_invite/2`
+  used below. A row with no code (not expected: codes are written at insert
+  and were backfilled) gets the long `/<slug>/<token>` form described here.
+  This function is called during render and never writes a code.
 
   ## Re-minting is not re-issuing
 
@@ -2329,19 +2376,91 @@ defmodule Platform.Meetings do
         %Invite{
           meeting_id: meeting_id,
           user_id: nil,
-          expires_at: %DateTime{} = expires_at
+          expires_at: %DateTime{}
         } = invite
       ) do
-    token =
-      GuestInvite.sign(
-        meeting.slug,
-        DateTime.to_unix(expires_at),
-        invite.display_name,
-        meeting_id: meeting.id,
-        invite_id: invite.id
+    case invite.short_code do
+      code when is_binary(code) ->
+        guest_short_url(code)
+
+      nil ->
+        # Defensive only: every guest row gets a code at insert, and the
+        # migration backfilled the rows that predate it. This runs during
+        # render (`MeetingLive`'s copy control), so it never writes a code;
+        # it falls back to the long form, which still admits.
+        guest_invite_url(meeting, guest_token_for_invite(meeting, invite))
+    end
+  end
+
+  # The one place a token is minted for an EXISTING guest row: the long link
+  # above and every short-link hit (`resolve_guest_short_code/1`) both come
+  # through here, so the two cannot disagree on what the row grants.
+  # `guest_space_id` is deliberately absent; see `guest_invite_link/2`.
+  defp guest_token_for_invite(
+         %Meeting{id: meeting_id} = meeting,
+         %Invite{meeting_id: meeting_id, user_id: nil, expires_at: %DateTime{} = expires_at} =
+           invite
+       ) do
+    GuestInvite.sign(
+      meeting.slug,
+      DateTime.to_unix(expires_at),
+      invite.display_name,
+      meeting_id: meeting.id,
+      invite_id: invite.id
+    )
+  end
+
+  @doc """
+  Resolve the code from a short guest link (`/g/<code>`) into the meeting and
+  a freshly minted guest token for it (task 01a18d0a-ec37).
+
+  Nothing is stored but the code. The token is re-minted from the invite row
+  with `guest_token_for_invite/2`, exactly as `guest_invite_link/2` does, and
+  then passed UNCHANGED through `resolve_guest_invite/2`. That is the whole
+  check: expiry comes from the row's `expires_at`, revocation from its
+  `revoked_at` (both via `check_invite_row/1`), and a deleted meeting fails
+  the meeting lookup there. This function never extends an expiry and never
+  mints for an account-holder row (`user_id` set), which has no guest link.
+
+    * `{:ok, %{meeting: meeting, token: token}}` — the caller redirects to
+      `/<meeting.slug>/<token>`, the existing guest ingress, which verifies
+      the token again on mount.
+    * `{:error, :invalid}` — malformed code (refused before any query), no
+      guest row with this code, or anything `resolve_guest_invite/2` calls
+      invalid.
+    * `{:error, :expired}` / `{:error, :revoked}` — from the row.
+  """
+  @spec resolve_guest_short_code(term()) ::
+          {:ok, %{meeting: Meeting.t(), token: String.t()}}
+          | {:error, :invalid | :expired | :revoked}
+  def resolve_guest_short_code(code) do
+    if GuestShortCode.valid_format?(code) do
+      do_resolve_guest_short_code(code)
+    else
+      {:error, :invalid}
+    end
+  end
+
+  defp do_resolve_guest_short_code(code) do
+    query =
+      from(i in Invite,
+        join: m in assoc(i, :meeting),
+        where: i.short_code == ^code and is_nil(i.user_id) and not is_nil(i.expires_at),
+        preload: [meeting: m]
       )
 
-    guest_invite_url(meeting, token)
+    case Repo.one(query) do
+      %Invite{meeting: %Meeting{} = meeting} = invite ->
+        token = guest_token_for_invite(meeting, invite)
+
+        case resolve_guest_invite(meeting.slug, token) do
+          {:ok, %{meeting: resolved}} -> {:ok, %{meeting: resolved, token: token}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      nil ->
+        {:error, :invalid}
+    end
   end
 
   # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
@@ -2992,6 +3111,21 @@ defmodule Platform.Meetings do
   # this environment"; it never interpolates an absent host, because
   # "https://#{nil}/..." is `https:///slug/token` — malformed but still
   # minted, and still handed to a human as if it worked.
+  # Short form, `https://<guest host>/g/<code>`. Same nil-when-unset rule as
+  # the long form below, for the same reason.
+  defp guest_short_url(code) when is_binary(code) do
+    if GuestInvite.guest_host_configured?() do
+      "https://#{GuestInvite.guest_host()}/g/#{code}"
+    else
+      Logger.warning(
+        "no short guest invite URL: " <>
+          ":meeting_guest_host is not configured (set MEETING_GUEST_HOST)"
+      )
+
+      nil
+    end
+  end
+
   defp guest_invite_url(%Meeting{} = meeting, token) do
     if GuestInvite.guest_host_configured?() do
       "https://#{GuestInvite.guest_host()}/#{meeting.slug}/#{token}"
@@ -3030,10 +3164,14 @@ defmodule Platform.Meetings do
     dedupe_slug(project_id, base, base, 1)
   end
 
+  # A reserved slug (`Meeting.reserved_slugs/0`) is treated as taken, so a
+  # meeting named "G" gets `g-2` rather than a changeset error.
   defp dedupe_slug(project_id, candidate, base, n) do
-    case get_meeting_by_slug(project_id, candidate) do
-      nil -> candidate
-      _ -> dedupe_slug(project_id, "#{base}-#{n + 1}", base, n + 1)
+    if candidate not in Meeting.reserved_slugs() and
+         is_nil(get_meeting_by_slug(project_id, candidate)) do
+      candidate
+    else
+      dedupe_slug(project_id, "#{base}-#{n + 1}", base, n + 1)
     end
   end
 
