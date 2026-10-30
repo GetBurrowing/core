@@ -233,7 +233,7 @@ defmodule Platform.Meetings.Completion do
   end
 
   defp ensure_run_control({:ok, %{task_ids: [_ | _]} = response}) do
-    canvas = Repo.get!(Canvas, response.canvas_id)
+    canvas = %{id: response.canvas_id}
 
     case Triage.ensure_completion_batch_control(canvas, response.run_id) do
       :ok ->
