@@ -20,7 +20,7 @@
   "registered_protocol_suite": {
     "passed": 138,
     "failed": 0,
-    "log": "/home/jordan/openai/rig/closing-s3/full-tests-release.log",
+    "log": "/fixture/runtime/rig/closing-s3/full-tests-release.log",
     "duration_s": 91.89
   },
   "real_cli": {
@@ -52,21 +52,21 @@
       0.00032334182927143244,
       0.0025621481526517664
     ],
-    "log": "/home/jordan/openai/rig/closing-s3/music-regression.log"
+    "log": "/fixture/runtime/rig/closing-s3/music-regression.log"
   },
   "mutation": {
     "change": "Replace disabled/legacy cleared outro.path with /stale/inherited.mp4",
     "mutant_failed": 2,
     "restored_passed": 2,
-    "mutant_log": "/home/jordan/openai/rig/closing-s3/mutant-clear-path.log",
-    "restored_log": "/home/jordan/openai/rig/closing-s3/restored-clear-path.log"
+    "mutant_log": "/fixture/runtime/rig/closing-s3/mutant-clear-path.log",
+    "restored_log": "/fixture/runtime/rig/closing-s3/restored-clear-path.log"
   },
   "optional_upstream_suite": {
     "passed": 19,
     "failed": 2,
-    "log": "/home/jordan/openai/rig/closing-s3/upstream-render-finish.log",
+    "log": "/fixture/runtime/rig/closing-s3/upstream-render-finish.log",
     "baseline_failed": 2,
-    "baseline_log": "/home/jordan/openai/rig/closing-s3/upstream-baseline-finish.log",
+    "baseline_log": "/fixture/runtime/rig/closing-s3/upstream-baseline-finish.log",
     "observation": "Unchanged82ef513 reproduces acoustic-tolerance failures; edited/steady case varies, quiet-bed PCM diff exceeds -40dB threshold. Not counted as green. render.py is byte-identical to baseline; no guard weakened."
   },
   "lint": {

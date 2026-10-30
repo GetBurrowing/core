@@ -302,6 +302,13 @@ defmodule PlatformWeb.SocialSettingsTab do
       options={@settings_options}
       project_setting={@project_setting}
     />
+    <.live_component
+      :if={@profile}
+      module={PlatformWeb.SocialClosingVideo}
+      id={"social-closing-video-" <> @profile.id}
+      profile={@profile}
+      user_id={@user && @user.id}
+    />
     <SocialVoiceSettings.editor
       :if={@profile && @can_edit? && @voice_draft}
       profile={@profile}

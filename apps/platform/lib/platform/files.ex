@@ -125,7 +125,31 @@ defmodule Platform.Files do
   def add_bytes_registered(project, bytes, filename, content_type, opts, register) do
     result =
       Repo.transaction(fn ->
-        case add_bytes(project, bytes, filename, content_type, Keyword.put(opts, :ingest, false)) do
+        # Registered human-only media never goes through ingestion. Serialize
+        # identical registrations and reuse its finalized row even while its
+        # ingestion status remains pending (upload completion is independent).
+        hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+        Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          project.id <> ":" <> hash
+        ])
+
+        sibling =
+          Repo.one(
+            from(f in File,
+              where:
+                f.project_id == ^project.id and f.content_hash == ^hash and is_nil(f.deleted_at),
+              limit: 1
+            )
+          )
+
+        added =
+          if finalized_upload?(sibling),
+            do: {:ok, sibling, true},
+            else:
+              add_bytes(project, bytes, filename, content_type, Keyword.put(opts, :ingest, false))
+
+        case added do
           {:ok, file, dedup?} ->
             registration =
               try do

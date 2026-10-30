@@ -1324,7 +1324,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `Ecto.Query.CastError`; the key itself comes out of an HMAC-verified
     # upload token, not a caller-supplied id. No `Platform.UUID.valid?/1`
     # guard applies.
-    "platform/files.ex" => 3,
+    # Task 01a18ab6 stage 4: registered uploads reuse finalized same-project
+    # hash siblings. project.id comes from the authorized persisted Project;
+    # content_hash is computed from bytes, neither is an untrusted event id.
+    "platform/files.ex" => 4,
     # 1 → 2 for task 01a11703. Stage 1: `open_item/2` shares
     # `fetch_owned/2` with `set_timestamp/3` rather than adding a second
     # Repo.one, and that lookup is UUID-guarded (see the inventory entry).

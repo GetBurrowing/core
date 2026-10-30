@@ -1,16 +1,16 @@
 {
   "test_only": true,
-  "executable": "/home/jordan/openai/rig/closing-s3/clip",
-  "python": "/home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
-  "imported_module": "/home/jordan/openai/rig/closing-s3/tool/clip-agent/src/clip_agent/config.py",
+  "executable": "/fixture/runtime/rig/closing-s3/clip",
+  "python": "/fixture/runtime/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
+  "imported_module": "/fixture/runtime/rig/closing-s3/tool/clip-agent/src/clip_agent/config.py",
   "source_revision": "82ef5132b926fed33a80a304364fdda14335c2d5",
   "cli_version": {
     "version": "0.9.0",
-    "source": "file:///home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/clip-agent",
+    "source": "file:///fixture/runtime/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/clip-agent",
     "commit": "58960577337d5682761e1538ff4365d4ba0b4e18",
     "ref": null,
     "editable": true,
-    "python": "/home/jordan/openai/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
+    "python": "/fixture/runtime/worktrees/01a17e37-6f5f-7000-b57b-564bc84dbf2d/.headline-tool/.venv/bin/python",
     "content_free": 2,
     "headline_review": 1
   },
@@ -136,7 +136,7 @@
       "argv": [
         "profile",
         "import",
-        "/home/jordan/openai/rig/closing-s3/real-final3/fixture-profile.toml",
+        "/fixture/runtime/rig/closing-s3/real-final3/fixture-profile.toml",
         "--name",
         "burrow-fixture",
         "--force",
@@ -154,7 +154,7 @@
     {
       "argv": [
         "process",
-        "/home/jordan/openai/rig/closing-s3/real-final3/source-test-only.mp4",
+        "/fixture/runtime/rig/closing-s3/real-final3/source-test-only.mp4",
         "--project",
         "closing-fixture",
         "--profile",
@@ -166,7 +166,7 @@
     {
       "argv": [
         "review",
-        "/home/jordan/openai/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
+        "/fixture/runtime/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
         "--overwrite",
         "--profile",
         "burrow-fixture"
@@ -176,7 +176,7 @@
     {
       "argv": [
         "review",
-        "/home/jordan/openai/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
+        "/fixture/runtime/rig/closing-s3/real-final3/tool-home/clips/closing-fixture",
         "--apply",
         "--profile",
         "burrow-fixture"

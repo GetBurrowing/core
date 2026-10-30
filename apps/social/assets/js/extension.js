@@ -10,4 +10,6 @@ import ClipReview from "./hooks/clip_review.js"
 import SocialCalendarZone from "./hooks/social_calendar_zone.js"
 import QueueSwipe from "./hooks/queue_swipe.js"
 
-export default { CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe }
+import ClosingVideoPreview from "./hooks/closing_video_preview.js"
+
+export default { ClosingVideoPreview, CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe }

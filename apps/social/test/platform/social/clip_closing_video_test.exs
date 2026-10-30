@@ -671,7 +671,7 @@ defmodule Platform.Social.ClipClosingVideoTest do
     bytes: bytes
   } do
     {:ok, %{file: file, asset: asset}} = upload(w, bytes)
-    {:ok, _} = Files.update_ingest_status(file, "ingested")
+    assert file.ingest_status == "pending"
     assert {:ok, %{file: same_file, asset: same_asset}} = upload(w, bytes)
     assert same_file.id == file.id
     assert same_asset.id == asset.id
