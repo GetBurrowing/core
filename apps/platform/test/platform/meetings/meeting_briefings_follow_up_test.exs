@@ -420,7 +420,7 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
     end
   end
 
-  # ── Assignee and sponsor (Ryan, 2026-10-30) ───────────────────────────────
+  # ── Assignee and sponsor (added to the stage 2026-10-30) ──────────────────
 
   describe "assignee and sponsor" do
     defp assign!(%TaskRecord{} = task, assignee_id, type, sponsor_id) do
