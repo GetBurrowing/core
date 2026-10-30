@@ -66,20 +66,6 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
   defp needs_login(agent_id, login),
     do: %{"agent_id" => agent_id, "state" => "needs_login", "login" => login}
 
-  defp eventually(fun, tries \\ 100) do
-    case fun.() do
-      truthy when truthy not in [nil, false] ->
-        truthy
-
-      _ when tries > 0 ->
-        Process.sleep(20)
-        eventually(fun, tries - 1)
-
-      other ->
-        flunk("condition never held; last value #{inspect(other)}")
-    end
-  end
-
   describe "the reconciler keeps a device code only in its measured shape" do
     setup %{owner: owner} do
       {agent, _} = native!(owner, "Cody", "codex")
@@ -224,7 +210,7 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
     end
 
     test "joins as the install's host", %{fake: fake} do
-      eventually(fn -> Reconciler.host_pid() == fake end)
+      assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
       assert %{profile: "fake"} = State.host()
     end
 
@@ -234,11 +220,11 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
     } do
       {agent, runtime} = native!(owner, "Cody", "codex")
       {:ok, _} = NativeAgents.set_desired_state(runtime, "running")
-      eventually(fn -> Reconciler.host_pid() == fake end)
+      assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
       :ok = Reconciler.converge(agent.id)
 
       entry =
-        eventually(fn ->
+        assert_eventually(fn ->
           match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id)
         end)
 
@@ -247,23 +233,23 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       assert NativeLogin.login_view(agent) == %{kind: :device_code, url: @url, code: "FAKE-1234"}
 
       assert :ok = FakeHost.complete(agent.id)
-      eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
+      assert_eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
       assert %{login_code: nil} = State.get(agent.id)
     end
 
     test "the dev route completes it too", %{owner: owner, fake: fake} do
       {agent, runtime} = native!(owner, "Cody", "codex")
       {:ok, _} = NativeAgents.set_desired_state(runtime, "running")
-      eventually(fn -> Reconciler.host_pid() == fake end)
+      assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
       :ok = Reconciler.converge(agent.id)
-      eventually(fn -> match?(%{state: :needs_login}, State.get(agent.id)) end)
+      assert_eventually(fn -> match?(%{state: :needs_login}, State.get(agent.id)) end)
 
       conn =
         Plug.Test.conn(:post, "/#{agent.id}/complete")
         |> PlatformWeb.Dev.FakeAgentHost.call([])
 
       assert conn.status == 200
-      eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
+      assert_eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
 
       unknown =
         Plug.Test.conn(:post, "/#{Ecto.UUID.generate()}/complete")
@@ -278,11 +264,11 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
     } do
       {agent, runtime} = native!(owner, "Clio", "claude_code")
       {:ok, _} = NativeAgents.set_desired_state(runtime, "running")
-      eventually(fn -> Reconciler.host_pid() == fake end)
+      assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
       :ok = Reconciler.converge(agent.id)
 
       entry =
-        eventually(fn ->
+        assert_eventually(fn ->
           match?(%{state: :needs_login}, State.get(agent.id)) && State.get(agent.id)
         end)
 
@@ -293,7 +279,7 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       key = "sk-ant-api03-" <> String.duplicate("f", 40)
       :ok = NativeLogin.put_api_key(owner.id, agent, key)
       :ok = Reconciler.restart(agent.id)
-      eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
+      assert_eventually(fn -> match?(%{state: :running}, State.get(agent.id)) end)
     end
   end
 end
