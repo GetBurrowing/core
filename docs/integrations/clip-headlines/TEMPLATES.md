@@ -110,3 +110,38 @@ cleared title after 3.5 s, continuing captions, 300-frame timing and single-line
 caption bounds on every frame. Decoded MP4 stills and playable MP4s accompany
 the contact-sheet canvas in the execution space. Receipts bind source digest,
 actual imported modules, font/logo hashes, sizes, wraps and final output hashes.
+
+## Qualification receipt
+
+The final dedicated installed renderer passes **103 focused tests**, including
+24 new template/safety cases and the unchanged HTC profile snapshots. The full
+installed-source run reports **3,513 passed, 20 skipped, 5 failed**. This is not
+a full green suite: the unchanged combined baseline reproduces the legacy
+one-pixel hook-boundary assertion, the installer's 120-second EOF timeout, and
+three audio-metric failures. Audio arms vary between unchanged runs, so their
+occasional raw passes are treated as flakes. No assertion was weakened or
+skipped to obtain these results. All audio-renderer bytes match the baseline.
+
+Full configured Ruff finds one pre-existing I001 import-order error in the
+caption prerequisite's `tests/test_dynamic_captions.py`, reproduced on the
+unchanged combined baseline. The full renderer source, new tests, installer
+and fixture pass their configured lint; the four newly authored Python files
+also pass the format check. That caption test and its qualification are left
+unchanged. Original OFL text bytes (including upstream line endings) are kept.
+
+The face-overlap mutant was killed by an unchanged explicit exception
+assertion; restored code and the final focused suite pass. Independent real
+renderer probes reject an unreadable 120-character token and a 40-word title
+(both below the 500-character input cap), leaving no partial output. Decoded
+caption pixels are byte-identical across all three templates. Actual delivered
+MP4 checks confirm the title is absent on frame 105 at 30 fps (3.5 s).
+
+The final playable comparisons and decoded contact sheet are in
+[evidence canvas](https://burrow.kobo-ai.com/canvases/01a18f04-9946-7000-bac3-f573d9fdd428).
+[templates-artifact.json](templates-artifact.json) pins patch, requirements,
+actual imported module paths/hashes, detector/font/logo/source hashes and sample
+outputs. [evidence/templates-v1](evidence/templates-v1) retains full logs,
+controls, decoded checks and installation receipts. These are isolated runtime
+qualification results, not a claim that production was upgraded or that a live
+headline model was provisioned. The readiness repair task and canonical runner
+were not changed.

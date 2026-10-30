@@ -5,6 +5,7 @@ Run with the qualified tool's Python; --source and --project must be originals.
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,8 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--face-model", required=True)
     args = parser.parse_args()
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg, "FFmpeg is required"
     import cv2
 
     out = Path(args.output)
@@ -172,7 +175,7 @@ def main():
     def decoded(path):
         raw = subprocess.check_output(
             [
-                "ffmpeg",
+                ffmpeg,
                 "-v",
                 "error",
                 "-i",
@@ -255,7 +258,7 @@ def main():
         # Decode actual alpha frames independently from the image/layout implementation.
         raw = subprocess.check_output(
             [
-                "ffmpeg",
+                ffmpeg,
                 "-v",
                 "error",
                 "-i",
@@ -288,7 +291,7 @@ def main():
                 )
             subprocess.run(
                 [
-                    "ffmpeg",
+                    ffmpeg,
                     "-v",
                     "error",
                     "-ss",

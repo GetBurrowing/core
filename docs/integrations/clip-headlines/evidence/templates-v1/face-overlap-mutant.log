@@ -1,0 +1,32 @@
+.F.....                                                                  [100%]
+=================================== FAILURES ===================================
+___________ test_fail_closed[mutation1-HEADLINE_FACE_REGION_UNSAFE] ____________
+
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-74/test_fail_closed_mutation1_HEA0')
+look = CaptionConfig(style='phrase-pop', preset=None, font='Anton-Regular.ttf', font_size=72, size_frac=None, primary_color='... hook_title_box=True, hook_title_two_lines=False, safe_top=0.04, safe_bottom=0.645, safe_side=0.111, safe_right=0.1667)
+mutation = {'hook_title_face_boxes': [[0.1, 0.1, 0.8, 0.5]]}
+code = 'HEADLINE_FACE_REGION_UNSAFE'
+
+    @pytest.mark.parametrize(
+        "mutation,code",
+        [
+            ({"hook_title_face_boxes": []}, "HEADLINE_FACE_GEOMETRY_MISSING"),
+            ({"hook_title_face_boxes": [[0.1, 0.1, 0.8, 0.5]]}, "HEADLINE_FACE_REGION_UNSAFE"),
+            ({"hook_title_face_boxes": [[0.5, 0.4, 0.2, 0.8]]}, "HEADLINE_FACE_GEOMETRY_INVALID"),
+            ({"hook_title_emphasis": [3]}, "HEADLINE_EMPHASIS_STALE"),
+            ({"hook_title_emphasis": [0], "hook_title_emphasis_text": "old text"}, "HEADLINE_EMPHASIS_STALE"),
+            ({"hook_title_emphasis": [0, 0]}, "HEADLINE_EMPHASIS_STALE"),
+            ({"hook_title_logo_sha256": "0" * 64}, "HEADLINE_ASSET_MISMATCH"),
+        ],
+    )
+    def test_fail_closed(tmp_path, look, mutation, code):
+        for k, v in mutation.items():
+            setattr(look, k, v)
+>       with pytest.raises(ValueError, match=code):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+.headline-tool/clip-agent/tests/test_headline_templates.py:57: Failed
+=========================== short test summary info ============================
+FAILED .headline-tool/clip-agent/tests/test_headline_templates.py::test_fail_closed[mutation1-HEADLINE_FACE_REGION_UNSAFE]
+1 failed, 6 passed, 15 deselected in 0.37s
