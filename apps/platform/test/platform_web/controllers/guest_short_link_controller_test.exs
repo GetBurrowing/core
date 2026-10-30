@@ -85,7 +85,7 @@ defmodule PlatformWeb.GuestShortLinkControllerTest do
 
     test "following the redirect lands the named guest in the meeting", %{conn: conn} do
       meeting = meeting!()
-      {invite, _token, _url} = guest_invite!(meeting, "Jordan Coombs")
+      {invite, _token, _url} = guest_invite!(meeting, "Sam Ortiz")
 
       location =
         conn |> meet() |> get("/g/#{invite.short_code}") |> get_resp_header("location") |> hd()
@@ -95,7 +95,7 @@ defmodule PlatformWeb.GuestShortLinkControllerTest do
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.chrome_mode == :none
       assert html =~ ~s(data-role="meeting-mic")
-      assert html =~ "Jordan Coombs"
+      assert html =~ "Sam Ortiz"
     end
 
     test "the old long link still admits", %{conn: conn} do

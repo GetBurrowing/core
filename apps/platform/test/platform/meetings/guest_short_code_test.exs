@@ -198,11 +198,11 @@ defmodule Platform.Meetings.GuestShortCodeTest do
       meeting = meeting!()
 
       assert {:ok, %{invite: invite, url: url}} =
-               Meetings.invite_guest(meeting, %{display_name: "Jordan Coombs"})
+               Meetings.invite_guest(meeting, %{display_name: "Sam Ortiz"})
 
       assert is_nil(invite.email)
       assert is_nil(invite.user_id)
-      assert invite.display_name == "Jordan Coombs"
+      assert invite.display_name == "Sam Ortiz"
       assert GuestShortCode.valid_format?(invite.short_code)
       assert url == "https://#{GuestInvite.guest_host()}/g/#{invite.short_code}"
       assert Repo.get!(Invite, invite.id).short_code == invite.short_code
