@@ -1060,6 +1060,33 @@ defmodule Platform.ExtensionsTest do
                {"meeting_triage_file", "meetings"}
              ]
 
+      # Task 01a18d37 stage 1 declares `project_id` on task_update and adds
+      # one sentence to its description. Pin both explicitly and strip them,
+      # so the frozen byte oracle still covers every older field.
+      project_move_sentence = " Pass project_id to re-file the task into another project."
+
+      defs =
+        Enum.map(defs, fn
+          %{name: "task_update"} = tool ->
+            assert %{
+                     type: "string",
+                     required: false,
+                     description: "Move the task to another" <> _
+                   } =
+                     tool.parameters.project_id
+
+            assert tool.description =~ project_move_sentence
+
+            %{
+              tool
+              | parameters: Map.delete(tool.parameters, :project_id),
+                description: String.replace(tool.description, project_move_sentence, "")
+            }
+
+          tool ->
+            tool
+        end)
+
       {extra, legacy} =
         Enum.split_with(defs, &(&1.bundle in ["access", "admin", "voice_ask"]))
 
