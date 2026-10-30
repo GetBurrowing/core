@@ -436,4 +436,115 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
       assert same_id == existing.id
     end
   end
+
+  # ── Task 01a18d0a-ec37 stage 2: the human invite on the quickmeet ───────
+
+  describe "the human Invite control on the quickmeet rail" do
+    setup %{space: space} do
+      original_host = Application.get_env(:platform, :meeting_guest_host)
+      Application.put_env(:platform, :meeting_guest_host, "meet.example.test")
+
+      on_exit(fn ->
+        case original_host do
+          nil -> Application.delete_env(:platform, :meeting_guest_host)
+          value -> Application.put_env(:platform, :meeting_guest_host, value)
+        end
+      end)
+
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Quickmeet Human Invite #{System.unique_integer([:positive])}",
+          org_id: Platform.TenancyFixtures.acme_org_id()
+        })
+
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, meeting} =
+        %Platform.Meetings.Meeting{id: meeting_id}
+        |> Platform.Meetings.Meeting.changeset(%{
+          project_id: project.id,
+          chat_space_id: space.id,
+          slug: "quickmeet-human-invite-#{System.unique_integer([:positive])}",
+          name: "Quickmeet Human Invite",
+          livekit_room_name: "meeting-#{meeting_id}",
+          status: "live"
+        })
+        |> Repo.insert()
+
+      {:ok, meeting: meeting, target: user!("target")}
+    end
+
+    defp human_invites(meeting) do
+      import Ecto.Query
+
+      Repo.all(
+        from(i in Platform.Meetings.Invite,
+          where: i.meeting_id == ^meeting.id,
+          order_by: i.inserted_at
+        )
+      )
+    end
+
+    defp type_name(view, query) do
+      view
+      |> form("#quickmeet-call-rail-human-invite-form", %{query: query})
+      |> render_change()
+    end
+
+    test "sits inside the humans section and offers the user row and the guest row, guest last",
+         %{conn: conn, space: space, meeting: meeting, target: target} do
+      view = join(conn, space)
+      assert assigns(view).quickmeet_meeting_id == meeting.id
+
+      assert has_element?(
+               view,
+               ~s(#quickmeet-call-rail [data-section="humans"] [data-role="meeting-human-invite"])
+             )
+
+      html = type_name(view, target.name)
+
+      roles =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="meeting-human-invite-dropdown"] > button))
+        |> Enum.map(&(&1 |> LazyHTML.attribute("data-role") |> List.first()))
+
+      assert roles == ["meeting-human-invite-user", "meeting-human-invite-guest"]
+    end
+
+    test "the user row writes a user invite on the quickmeet's meeting",
+         %{conn: conn, space: space, meeting: meeting, target: target} do
+      view = join(conn, space)
+      type_name(view, target.name)
+      render_click(view, "meeting_human_invite_user", %{"id" => target.id})
+
+      assert [%Platform.Meetings.Invite{user_id: user_id}] = human_invites(meeting)
+      assert user_id == target.id
+    end
+
+    test "the guest row writes a name-only guest invite and shows its /g/ link",
+         %{conn: conn, space: space, meeting: meeting} do
+      view = join(conn, space)
+      type_name(view, "Quickmeet Guest")
+      render_click(view, "meeting_human_invite_guest", %{})
+
+      assert [%Platform.Meetings.Invite{user_id: nil, email: nil} = invite] =
+               human_invites(meeting)
+
+      assert invite.display_name == "Quickmeet Guest"
+
+      assert has_element?(
+               view,
+               ~s(#quickmeet-call-rail [data-role="meeting-human-invite-link"]),
+               "https://meet.example.test/g/" <> invite.short_code
+             )
+    end
+
+    test "whitespace creates nothing", %{conn: conn, space: space, meeting: meeting} do
+      view = join(conn, space)
+      type_name(view, "   ")
+      render_click(view, "meeting_human_invite_guest", %{})
+      assert human_invites(meeting) == []
+    end
+  end
 end

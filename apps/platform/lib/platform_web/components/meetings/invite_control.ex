@@ -287,6 +287,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       <.dropdown
         candidates={@candidates}
         email_option={@email_option}
+        query={@query}
         mode={@mode}
         target={@target}
         dropdown={@dropdown}
@@ -340,9 +341,47 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   end
 
   # Nothing matched and the query is not an address the account schema
-  # would accept: no dropdown at all, rather than an empty panel.
+  # would accept. A blank query gets no dropdown at all, rather than an
+  # empty panel. A typed NAME gets one option: invite that name as a guest
+  # with no email (task 01a18d0a-ec37 stage 2), so a guest no longer needs
+  # an address to be invited. There is no external option here: an external
+  # member is an account-holder, and an account needs an address.
   defp dropdown(%{candidates: [], email_option: nil} = assigns) do
-    ~H""
+    assigns = assign(assigns, :name, String.trim(assigns.query || ""))
+
+    ~H"""
+    <div
+      :if={@name != ""}
+      class={dropdown_class(@dropdown)}
+      data-role="meeting-invite-dropdown"
+      data-dropdown-position={@dropdown}
+      data-dropdown-kind="guest-name"
+    >
+      <button
+        type="button"
+        data-role="meeting-invite-option"
+        data-option="guest-name"
+        data-default="true"
+        class="flex w-full items-center gap-2.5 bg-primary/10 px-3 py-2 text-left min-h-[52px] sm:min-h-11 lg:hover:bg-primary/15"
+        phx-click={event(@mode, :stage)}
+        phx-value-kind="guest"
+        phx-value-name={@name}
+        phx-target={@target}
+      >
+        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-warning/15">
+          <span class="hero-link size-4 text-warning" aria-hidden="true"></span>
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate text-sm font-semibold" data-role="meeting-invite-option-title">
+            Invite "{@name}" as a guest
+          </span>
+          <span class="block text-xs text-subtle" data-role="meeting-invite-option-detail">
+            Personal link · email optional
+          </span>
+        </span>
+      </button>
+    </div>
+    """
   end
 
   defp dropdown(%{candidates: []} = assigns) do
@@ -611,6 +650,268 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         <span class="hero-plus size-4 shrink-0 text-primary" aria-hidden="true"></span>
         <span>Add people</span>
       </button>
+    </div>
+    """
+  end
+
+  # ── human_invite/1 (task 01a18d0a-ec37 stage 2) ────────────────────────
+
+  attr(:state, :map,
+    required: true,
+    doc: """
+    `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`'s map: `:id`
+    (DOM id prefix), `:query`, `:users` (the resolver's `users`),
+    `:guest_host?`, `:result` (`nil` or the created guest invite with its
+    `:url`, `:name`, `:email_open?`, `:email_error`) and `:error`.
+    """
+  )
+
+  @doc """
+  The name-first Invite field at the foot of a live call's HUMANS section
+  (design canvas `01a18d0b-4f5a`, node md).
+
+  Typing a name opens a list in flow directly under the field: the matching
+  members from `Meetings.resolve_invite_candidates/2`, then, ALWAYS LAST and
+  set off by a `base-300` divider, `Invite "<name>" as guest`. The guest row
+  is rendered from the typed string, not from any query, whenever the
+  trimmed query is non-blank and a guest host is configured. So a name that
+  matches a member offers both, and an already-invited member (excluded by
+  the resolver) or a name matching nobody still offers the guest row.
+
+  The list is IN FLOW at every width, not absolutely positioned. On a phone
+  the participant list is already a bottom sheet, and the canvas wants the
+  options inline inside it; on desktop the People pane is a scrolling
+  column, where an absolutely positioned list is clipped by the pane (see
+  `invite_control/1`'s `@dropdown` note, which measured exactly that).
+
+  Choosing the guest row replaces it with a persistent result: the name, an
+  info Guest badge, "invited", the full short link in mono with no
+  ellipsis, a primary Copy link button and "+ Add email (optional)". It
+  stays until dismissed.
+
+  Event names are fixed (`meeting_human_invite_*`) and handled by
+  `MeetingHumanInvite` via `MeetingHooks`, on both call surfaces.
+  """
+  def human_invite(assigns) do
+    assigns =
+      assigns
+      |> assign(:name, String.trim(assigns.state.query || ""))
+      |> assign(:prefix, "#{assigns.state.id}-human-invite")
+
+    ~H"""
+    <div class="mt-1.5 px-2" data-role="meeting-human-invite" id={@prefix}>
+      <form
+        id={"#{@prefix}-form"}
+        phx-change="meeting_human_invite_search"
+        phx-submit="meeting_human_invite_search"
+        autocomplete="off"
+      >
+        <label class="flex min-h-11 items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+          <span class="hero-plus size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+          <span class="shrink-0 text-sm font-medium text-base-content">Invite</span>
+          <input
+            type="text"
+            name="query"
+            id={"#{@prefix}-search"}
+            data-role="meeting-human-invite-search"
+            value={@state.query}
+            placeholder="Type a name…"
+            aria-label="Invite someone by name"
+            autocomplete="off"
+            phx-debounce="120"
+            class="w-full min-w-0 border-0 bg-transparent p-0 text-sm text-base-content focus:outline-none focus:ring-0"
+          />
+        </label>
+      </form>
+
+      <p
+        :if={@state.error}
+        class="mt-1 flex items-center gap-1.5 text-xs text-base-content"
+        data-role="meeting-human-invite-error"
+        role="alert"
+      >
+        <span class="hero-exclamation-circle size-4 shrink-0 text-error" aria-hidden="true"></span>
+        <span>{@state.error}</span>
+      </p>
+
+      <.human_invite_result :if={@state.result} result={@state.result} prefix={@prefix} />
+
+      <div
+        :if={@name != "" and (@state.users != [] or @state.guest_host?)}
+        class="mt-1 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+        data-role="meeting-human-invite-dropdown"
+      >
+        <button
+          :for={user <- @state.users}
+          type="button"
+          data-role="meeting-human-invite-user"
+          data-user-id={user.id}
+          phx-click="meeting_human_invite_user"
+          phx-value-id={user.id}
+          class="flex min-h-11 w-full min-w-0 items-center gap-2.5 overflow-hidden px-2.5 py-2 text-left lg:hover:bg-base-200 phx-click-loading:opacity-60"
+        >
+          <.human_avatar name={user.name || user.email} seed={user.id} size="sm" class="shrink-0" />
+          <span class="flex min-w-0 flex-1 items-baseline gap-2">
+            <span
+              class="shrink-0 whitespace-nowrap text-sm font-medium text-base-content"
+              data-role="meeting-human-invite-user-name"
+            >
+              {user.name || user.email}
+            </span>
+            <span
+              :if={user.name}
+              class="min-w-0 truncate text-xs text-subtle"
+              data-role="meeting-human-invite-user-email"
+            >
+              {user.email}
+            </span>
+          </span>
+        </button>
+
+        <button
+          :if={@state.guest_host?}
+          type="button"
+          data-role="meeting-human-invite-guest"
+          phx-click="meeting_human_invite_guest"
+          class={[
+            "flex min-h-11 w-full min-w-0 items-center gap-2.5 px-2.5 py-2 text-left lg:hover:bg-base-200 phx-click-loading:opacity-60",
+            @state.users != [] && "border-t border-base-300"
+          ]}
+        >
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full border border-base-300">
+            <span class="hero-plus size-4 text-subtle" aria-hidden="true"></span>
+          </span>
+          <span class="min-w-0 flex-1">
+            <span
+              class="block truncate text-sm font-medium text-base-content"
+              data-role="meeting-human-invite-guest-label"
+            >
+              Invite "{@name}" as guest
+            </span>
+            <span class="mt-0.5 flex items-center gap-1.5">
+              <.chip
+                tone="info"
+                class="shrink-0 text-[10px]"
+                data-role="meeting-human-invite-guest-badge"
+              >
+                Guest
+              </.chip>
+              <span class="text-xs text-subtle">email optional</span>
+            </span>
+          </span>
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:result, :map, required: true)
+  attr(:prefix, :string, required: true)
+
+  defp human_invite_result(assigns) do
+    ~H"""
+    <div
+      class="mt-1 rounded-lg border border-base-300 bg-base-100 px-2.5 py-2"
+      data-role="meeting-human-invite-result"
+      data-invite-id={@result.invite.id}
+    >
+      <div class="flex min-w-0 items-center gap-1.5">
+        <span
+          class="shrink-0 whitespace-nowrap text-sm font-medium text-base-content"
+          data-role="meeting-human-invite-result-name"
+        >
+          {@result.name}
+        </span>
+        <.chip tone="info" class="shrink-0 text-[10px]" data-role="meeting-human-invite-result-badge">
+          Guest
+        </.chip>
+        <span class="min-w-0 flex-1 truncate text-xs text-subtle">invited</span>
+        <button
+          type="button"
+          phx-click="meeting_human_invite_dismiss"
+          data-role="meeting-human-invite-dismiss"
+          aria-label="Dismiss"
+          title="Dismiss"
+          class="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-subtle lg:hover:bg-base-200"
+        >
+          <span class="hero-x-mark size-4" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <code
+          class="min-w-0 break-all font-mono text-xs text-base-content"
+          data-role="meeting-human-invite-link"
+        >
+          {@result.url}
+        </code>
+        <button
+          type="button"
+          id={"#{@prefix}-copy-#{@result.invite.id}"}
+          phx-hook="CopyToClipboard"
+          data-clipboard-text={@result.url}
+          data-copied-label="Copied"
+          data-role="meeting-human-invite-copy"
+          class="min-h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-content data-[copy-state=copied]:bg-success data-[copy-state=copied]:text-success-content"
+        >
+          Copy link
+        </button>
+      </div>
+
+      <p
+        :if={@result.invite.email}
+        class="mt-1 truncate text-xs text-subtle"
+        data-role="meeting-human-invite-email-saved"
+      >
+        {@result.invite.email}
+      </p>
+
+      <button
+        :if={is_nil(@result.invite.email) and not @result.email_open?}
+        type="button"
+        phx-click="meeting_human_invite_email_open"
+        data-role="meeting-human-invite-add-email"
+        class="mt-1 min-h-11 text-left text-sm font-medium text-base-content lg:hover:underline"
+      >
+        + Add email (optional)
+      </button>
+
+      <form
+        :if={@result.email_open?}
+        id={"#{@prefix}-email-form"}
+        phx-submit="meeting_human_invite_email"
+        data-role="meeting-human-invite-email-form"
+        class="mt-1 flex items-center gap-2"
+      >
+        <input
+          type="text"
+          inputmode="email"
+          name="email"
+          id={"#{@prefix}-email"}
+          data-role="meeting-human-invite-email"
+          placeholder="name@example.com"
+          aria-label="Guest email (optional)"
+          autocomplete="off"
+          class="min-h-11 w-full min-w-0 rounded-lg border border-base-300 bg-base-100 px-2.5 text-sm text-base-content focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+        <button
+          type="submit"
+          data-role="meeting-human-invite-email-save"
+          class="min-h-11 shrink-0 rounded-lg border border-base-300 px-3 text-sm font-medium text-base-content lg:hover:bg-base-200 phx-submit-loading:opacity-60"
+        >
+          Save
+        </button>
+      </form>
+
+      <p
+        :if={@result.email_error}
+        class="mt-1 flex items-center gap-1.5 text-xs text-base-content"
+        data-role="meeting-human-invite-email-error"
+        role="alert"
+      >
+        <span class="hero-exclamation-circle size-4 shrink-0 text-error" aria-hidden="true"></span>
+        <span>{@result.email_error}</span>
+      </p>
     </div>
     """
   end

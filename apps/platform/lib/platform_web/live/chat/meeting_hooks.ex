@@ -93,8 +93,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Meetings.State, as: MeetingState
   alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CandidateRail
+  alias PlatformWeb.ChatLive.MeetingHumanInvite
   alias PlatformWeb.ChatLive.TranscriberMarkersHook
   alias PlatformWeb.SpaceTopics
+
+  @human_invite_events MeetingHumanInvite.events()
 
   @doc """
   Attach Meeting handlers. Call from `ChatLive.mount/3`.
@@ -950,6 +953,13 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, apply_media_states(socket, params)}
   end
 
+  # The name-first human invite inside the People pane's humans section
+  # (task 01a18d0a-ec37 stage 2). One body for `/meetings` and the quickmeet;
+  # see `MeetingHumanInvite` for the gates.
+  defp handle_event(event, params, socket) when event in @human_invite_events do
+    MeetingHumanInvite.handle_event(event, params, socket)
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   # ── Guest-flavored event surface (task 019f498d stage 3) ────────────────
@@ -1060,6 +1070,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp handle_guest_event("media_states", params, socket) do
     {:halt, apply_media_states(socket, params)}
   end
+
+  # An anonymous guest gets no human invite control, and a forged event
+  # from one is halted here and writes nothing. Halted rather than passed
+  # on, so `MeetingLive` never sees it.
+  defp handle_guest_event(event, _params, socket) when event in @human_invite_events,
+    do: {:halt, socket}
 
   defp handle_guest_event(_event, _params, socket), do: {:cont, socket}
 
@@ -2008,6 +2024,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign_new(:speaking_identities, fn -> MapSet.new() end)
     |> assign_new(:muted_identities, fn -> MapSet.new() end)
     |> assign_new(:camera_off_identities, fn -> MapSet.new() end)
+    |> MeetingHumanInvite.seed()
   end
 
   # Hydrate the rail for the meeting this socket just joined.

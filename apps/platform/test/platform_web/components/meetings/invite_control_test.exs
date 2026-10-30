@@ -538,4 +538,214 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert_raise KeyError, fn -> list([bare], :draft) end
     end
   end
+
+  # ── task 01a18d0a-ec37 stage 2 ─────────────────────────────────────────
+
+  describe "invite_control/1 — a typed name that matches nobody" do
+    test "offers ONE guest option carrying the name, and no external option" do
+      html = control(candidates: [], email_option: nil, query: "  Dana Whitfield ")
+
+      assert count(html, "[data-role=meeting-invite-option]") == 1
+      option = one(html, "[data-role=meeting-invite-option]")
+      assert attr(option, "data-option") == ["guest-name"]
+      assert attr(option, "phx-value-kind") == ["guest"]
+      assert attr(option, "phx-value-name") == ["Dana Whitfield"]
+      assert attr(option, "phx-value-email") == [nil]
+
+      assert text_at(html, "[data-role=meeting-invite-option-title]") ==
+               ~s(Invite "Dana Whitfield" as a guest)
+
+      assert count(html, "[data-option=external]") == 0
+    end
+
+    test "a whitespace-only query still renders no dropdown" do
+      html = control(candidates: [], email_option: nil, query: "   ")
+      assert count(html, "[data-role=meeting-invite-dropdown]") == 0
+    end
+  end
+
+  @human_users [
+    %User{
+      id: "3f1a0b6e-0000-4000-8000-0000000000a1",
+      name: "Dana Whitfield",
+      email: "dana.whitfield.has.a.very.long.address@example.test"
+    },
+    %User{id: "3f1a0b6e-0000-4000-8000-0000000000a2", name: "Dana Cole", email: "dc@example.test"}
+  ]
+
+  defp human_state(overrides) do
+    Map.merge(
+      %{
+        id: "rail",
+        query: "",
+        users: [],
+        guest_host?: true,
+        result: nil,
+        error: nil
+      },
+      Map.new(overrides)
+    )
+  end
+
+  defp human(overrides),
+    do: render_component(&InviteControl.human_invite/1, %{state: human_state(overrides)})
+
+  defp guest_result(overrides) do
+    Map.merge(
+      %{
+        invite: %Platform.Meetings.Invite{id: "inv-1", email: nil},
+        name: "Dana Whitfield",
+        url: "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv",
+        email_open?: false,
+        email_error: nil
+      },
+      Map.new(overrides)
+    )
+  end
+
+  describe "human_invite/1 — the field" do
+    test "is the inline 'Invite' field with 'Type a name…' and no dropdown while empty" do
+      html = human([])
+
+      input = one(html, "[data-role=meeting-human-invite-search]")
+      assert attr(input, "placeholder") == ["Type a name…"]
+      assert attr(input, "name") == ["query"]
+      assert html |> one("form") |> attr("phx-change") == ["meeting_human_invite_search"]
+      assert text_at(html, "[data-role=meeting-human-invite] label") == "Invite"
+      assert count(html, "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+
+    test "whitespace opens nothing" do
+      assert count(human(query: "   "), "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+  end
+
+  describe "human_invite/1 — the dropdown" do
+    setup do
+      %{html: human(query: "Dana Whitfield", users: @human_users)}
+    end
+
+    test "lists the user rows from the resolver and the guest row LAST", %{html: html} do
+      buttons =
+        html
+        |> q("[data-role=meeting-human-invite-dropdown] > button")
+        |> Enum.map(&(attr(&1, "data-role") |> List.first()))
+
+      assert buttons == [
+               "meeting-human-invite-user",
+               "meeting-human-invite-user",
+               "meeting-human-invite-guest"
+             ]
+
+      assert text_at(html, "[data-role=meeting-human-invite-guest-label]") ==
+               ~s(Invite "Dana Whitfield" as guest)
+
+      assert text_at(html, "[data-role=meeting-human-invite-guest-badge]") == "Guest"
+    end
+
+    test "user rows carry the rendered id; name is kept whole and the email truncates", %{
+      html: html
+    } do
+      [first | _] = html |> q("[data-role=meeting-human-invite-user]") |> Enum.to_list()
+      assert attr(first, "phx-value-id") == [hd(@human_users).id]
+      assert attr(first, "phx-click") == ["meeting_human_invite_user"]
+
+      name = html |> q("[data-role=meeting-human-invite-user-name]") |> Enum.at(0)
+      assert class_of(name) =~ "shrink-0"
+      assert class_of(name) =~ "whitespace-nowrap"
+      email = html |> q("[data-role=meeting-human-invite-user-email]") |> Enum.at(0)
+      assert class_of(email) =~ "min-w-0"
+      assert class_of(email) =~ "truncate"
+    end
+
+    test "the guest row is set off by a base-300 divider and uses the info badge", %{html: html} do
+      guest = one(html, "[data-role=meeting-human-invite-guest]")
+      assert class_of(guest) =~ "border-t border-base-300"
+      assert attr(guest, "phx-click") == ["meeting_human_invite_guest"]
+
+      badge = one(html, "[data-role=meeting-human-invite-guest-badge]")
+      assert class_of(badge) =~ "chip-info"
+    end
+
+    test "a name matching nobody still gets the guest row, with no divider above it" do
+      html = human(query: "Nobody Atall", users: [])
+
+      assert count(html, "[data-role=meeting-human-invite-user]") == 0
+      guest = one(html, "[data-role=meeting-human-invite-guest]")
+      refute class_of(guest) =~ "border-t"
+    end
+
+    test "with no guest host the guest row is ABSENT" do
+      html = human(query: "Dana Whitfield", users: @human_users, guest_host?: false)
+
+      assert count(html, "[data-role=meeting-human-invite-user]") == 2
+      assert count(html, "[data-role=meeting-human-invite-guest]") == 0
+    end
+
+    test "no guest host and no match: no dropdown at all" do
+      html = human(query: "Nobody", users: [], guest_host?: false)
+      assert count(html, "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+  end
+
+  describe "human_invite/1 — the persistent guest result" do
+    test "shows name, Guest badge, invited, the FULL link in mono, primary Copy link and + Add email" do
+      html = human(result: guest_result([]))
+
+      assert text_at(html, "[data-role=meeting-human-invite-result-name]") == "Dana Whitfield"
+      assert text_at(html, "[data-role=meeting-human-invite-result-badge]") == "Guest"
+
+      link = one(html, "[data-role=meeting-human-invite-link]")
+      assert text_of(link) == "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv"
+      assert class_of(link) =~ "font-mono"
+      refute class_of(link) =~ "truncate"
+
+      copy = one(html, "[data-role=meeting-human-invite-copy]")
+      assert text_of(copy) == "Copy link"
+      assert attr(copy, "phx-hook") == ["CopyToClipboard"]
+
+      assert attr(copy, "data-clipboard-text") == [
+               "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv"
+             ]
+
+      assert attr(copy, "data-copied-label") == ["Copied"]
+      assert class_of(copy) =~ "bg-primary text-primary-content"
+      assert class_of(copy) =~ "data-[copy-state=copied]:bg-success"
+
+      assert text_at(html, "[data-role=meeting-human-invite-add-email]") ==
+               "+ Add email (optional)"
+
+      assert count(html, "[data-role=meeting-human-invite-email-form]") == 0
+    end
+
+    test "Add email opens a form; its error renders without losing the link" do
+      html =
+        human(
+          result: guest_result(email_open?: true, email_error: "Email must be an email address.")
+        )
+
+      assert count(html, "[data-role=meeting-human-invite-email-form]") == 1
+      assert count(html, "[data-role=meeting-human-invite-add-email]") == 0
+
+      assert text_at(html, "[data-role=meeting-human-invite-email-error]") ==
+               "Email must be an email address."
+
+      assert count(html, "[data-role=meeting-human-invite-link]") == 1
+    end
+
+    test "a saved email is shown and the Add email affordance goes" do
+      invite = %Platform.Meetings.Invite{id: "inv-1", email: "dana@example.test"}
+      html = human(result: guest_result(invite: invite))
+
+      assert text_at(html, "[data-role=meeting-human-invite-email-saved]") == "dana@example.test"
+      assert count(html, "[data-role=meeting-human-invite-add-email]") == 0
+    end
+
+    test "carries no raw colour and no emoji" do
+      html = human(query: "Dana Whitfield", users: @human_users, result: guest_result([]))
+
+      refute html =~ ~r/#[0-9a-fA-F]{3,8}\b/
+      refute html =~ ~r/[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]/u
+    end
+  end
 end
