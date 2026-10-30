@@ -780,7 +780,7 @@ defmodule Platform.Meetings.CompletionTest do
              Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
   end
 
-  test "a second meeting in the same room owns new capture without reopening the first", ctx do
+  test "a second meeting in the same space owns new capture without reopening the first", ctx do
     {first, filed} = filed!(ctx)
 
     {:ok, second} =
@@ -792,7 +792,6 @@ defmodule Platform.Meetings.CompletionTest do
       second
       |> Ecto.Changeset.change(
         chat_space_id: first.chat_space_id,
-        livekit_room_name: first.livekit_room_name,
         status: "live",
         started_at: start
       )
