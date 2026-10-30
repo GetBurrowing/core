@@ -17,8 +17,32 @@
  *
  * Nothing here ever types into the pane. Logging in is the person's, through
  * Anthropic's own flow.
+ *
+ * HARNESS `codex` (core task 01a10315 stage 4; the env file's
+ * BURROW_AGENT_HARNESS says which):
+ *
+ * 1. While `codex login status` is non-zero, Codex's own device login
+ *    (codex_login.ts): the status file carries its URL and one-time code for
+ *    the owner to enter on auth.openai.com, and a fresh login starts when one
+ *    expires, at most once a minute.
+ * 2. Then `burrow codex --no-session` in the work dir, which runs burrow-cli's
+ *    Codex bridge in this process's place and returns only when it ends. Not
+ *    `--session`: burrow-cli 9a8ef75's `codex` refuses that option by name,
+ *    and names its tmux session for the agent, not `suite-agent`, so this
+ *    unit supervises the bridge directly, with systemd's restart.
+ * 3. Ready (status `ready`) is: the unit is active and `codex login status`
+ *    exits 0. `burrow pane-status` reads a Claude pane and is not used.
  */
-import { SESSION } from "./ids.ts";
+import { mkdirSync } from "node:fs";
+import { SESSION, statusFile } from "./ids.ts";
+import {
+  codexEnv,
+  codexHomeFor,
+  ensureCodexLogin,
+  writeStatusFile,
+  type CodexLoginIo,
+  type CodexLoginOptions,
+} from "./codex_login.ts";
 
 export const POLL_MS = 5_000;
 
@@ -54,6 +78,29 @@ export async function runAgent(io: RunnerIo, session: string = SESSION): Promise
   }
 }
 
+/**
+ * The codex loop (steps 1-3 above). `io.spawn` of the bridge returns when the
+ * bridge ends; without a stop that is a failure, so systemd restarts it.
+ */
+export const CODEX_BRIDGE = ["burrow", "codex", "--no-session"];
+
+export async function runCodexAgent(
+  io: RunnerIo,
+  login: CodexLoginIo,
+  agentId: string,
+  opts: CodexLoginOptions,
+  runBridge: (argv: string[]) => Promise<number> = async (argv) => (await io.spawn(argv)).exitCode,
+): Promise<number> {
+  login.writeStatus({ state: "starting" });
+  if (!(await ensureCodexLogin(agentId, login, opts))) return 0;
+  login.writeStatus({ state: "ready" });
+  const exitCode = await runBridge(CODEX_BRIDGE);
+  if (io.stopping()) return 0;
+  io.log(`burrow codex --no-session exited ${exitCode} without a stop; exiting so systemd can restart it`);
+  login.writeStatus({ state: "starting", detail: "the Codex bridge exited" });
+  return 1;
+}
+
 if (import.meta.main) {
   let stopping = false;
   const io: RunnerIo = {
@@ -72,5 +119,38 @@ if (import.meta.main) {
     Bun.spawnSync(["tmux", "kill-server"]);
     process.exit(0);
   });
+  const agentId = process.env.BURROW_AGENT_ID ?? "";
+  if (process.env.BURROW_AGENT_HARNESS === "codex") {
+    const codexHome = codexHomeFor(process.cwd());
+    mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+    // A stop's SIGTERM exits above; systemd's KillMode=control-group ends a
+    // login or bridge child with the unit.
+    const login: CodexLoginIo = {
+      start(argv, env, onStdout) {
+        const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "inherit" });
+        const decoder = new TextDecoder();
+        const pump = (async () => {
+          for await (const chunk of proc.stdout) onStdout(decoder.decode(chunk, { stream: true }));
+        })();
+        return {
+          exited: pump.then(() => proc.exited),
+          kill: () => proc.kill(),
+        };
+      },
+      async exitCode(argv, env) {
+        const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+        return await proc.exited;
+      },
+      writeStatus: (status) => writeStatusFile(statusFile(agentId), status),
+      now: () => Date.now(),
+      sleep: io.sleep,
+      log: io.log,
+      stopping: io.stopping,
+    };
+    const opts = { codexBin: "codex", codexHome, env: codexEnv(process.env, codexHome) };
+    // The bridge runs for the agent's life: its output goes to the journal, not a buffer.
+    const runBridge = async (argv: string[]) => await Bun.spawn(argv, { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exited;
+    process.exit(await runCodexAgent(io, login, agentId, opts, runBridge));
+  }
   process.exit(await runAgent(io));
 }

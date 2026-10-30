@@ -101,7 +101,8 @@ export function isAgentEnvName(value: unknown): value is string {
 
 // The unit sets BURROW_AGENT_ID, BURROW_AGENT_SESSION and BURROW_UNATTENDED,
 // and systemd lets EnvironmentFile= override Environment=, so an
-// owner-supplied entry would win. Reserve all three.
+// owner-supplied entry would win. Reserve all three, and BURROW_AGENT_HARNESS,
+// which the host writes into the env file itself (agents.ts renderEnvFile).
 const RESERVED_ENV = new Set([
   "HOME",
   "USER",
@@ -112,6 +113,7 @@ const RESERVED_ENV = new Set([
   "BURROW_AGENT_ID",
   "BURROW_AGENT_SESSION",
   "BURROW_UNATTENDED",
+  "BURROW_AGENT_HARNESS",
   "LD_PRELOAD",
   "LD_LIBRARY_PATH",
 ]);

@@ -19,6 +19,12 @@
  *        agent.restarted              {ref, agent_id, outcome, before, after}   tool snapshots, names only
  *        host.reply                   {ref, result}                       answer to host.env_names | host.admin
  *
+ * An observation's `login` is `{step}`, except a Codex agent at its device
+ * login (step `device_code`), whose `{step, url, code}` is forwarded as is:
+ * core shows the owner the auth.openai.com URL and the one-time code to
+ * enter there (agents.ts `deviceLogin`, codex_login.ts). A new code is a
+ * change, so it is reported like any other (`key` includes `login`).
+ *
  * An agent whose key a check found `rejected` reads `needs_login` (detail
  * `auth_error`) until its next start, which is the only thing that can give
  * it a new key.
