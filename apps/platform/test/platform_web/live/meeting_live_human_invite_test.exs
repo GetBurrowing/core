@@ -4,10 +4,9 @@ defmodule PlatformWeb.MeetingLiveHumanInviteTest do
   HUMANS section of the live call's participant list on `/meetings`.
 
   Driven through a real mounted `MeetingLive` and the real events, so each
-  claim is about what the page draws and what a click writes. The fixture
-  the stage names "Jordan Coombs" is a neutral name here
-  (`InstallIdentityGuardTest` refuses that person's name in tracked files,
-  which stage 1 found the hard way).
+  claim is about what the page draws and what a click writes. The stage's
+  named fixture person is replaced by a neutral name here, because
+  `InstallIdentityGuardTest` refuses real personal names in tracked files.
 
   Every "writes nothing" assertion reads the `meeting_invites` table, not the
   page: a refusal that only hides a button is not a refusal.
