@@ -118,6 +118,37 @@ defmodule Platform.PrototypeFixtures do
     agent
   end
 
+  @doc """
+  A runtime for `agent` owned by `owner`, holding `profile` (default: the
+  DEFAULT tool profile) with the restriction `Platform.Federation.register_runtime/2`
+  writes for an explicit profile (task 01a18da0 stage 1). Returns the
+  MCP-shaped context `%{runtime_id, agent_id}` the transports build.
+  """
+  def reader_context!(
+        agent,
+        owner,
+        profile \\ Platform.Agents.AgentRuntime.default_tool_profile()
+      ) do
+    n = System.unique_integer([:positive])
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "proto-reader-#{n}",
+        owner_user_id: owner.id,
+        agent_id: agent.id,
+        status: "active"
+      })
+
+    {:ok, _} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(profile)
+      )
+
+    %{runtime_id: runtime.runtime_id, agent_id: agent.id}
+  end
+
   @doc "An agent publisher with no runtime owner."
   def agent_publisher(agent, owner \\ nil),
     do: %{kind: :agent, agent_id: agent.id, owner_user: owner}

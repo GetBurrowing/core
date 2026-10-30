@@ -1023,6 +1023,32 @@ defmodule Platform.ExtensionsTest do
       assert by_name["calendar_propose"].parameters.operation.enum == ["create", "move"]
       assert by_name["calendar_propose"].parameters.attributes.type == "object"
 
+      # Task 01a18da0 stage 1 adds the prototype READ tools to the default
+      # `context_read` bundle. Pin their contract explicitly; the frozen oracle
+      # below still covers every older tool unchanged (digest NOT re-pinned).
+      {prototype_read, defs} =
+        Enum.split_with(defs, &(&1.name in ["prototype_files", "prototype_file_get"]))
+
+      assert Enum.map(prototype_read, &{&1.name, &1.bundle}) == [
+               {"prototype_files", "context_read"},
+               {"prototype_file_get", "context_read"}
+             ]
+
+      by_name = Map.new(prototype_read, &{&1.name, &1})
+
+      for {name, required} <- [
+            {"prototype_files", ~w(prototype_id)a},
+            {"prototype_file_get", ~w(prototype_id path)a}
+          ] do
+        actual =
+          for {key, parameter} <- by_name[name].parameters, parameter[:required] == true, do: key
+
+        assert MapSet.new(actual) == MapSet.new(required)
+
+        for field <- [:description, :returns, :limitations, :when_to_use],
+            do: assert(is_binary(Map.fetch!(by_name[name], field)))
+      end
+
       # Task 01a18305 stage 2 adds owning-runtime dependency verification.
       # Pin the additions while retaining the frozen oracle for all old fields.
       {dependency, defs} =

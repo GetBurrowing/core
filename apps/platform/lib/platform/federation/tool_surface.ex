@@ -163,7 +163,8 @@ defmodule Platform.Federation.ToolSurface do
     "canvas_list_kinds" => :kinds,
     "task_delivery_candidate_list" => :candidates,
     "vault_list" => :secrets,
-    "mail_inbound_list" => :messages
+    "mail_inbound_list" => :messages,
+    "prototype_files" => :files
   }
 
   # List-returning tools outside task 01a04a7a's scope, each with the reason.
@@ -255,9 +256,17 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("review"), do: tag(review_tools(), "review")
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
 
+  # `prototype_files` / `prototype_file_get` (task 01a18da0 stage 1) ride the
+  # default `context_read` bundle so every runtime can read a prototype it
+  # may open; definitions in PrototypeTools.read_definitions/0.
   defp tools_for_bundle("context_read"),
     do:
-      tag(context_read_tools() ++ Platform.Federation.CalendarTools.definitions(), "context_read")
+      tag(
+        context_read_tools() ++
+          Platform.Federation.CalendarTools.definitions() ++
+          Platform.Federation.PrototypeTools.read_definitions(),
+        "context_read"
+      )
 
   # `feedback_submit` (task 01a11ec3 stage 2) rides the `federation` bundle,
   # which every runtime holds by default, and is appended ONLY while
@@ -8394,13 +8403,17 @@ defmodule Platform.Federation.ToolSurface do
   # Every `prototype_*` tool (task 01a1316b-4e46 stage 1; renamed from
   # `prototype.*` by task 01a14a7f stage 3); no other tool name has this
   # prefix. The agent's home org is resolved here, by the same rule
-  # every tenant-scoped tool uses, and handed over in the context.
+  # every tenant-scoped tool uses, and handed over in the context, with the
+  # caller's RBAC Scope as `:access_scope` (`memory_access_opts/1`; absent
+  # when none resolves), which the read tools check (task 01a18da0 stage 1).
   def execute("prototype_" <> _ = tool, args, context),
     do:
       Platform.Prototypes.Tools.execute(
         tool,
         args,
-        Map.put(context, :agent_home_org, agent_home_org(load_agent(context)))
+        context
+        |> Map.put(:agent_home_org, agent_home_org(load_agent(context)))
+        |> Map.put(:access_scope, Keyword.get(memory_access_opts(context), :access_scope))
       )
 
   def execute("access_" <> _ = tool, args, context),

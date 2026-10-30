@@ -92,9 +92,10 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
     # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0),
     # dispatch_metrics_list (01a114a8 stage 1), code_mode_report (stage 4)
     # vault_list (01a131c5 stage 1) and mail_inbound_list (01a13ba5 stage 2).
-    test "the registry covers the 31 registered tools, each with an atom rows key" do
+    # + prototype_files (01a18da0 stage 1).
+    test "the registry covers the 32 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 31
+      assert map_size(tools) == 32
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -1388,6 +1389,32 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       assert env.total == 3
       assert env.has_more == false
       assert length(env.events) == 1
+    end
+  end
+
+  # Task 01a18da0 stage 1: every file of one version, read whole from the
+  # version's manifest. A default-profile runtime whose owner is a member.
+  describe "runtime conformance: prototype_files" do
+    test "every manifest file of the version, whole" do
+      Platform.PrototypeFixtures.scratch_storage!("list_envelope_prototype_files")
+      Platform.PrototypeFixtures.set_settings!(%{enabled: true, who_may_publish: "members"})
+      org_id = tenant_org_id("env-proto-#{u()}")
+      owner = Platform.PrototypeFixtures.user!("Envelope owner")
+      Platform.PrototypeFixtures.member!(owner, org_id)
+      agent = Platform.PrototypeFixtures.agent!(%{"org_id" => org_id})
+      context = Platform.PrototypeFixtures.reader_context!(agent, owner)
+
+      files = for i <- 1..3, into: %{}, do: {"f#{i}.html", %{"content" => "<p>#{i}</p>"}}
+
+      {:ok, %{prototype: p}} =
+        Platform.Prototypes.publish(
+          Platform.PrototypeFixtures.agent_publisher(agent),
+          %{org_id: org_id, name: "Envelope", entry_path: "f1.html"},
+          {:files, files}
+        )
+
+      env = call("prototype_files", %{"prototype_id" => p.id}, context)
+      assert_unbounded("prototype_files", env, 3)
     end
   end
 

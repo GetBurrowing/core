@@ -106,4 +106,62 @@ defmodule Platform.Federation.PrototypeTools do
       }
     ]
   end
+
+  @doc """
+  The read tools (task 01a18da0 stage 1): `prototype_files` and
+  `prototype_file_get`. They ride the DEFAULT `context_read` bundle
+  (`ToolSurface.tools_for_bundle/1`), not `prototype`, so every planner,
+  executor and reviewer runtime can render a prototype it may read.
+  `definitions/0` is untouched, so the frozen digest of the existing
+  prototype tools does not move.
+  """
+  @spec read_definitions() :: [map()]
+  def read_definitions do
+    [
+      %{
+        name: "prototype_files",
+        description:
+          "List every file of one version of a prototype bundle (path, byte_size, sha256, content_type), plus the entry path, so you can fetch each with prototype_file_get and render the prototype locally.",
+        parameters: %{
+          prototype_id: %{type: "string", required: true, description: "Prototype UUID."},
+          version: %{
+            type: "integer",
+            required: false,
+            description: "Version number. Omit for the prototype's latest version."
+          }
+        },
+        returns:
+          "%{prototype_id, version, latest_version, entry_path, files: [%{path, byte_size, sha256, content_type}], total, has_more, total_bytes} — every file of the version is returned; has_more is always false.",
+        limitations:
+          "not_found for an unknown id, for a prototype outside your org, and for one you are denied (a canvas.read deny on its canvas or a chat.read deny on its space): the three are indistinguishable. version_not_found for an unknown version or one removed by retention.",
+        when_to_use:
+          "Before building or reviewing a UI from a prototype: list the files, then fetch each with prototype_file_get."
+      },
+      %{
+        name: "prototype_file_get",
+        description:
+          "Read the stored bytes of one file of a prototype version. Text (text/*, JavaScript, JSON, SVG) that is valid UTF-8 comes back inline as content; anything else as content_base64. The bytes are verified against the manifest sha256 before they are returned.",
+        parameters: %{
+          prototype_id: %{type: "string", required: true, description: "Prototype UUID."},
+          path: %{
+            type: "string",
+            required: true,
+            description:
+              "Exact file path as listed by prototype_files (e.g. index.html, assets/app.js)."
+          },
+          version: %{
+            type: "integer",
+            required: false,
+            description: "Version number. Omit for the prototype's latest version."
+          }
+        },
+        returns:
+          "%{prototype_id, version, path, content_type, byte_size, sha256} plus content (UTF-8 text) or content_base64.",
+        limitations:
+          "not_found for an unknown id, a prototype outside your org, or one you are denied (indistinguishable). The path must be an exact manifest path of that version: a path that is absolute, has ./ or ../ segments, a backslash, NUL or control character is invalid_path, and any other path not in the version's manifest is file_not_found. version_not_found for an unknown or retention-removed version; file_too_large over 25 MiB; storage_failed when the stored bytes do not match the manifest sha256. HTML is returned as stored, without the room bridge the /proto/ route injects, so window.suite is undefined when you serve the files locally.",
+        when_to_use:
+          "To download a prototype's files into a fresh temp directory, serve them on 127.0.0.1 and screenshot the entry path."
+      }
+    ]
+  end
 end

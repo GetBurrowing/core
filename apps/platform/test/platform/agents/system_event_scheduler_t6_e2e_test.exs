@@ -769,7 +769,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # these do not add a historian scheduler tool or change T6 triggers.
     # +2 owner-granted Calendar tools (task 01a16991 stage 5), which add
     # no historian scheduler endpoint or T6 trigger.
-    @t6_baseline_tool_count 153
+    # +2 prototype read tools, `prototype_files` and `prototype_file_get`, in
+    # `context_read` (task 01a18da0 stage 1); no schedule, no trigger and no
+    # historian surface.
+    @t6_baseline_tool_count 155
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -77,6 +77,24 @@ defmodule Platform.Prototypes do
   def readable_by?(_user, _prototype), do: false
 
   @doc """
+  May the caller behind `scope` read `prototype`'s bytes through the MCP
+  read tools (`prototype_files` / `prototype_file_get`, task 01a18da0
+  stage 1)? The SAME `canvas.read` + `chat.read` check `readable_by?/2`
+  runs for a user, through one private function, so the agent path and the
+  serve route cannot drift. Org scope is the tool layer's
+  (`Platform.Prototypes.Tools`), decided before this runs.
+
+  A nil scope is refused (fail closed): these tools sit in the default
+  `context_read` bundle and return raw bytes, so an unresolvable caller
+  reads nothing (architecture verdict on task 01a18da0, must-have 1).
+  """
+  @spec readable_by_scope?(Platform.Access.Scope.t() | nil, Prototype.t()) :: boolean()
+  def readable_by_scope?(%Platform.Access.Scope{} = scope, %Prototype{} = prototype),
+    do: access_check(scope, prototype) == :ok
+
+  def readable_by_scope?(_scope, _prototype), do: false
+
+  @doc """
   The prototypes `user` may open, in one query: rows whose id is in `:ids`
   or whose `canvas_id` is in `:canvas_ids` (exactly one of the two), each
   passed through `readable_by?/2`. Unreadable and missing rows are omitted.
@@ -100,9 +118,15 @@ defmodule Platform.Prototypes do
     end
   end
 
-  defp access_check(user, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
-    scope = Platform.Access.Scope.for_user(user)
+  defp access_check(%Platform.Access.Scope{} = scope, %Prototype{} = prototype),
+    do: scope_access_check(scope, prototype)
 
+  defp access_check(user, %Prototype{} = prototype),
+    do: user |> Platform.Access.Scope.for_user() |> scope_access_check(prototype)
+
+  # The one check both readers share: `canvas.read` on the prototype's
+  # canvas, then `chat.read` on its space, each skipped when unset.
+  defp scope_access_check(scope, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
     with :ok <- access_check(scope, "canvas.read", :canvas, canvas_id),
          do: access_check(scope, "chat.read", :space, space_id)
   end
@@ -120,6 +144,40 @@ defmodule Platform.Prototypes do
         where: v.prototype_id == ^prototype_id and v.version == ^version and is_nil(v.removed_at)
       )
     )
+  end
+
+  @doc """
+  The manifest entry of `version` whose path is EXACTLY `path` (task
+  01a18da0 stage 1). `path` must first pass `Bundle.validate_path/1`; a
+  refused path is `{:error, {:invalid_path, msg}}` before any lookup, and a
+  valid path absent from THIS version's manifest is `{:error, :not_found}`.
+  """
+  @spec file_entry(Version.t(), term()) :: {:ok, map()} | {:error, :not_found} | error()
+  def file_entry(%Version{} = version, path) do
+    with :ok <- Bundle.validate_path(path) do
+      case Version.file(version, path) do
+        %{"storage_key" => key} = entry when is_binary(key) -> {:ok, entry}
+        _ -> {:error, :not_found}
+      end
+    end
+  end
+
+  @doc """
+  The stored bytes of one file of `version` (task 01a18da0 stage 1), read by
+  the manifest entry's OWN `storage_key`. The key is never built from
+  `path`: `path` only selects a manifest entry (`file_entry/2`), so a path
+  that is not in this version's manifest cannot reach storage at all.
+  Returns `{:ok, entry, bytes}`.
+  """
+  @spec read_file(Version.t(), term()) ::
+          {:ok, map(), binary()} | {:error, :not_found} | {:error, {:storage, term()}} | error()
+  def read_file(%Version{} = version, path) do
+    with {:ok, %{"storage_key" => key} = entry} <- file_entry(version, path) do
+      case Storage.read(key) do
+        {:ok, bytes} -> {:ok, entry, bytes}
+        {:error, reason} -> {:error, {:storage, reason}}
+      end
+    end
   end
 
   @doc """

@@ -229,7 +229,13 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # list requires owner_id/from/to; propose requires owner_id/operation/
   # attributes/request_key. No handler default or context alias substitutes
   # for these fields. instant/1 and AgentAccess.propose/6 refuse their absence.
-  @surveyed_required_count 226
+  # 229 adds three HONEST prototype read declarations (task 01a18da0 stage
+  # 1): `prototype_files`' `prototype_id` and `prototype_file_get`'s
+  # `prototype_id` and `path`. `Platform.Prototypes.Tools` reads each under its
+  # declared key only (`require_string/2`) and refuses absence with
+  # `invalid_argument` before any lookup or storage read. No alias, no context
+  # fallback, no absence default.
+  @surveyed_required_count 229
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

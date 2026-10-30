@@ -195,11 +195,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
       # +2 owning-runtime dependency verification tools (task 01a18305 stage 2).
       # +2 owner-granted Calendar tools (task 01a16991 stage 5).
-      assert length(tools) == 153
+      # +2 prototype read tools in `context_read` (task 01a18da0 stage 1).
+      assert length(tools) == 155
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names
       assert "calendar_propose" in tool_names
+      assert "prototype_files" in tool_names
+      assert "prototype_file_get" in tool_names
       assert "task_close_as_delivered" in tool_names
       assert "task_delivery_candidate_list" in tool_names
       assert "send_media" in tool_names

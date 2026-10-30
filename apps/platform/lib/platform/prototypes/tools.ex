@@ -8,15 +8,31 @@ defmodule Platform.Prototypes.Tools do
 
   Scope: a tenant agent may only touch prototypes of its own org; a root
   agent may touch any. A prototype outside scope reads as not found.
+
+  The read tools `prototype_files` and `prototype_file_get` (task 01a18da0
+  stage 1) additionally require `Prototypes.readable_by_scope?/2` on
+  `context.access_scope` (the caller's RBAC Scope, also added by ToolSurface):
+  a `canvas.read` deny on the prototype's canvas, a `chat.read` deny on its
+  space, or no resolvable Scope all read as not found, with the same envelope
+  as an unknown id. Bytes are read by the manifest's own `storage_key`, after
+  the path passes `Bundle.validate_path/1` and matches a manifest entry of the
+  requested version exactly, and are returned only when their sha256 equals
+  the manifest's.
   Policy (on/off, who may publish, caps) is `Platform.Prototypes`'.
   """
 
   alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.Attachments.ToolHandlers, as: AttachmentHandlers
+  alias Platform.Federation.ResultBound
   alias Platform.Prototypes
   alias Platform.Prototypes.Prototype
+  alias Platform.Prototypes.Version
   alias Platform.Tenancy
+
+  # One file's read cap for `prototype_file_get`, mirroring
+  # `Platform.Chat.Attachments.ToolHandlers`' `@inline_read_max_bytes`.
+  @max_file_bytes 25 * 1024 * 1024
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute("prototype_publish", args, context) do
@@ -97,6 +113,59 @@ defmodule Platform.Prototypes.Tools do
         {:error, {code, message}} ->
           error(code, message)
       end
+    end
+  end
+
+  # Task 01a18da0 stage 1: the read tools. Org scope THEN the caller's
+  # canvas.read / chat.read (`fetch_readable/2`); either failing is the same
+  # `not_found/1` envelope an unknown id gets.
+  def execute("prototype_files", args, context) do
+    with {:ok, prototype} <- fetch_readable(args, context),
+         {:ok, version} <- fetch_version(prototype, args) do
+      files =
+        Enum.map(version.manifest, fn entry ->
+          %{
+            path: entry["path"],
+            byte_size: entry["byte_size"],
+            sha256: entry["sha256"],
+            content_type: entry["content_type"]
+          }
+        end)
+
+      {:ok,
+       ResultBound.whole(:files, files, %{
+         prototype_id: prototype.id,
+         version: version.version,
+         latest_version: prototype.latest_version,
+         entry_path: version.entry_path,
+         total_bytes: Enum.reduce(files, 0, &((&1.byte_size || 0) + &2))
+       })}
+    end
+  end
+
+  def execute("prototype_file_get", args, context) do
+    with {:ok, prototype} <- fetch_readable(args, context),
+         {:ok, path} <- require_string(args, "path"),
+         {:ok, version} <- fetch_version(prototype, args),
+         {:ok, entry} <- manifest_entry(version, path),
+         :ok <- check_size(entry["byte_size"], path),
+         {:ok, bytes} <- read_bytes(version, path),
+         :ok <- check_size(byte_size(bytes), path),
+         :ok <- verify_sha256(bytes, entry, path) do
+      content_type = entry["content_type"]
+
+      {:ok,
+       Map.merge(
+         %{
+           prototype_id: prototype.id,
+           version: version.version,
+           path: path,
+           content_type: content_type,
+           byte_size: byte_size(bytes),
+           sha256: entry["sha256"]
+         },
+         content_field(content_type, bytes)
+       )}
     end
   end
 
@@ -181,6 +250,112 @@ defmodule Platform.Prototypes.Tools do
       end
     end
   end
+
+  # `fetch_in_scope/2` (org scope) THEN `Prototypes.readable_by_scope?/2`
+  # on the caller's `:access_scope` (put there by ToolSurface). A failure of
+  # either is `not_found/1`, byte-identical to an unknown id, so a denied
+  # caller cannot tell "exists but denied" from "does not exist".
+  defp fetch_readable(args, context) do
+    with {:ok, prototype} <- fetch_in_scope(args, context) do
+      if Prototypes.readable_by_scope?(Map.get(context, :access_scope), prototype),
+        do: {:ok, prototype},
+        else: not_found(Map.fetch!(args, "prototype_id"))
+    end
+  end
+
+  # `version` omitted = latest. Unknown or retention-removed = version_not_found.
+  defp fetch_version(%Prototype{} = prototype, args) do
+    requested =
+      case Map.get(args, "version") do
+        nil -> {:ok, prototype.latest_version}
+        "" -> {:ok, prototype.latest_version}
+        _ -> require_integer(args, "version")
+      end
+
+    with {:ok, n} <- requested do
+      case is_integer(n) && Prototypes.get_live_version(prototype.id, n) do
+        %Version{} = v ->
+          {:ok, v}
+
+        _ ->
+          error(
+            :version_not_found,
+            "version #{inspect(n)} does not exist or was removed by retention"
+          )
+      end
+    end
+  end
+
+  # ── File reads ─────────────────────────────────────────────────────────
+
+  # The path only SELECTS a manifest entry of this version; bytes are read by
+  # that entry's own storage_key (`Prototypes.read_file/2`), never by a key
+  # built from the caller's path.
+  defp manifest_entry(version, path) do
+    case Prototypes.file_entry(version, path) do
+      {:ok, entry} -> {:ok, entry}
+      {:error, :not_found} -> file_not_found(version, path)
+      {:error, {code, message}} -> error(code, message)
+    end
+  end
+
+  defp read_bytes(version, path) do
+    case Prototypes.read_file(version, path) do
+      {:ok, _entry, bytes} ->
+        {:ok, bytes}
+
+      {:error, :not_found} ->
+        file_not_found(version, path)
+
+      {:error, {:storage, reason}} ->
+        error(:storage_failed, "could not read #{inspect(path)}: #{inspect(reason)}")
+
+      {:error, {code, message}} ->
+        error(code, message)
+    end
+  end
+
+  defp file_not_found(version, path),
+    do:
+      error(
+        :file_not_found,
+        "version #{version.version} has no file #{inspect(path)}; call prototype_files for the exact paths"
+      )
+
+  defp check_size(size, path) when is_integer(size) and size > @max_file_bytes,
+    do:
+      error(
+        :file_too_large,
+        "#{inspect(path)} is #{size} bytes, over the #{@max_file_bytes}-byte read cap"
+      )
+
+  defp check_size(_size, _path), do: :ok
+
+  defp verify_sha256(bytes, %{"sha256" => expected}, path) do
+    if Prototypes.sha256_hex(bytes) == expected,
+      do: :ok,
+      else:
+        error(
+          :storage_failed,
+          "stored bytes of #{inspect(path)} do not match the manifest sha256"
+        )
+  end
+
+  defp verify_sha256(_bytes, _entry, path),
+    do: error(:storage_failed, "manifest entry for #{inspect(path)} has no sha256")
+
+  defp content_field(content_type, bytes) do
+    if textual?(content_type) and String.valid?(bytes),
+      do: %{content: bytes},
+      else: %{content_base64: Base.encode64(bytes)}
+  end
+
+  defp textual?("text/" <> _), do: true
+
+  defp textual?(type) when type in ~w(application/javascript application/json image/svg+xml),
+    do: true
+
+  defp textual?(_), do: false
 
   defp in_scope(org_id, context) do
     case Map.get(context, :agent_home_org, :root) do
@@ -273,7 +448,8 @@ defmodule Platform.Prototypes.Tools do
   @recoverable ~w(invalid_argument missing_bundle ambiguous_bundle missing_org missing_entry
                   invalid_path too_many_files bundle_too_large symlink_entry invalid_zip
                   unsupported_zip duplicate_path path_conflict invalid_files
-                  invalid_file_content empty_bundle version_not_found storage_failed)a
+                  invalid_file_content empty_bundle version_not_found storage_failed
+                  file_not_found)a
 
   defp error(code, message) do
     {:error,
