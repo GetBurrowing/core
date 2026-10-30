@@ -374,4 +374,15 @@ defmodule Platform.SkillsTest do
       assert Skills.resolve_skills("higgins") == []
     end
   end
+
+  test "persisted officer skill forwards every priority and note fallback" do
+    Skills.seed_defaults()
+    content = Skills.get_skill_by_slug("meeting-triage-officer").content
+    for value <- ["low", "medium", "high", "critical"], do: assert(content =~ "`#{value}` → `#{value}`")
+    assert content =~ "Copy the parsed note priority into `priority`"
+    assert content =~ "note priorities default to `medium`"
+    assert content =~ "invalid explicit API priority is refused"
+    assert content =~ "server owns the single batch junk control"
+  end
+
 end

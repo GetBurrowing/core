@@ -5994,4 +5994,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              ) == 1
     end
   end
+
+  test "persisted triage prompt forwards every priority and note fallback" do
+    PromptTemplates.seed_defaults()
+    content = PromptTemplates.get_template_by_slug("dispatch.triage_dispatch").content
+    for value <- ["low", "medium", "high", "critical"], do: assert(content =~ "`#{value}` → `#{value}`")
+    assert content =~ "Copy the parsed note priority into `priority`"
+    assert content =~ "note priorities default to `medium`"
+    assert content =~ "invalid explicit API priority is refused"
+    assert content =~ "server owns the single batch junk control"
+  end
+
 end

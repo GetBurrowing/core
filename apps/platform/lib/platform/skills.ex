@@ -286,7 +286,7 @@ defmodule Platform.Skills do
     - `checklist_item.note` — a JSON blob with keys:
       - `owner` — string, e.g. `"@dev"` or `"@nobody_matches"`. May be `nil`.
       - `project_hint` — string, e.g. `"Widgets Platform"`. May be `nil`.
-      - `priority` — one of `"high" | "medium" | "low"`. May be missing.
+      - `priority` — one of `"low" | "medium" | "high" | "critical"`. May be missing.
       - `due_hint` — free-text like `"this week"` or `"next sprint"`. May
         be `nil`.
       - `source_transcript_id` — UUID of the transcript that surfaced
@@ -342,12 +342,25 @@ defmodule Platform.Skills do
 
     ## 5. Priority parsing + idempotency
 
-    Priority map (`high|medium|low`, case-insensitive on the JSON string):
+    Priority map (`low|medium|high|critical`, case-insensitive on the JSON string):
 
     - `"high"` → `high`
     - `"medium"` → `medium`
     - `"low"` → `low`
+    - `"critical"` → `critical`
     - anything else (unrecognised string, missing key, `nil`) → `medium`
+
+    ## Priority forwarding and batch control
+
+    Copy the parsed note priority into `priority` on every filed `action_items` entry.
+    Normalize note strings case-insensitively: `low` → `low`, `medium` → `medium`,
+    `high` → `high`, `critical` → `critical`. Missing, nil, malformed or unrecognized
+    note priorities default to `medium`. This is a note-parsing fallback only:
+    an invalid explicit API priority is refused by `meeting_triage_file`, not silently
+    normalized. Send a valid lowercase enum value and preserve canonical run/item
+    identities, transcript grounding and candidate provenance.
+    The server owns the single batch junk control; do not append another
+    "Junk this batch" control, including on replay.
 
     ### Idempotency contract
 
