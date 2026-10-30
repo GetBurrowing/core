@@ -942,6 +942,17 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       |> recycle()
       |> post(
         @livekit_webhook_path,
+        transcription_payload(room_name, [Map.put(input, "text", "Final corrected speech")])
+      )
+      |> json_response(200)
+
+      assert [%{"id" => "source-segment-one", "text" => "Final corrected speech"}] =
+               Meetings.get_transcript(transcript_id).segments
+
+      conn
+      |> recycle()
+      |> post(
+        @livekit_webhook_path,
         transcription_payload(room_name, [Map.put(input, "id", "source-segment-two")])
       )
       |> json_response(200)

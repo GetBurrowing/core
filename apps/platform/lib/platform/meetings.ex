@@ -5766,17 +5766,34 @@ defmodule Platform.Meetings do
             Repo.rollback(:not_found)
 
           transcript ->
-            if Enum.any?(transcript.segments || [], &(&1["id"] == segment["id"])) do
+            segment = enrich_speaker_name(segment, transcript)
+            segments = transcript.segments || []
+            index = Enum.find_index(segments, &(&1["id"] == segment["id"]))
+            previous = if index, do: Enum.at(segments, index)
+
+            if previous &&
+                 Map.drop(previous, ["spoken_at"]) == Map.drop(segment, ["spoken_at"]) do
               {transcript, segment, :duplicate}
             else
-              segment = enrich_speaker_name(segment, transcript)
+              # LiveKit may revise an interim segment under the same source ID.
+              # Preserve its position/time and accept changed speech, rather than
+              # mistaking a final transcription update for delivery replay.
+              segment =
+                if previous,
+                  do: Map.put(segment, "spoken_at", previous["spoken_at"]),
+                  else: segment
+
+              segments =
+                if index,
+                  do: List.replace_at(segments, index, segment),
+                  else: segments ++ [segment]
 
               owner =
                 if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
                   do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
 
               refresh? = transcript.status in ["complete", "processing", "failed"]
-              changes = %{segments: (transcript.segments || []) ++ [segment]}
+              changes = %{segments: segments}
               changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
 
               changes =
