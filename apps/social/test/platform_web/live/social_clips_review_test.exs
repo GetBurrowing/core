@@ -548,6 +548,8 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     {clip, old} = ending_clip!(w, a)
     ending_default!(w, b, "mute")
     child = open(conn, w.approver)
+    bay(child) |> render_click("pick_version", %{})
+    bay(child) |> render_click("pick_version", %{"render_id" => "not-a-uuid"})
     assert has_element?(child, "[data-role=selected-ending]", "Ends with: #{a.name}")
     assert has_element?(child, "[data-role=use-closing-video] input[value='#{old.id}']")
     child |> form("[data-role=use-closing-video]") |> render_submit()

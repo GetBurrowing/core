@@ -241,6 +241,8 @@ defmodule PlatformWeb.SocialClipsReview do
     end
   end
 
+  def handle_event("pick_version", _params, socket), do: {:noreply, authorize(socket)}
+
   def handle_event("use_closing_video", params, socket) do
     socket = authorize(socket)
     %{profile: p, clip: clip, selected_render: selected} = socket.assigns
