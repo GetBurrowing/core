@@ -941,12 +941,18 @@ if files_service_url do
 end
 
 # ── One-click installs (task 01a10315 stage 2) ───────────────────────────────
-# SUITE_INSTALLS_DNS_ZONE: the DigitalOcean-managed zone an install on a
+# BURROW_INSTALLS_DNS_ZONE: the DigitalOcean-managed zone an install on a
 # subdomain of ours lives under (<slug>.<zone> and auth.<slug>.<zone>). Unset:
 # only customer-domain installs can be created.
-case System.get_env("SUITE_INSTALLS_DNS_ZONE") do
+case System.get_env("BURROW_INSTALLS_DNS_ZONE") do
   zone when is_binary(zone) and zone != "" -> config :platform, Platform.Installs, dns_zone: zone
   _ -> :ok
+end
+
+# BURROW_INSTALLS_IMAGES_PUBLIC=1 once the ghcr.io images are public: the
+# render then reads no registry pull credential from the vault.
+if System.get_env("BURROW_INSTALLS_IMAGES_PUBLIC") in ["1", "true"] do
+  config :platform, Platform.Installs, images_public: true
 end
 
 # The release image copies the installer package here (apps/platform/Dockerfile);
@@ -955,11 +961,11 @@ if config_env() == :prod do
   config :platform, Platform.Installs, installer_path: "/app/installer"
 end
 
-# Dev stub mode: SUITE_INSTALLS_FAKE=1, dev only. DigitalOcean is the
+# Dev stub mode: BURROW_INSTALLS_FAKE=1, dev only. DigitalOcean is the
 # in-process PlatformWeb.Dev.FakeDigitalOcean (also at /dev/fake-digitalocean),
 # and render, probes and bootstrap are Platform.Installs.Fake. Never reads the
 # real token.
-if config_env() == :dev and System.get_env("SUITE_INSTALLS_FAKE") == "1" do
+if config_env() == :dev and System.get_env("BURROW_INSTALLS_FAKE") == "1" do
   config :platform, Platform.Installs,
     fake: true,
     render: Platform.Installs.Fake,

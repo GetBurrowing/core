@@ -59,6 +59,25 @@ defmodule Platform.Installs.RenderTest do
              Render.Python.render(install(), SshKey.generate().public)
   end
 
+  test "with public images no vault slug is read and the auth is an empty docker config" do
+    previous = Application.get_env(:platform, Platform.Installs, [])
+    Application.put_env(:platform, Platform.Installs, Keyword.put(previous, :images_public, true))
+    on_exit(fn -> Application.put_env(:platform, Platform.Installs, previous) end)
+
+    # The slug does not exist here; private mode is the :registry_auth_missing case above.
+    assert {:ok, auth} = Render.Python.registry_auth()
+    assert Jason.decode!(auth) == %{"auths" => %{}}
+
+    Application.put_env(:platform, Platform.Installs, Keyword.put(previous, :images_public, false))
+    assert {:error, :registry_auth_missing} = Render.Python.registry_auth()
+  end
+
+  test "with a vault slug in private mode, its value is the auth" do
+    value = ~s({"auths": {"ghcr.io": {"auth": "ZmFrZS1yZWFkLW9ubHk="}}})
+    {:ok, _} = Platform.Vault.put("install-registry-pull-auth", :custom, value)
+    assert {:ok, ^value} = Render.Python.registry_auth()
+  end
+
   test "read_render keeps exactly the two values and refuses an incomplete render" do
     Python.with_private_dir(fn dir ->
       File.write!(Path.join(dir, "user-data"), "#cloud-config\n")

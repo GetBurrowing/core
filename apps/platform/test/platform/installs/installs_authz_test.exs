@@ -80,7 +80,7 @@ defmodule Platform.Installs.InstallsAuthzTest do
                )
     end
 
-    test "a subdomain of ours needs SUITE_INSTALLS_DNS_ZONE; a customer domain does not" do
+    test "a subdomain of ours needs BURROW_INSTALLS_DNS_ZONE; a customer domain does not" do
       put_installs_env(dns_zone: nil)
       assert {:error, :dns_zone_missing} = Installs.create(admin!(), @attrs)
 

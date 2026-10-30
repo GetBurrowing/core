@@ -56,7 +56,7 @@ defmodule Platform.Installs.DigitalOceanTest do
                "size" => "s-2vcpu-4gb",
                "image" => "ubuntu-24-04-x64",
                "user_data" => "#cloud-config\n",
-               "tags" => ["suite-install", "suite-install-abc"],
+               "tags" => ["burrow-install", "burrow-install-abc"],
                "monitoring" => true,
                "ipv6" => false
              }
@@ -90,11 +90,11 @@ defmodule Platform.Installs.DigitalOceanTest do
         end
       end)
 
-      assert {:ok, [%{"id" => 1}]} = DigitalOcean.find_droplets_by_tag("suite-install-abc")
-      assert_received {:req, "GET", "/v2/droplets", %{"tag_name" => "suite-install-abc"}, _, _}
+      assert {:ok, [%{"id" => 1}]} = DigitalOcean.find_droplets_by_tag("burrow-install-abc")
+      assert_received {:req, "GET", "/v2/droplets", %{"tag_name" => "burrow-install-abc"}, _, _}
 
-      assert :ok = DigitalOcean.delete_droplets_by_tag("suite-install-abc")
-      assert_received {:req, "DELETE", "/v2/droplets", %{"tag_name" => "suite-install-abc"}, _, _}
+      assert :ok = DigitalOcean.delete_droplets_by_tag("burrow-install-abc")
+      assert_received {:req, "DELETE", "/v2/droplets", %{"tag_name" => "burrow-install-abc"}, _, _}
     end
 
     test "public_ipv4 picks the public v4 address" do
@@ -130,8 +130,8 @@ defmodule Platform.Installs.DigitalOceanTest do
 
         Req.Test.json(conn, %{
           "firewalls" => [
-            %{"id" => "fw-other", "name" => "suite-install-zzz"},
-            %{"id" => "fw-1", "name" => "suite-install-abc"}
+            %{"id" => "fw-other", "name" => "burrow-install-zzz"},
+            %{"id" => "fw-1", "name" => "burrow-install-abc"}
           ]
         })
       end)
@@ -153,8 +153,8 @@ defmodule Platform.Installs.DigitalOceanTest do
 
       assert {:ok, "fw-new"} = DigitalOcean.ensure_firewall("abc")
       assert_received {:req, "POST", "/v2/firewalls", _, body, _}
-      assert body["name"] == "suite-install-abc"
-      assert body["tags"] == ["suite-install-abc"]
+      assert body["name"] == "burrow-install-abc"
+      assert body["tags"] == ["burrow-install-abc"]
       assert Enum.map(body["inbound_rules"], & &1["ports"]) == ["22", "80", "443"]
 
       for rule <- body["inbound_rules"] do

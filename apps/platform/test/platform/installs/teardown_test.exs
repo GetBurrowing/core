@@ -105,7 +105,8 @@ defmodule Platform.Installs.TeardownTest do
 
       out = capture_io(fn -> Mix.Tasks.Burrow.Install.Teardown.run([install.slug]) end)
       assert out =~ "torn down: #{install.slug}"
-      out = capture_io(fn -> Mix.Tasks.Suite.Install.Teardown.run([install.slug]) end)
+      # Again: a no-op that still succeeds.
+      out = capture_io(fn -> Mix.Tasks.Burrow.Install.Teardown.run([install.slug]) end)
       assert out =~ "torn down: #{install.slug}"
 
       assert_raise Mix.Error, ~r/usage: mix burrow.install.teardown/, fn ->

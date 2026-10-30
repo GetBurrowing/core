@@ -21,7 +21,7 @@ defmodule Platform.Installs do
   ## Teardown is one command
 
       bin/platform eval 'Platform.Installs.teardown("<slug>")'
-      mix burrow.install.teardown <slug>     # or the old name, suite.install.teardown
+      mix burrow.install.teardown <slug>
 
   It deletes the droplets by tag, the firewall by name and, for a subdomain of
   ours, both A records, then re-reads `GET /v2/droplets?tag_name=` and returns
@@ -46,7 +46,7 @@ defmodule Platform.Installs do
 
   ## Dev stub mode
 
-  `SUITE_INSTALLS_FAKE=1` in dev only (`config/runtime.exs`): the DigitalOcean
+  `BURROW_INSTALLS_FAKE=1` in dev only (`config/runtime.exs`): the DigitalOcean
   client talks to `PlatformWeb.Dev.FakeDigitalOcean` (also mounted at
   `/dev/fake-digitalocean`, with `GET _calls` and `POST _fail`), and the
   render, probes and bootstrap are `Platform.Installs.Fake`. Stub mode never
@@ -427,7 +427,7 @@ defmodule Platform.Installs do
 
   @doc """
   The hand-over credentials of a ready install, with a FRESH one-time sign-in
-  link: `%{suite_url, admin_email, sign_in_link, ssh: %{host, user, private_key}}`.
+  link: `%{burrow_url, admin_email, sign_in_link, ssh: %{host, user, private_key}}`.
   Nothing is persisted. Errors: `:not_ready`, `:already_handed_over` (after
   `acknowledge_handover/1`), `:handover_expired` (7 days unacknowledged).
   """
@@ -451,7 +451,7 @@ defmodule Platform.Installs do
            }) do
       {:ok,
        %{
-         suite_url: "https://#{install.primary_host}",
+         burrow_url: "https://#{install.primary_host}",
          admin_email: install.owner_email,
          sign_in_link: link,
          ssh: %{host: install.droplet_ip, user: "root", private_key: sealed["ssh_private_key"]}

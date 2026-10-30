@@ -1,6 +1,6 @@
 defmodule PlatformWeb.Dev.FakeDigitalOcean do
   @moduledoc """
-  A fake DigitalOcean API v2 for dev stub mode (`SUITE_INSTALLS_FAKE=1`, task
+  A fake DigitalOcean API v2 for dev stub mode (`BURROW_INSTALLS_FAKE=1`, task
   01a10315 stage 2). Two ways in, one state (`Platform.Installs.Fake`):
 
     * `Platform.Installs.DigitalOcean` calls it in-process as its Req `plug:`;

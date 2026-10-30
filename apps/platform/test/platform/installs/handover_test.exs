@@ -43,7 +43,7 @@ defmodule Platform.Installs.HandoverTest do
     install = ready_install!()
 
     assert {:ok, handover} = Installs.reveal_handover(install)
-    assert handover.suite_url == "https://#{install.primary_host}"
+    assert handover.burrow_url == "https://#{install.primary_host}"
     assert handover.admin_email == install.owner_email
     assert handover.sign_in_link == "https://auth.fake.invalid/lc/FAKECODE"
     assert handover.ssh.host == install.droplet_ip

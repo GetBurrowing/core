@@ -36,20 +36,20 @@ defmodule PlatformWeb.Dev.FakeDigitalOceanTest do
         user_data: "#cloud-config\n"
       })
 
-    assert {:ok, [%{"id" => id}]} = DigitalOcean.find_droplets_by_tag("suite-install-abc")
+    assert {:ok, [%{"id" => id}]} = DigitalOcean.find_droplets_by_tag("burrow-install-abc")
     assert id == droplet["id"]
-    assert {:ok, []} = DigitalOcean.find_droplets_by_tag("suite-install-other")
+    assert {:ok, []} = DigitalOcean.find_droplets_by_tag("burrow-install-other")
 
     {:ok, active} = DigitalOcean.get_droplet(id)
     assert active["status"] == "active"
     assert DigitalOcean.public_ipv4(active) =~ "203.0.113."
 
-    assert :ok = DigitalOcean.delete_droplets_by_tag("suite-install-abc")
-    assert {:ok, []} = DigitalOcean.find_droplets_by_tag("suite-install-abc")
+    assert :ok = DigitalOcean.delete_droplets_by_tag("burrow-install-abc")
+    assert {:ok, []} = DigitalOcean.find_droplets_by_tag("burrow-install-abc")
 
     assert {200, calls} = control(:get, "/_calls")
     assert calls["POST /v2/droplets"] == 1
-    assert calls["POST /v2/droplets tag:suite-install-abc"] == 1
+    assert calls["POST /v2/droplets tag:burrow-install-abc"] == 1
     assert calls["DELETE /v2/droplets"] == 1
   end
 

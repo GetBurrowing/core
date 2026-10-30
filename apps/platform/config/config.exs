@@ -283,7 +283,7 @@ config :platform, Platform.Vault, allow_unscoped_workspace_access: false
 # surface: which droplet size is offered first, which sizes and which US
 # regions are offered at all. `image_registry` is the install manifest's
 # `images.registry`. The DNS zone for a subdomain of ours comes from
-# SUITE_INSTALLS_DNS_ZONE (config/runtime.exs).
+# BURROW_INSTALLS_DNS_ZONE (config/runtime.exs).
 config :platform, Platform.Installs,
   default_size: "s-2vcpu-4gb",
   sizes: ["s-2vcpu-4gb", "s-4vcpu-8gb"],

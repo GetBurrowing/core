@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Burrow.Install.Teardown do
       mix burrow.install.teardown <slug-or-id>
 
   Deletes its droplets by tag, its firewall and (for a subdomain of ours) its
-  two A records, then confirms `GET /v2/droplets?tag_name=suite-install-<id>`
+  two A records, then confirms `GET /v2/droplets?tag_name=burrow-install-<id>`
   is empty. A second run is a no-op that exits 0. Same as
   `bin/platform eval 'Platform.Installs.teardown("<slug>")'` in a release.
 

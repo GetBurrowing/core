@@ -179,10 +179,10 @@ defmodule Platform.Installs.RunnerTest do
       {install, _} =
         create_install!(%{
           "domain_mode" => "customer",
-          "primary_host" => "Suite.Acme.example.test"
+          "primary_host" => "Shop.Acme.example.test"
         })
 
-      assert install.primary_host == "suite.acme.example.test"
+      assert install.primary_host == "shop.acme.example.test"
 
       {pid, ref} = spawn_monitor(fn -> Runner.run(install.id) end)
 
@@ -199,8 +199,8 @@ defmodule Platform.Installs.RunnerTest do
       # No A record of ours for a customer's domain.
       assert Fake.all(:record) == []
 
-      Fake.resolve_dns("suite.acme.example.test")
-      Fake.resolve_dns("auth.suite.acme.example.test")
+      Fake.resolve_dns("shop.acme.example.test")
+      Fake.resolve_dns("auth.shop.acme.example.test")
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
       assert Installs.get(install.id).status == "ready"

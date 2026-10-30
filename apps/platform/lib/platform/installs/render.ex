@@ -100,6 +100,12 @@ defmodule Platform.Installs.Render.Python do
   so it must be a read-only pull token. A missing slug is
   `{:error, :registry_auth_missing}`.
 
+  Once the images are public (`config :platform, Platform.Installs,
+  images_public: true`, from `BURROW_INSTALLS_IMAGES_PUBLIC=1`), nothing is
+  read from the vault and no error is raised: the render gets an empty docker
+  config (`{"auths": {}}`), because the renderer still requires the flag for
+  images it lists as private, and an empty `auths` pulls anonymously.
+
   Of the rendered files only `user-data` and two values of `secrets.env`
   (`STATIC_API_KEY`, `OIDC_CLIENT_SECRET`) are read; the directory is removed
   in an `after` block.
@@ -113,6 +119,7 @@ defmodule Platform.Installs.Render.Python do
   @registry_auth_slug "install-registry-pull-auth"
   @accessor {:system, "installs-provisioner"}
   @kept ~w(STATIC_API_KEY OIDC_CLIENT_SECRET)
+  @anonymous_auth ~s({"auths": {}}\n)
 
   @impl true
   def render(install, ssh_public_key) do
@@ -134,7 +141,14 @@ defmodule Platform.Installs.Render.Python do
     end
   end
 
-  defp registry_auth do
+  @doc false
+  def registry_auth do
+    if Keyword.get(Application.get_env(:platform, Platform.Installs, []), :images_public, false),
+      do: {:ok, @anonymous_auth},
+      else: vault_registry_auth()
+  end
+
+  defp vault_registry_auth do
     case Platform.Vault.get(@registry_auth_slug, accessor: @accessor) do
       {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
       {:error, :not_found} -> {:error, :registry_auth_missing}

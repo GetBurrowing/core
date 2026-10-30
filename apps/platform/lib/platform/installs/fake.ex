@@ -1,7 +1,7 @@
 defmodule Platform.Installs.Fake do
   @moduledoc """
   Dev stub mode for `Platform.Installs` (task 01a10315 stage 2), on with
-  `SUITE_INSTALLS_FAKE=1` in dev only. Nothing here runs in prod: the
+  `BURROW_INSTALLS_FAKE=1` in dev only. Nothing here runs in prod: the
   process is started only when `config :platform, Platform.Installs, fake: true`
   (set by `config/runtime.exs` inside `if config_env() == :dev`).
 

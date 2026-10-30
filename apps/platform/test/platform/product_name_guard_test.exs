@@ -105,8 +105,6 @@ defmodule Platform.ProductNameGuardTest do
      "Mix task module; its name is the `mix suite.deploy.scope_gate` command scripts call"},
     {"apps/platform/lib/mix/tasks/suite.responsibility_reachability.ex", "Mix.Tasks.Suite.",
      "Mix task module; its name is the `mix suite.responsibility_reachability` command scripts call"},
-    {"apps/platform/lib/mix/tasks/suite.install.teardown.ex", "Mix.Tasks.Suite.",
-     "Mix task module; its name is the `mix suite.install.teardown` command task 01a10315's plan and runbooks type"},
     {"apps/platform/lib/platform/experiments/surfaces/code_mode.ex", "Suite tool",
      "Experiment code-mode-2026-10 is running on this surface; its directives stay byte-identical until it concludes"},
     {"apps/platform/lib/platform/experiments/surfaces/code_mode.ex", "Suite calls",

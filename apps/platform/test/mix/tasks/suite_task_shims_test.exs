@@ -11,17 +11,14 @@ defmodule Mix.Tasks.SuiteTaskShimsTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Burrow.Deploy.ScopeGate, as: BurrowScopeGate
-  alias Mix.Tasks.Burrow.Install.Teardown, as: BurrowTeardown
   alias Mix.Tasks.Burrow.ResponsibilityReachability, as: BurrowReachability
   alias Mix.Tasks.Suite.Deploy.ScopeGate, as: SuiteScopeGate
-  alias Mix.Tasks.Suite.Install.Teardown, as: SuiteTeardown
   alias Mix.Tasks.Suite.ResponsibilityReachability, as: SuiteReachability
 
   @pairs [
     {"burrow.deploy.scope_gate", "suite.deploy.scope_gate", BurrowScopeGate, SuiteScopeGate},
     {"burrow.responsibility_reachability", "suite.responsibility_reachability",
-     BurrowReachability, SuiteReachability},
-    {"burrow.install.teardown", "suite.install.teardown", BurrowTeardown, SuiteTeardown}
+     BurrowReachability, SuiteReachability}
   ]
 
   test "both names resolve; only the Burrow name carries a shortdoc" do

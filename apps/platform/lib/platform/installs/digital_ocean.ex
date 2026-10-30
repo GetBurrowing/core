@@ -23,7 +23,7 @@ defmodule Platform.Installs.DigitalOcean do
   `base_url` (default `https://api.digitalocean.com`) and `req_options` come
   from the same config; `config/test.exs` sets
   `req_options: [plug: {Req.Test, #{inspect(__MODULE__)}}]` so no test reaches
-  the network, and dev stub mode (`SUITE_INSTALLS_FAKE=1`) points it at
+  the network, and dev stub mode (`BURROW_INSTALLS_FAKE=1`) points it at
   `PlatformWeb.Dev.FakeDigitalOcean`.
 
   Every function returns `{:ok, value}` or `{:error, reason}` with
@@ -33,8 +33,8 @@ defmodule Platform.Installs.DigitalOcean do
 
   ## Tags and names
 
-  Droplets are tagged `suite-install` and `suite-install-<install id>`; the
-  Cloud Firewall is named `suite-install-<install id>` and targets that tag,
+  Droplets are tagged `burrow-install` and `burrow-install-<install id>`; the
+  Cloud Firewall is named `burrow-install-<install id>` and targets that tag,
   so attaching it follows the tag and is idempotent.
   """
 
@@ -55,9 +55,9 @@ defmodule Platform.Installs.DigitalOcean do
   @doc "The droplet image every install boots."
   def image, do: @image
 
-  @doc "The per-install tag (`suite-install-<id>`)."
+  @doc "The per-install tag (`burrow-install-<id>`)."
   @spec install_tag(String.t()) :: String.t()
-  def install_tag(install_id), do: "suite-install-#{install_id}"
+  def install_tag(install_id), do: "burrow-install-#{install_id}"
 
   @doc "The Cloud Firewall name of an install (same as its tag)."
   def firewall_name(install_id), do: install_tag(install_id)
@@ -110,7 +110,7 @@ defmodule Platform.Installs.DigitalOcean do
         size: attrs.size,
         image: @image,
         user_data: attrs.user_data,
-        tags: ["suite-install", install_tag(attrs.install_id)],
+        tags: ["burrow-install", install_tag(attrs.install_id)],
         monitoring: true,
         ipv6: false
       }
