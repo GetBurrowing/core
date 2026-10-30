@@ -28,8 +28,8 @@ defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
 
   # Suffix => reason. Six entries, all mobile push category/action ids.
   # Measured 2026-10-30 with Platform.Mobile.push_category_adoption() over
-  # prod rpc: legacy iOS rows were 2 on kobo, 1 on milv, 1 on milvlife, so
-  # renaming would stop those devices showing actions. Remove an entry only
+  # prod rpc: legacy iOS rows were nonzero on each of the three prod
+  # installs (2, 1, 1), so renaming would stop those devices showing actions. Remove an entry only
   # when ios.legacy == 0 and android.legacy == 0 on every install.
   @keep %{
     "MENTION" =>
@@ -59,8 +59,9 @@ defmodule Platform.Regression.BurrowEnvFallbackGuardTest do
   ]
 
   # A token starts at any character that is not an uppercase letter, digit or
-  # underscore. Stricter than `\b`: `\b` misses `\nSUITE_X` inside a JS
-  # template literal, because the `n` of `\n` is a word character.
+  # underscore. Stricter than `\b`: `\b` misses a token written right after
+  # a `\n` escape inside a JS template literal, because the `n` of `\n` is a
+  # word character.
   @suite_token ~r/(?<![A-Z0-9_])SUITE_[A-Z0-9_]+/
 
   # The Xcode test-runner form: Xcode strips `TEST_RUNNER_` and passes the
