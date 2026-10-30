@@ -62,7 +62,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Protocol
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 KINDS = ("new_clip", "rerender", "save_default", "episode")
 RESULT_KEYS = (
@@ -89,7 +89,7 @@ LEGACY_CAPTION_STYLES = ("plain", "phrase-pop", "karaoke")
 DYNAMIC_CAPTION_STYLES = ("type-on", "focus-word", "editorial-punch")
 CAPTION_STYLES = LEGACY_CAPTION_STYLES + DYNAMIC_CAPTION_STYLES
 # Pinned actual imported renderer sources, not the CLI's distribution label.
-CAPTION_RENDERER_SHA256 = "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141"
+CAPTION_RENDERER_SHA256 = "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4"
 CAPTION_TEMPORAL_SHA256 = "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
 
 

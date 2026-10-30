@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Authorized caption comparison receipt",
+  "type": "object",
+  "required": ["schema", "pending_review", "source_id", "candidate_id", "requested_start_s", "requested_end_s", "original_project_unchanged", "helper_sha256", "executable", "executable_sha256", "cli_identity", "renders", "scope"],
+  "properties": {
+    "schema": {"const": "caption-comparison/1"},
+    "pending_review": {"const": true},
+    "source_id": {"type": "string"},
+    "candidate_id": {"type": "string"},
+    "requested_start_s": {"type": "number", "minimum": 0},
+    "requested_end_s": {"type": "number", "exclusiveMinimum": 0},
+    "original_project_unchanged": {"const": true},
+    "helper_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "executable": {"type": "string"},
+    "executable_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "cli_identity": {"type": "object", "required": ["version", "caption_treatments", "caption_renderer"]},
+    "renders": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["style", "file", "sha256", "bytes", "ffprobe", "applied_source_start_s", "applied_source_end_s", "content_free_result"],
+        "properties": {
+          "style": {"enum": ["type-on", "focus-word", "editorial-punch"]},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1},
+          "ffprobe": {"type": "object"}
+        }
+      }
+    },
+    "scope": {"type": "string"}
+  }
+}

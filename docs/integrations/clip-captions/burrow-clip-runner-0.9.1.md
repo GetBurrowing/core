@@ -2,7 +2,7 @@
 
 Runs Burrow Clip Studio jobs on a machine that has the `clip` CLI (htc-clip-tool 0.9.0+) installed. Burrow never runs `clip` itself. A human enqueues manual jobs; automatic episode discovery enqueues episode jobs. This runner claims each job, drives `clip`, uploads the render to Burrow Files, and completes or fails the job through the five job tools.
 
-**Helper version: 0.9.0 (qualified dynamic captions; preserves closing video/music 0.8.0).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+**Helper version: 0.9.1 (qualified dynamic captions; preserves closing video/music 0.8.0).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
 
 
 
@@ -84,7 +84,7 @@ Core's `payload.music` is the full selected track contract: `file_id`, `enabled`
 
 The single helper requests `social_clip_job_source(job_id, asset="music")`; forward it through MCP like every other request. Core takes the asset ONLY from the persisted job, checks claimer/open status plus current project/org/finalized audio, and returns a 15-minute Files URL. Never supply another file id, save the URL, or echo it. The bridge deletes its private reply file. The helper validates returned identity/project/type/size, downloads to a 0700 job directory with 0600 audio bytes, bounds streamed bytes to declared size and 25 MB, and gives only the disposable local path to a temporary user profile's `music.path`. `music.enabled` and `music.level_db` use upstream MusicConfig; speech loudness, ducking, speech margin and fades stay renderer-owned. No FFmpeg mixer in Burrow or this helper. Track, partial download and derived profile are removed on success/failure; downloads receive no agent token and signed URLs never enter CLI argv/env, journal/state or complete/fail. The runner also strips BURROW_TOKEN/BURROW_API_TOKEN and CF access credentials from child environments. Muting retains the asset/gain in Core and downloads nothing.
 
-Canonical helper SHA256 `67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
+Canonical helper SHA256 `523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
 
 ## Closing video (helper 0.8.0)
 
@@ -101,7 +101,10 @@ Verification on isolated-linux-runtime:138 complete protocol tests, separate fro
 
 The existing three-render real music regression also passes (off/-42/-24dB have distinct measured tone amplitudes). Additional upstream renderer tests were 19/21, with two acoustic-tolerance failures also reproduced on unmodified 82ef513 (case variability recorded); they are NOT counted as a green suite. No renderer guard was weakened or changed.
 
-## Dynamic caption treatments (helper 0.9.0)
+## Dynamic caption treatments (helper 0.9.1)
+
+Stage-4 decoded last-word checks caught early caption-track endings. The corrected pinned caption patch gives the repeated final PNG the same 30 Hz timebase as every temporal input and retains nine decimal places for temporal durations. The unchanged new regression requires a real 5-second track to decode exactly 150 frames and retain the final word; the previous patch fails it. Reinstall the corrected tracked patch and requalify; 0.9.0 receipts are superseded. Helper behavior otherwise preserves 0.9.0, including all 0.8.0 music/outro/privacy paths. Comparison media are pending review, never approval or publication.
+
 
 Extends the current helper in place, preserving its 0.8.0 closing-video, music,
 headline, private downloads, source-project mapping and child request/reply
@@ -163,7 +166,7 @@ and digests under `docs/integrations/clip-captions/`.
 5. The upload token is the `token` key of your agent credentials file. Export it only into the `run` process's environment, as `CLIP_RUNNER_TOKEN`, together with `CLIP_RUNNER_BASE_URL`, your Burrow base URL (https). Never echo the token.
 6. Optional: install yt-dlp, or set `CLIP_RUNNER_YTDLP`, to fetch episodes by `source_url`.
 
-Pinned sha256 of `clip_runner.py` 0.9.0: `67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21`
+Pinned sha256 of `clip_runner.py` 0.9.1: `523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce`
 
 ## The loop (you are the only MCP caller)
 
@@ -318,7 +321,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Protocol
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 KINDS = ("new_clip", "rerender", "save_default", "episode")
 RESULT_KEYS = (
@@ -345,7 +348,7 @@ LEGACY_CAPTION_STYLES = ("plain", "phrase-pop", "karaoke")
 DYNAMIC_CAPTION_STYLES = ("type-on", "focus-word", "editorial-punch")
 CAPTION_STYLES = LEGACY_CAPTION_STYLES + DYNAMIC_CAPTION_STYLES
 # Pinned actual imported renderer sources, not the CLI's distribution label.
-CAPTION_RENDERER_SHA256 = "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141"
+CAPTION_RENDERER_SHA256 = "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4"
 CAPTION_TEMPORAL_SHA256 = "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
 
 
@@ -4600,7 +4603,7 @@ CAPABILITY = {
         "editorial-punch",
     ],
     "caption_renderer": {
-        "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+        "sha256": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
         "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
     },
 }

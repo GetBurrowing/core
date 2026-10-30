@@ -228,9 +228,9 @@ defmodule Platform.Social.ClipJobsTest do
   defp qualified_caption_renderer do
     %{
       "caption_treatments" => 1,
-      "renderer_sha256" => "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+      "renderer_sha256" => "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
       "temporal_sha256" => "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
-      "helper_sha256" => "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
+      "helper_sha256" => "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
       "executable_sha256" => String.duplicate("a", 64),
       "caption_styles" => ~w(none plain phrase-pop karaoke type-on focus-word editorial-punch)
     }

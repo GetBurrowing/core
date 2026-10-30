@@ -10,9 +10,9 @@ defmodule Platform.Social.ClipCaptionRenderer do
   alias Platform.Social.ClipLook
 
   @legacy ~w(plain phrase-pop karaoke)
-  @renderer "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141"
+  @renderer "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4"
   @temporal "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
-  @helper "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21"
+  @helper "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce"
 
   @doc "Selectable styles for the current server-configured executable/helper."
   def styles, do: if(receipt(), do: ClipLook.styles(), else: @legacy)

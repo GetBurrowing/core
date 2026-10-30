@@ -1,0 +1,34 @@
+{
+  "media": {
+    "type-on": {
+      "id": "01a18d9a-894a-7000-a4bd-f69c3c00b40b",
+      "byte_size": 457278,
+      "content_type": "video/mp4",
+      "url": "/chat/attachments/01a18d9a-894a-7000-a4bd-f69c3c00b40b",
+      "content_hash": "563dc530b738f57aae97252ff8d6fc932d44c8e9849a32262f9416ae483bcab9",
+      "deduplicated": false
+    },
+    "focus-word": {
+      "id": "01a18d9a-8acc-7000-a033-ceec122d9089",
+      "byte_size": 476348,
+      "content_type": "video/mp4",
+      "url": "/chat/attachments/01a18d9a-8acc-7000-a033-ceec122d9089",
+      "content_hash": "b6b7836abf55178c020e13c15ad20d4c33b9f674381ba00a0d59acc8e6246b9a",
+      "deduplicated": false
+    },
+    "editorial-punch": {
+      "id": "01a18d9a-8c47-7000-b6a5-f9679b89c3fe",
+      "byte_size": 473162,
+      "content_type": "video/mp4",
+      "url": "/chat/attachments/01a18d9a-8c47-7000-b6a5-f9679b89c3fe",
+      "content_hash": "073aebd5b0ab38f929f8881eacbf862741bd6471d996c56ccab353914ce449a3",
+      "deduplicated": false
+    }
+  },
+  "canvas": {
+    "title": "Caption treatments: corrected source frames and motion evidence",
+    "kind": "stack",
+    "revision": 1,
+    "canvas_id": "01a18d9a-e558-7000-91b7-2b3833ec82eb"
+  }
+}

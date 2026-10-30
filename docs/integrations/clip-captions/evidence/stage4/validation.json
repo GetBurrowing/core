@@ -1,0 +1,188 @@
+{
+  "task_id": "01a18d1b-a5c1-7000-947c-7931a3ec53e5",
+  "stage": 4,
+  "runtime": "executor-owned Linux WSL2; private PostgreSQL16(port55458),OTP28.1,Elixir1.20.4,Python3.14.4,FFmpeg8.0.1",
+  "checks": {
+    "authorized_comparisons": {
+      "status": "passed",
+      "samples": 3,
+      "duration_s": 10.302,
+      "dimensions": [
+        360,
+        640
+      ],
+      "original_project_unchanged": true,
+      "pending_review": true,
+      "media_receipt": "media.json",
+      "scope": "Exact CLI/canonical helper real render path with local sink; media uploaded separately, no live Social claim/completion"
+    },
+    "picker": {
+      "status": "passed",
+      "same_excerpt_s": 3.336667,
+      "styles": 6,
+      "files": 24,
+      "legacy_video_hashes_unchanged": true
+    },
+    "decoded_source": {
+      "status": "passed",
+      "command": "verify_comparison_frames.py WORKSPACE",
+      "assertions": "First/last words; pre/on/mid/post phrase; every changed overlay pixel rows396-500. Previous source fails unchanged last-word guard."
+    },
+    "decoded_motion": {
+      "status": "passed",
+      "command": "verify_temporal_frames.py DIR; verify_decoded_motion.py DIR",
+      "five_second_track_frame_counts": [
+        150,
+        150,
+        150
+      ],
+      "assertions": "Intermediate text intensity/alpha; both pill edges+width; rise centroid; cleared gap"
+    },
+    "mutations": {
+      "old_encoded_renderer": "3unchanged tests fail; corrected3pass",
+      "frozen_intermediate_pill": "Unchanged pixelguard fails; restoredgreen",
+      "surviving_mutant": false
+    },
+    "ending_integration": {
+      "status": "passed",
+      "corrected_real_renders": 21,
+      "enabled_s": 6.2,
+      "disabled_s": 5.0,
+      "closing_frames": 36,
+      "cases": "All3styles keep/mute/replacement/disabled/headline/caption/music; process-time none override; one ending, overlay cutoff, invalid-video rejection, asset/profile cleanup"
+    },
+    "helper": {
+      "status": "passed",
+      "command": "python -m pytest docs/integrations/clip-captions/runner/tests -q",
+      "passed": 153,
+      "time_s": 149.18,
+      "fake_protocol": true
+    },
+    "social_full": {
+      "status": "passed",
+      "command": "apps/social: PLATFORM_TEST_DATABASE=platform_test_caption_stage4_fresh_20261030 mix test",
+      "passed": 1562,
+      "time_s": 203.0,
+      "initial_failure": "Reused previousstageDB:1561/1562 duplicatefixtureemail. Failedattempt retained; freshprivateDBpasses."
+    },
+    "social_final_affected": {
+      "status": "passed",
+      "command": "apps/social: mix test look/jobs/versions/appearance/review/phone tests; private stage4qualifiedDB",
+      "passed": 83,
+      "time_s": 17.6
+    },
+    "upstream_focused": {
+      "status": "passed",
+      "command": "QualifiedtoolPython: captions,EDL,finaltimeline,dynamic,config,models,CLI",
+      "tests": 271,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 271,
+      "time_s": 21.29,
+      "failed_cases": []
+    },
+    "upstream_dynamic": {
+      "status": "passed",
+      "command": "pytest tests/test_dynamic_captions.py",
+      "passed": 14
+    },
+    "upstream_full": {
+      "status": "failed",
+      "command": "Qualifiedtool clip-agent: python -m pytest tests -q",
+      "tests": 3514,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 20,
+      "passed": 3490,
+      "time_s": 583.709,
+      "failed_cases": [
+        "tests.test_captions_safe::test_hook_title_png_in_top_band_and_safe_area",
+        "tests.test_installer::test_eof_at_the_name_prompt_stops_with_a_message",
+        "tests.test_render_finish::test_a_loud_bed_is_capped_under_the_speech[unnormalised]",
+        "tests.test_render_finish::test_a_bed_already_under_the_margin_is_left_as_it_is"
+      ]
+    },
+    "pristine_controls": {
+      "status": "failed",
+      "command": "Untouched82ef513: exact4failedcases with PYTHONPATH=src",
+      "tests": 4,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "time_s": 125.898,
+      "failed_cases": [
+        "tests.test_captions_safe::test_hook_title_png_in_top_band_and_safe_area",
+        "tests.test_installer::test_eof_at_the_name_prompt_stops_with_a_message",
+        "tests.test_render_finish::test_a_loud_bed_is_capped_under_the_speech[unnormalised]",
+        "tests.test_render_finish::test_a_bed_already_under_the_margin_is_left_as_it_is"
+      ],
+      "interpretation": "All4samefailures reproduce on untouched upstream; fullgreen is NOT claimed. Prior audio variations remain reported as flakes.",
+      "unchanged_source_and_test_files": {
+        "clip-agent/src/clip_agent/render.py": true,
+        "clip-agent/tests/test_render_finish.py": true,
+        "clip-agent/tests/test_installer.py": true,
+        "clip-agent/tests/test_captions_safe.py": true
+      }
+    },
+    "javascript": {
+      "status": "passed",
+      "command": "apps/platform/assets: npm test",
+      "vitest_files": 101,
+      "vitest_passed": 1541,
+      "node_passed": 102
+    },
+    "assets": {
+      "status": "passed",
+      "command": "apps/platform: mix assets.build"
+    },
+    "schema": {
+      "status": "passed",
+      "command": "jsonschema Draft202012Validator.check_schema + validate private/public receipts"
+    },
+    "lint": {
+      "status": "passed",
+      "details": "ConfiguredupstreamRuff; newscriptRuff/format/compileall; Socialwarnings-as-errors+format; original15identitytests aftersanitization;44designguards passed."
+    },
+    "identity_guard_initial": {
+      "status": "failed",
+      "passed": 56,
+      "total": 59,
+      "reason": "Personal prose name, deployment URL, tmp username in newlypackagedevidence; sanitized. Original15identitytests thenpass; guard/allowlist unchanged."
+    },
+    "core_precommit": {
+      "status": "passed",
+      "command": "apps/platform: PLATFORM_TEST_DATABASE=platform_test_caption_stage4_core_20261030 mix precommit",
+      "initial_failure": "Missing UUID doctest beam after deps.unlock invalidatedcache; force rebuilt. No pass claimed for abortedattempt.",
+      "passed": 26031,
+      "doctests": 52,
+      "tests": 25979,
+      "skipped": 3,
+      "excluded": 13,
+      "time_s": 1419.9,
+      "lockfile": "Precommit unused-dependency mutation restored to original tracked bytes; no unrelated lockfile diff ships."
+    }
+  },
+  "renderer": {
+    "base": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "caption_patch_sha256": "37596cefadf68872e36ce12b7ccec6c5ec6d158b882bf1924164b460c5e59e9f",
+    "source_sha256": {
+      "clip-agent/src/clip_agent/captions.py": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
+      "clip-agent/src/clip_agent/dynamic_captions.py": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
+      "clip-agent/src/clip_agent/cli.py": "bbbe8bb288b9ccb5363d80909fed96385221ee6710eb72a5532ee7ad21e97717",
+      "clip-agent/src/clip_agent/config.py": "fd72b9bf2a9ebda8f5c8e8e72351611a26e83fe963e0a7b778956911034e359a",
+      "clip-agent/src/clip_agent/models.py": "ee6d29a8f65b80319b574f2ebf5c18d30cac49336e675c211d3cc81da90fd440",
+      "clip-agent/src/clip_agent/fonts/weights/Inter-ExtraBold.ttf": "e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22"
+    },
+    "cli_version": "0.9.0",
+    "helper_version": "0.9.1",
+    "helper_sha256": "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
+    "actual_paths": "Private local .caption-evidence/stage4-corrected-real/receipt-private.json; public sanitized comparison-receipt.json"
+  },
+  "design_deviations": [
+    "canvas01a18d1c-57fd node md | retains declared always-on scrim for deterministic contrast",
+    "Stage3picker deviations remain; comparison fit framing does not change productionframingpolicy"
+  ],
+  "limits": "No production config/worker replacement, Socialapproval/scheduling/publication, PR or deploy; broadfailures retained honestly."
+}

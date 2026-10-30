@@ -1,8 +1,8 @@
 {
-  "helper_version": "0.9.0",
-  "helper_sha256": "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
-  "previous_helper_version": "0.8.0",
-  "previous_helper_sha256": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077",
+  "helper_version": "0.9.1",
+  "helper_sha256": "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
+  "previous_helper_version": "0.9.0",
+  "previous_helper_sha256": "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
   "renderer_contract": "caption_treatments:1",
   "upstream_base": "82ef5132b926fed33a80a304364fdda14335c2d5",
   "runtime": {
@@ -63,12 +63,12 @@
     }
   },
   "source_sha256": {
-    "runner/clip_runner.py": "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
+    "runner/clip_runner.py": "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
     "runner/tests/conftest.py": "e0615ca8705072836c6466af8d3ef387266f3f246fbbca72d63c607fe0516be9",
     "runner/tests/fake_clip.py": "014adc0d26e9c0a49b196188b2ee669f0392f557880629f48ab6475f69f0dc38",
     "runner/tests/test_appearance.py": "ae68571e94589f00b489d926928e4f7eccf79b9261223aaf85b8224782056e21",
     "runner/tests/test_closing_video.py": "4f74a097c14e3334da8d3998c94e9408e7d1bb998df2169f83fffa87771175cb",
-    "runner/tests/test_dynamic_styles.py": "7e3a95e726726694b781f9cb6db1d568dc213a244a435b0bf600e04c9d0db639",
+    "runner/tests/test_dynamic_styles.py": "16c35de1a93186b18e6761b593040c5494dff13453b6e1a7dba701ebf747693c",
     "runner/tests/test_episode.py": "00a91dc4af7f64946d5d5dd21dce2aad8e2a4057fcb919ce420d010db6f190b9",
     "runner/tests/test_fixes.py": "5abba1888361a0f9f9ead234da89ec9996bf8290bfb627bf35150f94805c8a96",
     "runner/tests/test_headlines.py": "e8fcf9f5d0a78aee71aa89ec11b9d68e7cbda622227301212e870dd02c010e6f",
@@ -77,9 +77,24 @@
     "runner/tests/test_stage2.py": "003049b2522eaf59713a5695273dc565d2b436856b549318b6869d7511a7fcda"
   },
   "canonical_skill": {
-    "version": "0.9.0",
-    "registered_updated_at": "2026-10-30T14:54:43.827451Z",
+    "version": "0.9.1",
+    "registered_updated_at": "2026-10-30T16:15:15.067737Z",
     "packaged_content_verified_equal": true
   },
-  "scope_limit": "No production configuration, worker replacement, PR, approval or publication; representative UI and authorized-source comparison media are later stages."
+  "scope_limit": "No production configuration, worker replacement, PR, approval or publication; representative UI and authorized-source comparison media are later stages.",
+  "stage4_previous_helper_sha256": "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
+  "stage4_correction": "Renderer qualification repinned after decoded-tail failure; inherited0.9.0 protocol behavior unchanged.",
+  "stage2_previous_release": {
+    "version": "0.8.0",
+    "sha256": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077"
+  },
+  "stage4_validation": {
+    "helper": "153passed",
+    "dynamic": "14passed, including3realencoded duration/lastword cases",
+    "social": "FreshprivateDB1562pass; final83affectedpass",
+    "qualification": "Actual imported source/font/helper digests and patches match; freshbase+bothpatches+font reproduces all installeddigests",
+    "renderer_tail_regression": "Prior rendererfails3unchanged actualMOV framecount assertions; correctedsourcepasses",
+    "core_precommit": "26031passed (52doctests/25979tests),3skipped,13excluded;1419.9s. Original lock restored.",
+    "upstream_full": "3490passed/20skipped/4failed; all4samefailures reproduce on untouched82ef513. Focused271anddynamic14green. Fullupstreamgreen NOT claimed."
+  }
 }

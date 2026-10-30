@@ -2,12 +2,10 @@
   "contract": 1,
   "upstream_base": "82ef5132b926fed33a80a304364fdda14335c2d5",
   "core_base": "a433cb9c",
-  "helper_version_preserved": "0.8.0",
-  "helper_changed": false,
   "headline_patch_sha256": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
-  "caption_patch_sha256": "925e3f5e1d74ccf00fe21d1db33032420dfb6ca10733e0ede5f1b6053a87a9d8",
+  "caption_patch_sha256": "37596cefadf68872e36ce12b7ccec6c5ec6d158b882bf1924164b460c5e59e9f",
   "installed_source_sha256": {
-    "clip-agent/src/clip_agent/captions.py": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+    "clip-agent/src/clip_agent/captions.py": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
     "clip-agent/src/clip_agent/dynamic_captions.py": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
     "clip-agent/src/clip_agent/cli.py": "bbbe8bb288b9ccb5363d80909fed96385221ee6710eb72a5532ee7ad21e97717",
     "clip-agent/src/clip_agent/config.py": "fd72b9bf2a9ebda8f5c8e8e72351611a26e83fe963e0a7b778956911034e359a",
@@ -16,11 +14,11 @@
   },
   "cli": {
     "version": "0.9.0",
-    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
-    "commit": "c71e2ac88d681bf5b368971c9250a31f3b63f196",
+    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
     "ref": null,
     "editable": true,
-    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
     "content_free": 2,
     "headline_review": 1,
     "caption_treatments": 1,
@@ -34,9 +32,9 @@
       "editorial-punch"
     ],
     "caption_renderer": {
-      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
-      "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
-      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/dynamic_captions.py",
+      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+      "sha256": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
+      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
       "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
     }
   },
@@ -47,11 +45,11 @@
   },
   "decoded_temporal_evidence": {
     "test_only": true,
-    "module": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
-    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "module": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
     "styles": {
       "type-on": {
-        "track_sha256": "e74054223e5957c531e824c8be3f17d8440c1dfdca02e53c39a57ad7468eceef",
+        "track_sha256": "67ea957468fb96f8f8a12b8dca4b27ae68ff2882c65bee648ba6524395caab96",
         "frames": {
           "0": "f3e284a68faab7ae18c5a67667842e60305df516d195b2d62c823347107b67b3",
           "0.033": "f5cc7b352d110c873800b81acbda5b6c80653287cf24910e439d48255a8d27c8",
@@ -67,10 +65,10 @@
           "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
           "4.5": "6622cb98dfd0f93f4b2f1bc0180a859ca8c3016291807b9d67c037d57cb19aa0"
         },
-        "frame_count": 143
+        "frame_count": 150
       },
       "focus-word": {
-        "track_sha256": "11b43d993bb1a5d185089251e3186f1a27a28080cad8f4d1665644aba03604bb",
+        "track_sha256": "9187e110fdde5d9fd948807f70aa46418b3df0a5f960301aca557ace0d35c46f",
         "frames": {
           "0": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
           "0.033": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
@@ -86,10 +84,10 @@
           "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
           "4.5": "c7ba9bd8f9f8abb7982f4d6d320865815892b3c58d8a5f7bb0a09faf0dfb2689"
         },
-        "frame_count": 144
+        "frame_count": 150
       },
       "editorial-punch": {
-        "track_sha256": "112220037b8e6fb9e08bbc3c6ebe0de44758f6236d588e2fc8dc8e19651cd391",
+        "track_sha256": "35f5e52bffa0a4fb6c46d9a9310384c23a1c04b4cc316123947eba440792273a",
         "frames": {
           "0": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
           "0.033": "4ad04bc711fc7816583fce820f5538fae3c5cd2fa550d49f0eb976088b7ccbb9",
@@ -105,7 +103,7 @@
           "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
           "4.5": "57a121a85731598c35eea1c9bab989707086ee1b3080c415cc9bad2c3a64f78e"
         },
-        "frame_count": 144
+        "frame_count": 150
       }
     }
   },
@@ -276,5 +274,18 @@
     "clip-agent/tests/test_render_finish.py": "572ce520068b12ba4e77171a758175978b33f6b46b9eef07cb967dc6999be70d"
   },
   "font_companion_sha256": "e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22",
-  "packaging_note": "Stage2 moves identical font bytes from encoded binary patch to licensed companion; installed source/font digests are unchanged. Evidence paths/hosts neutralized for public repository."
+  "packaging_note": "Stage2 moves identical font bytes from encoded binary patch to licensed companion; installed source/font digests are unchanged. Evidence paths/hosts neutralized for public repository.",
+  "stage4_correction": {
+    "supersedes_renderer_sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+    "reason": "Repeated final PNG lacked temporal30Hz timebase; cumulative concat durations used3decimal precision; decoded tracks lost tail frames. Final sentinel shares30Hz and temporal durations retain9decimals. Legacy branch remains byte-semantically unchanged.",
+    "fixed_renderer_sha256": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
+    "regression": "Actual5second MOV must decode150frames and retain last spoken word, all3styles. Original renderer fails unchanged new test.",
+    "previous_5s_frame_counts": {
+      "type-on": 143,
+      "focus-word": 144,
+      "editorial-punch": 144
+    }
+  },
+  "stage1_helper_version_preserved": "0.8.0",
+  "stage1_helper_changed": false
 }

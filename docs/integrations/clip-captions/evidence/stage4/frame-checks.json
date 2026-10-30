@@ -1,0 +1,693 @@
+{
+  "schema": "caption-comparison-frames/1",
+  "times_s": [
+    0.0,
+    0.05,
+    0.1,
+    0.15,
+    1.5,
+    1.66,
+    1.71,
+    1.76,
+    1.81,
+    4.103,
+    4.153,
+    4.2,
+    4.203,
+    4.253,
+    5.943,
+    5.993,
+    6.0,
+    6.043,
+    6.093,
+    7.763,
+    7.813,
+    7.863,
+    7.913,
+    9.493,
+    9.5,
+    9.543,
+    9.593,
+    9.643,
+    10.2
+  ],
+  "styles": {
+    "type-on": [
+      {
+        "timestamp_s": 0.0,
+        "changed_pixels": 2993,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.05,
+        "changed_pixels": 3161,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.1,
+        "changed_pixels": 3746,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.15,
+        "changed_pixels": 3746,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 1.5,
+        "changed_pixels": 2213,
+        "y_bounds": [
+          421,
+          478
+        ]
+      },
+      {
+        "timestamp_s": 1.66,
+        "changed_pixels": 2525,
+        "y_bounds": [
+          421,
+          478
+        ]
+      },
+      {
+        "timestamp_s": 1.71,
+        "changed_pixels": 79,
+        "y_bounds": [
+          463,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 1.76,
+        "changed_pixels": 603,
+        "y_bounds": [
+          436,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 1.81,
+        "changed_pixels": 603,
+        "y_bounds": [
+          436,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 4.103,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.153,
+        "changed_pixels": 9863,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.2,
+        "changed_pixels": 8674,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.203,
+        "changed_pixels": 8674,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.253,
+        "changed_pixels": 9428,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 5.943,
+        "changed_pixels": 10607,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 5.993,
+        "changed_pixels": 9408,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.0,
+        "changed_pixels": 9408,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.043,
+        "changed_pixels": 8967,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.093,
+        "changed_pixels": 9437,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.763,
+        "changed_pixels": 10489,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.813,
+        "changed_pixels": 9650,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.863,
+        "changed_pixels": 10240,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.913,
+        "changed_pixels": 10186,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.493,
+        "changed_pixels": 10576,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.5,
+        "changed_pixels": 10576,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.543,
+        "changed_pixels": 4933,
+        "y_bounds": [
+          419,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 9.593,
+        "changed_pixels": 4586,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 9.643,
+        "changed_pixels": 4323,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 10.2,
+        "changed_pixels": 4224,
+        "y_bounds": [
+          434,
+          463
+        ]
+      }
+    ],
+    "focus-word": [
+      {
+        "timestamp_s": 0.0,
+        "changed_pixels": 5117,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.05,
+        "changed_pixels": 5618,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.1,
+        "changed_pixels": 6731,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 0.15,
+        "changed_pixels": 6834,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 1.5,
+        "changed_pixels": 3572,
+        "y_bounds": [
+          421,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 1.66,
+        "changed_pixels": 3844,
+        "y_bounds": [
+          421,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 1.71,
+        "changed_pixels": 2341,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 1.76,
+        "changed_pixels": 2341,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 1.81,
+        "changed_pixels": 2341,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 4.103,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.153,
+        "changed_pixels": 10388,
+        "y_bounds": [
+          418,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.2,
+        "changed_pixels": 10379,
+        "y_bounds": [
+          418,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.203,
+        "changed_pixels": 10379,
+        "y_bounds": [
+          418,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 4.253,
+        "changed_pixels": 10392,
+        "y_bounds": [
+          418,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 5.943,
+        "changed_pixels": 11322,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 5.993,
+        "changed_pixels": 9808,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.0,
+        "changed_pixels": 9808,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.043,
+        "changed_pixels": 9761,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 6.093,
+        "changed_pixels": 10008,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.763,
+        "changed_pixels": 11080,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.813,
+        "changed_pixels": 11092,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.863,
+        "changed_pixels": 11085,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.913,
+        "changed_pixels": 11087,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.493,
+        "changed_pixels": 11178,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.5,
+        "changed_pixels": 11178,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.543,
+        "changed_pixels": 4598,
+        "y_bounds": [
+          432,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 9.593,
+        "changed_pixels": 4767,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 9.643,
+        "changed_pixels": 4562,
+        "y_bounds": [
+          434,
+          463
+        ]
+      },
+      {
+        "timestamp_s": 10.2,
+        "changed_pixels": 5179,
+        "y_bounds": [
+          434,
+          463
+        ]
+      }
+    ],
+    "editorial-punch": [
+      {
+        "timestamp_s": 0.0,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 0.05,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 0.1,
+        "changed_pixels": 2057,
+        "y_bounds": [
+          418,
+          469
+        ]
+      },
+      {
+        "timestamp_s": 0.15,
+        "changed_pixels": 2307,
+        "y_bounds": [
+          418,
+          471
+        ]
+      },
+      {
+        "timestamp_s": 1.5,
+        "changed_pixels": 2591,
+        "y_bounds": [
+          421,
+          469
+        ]
+      },
+      {
+        "timestamp_s": 1.66,
+        "changed_pixels": 2591,
+        "y_bounds": [
+          421,
+          469
+        ]
+      },
+      {
+        "timestamp_s": 1.71,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 1.76,
+        "changed_pixels": 564,
+        "y_bounds": [
+          436,
+          458
+        ]
+      },
+      {
+        "timestamp_s": 1.81,
+        "changed_pixels": 608,
+        "y_bounds": [
+          436,
+          458
+        ]
+      },
+      {
+        "timestamp_s": 4.103,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.153,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.2,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.203,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 4.253,
+        "changed_pixels": 2484,
+        "y_bounds": [
+          419,
+          473
+        ]
+      },
+      {
+        "timestamp_s": 5.943,
+        "changed_pixels": 10293,
+        "y_bounds": [
+          419,
+          477
+        ]
+      },
+      {
+        "timestamp_s": 5.993,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 6.0,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 6.043,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 6.093,
+        "changed_pixels": 5340,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 7.763,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 7.813,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 7.863,
+        "changed_pixels": 1152,
+        "y_bounds": [
+          423,
+          475
+        ]
+      },
+      {
+        "timestamp_s": 7.913,
+        "changed_pixels": 5569,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.493,
+        "changed_pixels": 9983,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.5,
+        "changed_pixels": 9983,
+        "y_bounds": [
+          418,
+          479
+        ]
+      },
+      {
+        "timestamp_s": 9.543,
+        "changed_pixels": 0,
+        "y_bounds": null
+      },
+      {
+        "timestamp_s": 9.593,
+        "changed_pixels": 1144,
+        "y_bounds": [
+          436,
+          458
+        ]
+      },
+      {
+        "timestamp_s": 9.643,
+        "changed_pixels": 1249,
+        "y_bounds": [
+          436,
+          458
+        ]
+      },
+      {
+        "timestamp_s": 10.2,
+        "changed_pixels": 3463,
+        "y_bounds": [
+          434,
+          463
+        ]
+      }
+    ]
+  }
+}

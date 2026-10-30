@@ -1,17 +1,15 @@
 diff --git a/clip-agent/THIRD-PARTY.md b/clip-agent/THIRD-PARTY.md
-index a5eda6d..5fb0ace 100644
+index a5eda6d..dd9afe1 100644
 --- a/clip-agent/THIRD-PARTY.md
 +++ b/clip-agent/THIRD-PARTY.md
-@@ -66,6 +66,7 @@ The installer downloads and runs these on the user's Mac. None is pinned to a ve
+@@ -249,3 +249,5 @@ Licences were read from installed metadata. The dev venv used for that check was
  |---|---|---|---|
- | Anton-Regular.ttf | 2.116, SHA-256 `a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab` | **OFL-1.1** | Licence text shipped as `fonts/Anton-OFL.txt`; provenance in `fonts/SOURCES.txt`. |
- | Inter-SemiBold.ttf | 4.001 (v4.1), SHA-256 `78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3` | **OFL-1.1** | Licence text shipped as `fonts/Inter-OFL.txt`. |
+ | Legal / OSS review | | | |
+ | Engineering owner (register accuracy) | | | |
++
 +| weights/Inter-ExtraBold.ttf | Inter v4.1 official release, SHA-256 `e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22` | **OFL-1.1** | Same Inter-OFL.txt; https://github.com/rsms/inter/releases/tag/v4.1. Used only for editorial word emphasis. |
- | WhisperX-derived word→speaker assignment (`diarize.assign_speakers`) | adapted from `assign_word_speakers`, github.com/m-bain/whisperX | **BSD-2-Clause**, Copyright (c) 2022, Max Bain | Notice kept in the code and in `NOTICE`. |
- 
- ## Not used
 diff --git a/clip-agent/src/clip_agent/captions.py b/clip-agent/src/clip_agent/captions.py
-index 75502f8..ad3ed55 100644
+index 75502f8..5b12136 100644
 --- a/clip-agent/src/clip_agent/captions.py
 +++ b/clip-agent/src/clip_agent/captions.py
 @@ -1191,6 +1191,13 @@ def render_caption_pngs(
@@ -28,15 +26,26 @@ index 75502f8..ad3ed55 100644
      out_dir = Path(out_dir)
      look = resolve_look(config)
      font_path = resolve_font_path(look.font, fonts_dir)
-@@ -1358,6 +1365,8 @@ def render_caption_track(
+@@ -1356,11 +1363,18 @@ def render_caption_track(
+         # concat list -> transparent caption track (qtrle .mov keeps alpha)
+         listf = tmpd / "concat.txt"
          lines = []
++        temporal = style in {CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH}
          for png, d in timeline:
              lines.append(f"file {_concat_quote(Path(png).as_posix())}")
-+            if style in {CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH}:
+-            lines.append(f"duration {d:.3f}")
++            if temporal:
 +                lines.append("option framerate 30")
-             lines.append(f"duration {d:.3f}")
++            lines.append(f"duration {d:.9f}" if temporal else f"duration {d:.3f}")
          # repeat the last frame so its duration is applied by the demuxer
          lines.append(f"file {_concat_quote(Path(timeline[-1][0]).as_posix())}")
++        # The sentinel must use the SAME timebase as every temporal input.
++        # The default 25 Hz PNG timebase otherwise shortens the decoded tail.
++        if temporal:
++            lines.append("option framerate 30")
+         listf.write_text("\n".join(lines) + "\n")
+ 
+         # The concat demuxer gives the repeated last frame extra time, so the
 diff --git a/clip-agent/src/clip_agent/cli.py b/clip-agent/src/clip_agent/cli.py
 index f18005e..0dac6b2 100644
 --- a/clip-agent/src/clip_agent/cli.py
@@ -350,13 +359,15 @@ index 9c129d0..552098c 100644
  class Clip(BaseModel):
 diff --git a/clip-agent/tests/test_dynamic_captions.py b/clip-agent/tests/test_dynamic_captions.py
 new file mode 100644
-index 0000000..4628b51
+index 0000000..6763c5a
 --- /dev/null
 +++ b/clip-agent/tests/test_dynamic_captions.py
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,253 @@
 +"""Temporal, transcript and geometry contracts, independent of config acceptance."""
 +
 +import json
++import shutil
++import subprocess
 +from pathlib import Path
 +
 +import pytest
@@ -547,20 +558,69 @@ index 0000000..4628b51
 +def test_unrepresentable_token_fails_instead_of_clipping():
 +    with pytest.raises(ValueError, match="without clipping"):
 +        dc.layout(["W" * 10000], 360, 640, Path(FONTS_DIR))
++
++
++@pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
++def test_encoded_track_keeps_full_timeline_and_last_word(tmp_path, style):
++    from clip_agent.captions import render_caption_track
++
++    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
++    assert ffmpeg and ffprobe
++    timed = [Word("word", i * 0.2, i * 0.2 + 0.18) for i in range(25)]
++    output = tmp_path / "actual.mov"
++    render_caption_track(
++        timed,
++        output,
++        width=360,
++        height=640,
++        style=style,
++        config=Config(),
++        fonts_dir=FONTS_DIR,
++        clip_start=0,
++        clip_dur=5,
++    )
++    probe = json.loads(
++        subprocess.check_output(
++            [
++                ffprobe,
++                "-v",
++                "error",
++                "-count_frames",
++                "-show_entries",
++                "stream=nb_read_frames,duration",
++                "-of",
++                "json",
++                str(output),
++            ]
++        )
++    )
++    assert int(probe["streams"][0]["nb_read_frames"]) == 150
++    assert float(probe["streams"][0]["duration"]) == pytest.approx(5, abs=1 / 30)
++    raw = subprocess.check_output(
++        [
++            ffmpeg,
++            "-v",
++            "error",
++            "-i",
++            str(output),
++            "-vf",
++            "select=eq(n\\,149)",
++            "-frames:v",
++            "1",
++            "-f",
++            "rawvideo",
++            "-pix_fmt",
++            "rgba",
++            "-",
++        ]
++    )
++    assert len(raw) == 360 * 640 * 4
++    assert max(raw[3::4]) > 0, "last spoken word disappeared from decoded tail"
 diff --git a/clip-agent/tests/test_models.py b/clip-agent/tests/test_models.py
-index 5d09025..1b6e3ce 100644
+index 5d09025..1778a63 100644
 --- a/clip-agent/tests/test_models.py
 +++ b/clip-agent/tests/test_models.py
-@@ -1,7 +1,6 @@
- import pytest
--from pydantic import ValidationError
--
- from clip_agent.models import CaptionStyle, Clip, ClipList, Transcript, Word
-+from pydantic import ValidationError
- 
- 
- def test_clip_duration_and_validation():
-@@ -28,4 +27,4 @@ def test_transcript_words_between_is_half_open():
+@@ -28,4 +28,4 @@ def test_transcript_words_between_is_half_open():
  
  def test_caption_style_values():
      assert CaptionStyle.PHRASE_POP.value == "phrase-pop"

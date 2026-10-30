@@ -20,7 +20,7 @@ CAPABILITY = {
         "editorial-punch",
     ],
     "caption_renderer": {
-        "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+        "sha256": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
         "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
     },
 }

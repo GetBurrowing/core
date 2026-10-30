@@ -37,8 +37,10 @@ python docs/integrations/clip-captions/build_preview_assets.py \
 The workspace must not already exist. Inspect its content-bearing CLI diagnostics
 locally if rendering fails; do not put them in chat or completion evidence.
 Only operator-authorized source media may be copied into the shipped sample
-folder. The included assets were reproduced with byte-identical video digests
-using the tracked builder on this task's runtime. No speech model or remote
+folder. The stage-3 assets were reproduced with byte-identical video digests
+using the tracked builder. Stage 4 regenerated the dynamic assets after a
+decoded tail-timing correction; the three legacy MP4 hashes remain unchanged.
+Current hashes are in `preview-assets.json`. No speech model or remote
 brain call is made during this workflow: it reuses the original transcript.
 
 The profile uses the existing renderer's fit framing, with no headline, music or

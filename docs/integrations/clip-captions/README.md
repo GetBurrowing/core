@@ -1,5 +1,12 @@
 # Shared caption treatments v1
 
+Current qualification uses canonical helper **0.9.1** and the corrected caption
+patch in this directory. Stage 4 caught and fixed an encoded tail-timing defect;
+old renderer/helper receipts are superseded. See [COMPARISONS.md](COMPARISONS.md)
+for actual-source videos, independent decoded checks and current evidence.
+The stage-numbered sections below retain their historical validation outcomes,
+including failures.
+
 Task `01a18d1b-a5c1-7000-947c-7931a3ec53e5`, implementation stage 1.
 This is a patch to **the existing htc-clip-tool renderer**, not a Core renderer,
 parallel cutter, timeline, editor, runner, or production rollout. Social must
@@ -163,7 +170,7 @@ make no engagement or retention improvement claim.
 
 The registered `burrow-clip-runner` is extended in place from 0.8.0 to **0.9.0**.
 Its reproducible source and all eleven test modules are in [runner](runner/);
-[the complete skill](burrow-clip-runner-0.9.0.md) retains the existing music,
+[the complete skill](burrow-clip-runner-0.9.1.md) retains the existing music,
 closing video, headline, source-project, privacy and child request/reply rules.
 [runner-artifact.json](runner-artifact.json) pins the helper digest and validation
 receipts. This version does not replace a running worker or operator state.

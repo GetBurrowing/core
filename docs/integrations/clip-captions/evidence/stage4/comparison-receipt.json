@@ -1,0 +1,138 @@
+{
+  "schema": "caption-comparison/1",
+  "pending_review": true,
+  "source_id": "GES6h4843C4",
+  "candidate_id": "e951edb54d",
+  "requested_start_s": 3686.34,
+  "requested_end_s": 3697.1400000000003,
+  "source_snapshot_sha256": "9d094dc054e24efb0ac4889dcf6e7e8ce21fbf50cec00dfa110db55ea8fa2845",
+  "original_project_unchanged": true,
+  "helper_sha256": "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
+  "executable": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/clip",
+  "executable_sha256": "9c713bb0fae3635e5a7c255771053ed469c2af26f73638c2069d77a0051e48b9",
+  "cli_identity": {
+    "version": "0.9.0",
+    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+      "sha256": "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4",
+      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "renders": [
+    {
+      "style": "type-on",
+      "file": "type-on.mp4",
+      "sha256": "563dc530b738f57aae97252ff8d6fc932d44c8e9849a32262f9416ae483bcab9",
+      "bytes": 457278,
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 360,
+            "height": 640,
+            "r_frame_rate": "24000/1001"
+          },
+          {
+            "codec_name": "aac",
+            "r_frame_rate": "0/0"
+          }
+        ],
+        "format": {
+          "duration": "10.302000"
+        }
+      },
+      "applied_source_start_s": 3686.34,
+      "applied_source_end_s": 3697.05,
+      "content_free_result": {
+        "file_id": "local-comparison-artifact",
+        "candidate_id": "e951edb54d",
+        "duration_s": 10.71
+      }
+    },
+    {
+      "style": "focus-word",
+      "file": "focus-word.mp4",
+      "sha256": "b6b7836abf55178c020e13c15ad20d4c33b9f674381ba00a0d59acc8e6246b9a",
+      "bytes": 476348,
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 360,
+            "height": 640,
+            "r_frame_rate": "24000/1001"
+          },
+          {
+            "codec_name": "aac",
+            "r_frame_rate": "0/0"
+          }
+        ],
+        "format": {
+          "duration": "10.302000"
+        }
+      },
+      "applied_source_start_s": 3686.34,
+      "applied_source_end_s": 3697.05,
+      "content_free_result": {
+        "file_id": "local-comparison-artifact",
+        "candidate_id": "e951edb54d",
+        "duration_s": 10.71
+      }
+    },
+    {
+      "style": "editorial-punch",
+      "file": "editorial-punch.mp4",
+      "sha256": "073aebd5b0ab38f929f8881eacbf862741bd6471d996c56ccab353914ce449a3",
+      "bytes": 473162,
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 360,
+            "height": 640,
+            "r_frame_rate": "24000/1001"
+          },
+          {
+            "codec_name": "aac",
+            "r_frame_rate": "0/0"
+          }
+        ],
+        "format": {
+          "duration": "10.302000"
+        }
+      },
+      "applied_source_start_s": 3686.34,
+      "applied_source_end_s": 3697.05,
+      "content_free_result": {
+        "file_id": "local-comparison-artifact",
+        "candidate_id": "e951edb54d",
+        "duration_s": 10.71
+      }
+    }
+  ],
+  "scope": "Real CLI and canonical helper render path; local artifact sink, no live claim/upload/completion or publication"
+}
