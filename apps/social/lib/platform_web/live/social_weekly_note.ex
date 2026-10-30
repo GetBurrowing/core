@@ -258,7 +258,7 @@ defmodule PlatformWeb.SocialWeeklyNote do
         <div :for={note <- row.older} data-role="weekly-note-older">
           <button
             type="button"
-            class="flex w-full items-center gap-2 py-2 text-left text-xs text-base-content/70"
+            class="flex w-full items-center gap-2 py-2 text-left text-xs text-subtle"
             phx-click="older"
             phx-target={@myself}
             phx-value-note={note.id}
@@ -297,7 +297,7 @@ defmodule PlatformWeb.SocialWeeklyNote do
           <h2 class="text-base font-semibold">This week: what worked</h2>
           <div class="flex min-w-0 items-center gap-3 text-xs">
             <span
-              class="min-w-0 truncate text-base-content/70"
+              class="min-w-0 truncate text-subtle"
               title={"Delivery week in #{@row.profile.timezone}; reports the preceding completed week"}
             >
               Week of {Calendar.strftime(@note.week_start, "%b %-d")} · {@row.profile.name}
@@ -357,7 +357,7 @@ defmodule PlatformWeb.SocialWeeklyNote do
           class="space-y-3 p-4 sm:p-5"
         >
           <div class="flex flex-col gap-1 sm:flex-row sm:gap-3">
-            <span class="shrink-0 text-xs uppercase text-base-content/70">{item.kind}</span>
+            <span class="shrink-0 text-xs uppercase text-subtle">{item.kind}</span>
             <p>{item.text}</p>
           </div>
           <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -434,9 +434,7 @@ defmodule PlatformWeb.SocialWeeklyNote do
             data-role="weekly-note-decision"
           >
             <.icon :if={item.decision == "use"} name="hero-check-circle" class="size-4 text-success" />
-            <span class={
-              if item.decision == "ignore", do: "text-base-content/70", else: "text-base-content"
-            }>
+            <span class={if item.decision == "ignore", do: "text-subtle", else: "text-base-content"}>
               {decision_text(item, @row.profile)}
             </span>
             <button
