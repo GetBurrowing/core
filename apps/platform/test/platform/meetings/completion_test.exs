@@ -549,7 +549,11 @@ defmodule Platform.Meetings.CompletionTest do
     Enum.filter(doc["root"]["children"], fn node ->
       node["type"] == "action_row" and
         get_in(node, ["props", "actions"]) == [
-          %{"label" => "Junk this batch", "value" => "junk_batch:#{canvas.id}", "variant" => "danger"}
+          %{
+            "label" => "Junk this batch",
+            "value" => "junk_batch:#{canvas.id}",
+            "variant" => "danger"
+          }
         ]
     end)
   end
@@ -580,7 +584,8 @@ defmodule Platform.Meetings.CompletionTest do
     })
   end
 
-  test "four authenticated items and two replays retain one run control and all canonical nodes", ctx do
+  test "four authenticated items and two replays retain one run control and all canonical nodes",
+       ctx do
     {meeting, run, seg} = ready!(ctx.meeting)
     canvas = completion_canvas!(meeting.chat_space_id, ctx.scribe)
     args = params(meeting, run, canvas)
@@ -590,16 +595,26 @@ defmodule Platform.Meetings.CompletionTest do
     assert {:ok, %{status: "filed", task_ids: ids}} = authenticated_file(ctx, args)
     assert length(ids) == 4
     assert Enum.all?(ids, &Repo.get!(Task, &1))
-    assert [%{"id" => control_id, "props" => %{"label" => "Meeting triage"}}] = junk_controls!(canvas)
+
+    assert [%{"id" => control_id, "props" => %{"label" => "Meeting triage"}}] =
+             junk_controls!(canvas)
+
     assert control_id == "triage-junk-actions-#{run.id}"
     assert {:ok, %{task_ids: ^ids}} = authenticated_file(ctx, args)
     Repo.get!(Task, hd(ids)) |> Ecto.Changeset.change(status: "done") |> Repo.update!()
     assert {:ok, %{task_ids: ^ids}} = authenticated_file(ctx, args)
     assert length(junk_controls!(canvas)) == 1
-    assert Repo.aggregate(from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id), :count) == 4
+
+    assert Repo.aggregate(
+             from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id),
+             :count
+           ) == 4
+
     {:ok, %{document: document}} = Platform.Chat.Canvas.Server.describe(canvas.id)
+
     for id <- ~w(repair-completion invalid duplicate conflict unrelated) do
-      assert Platform.Chat.CanvasDocument.get_node(document, id) == Platform.Chat.CanvasDocument.get_node(canvas.document, id)
+      assert Platform.Chat.CanvasDocument.get_node(document, id) ==
+               Platform.Chat.CanvasDocument.get_node(canvas.document, id)
     end
   end
 
@@ -609,15 +624,22 @@ defmodule Platform.Meetings.CompletionTest do
     args = params(meeting, run, canvas)
     assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
     [first | remaining] = batch_items(seg)
-    assert {:ok, %{task_ids: [first_id]}} = authenticated_file(ctx, Map.put(args, "action_items", [first]))
+
+    assert {:ok, %{task_ids: [first_id]}} =
+             authenticated_file(ctx, Map.put(args, "action_items", [first]))
+
     assert length(junk_controls!(canvas)) == 1
-    assert {:ok, %{task_ids: ids}} = authenticated_file(ctx, Map.put(args, "action_items", remaining))
+
+    assert {:ok, %{task_ids: ids}} =
+             authenticated_file(ctx, Map.put(args, "action_items", remaining))
+
     assert length(ids) == 4
     assert first_id in ids
     assert length(junk_controls!(canvas)) == 1
   end
 
-  test "declined canvas patches retain the ledger and an item-free replay repairs the control", ctx do
+  test "declined canvas patches retain the ledger and an item-free replay repairs the control",
+       ctx do
     {meeting, run, seg} = ready!(ctx.meeting)
     canvas = completion_canvas!(meeting.chat_space_id, ctx.scribe)
     args = params(meeting, run, canvas)
@@ -630,15 +652,19 @@ defmodule Platform.Meetings.CompletionTest do
     end)
 
     assert {:ok, %{status: "triage_pending", task_ids: [task_id]}} =
-      authenticated_file(ctx, Map.put(args, "action_items", [hd(batch_items(seg))]))
+             authenticated_file(ctx, Map.put(args, "action_items", [hd(batch_items(seg))]))
+
     assert junk_controls!(canvas) == []
     assert run!(meeting).last_error =~ "batch control"
     assert map_size(run!(meeting).item_results) == 1
+
     :sys.replace_state(server, fn state ->
       %{state | document: put_in(state.document, ["root", "type"], "stack")}
     end)
+
     assert {:ok, %{status: "filed", task_ids: [^task_id]}} =
-      authenticated_file(ctx, Map.put(args, "action_items", []))
+             authenticated_file(ctx, Map.put(args, "action_items", []))
+
     assert length(junk_controls!(canvas)) == 1
     assert run!(meeting).last_error == nil
   end
@@ -649,8 +675,16 @@ defmodule Platform.Meetings.CompletionTest do
     args = params(meeting, run, canvas)
     assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
     assert {:ok, %{task_ids: []}} = authenticated_file(ctx, Map.put(args, "action_items", []))
-    decisions = Enum.map(~w(repair-completion invalid duplicate conflict), &%{"item_id" => &1, "decision" => "exclude"})
-    assert {:ok, %{task_ids: []}} = authenticated_file(ctx, Map.put(args, "action_items", decisions))
+
+    decisions =
+      Enum.map(
+        ~w(repair-completion invalid duplicate conflict),
+        &%{"item_id" => &1, "decision" => "exclude"}
+      )
+
+    assert {:ok, %{task_ids: []}} =
+             authenticated_file(ctx, Map.put(args, "action_items", decisions))
+
     assert junk_controls!(canvas) == []
   end
 
@@ -1200,3 +1234,4 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
     end
   end
 end
+
