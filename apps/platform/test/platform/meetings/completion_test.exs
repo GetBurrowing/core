@@ -590,6 +590,16 @@ defmodule Platform.Meetings.CompletionTest do
 
   test "real recording starts clear the capture fence but processing is not a speech fence",
        ctx do
+    previous = Application.get_env(:platform, :livekit, [])
+
+    Application.put_env(:platform, :livekit,
+      url: "wss://livekit.test",
+      api_key: "test-key",
+      api_secret: "test-secret"
+    )
+
+    on_exit(fn -> Application.put_env(:platform, :livekit, previous) end)
+    assert Meetings.enabled?()
     {meeting, run} = filed!(ctx)
     {:ok, _live} = Meetings.resume_meeting(meeting)
 
