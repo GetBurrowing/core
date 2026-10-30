@@ -604,4 +604,3 @@ defmodule Platform.Meetings.Completion do
          task_ids: Enum.flat_map(run.item_results, fn {_, v} -> v["task_ids"] || [] end)
        }}
 end
-

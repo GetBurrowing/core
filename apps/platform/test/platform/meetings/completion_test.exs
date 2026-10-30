@@ -1234,4 +1234,3 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
     end
   end
 end
-
