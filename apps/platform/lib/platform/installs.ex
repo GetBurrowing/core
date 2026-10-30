@@ -409,7 +409,12 @@ defmodule Platform.Installs do
     DigitalOcean.delete_records(ours_zone(install), [install.slug, "auth." <> install.slug])
   end
 
-  defp delete_dns(_customer), do: :ok
+  defp delete_dns(%Install{domain_mode: "customer"} = install) do
+    case cname_zone() do
+      nil -> :ok
+      zone -> DigitalOcean.delete_records(zone, [install.slug, "auth." <> install.slug])
+    end
+  end
 
   defp confirm_gone(tag, attempts) do
     case DigitalOcean.find_droplets_by_tag(tag) do
@@ -531,6 +536,106 @@ defmodule Platform.Installs do
       end)
 
   def unseal(_), do: {:error, :handover_missing}
+
+  @doc """
+  The zone a customer-domain install's CNAME targets live in
+  (`BURROW_INSTALLS_DNS_ZONE`), or nil. With a zone, `reserve` also points
+  `<slug>.<zone>` and `auth.<slug>.<zone>` at the server so the customer
+  can CNAME to them (task 01a10315 stage 3); without one the customer gets
+  A records to the server's address instead.
+  """
+  @spec cname_zone() :: String.t() | nil
+  def cname_zone do
+    case config(:dns_zone, nil) do
+      zone when is_binary(zone) and zone != "" -> zone
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The two records a customer-domain install's owner adds where they manage
+  their domain: `[%{name, type, value}]`, primary host first. A CNAME to
+  `<slug>.<zone>.` (and `auth.<slug>.<zone>.`), or an A record to the
+  server's address when the host is an apex (an apex cannot CNAME) or no
+  zone is configured. `[]` for a subdomain of ours. `value` is nil for an A
+  record while the address is not known yet.
+  """
+  @spec dns_instructions(Install.t()) :: [%{name: String.t(), type: String.t(), value: term()}]
+  def dns_instructions(%Install{domain_mode: "customer"} = install) do
+    host = install.primary_host
+    zone = cname_zone()
+    apex? = length(String.split(host, ".")) == 2
+    a = fn name -> %{name: name, type: "A", value: install.droplet_ip} end
+
+    cname = fn name, target ->
+      %{name: name, type: "CNAME", value: "#{target}.#{zone}."}
+    end
+
+    case zone do
+      nil ->
+        [a.(host), a.("auth." <> host)]
+
+      _zone ->
+        primary = if apex?, do: a.(host), else: cname.(host, install.slug)
+        [primary, cname.("auth." <> host, "auth." <> install.slug)]
+    end
+  end
+
+  def dns_instructions(%Install{}), do: []
+
+  @region_names %{
+    "nyc1" => "New York",
+    "nyc2" => "New York",
+    "nyc3" => "New York",
+    "sfo2" => "San Francisco",
+    "sfo3" => "San Francisco",
+    "atl1" => "Atlanta",
+    "ric1" => "Richmond"
+  }
+
+  @fallback_prices %{"s-2vcpu-4gb" => 24, "s-4vcpu-8gb" => 48}
+
+  @doc ~S'A region slug in business terms: `"New York (nyc3)"`.'
+  @spec region_label(String.t()) :: String.t()
+  def region_label(region), do: "#{Map.get(@region_names, region, region)} (#{region})"
+
+  @doc ~S'A size slug in business terms: `"s-2vcpu-4gb"` is `"2 vCPU / 4 GB"`.'
+  @spec size_label(String.t()) :: String.t()
+  def size_label(size) do
+    case Regex.run(~r/(\d+)vcpu-(\d+)gb/, size) do
+      [_, cpu, gb] -> "#{cpu} vCPU / #{gb} GB"
+      _ -> size
+    end
+  end
+
+  @doc """
+  `%{slug => monthly price}` for the offered sizes, from
+  `DigitalOcean.sizes/0` (cached an hour) and falling back to the list
+  price when the API cannot be reached, so a screen never fails on it.
+  """
+  @spec monthly_prices() :: %{String.t() => number()}
+  def monthly_prices do
+    live =
+      try do
+        case DigitalOcean.sizes() do
+          {:ok, sizes} -> sizes
+          _ -> %{}
+        end
+      rescue
+        _ -> %{}
+      end
+
+    Map.new(defaults().sizes, fn size ->
+      {size, Map.get(live, size) || Map.get(@fallback_prices, size)}
+    end)
+  end
+
+  @doc ~S'A monthly price as `"$24/mo"` (nil when unknown).'
+  @spec price_label(number() | nil) :: String.t() | nil
+  def price_label(nil), do: nil
+  def price_label(price) when is_float(price) and price == trunc(price), do: price_label(trunc(price))
+  def price_label(price) when is_integer(price), do: "$#{price}/mo"
+  def price_label(price), do: "$#{:erlang.float_to_binary(price / 1, decimals: 2)}/mo"
 
   @doc "pocket-id's host: `auth.<primary>`."
   def auth_host(%Install{primary_host: primary}), do: "auth." <> primary

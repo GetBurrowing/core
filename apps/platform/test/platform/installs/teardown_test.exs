@@ -73,7 +73,7 @@ defmodule Platform.Installs.TeardownTest do
     assert {:error, :not_found} = Installs.teardown(Ecto.UUID.generate())
   end
 
-  test "a customer-domain install deletes no DNS record of ours" do
+  test "a customer-domain install deletes its CNAME targets of ours, nothing else" do
     use_fake_backend()
 
     {install, _} =
@@ -82,6 +82,24 @@ defmodule Platform.Installs.TeardownTest do
     Fake.resolve_dns("shop.example.test")
     Fake.resolve_dns("auth.shop.example.test")
     assert Runner.run(install.id) == :ready
+    assert length(Fake.all(:record)) == 2
+
+    assert :ok = Installs.teardown(install.slug)
+    assert Fake.all(:record) == []
+    assert Fake.calls()["DELETE /v2/domains/:zone/records/:id"] == 2
+  end
+
+  test "a customer-domain install with no zone configured creates and deletes no record" do
+    use_fake_backend()
+
+    {install, _} =
+      create_install!(%{"domain_mode" => "customer", "primary_host" => "shop.example.test"})
+
+    put_installs_env(dns_zone: nil)
+    Fake.resolve_dns("shop.example.test")
+    Fake.resolve_dns("auth.shop.example.test")
+    assert Runner.run(install.id) == :ready
+    assert Fake.all(:record) == []
 
     assert :ok = Installs.teardown(install.slug)
     refute Map.has_key?(Fake.calls(), "GET /v2/domains/:zone/records")

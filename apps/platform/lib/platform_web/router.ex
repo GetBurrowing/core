@@ -859,6 +859,24 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.BookingRateLimitPlug)
   end
 
+  # Task 01a10315 stage 3: the customer's install progress and shown-once
+  # hand-over. No login: the token in the path is the capability
+  # (`Platform.Installs.get_by_token/2`). Its OWN scope on `:guest_browser`
+  # and its own `live_session :install_status` with the `:guest` layout,
+  # modelled on `:guest_meeting` above: a layout is locked at the
+  # live_session boundary, and this page must carry no app shell and no auth
+  # chrome. App-fenced (`:require_app_surface` LAST): the link is minted on
+  # the app host. No earlier route matches `/install-status/<token>` on the
+  # app host; `router_install_status_placement_test.exs` pins that it
+  # resolves here.
+  scope "/", PlatformWeb do
+    pipe_through([:guest_browser, :require_app_surface])
+
+    live_session :install_status, layout: {PlatformWeb.Layouts, :guest} do
+      live("/install-status/:token", InstallStatusLive, :show, metadata: %{log: false})
+    end
+  end
+
   # Public booking is intentionally app-host fenced, without account authentication.
   # The opaque token reveals available slots only; no owner event details.
   scope "/", PlatformWeb do
@@ -1076,6 +1094,10 @@ defmodule PlatformWeb.Router do
       # live_session's gate is not load-bearing alone.
       live("/admin/vault", AdminVaultLive, :index)
       live("/admin/vault/:slug", AdminVaultLive, :show)
+      # Task 01a10315 stage 3: one-click installs on DigitalOcean.
+      # `Platform.Installs` re-checks the actor on create and list, and the
+      # view re-checks it before a teardown.
+      live("/admin/installs", AdminInstallsLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

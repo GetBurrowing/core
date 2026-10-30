@@ -315,7 +315,19 @@ defmodule Platform.Installs.Runner do
     end
   end
 
-  defp ensure_dns(_customer, _ip), do: :ok
+  # A customer's own domain CNAMEs to <slug>.<zone> (Installs.dns_instructions/1),
+  # so those targets point at the server too when a zone is configured.
+  defp ensure_dns(install, ip) do
+    case Installs.cname_zone() do
+      nil ->
+        :ok
+
+      zone ->
+        with :ok <- DigitalOcean.ensure_a_record(zone, install.slug, ip) do
+          DigitalOcean.ensure_a_record(zone, "auth." <> install.slug, ip)
+        end
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Helpers

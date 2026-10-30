@@ -197,8 +197,13 @@ defmodule Platform.Installs.RunnerTest do
       assert Installs.get(install.id).status == "provisioning"
       assert step(Installs.get(install.id), "connect")["state"] == "running"
       assert step(waiting, "install")["state"] == "done"
-      # No A record of ours for a customer's domain.
-      assert Fake.all(:record) == []
+      # The CNAME targets of ours (task 01a10315 stage 3) point at the server;
+      # nothing is created under the customer's own domain.
+      assert Enum.sort(Enum.map(Fake.all(:record), &{&1["zone"], &1["name"], &1["type"]})) ==
+               Enum.sort([
+                 {"installs.example.test", install.slug, "A"},
+                 {"installs.example.test", "auth." <> install.slug, "A"}
+               ])
 
       Fake.resolve_dns("shop.acme.example.test")
       Fake.resolve_dns("auth.shop.acme.example.test")
