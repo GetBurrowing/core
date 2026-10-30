@@ -355,6 +355,77 @@ defmodule Platform.Meetings.CompletionTest do
              Completion.scribe_complete(ctx.scribe.id, params(ctx.meeting, run, canvas))
   end
 
+  # Task 01a18ab4 stage 2. The channel plugins read a frame's body from
+  # `message.content ?? signal.prompt`; these frames carry no message, so a
+  # frame without a rendered `:prompt` is dropped and the run never files.
+  describe "the completion frames carry a rendered prompt" do
+    test "the scribe frame's prompt names the run, the meeting and every segment by id", ctx do
+      {meeting, run, seg} = ready!(ctx.meeting)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{signal: %{reason: "meeting_scribe_completion", prompt: prompt}}
+      }
+
+      assert is_binary(prompt) and String.trim(prompt) != ""
+      assert prompt =~ run.id
+      assert prompt =~ meeting.id
+      assert prompt =~ run.snapshot_hash
+      assert prompt =~ seg["text"]
+      assert prompt =~ seg["id"] <> " | 00:00:00 | Unknown: " <> seg["text"]
+      assert prompt =~ "meeting_scribe_complete"
+      refute prompt =~ "{{run_id}}"
+    end
+
+    test "the triage frame's prompt names the run, the scribe canvas and meeting_triage_file",
+         ctx do
+      {meeting, run, _seg} = ready!(ctx.meeting)
+      canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+
+      assert {:ok, %{status: "triage_dispatched"}} =
+               Completion.scribe_complete(ctx.scribe.id, params(meeting, run, canvas))
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{signal: %{reason: "meeting_triage_dispatch", prompt: prompt}}
+      }
+
+      assert String.trim(prompt) != ""
+      assert prompt =~ run.id
+      assert prompt =~ canvas.id
+      assert prompt =~ "meeting_triage_file"
+      refute prompt =~ "{{canvas_id}}"
+    end
+
+    test "federation refuses a missing or blank prompt before anything is broadcast", ctx do
+      for {fun, agent, reason} <- [
+            {&Federation.dispatch_scribe_attention/2, ctx.scribe, "meeting_scribe_completion"},
+            {&Federation.dispatch_triage_attention/2, ctx.triage, "meeting_triage_dispatch"}
+          ],
+          payload <- [
+            %{reason: reason, run_id: "x"},
+            %{reason: reason, run_id: "x", prompt: "   "},
+            %{reason: reason, run_id: "x", prompt: nil}
+          ] do
+        assert {:error, :empty_prompt} = fun.(agent.id, payload)
+        refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 50
+      end
+    end
+
+    test "a run whose capture never finished stays waiting and sends no frame", ctx do
+      transcript = transcript!(ctx.meeting, [segment("Speech with capture still open", 1)])
+      {:ok, _} = Meetings.end_meeting(ctx.meeting)
+      {:ok, _} = complete_current!(transcript.id, "Capture open")
+      assert is_nil(run!(ctx.meeting).capture_finished_at)
+
+      Completion.resume(ctx.meeting.id)
+
+      run = run!(ctx.meeting)
+      assert run.status == "waiting"
+      assert run.last_error == "capture_active"
+      assert is_nil(run.capture_finished_at)
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 50
+    end
+  end
+
   test "the scribe callback dispatches triage and normalized filing is stable after task completion",
        ctx do
     {meeting, run, seg} = ready!(ctx.meeting)

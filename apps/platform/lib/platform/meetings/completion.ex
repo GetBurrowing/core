@@ -6,7 +6,17 @@ defmodule Platform.Meetings.Completion do
   """
   import Ecto.Query
   alias Platform.{Repo, Meetings}
-  alias Platform.Meetings.{Meeting, Transcript, Room, CompletionRun, Triage, MeetingCandidate}
+
+  alias Platform.Meetings.{
+    Meeting,
+    Transcript,
+    Room,
+    CompletionRun,
+    CompletionPrompt,
+    Triage,
+    MeetingCandidate
+  }
+
   alias Platform.Chat.Canvas
 
   def resume(meeting_id) do
@@ -395,10 +405,14 @@ defmodule Platform.Meetings.Completion do
               run,
               "meeting_scribe",
               fn agent ->
+                payload = payload(run, meeting)
+                {:ok, prompt} = CompletionPrompt.render(:scribe, payload, meeting)
+
                 Platform.Federation.dispatch_scribe_attention(
                   agent,
-                  payload(run, meeting)
+                  payload
                   |> Map.put(:reason, "meeting_scribe_completion")
+                  |> Map.put(:prompt, prompt)
                 )
               end,
               "scribe_dispatched"
@@ -484,10 +498,22 @@ defmodule Platform.Meetings.Completion do
     )
   end
 
-  def dispatch_payload(transcript_id) do
+  def dispatch_payload(transcript_id),
+    do: transcript_id |> dispatch_payload_with_meeting() |> elem(0)
+
+  @doc """
+  `dispatch_payload/1` plus the meeting it was built from (`nil` when the
+  transcript has no completion run), so the triage dispatch can render its
+  prompt without re-querying the meeting.
+  """
+  def dispatch_payload_with_meeting(transcript_id) do
     case Repo.one(from(r in CompletionRun, where: r.transcript_id == ^transcript_id)) do
-      nil -> %{}
-      run -> payload(run, Repo.get!(Meeting, run.meeting_id))
+      nil ->
+        {%{}, nil}
+
+      run ->
+        meeting = Repo.get!(Meeting, run.meeting_id)
+        {payload(run, meeting), meeting}
     end
   end
 
