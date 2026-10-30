@@ -18,32 +18,56 @@ defmodule Platform.Access.Lineage do
       edges only below a project; the ADR additionally requires this direct
       edge, and the ADR wins;
     * memory node N → every node and page under N's current path, through
-      `Platform.Org.Wiki.Nodes.resolve/2`.
+      `Platform.Org.Wiki.Nodes.resolve/2`;
+    * project P → its meetings' chat spaces (`meetings.project_id = P` →
+      `meetings.chat_space_id`), and the canvases in them (task 01a18d38
+      stage 2), so a project deny covers a meeting created later;
+    * org O → its projects (`projects.org_id`), and through them their
+      tasks, stacks, execution and meeting spaces and canvases; and its
+      spaces (`chat_spaces.org_id`) and their canvases (task 01a18d38 stage
+      2). Memory has no org edge.
 
-  Nothing flows upward: `ancestors/1` of a project is the project alone, and
+  Nothing flows upward: `ancestors/1` of an org is the org alone, and
   `descendant_ids/2` never returns a project for a space or canvas target.
+
+  ## Coverage is computed when the check runs
+
+  No edge is materialised: a space, meeting or project created after an org
+  or project deny is covered the moment its `org_id` / `project_id` is set,
+  whichever path created it.
+
+  ## A nil org is no org (fail closed, not open)
+
+  A resource whose `org_id` is NULL (an org-less space, a project without an
+  org) gets no `{:org, _}` ancestor, so it inherits no org deny; it keeps its
+  own denies and its project's. A NULL org is never read as "covered by every
+  org", which would turn one org's deny into an install-wide one.
 
   ## Resource forms
 
-  A typed resource is one of `{:project, id}`, `{:task, id}`, `{:stack, id}`,
-  `{:space, id}`, `{:canvas, id}`, `{:memory, path}`, `{:memory, path, at}`
-  or `{:memory_node, id}`. `typed/1` also infers the type from a
-  `%Project{}`, `%Task{}`, `%Stack{}`, `%Space{}` or `%Canvas{}` struct.
+  A typed resource is one of `{:org, id}`, `{:project, id}`, `{:task, id}`,
+  `{:stack, id}`, `{:space, id}`, `{:canvas, id}`, `{:memory, path}`,
+  `{:memory, path, at}` or `{:memory_node, id}`. `typed/1` also infers the
+  type from an `%Org{}`, `%Project{}`, `%Task{}`, `%Stack{}`, `%Space{}` or
+  `%Canvas{}` struct. `:org` is a grant TARGET only: `id_types/0` (the types
+  a listing asks about) does not include it.
   """
 
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Chat.{Canvas, Space}
+  alias Platform.Meetings.Meeting
   alias Platform.Org.Wiki.{NodePath, Nodes}
   alias Platform.Repo
   alias Platform.Tasks.{CanvasAttachment, Project, Stack, Task}
+  alias Platform.Tenancy.Org
 
   @type typed ::
-          {:project | :task | :stack | :space | :canvas | :memory_node, binary()}
+          {:org | :project | :task | :stack | :space | :canvas | :memory_node, binary()}
           | {:memory, String.t()}
           | {:memory, String.t(), DateTime.t() | nil}
 
-  @id_types [:project, :task, :stack, :space, :canvas, :memory_node]
+  @id_types [:org, :project, :task, :stack, :space, :canvas, :memory_node]
 
   @doc "The resource types `descendant_ids/2` and `base_ids/4` accept."
   @spec id_types() :: [atom()]
@@ -61,6 +85,7 @@ defmodule Platform.Access.Lineage do
 
   def typed({:memory, path}) when is_binary(path), do: {:memory, path, nil}
   def typed({:memory, path, _at} = r) when is_binary(path), do: r
+  def typed(%Org{id: id}) when is_binary(id), do: {:org, id}
   def typed(%Project{id: id}) when is_binary(id), do: {:project, id}
   def typed(%Task{id: id}) when is_binary(id), do: {:task, id}
   def typed(%Stack{id: id}) when is_binary(id), do: {:stack, id}
@@ -76,20 +101,51 @@ defmodule Platform.Access.Lineage do
   (`{:memory_node, id}`), read through the interval history at `at`.
   """
   @spec ancestors(typed()) :: [{atom(), binary()}]
-  def ancestors({:project, id}), do: [{:project, id}]
+  def ancestors({:org, id}), do: [{:org, id}]
+
+  def ancestors({:project, id}) do
+    org = Repo.one(from(p in Project, where: p.id == ^id, select: p.org_id))
+    [{:project, id} | org_pairs([org])]
+  end
 
   def ancestors({:task, id}) do
-    project = Repo.one(from(t in Task, where: t.id == ^id, select: t.project_id))
-    [{:task, id} | project_pairs([project])]
+    rows =
+      Repo.all(
+        from(t in Task,
+          left_join: p in Project,
+          on: p.id == t.project_id,
+          where: t.id == ^id,
+          select: {t.project_id, p.org_id}
+        )
+      )
+
+    [{:task, id} | project_and_org_pairs(rows)]
   end
 
   def ancestors({:stack, id}) do
-    project = Repo.one(from(s in Stack, where: s.id == ^id, select: s.project_id))
-    [{:stack, id} | project_pairs([project])]
+    rows =
+      Repo.all(
+        from(s in Stack,
+          left_join: p in Project,
+          on: p.id == s.project_id,
+          where: s.id == ^id,
+          select: {s.project_id, p.org_id}
+        )
+      )
+
+    [{:stack, id} | project_and_org_pairs(rows)]
   end
 
+  # The space's own org, the project of an execution space, and the project
+  # of a meeting whose chat space it is, each with that project's org.
   def ancestors({:space, id}) do
-    [{:space, id} | project_pairs([execution_space_project(id)])]
+    space_org = Repo.one(from(s in Space, where: s.id == ^id, select: s.org_id))
+
+    Enum.uniq(
+      [{:space, id}] ++
+        project_and_org_pairs(execution_space_project(id) ++ meeting_space_projects(id)) ++
+        org_pairs([space_org])
+    )
   end
 
   def ancestors({:canvas, id}) do
@@ -100,14 +156,16 @@ defmodule Platform.Access.Lineage do
         from(a in CanvasAttachment,
           join: t in Task,
           on: t.id == a.task_id,
+          left_join: p in Project,
+          on: p.id == t.project_id,
           where: a.canvas_id == ^id,
-          select: t.project_id
+          select: {t.project_id, p.org_id}
         )
       )
 
     above_space = if space_id, do: ancestors({:space, space_id}), else: []
 
-    Enum.uniq([{:canvas, id}] ++ above_space ++ project_pairs(attached_projects))
+    Enum.uniq([{:canvas, id}] ++ above_space ++ project_and_org_pairs(attached_projects))
   end
 
   def ancestors({:memory, path, at}) do
@@ -130,13 +188,36 @@ defmodule Platform.Access.Lineage do
 
   defp project_pairs(ids), do: for(id <- ids, is_binary(id), do: {:project, id})
 
+  # A NULL org contributes nothing (moduledoc, "A nil org is no org").
+  defp org_pairs(ids), do: for(id <- ids, is_binary(id), do: {:org, id})
+
+  defp project_and_org_pairs(rows) do
+    Enum.uniq(
+      project_pairs(Enum.map(rows, &elem(&1, 0))) ++ org_pairs(Enum.map(rows, &elem(&1, 1)))
+    )
+  end
+
   defp execution_space_project(space_id) do
-    Repo.one(
+    Repo.all(
       from(s in Space,
         join: t in Task,
         on: fragment("?->>'task_id' = ?::text", s.metadata, t.id),
+        left_join: p in Project,
+        on: p.id == t.project_id,
         where: s.id == ^space_id and s.kind == "execution",
-        select: t.project_id
+        select: {t.project_id, p.org_id}
+      )
+    )
+  end
+
+  # The project → meeting chat space edge, read upward.
+  defp meeting_space_projects(space_id) do
+    Repo.all(
+      from(m in Meeting,
+        left_join: p in Project,
+        on: p.id == m.project_id,
+        where: m.chat_space_id == ^space_id,
+        select: {m.project_id, p.org_id}
       )
     )
   end
@@ -152,24 +233,37 @@ defmodule Platform.Access.Lineage do
   def descendant_ids(_type, []), do: []
 
   def descendant_ids(type, targets) do
+    orgs = ids_of(targets, :org)
     projects = ids_of(targets, :project)
     spaces = ids_of(targets, :space)
     canvases = ids_of(targets, :canvas)
 
+    # Every project the targets cover: the named ones plus every project of a
+    # named org, as ONE subquery (never a query per project or per org).
+    covered_projects = projects_of(projects, orgs)
+
     case type do
-      :project ->
+      :project when orgs == [] ->
         projects
 
+      :project ->
+        Repo.all(covered_projects)
+
       :task ->
-        Repo.all(from(t in Task, where: t.project_id in ^projects, select: t.id))
+        Repo.all(from(t in Task, where: t.project_id in subquery(covered_projects), select: t.id))
 
       :stack ->
-        Repo.all(from(s in Stack, where: s.project_id in ^projects, select: s.id))
+        Repo.all(
+          from(s in Stack, where: s.project_id in subquery(covered_projects), select: s.id)
+        )
 
       :space ->
         Repo.all(
           from(s in Space,
-            where: s.id in ^spaces or s.id in subquery(execution_spaces_of(projects)),
+            where:
+              s.id in ^spaces or s.org_id in ^orgs or
+                s.id in subquery(execution_spaces_of(covered_projects)) or
+                s.id in subquery(meeting_spaces_of(covered_projects)),
             select: s.id
           )
         )
@@ -177,10 +271,13 @@ defmodule Platform.Access.Lineage do
       :canvas ->
         Repo.all(
           from(c in Canvas,
+            left_join: s in Space,
+            on: s.id == c.space_id,
             where:
-              c.id in ^canvases or c.space_id in ^spaces or
-                c.space_id in subquery(execution_spaces_of(projects)) or
-                c.id in subquery(attached_canvases_of(projects)),
+              c.id in ^canvases or c.space_id in ^spaces or s.org_id in ^orgs or
+                c.space_id in subquery(execution_spaces_of(covered_projects)) or
+                c.space_id in subquery(meeting_spaces_of(covered_projects)) or
+                c.id in subquery(attached_canvases_of(covered_projects)),
             select: c.id
           )
         )
@@ -190,20 +287,28 @@ defmodule Platform.Access.Lineage do
 
   defp ids_of(targets, type), do: for({^type, id} <- targets, do: id)
 
+  defp projects_of(projects, orgs) do
+    from(p in Project, where: p.id in ^projects or p.org_id in ^orgs, select: p.id)
+  end
+
   defp execution_spaces_of(projects) do
     from(s in Space,
       join: t in Task,
       on: fragment("?->>'task_id' = ?::text", s.metadata, t.id),
-      where: s.kind == "execution" and t.project_id in ^projects,
+      where: s.kind == "execution" and t.project_id in subquery(projects),
       select: s.id
     )
+  end
+
+  defp meeting_spaces_of(projects) do
+    from(m in Meeting, where: m.project_id in subquery(projects), select: m.chat_space_id)
   end
 
   defp attached_canvases_of(projects) do
     from(a in CanvasAttachment,
       join: t in Task,
       on: t.id == a.task_id,
-      where: t.project_id in ^projects,
+      where: t.project_id in subquery(projects),
       select: a.canvas_id
     )
   end
@@ -273,6 +378,8 @@ defmodule Platform.Access.Lineage do
       nil -> [id]
     end
   end
+
+  def base_candidates({:org, id}), do: [id]
 
   def base_candidates(_memory), do: []
 

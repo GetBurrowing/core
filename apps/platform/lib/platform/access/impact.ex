@@ -88,6 +88,10 @@ defmodule Platform.Access.Impact do
   # allow on a module is refused, as `Grants.apply_ops/2` refuses it.
   defp op_target(%{action: "grant", resource: {:module, _}}), do: {:error, :module_allow_refused}
 
+  # An org-level grant is deny-only (task 01a18d38 stage 2), as
+  # `Grants.apply_ops/2` refuses an org allow.
+  defp op_target(%{action: "grant", resource: {:org, _}}), do: {:error, :org_allow_refused}
+
   defp op_target(%{action: "deny", permission: module, resource: {:module, org_id}})
        when is_binary(module) and is_binary(org_id),
        do: {:ok, {module, {:module, org_id}}}
@@ -110,6 +114,7 @@ defmodule Platform.Access.Impact do
   defp resource("canvas", id), do: {:canvas, id}
   defp resource("memory_node", id), do: {:memory_node, id}
   defp resource("module", id), do: {:module, id}
+  defp resource("org", id), do: {:org, id}
 
   defp inspect_access(targets, ops) do
     users = Repo.all(from(u in User, order_by: u.id))

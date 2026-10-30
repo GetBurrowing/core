@@ -349,7 +349,8 @@ defmodule PlatformWeb.AccessLive do
       "project" => Platform.Tasks.Project,
       "space" => Platform.Chat.Space,
       "canvas" => Platform.Chat.Canvas,
-      "memory_node" => Platform.Org.Wiki.Node
+      "memory_node" => Platform.Org.Wiki.Node,
+      "org" => Platform.Tenancy.Org
     }
 
     resource =

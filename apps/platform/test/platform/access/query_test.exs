@@ -380,6 +380,61 @@ defmodule Platform.Access.QueryTest do
     refute ctx.kc.id in assert_same(scope(m), "canvas.read", :canvas)
   end
 
+  # Task 01a18d38 stage 2: an ORG deny is expanded at check time, so
+  # resources created AFTER it are covered, and the query and can? still agree
+  # on every type. The member also belongs to the root org, whose resources
+  # are the positive control: an org deny must not leak across orgs.
+  test "an org deny covers resources created after it, and stays inside its org", ctx do
+    m = member!(ctx.org)
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: m.id, org_id: acme_org_id(), role: "member"})
+    |> Repo.insert!()
+
+    for perm <- ~w(tasks.read chat.read canvas.read) do
+      ok!(Grants.deny(%{principal: m, permission: perm, resource: {:org, ctx.org}}))
+    end
+
+    # Created after the deny, in the denied org.
+    later_p = project!(ctx.org)
+    later_task = task!(later_p)
+    later_exec = exec_space!(later_task, ctx.org)
+    later_channel = space!("channel", ctx.org)
+    later_canvas = canvas!(later_channel, m)
+    later_stack = stack!(later_p)
+
+    # Created after the deny, in the root org.
+    root_p = project!(acme_org_id())
+    root_channel = space!("channel", acme_org_id())
+    root_canvas = canvas!(root_channel, m)
+
+    s = scope(m)
+
+    for {type, perm} <- [
+          project: "tasks.read",
+          task: "tasks.read",
+          stack: "tasks.read",
+          space: "chat.read",
+          canvas: "canvas.read"
+        ] do
+      assert_same(s, perm, type)
+    end
+
+    projects = via_query(s, "tasks.read", :project)
+    spaces = via_query(s, "chat.read", :space)
+    canvases = via_query(s, "canvas.read", :canvas)
+
+    for id <- [later_p.id, ctx.p.id], do: refute(id in projects)
+    refute later_task.id in via_query(s, "tasks.read", :task)
+    refute later_stack.id in via_query(s, "tasks.read", :stack)
+    for id <- [later_exec.id, later_channel.id, ctx.channel.id], do: refute(id in spaces)
+    for id <- [later_canvas.id, ctx.kc.id], do: refute(id in canvases)
+
+    assert root_p.id in projects
+    assert root_channel.id in spaces
+    assert root_canvas.id in canvases
+  end
+
   test "Access.permitted/3 for :system is unrestricted and unknown types raise", _ctx do
     assert %Access.Permitted{allow: :all, deny: []} =
              Access.permitted(Scope.system(), "tasks.read", :task)

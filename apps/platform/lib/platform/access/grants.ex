@@ -23,6 +23,15 @@ defmodule Platform.Access.Grants do
   `{:project, id}`, `{:space, id}`, `{:canvas, id}` (or the matching
   structs), `{:memory, path}` and `{:memory_node, node_id}`.
 
+  **Org denies** (task 01a18d38 stage 2, `Platform.Access.Grant`, "Org
+  denies"): `deny/2` takes `resource: {:org, org_id}` or a
+  `%Platform.Tenancy.Org{}` and stores a deny whose `resource_id` and
+  `org_id` are that org. It covers every project, task, stack, space and
+  canvas in the org, including ones created later, because
+  `Platform.Access.Lineage` computes coverage at check time. `grant/2` (and an
+  `apply_ops/2` grant op) refuses an org resource with
+  `{:error, :org_allow_refused}`.
+
   **Module locks** (task 01a14721 stage 2, `Platform.Access.Grant`, "Module
   locks"): `deny/2` takes `resource: {:module, org_id}` with `permission:` a
   lockable module name (`"tasks"`, `"files"`), and stores a module-scoped
@@ -79,7 +88,7 @@ defmodule Platform.Access.Grants do
   import Ecto.Query, only: [from: 2, subquery: 1]
 
   alias Platform.Access.{Changes, Grant, Role, RoleAssignment, Scope}
-  alias Platform.Tenancy.OrgMembership
+  alias Platform.Tenancy.{Org, OrgMembership}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat.{Canvas, Space}
   alias Platform.Org.Wiki.{Node, Nodes}
@@ -112,12 +121,22 @@ defmodule Platform.Access.Grants do
   """
   @spec grant(map(), keyword()) :: {:ok, Grant.t()} | {:error, term()}
   def grant(attrs, opts) do
-    if module_resource?(attrs),
-      do: {:error, :module_allow_refused},
-      else: insert(attrs, "allow", "grant", opts)
+    cond do
+      module_resource?(attrs) -> {:error, :module_allow_refused}
+      org_resource?(attrs) -> {:error, :org_allow_refused}
+      true -> insert(attrs, "allow", "grant", opts)
+    end
   end
 
   defp module_resource?(attrs), do: match?({:module, _}, Map.get(Map.new(attrs), :resource))
+
+  defp org_resource?(attrs) do
+    case Map.get(Map.new(attrs), :resource) do
+      {:org, _} -> true
+      %Org{} -> true
+      _ -> false
+    end
+  end
 
   @doc "Insert a `deny` grant as `Platform.Access.Scope.system/0`."
   @spec deny(map()) :: {:ok, Grant.t()} | {:error, term()}
@@ -247,6 +266,12 @@ defmodule Platform.Access.Grants do
 
   defp prepare_op(%{action: "grant", resource: {:module, _}}, _actor),
     do: {:error, :module_allow_refused}
+
+  defp prepare_op(%{action: "grant", resource: {:org, _}}, _actor),
+    do: {:error, :org_allow_refused}
+
+  defp prepare_op(%{action: "grant", resource: %Org{}}, _actor),
+    do: {:error, :org_allow_refused}
 
   defp prepare_op(%{action: action} = op, actor) when action in ["grant", "deny"] do
     with {:ok, principal} <- principal_fields(op[:principal]),
@@ -569,11 +594,12 @@ defmodule Platform.Access.Grants do
   defp resource_fields(%Project{id: id}), do: resource_fields({:project, id})
   defp resource_fields(%Space{id: id}), do: resource_fields({:space, id})
   defp resource_fields(%Canvas{id: id}), do: resource_fields({:canvas, id})
+  defp resource_fields(%Org{id: id}), do: resource_fields({:org, id})
 
   # Every id below can arrive from a caller: a malformed one is not found,
   # never a query that raises.
   defp resource_fields({type, id})
-       when type in [:project, :space, :canvas, :memory_node, :module] and is_binary(id) do
+       when type in [:project, :space, :canvas, :memory_node, :module, :org] and is_binary(id) do
     if Platform.UUID.valid?(id), do: fetch_resource(type, id), else: not_found()
   end
 
@@ -625,6 +651,15 @@ defmodule Platform.Access.Grants do
     case Repo.one(from(o in Platform.Tenancy.Org, where: o.id == ^id, select: o.id)) do
       nil -> not_found()
       org_id -> {:ok, {"module", org_id, org_id}}
+    end
+  end
+
+  # An org deny's resource is its org: `resource_id` and `org_id` are both
+  # that org (task 01a18d38 stage 2).
+  defp fetch_resource(:org, id) do
+    case Repo.one(from(o in Org, where: o.id == ^id, select: o.id)) do
+      nil -> not_found()
+      org_id -> {:ok, {"org", org_id, org_id}}
     end
   end
 

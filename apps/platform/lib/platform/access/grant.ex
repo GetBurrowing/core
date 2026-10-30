@@ -25,6 +25,18 @@ defmodule Platform.Access.Grant do
   `mcp` are not lockable (not grantable, or derived), nor is `access`
   (locking it would bypass the last-manager guard): `lockable_modules/0`.
 
+  ## Org denies (task 01a18d38 stage 2)
+
+  A row with `resource_type: "org"` denies its permission on EVERYTHING in
+  one org: its `resource_id` is the org and equals its `org_id`.
+  `Platform.Access.Lineage` puts `{:org, org_id}` above every project, task,
+  stack, space and canvas of that org, and expands an org target downward,
+  so a resource created after the deny is covered when the check runs. Only
+  `effect: "deny"` is accepted for now: one org allow row would be the
+  broadest privilege in the system, and nothing has decided to permit it
+  (architecture verdict on task 01a18d38). Memory is not reached by an org
+  row here.
+
   `permission` must be declared in `Platform.Access.Registry`. Install-level
   permissions (`install.admin`) and derived permissions (`orgs.read`) are
   refused: no grant may name either.
@@ -41,7 +53,7 @@ defmodule Platform.Access.Grant do
   @foreign_key_type :binary_id
 
   @principal_types ~w(user role agent)
-  @resource_types ~w(project space canvas memory_node module)
+  @resource_types ~w(project space canvas memory_node module org)
   @unlockable_modules ~w(install orgs mcp access)
   @effects ~w(allow deny)
 
@@ -93,7 +105,10 @@ defmodule Platform.Access.Grant do
   def module_lock?(%{"resource_type" => "module"}), do: true
   def module_lock?(_), do: false
 
-  @doc "The grant's resource as `{type_atom, id}` (a module lock: `{:module, org_id}`)."
+  @doc """
+  The grant's resource as `{type_atom, id}` (a module lock: `{:module,
+  org_id}`; an org deny: `{:org, org_id}`).
+  """
   @spec target(t()) :: {atom(), binary()}
   def target(%__MODULE__{resource_type: type, resource_id: id}),
     do: {String.to_existing_atom(type), id}
@@ -171,6 +186,7 @@ defmodule Platform.Access.Grant do
     |> validate_principal()
     |> validate_permission()
     |> validate_module_lock()
+    |> validate_org_deny()
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:principal_role_key)
     |> check_constraint(:principal_id, name: :access_grants_principal_check)
@@ -245,6 +261,25 @@ defmodule Platform.Access.Grant do
         if get_field(cs, :resource_id) == get_field(cs, :org_id),
           do: cs,
           else: add_error(cs, :resource_id, "a module lock names its own org")
+      end)
+    else
+      changeset
+    end
+  end
+
+  # An org deny (task 01a18d38 stage 2) names its own org and is a deny.
+  defp validate_org_deny(changeset) do
+    if get_field(changeset, :resource_type) == "org" do
+      changeset
+      |> then(fn cs ->
+        if get_field(cs, :effect) in [nil, "deny"],
+          do: cs,
+          else: add_error(cs, :effect, "an org-level grant must be a deny")
+      end)
+      |> then(fn cs ->
+        if get_field(cs, :resource_id) == get_field(cs, :org_id),
+          do: cs,
+          else: add_error(cs, :resource_id, "an org-level grant names its own org")
       end)
     else
       changeset

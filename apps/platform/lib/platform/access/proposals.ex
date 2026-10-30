@@ -120,6 +120,7 @@ defmodule Platform.Access.Proposals do
     schema =
       case row.resource_type do
         "module" -> Platform.Tenancy.Org
+        "org" -> Platform.Tenancy.Org
         "project" -> Platform.Tasks.Project
         "space" -> Chat.Space
         "canvas" -> Canvas
