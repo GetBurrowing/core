@@ -5636,16 +5636,30 @@ defmodule PlatformWeb.MeetingLive do
 
   defp maybe_start_meeting(socket), do: socket
 
-  # Whether the viewer has already joined THIS meeting's call and not left
-  # it (task 01a18d0a stage 2). `Platform.Meetings.State` holds one row per
-  # user, written only by an explicit join (`MeetingHooks.join/1` via
-  # `broadcast_joined/5`) and deleted by every leave path, so a match on the
-  # meeting's chat space is server-held proof of earlier join intent. It is
-  # what lets a reconnect or a navigation back to the page re-adopt the room
-  # without asking again, and it is the only arrival that auto-joins.
+  # Whether the viewer has already joined THIS meeting's call and is still
+  # in it (task 01a18d0a stages 2 and 4). Two facts, both required:
+  #
+  #   * intent: `Platform.Meetings.State` holds one row per user, written
+  #     only by an explicit join (`MeetingHooks.join/1` via
+  #     `broadcast_joined/5`) and deleted by every leave path, and it names
+  #     this meeting's chat space;
+  #   * presence: the viewer still has an ACTIVE participant row
+  #     (`left_at` nil) in that space's active room.
+  #
+  # The State row alone is not enough. It has no TTL and only an explicit
+  # leave deletes it, so a browser closed without Leave keeps it after the
+  # LiveKit `participant_left` webhook has stamped `left_at`; a later bare
+  # visit would then auto-join a call the viewer had already dropped out of.
+  # The participant row is what the webhook retires. Together they let a
+  # reconnect or a navigation back re-adopt a call still in progress, and
+  # nothing else auto-joins.
   defp holds_joined_call?(socket, %{chat_space_id: space_id}) when is_binary(space_id) do
-    case Platform.Meetings.State.get_for_user(socket.assigns[:user_id]) do
-      %{space_id: ^space_id} -> true
+    user_id = socket.assigns[:user_id]
+
+    with %{space_id: ^space_id} <- Platform.Meetings.State.get_for_user(user_id),
+         %{} <- Meetings.active_participant_for_user_in_space(space_id, user_id) do
+      true
+    else
       _ -> false
     end
   end

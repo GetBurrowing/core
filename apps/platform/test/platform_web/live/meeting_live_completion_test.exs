@@ -197,6 +197,64 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert has_element?(revisit, ~s([data-role="meeting-join"]))
   end
 
+  # Task 01a18d0a stage 4 (review case 01a18d0d-ce1b-700c). The State row
+  # alone is not proof of a call in progress: a browser closed without Leave
+  # keeps it, while the LiveKit `participant_left` webhook retires the
+  # participant row. A later bare visit must then show Join, not reconnect.
+  test "a browser closed without Leave, then retired by the webhook, does not auto-join on revisit",
+       ctx do
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    assert_push_event(view, "join-meeting", %{room_name: room_name})
+    assert [%Participant{}] = active_participants(ctx)
+
+    # The tab closes: the LiveView dies with no `meeting_leave`/`meeting_left`,
+    # so the State row survives.
+    GenServer.stop(view.pid)
+    space_id = ctx.meeting.chat_space_id
+    assert %{space_id: ^space_id} = MeetingState.get_for_user(ctx.user.id)
+
+    # ~30 s later LiveKit drops the participant and its webhook stamps
+    # `left_at`, through the same call the webhook controller makes.
+    room = Repo.get_by!(Room, livekit_room_name: room_name)
+
+    assert {:ok, %Participant{left_at: %DateTime{}}} =
+             Meetings.mark_live_participant_left(room, %{
+               identity: "user:" <> ctx.user.id,
+               name: "Completion Viewer",
+               sid: "PA_closed_tab"
+             })
+
+    # A fresh context opens the bare URL with no click.
+    {:ok, revisit, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    render(revisit)
+
+    refute_push_event(revisit, "join-meeting", %{}, 50)
+    refute :sys.get_state(revisit.pid).socket.assigns.in_meeting
+    assert has_element?(revisit, ~s([data-role="meeting-join"]))
+    assert active_participants(ctx) == []
+    assert Repo.aggregate(from(p in Participant, where: p.room_id == ^room.id), :count) == 1
+  end
+
+  test "a reload while still in the call (participant row active) restores it", ctx do
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    assert_push_event(view, "join-meeting", %{})
+
+    # The positive control for the test above: same State row, but the
+    # participant row is still active (no webhook has retired it).
+    GenServer.stop(view.pid)
+    assert [%Participant{left_at: nil}] = active_participants(ctx)
+
+    {:ok, reloaded, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    render(reloaded)
+
+    assert_push_event(reloaded, "join-meeting", %{token: token})
+    assert is_binary(token)
+    assert :sys.get_state(reloaded.pid).socket.assigns.in_meeting
+    assert [%Participant{}] = active_participants(ctx)
+  end
+
   test "a call held in ANOTHER meeting does not join this one", ctx do
     {:ok, other} =
       Meetings.create_meeting(%{project_id: ctx.meeting.project_id, name: "Other call"})
