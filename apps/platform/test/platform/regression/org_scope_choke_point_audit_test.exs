@@ -149,7 +149,17 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
     # would hand each of them a directory of every user in every tenant.
     # It is a membership join for a contact picker, not a visibility
     # scope, and it can only ever narrow.
-    "lib/platform/mobile/app_people.ex"
+    "lib/platform/mobile/app_people.ex",
+
+    # `Access.Lineage.projects_of/2` (task 01a18d38 stage 2) is not a
+    # viewer scope: it expands an ORG-LEVEL GRANT TARGET (`{:org, id}`)
+    # down to the projects inside that org, so `descendant_ids/2` can
+    # compute what one org deny covers at check time. The org ids come
+    # from grant rows, never from the viewer's memberships, and an org
+    # grant is deny-only (`Platform.Access.Grant`), so this expansion can
+    # only NARROW what a viewer reads. Composing `Tenancy.scope/2` here
+    # would answer a different question ("which orgs may the viewer see").
+    "lib/platform/access/lineage.ex"
   ]
 
   describe "private org filters outside the choke point" do

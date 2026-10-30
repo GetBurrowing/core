@@ -1689,7 +1689,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # 4 → 5 for task 01a14721 stage 2: `fetch_resource(:module, id)` pins
     # `o.id == ^id` for a module lock's `{:module, org_id}`, reached only
     # through the same `resource_fields/1` Platform.UUID.valid?/1 check.
-    "platform/access/grants.ex" => 5,
+    # 5 → 6 for task 01a18d38 stage 2: `fetch_resource(:org, id)` pins
+    # `o.id == ^id` for an org deny's `{:org, org_id}`, behind the same check.
+    "platform/access/grants.ex" => 6,
     # Member9: participant lookup checks MCP space_id first; runtime.agent_id
     # comes from the loaded AgentRuntime UUID field.
     "platform/access/agent_tools.ex" => 1,
@@ -1720,7 +1722,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # resource tuple (behind `typed/1`'s Platform.UUID.valid?/1 guard), from a
     # struct loaded from the Repo, or from a UUID column of a row just read
     # (`space_id`, `project_id`). No unguarded caller id reaches them.
-    "platform/access/lineage.ex" => 10,
+    # 10 → 9 for task 01a18d38 stage 2: the task and stack ancestors and the
+    # execution-space project now read `{project_id, org_id}` rows with
+    # Repo.all; the project's and the space's own org are two new Repo.one
+    # reads, each behind `typed/1`'s guard.
+    "platform/access/lineage.ex" => 9,
     # Task 01a1472d stage 1: `one/2`, the review-item and the review-request
     # walks. Each `where:` pins an id that `resolve/1` has already passed
     # through Platform.UUID.cast/1, or a UUID column of a row just read.
