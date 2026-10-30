@@ -1,12 +1,14 @@
 defmodule PlatformWeb.MeetingLiveCompletionTest do
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Platform.{Chat, Federation, Meetings, Repo, Roles, Tasks}
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
-  alias Platform.Meetings.{Completion, CompletionRun, Meeting, Transcript}
+  alias Platform.Meetings.{Completion, CompletionRun, Meeting, Participant, Room, Transcript}
+  alias Platform.Meetings.State, as: MeetingState
   alias Platform.Tenancy.OrgMembership
 
   setup %{conn: conn} do
@@ -22,6 +24,9 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     n = System.unique_integer([:positive])
     org_id = Platform.TenancyFixtures.acme_org_id()
     user = user!("viewer-#{n}")
+    # `Meetings.State` is a node-wide ETS table; a joined row must not
+    # outlive the test that wrote it.
+    on_exit(fn -> MeetingState.broadcast_left(user.id) end)
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: "member"})
@@ -32,6 +37,7 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
 
     %{
       conn: init_test_session(conn, current_user_id: user.id),
+      user: user,
       meeting: meeting,
       scribe: role_agent!("meeting_scribe", n),
       triage: role_agent!("triage_officer", n)
@@ -43,6 +49,7 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{meeting.slug}")
     assert_preserved!(meeting, filed)
     assert has_element?(view, ~s([data-role="meeting-join"]))
+    refute_push_event(view, "join-meeting", %{}, 50)
 
     # Exercise the handler independently of the mount scheduler guard.
     send(view.pid, :auto_join)
@@ -84,12 +91,139 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert Repo.get!(CompletionRun, filed.id) == filed
   end
 
-  test "scheduled meetings still auto-join on the normal connected URL", ctx do
+  # ── Explicit Join on ordinary visits (task 01a18d0a stage 2) ──────────
+  #
+  # Ryan: "An open meeting you navigate into also needs an explicit Join,
+  # unless you arrived via an invite link or a ring that you accepted." The
+  # normal connected URL is an ordinary visit for a scheduled meeting and for
+  # a live one alike. These tests replace "scheduled meetings still auto-join
+  # on the normal connected URL", which pinned the opposite.
+
+  test "an ordinary visit to a scheduled meeting shows Join and connects nothing", ctx do
     {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    assert_unjoined_visit!(view, ctx, "scheduled")
+
+    # A bare `:auto_join` carries no intent of its own: stale, duplicate or
+    # forged, it cannot join an ordinary visit.
+    send(view.pid, :auto_join)
+    send(view.pid, :auto_join)
     render(view)
-    assert Repo.get!(Meeting, ctx.meeting.id).status == "live"
+    assert_unjoined_visit!(view, ctx, "scheduled")
+
+    # Nor does a remount, nor an arbitrary query flag.
+    GenServer.stop(view.pid)
+    {:ok, remounted, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}?join=true&auto_join=1")
+    assert_unjoined_visit!(remounted, ctx, "scheduled")
+  end
+
+  test "an ordinary visit to a live meeting shows Join and connects nothing", ctx do
+    started_at = DateTime.add(DateTime.utc_now(), -60)
+
+    ctx.meeting
+    |> Ecto.Changeset.change(status: "live", started_at: started_at)
+    |> Repo.update!()
+
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    assert_unjoined_visit!(view, ctx, "live")
+
+    send(view.pid, :auto_join)
+    render(view)
+    assert_unjoined_visit!(view, ctx, "live")
+    assert Repo.get!(Meeting, ctx.meeting.id).started_at == started_at
+  end
+
+  test "Join connects once; duplicates add nothing and a remount restores the joined call",
+       ctx do
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    assert_unjoined_visit!(view, ctx, "scheduled")
+
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+
     assert_push_event(view, "join-meeting", %{token: token, url: "wss://livekit.test"})
     assert is_binary(token)
+    assert Repo.get!(Meeting, ctx.meeting.id).status == "live"
+    assert :sys.get_state(view.pid).socket.assigns.in_meeting
+    assert [%Participant{}] = active_participants(ctx)
+    refute has_element?(view, ~s([data-role="meeting-join"]))
+
+    # A queued restore and a tab patch on a joined socket push nothing more.
+    send(view.pid, :auto_join)
+    render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=people")
+    refute_push_event(view, "join-meeting", %{}, 50)
+    assert [%Participant{}] = active_participants(ctx)
+
+    # A reconnect is a new LiveView process. The viewer joined and never
+    # left, so the page re-adopts the call instead of asking again.
+    GenServer.stop(view.pid)
+    {:ok, reconnected, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    render(reconnected)
+
+    assert_push_event(reconnected, "join-meeting", %{token: restored})
+    assert is_binary(restored)
+    assert :sys.get_state(reconnected.pid).socket.assigns.in_meeting
+    refute_push_event(reconnected, "join-meeting", %{}, 50)
+    assert [%Participant{}] = active_participants(ctx)
+  end
+
+  test "a restore queued before the viewer left does not rejoin them", ctx do
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    assert_push_event(view, "join-meeting", %{})
+
+    render_click(view, "meeting_leave", %{})
+    refute :sys.get_state(view.pid).socket.assigns.in_meeting
+    assert MeetingState.get_for_user(ctx.user.id) == nil
+
+    send(view.pid, :auto_join)
+    render(view)
+    refute_push_event(view, "join-meeting", %{}, 50)
+    refute :sys.get_state(view.pid).socket.assigns.in_meeting
+    assert has_element?(view, ~s([data-role="meeting-join"]))
+
+    # After a leave, the next visit is ordinary again.
+    GenServer.stop(view.pid)
+    {:ok, revisit, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    refute_push_event(revisit, "join-meeting", %{}, 50)
+    assert has_element?(revisit, ~s([data-role="meeting-join"]))
+  end
+
+  test "a call held in ANOTHER meeting does not join this one", ctx do
+    {:ok, other} =
+      Meetings.create_meeting(%{project_id: ctx.meeting.project_id, name: "Other call"})
+
+    MeetingState.broadcast_joined(ctx.user.id, other.chat_space_id, "Other", nil, other.slug)
+
+    {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+    assert_unjoined_visit!(view, ctx, "scheduled")
+  end
+
+  defp assert_unjoined_visit!(view, ctx, status) do
+    render(view)
+    assert has_element?(view, ~s([data-role="meeting-join"]))
+    refute_push_event(view, "join-meeting", %{}, 50)
+    refute :sys.get_state(view.pid).socket.assigns.in_meeting
+    assert Repo.get!(Meeting, ctx.meeting.id).status == status
+    assert Repo.get_by(Room, space_id: ctx.meeting.chat_space_id) == nil
+    assert active_participants(ctx) == []
+    assert Repo.all(from(r in CompletionRun, where: r.meeting_id == ^ctx.meeting.id)) == []
+
+    assert Repo.all(from(t in Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)) ==
+             []
+
+    space_id = ctx.meeting.chat_space_id
+    refute match?(%{space_id: ^space_id}, MeetingState.get_for_user(ctx.user.id))
+  end
+
+  defp active_participants(ctx) do
+    Repo.all(
+      from(p in Participant,
+        join: r in Room,
+        on: r.id == p.room_id,
+        where:
+          r.space_id == ^ctx.meeting.chat_space_id and p.user_id == ^ctx.user.id and
+            is_nil(p.left_at)
+      )
+    )
   end
 
   defp assert_preserved!(meeting, filed) do

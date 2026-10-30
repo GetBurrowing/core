@@ -278,6 +278,30 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
       assert_push_event(view, "join-meeting", %{mic_enabled: false, camera_enabled: true})
     end
+
+    test "a member who joined and reconnects re-adopts the call instead of the lobby",
+         %{conn: conn, ext: ext, meeting: meeting} do
+      # Task 01a18d0a stage 2: the joined state is server-held
+      # (`Platform.Meetings.State`), so a reconnect, a new LiveView process,
+      # restores it rather than dropping the member back to the lobby while
+      # their LiveKit connection is still up.
+      on_exit(fn -> Platform.Meetings.State.broadcast_left(ext.id) end)
+      member_conn = conn |> login(ext) |> on_meet_host()
+
+      {:ok, view, _html} = live(member_conn, "/meetings/#{meeting.slug}")
+      view |> element(~s([data-role="meeting-lobby-join"])) |> render_click()
+      assert_push_event(view, "join-meeting", %{})
+
+      GenServer.stop(view.pid)
+      {:ok, reconnected, _html} = live(member_conn, "/meetings/#{meeting.slug}")
+      render(reconnected)
+
+      assigns = :sys.get_state(reconnected.pid).socket.assigns
+      assert assigns.in_meeting
+      refute assigns.state == :lobby
+      assert_push_event(reconnected, "join-meeting", %{token: token})
+      assert is_binary(token)
+    end
   end
 
   # ── The denied member ──────────────────────────────────────────────────
@@ -408,6 +432,37 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       # And it is NOT wearing either chrome-less badge.
       refute has_element?(view, "[data-role=member-identity-badge]")
       refute has_element?(view, "[data-role=guest-identity-badge]")
+    end
+
+    test "an internal user's ordinary visit shows Join and does not connect",
+         %{conn: conn} do
+      # Task 01a18d0a stage 2: the in-app surface used to auto-join on a
+      # connected mount. A bare `/meetings/:slug` is not join intent; the
+      # call shell renders its Join control and nothing is created.
+      org = tenant_org!()
+      int = create_user!("int")
+      Platform.ExternalUserFixtures.plain_member!(int, org)
+      meeting = meeting!(org)
+
+      {:ok, view, _html} = conn |> login(int) |> live("/meetings/#{meeting.slug}")
+      render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      refute assigns.in_meeting
+      assert is_nil(assigns.state)
+      assert has_element?(view, ~s([data-role="meeting-join"]))
+      refute_push_event(view, "join-meeting", %{}, 50)
+      assert Repo.get_by(Room, space_id: meeting.chat_space_id) == nil
+      assert Repo.get!(Platform.Meetings.Meeting, meeting.id).status == "scheduled"
+
+      view |> element(~s([data-role="meeting-join"])) |> render_click()
+      assert_push_event(view, "join-meeting", %{token: token})
+      assert is_binary(token)
+      on_exit(fn -> Platform.Meetings.State.broadcast_left(int.id) end)
+
+      room = Repo.get_by(Room, space_id: meeting.chat_space_id)
+      assert [%{user_id: user_id}] = Repo.all(from(p in Participant, where: p.room_id == ^room.id))
+      assert user_id == int.id
     end
 
     test "the same internal user on the MEET host gets the chrome-less surface",

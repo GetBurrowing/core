@@ -1257,21 +1257,28 @@ defmodule PlatformWeb.MeetingLive do
         # (`do_join/1` reads the live `:mic_enabled`/`:camera_enabled` pair at
         # push time — device choice survives the transition unchanged).
         #
-        # SCOPE (a documented judgment call). An INTERNAL user reaching a
-        # meeting from the in-app meetings list renders inside the shell
-        # (`chrome_mode == :shell`) and continues to auto-join on a connected
-        # mount, unchanged. They navigated INTO the meeting from their own
-        # list; the divergence is about the link-arrival surface that mirrors
-        # a guest, and that is the chrome-less one. Widening the prejoin to
-        # the in-app shell surface is a larger change (every in-call shell
-        # test would have to enter through the lobby) and is left as a
-        # follow-up rather than bundled in here.
+        # EXPLICIT JOIN (task 01a18d0a stage 2). An ordinary visit to a
+        # scheduled, live or ended meeting page, on either surface, renders
+        # the page with its Join control and connects nothing: no room, no
+        # participant row, no token, no status change. Ryan's rule: "An open
+        # meeting you navigate into also needs an explicit Join, unless you
+        # arrived via an invite link or a ring that you accepted." Those
+        # arrivals keep their own paths: a guest invite link mints on the
+        # token route, a member invite link lands in the lobby below, and an
+        # accepted ring joins through the native app's API. A bare detail
+        # route, a history entry or a query flag is never join intent.
+        #
+        # The one thing that still joins without a click is restoring a call
+        # the viewer ALREADY joined and has not left (`holds_joined_call?/2`):
+        # a socket reconnect or a navigation back to the page re-pushes
+        # `join-meeting` so the server re-adopts the LiveKit room the client
+        # kept connected. That intent is server-held, written only by an
+        # explicit join, and cleared by every leave.
         #
         # `?no_autojoin=true` keeps its meaning as the test/deep-link escape
-        # hatch: SKIP the lobby / auto-join and render the call shell (with
-        # its own manual "Join" CTA) WITHOUT connecting. `:in_meeting` guards
-        # a live-patch re-entry (e.g. a `?tab=` deep-link) on an already
-        # joined member so it cannot bounce them back out of the call.
+        # hatch: skip the lobby and the restore. `:in_meeting` guards a
+        # live-patch re-entry (e.g. a `?tab=` deep-link) on an already joined
+        # viewer so it cannot bounce them back out of the call.
         socket =
           cond do
             Map.get(params, "no_autojoin") == "true" ->
@@ -1284,18 +1291,17 @@ defmodule PlatformWeb.MeetingLive do
               # Viewing a past meeting must not enter its call lifecycle.
               socket
 
+            connected?(socket) and holds_joined_call?(socket, meeting) ->
+              # Defer one tick so the LV is fully mounted before
+              # MeetingHooks reads `:active_space`.
+              send(self(), :auto_join)
+              socket
+
             socket.assigns[:chrome_mode] == :none ->
               # Set on both the disconnected and connected render so the
               # static first paint and the live view agree; the join itself
               # happens only on the explicit "Join".
               assign(socket, :state, :lobby)
-
-            connected?(socket) ->
-              # Internal shell surface, unchanged: defer the join one tick so
-              # the LV is fully mounted before MeetingHooks reads
-              # `:active_space`.
-              send(self(), :auto_join)
-              socket
 
             true ->
               socket
@@ -4647,10 +4653,15 @@ defmodule PlatformWeb.MeetingLive do
 
   # ── PubSub ───────────────────────────────────────────────────────────────
 
-  # Auto-join trigger from handle_params/3. Delegates straight into
-  # MeetingHooks' public `join/1` so the LiveKit lifecycle (token mint,
+  # Restore-a-joined-call trigger from handle_params/3. Delegates straight
+  # into MeetingHooks' public `join/1` so the LiveKit lifecycle (token mint,
   # MeetingClient push_event, MeetingState broadcast) stays a single
   # source of truth — same code path as the manual "Join meeting" CTA.
+  #
+  # Since task 01a18d0a stage 2 this only ever RESTORES a call the viewer
+  # already joined: the message carries no intent of its own, so it is
+  # re-checked against `holds_joined_call?/2` when it is handled. A message
+  # queued before a leave, or sent to an ordinary visit, does nothing.
   @impl true
   def handle_info(:auto_join, socket) do
     cond do
@@ -4679,13 +4690,15 @@ defmodule PlatformWeb.MeetingLive do
         # path does not widen who may join.
         {:noreply, socket}
 
+      not holds_joined_call?(socket, socket.assigns[:meeting]) ->
+        # An ordinary visit, or a restore whose call was left before this
+        # message arrived. Joining needs the explicit Join.
+        {:noreply, socket}
+
       true ->
-        # Transition a still-`scheduled` meeting to `live` BEFORE joining.
-        # `Meetings.start_meeting/1` had ZERO callers — the /meetings FAB only
-        # created (status="scheduled") then navigated here — so every meeting
-        # stayed "scheduled" forever and the index showed it under "Upcoming".
-        # Auto-join is the single chokepoint every join (FAB or direct link)
-        # flows through, so starting the meeting here covers all paths.
+        # The same `maybe_start_meeting |> MeetingHooks.join()` pair every
+        # explicit Join runs (lobby Join, call-shell Join), so the restore
+        # cannot drift from a first join.
         socket = socket |> maybe_start_meeting() |> MeetingHooks.join()
         {:noreply, socket}
     end
@@ -5608,6 +5621,22 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp maybe_start_meeting(socket), do: socket
+
+  # Whether the viewer has already joined THIS meeting's call and not left
+  # it (task 01a18d0a stage 2). `Platform.Meetings.State` holds one row per
+  # user, written only by an explicit join (`MeetingHooks.join/1` via
+  # `broadcast_joined/5`) and deleted by every leave path, so a match on the
+  # meeting's chat space is server-held proof of earlier join intent. It is
+  # what lets a reconnect or a navigation back to the page re-adopt the room
+  # without asking again, and it is the only arrival that auto-joins.
+  defp holds_joined_call?(socket, %{chat_space_id: space_id}) when is_binary(space_id) do
+    case Platform.Meetings.State.get_for_user(socket.assigns[:user_id]) do
+      %{space_id: ^space_id} -> true
+      _ -> false
+    end
+  end
+
+  defp holds_joined_call?(_socket, _meeting), do: false
 
   # Upsert by id, preserving `list_canvases/1`'s oldest-first ordering so
   # `latest_canvas/1`'s `List.last/1` keeps meaning what it says.
