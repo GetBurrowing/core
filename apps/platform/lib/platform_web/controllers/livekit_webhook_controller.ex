@@ -72,7 +72,13 @@ defmodule PlatformWeb.LivekitWebhookController do
         conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unregistered room"})
 
       room_id ->
-        case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
+        # Room activation is not proof of new capture. Replayed room_started
+        # must leave a completed transcript and its filed completion untouched.
+        case Meetings.ensure_transcript(%{
+               room_id: room_id,
+               space_id: space_id,
+               capture_started: false
+             }) do
           {:ok, transcript} ->
             Logger.info("[LiveKit] Created transcript #{transcript.id} for room #{room_id}")
 

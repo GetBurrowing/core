@@ -547,6 +547,19 @@ defmodule Platform.Meetings.CompletionTest do
     }
 
     {:ok, resumed} = Meetings.resume_meeting(meeting)
+
+    for _ <- 1..2 do
+      {:ok, passive} =
+        Meetings.ensure_transcript(%{
+          room_id: meeting.livekit_room_name,
+          space_id: meeting.chat_space_id,
+          capture_started: false
+        })
+
+      assert passive.id == run.transcript_id
+      assert passive.status == "complete"
+    end
+
     assert run!(meeting) == run
     {:ok, ended} = Meetings.end_meeting(resumed)
 

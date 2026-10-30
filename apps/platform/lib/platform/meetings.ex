@@ -4867,14 +4867,9 @@ defmodule Platform.Meetings do
           if owner = transcript_meeting_at(room.space_id, DateTime.utc_now()),
             do: Platform.Meetings.Completion.reopened(owner.id, capture_started: true)
 
+          room |> Room.changeset(%{status: "recording"}) |> Repo.update!()
           recording
         end)
-
-      with {:ok, _recording} <- result do
-        room
-        |> Room.changeset(%{status: "recording"})
-        |> Repo.update()
-      end
 
       broadcast_recording_updated(result)
     end
@@ -4975,11 +4970,12 @@ defmodule Platform.Meetings do
           {:error, changeset} -> Repo.rollback(changeset)
         end
 
-      if transcript.status == "recording" or transcript.segments != [],
-        do:
-          Platform.Meetings.Completion.input_changed(transcript,
-            capture_started: transcript.status == "recording"
-          )
+      if (transcript.status == "recording" and Map.get(attrs, "capture_started", true)) or
+           transcript.segments != [],
+         do:
+           Platform.Meetings.Completion.input_changed(transcript,
+             capture_started: transcript.status == "recording"
+           )
 
       transcript
     end)
@@ -5401,10 +5397,12 @@ defmodule Platform.Meetings do
     started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
     owner = transcript_meeting_at(Map.get(attrs, :space_id), started_at)
 
+    capture_started? = Map.get(attrs, :capture_started, true)
+
     transcript =
       room_id
       |> list_transcripts_for_room()
-      |> Enum.reject(&(&1.status == "complete"))
+      |> Enum.reject(&(capture_started? and &1.status == "complete"))
       |> Enum.filter(&transcript_owned_by?(&1, owner))
       |> Enum.min_by(
         fn t -> {-length(t.segments), DateTime.to_unix(t.inserted_at, :microsecond)} end,
@@ -5413,6 +5411,7 @@ defmodule Platform.Meetings do
 
     case transcript do
       nil -> create_transcript(attrs)
+      %Transcript{} = transcript when not capture_started? -> {:ok, transcript}
       %Transcript{status: "recording"} = transcript -> {:ok, transcript}
       %Transcript{} = transcript -> reopen_transcript(transcript)
     end

@@ -103,7 +103,10 @@ defmodule Platform.Meetings.Completion do
 
   # Called only inside the successful capture/segment write transaction. The
   # space lock orders input writes against snapshots and callback acceptance.
-  def input_changed(%Transcript{} = transcript, opts \\ []) do
+  def input_changed(transcript, opts \\ [])
+  def input_changed(%Transcript{space_id: nil}, _opts), do: :ok
+
+  def input_changed(%Transcript{} = transcript, opts) do
     meeting =
       if transcript.meeting_id do
         Repo.get(Meeting, transcript.meeting_id)
