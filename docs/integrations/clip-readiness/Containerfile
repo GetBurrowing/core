@@ -17,5 +17,6 @@ RUN python3 /tmp/clip-readiness/rebind_image_driver.py \
     && rm -rf /tmp/clip-readiness
 COPY tests/ /opt/clip-runner/src/tests/
 COPY install_helper.py rebind_image_driver.py source-receipt.json /opt/clip-runner/src/
+COPY serving-driver/ /opt/clip-runner/src/serving-driver/
 LABEL org.getburrow.clip-helper.version="0.9.2" \
       org.getburrow.clip-helper.sha256="0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4"

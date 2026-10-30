@@ -35,7 +35,12 @@
     "authoritative_build_context": "/var/home/rocks/clip-runner/build070",
     "build_context_is_git": false,
     "quadlet": "/var/home/rocks/.config/containers/systemd/clip-runner.container",
-    "base_image_digest_observed": "sha256:1148dbb014615300fa7e713b2f94f550c0d1c69780c0805f84f093ceee34dd0b"
+    "base_image_digest_observed": "sha256:1148dbb014615300fa7e713b2f94f550c0d1c69780c0805f84f093ceee34dd0b",
+    "mcp_client_sha256": "b0254651e7a28a7789e16136973659cd718ebc88d3b5ab744402b4ebce06b058",
+    "source_attachments": [
+      "01a18f33-21d0-7000-b5e6-2417ee4dd6a6",
+      "01a18f33-2578-7000-bb50-4841bcc65423"
+    ]
   },
   "selected_profile_qualification": {
     "observed_at": "2026-10-30T23:43:42Z",

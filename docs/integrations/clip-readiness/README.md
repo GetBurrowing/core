@@ -106,6 +106,17 @@ HELPER_SHA256 assignment matching the old helper, verifies the replacement
 against the receipt, and changes only that startup pin. It never disables the
 driver's digest check. Unexpected bytes/contracts fail the build.
 
+The full measured driver and MCP adapter are preserved byte-for-byte under
+`serving-driver/`, with a matching 0.7.0 helper fixture. Their literal SHA256
+values are independently asserted by `tests/test_serving_driver.py` before
+rebinding. That test runs the actual driver and helper subprocess protocol
+(order/claim/context/source reply/upload/completion) with fake MCP/CLI and a
+local HTTP upload: karaoke plus selected music at -12 dB must complete without
+process/transcription; model failure must fail before upload; tampered helper
+must exit 2 at the unchanged startup digest guard. It does not claim a real
+production render. The image installs both helper copies and this full suite;
+the retained startup log label becomes 0.9.2 rather than advertising 0.7.0.
+
 ```
 podman build -f Containerfile -t localhost/clip-runner:0.9.2-readiness \
   --build-arg BASE_IMAGE="$MEASURED_FULL_IMAGE_ID" \
@@ -129,6 +140,18 @@ base image or authoritative driver/build context is managed in another repo,
 record its actual location and upstream this same pin change there instead of
 leaving an untracked runtime-only patch. Do not invent an upstream commit from
 the CLI's null commit field.
+
+Use full measured base image ID
+`fcfbe17e36bbccc9b94f267fb33bdc3ddb2e2e93463b3a635c01a511e74f429e`
+and driver SHA256
+`fe08fa40eacf3efd705055a1f144eebf4be83c629cf2e029ea6ece763521a06d`
+only if remeasurement still matches. The authoritative predecessor build
+context is `/var/home/rocks/clip-runner/build070/` (not a git checkout); keep
+that baseline unchanged, and preserve the new context from this task commit
+under a separate operator-owned persistent directory. The authoritative
+quadlet is `/var/home/rocks/.config/containers/systemd/clip-runner.container`.
+Its environment/config/data mounts and the sibling Ollama container remain
+unchanged. No base-image rebuild from a moving python tag is needed.
 
 Record sanitized actual command results, executable/import identity, checkout,
 model verification and helper digest in a serving-host receipt before marking
