@@ -939,3 +939,37 @@ if files_service_url do
     token: System.get_env("FILES_SERVICE_TOKEN"),
     timeout: files_service_timeout
 end
+
+# ── One-click installs (task 01a10315 stage 2) ───────────────────────────────
+# SUITE_INSTALLS_DNS_ZONE: the DigitalOcean-managed zone an install on a
+# subdomain of ours lives under (<slug>.<zone> and auth.<slug>.<zone>). Unset:
+# only customer-domain installs can be created.
+case System.get_env("SUITE_INSTALLS_DNS_ZONE") do
+  zone when is_binary(zone) and zone != "" -> config :platform, Platform.Installs, dns_zone: zone
+  _ -> :ok
+end
+
+# The release image copies the installer package here (apps/platform/Dockerfile);
+# dev and test run it from the repo's deployment/installer.
+if config_env() == :prod do
+  config :platform, Platform.Installs, installer_path: "/app/installer"
+end
+
+# Dev stub mode: SUITE_INSTALLS_FAKE=1, dev only. DigitalOcean is the
+# in-process PlatformWeb.Dev.FakeDigitalOcean (also at /dev/fake-digitalocean),
+# and render, probes and bootstrap are Platform.Installs.Fake. Never reads the
+# real token.
+if config_env() == :dev and System.get_env("SUITE_INSTALLS_FAKE") == "1" do
+  config :platform, Platform.Installs,
+    fake: true,
+    render: Platform.Installs.Fake,
+    probe: Platform.Installs.Fake,
+    bootstrap: Platform.Installs.Fake,
+    dns_zone: "fake.invalid",
+    poll_interval_ms: 1_000
+
+  config :platform, Platform.Installs.DigitalOcean,
+    base_url: "http://fake-digitalocean.invalid",
+    token_source: {:static, "dop_v1_fake_dev_only"},
+    req_options: [plug: PlatformWeb.Dev.FakeDigitalOcean]
+end

@@ -635,3 +635,20 @@ config :platform, :chat_async_fault_injection, true
 config :platform, :start_meeting_completion_sweeper, false
 
 config :platform, :start_calendar_refresh, false
+
+# One-click installs (task 01a10315 stage 2): no boot-time sweeper or resume,
+# no run started by create/2 or retry/2 (cases call Runner.run/1 themselves),
+# fast polls, and a DigitalOcean client that only ever reaches Req.Test stubs
+# with an obviously fake token.
+config :platform, :start_installs, false
+
+config :platform, Platform.Installs,
+  start_runs: false,
+  poll_interval_ms: 5,
+  teardown_confirm_interval_ms: 1,
+  dns_zone: "installs.example.test",
+  fake_delay_ms: 0
+
+config :platform, Platform.Installs.DigitalOcean,
+  token_source: {:static, "dop_v1_test_fake_token"},
+  req_options: [plug: {Req.Test, Platform.Installs.DigitalOcean}]

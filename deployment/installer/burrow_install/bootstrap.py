@@ -1,7 +1,8 @@
 """``bootstrap-admin``: non-interactive pocket-id admin bootstrap (core task 01a10315).
 
     python3 -m burrow_install bootstrap-admin --base https://<auth host> \\
-        --api-key-file <0600 file> --email <addr> [--username <u>] --link-file <path>
+        --api-key-file <0600 file> --email <addr> [--username <u>] --link-file <path> \\
+        [--primary <host> --oidc-secret-file <0600 file>]
 
 For an install provisioned by someone else (a droplet), where the Mac-oriented
 ``setup`` CLI does not apply. It reuses ``setup/pocketid.py`` (target-agnostic)
@@ -12,6 +13,13 @@ unchanged:
    (30m; it must stay above 15m, see pocketid.py) and build
    ``https://<auth host>/lc/<code>?redirect=/settings/account``.
 3. Write that link to ``--link-file`` with mode 0600.
+4. With ``--primary`` and ``--oidc-secret-file`` (both or neither): register
+   core's OIDC client the way the Mac setup CLI does (``ensure_client`` with
+   the primary's callback and PKCE, ``drop_created_secret``), then the
+   render's OIDC_CLIENT_SECRET as its secret unless an active secret with the
+   same 4-character prefix is already listed. A single-host render has no
+   other step that registers the client, so without this core's sign-in
+   cannot complete on a droplet.
 
 The link is a credential until it is used or expires, and the API key is the
 pocket-id admin credential, so neither is EVER printed. stdout carries exactly
@@ -64,6 +72,10 @@ def _parser():
     parser.add_argument("--email", required=True)
     parser.add_argument("--username", default=None)
     parser.add_argument("--link-file", required=True, help="written with mode 0600")
+    parser.add_argument("--primary", default=None, help="the install's primary host")
+    parser.add_argument(
+        "--oidc-secret-file", default=None, help="0600 file holding OIDC_CLIENT_SECRET"
+    )
     return parser
 
 
@@ -80,24 +92,48 @@ def auth_host_of(base):
     return parsed.netloc
 
 
-def read_api_key(path):
-    """The key from a regular file readable by its owner only (never echoed)."""
+def read_api_key(path, flag="--api-key-file", code="api_key_file"):
+    """The value of a regular file readable by its owner only (never echoed)."""
     try:
         info = os.stat(path)
     except OSError as exc:
-        raise UsageError("unreadable_api_key_file", f"--api-key-file: {exc.strerror}") from exc
+        raise UsageError(f"unreadable_{code}", f"{flag}: {exc.strerror}") from exc
     if not stat.S_ISREG(info.st_mode):
-        raise UsageError("unreadable_api_key_file", "--api-key-file is not a regular file")
+        raise UsageError(f"unreadable_{code}", f"{flag} is not a regular file")
     if info.st_mode & 0o077:
         raise UsageError(
-            "api_key_file_mode",
-            f"--api-key-file is mode {stat.S_IMODE(info.st_mode):04o}; chmod 0600 it",
+            f"{code}_mode",
+            f"{flag} is mode {stat.S_IMODE(info.st_mode):04o}; chmod 0600 it",
         )
     with open(path, encoding="utf-8") as handle:
         key = handle.read().strip()
     if not key:
-        raise UsageError("unreadable_api_key_file", "--api-key-file is empty")
+        raise UsageError(f"unreadable_{code}", f"{flag} is empty")
     return key
+
+
+def ensure_oidc_client(client, primary, secret):
+    """Register core's OIDC client and ``secret`` on it. Returns the client action."""
+    record, action = pocketid.ensure_client(client, primary)
+    if action == "created":
+        pocketid.drop_created_secret(client, record)
+    _status, listed = client.call("GET", f"/api/oidc/clients/{pocketid.CLIENT_ID}/secrets")
+    present = any(
+        item.get("prefix") == secret[:4] and item.get("isActive", True) for item in listed or []
+    )
+    if not present:
+        client.call(
+            "POST", f"/api/oidc/clients/{pocketid.CLIENT_ID}/secrets", body={"secret": secret}
+        )
+    return action
+
+
+def _valid_host(value):
+    labels = value.split(".")
+    return len(labels) >= 2 and all(
+        label and len(label) <= 63 and all(c.isalnum() or c == "-" for c in label)
+        for label in labels
+    )
 
 
 def write_link(path, link):
@@ -128,13 +164,26 @@ def run(args):
     link_dir = os.path.dirname(os.path.abspath(args.link_file))
     if not os.path.isdir(link_dir):
         raise UsageError("invalid_link_file", "--link-file's directory does not exist")
+    if (args.primary is None) != (args.oidc_secret_file is None):
+        raise UsageError("usage", "--primary and --oidc-secret-file go together")
+    if args.primary is not None and not _valid_host(args.primary):
+        raise UsageError("invalid_primary", "--primary must be a host name")
     key = read_api_key(args.api_key_file)
+    oidc_secret = None
+    if args.oidc_secret_file is not None:
+        oidc_secret = read_api_key(
+            args.oidc_secret_file, "--oidc-secret-file", "oidc_secret_file"
+        )
     client = pocketid.Client(args.base, key)
     username = args.username or pocketid.default_username(args.email)
     user, action = pocketid.ensure_admin(client, args.email, username)
     link = pocketid.login_link(client, user["id"], auth_host)
     write_link(args.link_file, link)
-    return {
+    extra = {}
+    if oidc_secret is not None:
+        action = ensure_oidc_client(client, args.primary, oidc_secret)
+        extra["oidc_client"] = "created" if action == "created" else "exists"
+    return extra | {
         "ok": True,
         "admin": "created" if action == "created" else "exists",
         "admin_username": username,

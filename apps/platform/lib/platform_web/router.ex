@@ -511,6 +511,10 @@ defmodule PlatformWeb.Router do
 
       post("/meeting_evidence/join", DevMeetingEvidenceController, :join)
       post("/meeting_evidence/leave", DevMeetingEvidenceController, :leave)
+
+      # Dev stub mode for one-click installs (task 01a10315 stage 2): the fake
+      # DigitalOcean API and its _calls / _fail / _dns / _reset controls.
+      forward("/fake-digitalocean", Dev.FakeDigitalOcean)
     end
   end
 

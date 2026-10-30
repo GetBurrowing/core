@@ -375,7 +375,7 @@ each and diff the copies. Do not diff the raw directories: `user-data` carries `
 ```
 python3 -m burrow_install bootstrap-admin --base https://<auth host> \
   --api-key-file <0600 file holding STATIC_API_KEY> --email <addr> [--username <u>] \
-  --link-file <path>
+  --link-file <path> [--primary <host> --oidc-secret-file <0600 file>]
 ```
 
 The non-interactive pocket-id bootstrap for an install provisioned by someone else (a droplet),
@@ -387,4 +387,8 @@ stdout is one JSON document, `{"ok": true, "admin": "created"|"exists", "link_fi
 link and the API key are never printed. A re-run mints a fresh link. Exit codes: `0` ok, `1`
 pocket-id unreachable or erroring (`{"ok": false, "error": ..., "kind": ...}`, `kind` being the
 connection class such as `connection_refused`, or `http`), `2` usage (including an API key file
-readable by anyone but its owner).
+readable by anyone but its owner). With `--primary` and `--oidc-secret-file` (both or neither) it also
+registers core's OIDC client (`suite-core`, callback `https://<primary>/auth/oidc/callback`,
+PKCE) and the render's `OIDC_CLIENT_SECRET` as its only secret, as the Mac setup CLI's pocket-id
+step does: nothing else registers the client on a `single-host` install. The JSON then carries
+`"oidc_client": "created"|"exists"`; a re-run registers nothing new.

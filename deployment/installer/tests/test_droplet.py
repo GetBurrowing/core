@@ -532,6 +532,39 @@ class BootstrapAdminTest(unittest.TestCase):
         self.assertEqual(self.fake.requests, [])
         self.assertFalse(os.path.exists(self.link_file))
 
+    def test_registers_cores_oidc_client_once_with_the_render_secret(self):
+        secret = "oidc-client-secret-01a10315-fake-abcdef"
+        secret_file = write_secret_file(self.tmp, "oidc", secret)
+        flags = ("--primary", "acme.example.test", "--oidc-secret-file", secret_file)
+        code, out, err = self.bootstrap(*flags)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["oidc_client"], "created")
+        client = self.fake.clients[pocketid.CLIENT_ID]
+        self.assertEqual(
+            client["callbackURLs"], ["https://acme.example.test/auth/oidc/callback"]
+        )
+        self.assertTrue(client["pkceEnabled"])
+        # pocket-id's auto-created secret is dropped; ours is the only one.
+        listed = self.fake.secrets[pocketid.CLIENT_ID]
+        self.assertEqual([s["secret"] == secret for s in listed], [True])
+
+        code, out2, err2 = self.bootstrap(*flags)
+        self.assertEqual(code, 0, out2)
+        self.assertEqual(json.loads(out2)["oidc_client"], "exists")
+        self.assertEqual(len(self.fake.secrets[pocketid.CLIENT_ID]), 1)
+        for text in (out, err, out2, err2):
+            self.assertNotIn(secret, text)
+            self.assertEqual(self.secret_hits(text), [])
+
+    def test_primary_and_oidc_secret_go_together(self):
+        secret_file = write_secret_file(self.tmp, "oidc", "oidc-secret-01a10315-fake")
+        for extra in (("--primary", "acme.example.test"), ("--oidc-secret-file", secret_file)):
+            with self.subTest(extra=extra[0]):
+                code, out, _err = self.bootstrap(*extra)
+                self.assertEqual(code, 2, out)
+                self.assertEqual(json.loads(out)["error"], "usage")
+        self.assertEqual(self.fake.requests, [])
+
     def test_runs_as_the_documented_module_command(self):
         env = dict(os.environ, PYTHONPATH=INSTALLER)
         proc = subprocess.run(
