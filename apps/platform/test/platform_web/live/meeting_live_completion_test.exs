@@ -59,7 +59,10 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
 
     # Even the next room-finished notification cannot re-dispatch this run.
     Completion.capture_finished_for_space(meeting.chat_space_id)
-    assert_preserved!(meeting, filed)
+    persisted = Repo.get!(CompletionRun, filed.id)
+    assert persisted.status == "filed"
+    assert persisted.generation == filed.generation
+    assert persisted.snapshot_hash == filed.snapshot_hash
 
     refute_receive %Phoenix.Socket.Broadcast{
                      payload: %{signal: %{reason: "meeting_scribe_completion"}}

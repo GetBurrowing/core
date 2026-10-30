@@ -7433,6 +7433,13 @@ defmodule PlatformWeb.MeetingLive do
         {:cont, assign(socket, :call_recap, build_call_recap(socket))}
 
       "meeting_join", _params, socket ->
+        # The call-shell Join CTA is handled by MeetingHooks next. Resume
+        # here, before that hook joins, just as the lobby Join does.
+        socket =
+          if connected?(socket) and is_binary(socket.assigns[:user_id]),
+            do: maybe_start_meeting(socket),
+            else: socket
+
         {:cont, assign(socket, :call_recap, nil)}
 
       _event, _params, socket ->
