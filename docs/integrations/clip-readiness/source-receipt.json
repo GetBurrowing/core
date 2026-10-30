@@ -4,7 +4,7 @@
   "source_helper_sha256": "523cbac53ff053a3d72a92b4075b653829e827e0f2ade54d63ff84f0795e01ce",
   "helper_version": "0.9.2",
   "helper_sha256": "0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4",
-  "serving_host_qualified": false,
+  "serving_host_qualified": true,
   "source_role": "Canonical skill provenance only; not the live predecessor",
   "measured_serving_predecessor": {
     "observed_at": "2026-10-30T23:42:15Z",
@@ -71,5 +71,85 @@
     "helper_installed": false,
     "service_switched": false,
     "retry_safe": false
+  },
+  "candidate_image_qualification": {
+    "observed_at": "2026-10-30T23:49:53Z",
+    "evidence_message_id": "01a18f38-4ad8-7000-9c01-77183534893c",
+    "source_commit": "907305ddcda5fb94be8f62d30c038d192249196d",
+    "persistent_build_context": "/var/home/rocks/clip-runner/build092-907305dd",
+    "image_tag": "localhost/clip-runner:0.9.2-907305dd",
+    "image_id": "6077c03e25bb467033ce0d94c595577f8ca04367fa078ec7dc96c07953c30b0d",
+    "image_digest": "sha256:3dd897dcab4f3b56e142d0293b5e2f7b89a5165c6f6de7f782af75971111fbbd",
+    "helper_bin_src_identical": true,
+    "helper_version": "0.9.2",
+    "driver_sha256": "359a0e6d0f75ac4103e2195976d2d1948f86191fb7fa691a887081db90f51d09",
+    "driver_pin_matches": true,
+    "driver_log_version": "0.9.2",
+    "historical_driver_pin_comment": "helper 0.7.0 (unchanged provenance comment only)",
+    "isolated_suite": {
+      "passed": 172,
+      "seconds": 92.6,
+      "exit": 0,
+      "network": "none",
+      "production_environment_loaded": false
+    },
+    "startup_pin_tamper_probe": {
+      "exit": 2,
+      "observed": "helper sha256 mismatch; refusing to start",
+      "positive_control": "verified digest, reclaim 0, poll idle (0 profiles), stopped by timeout 124"
+    },
+    "selected_deep_doctor": {
+      "pass": 15,
+      "warn": 0,
+      "fix": 0,
+      "exit": 0,
+      "data_mount": "read-only",
+      "production_environment_loaded": false
+    },
+    "live_switch_completed": true
+  },
+  "qualification_scope": "Serving model/profile readiness, persistent helper installation and driver restart durability; actual original-project selected-music render remains later validation.",
+  "live_serving_qualification": {
+    "observed_at": "2026-10-30T23:53:07Z",
+    "evidence_message_id": "01a18f3b-423f-7000-9740-74f5f2c780d9",
+    "runtime": "clip-runner-moon",
+    "service": "clip-runner.service",
+    "user": "rocks",
+    "image_id": "6077c03e25bb467033ce0d94c595577f8ca04367fa078ec7dc96c07953c30b0d",
+    "image_digest": "sha256:3dd897dcab4f3b56e142d0293b5e2f7b89a5165c6f6de7f782af75971111fbbd",
+    "source_commit": "907305ddcda5fb94be8f62d30c038d192249196d",
+    "helper_sha256": "0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4",
+    "helper_bin_src_identical": true,
+    "driver_sha256": "359a0e6d0f75ac4103e2195976d2d1948f86191fb7fa691a887081db90f51d09",
+    "driver_pin_matches": true,
+    "quadlet_diff": "Image line only, old0.7.0 to0.9.2-907305dd",
+    "idle_before_each_stop": true,
+    "actual_state_lock_acquired": true,
+    "backup_preserved": true,
+    "clean_start_times_utc": [
+      "2026-10-30T23:50:07Z",
+      "2026-10-30T23:51:02Z",
+      "2026-10-30T23:51:54Z"
+    ],
+    "each_start_digest_verified": true,
+    "each_start_reclaimed_jobs": 0,
+    "each_start_reached_idle": true,
+    "final_service_state": "active/running",
+    "final_nrestarts": 0,
+    "state_digest_before": "49700887d0bedaa757e52831088eb3fd22e43f2732e17563c4dcabe50058e0f6",
+    "state_digest_after": "49700887d0bedaa757e52831088eb3fd22e43f2732e17563c4dcabe50058e0f6",
+    "jobs_directory_empty": true,
+    "failed_job_and_outbox_unchanged": true,
+    "selected_deep_doctor": {
+      "pass": 15,
+      "warn": 0,
+      "fix": 0,
+      "exit": 0
+    },
+    "ready_for_supported_retry": true,
+    "successful_real_render_verified": false,
+    "jobs_claimed_retried_rewritten": false,
+    "approval_or_publication": false,
+    "other_services_restarted": false
   }
 }
