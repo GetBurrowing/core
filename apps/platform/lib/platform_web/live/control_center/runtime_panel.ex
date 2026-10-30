@@ -261,9 +261,18 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           :if={@can_manage? and @fed_runtime.status == "active"}
           type="button"
           phx-click="suspend_federated_runtime"
+          data-confirm="Suspend this runtime? This blocks runtime authentication until you unsuspend it."
           class="btn btn-ghost btn-sm"
         >
           Suspend
+        </button>
+        <button
+          :if={@can_manage? and @fed_runtime.status == "suspended"}
+          type="button"
+          phx-click="unsuspend_federated_runtime"
+          class="btn btn-primary btn-sm"
+        >
+          Unsuspend
         </button>
         <button
           :if={@can_manage? and @fed_runtime.status != "revoked"}
