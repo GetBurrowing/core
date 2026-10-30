@@ -213,7 +213,8 @@ defmodule Platform.Agents.SetupAgent do
   defp ensure_participant(space, type, id, display_name) do
     if Repo.exists?(
          from(p in Participant,
-           where: p.space_id == ^space.id and p.participant_type == ^type and p.participant_id == ^id
+           where:
+             p.space_id == ^space.id and p.participant_type == ^type and p.participant_id == ^id
          )
        ) do
       :ok
@@ -276,7 +277,11 @@ defmodule Platform.Agents.SetupAgent do
   defp system_participant(space) do
     id = Platform.UUID.deterministic("setup_kickoff:#{space.id}")
 
-    case Repo.get_by(Participant, space_id: space.id, participant_type: "system", participant_id: id) do
+    case Repo.get_by(Participant,
+           space_id: space.id,
+           participant_type: "system",
+           participant_id: id
+         ) do
       %Participant{} = participant ->
         {:ok, participant}
 

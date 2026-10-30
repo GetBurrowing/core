@@ -211,7 +211,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     kickoffs =
       Repo.all(
         from(m in Message,
-          where: m.space_id == ^space.id and fragment("?->>'source'", m.metadata) == "setup_kickoff"
+          where:
+            m.space_id == ^space.id and fragment("?->>'source'", m.metadata) == "setup_kickoff"
         )
       )
 

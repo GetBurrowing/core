@@ -138,6 +138,7 @@ defmodule PlatformWeb.ConnectAiLive do
           if option in [:codex, :claude_subscription],
             do: ensure_agent(socket, option),
             else: socket
+
         {:noreply, socket}
     end
   end
@@ -437,7 +438,11 @@ defmodule PlatformWeb.ConnectAiLive do
       <span class="hero-arrow-path size-5 shrink-0 animate-spin text-info" />
       <span class="font-medium text-info">Waiting for sign-in...</span>
     </p>
-    <p :if={@running?} id="connect-ai-status" class="flex items-center gap-2 text-base text-base-content">
+    <p
+      :if={@running?}
+      id="connect-ai-status"
+      class="flex items-center gap-2 text-base text-base-content"
+    >
       <span class="hero-check-circle size-5 shrink-0 text-neutral" />
       {@agent_name} is connected.
     </p>
@@ -449,12 +454,20 @@ defmodule PlatformWeb.ConnectAiLive do
 
   defp failure_block(assigns) do
     ~H"""
-    <div id="connect-ai-failed" class="rounded-box border border-error/40 bg-error/10 p-4 text-base-content">
+    <div
+      id="connect-ai-failed"
+      class="rounded-box border border-error/40 bg-error/10 p-4 text-base-content"
+    >
       <p class="flex items-start gap-2 text-base">
         <span class="hero-exclamation-circle mt-0.5 size-5 shrink-0 text-error" />
         <span>{failure_text(@failure, @agent_name)}</span>
       </p>
-      <button id="connect-ai-retry" type="button" phx-click="retry" class="btn btn-outline mt-3 min-h-11">
+      <button
+        id="connect-ai-retry"
+        type="button"
+        phx-click="retry"
+        class="btn btn-outline mt-3 min-h-11"
+      >
         Retry
       </button>
     </div>
