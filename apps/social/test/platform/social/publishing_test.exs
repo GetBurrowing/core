@@ -23,6 +23,143 @@ defmodule Platform.Social.PublishingTest do
     %{org_id: org_id, profile: profile, account: account}
   end
 
+  describe "existing vendor posts" do
+    test "retry success persists publication identity and clears refusal state", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+
+      {:ok, post} =
+        post
+        |> Ecto.Changeset.change(
+          external_id: "existing-1",
+          error: "old failure",
+          refused_reason: "rate_limited",
+          refused_at: DateTime.utc_now()
+        )
+        |> Repo.update()
+
+      Fake.put_next(
+        :retry,
+        {:ok,
+         %{
+           status: :published,
+           external_id: "existing-1",
+           external_url: "https://example.test/retried",
+           platform_post_id: "platform-2"
+         }}
+      )
+
+      assert {:ok, published} = Publishing.publish_post(ctx.org_id, post.id)
+      assert published.status == "published"
+      assert published.external_id == "existing-1"
+      assert published.external_url == "https://example.test/retried"
+      assert published.platform_post_id == "platform-2"
+      assert published.publish_attempts == 1
+      assert %DateTime{} = published.published_at
+      assert {published.error, published.refused_reason, published.refused_at} == {nil, nil, nil}
+      assert [{:retry, [account, "existing-1"], _}] = Fake.calls(:retry)
+      assert account.id == ctx.account.id
+      assert Fake.calls(:publish) == []
+    end
+
+    test "repeated platform failure and transport failure retain existing id", ctx do
+      for result <- [
+            {:ok, %{status: :failed, external_id: "existing-failed", error: "platform refused"}},
+            {:error, :timeout}
+          ] do
+        post = approved_post!(ctx.org_id, ctx.account)
+
+        {:ok, post} =
+          post |> Ecto.Changeset.change(external_id: "existing-failed") |> Repo.update()
+
+        Fake.put_next(:retry, result)
+        assert {:error, {:publish_failed, _}} = Publishing.publish_post(ctx.org_id, post.id)
+        row = Repo.get!(Post, post.id)
+        assert row.status == "failed"
+        assert row.external_id == "existing-failed"
+        assert row.publish_attempts == 1
+        assert row.error == if(elem(result, 0) == :ok, do: "platform refused", else: "timeout")
+      end
+
+      assert length(Fake.calls(:retry)) == 2
+      assert Fake.calls(:publish) == []
+    end
+
+    test "scheduled retry awaits later settlement", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+
+      {:ok, post} =
+        post |> Ecto.Changeset.change(external_id: "existing-scheduled") |> Repo.update()
+
+      Fake.put_next(:retry, {:ok, %{status: :scheduled, external_id: "existing-scheduled"}})
+      assert {:ok, retried} = Publishing.publish_post(ctx.org_id, post.id)
+      assert retried.status == "scheduled"
+      assert retried.publish_attempts == 1
+      assert retried.published_at == nil
+
+      assert {:ok, settled} =
+               Publishing.apply_outcome(retried, %{
+                 kind: :published,
+                 external_url: "https://example.test/later",
+                 error: nil
+               })
+
+      assert settled.status == "published"
+      assert settled.external_id == "existing-scheduled"
+      assert settled.publish_attempts == 1
+      assert Fake.calls(:publish) == []
+    end
+
+    test "guard refusal preserves existing id and sends no vendor request", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+
+      {:ok, post} =
+        post |> Ecto.Changeset.change(external_id: "existing-guarded") |> Repo.update()
+
+      previous = Application.get_env(:social, :rate_limit)
+      Application.put_env(:social, :rate_limit, per_window: 0, window_ms: 60_000)
+      on_exit(fn -> Application.put_env(:social, :rate_limit, previous) end)
+      assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, post.id)
+      row = Repo.get!(Post, post.id)
+      assert row.status == "approved"
+      assert row.external_id == "existing-guarded"
+      assert row.publish_attempts == 0
+      assert row.refused_reason == "rate_limited"
+      assert Fake.calls(:publish) == []
+      assert Fake.calls(:retry) == []
+    end
+
+    test "unsupported retry never falls back to creation or counts an attempt", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+
+      {:ok, post} =
+        post |> Ecto.Changeset.change(external_id: "existing-unsupported") |> Repo.update()
+
+      previous = Application.get_env(:social, :publisher)
+      # A loaded module with no retry callback simulates an older adapter.
+      Application.put_env(:social, :publisher, __MODULE__)
+      on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+      assert {:error, :retry_not_supported} = Publishing.publish_post(ctx.org_id, post.id)
+      row = Repo.get!(Post, post.id)
+      assert row.external_id == "existing-unsupported"
+      assert row.refused_reason == "publisher_not_configured"
+      assert row.publish_attempts == 0
+      assert Fake.calls(:publish) == []
+      assert Fake.calls(:retry) == []
+    end
+
+    test "blank external id keeps the create idempotency key", ctx do
+      for external_id <- [nil, "", "  "] do
+        post = approved_post!(ctx.org_id, ctx.account)
+        {:ok, post} = post |> Ecto.Changeset.change(external_id: external_id) |> Repo.update()
+        assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
+        assert {:publish, [_, request], _} = List.last(Fake.calls(:publish))
+        assert request.idempotency_key == post.id
+      end
+
+      assert Fake.calls(:retry) == []
+    end
+  end
+
   describe "happy path" do
     test "approved -> scheduled with external_id -> published with external_url", ctx do
       post = approved_post!(ctx.org_id, ctx.account, %{body: "launch day"})

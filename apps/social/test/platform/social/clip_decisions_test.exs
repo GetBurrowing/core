@@ -29,6 +29,73 @@ defmodule Platform.Social.ClipDecisionsTest do
     %{w: world, clip: pending_clip!(world, "first-render-v1"), t0: DateTime.utc_now()}
   end
 
+  test "a real vendor status failure retries the existing post through the guard", ctx do
+    alias Platform.Social.{Publishing, Publisher.Zernio}
+    {:ok, %{posts: [post]}} = approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id])
+    assert [{_, {:ok, scheduled}}] = ClipPublish.sweep_now(@publisher, at(ctx, 8_000))
+    assert scheduled.external_id == "fake_" <> post.id
+
+    {:ok, _} =
+      Platform.Vault.put("social:zernio:api_key", :api_key, "retry-status-test-key",
+        scope: {:integration, nil},
+        provider: "social"
+      )
+
+    previous = Application.get_env(:social, :publisher)
+    on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+    Application.put_env(:social, :publisher, Zernio)
+
+    Req.Test.expect(Zernio, fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == "/api/v1/posts/" <> scheduled.external_id
+
+      Req.Test.json(conn, %{
+        post: %{
+          status: "failed",
+          platforms: [
+            %{
+              accountId: ctx.w.tiktok.provider_account_ref,
+              status: "failed",
+              errorMessage: "platform upload failed"
+            }
+          ]
+        }
+      })
+    end)
+
+    assert {:ok, failed} = Publishing.refresh_status(ctx.w.org_id, post.id)
+    assert failed.status == "failed"
+    assert failed.error == "platform upload failed"
+    assert failed.external_id == scheduled.external_id
+
+    Application.put_env(:social, :publisher, Fake)
+    Fake.reset()
+
+    Fake.put_next(
+      :retry,
+      {:ok,
+       %{
+         status: :published,
+         external_id: scheduled.external_id,
+         external_url: "https://tiktok.example.test/retried",
+         platform_post_id: "retry-platform-1"
+       }}
+    )
+
+    retrier = make_approver!(ctx.w.org_id, ctx.w.profile, member!(user!(), ctx.w.org_id))
+    assert {:ok, published} = Social.retry_post(ctx.w.org_id, post.id, retrier.id)
+    assert published.status == "published"
+    assert published.external_id == scheduled.external_id
+    assert published.external_url == "https://tiktok.example.test/retried"
+    assert published.platform_post_id == "retry-platform-1"
+    assert published.publish_attempts == 2
+    assert published.approved_by_user_id == retrier.id
+    assert published.error == nil
+    assert [{:retry, [_, external_id], _}] = Fake.calls(:retry)
+    assert external_id == scheduled.external_id
+    assert Fake.calls(:publish) == []
+  end
+
   # An externally rendered clip, review pending, submitted by the world's agent.
   defp pending_clip!(w, bytes \\ "rendered clip #{unique()}") do
     file = stored_file!(w.project, bytes, "clip.mp4", "video/mp4")

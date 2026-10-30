@@ -1,0 +1,82 @@
+{
+  "task_id": "01a18ab6-ac9e-7000-8598-eb29fe1f366f",
+  "stage_id": "01a18abf-9bc9-7005-8ed9-15d07ad710f8",
+  "runtime": "DESKTOP-MMP1PEM",
+  "skill": {
+    "id": "01a1679e-a21f-7000-a752-99ae62a783da",
+    "slug": "burrow-clip-runner",
+    "updated_at": "2026-10-30T04:39:36.607565Z",
+    "action": "updated"
+  },
+  "helper_version": "0.8.0",
+  "helper_sha256": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077",
+  "previous_helper_sha256": "c55f6ceb913004ddfc3e947407847c2d768d78d4a40c081106fba97a8a066999",
+  "skill_before_sha256": "098cdbe8cbe296ae92e8128927b5fe6275f84d4054ed484a9c3138e4d326d08c",
+  "skill_after_sha256": "14dcecaa1e8db3d73a21f478becdeb22e3f891718a1bb95bbc5c9fc8b8369aa6",
+  "skill_readback_exact": true,
+  "exact_registered_skill_diff": "canonical-runner-0.8.0.patch",
+  "registered_diff_sha256": "21eb0af5a3ec9091709fa2c9e2851f8510c340c535bc2e0f072d69ae80b2aea1",
+  "fixture_harness_sha256": "c71350f31290e0dbdef70f578d1eae0b99dff0fbd50e59253e76fcfc5b07ee66",
+  "registered_protocol_suite": {
+    "passed": 138,
+    "failed": 0,
+    "log": "/fixture/runtime/rig/closing-s3/full-tests-release.log",
+    "duration_s": 91.89
+  },
+  "real_cli": {
+    "receipt": "real-cli-receipt.json",
+    "renders_passed": 7,
+    "invalid_video_rejected": true,
+    "suffix_frames": 36,
+    "total_enabled_s": 6.2,
+    "total_disabled_s": 5.0,
+    "source_content_bounds_s": [
+      0,
+      5
+    ],
+    "source_revision": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "headline_patch": "Existing headline-review/1 cli.py/review.py/headline.py patch, applied cleanly; hashes in real CLI receipt",
+    "production_cli_upgrade_claimed": false,
+    "real_htc_logo_asset": false
+  },
+  "existing_real_music_regression": {
+    "passed": true,
+    "renders": 3,
+    "gain_db": [
+      null,
+      -42,
+      -24
+    ],
+    "tone_997hz_amplitudes": [
+      1.9726545369455632e-06,
+      0.00032334182927143244,
+      0.0025621481526517664
+    ],
+    "log": "/fixture/runtime/rig/closing-s3/music-regression.log"
+  },
+  "mutation": {
+    "change": "Replace disabled/legacy cleared outro.path with /stale/inherited.mp4",
+    "mutant_failed": 2,
+    "restored_passed": 2,
+    "mutant_log": "/fixture/runtime/rig/closing-s3/mutant-clear-path.log",
+    "restored_log": "/fixture/runtime/rig/closing-s3/restored-clear-path.log"
+  },
+  "optional_upstream_suite": {
+    "passed": 19,
+    "failed": 2,
+    "log": "/fixture/runtime/rig/closing-s3/upstream-render-finish.log",
+    "baseline_failed": 2,
+    "baseline_log": "/fixture/runtime/rig/closing-s3/upstream-baseline-finish.log",
+    "observation": "Unchanged82ef513 reproduces acoustic-tolerance failures; edited/steady case varies, quiet-bed PCM diff exceeds -40dB threshold. Not counted as green. render.py is byte-identical to baseline; no guard weakened."
+  },
+  "lint": {
+    "passed": true,
+    "checks": [
+      "py_compile helper and all registered test sources plus fixture harness",
+      "Ruff full check and format for new fixture/test",
+      "Ruff E9,F63,F7,F82 for complete registered helper/test suite",
+      "git diff --check"
+    ]
+  },
+  "scope": "Single registered runner, no second renderer/loop, no customer media/credentials; no PR/deploy; source profiles and fixture bytes remain local and disposable"
+}

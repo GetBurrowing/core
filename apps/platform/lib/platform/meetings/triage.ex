@@ -235,14 +235,12 @@ defmodule Platform.Meetings.Triage do
           end
         end)
 
-      # Stage 5: surface a "Junk this batch" action row on the source
-      # canvas whenever we actually filed something in this call. Idempotent
-      # only in the sense that we never emit more than one per successful
-      # invocation — the canvas can accumulate multiple over time if the
-      # triage-officer re-fires. Skipped on empty-batch invocations so
-      # dry-run parses don't spam the canvas.
+      # Completion files one item at a time and ensures its run-level control
+      # after processing the cumulative ledger, including on replay.
       if result.filed != [] do
-        append_junk_batch_action_row(ctx.canvas)
+        if Keyword.get(opts, :render_junk_control, true),
+          do: append_junk_batch_action_row(ctx.canvas)
+
         refresh_meeting_briefing(meeting_id)
       end
 
@@ -797,13 +795,28 @@ defmodule Platform.Meetings.Triage do
   # can extract it deterministically without needing to inspect the
   # active canvas. Semantic `danger` variant renders as `btn-error`.
   defp append_junk_batch_action_row(canvas) do
-    case CanvasServer.describe(canvas.id) do
-      {:ok, %{revision: revision, document: document}} ->
-        parent_id = CanvasDocument.root_kind(document) && root_id(document)
+    append_junk_control(canvas, "triage-junk-actions-#{Ecto.UUID.generate()}", 1)
+  end
 
-        if is_binary(parent_id) do
+  @doc "Ensure the completion run has one recoverable batch control on its source canvas."
+  def ensure_completion_batch_control(canvas, run_id) do
+    # Canvas append patches may rebase, and do not enforce unique node IDs.
+    # Serialize our check/append pair across callers as well as rereading on
+    # conflict; the completion callback also holds its durable run row lock.
+    :global.trans({{__MODULE__, :batch_control, canvas.id, run_id}, self()}, fn ->
+      append_junk_control(canvas, "triage-junk-actions-#{run_id}", 3)
+    end)
+  end
+
+  defp append_junk_control(canvas, node_id, attempts) do
+    with {:ok, %{revision: revision, document: document}} <- CanvasServer.describe(canvas.id) do
+      cond do
+        CanvasDocument.get_node(document, node_id) ->
+          :ok
+
+        is_binary(root_id(document)) ->
           node = %{
-            "id" => "triage-junk-actions-#{Ecto.UUID.generate()}",
+            "id" => node_id,
             "type" => "action_row",
             "props" => %{
               "label" => "Meeting triage",
@@ -819,31 +832,18 @@ defmodule Platform.Meetings.Triage do
 
           case CanvasServer.apply_patches(
                  canvas.id,
-                 [{:append_child, parent_id, node}],
+                 [{:append_child, root_id(document), node}],
                  revision,
                  @system_attribution
                ) do
-            {:ok, _new_revision} ->
-              :ok
-
-            other ->
-              Logger.debug(
-                "meetings.triage: append_junk_action_row patch declined for canvas=#{canvas.id} " <>
-                  "reason=#{inspect(other)}"
-              )
-
-              :ok
+            {:ok, _new_revision} -> :ok
+            {:conflict, _} when attempts > 1 -> append_junk_control(canvas, node_id, attempts - 1)
+            other -> {:error, other}
           end
-        else
-          :ok
-        end
 
-      {:error, reason} ->
-        Logger.debug(
-          "meetings.triage: describe failed for action_row on #{canvas.id}: #{inspect(reason)}"
-        )
-
-        :ok
+        true ->
+          {:error, :missing_canvas_root}
+      end
     end
   end
 

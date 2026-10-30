@@ -123,5 +123,9 @@ defmodule Platform.Social.ClipVersions do
     render
     |> Map.from_struct()
     |> Map.drop([:__meta__, :clip, :file, :submitted_by_agent, :removed_by_user])
+    |> Map.update!(:closing_video, fn
+      nil -> nil
+      snapshot -> Platform.Social.ClosingVideoSnapshot.dump(snapshot)
+    end)
   end
 end

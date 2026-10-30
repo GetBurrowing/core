@@ -100,9 +100,10 @@ defmodule Platform.Social.Publisher do
   """
   @type publish_result :: %{
           required(:external_id) => binary(),
-          required(:status) => :scheduled | :published,
+          required(:status) => :scheduled | :published | :failed,
           required(:external_url) => binary() | nil,
-          optional(:platform_post_id) => String.t() | nil
+          optional(:platform_post_id) => String.t() | nil,
+          optional(:error) => String.t() | nil
         }
 
   @typedoc "A status read. `:platform_post_id` is optional, as in `t:publish_result/0`."
@@ -171,6 +172,10 @@ defmodule Platform.Social.Publisher do
 
   @doc "Creates (or schedules) the post at the vendor."
   @callback publish(account(), request()) :: {:ok, publish_result()} | {:error, term()}
+
+  @doc "Retries publication of an existing vendor post; never creates a second post."
+  @callback retry(account(), external_id :: String.t()) ::
+              {:ok, publish_result()} | {:error, term()}
 
   @doc "Reads a post's state at the vendor."
   @callback status(account(), external_id :: String.t()) ::

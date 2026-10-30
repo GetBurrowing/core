@@ -17,7 +17,10 @@ defmodule Platform.Social.Publishing do
     4. checks `Platform.Social.MediaRules`;
     5. checks `Platform.Social.RateLimit`;
 
-  and only then builds the vendor-neutral request and calls the adapter.
+  and only then calls the vendor-neutral adapter. A nonblank `external_id`
+  selects `retry/2` for the existing vendor post; otherwise `publish/2`
+  creates it with the original post idempotency key. An unsupported retry
+  records a configuration refusal and never falls back to creation.
   Step 2 never changes the row. A refusal at steps 3 to 5, or no configured
   publisher, records why on the row under the same lock, in the same
   transaction (task 01a165f1): `refused_reason`, `refused_at`, a one-sentence
@@ -38,8 +41,8 @@ defmodule Platform.Social.Publishing do
 
   ## Attempts and platform ids (Clip Studio 2/9, task 01a16662)
 
-  Every adapter `publish/2` call adds one to `publish_attempts`, on success
-  and on failure, in the same write as its result. A refusal before the
+  Every adapter `publish/2` or `retry/2` call adds one to `publish_attempts`,
+  on success and on failure, in the same write as its result. A refusal before the
   adapter (the guard, an archived account, `MediaRules`, `RateLimit`, no
   configured publisher) sent nothing, so it does not count. When a publish,
   status or webhook result carries `:platform_post_id` (the platform's own
@@ -166,8 +169,16 @@ defmodule Platform.Social.Publishing do
          :ok <- check_media(account, media),
          :ok <- RateLimit.check(account.id, now_ms),
          adapter when is_atom(adapter) <- Publisher.impl() do
-      request = build_request(post, account, media, cover)
-      apply_publish(post, adapter.publish(account, request))
+      if is_binary(post.external_id) and String.trim(post.external_id) != "" do
+        if Code.ensure_loaded?(adapter) and function_exported?(adapter, :retry, 2) do
+          apply_publish(post, adapter.retry(account, post.external_id))
+        else
+          {:error, :retry_not_supported}
+        end
+      else
+        request = build_request(post, account, media, cover)
+        apply_publish(post, adapter.publish(account, request))
+      end
     end
   end
 
@@ -206,6 +217,11 @@ defmodule Platform.Social.Publishing do
 
   defp refusal(:publisher_not_configured, _post, _org_id, _now_ms),
     do: {"publisher_not_configured", "Publishing isn't set up for this profile.", nil}
+
+  defp refusal(:retry_not_supported, _post, _org_id, _now_ms),
+    do:
+      {"publisher_not_configured", "The publisher does not support retrying an existing post.",
+       nil}
 
   defp refusal(_reason, _post, _org_id, _now_ms), do: nil
 
@@ -475,6 +491,21 @@ defmodule Platform.Social.Publishing do
     |> Changeset.change(Post.refusal_cleared())
     |> counted(post)
     |> update()
+  end
+
+  defp apply_publish(post, {:ok, %{status: :failed, external_id: external_id} = result}) do
+    reason = Map.get(result, :error) || "failed at the vendor"
+
+    changeset =
+      post
+      |> Changeset.change(status: "failed", external_id: external_id, error: readable(reason))
+      |> Changeset.change(Post.refusal_cleared())
+      |> counted(post)
+
+    case update(changeset) do
+      {:ok, _failed} -> {:error, {:publish_failed, reason}}
+      error -> error
+    end
   end
 
   defp apply_publish(post, {:error, reason}) do

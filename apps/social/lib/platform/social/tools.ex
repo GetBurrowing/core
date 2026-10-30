@@ -290,9 +290,14 @@ defmodule Platform.Social.Tools do
   end
 
   defp job_tool("social_clip_job_source", args, scope, agent) do
-    case ClipJobs.source_download(scope, args["job_id"], agent.id, args["asset"] || "episode") do
-      {:ok, source} -> {:ok, source}
-      error -> {:error, error_envelope(error)}
+    if Enum.any?(~w(file_id path url), &Map.has_key?(args, &1)) or
+         (args["asset"] == "closing_video" and Map.has_key?(args, "source_file_id")) do
+      {:error, error_envelope({:error, :invalid_asset})}
+    else
+      case ClipJobs.source_download(scope, args["job_id"], agent.id, args["asset"] || "episode") do
+        {:ok, source} -> {:ok, source}
+        error -> {:error, error_envelope(error)}
+      end
     end
   end
 
@@ -316,7 +321,7 @@ defmodule Platform.Social.Tools do
   end
 
   defp job_tool("social_clip_job_complete", args, scope, agent) do
-    result = Map.take(args, ClipJobs.result_keys())
+    result = Map.take(args, ["closing_video" | ClipJobs.result_keys()])
 
     case ClipJobs.complete(scope, args["job_id"], agent.id, result) do
       {:ok, %{job: job, clip: clip}} ->
@@ -818,6 +823,42 @@ defmodule Platform.Social.Tools do
       "the selected music is not available in the job's project",
       false,
       "Fail this job safely. A human can select or upload project audio and rerender."
+    )
+  end
+
+  defp error_envelope({:error, :closing_video_unavailable}) do
+    err(
+      :closing_video_unavailable,
+      "the pinned closing video is unavailable or no longer matches this job",
+      false,
+      "Fail this job safely. A human can choose an available closing video and request a new render."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_asset}) do
+    err(
+      :invalid_asset,
+      "choose episode, music or closing_video; asset identity comes from the job",
+      false,
+      "Pass only job_id and asset; never supply a file id, path or URL."
+    )
+  end
+
+  defp error_envelope({:error, :closing_video_override}) do
+    err(
+      :closing_video_override,
+      "a completion cannot change the pinned closing contract",
+      false,
+      "Omit closing_video; the job's immutable selection is used."
+    )
+  end
+
+  defp error_envelope({:error, :output_measurements_unavailable}) do
+    err(
+      :output_measurements_unavailable,
+      "the completed output could not be measured",
+      false,
+      "Fail this job safely; do not substitute source duration for total output duration."
     )
   end
 

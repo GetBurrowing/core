@@ -127,11 +127,22 @@ defmodule PlatformWeb.SocialClipRemoval do
               data-role="clip-render-row"
               data-render-id={render.id}
             >
-              <span class="font-mono text-xs">
+              <span class="shrink-0 font-mono text-xs">
                 v{render.rev}{if render.rev == @clip.rev, do: " · Current"}
               </span>
               <span class="min-w-0 flex-1 truncate text-xs">
                 {render.headline || "Untitled render"}
+              </span>
+              <span
+                class="min-w-0 w-full truncate text-xs text-subtle"
+                data-role="history-ending"
+                title={Platform.Social.ClipClosingVideo.ending_name(render.closing_video, @profile)}
+              >
+                <%= if name = Platform.Social.ClipClosingVideo.ending_name(render.closing_video, @profile) do %>
+                  Ends with: {name}
+                <% else %>
+                  No closing video
+                <% end %>
               </span>
               <button
                 type="button"

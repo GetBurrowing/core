@@ -91,6 +91,8 @@ defmodule Platform.Social.ClipVersionsTest do
     assert {second.duration_s, second.width, second.height, second.byte_size} ==
              {18.0, 1080, 1920, w.next_file.byte_size}
 
+    assert first.closing_video == nil
+    assert second.closing_video.enabled == false
     assert first.headline == "Original headline"
     assert first.caption == "Original caption"
     assert first.file_id == w.original_file.id

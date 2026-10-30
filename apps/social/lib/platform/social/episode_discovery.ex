@@ -102,7 +102,8 @@ defmodule Platform.Social.EpisodeDiscovery do
   end
 
   defp asset?(id, profile) do
-    id in Keyword.get(config(), :asset_file_ids, []) or
+    Platform.Social.ClipClosingVideo.asset?(id) or
+      id in Keyword.get(config(), :asset_file_ids, []) or
       id in brand_file_ids(profile.brand) or
       Repo.exists?(from(c in Clip, where: c.render_file_id == ^id)) or
       Repo.exists?(from(r in ClipRender, where: r.file_id == ^id)) or

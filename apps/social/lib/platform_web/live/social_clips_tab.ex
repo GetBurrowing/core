@@ -25,6 +25,7 @@ defmodule PlatformWeb.SocialClipsTab do
   @impl true
   def init(socket) do
     socket
+    |> assign(:closing_filter, nil)
     |> assign(:clips_view, "review")
     |> assign(:clips_clip_id, nil)
     |> assign(:clips_profile_id, nil)
@@ -58,6 +59,7 @@ defmodule PlatformWeb.SocialClipsTab do
     socket
     |> assign(:clips_view, if(query["view"] in @clips_views, do: query["view"], else: "review"))
     |> assign(:clips_clip_id, clip_param(query["clip"]))
+    |> assign(:closing_filter, if(query["closing"] == "previous", do: "previous"))
   end
 
   defp clip_param(clip) when is_binary(clip) do
@@ -121,6 +123,7 @@ defmodule PlatformWeb.SocialClipsTab do
       user_id={@user.id}
       view={@clips_view}
       clip_id={@clips_clip_id}
+      closing_filter={@closing_filter}
     />
     <.live_component
       :if={@clips_view == "library"}
