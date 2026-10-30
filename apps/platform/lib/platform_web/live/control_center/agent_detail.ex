@@ -319,6 +319,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:agent, :map, required: true)
   attr(:config_form, :map, required: true)
   attr(:uploads, :map, required: true)
+  attr(:federation_runtime, :any, default: nil)
   attr(:regenerated_token, :string, default: nil)
   attr(:federation_online?, :boolean, required: true)
   attr(:federation_spaces, :list, default: [])
@@ -351,6 +352,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       </p>
       <RuntimePanel.federation_connection_panel
         agent={@agent}
+        federation_runtime={@federation_runtime}
         regenerated_token={@regenerated_token}
         federation_online?={@federation_online?}
         can_manage?={@can_manage?}

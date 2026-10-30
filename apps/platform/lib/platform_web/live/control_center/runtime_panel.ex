@@ -61,13 +61,14 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   # ── Federation connection panel ────────────────────────────────────
 
   attr(:agent, Agent, required: true)
+  attr(:federation_runtime, :any, default: nil)
   attr(:regenerated_token, :string, default: nil)
   attr(:federation_online?, :boolean, default: false)
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
 
   def federation_connection_panel(assigns) do
-    runtime = Federation.get_runtime(assigns.agent.runtime_id)
+    runtime = assigns.federation_runtime || Federation.get_runtime(assigns.agent.runtime_id)
     profile = runtime && RuntimeProfiles.get(runtime)
     modules = if runtime, do: RuntimeProfiles.tool_profile(runtime, profile), else: []
     restrictions = if runtime, do: RuntimeProfiles.restrictions(runtime, profile), else: nil
@@ -116,7 +117,11 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </div>
         <div class="mt-2 flex items-center justify-between gap-3">
           <span>Status</span>
-          <span class={runtime_badge_class(String.to_existing_atom(@fed_runtime.status))}>
+          <span class={
+            if @fed_runtime.status == "suspended",
+              do: "rounded-full bg-warning/15 px-3 py-1 text-xs font-semibold text-warning",
+              else: runtime_badge_class(String.to_existing_atom(@fed_runtime.status))
+          }>
             {humanize_value(@fed_runtime.status)}
           </span>
         </div>

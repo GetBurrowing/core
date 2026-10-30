@@ -1009,6 +1009,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
               <AgentDetail.federation_panels
                 agent={@selected_agent}
+                federation_runtime={@federation_runtime}
                 config_form={@config_form}
                 uploads={@uploads}
                 regenerated_token={@regenerated_token}
