@@ -116,6 +116,72 @@ defmodule Platform.Files do
     end
   end
 
+  @doc """
+  Persist bytes and a caller's database registration atomically. The callback runs
+  before the finalized row is visible and returns `{:ok, value}` or `{:error, reason}`.
+  On rollback, remove only a newly allocated object, never a deduplicated sibling.
+  This keeps compensating storage cleanup inside the Files boundary.
+  """
+  def add_bytes_registered(project, bytes, filename, content_type, opts, register) do
+    result =
+      Repo.transaction(fn ->
+        # Registered human-only media never goes through ingestion. Serialize
+        # identical registrations and reuse its finalized row even while its
+        # ingestion status remains pending (upload completion is independent).
+        hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+        Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          project.id <> ":" <> hash
+        ])
+
+        sibling =
+          Repo.one(
+            from(f in File,
+              where:
+                f.project_id == ^project.id and f.content_hash == ^hash and is_nil(f.deleted_at),
+              limit: 1
+            )
+          )
+
+        added =
+          if finalized_upload?(sibling),
+            do: {:ok, sibling, true},
+            else:
+              add_bytes(project, bytes, filename, content_type, Keyword.put(opts, :ingest, false))
+
+        case added do
+          {:ok, file, dedup?} ->
+            registration =
+              try do
+                register.(file)
+              rescue
+                _ -> {:error, :registration_failed}
+              catch
+                _, _ -> {:error, :registration_failed}
+              end
+
+            case registration do
+              {:ok, value} -> value
+              {:error, reason} -> Repo.rollback({:registration_failed, reason, file, dedup?})
+            end
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:error, {:registration_failed, reason, file, dedup?}} ->
+        unless dedup? or Repo.get(File, file.id),
+          do: Platform.Files.Storage.delete(file.storage_key)
+
+        {:error, reason}
+
+      other ->
+        other
+    end
+  end
+
   defp insert_added_bytes(project, filename, content_type, size, storage_key, hash, opts) do
     attrs = %{
       project_id: project.id,

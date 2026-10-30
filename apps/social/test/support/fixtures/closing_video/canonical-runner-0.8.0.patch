@@ -1,0 +1,727 @@
+--- burrow-clip-runner-0.7.0.md
++++ burrow-clip-runner-0.8.0.md
+@@ -5 +5 @@
+-**Helper version: 0.7.0 (project music; builds on 0.6.0).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
++**Helper version: 0.8.0 (pinned closing video; builds on project music 0.7.0).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+@@ -87 +87,16 @@
+-Canonical helper SHA256 `c55f6ceb913004ddfc3e947407847c2d768d78d4a40c081106fba97a8a066999`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++Canonical helper SHA256 `1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++
++## Closing video (helper 0.8.0)
++
++Core pins `payload.closing_video` at enqueue: `enabled`, `file_id`, `audio` (`keep`/`mute`), `project_id`, `profile_id`, `org_id`, SHA256 `content_hash`, `content_type`, `byte_size` and verified video measurements. The helper never selects from the old boolean look.outro, latest show default, a caller URL or a suffixed render. The clip's original mapped project/candidate remains its source.
++
++- Verify installed `config get outro.audio` and `config get outro.path` support, as well as the existing headline-review/1 boundary. A version 0.9.0 string alone is insufficient: older distributions lack outro/music. Enabled jobs on an incapable CLI fail `CLOSING_CLI_UNSUPPORTED`. Disabled/legacy jobs can run on an old CLI. On a capable CLI they explicitly set `outro.path=""`, clearing inherited settings; no invented `outro.enabled`.
++- Enabled jobs request `social_clip_job_source(job_id, asset="closing_video")`. Core serves only that job's pinned asset. Forward every request/reply through the existing loop. The helper verifies file/project/type/size/SHA256 against the snapshot and derives the download byte cap from the source endpoint's `max_bytes` (Core's single 200 MiB contract). It validates the streamed count and SHA256 again. No arbitrary file identifier, path or URL is accepted from a separate runner input.
++- Download directly into `tmp/closing-<job id>/` (0700); bytes and partial bytes are0600. Media requests and redirects carry no Burrow/CF token, reject credentials and non-HTTP(S) redirects, use HTTPS except loopback fixture HTTP, and do not inherit proxy headers. Signed URLs never enter CLI argv/env, journal, state, outbox, completion/failure or logs.
++- One derived user profile combines look/music with `outro.path=<private file>` and the pinned `outro.audio`. Source/imported temporary profiles are private (0600 via subprocess umask), and all CLI processes retain `CLIP_NO_CONTENT=1` and stripped Burrow/CF credentials. The compatible upstream finish graph owns real decoding/probing, scaling/padding/framerate/audio normalization, captions/headline cutoff, music and loudness guards. The helper adds no concatenator or mixer.
++- Private video/partial bytes, profile import files, request/reply files and derived profiles are removed on success/failure/SIGTERM; startup reclaim scrubs journaled video/music/headline/profile/reply remnants. Cleanup failures fail safely before upload/completion rather than promoting a render. An invalid or unavailable asset fails visibly. Core preserves the playing version until a new render exists and a human approves it.
++- Enabled completion omits runner-estimated content `duration_s`: Core measures total output duration/dimensions/bytes from the uploaded file. Requested/actual source bounds remain content-only. Repeated headline/caption/music rerenders finalize the original source/candidate, so the closing video appends exactly once.
++
++Verification on DESKTOP-MMP1PEM:138 complete protocol tests, separate from real rendering. The repository harness `apps/social/priv/scripts/clip_closing_video_fixture.py` seeds deterministic proposals/transcript only, then runs unpatched process/resume, review/apply and real helper finalize on upstream 82ef513 plus the existing headline-review/1 patch. Seven TEST ONLY renders cover two clip/project identities, A/keep, A/mute, replacement B, disabled and headline/caption/music rerenders. Decoded frames prove exactly 36 closing frames; totals 6.2s enabled/5.0s disabled; the 997 Hz closing tone is present for keep (~0.1395) and absent for mute, with 440 Hz source sound retained. Closing delivery/clean pixels match; changed headline/caption pixels are verified before the seam. A hash-correct fake-video fixture fails before upload. The exact imported module/source/patch/helper hashes and command receipts live alongside the harness fixtures. The real HTC logo video is still requested; these assets are visibly labeled TEST ONLY and are never represented as customer media.
++
++The existing three-render real music regression also passes (off/-42/-24dB have distinct measured tone amplitudes). Additional upstream renderer tests were 19/21, with two acoustic-tolerance failures also reproduced on unmodified 82ef513 (case variability recorded); they are NOT counted as a green suite. No renderer guard was weakened or changed.
+@@ -104,2 +119,2 @@
+-   - Write the helper to `~/.clip-runner/src/clip_runner.py` and the nine `tests/` blocks to `~/.clip-runner/src/tests/`.
+-   - Run `python3 -m pytest -q ~/.clip-runner/src/tests` (needs pytest). Expect 88 passed.
++   - Write the helper to `~/.clip-runner/src/clip_runner.py` and the ten `tests/` blocks to `~/.clip-runner/src/tests/`.
++   - Run `python3 -m pytest -q ~/.clip-runner/src/tests` (needs pytest). Expect 138 passed.
+@@ -111 +126 @@
+-Pinned sha256 of `clip_runner.py` 0.7.0: `c55f6ceb913004ddfc3e947407847c2d768d78d4a40c081106fba97a8a066999`
++Pinned sha256 of `clip_runner.py` 0.8.0: `1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077`
+@@ -266 +281 @@
+-VERSION = "0.7.0"
++VERSION = "0.8.0"
+@@ -422 +437,2 @@
+-        self.reply_dir.mkdir(parents=True, exist_ok=True)
++        self.reply_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
++        self.reply_dir.chmod(0o700)
+@@ -427,22 +443,27 @@
+-        self._emit(tool, args, {"reply_file": str(reply)})
+-        deadline = time.monotonic() + self.reply_timeout_s
+-        last_beat = time.monotonic()
+-        while time.monotonic() < deadline:
+-            if reply.exists():
+-                try:
+-                    doc = json.loads(reply.read_text())
+-                except ValueError:
+-                    time.sleep(0.1)  # agent mid-write
+-                    continue
+-                reply.unlink()
+-                if not isinstance(doc, dict):
+-                    raise ClipError("REPLY_INVALID", tool)
+-                if doc.get("error") or doc.get("code"):
+-                    code = str(doc.get("code") or "REPLY_ERROR").upper()
+-                    raise ClipError(code if _CODE_RE.match(code) else "REPLY_ERROR", tool)
+-                return doc
+-            if wait is not None and time.monotonic() - last_beat >= 20:
+-                wait()
+-                last_beat = time.monotonic()
+-            time.sleep(0.1)
+-        raise ClipError("REPLY_TIMEOUT", tool)
++        try:
++            self._emit(tool, args, {"reply_file": str(reply)})
++            deadline = time.monotonic() + self.reply_timeout_s
++            last_beat = time.monotonic()
++            while time.monotonic() < deadline:
++                if reply.exists():
++                    try:
++                        doc = json.loads(reply.read_text())
++                    except ValueError:
++                        time.sleep(0.1)  # agent mid-write
++                        continue
++                    reply.unlink()
++                    if not isinstance(doc, dict):
++                        raise ClipError("REPLY_INVALID", tool)
++                    if doc.get("error") or doc.get("code"):
++                        code = str(doc.get("code") or "REPLY_ERROR").upper()
++                        raise ClipError(code if _CODE_RE.match(code) else "REPLY_ERROR", tool)
++                    return doc
++                if wait is not None and time.monotonic() - last_beat >= 20:
++                    wait()
++                    last_beat = time.monotonic()
++                time.sleep(0.1)
++            raise ClipError("REPLY_TIMEOUT", tool)
++        finally:
++            reply.unlink(missing_ok=True)
++            reply.with_suffix(reply.suffix + ".tmp").unlink(missing_ok=True)
++
+@@ -757,0 +779 @@
++            self._cleanup_orphan(job_id)
+@@ -760,0 +783,29 @@
++
++    def _cleanup_orphan(self, job_id: str) -> None:
++        entry = next((e for e in self.journal.read_all() if e.get("job_id") == job_id), {})
++        key = re.sub(r"[^a-z0-9-]", "-", str(job_id).lower())
++        if not _CODE_RE.fullmatch(job_id):
++            raise ClipError("BAD_PAYLOAD", "cleanup")
++        folder = self.state_dir / "tmp" / ("closing-" + key)
++        if folder.exists():
++            for name in ("closing.video", "closing.part"):
++                (folder / name).unlink(missing_ok=True)
++            folder.rmdir()
++        tmp = self.state_dir / "tmp"
++        (tmp / "headline-request.json").unlink(missing_ok=True)
++        music = tmp / "music"
++        if music.is_dir():
++            (music / "track.audio").unlink(missing_ok=True)
++            (music / "track.part").unlink(missing_ok=True)
++            music.rmdir()
++        profile = entry.get("profile_id")
++        if isinstance(profile, str) and _CODE_RE.fullmatch(profile):
++            name = ("burrow-" + profile + "-job-" + key)[:120]
++            _remove_profile(self, name)
++            (self.state_dir / "tmp" / (name + ".toml")).unlink(missing_ok=True)
++        # A reply can carry a signed URL. Reclaim runs under the existing state lock.
++        replies = self.state_dir / "replies"
++        if replies.is_dir():
++            for reply in replies.iterdir():
++                if reply.is_file() and re.fullmatch(r"[0-9]+-[0-9]+-[a-z_]+\.json(?:\.tmp)?", reply.name):
++                    reply.unlink()
+@@ -892,0 +944 @@
++                umask=0o077,
+@@ -930 +982,2 @@
+-        d.mkdir(parents=True, exist_ok=True)
++        d.mkdir(mode=0o700, parents=True, exist_ok=True)
++        d.chmod(0o700)
+@@ -1205 +1258,3 @@
+-    src.write_text(profile_toml(extends, mapped))
++    with open(src, "w", opener=lambda p, flags: os.open(p, flags, 0o600)) as fh:
++        fh.write(profile_toml(extends, mapped))
++    src.chmod(0o600)
+@@ -1222 +1277 @@
+-def _remove_profile(runner: Runner, name: str) -> None:
++def _remove_profile(runner: Runner, name: str, required: bool = False) -> None:
+@@ -1229,0 +1285,2 @@
++        if required:
++            raise ClipError("PROFILE_CLEANUP_FAILED", "profile_cleanup") from None
+@@ -1233,2 +1290 @@
+-        warn("PROFILE_REMOVE_REFUSED")
+-        return
++        raise ClipError("PROFILE_CLEANUP_FAILED", "profile_cleanup")
+@@ -1246,0 +1303 @@
++    created = False
+@@ -1248,0 +1306 @@
++        created = True
+@@ -1252 +1310 @@
+-            _remove_profile(runner, name)
++            _remove_profile(runner, name, required=created)
+@@ -1254 +1312 @@
+-            warn("PROFILE_REMOVE_FAILED")
++            raise ClipError("PROFILE_CLEANUP_FAILED", "profile_cleanup") from None
+@@ -1488,0 +1547,108 @@
++
++class _MediaRedirect(urllib.request.HTTPRedirectHandler):
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        _media_url(newurl)
++        # Build a fresh credential-free request rather than forwarding headers.
++        return urllib.request.Request(newurl)
++
++
++def _media_url(url):
++    if not isinstance(url, str):
++        raise ClipError("CLOSING_URL_INVALID", "closing_video")
++    try:
++        u = urllib.parse.urlsplit(url)
++        if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
++            raise ValueError()
++        if u.scheme == "http" and u.hostname not in ("127.0.0.1", "localhost", "::1"):
++            raise ValueError()
++    except ValueError:
++        raise ClipError("CLOSING_URL_INVALID", "closing_video") from None
++    return url
++
++
++@contextlib.contextmanager
++def closing_profile(runner: Runner, job: dict, base: str, mapped: dict):
++    """Pinned video only, one disposable profile, never a rendered output as source.
++    The server contract owns the byte cap; it must match this protocol revision.
++    Absent legacy contracts mean disabled, explicitly clearing inherited outro.
++    """
++    closing = (job.get("payload") or {}).get("closing_video")
++    if closing is not None and (not isinstance(closing, dict) or
++            type(closing.get("enabled")) is not bool or closing.get("audio") not in ("keep", "mute")):
++        raise ClipError("CLOSING_CONTRACT_INVALID", "closing_video")
++    closing = closing or {"enabled": False, "audio": "mute"}
++    mapped = {k: v for k, v in mapped.items() if not k.startswith("outro.")}
++    enabled = closing["enabled"]
++    if enabled and ((closing.get("profile_id") is not None and closing["profile_id"] != job.get("profile_id")) or
++            (runner.context.get("org_id") is not None and closing.get("org_id") != runner.context["org_id"])):
++        raise ClipError("CLOSING_ASSET_INVALID", "closing_video")
++    try:
++        supported = _last_line(runner.clip("closing_capability", ["config", "get", "outro.audio", "--profile", base], raw=True)) in ("keep", "mute")
++    except ClipError:
++        supported = False
++    if not supported:
++        if enabled:
++            raise ClipError("CLOSING_CLI_UNSUPPORTED", "closing_video")
++        yield mapped
++        return
++    try:
++        runner.clip("closing_path_capability", ["config", "get", "outro.path", "--profile", base], raw=True)
++    except ClipError:
++        raise ClipError("CLOSING_CLI_UNSUPPORTED", "closing_video") from None
++    mapped.update({"outro.path": "", "outro.audio": closing["audio"]})
++    if not enabled:
++        yield mapped
++        return
++    source = runner.client.request("social_clip_job_source", {"job_id": job["id"], "asset": "closing_video"}, wait=runner.heartbeat)
++    cap = source.get("max_bytes") if isinstance(source, dict) else None
++    if (not isinstance(source, dict) or type(cap) is not int or cap <= 0 or
++        source.get("file_id") != closing.get("file_id") or not closing.get("file_id") or
++        source.get("project_id") != runner.context.get("project_id") or
++        source.get("project_id") != closing.get("project_id") or
++        source.get("content_type") != closing.get("content_type") or
++        source.get("content_type") not in ("video/mp4", "video/quicktime", "video/webm") or
++        type(source.get("byte_size")) is not int or not 0 < source["byte_size"] <= cap or
++        source.get("byte_size") != closing.get("byte_size") or
++        not isinstance(source.get("content_hash"), str) or
++        not re.fullmatch(r"[0-9a-f]{64}", source["content_hash"]) or
++        source.get("content_hash") != closing.get("content_hash")):
++        raise ClipError("CLOSING_ASSET_INVALID", "closing_video")
++    url = _media_url(source.get("url"))
++    key = re.sub(r"[^a-z0-9-]", "-", str(job["id"]).lower())
++    folder = runner.tmp_dir() / ("closing-" + key)
++    folder.mkdir(mode=0o700, exist_ok=True)
++    folder.chmod(0o700)
++    path, part = folder / "closing.video", folder / "closing.part"
++    try:
++        try:
++            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _MediaRedirect())
++            with opener.open(url, timeout=120) as response, open(part, "wb", opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW, 0o600)) as output:
++                part.chmod(0o600)
++                remaining = source["byte_size"]
++                digest = hashlib.sha256()
++                while chunk := response.read(min(1 << 20, remaining + 1)):
++                    remaining -= len(chunk)
++                    if remaining < 0:
++                        raise ClipError("CLOSING_DOWNLOAD_SIZE", "closing_video")
++                    digest.update(chunk)
++                    output.write(chunk)
++                    runner.heartbeat()
++                if remaining != 0:
++                    raise ClipError("CLOSING_DOWNLOAD_SIZE", "closing_video")
++                if digest.hexdigest() != source["content_hash"]:
++                    raise ClipError("CLOSING_HASH_MISMATCH", "closing_video")
++            os.replace(part, path)
++        except (urllib.error.URLError, OSError, ValueError):
++            raise ClipError("CLOSING_DOWNLOAD_FAILED", "closing_video") from None
++        # Real-video probing already happened twice in Core; the supported CLI's
++        # finish_for decodes/probes again before rendering and fails closed.
++        mapped["outro.path"] = str(path)
++        yield mapped
++    finally:
++        try:
++            path.unlink(missing_ok=True)
++            part.unlink(missing_ok=True)
++            folder.rmdir()
++        except OSError:
++            raise ClipError("CLOSING_CLEANUP_FAILED", "closing_cleanup") from None
++
+@@ -1518,2 +1684,2 @@
+-    with music_profile(runner, job, base, mapped) as mapped, derived_profile(runner, job, base, mapped) as look_profile:
+-        profile_args = ["--profile", look_profile or base] if consumer or appearance else []
++    with music_profile(runner, job, base, mapped) as mapped, closing_profile(runner, job, base, mapped) as mapped, derived_profile(runner, job, base, mapped) as look_profile:
++        profile_args = ["--profile", look_profile or base] if consumer or appearance or look_profile else []
+@@ -1571 +1737,3 @@
+-        result["duration_s"] = round(end - start, 3)
++        if not (payload.get("closing_video") or {}).get("enabled"):
++            result["duration_s"] = round(end - start, 3)
++        # Enabled closing totals come only from Core's uploaded-file probe.
+@@ -1973,0 +2142,2 @@
++        if argv[2] == "outro.audio":
++            return os.environ.get("FAKE_OUTRO_AUDIO", "unsupported")
+@@ -2374,0 +2545 @@
++        ["config", "get", "outro.audio", "--profile", P],
+@@ -2387,0 +2559 @@
++        ["config", "get", "outro.audio", "--profile", P],
+@@ -2830,0 +3003 @@
++        ["config", "get", "outro.audio", "--profile", P],
+@@ -2855,0 +3029 @@
++        ["config", "get", "outro.audio", "--profile", P],
+@@ -2865 +3039 @@
+-        ["review", d, "--apply"],
++        ["review", d, "--apply", "--profile", derived],
+@@ -3888,0 +4063,442 @@
++
++
++### `tests/test_closing_video.py`
++
++````python
++"""Protocol tests only. Real frame/audio evidence is in the repository harness."""
++
++import hashlib
++import http.server
++import json
++import signal
++import threading
++from pathlib import Path
++
++import clip_runner
++import pytest
++from conftest import FakeJobClient, make_runner
++from test_stage2 import first_new_clip, rerender_job, run
++
++VIDEO = b"\x00\x00\x00\x18ftypmp42-protocol-fixture"
++HASH = hashlib.sha256(VIDEO).hexdigest()
++
++
++@pytest.fixture
++def video_server():
++    requests = []
++
++    class Handler(http.server.BaseHTTPRequestHandler):
++        def do_GET(self):
++            requests.append((self.path, dict(self.headers)))
++            if self.path == "/redirect":
++                self.send_response(302)
++                self.send_header("Location", "/signed-private-video")
++                self.end_headers()
++                return
++            if self.path == "/bad-redirect":
++                self.send_response(302)
++                self.send_header("Location", "file:///etc/passwd")
++                self.end_headers()
++                return
++            self.send_response(200)
++            self.end_headers()
++            self.wfile.write(VIDEO)
++
++        def log_message(self, *a):
++            pass
++
++    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
++    threading.Thread(target=server.serve_forever, daemon=True).start()
++    yield "http://127.0.0.1:" + str(server.server_address[1]), requests
++    server.shutdown()
++    server.server_close()
++
++
++def contract(**kw):
++    return dict(
++        enabled=True,
++        file_id="closing-A",
++        audio="keep",
++        project_id="project-files-1",
++        content_hash=HASH,
++        content_type="video/mp4",
++        byte_size=len(VIDEO),
++        **kw,
++    )
++
++
++def client(job, source_url, **changes):
++    c = FakeJobClient(jobs=[job])
++    d = dict(contract())
++    d.pop("enabled")
++    d.pop("audio")
++    d.update(url=source_url, max_bytes=209715200)
++    d.update(changes)
++    c.replies["social_clip_job_source"] = d
++    return c
++
++
++def job(**changes):
++    closing = contract()
++    closing.update(changes)
++    return rerender_job(closing_video=closing, candidate_id="c2bbbbbbbb")
++
++
++def clean(state_dir, shim):
++    assert not list(state_dir.rglob("closing.video"))
++    assert not list(state_dir.rglob("closing.part"))
++    assert not list((shim.home / "profiles").glob("*-job-*"))
++
++
++@pytest.mark.parametrize("audio", ["keep", "mute"])
++def test_private_exact_asset_profile_and_cleanup(
++    shim, state_dir, video_server, monkeypatch, audio
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    for key in (
++        "CLIP_RUNNER_TOKEN",
++        "BURROW_TOKEN",
++        "BURROW_API_TOKEN",
++        "CF_ACCESS_CLIENT_ID",
++        "CF_ACCESS_CLIENT_SECRET",
++    ):
++        monkeypatch.setenv(key, "secret-burrow-token")
++    url, requests = video_server
++    c = client(job(audio=audio), url + "/redirect")
++    assert run(c, state_dir)["status"] == "done"
++    assert c.named("request") == [
++        (
++            "request",
++            "social_clip_job_source",
++            {"job_id": "job-02", "asset": "closing_video"},
++        )
++    ]
++    imports = [x for x in shim.calls() if x["argv"][:2] == ["profile", "import"]]
++    text = imports[-1]["imported"]
++    assert (
++        "[outro]" in text and f'audio = "{audio}"' in text and "closing.video" in text
++    )
++    complete = c.named("complete")[-1][-1]
++    assert "duration_s" not in complete
++    assert requests and all(
++        not any(
++            k.lower()
++            in ("authorization", "cf-access-client-id", "cf-access-client-secret")
++            for k in h
++        )
++        for _, h in requests
++    )
++    assert all("secret-burrow-token" not in json.dumps(x["env"]) for x in shim.calls())
++    for p in state_dir.rglob("*.json"):
++        assert (
++            "signed-private" not in p.read_text()
++            and "secret-burrow-token" not in p.read_text()
++        )
++    assert "signed-private" not in json.dumps(shim.calls())
++    clean(state_dir, shim)
++
++
++@pytest.mark.parametrize(
++    "change,code",
++    [
++        ({"file_id": "foreign"}, "CLOSING_ASSET_INVALID"),
++        ({"project_id": "foreign"}, "CLOSING_ASSET_INVALID"),
++        ({"content_type": "audio/wav"}, "CLOSING_ASSET_INVALID"),
++        ({"byte_size": 0}, "CLOSING_ASSET_INVALID"),
++        ({"byte_size": 209715201}, "CLOSING_ASSET_INVALID"),
++        ({"content_hash": "0" * 64}, "CLOSING_ASSET_INVALID"),
++        ({"max_bytes": 0}, "CLOSING_ASSET_INVALID"),
++        ({"url": "file:///etc/passwd"}, "CLOSING_URL_INVALID"),
++        ({"url": "https://user:password@example.com/media"}, "CLOSING_URL_INVALID"),
++        ({"url": "http://example.com/media"}, "CLOSING_URL_INVALID"),
++        ({"url": "http://127.0.0.1:1/private-token"}, "CLOSING_DOWNLOAD_FAILED"),
++    ],
++)
++def test_reject_identity_contract_and_download_errors(
++    shim, state_dir, video_server, monkeypatch, change, code
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    c = client(job(), url + "/signed-private-video", **change)
++    result = run(c, state_dir)
++    assert result["status"] == "failed" and result["code"] == code
++    clean(state_dir, shim)
++    assert not c.named("complete")
++    assert "private-token" not in json.dumps(c.named("fail"))
++
++
++@pytest.mark.parametrize(
++    "size,hash_value,code",
++    [
++        (len(VIDEO) - 1, HASH, "CLOSING_DOWNLOAD_SIZE"),
++        (len(VIDEO) + 1, HASH, "CLOSING_DOWNLOAD_SIZE"),
++        (len(VIDEO), "0" * 64, "CLOSING_HASH_MISMATCH"),
++    ],
++)
++def test_streamed_bytes_and_hash_enforced(
++    shim, state_dir, video_server, monkeypatch, size, hash_value, code
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    j = job(byte_size=size, content_hash=hash_value)
++    c = client(
++        j, url + "/signed-private-video", byte_size=size, content_hash=hash_value
++    )
++    assert run(c, state_dir)["code"] == code
++    clean(state_dir, shim)
++
++
++@pytest.mark.parametrize("legacy", [False, True])
++def test_disabled_or_legacy_clears_inherited_path_without_download(
++    shim, state_dir, monkeypatch, legacy
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "keep")
++    j = rerender_job() if legacy else job(enabled=False)
++    c = FakeJobClient(jobs=[j])
++    assert run(c, state_dir)["status"] == "done"
++    assert not c.named("request")
++    text = [
++        x["imported"] for x in shim.calls() if x["argv"][:2] == ["profile", "import"]
++    ][-1]
++    assert "[outro]" in text and 'path = ""' in text
++    clean(state_dir, shim)
++
++
++def test_unsupported_cli_enabled_fails_disabled_succeeds(shim, state_dir, video_server):
++    first_new_clip(shim, state_dir)
++    url, _ = video_server
++    c = client(job(), url)
++    assert run(c, state_dir)["code"] == "CLOSING_CLI_UNSUPPORTED"
++    assert not c.named("request")
++    c = FakeJobClient(jobs=[job(enabled=False)])
++    assert run(c, state_dir)["status"] == "done"
++
++
++@pytest.mark.parametrize("audio", ["bad", None, True])
++def test_invalid_audio_contract(shim, state_dir, audio):
++    first_new_clip(shim, state_dir)
++    c = FakeJobClient(jobs=[job(audio=audio)])
++    assert run(c, state_dir)["code"] == "CLOSING_CONTRACT_INVALID"
++
++
++def test_render_failure_and_sigterm_clean(shim, state_dir, video_server, monkeypatch):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    shim.script(finalize={"exit": 1})
++    c = client(job(), url)
++    assert run(c, state_dir)["status"] == "failed"
++    clean(state_dir, shim)
++    shim.script()
++    c = client(job(), url)
++    r = make_runner(c, state_dir)
++    original = r.clip
++
++    def interrupted(step, *a, **kw):
++        if step == "finalize":
++            raise clip_runner.RunnerInterrupted(signal.SIGTERM)
++        return original(step, *a, **kw)
++
++    r.clip = interrupted
++    assert r.poll_once(["profile-1"])["code"] == "RUNNER_SIGTERM"
++    clean(state_dir, shim)
++
++
++def test_restart_reclaims_orphan_bytes_profiles_and_replies(shim, state_dir):
++    first_new_clip(shim, state_dir)
++    j = job()
++    j.update(status="running", claimed_by_agent_id="agent-self")
++    c = FakeJobClient(jobs=[j])
++    r = make_runner(c, state_dir)
++    r.journal.write(j, "finalize")
++    folder = r.tmp_dir() / "closing-job-02"
++    folder.mkdir()
++    (folder / "closing.video").write_bytes(VIDEO)
++    (folder / "closing.part").write_bytes(b"partial")
++    (shim.home / "profiles" / "burrow-profile-1-job-job-02.toml").write_text(
++        'extends="how-to-computer"'
++    )
++    replies = state_dir / "replies"
++    replies.mkdir()
++    (replies / "12-1-social_clip_job_source.json").write_text('{"url":"private"}')
++    assert r.startup_reclaim(["profile-1"]) == ["job-02"]
++    clean(state_dir, shim)
++    assert not list(replies.iterdir())
++
++
++def test_single_profile_combines_look_music_and_closing(
++    shim, state_dir, video_server, monkeypatch
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    j = job()
++    j["payload"].update(
++        music={"enabled": False, "file_id": "song", "level_db": -18},
++        clip_overrides={"mapped": {"captions.style": "plain"}, "unmapped": []},
++    )
++    c = client(j, url)
++    before = len([x for x in shim.calls() if x["argv"][:2] == ["profile", "import"]])
++    assert run(c, state_dir)["status"] == "done"
++    imports = [x for x in shim.calls() if x["argv"][:2] == ["profile", "import"]][
++        before:
++    ]
++    assert len(imports) == 1
++    assert all(
++        section in imports[0]["imported"]
++        for section in ("[music]", "[captions]", "[outro]")
++    )
++    clean(state_dir, shim)
++
++
++def test_private_modes_while_live(shim, state_dir, video_server, monkeypatch):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    j = job()
++    c = client(j, url)
++    r = make_runner(c, state_dir)
++    r._job = j
++    r.context = {"project_id": "project-files-1"}
++    with clip_runner.closing_profile(r, j, "burrow-profile-1", {}) as mapped:
++        video = Path(mapped["outro.path"])
++        assert video.stat().st_mode & 0o777 == 0o600
++        assert video.parent.stat().st_mode & 0o777 == 0o700
++        with clip_runner.derived_profile(r, j, "burrow-profile-1", mapped) as profile:
++            assert (
++                shim.home / "profiles" / (profile + ".toml")
++            ).stat().st_mode & 0o777 == 0o600
++    clean(state_dir, shim)
++
++
++@pytest.mark.parametrize(
++    "change", [{"profile_id": "foreign-profile"}, {"org_id": "foreign-org"}]
++)
++def test_pinned_profile_and_org_match_current_context(
++    shim, state_dir, video_server, monkeypatch, change
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    j = job(**change)
++    c = client(j, url)
++    r = make_runner(c, state_dir)
++    r._job = j
++    r.context = {"project_id": "project-files-1", "org_id": "org-current"}
++    with (
++        pytest.raises(clip_runner.ClipError, match="closing_video") as err,
++        clip_runner.closing_profile(r, j, "burrow-profile-1", {}),
++    ):
++        pass
++    assert err.value.code == "CLOSING_ASSET_INVALID"
++    assert not c.named("request")
++
++
++def test_cleanup_failure_cannot_upload_or_complete(
++    shim, state_dir, video_server, monkeypatch
++):
++    first_new_clip(shim, state_dir)
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    c = client(job(), url)
++    unlink = Path.unlink
++
++    def fail_cleanup(path, *a, **kw):
++        if path.name == "closing.video":
++            raise PermissionError("private pathname must not leak")
++        return unlink(path, *a, **kw)
++
++    monkeypatch.setattr(Path, "unlink", fail_cleanup)
++    assert run(c, state_dir)["code"] == "CLOSING_CLEANUP_FAILED"
++    assert not c.named("complete")
++    assert "private pathname" not in json.dumps(c.named("fail"))
++
++
++def test_restart_cleans_headline_and_music_partial(shim, state_dir):
++    first_new_clip(shim, state_dir)
++    j = job()
++    j.update(status="running", claimed_by_agent_id="agent-self")
++    c = FakeJobClient(jobs=[j])
++    r = make_runner(c, state_dir)
++    r.journal.write(j, "finalize")
++    tmp = r.tmp_dir()
++    (tmp / "headline-request.json").write_text("private")
++    music = tmp / "music"
++    music.mkdir()
++    (music / "track.part").write_bytes(b"partial")
++    r.startup_reclaim(["profile-1"])
++    assert not (tmp / "headline-request.json").exists() and not music.exists()
++
++
++def test_reply_timeout_removes_private_partial(shim, state_dir):
++    import io
++
++    replies = state_dir / "replies"
++    client = clip_runner.OutboxClient(
++        out=io.StringIO(), reply_dir=replies, reply_timeout_s=0
++    )
++    emit = client._emit
++
++    def partial(tool, args, extra):
++        path = Path(extra["reply_file"])
++        path.with_suffix(".json.tmp").write_text('{"url":"private-signed-value"}')
++        emit(tool, args, extra)
++
++    client._emit = partial
++    with pytest.raises(clip_runner.ClipError) as err:
++        client.request(
++            "social_clip_job_source", {"job_id": "job-02", "asset": "closing_video"}
++        )
++    assert err.value.code == "REPLY_TIMEOUT"
++    assert replies.stat().st_mode & 0o777 == 0o700
++    assert not list(replies.iterdir())
++
++
++def test_episode_children_each_resolve_their_pinned_closing(
++    shim, state_dir, video_server, monkeypatch
++):
++    from test_episode import EpisodeClient, episode
++
++    monkeypatch.setenv("FAKE_OUTRO_AUDIO", "mute")
++    url, _ = video_server
++    source = client(job(), url).replies["social_clip_job_source"]
++
++    class ClosingEpisodeClient(EpisodeClient):
++        def request(self, tool, args, wait=None):
++            if (
++                tool == "social_clip_job_source"
++                and args.get("asset") == "closing_video"
++            ):
++                self.calls.append(("request", tool, dict(args)))
++                return dict(source)
++            reply = super().request(tool, args, wait)
++            if tool == "social_clip_job_progress" and "picks" in args:
++                for child in reply["jobs"]:
++                    child["payload"]["closing_video"] = contract()
++            return reply
++
++    parent = episode()
++    parent["payload"]["closing_video"] = contract()
++    c = ClosingEpisodeClient(jobs=[parent])
++    assert make_runner(c, state_dir).poll_once(["profile-1"])["status"] == "done"
++    assert [
++        call[2]["job_id"]
++        for call in c.calls
++        if call[:2] == ("request", "social_clip_job_source")
++        and call[2].get("asset") == "closing_video"
++    ] == ["child-0", "child-1"]
++    imports = [
++        x["imported"]
++        for x in shim.calls()
++        if x["argv"][:2] == ["profile", "import"] and "[outro]" in x["imported"]
++    ]
++    assert len(imports) == 2 and all(
++        'audio = "keep"' in x and "closing.video" in x for x in imports
++    )
++    assert sum(a[0] == "process" for a in shim.argvs()) == 1
++    clean(state_dir, shim)
++````

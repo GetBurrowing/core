@@ -459,4 +459,217 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     refute empty |> LazyHTML.from_fragment() |> LazyHTML.text() =~ ~r/\p{Extended_Pictographic}/u
   end
+
+  defp ending_fixture!(w, name, color) do
+    path = Path.join(System.tmp_dir!(), "review-ending-#{unique()}.mp4")
+
+    {_, 0} =
+      System.cmd("ffmpeg", [
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=#{color}:s=64x96:r=25:d=0.4",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        path
+      ])
+
+    bytes = File.read!(path)
+    File.rm!(path)
+
+    {:ok, %{file: file}} =
+      Social.ClipClosingVideo.upload(
+        w.org_id,
+        w.profile.id,
+        w.approver.id,
+        bytes,
+        name,
+        "video/mp4"
+      )
+
+    file
+  end
+
+  defp ending_default!(w, file, audio \\ "keep", enabled \\ true) do
+    {:ok, _} =
+      Social.ClipClosingVideo.save(w.org_id, w.profile.id, w.approver.id, %{
+        file_id: file.id,
+        audio: audio,
+        enabled: enabled
+      })
+  end
+
+  defp ending_clip!(w, output) do
+    {:ok, %{job: job}} =
+      ClipJobs.enqueue_new_clip(w.org_id, w.profile.id, w.approver.id, %{
+        source_url: "https://example.com/TEST-ONLY-source",
+        in_s: 0,
+        out_s: 1
+      })
+
+    ending_complete!(w, job, output)
+  end
+
+  defp ending_complete!(w, job, output) do
+    {:ok, _} = ClipJobs.claim(w.scope, job.id, w.agent.id)
+
+    {:ok, %{clip: clip}} =
+      ClipJobs.complete(w.scope, job.id, w.agent.id, %{
+        file_id: output.id,
+        candidate_id: "original-only",
+        actual_in_s: 0,
+        actual_out_s: 1,
+        title: "TEST ONLY source"
+      })
+
+    {:ok, [render | _]} = Social.ClipVersions.recent(w.org_id, w.profile.id, clip.id)
+    {clip, render}
+  end
+
+  @tag :ffmpeg
+  test "selected immutable endings survive replacement and old playback disables decisions", %{
+    conn: conn,
+    w: w
+  } do
+    a =
+      ending_fixture!(
+        w,
+        "TEST-ONLY-A-with-a-very-long-filename-that-truncates-on-a-phone.mp4",
+        "magenta"
+      )
+
+    b = ending_fixture!(w, "TEST-ONLY-B.mp4", "lime")
+    ending_default!(w, a)
+    {clip, old} = ending_clip!(w, a)
+    ending_default!(w, b, "mute")
+    child = open(conn, w.approver)
+    bay(child) |> render_click("pick_version", %{})
+    bay(child) |> render_click("pick_version", %{"render_id" => "not-a-uuid"})
+    assert has_element?(child, "[data-role=selected-ending]", "Ends with: #{a.name}")
+    assert has_element?(child, "[data-role=use-closing-video] input[value='#{old.id}']")
+    child |> form("[data-role=use-closing-video]") |> render_submit()
+    assert has_element?(child, "[data-role=closing-render-pending]")
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{old.rev}")
+    assert has_element?(child, "[data-role=use-closing-video] button[disabled]")
+    {:ok, jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    job = Enum.find(jobs, &(&1.payload["base_render_id"] == old.id))
+    assert job.payload["closing_video"]["file_id"] == b.id
+    {updated, current} = ending_complete!(w, job, b)
+    render(child)
+    assert has_element?(child, "[data-role=selected-ending]", "Ends with: #{b.name}")
+    refute has_element?(child, "[data-role=use-closing-video]")
+
+    # Hiding a form must not authorize a forged matching submission.
+    {:ok, before_forged} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => current.id})
+    assert has_element?(child, "[data-role=closing-render-error]")
+    refute has_element?(child, "[data-role=closing-render-pending]")
+    {:ok, after_forged} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert length(after_forged) == length(before_forged)
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{updated.rev}")
+
+    child
+    |> element("[data-role=pick-render-version][data-render-id='#{old.id}']")
+    |> render_click()
+
+    assert has_element?(child, "[data-role=selected-ending]", "Ends with: #{a.name}")
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{old.rev}")
+    refute has_element?(child, "[data-role=clips-pbar]")
+    refute has_element?(child, "[data-role=use-closing-video]")
+    refute has_element?(child, "[data-role=clip-approve]")
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
+    assert has_element?(child, "[data-role=closing-render-error]")
+    {:ok, after_jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert length(after_jobs) == length(jobs)
+
+    child
+    |> element("[data-role=pick-render-version][data-render-id='#{current.id}']")
+    |> render_click()
+
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{updated.rev}")
+    assert has_element?(child, "[data-role=clip-approve]")
+  end
+
+  @tag :ffmpeg
+  test "impact filter shares Settings counts and removes a clip once its new ending completes", %{
+    conn: conn,
+    w: w
+  } do
+    a = ending_fixture!(w, "TEST-ONLY-A.mp4", "magenta")
+    b = ending_fixture!(w, "TEST-ONLY-B.mp4", "lime")
+    ending_default!(w, a)
+    {old_clip, old} = ending_clip!(w, a)
+    ending_default!(w, b, "mute")
+    {matching_clip, _} = ending_clip!(w, b)
+
+    child =
+      open(conn, w.approver, "?tab=clips&view=review&profile=#{w.profile.id}&closing=previous")
+
+    assert has_element?(child, "[data-role=closing-impact-filter]")
+    assert has_element?(child, "[data-role=clips-queue-item][phx-value-id='#{old_clip.id}']")
+    refute has_element?(child, "[data-role=clips-queue-item][phx-value-id='#{matching_clip.id}']")
+    bay(child) |> render_click("pick", %{"id" => matching_clip.id})
+    assert has_element?(child, "[data-role=clips-bay][data-clip-id='#{old_clip.id}']")
+    child |> form("[data-role=use-closing-video]") |> render_submit()
+    {:ok, jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    job = Enum.find(jobs, &(&1.payload["base_render_id"] == old.id))
+    ending_complete!(w, job, b)
+    render(child)
+    refute has_element?(child, "[data-role=clips-queue-item]")
+    assert has_element?(child, "[data-role=clips-empty]")
+    profile = Social.get_profile(w.org_id, w.profile.id)
+
+    assert Social.ClipClosingVideo.review_renders(profile)
+           |> Enum.all?(fn {_, r} ->
+             Social.ClipClosingVideo.same_ending?(r.closing_video, profile.closing_video)
+           end)
+  end
+
+  @tag :ffmpeg
+  test "failed closing renders and forged duplicate revoked or approved requests keep playing bytes",
+       %{conn: conn, w: w} do
+    a = ending_fixture!(w, "TEST-ONLY-A.mp4", "magenta")
+    ending_default!(w, a)
+    {clip, old} = ending_clip!(w, a)
+    ending_default!(w, a, "mute")
+    child = open(conn, w.approver)
+    child |> form("[data-role=use-closing-video]") |> render_submit()
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
+    {:ok, jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert Enum.count(jobs, &(&1.status == "queued")) == 1
+    job = Enum.find(jobs, &(&1.status == "queued"))
+    {:ok, _} = ClipJobs.claim(w.scope, job.id, w.agent.id)
+    {:ok, _} = ClipJobs.fail(w.scope, job.id, w.agent.id, "CLOSING_DOWNLOAD_FAILED", "safe")
+    render(child)
+    assert has_element?(child, "[data-role=closing-render-failure]")
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{old.rev}")
+    w.profile |> Ecto.Changeset.change(approver_user_ids: []) |> Repo.update!()
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
+    {:ok, revoked_jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert length(revoked_jobs) == length(jobs)
+
+    Repo.reload!(w.profile)
+    |> Ecto.Changeset.change(approver_user_ids: [w.approver.id])
+    |> Repo.update!()
+
+    {:ok, _} =
+      Social.approve_clip(
+        w.org_id,
+        clip.id,
+        w.approver.id,
+        %{"render_id" => old.id, "account_ids" => [w.ig.id]},
+        now: DateTime.add(DateTime.utc_now(), 3600),
+        publish_server: :closing_review_no_publisher
+      )
+
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
+    {:ok, final} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert length(final) == length(jobs)
+    assert Social.get_clip(w.org_id, clip.id).render_file_id == old.file_id
+  end
 end

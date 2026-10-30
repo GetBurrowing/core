@@ -23,6 +23,7 @@ defmodule Platform.Social.ClipRender do
     field(:rev, :integer)
     belongs_to(:file, Platform.Files.File)
     field(:look, :map, default: %{})
+    embeds_one(:closing_video, Platform.Social.ClosingVideoSnapshot, on_replace: :update)
     field(:trim_in_s, :float)
     field(:trim_out_s, :float)
     field(:requested_start_s, :float)
@@ -61,6 +62,7 @@ defmodule Platform.Social.ClipRender do
   def changeset(%__MODULE__{} = render, attrs) do
     render
     |> cast(attrs, @fields)
+    |> cast_embed(:closing_video)
     |> validate_required([:clip_id, :rev, :look])
     |> validate_number(:rev, greater_than_or_equal_to: 1)
     |> validate_inclusion(:snapshot_status, ~w(recorded historical_unknown))

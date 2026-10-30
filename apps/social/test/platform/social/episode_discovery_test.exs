@@ -257,4 +257,29 @@ defmodule Platform.Social.EpisodeDiscoveryTest do
     assert jobs(w) == []
     assert jobs(other) == []
   end
+
+  test "durable closing registry excludes uploads independently of current show settings", %{w: w} do
+    pipeline = activate!(w)
+    file = upload!(w, "arbitrary-name.mp4")
+
+    %Platform.Social.ClosingAsset{}
+    |> Ecto.Changeset.change(%{
+      org_id: w.org_id,
+      project_id: w.project.id,
+      profile_id: w.profile.id,
+      file_id: file.id,
+      content_hash: file.content_hash,
+      byte_size: file.byte_size,
+      duration_s: 1.0,
+      width: 64,
+      height: 96
+    })
+    |> Repo.insert!()
+
+    refute EpisodeDiscovery.eligible?(file, w.profile, pipeline)
+    assert EpisodeDiscovery.sweep([w.profile.id]) == []
+    assert {:error, :ineligible_episode} = ClipJobs.enqueue_episode(pipeline.id, file.id)
+    assert {:ok, ^pipeline} = EpisodeDiscovery.activate(w.profile)
+    assert EpisodeDiscovery.sweep([w.profile.id]) == []
+  end
 end

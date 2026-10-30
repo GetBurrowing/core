@@ -1,0 +1,187 @@
+{
+  "task_id": "01a18ab6-ac9e-7000-8598-eb29fe1f366f",
+  "stage_id": "01a18abf-9bca-7002-892b-086038691ae8",
+  "runtime": "DESKTOP-MMP1PEM",
+  "source_commit": "797236391f909e8231a23dfb41fdad918b0d5bca",
+  "source_sha256": {
+    "apps/social/lib/platform/social/clip_closing_video.ex": "8d63d5eb039c03670fcf71012389dc9b3f7fba68e5cb23ca5afab263821ec7d7",
+    "apps/social/lib/platform_web/live/social_clip_removal.ex": "9902f1843fa079d5fd3bdbf1300814da1e7e7a534719152d2db2a7ab3e3bfaeb",
+    "apps/social/lib/platform_web/live/social_clips_review.ex": "372c2b4f52f673dffcf06872fd243915d21528de9b86f8a36c7d1e850da995f1",
+    "apps/social/lib/platform_web/live/social_clips_tab.ex": "ea7967f5cc5f044d8c27b31e345cc665852e38767c4fef1f063e0eadec1f91a4",
+    "apps/social/lib/platform_web/live/social_closing_video.ex": "f8bfdbcd914cbcf21ffde6fdde43b1e36066384196fee01131971545c608d85e",
+    "apps/social/priv/scripts/clip_closing_video_fixture.exs": "30bbc73f28e99690249caa960788f7f35eb95c174f260ecd9d7ef01b9433888f",
+    "apps/social/test/platform_web/live/social_clips_review_phone_test.exs": "c1bc044880b4ee427d9f4486306640e528d77777fe8d1b24ad0c1eae6d7df106",
+    "apps/social/test/platform_web/live/social_clips_review_test.exs": "dc699af0de4b11e6a708d4bd26fb9a9ebfe7ac14bb1b2e9133b587312f8b0fee",
+    "apps/social/test/platform_web/live/social_closing_video_test.exs": "a408e021dc4f1adbfa7f724d76b51698959fc679e5e8e97faf51e5a8cc2bf8ac",
+    "apps/social/test/support/fixtures/closing_video/README.txt": "198e593a026917768fc906c57055297e2f53cf7426c4f02162f2530354306357"
+  },
+  "validation": {
+    "social": {
+      "command": "mix test (apps/social)",
+      "passed": 1534,
+      "private_database": "platform_test_closing_s5_commit"
+    },
+    "core": {
+      "command": "mix precommit (apps/platform)",
+      "passed": 25932,
+      "private_database": "platform_test_closing_s5_core",
+      "scope_note": "Core executable source was unchanged during this stage; full Social verification used the final committed stage-5 code."
+    },
+    "social_javascript": {
+      "passed": 39
+    },
+    "registered_runner": {
+      "passed": 138,
+      "blocks_byte_identical_to_registered_skill": 11
+    },
+    "compile_warnings_as_errors": "passed",
+    "format_check": "passed",
+    "parallel_ui_report": {
+      "entries": 0,
+      "files_scanned": 1757
+    },
+    "committed_core_guards": {
+      "passed": 127,
+      "private_database": "platform_test_closing_s5_guards",
+      "kinds": [
+        "design-token",
+        "extension-boundary",
+        "ParallelUI",
+        "Repo-lookup",
+        "install-identity"
+      ]
+    }
+  },
+  "runner": {
+    "version": "0.8.0",
+    "sha256": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077"
+  },
+  "real_cli": {
+    "source_revision": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "reported_version_alone_not_used_for_compatibility": true,
+    "source_file_sha256": {
+      "config.py": "e6d423ed0034b79cd15ac3290681b3ec17e27125d51d7d252551cb5aecf186fa",
+      "render.py": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
+      "cli.py": "01b348df26b2b99993c90a1a847335260d62dc0f345f9de0973614f8cc4020ed",
+      "review.py": "a6a9b98e0534333c06971041a725a3992a78fea918b36b3a0e225b50a25d518d",
+      "headline.py": "eca12d6221c205afae31fc1f6c3800bb9fe43347f444610146d3e665df9e3b4c"
+    },
+    "renders": [
+      {
+        "name": "clip1-A-keep",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.3444583656269624,
+        "sha256": "0d6298399761d0a2834a6f3cba9b08f078aae2886f2003e98c44c357941293e0",
+        "closing_997hz_amplitude": 0.13953478460637048,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.0907103587962963,
+        "closing_frames": 36
+      },
+      {
+        "name": "clip2-A-mute",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.30651246137599,
+        "sha256": "774706940b231f9660f1504fb2b678aa5357c16985c30ea72abbe3cc5e4f219d",
+        "closing_997hz_amplitude": 0.0,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.0907103587962963,
+        "closing_frames": 36
+      },
+      {
+        "name": "replacement-B",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.30651246137599,
+        "sha256": "f008284c483d86633a51a4e7bae1bd060d13296606bcff1dd4a61df0b4a5a3f9",
+        "closing_997hz_amplitude": 0.0,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.08343171296296296,
+        "closing_frames": 36
+      },
+      {
+        "name": "disabled",
+        "duration_s": 5.0,
+        "expected_s": 5.0,
+        "source_440hz_amplitude": 0.30652379143905023,
+        "sha256": "8cd0347e8be94557c509dd8300b94628eb9648de2dcb5b15dba981c925f311f0"
+      },
+      {
+        "name": "headline",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.3444583656269624,
+        "sha256": "de98bed0fbf130e80abc654843ed7b5995748b433945e9a19f97797f1908e033",
+        "closing_997hz_amplitude": 0.13953478460637048,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.0907103587962963,
+        "closing_frames": 36
+      },
+      {
+        "name": "caption",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.30651246137599,
+        "sha256": "9c9050639ef9c560b08dbe42a7116bec37d20d5245e94eea3d5f1187e8e7603a",
+        "closing_997hz_amplitude": 0.0,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.0907103587962963,
+        "closing_frames": 36
+      },
+      {
+        "name": "music",
+        "duration_s": 6.2,
+        "expected_s": 6.2,
+        "source_440hz_amplitude": 0.3172988162165476,
+        "sha256": "0aad126dd9cee91bc6759bafff7df2c0eea349e0f861564f8616ad16cb6bf92e",
+        "closing_997hz_amplitude": 1.0816659365314571e-06,
+        "suffix_delivery_clean_mae": 0.0,
+        "final_asset_mae": 0.0907103587962963,
+        "closing_frames": 36
+      }
+    ]
+  },
+  "browser": {
+    "canvas_id": "01a18b5a-02b1-7000-981f-9f29ffbd19ee",
+    "viewports": [
+      "1280x800",
+      "375x812"
+    ],
+    "loaded_media_required": true,
+    "liveview_connected": true,
+    "app_js_status": 200,
+    "horizontal_overflow": false,
+    "long_filename": {
+      "client_px": 229,
+      "scroll_px": 480,
+      "version_px": 65
+    },
+    "selected_render_duration_s": 6.2,
+    "disabled_duration_s": 5.0,
+    "decoded_times_s": [
+      4.9,
+      5.1,
+      6.15
+    ],
+    "impact_count": 1,
+    "historical_mutation_controls_absent": true,
+    "historical_approval_is_fixture_state_without_publisher_job": true
+  },
+  "design_deviations": [
+    "canvas 01a18ab7-3dee-7000-93a7-945d52ca5320 node states | Added a compact read-only version selector so the selected snapshot and its media can be inspected; historical playback disables editing/approval controls.",
+    "canvas 01a18ab7-3dee-7000-93a7-945d52ca5320 node wf | Historical decisions without a retained approval binding use \u201cPrevious\u201d; no rejected/approved history is invented from the current clip status. Existing rejected-clip Library/removal behavior remains.",
+    "canvas 01a18ab7-3dee-7000-93a7-945d52ca5320 node states | New status/error copy: \u201cRendering a new pending version. You can keep playing this one.\u201d; \u201cRender failed. Your previous video is unchanged.\u201d; \u201cA render is already running. Your playing version is unchanged.\u201d; \u201cSelect the current version before applying the closing video.\u201d; \u201cThis closing video could not be applied. Your playing version is unchanged.\u201d These states were not specified verbatim in the canvas.",
+    "canvas 01a18ab7-3dee-7000-93a7-945d52ca5320 node states | Added filter navigation copy \u201cClips with a previous closing video.\u201d / \u201cShow all clips\u201d, and deleted-asset identity \u201cUnavailable video (<file_id>)\u201d; these keep filtering and historical asset loss explicit."
+  ],
+  "findings_fixed": [
+    "Integrated run detected completion-job refresh consuming the New clip in Review toast before the clip event; preserved landed notification in both orders.",
+    "Missing/invalid pick_version payloads safely ignored; old selected bytes preserved.",
+    "Browser fixture storage-root mismatch corrected before final loaded-media evidence."
+  ],
+  "limitations": [
+    "Actual HTC closing/logo video was not supplied or used; all fixture media is TEST ONLY.",
+    "Two optional upstream acoustic-tolerance failures reproduce on unchanged source per the stage-3 release receipt; not counted as green and renderer guards untouched.",
+    "No PR, CI run, merge or deployment performed by implementation stages."
+  ]
+}

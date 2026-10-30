@@ -30,6 +30,16 @@ defmodule Platform.Social.ToolDefinitionsTest do
     assert tool.limitations =~ "Read-only"
   end
 
+  test "source selector is narrow and describes pinned assets and safe bearer handling" do
+    tool = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_clip_job_source"))
+    assert tool.parameters.asset.enum == ["episode", "music", "closing_video"]
+    assert Enum.sort(Map.keys(tool.parameters)) == [:asset, :job_id]
+    assert tool.returns =~ "content_hash"
+    assert tool.returns =~ "max_bytes"
+    assert tool.limitations =~ "persisted selected assets"
+    assert tool.limitations =~ "never log or persist"
+  end
+
   test "social_post_list documents the read-only Clip Studio post fields" do
     list = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_post_list"))
 
