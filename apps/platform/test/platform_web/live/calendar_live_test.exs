@@ -435,7 +435,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert native =~ "cal-k-native"
 
     assert native =~
-             ~s(aria-label="Event: Lunch with Ryan, #{Calendar.strftime(today, "%a %-d %b")} 12:30 to 13:15")
+             ~s(aria-label="Event: Lunch with Ryan, #{Elixir.Calendar.strftime(today, "%a %-d %b")} 12:30 to 13:15")
 
     meeting = chip_html(view, "meeting")
     assert meeting =~ "cal-live"
@@ -478,7 +478,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     zone = midday_zone()
     today = local_today(zone)
     {:ok, view, _} = live(zoned(conn, zone), "/calendar")
-    label = "New event #{Calendar.strftime(today, "%a %-d %b")} 09:30"
+    label = "New event #{Elixir.Calendar.strftime(today, "%a %-d %b")} 09:30"
 
     view
     |> element("[data-role=calendar-week] button.cal-slot[aria-label='#{label}']")
@@ -527,14 +527,24 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert_patch(view, "/calendar?view=month")
     assert has_element?(view, "[data-role=calendar-month]")
     refute has_element?(view, "[data-role=calendar-week]")
-    assert has_element?(view, "[data-role=calendar-range]", Calendar.strftime(today, "%B %Y"))
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-range]",
+             Elixir.Calendar.strftime(today, "%B %Y")
+           )
 
     view
     |> element("[data-role=calendar-header] button[aria-label=Previous]")
     |> render_click()
 
     previous = today |> Date.beginning_of_month() |> Date.add(-1)
-    assert has_element?(view, "[data-role=calendar-range]", Calendar.strftime(previous, "%B %Y"))
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-range]",
+             Elixir.Calendar.strftime(previous, "%B %Y")
+           )
 
     # A month cell opens that day's week.
     view
@@ -557,7 +567,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(
              view,
              "[data-role=calendar-mini-label]",
-             Calendar.strftime(next_month, "%B %Y")
+             Elixir.Calendar.strftime(next_month, "%B %Y")
            )
 
     target = Date.add(next_month, 9)
