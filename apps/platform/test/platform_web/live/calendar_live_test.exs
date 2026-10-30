@@ -44,7 +44,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     })
 
     {:ok, _} = Platform.Calendar.AgentAccess.grant(scope, agent.id, %{read: true, create: true})
-    {:ok, view, _} = live(conn, "/calendar")
+    {:ok, view, _} = live(conn, "/calendar/settings")
     view |> element("#calendar-agent-access") |> render_click()
     render_change(view, "choose_grant_agent", %{"grant" => %{"agent_id" => agent.id}})
     assert has_element?(view, "#grant_read[checked]")
@@ -71,7 +71,6 @@ defmodule PlatformWeb.CalendarLiveTest do
   } do
     {:ok, view, _} = live(conn, "/calendar")
     view |> element("#calendar-new") |> render_click()
-    view |> element("#calendar-create-event") |> render_click()
 
     view
     |> form("#calendar-event-form",
@@ -169,7 +168,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     scope: scope
   } do
     {:ok, old_token} = Calendar.rotate_feed(scope)
-    {:ok, view, _} = live(conn, "/calendar")
+    {:ok, view, _} = live(conn, "/calendar/settings")
     view |> element("#calendar-subscribe") |> render_click()
     refute has_element?(view, "#calendar-copy-feed")
     view |> element("button", "Regenerate link") |> render_click()
@@ -192,18 +191,6 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "h2", "Past")
   end
 
-  test "the phone week strip follows the selected day while the desktop is in Month", %{
-    conn: conn
-  } do
-    {:ok, view, _} = live(conn, "/calendar?view=month")
-    render_click(view, "select_day", %{"date" => "2060-10-29"})
-    assert has_element?(view, "[data-role=calendar-month]")
-
-    for date <- Date.range(~D[2060-10-25], ~D[2060-10-31]) do
-      assert has_element?(view, "button[phx-click=select_day][phx-value-date='#{date}']")
-    end
-  end
-
   test "overlapping recurrence occurrences have distinct DOM identities", %{
     conn: conn,
     scope: scope
@@ -219,44 +206,42 @@ defmodule PlatformWeb.CalendarLiveTest do
         recurrence: "FREQ=DAILY;COUNT=3"
       })
 
-    {:ok, view, _} = live(conn, "/calendar?view=agenda")
+    {:ok, view, _} = live(conn, "/calendar")
     html = render_click(view, "select_day", %{"date" => Date.to_iso8601(today)})
 
     ids =
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("[id^='agenda-#{today}-event-']")
+      |> LazyHTML.query("[id^='week-#{today}-event-']")
       |> LazyHTML.attribute("id")
 
     assert length(ids) == 2
     assert length(Enum.uniq(ids)) == 2
   end
 
-  test "shared arithmetic lays overlapping native events in separate lanes and clips midnight" do
+  test "day chips lay overlapping events in separate lanes and clip at midnight" do
     first = %{
       kind: :event,
+      id: "a",
       all_day: false,
-      starts_at: ~U[2026-10-29 23:00:00Z],
+      starts_at: ~U[2026-10-29 19:00:00Z],
       ends_at: ~U[2026-10-30 02:00:00Z]
     }
 
-    second = %{first | starts_at: ~U[2026-10-29 23:30:00Z]}
-    blocks = PlatformWeb.CalendarLive.day_blocks([first, second], ~D[2026-10-29], "Etc/UTC")
-    assert length(blocks) == 2
-    assert Enum.map(blocks, fn {_, p} -> p.lane end) == [0, 1]
-    assert Enum.all?(blocks, fn {_, p} -> p.top + p.height <= 100.00001 end)
+    second = %{first | id: "b", starts_at: ~U[2026-10-29 19:30:00Z]}
+    chips = PlatformWeb.CalendarLive.day_chips([first, second], ~D[2026-10-29], "Etc/UTC")
+    assert Enum.map(chips, & &1.lane) == [0, 1]
+    assert Enum.all?(chips, &(&1.lanes == 2))
+    # 19:00 is 12 hours below 07:00 at 48px an hour; the end clips to 21:00.
+    assert [%{top: 576.0, height: 94.0} | _] = chips
 
-    assert [{_, position}] =
-             PlatformWeb.CalendarLive.day_blocks([first], ~D[2026-10-30], "Etc/UTC")
+    assert [%{s: 0, e: 120, top: +0.0}] =
+             PlatformWeb.CalendarLive.day_chips([first], ~D[2026-10-30], "Etc/UTC")
 
-    assert position.top == 0
     midnight = %{first | starts_at: ~U[2026-10-30 00:00:00Z], ends_at: nil}
 
-    assert [{_, midnight_position}] =
-             PlatformWeb.CalendarLive.day_blocks([midnight], ~D[2026-10-30], "Etc/UTC")
-
-    assert midnight_position.top == 0
-    assert midnight_position.height > 0
+    assert [%{s: 0, e: 30, height: 22, compact: true}] =
+             PlatformWeb.CalendarLive.day_chips([midnight], ~D[2026-10-30], "Etc/UTC")
   end
 
   test "external calendars are owner-only and never render the bearer URL", %{
@@ -283,5 +268,429 @@ defmodule PlatformWeb.CalendarLiveTest do
     refute html =~ "private-secret"
     view |> element("#external-calendar-#{sub.id} button", "Remove") |> render_click()
     assert [] == Calendar.Subscriptions.list(scope)
+  end
+
+  # ── Calendar v4 shell, list pane and grids (task 01a18d9f stage 1) ──────
+
+  # A fixed-offset zone where it is midday now, so chips placed today at
+  # 10:30–16:45 local always land in the 07–21 grid and the now line shows.
+  defp midday_zone do
+    offset = 12 - DateTime.utc_now().hour
+
+    cond do
+      offset == 0 -> "Etc/UTC"
+      offset > 0 -> "Etc/GMT-#{offset}"
+      true -> "Etc/GMT+#{-offset}"
+    end
+  end
+
+  defp at(zone, date, hour, minute),
+    do: date |> DateTime.new!(Time.new!(hour, minute, 0), zone) |> DateTime.shift_zone!("Etc/UTC")
+
+  defp local_today(zone),
+    do: DateTime.utc_now() |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  defp zoned(conn, zone), do: put_connect_params(conn, %{"timezone" => zone})
+
+  defp seed_meeting!(zone, today, status) do
+    n = System.unique_integer([:positive])
+
+    {:ok, project} =
+      %Platform.Tasks.Project{}
+      |> Platform.Tasks.Project.changeset(%{
+        name: "Calendar v4 #{n}",
+        slug: "calendar-v4-#{n}",
+        org_id: Platform.TenancyFixtures.acme_org_id()
+      })
+      |> Repo.insert()
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "design-#{n}",
+        slug: "calendar-v4-space-#{n}",
+        kind: "channel"
+      })
+
+    id = Platform.Types.UUIDv7.generate()
+
+    %Platform.Meetings.Meeting{id: id}
+    |> Platform.Meetings.Meeting.changeset(%{
+      project_id: project.id,
+      chat_space_id: space.id,
+      slug: "calendar-v4-#{n}",
+      name: "#design · call",
+      livekit_room_name: "meeting-#{id}",
+      status: status,
+      scheduled_start_at: at(zone, today, 10, 30),
+      scheduled_end_at: at(zone, today, 11, 15)
+    })
+    |> Repo.insert!()
+  end
+
+  defp seed_external!(user, zone, today) do
+    Repo.insert!(%Calendar.Subscription{
+      owner_id: user.id,
+      name: "Recruiting (Greenhouse)",
+      url: "https://calendar.example/feed.ics",
+      refreshed_at: DateTime.utc_now(),
+      snapshot: [
+        %{
+          "uid" => "candidate-1",
+          "sequence" => 0,
+          "title" => "Candidate screen",
+          "starts_at" => DateTime.to_iso8601(at(zone, today, 14, 0)),
+          "ends_at" => DateTime.to_iso8601(at(zone, today, 15, 0)),
+          "time_zone" => zone,
+          "all_day" => false,
+          "start_date" => nil,
+          "end_date" => nil,
+          "recurrence" => nil,
+          "exception_dates" => [],
+          "transparent" => false
+        }
+      ]
+    })
+  end
+
+  defp seed_hold!(user, owner_scope, zone, today) do
+    n = System.unique_integer([:positive])
+    agent = Repo.insert!(%Platform.Agents.Agent{name: "Higgins", slug: "higgins-#{n}"})
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "higgins-#{n}",
+        owner_user_id: user.id,
+        agent_id: agent.id,
+        status: "active",
+        display_name: "Higgins"
+      })
+
+    Repo.insert!(%Platform.Access.RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: ["context_read"],
+      restricted_permissions:
+        Platform.Access.RuntimeProfiles.translated_permissions(["context_read"])
+    })
+
+    {:ok, _} =
+      Calendar.AgentAccess.grant(owner_scope, agent.id, %{
+        read: true,
+        read_private: true,
+        create: true
+      })
+
+    {:ok, %Calendar.Consent{}} =
+      Calendar.AgentAccess.propose(
+        Scope.for_runtime(runtime),
+        user.id,
+        "create",
+        %{
+          title: "Interview · Sam Rivera",
+          starts_at: at(zone, today, 16, 0),
+          ends_at: at(zone, today, 16, 45),
+          time_zone: zone
+        },
+        "hold-#{n}"
+      )
+  end
+
+  defp text(html),
+    do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.replace(~r/\s+/u, " ")
+
+  defp chip_html(view, kind) do
+    view
+    |> element("[data-role=calendar-week] .cal-ev[data-kind=#{kind}]")
+    |> render()
+  end
+
+  test "the week renders the four chip kinds with their verbatim meta lines", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Lunch with Ryan",
+        starts_at: at(zone, today, 12, 30),
+        ends_at: at(zone, today, 13, 15),
+        time_zone: zone,
+        visibility: "busy",
+        recurrence: "FREQ=WEEKLY"
+      })
+
+    seed_meeting!(zone, today, "live")
+    seed_external!(user, zone, today)
+    seed_hold!(user, scope, zone, today)
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    native = chip_html(view, "native")
+    assert native =~ "Lunch with Ryan"
+    assert native =~ "12:30–13:15"
+    assert native =~ "hero-eye-slash"
+    assert native =~ "hero-arrow-path"
+    assert native =~ "cal-k-native"
+
+    assert native =~
+             ~s(aria-label="Event: Lunch with Ryan, #{Calendar.strftime(today, "%a %-d %b")} 12:30 to 13:15")
+
+    meeting = chip_html(view, "meeting")
+    assert meeting =~ "cal-live"
+    assert meeting =~ "cal-pulse"
+    assert meeting =~ "hero-video-camera"
+    assert text(meeting) =~ "Live · Meeting · 10:30–11:15"
+    assert meeting =~ "Meeting: #design · call"
+
+    external = chip_html(view, "external")
+    assert external =~ "Candidate screen"
+    assert external =~ "hero-lock-closed"
+    assert text(external) =~ "Recruiting · 14:00–15:00"
+    assert external =~ "External, read-only: Candidate screen"
+
+    tentative = chip_html(view, "tentative")
+    assert tentative =~ "<b>Interview · Sam Rivera</b>"
+    assert text(tentative) =~ "Tentative · Higgins · needs OK"
+    assert tentative =~ "Tentative hold by Higgins: Interview · Sam Rivera"
+  end
+
+  test "the now line sits in today's column", %{conn: conn} do
+    zone = midday_zone()
+    today = Date.to_iso8601(local_today(zone))
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-week] [data-role=calendar-day-column][data-date='#{today}'] [data-role=calendar-now]"
+           )
+
+    assert [_] =
+             view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("[data-role=calendar-week] [data-role=calendar-now]")
+             |> Enum.to_list()
+  end
+
+  test "a 30-minute slot opens New event preset to that time", %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    label = "New event #{Calendar.strftime(today, "%a %-d %b")} 09:30"
+
+    view
+    |> element("[data-role=calendar-week] button.cal-slot[aria-label='#{label}']")
+    |> render_click()
+
+    assert has_element?(view, "h2", "New event")
+
+    assert has_element?(
+             view,
+             "#calendar-event-form input[value='#{Date.to_iso8601(today)}T09:30']"
+           )
+
+    assert has_element?(
+             view,
+             "#calendar-event-form input[value='#{Date.to_iso8601(today)}T10:30']"
+           )
+  end
+
+  test "Week/Month, Today and prev/next move the grid", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    today = local_today("Etc/UTC")
+    monday = Date.beginning_of_week(today)
+    week_label = PlatformWeb.CalendarLive.range_label("week", today, today)
+    assert has_element?(view, "[data-role=calendar-range]", week_label)
+
+    view
+    |> element("[data-role=calendar-header] button[aria-label=Next]")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-range]",
+             PlatformWeb.CalendarLive.range_label("week", Date.add(monday, 7), nil)
+           )
+
+    view
+    |> element("[data-role=calendar-header] button", "Today")
+    |> render_click()
+
+    assert has_element?(view, "[data-role=calendar-range]", week_label)
+
+    view
+    |> element("[data-role=calendar-header] a[role=tab]", "Month")
+    |> render_click()
+
+    assert_patch(view, "/calendar?view=month")
+    assert has_element?(view, "[data-role=calendar-month]")
+    refute has_element?(view, "[data-role=calendar-week]")
+    assert has_element?(view, "[data-role=calendar-range]", Calendar.strftime(today, "%B %Y"))
+
+    view
+    |> element("[data-role=calendar-header] button[aria-label=Previous]")
+    |> render_click()
+
+    previous = today |> Date.beginning_of_month() |> Date.add(-1)
+    assert has_element?(view, "[data-role=calendar-range]", Calendar.strftime(previous, "%B %Y"))
+
+    # A month cell opens that day's week.
+    view
+    |> element("[data-role=calendar-month] [data-date='#{Date.beginning_of_month(previous)}']")
+    |> render_click()
+
+    assert_patch(view, "/calendar?view=week")
+    assert has_element?(view, "[data-role=calendar-week]")
+  end
+
+  test "the mini month pages months and a day moves the cursor", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    today = local_today("Etc/UTC")
+    next_month = today |> Date.end_of_month() |> Date.add(1)
+
+    view
+    |> element("[data-role=calendar-mini-month] button[aria-label='Next month']")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-mini-label]",
+             Calendar.strftime(next_month, "%B %Y")
+           )
+
+    target = Date.add(next_month, 9)
+
+    view
+    |> element("[data-role=calendar-mini-month] button[phx-value-date='#{target}']")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-range]",
+             PlatformWeb.CalendarLive.range_label("week", target, target)
+           )
+
+    assert has_element?(view, "[data-role=calendar-week] [data-date='#{target}']")
+  end
+
+  test "calendar toggles hide and show their entries", %{conn: conn, scope: scope, user: user} do
+    zone = midday_zone()
+    today = local_today(zone)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Own block",
+        starts_at: at(zone, today, 12, 0),
+        ends_at: at(zone, today, 13, 0),
+        time_zone: zone
+      })
+
+    sub = seed_external!(user, zone, today)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    assert has_element?(view, "button[role=checkbox][data-calendar-key=native]", user.name)
+
+    assert has_element?(
+             view,
+             "button[role=checkbox][data-calendar-key='ext:#{sub.id}']",
+             "read-only · iCal"
+           )
+
+    assert has_element?(view, ".cal-ev[data-kind=native]", "Own block")
+    assert has_element?(view, ".cal-ev[data-kind=external]", "Candidate screen")
+
+    view |> element("button[data-calendar-key=native]") |> render_click()
+    assert has_element?(view, "button[data-calendar-key=native][aria-checked=false]")
+    refute has_element?(view, ".cal-ev[data-kind=native]")
+    assert has_element?(view, ".cal-ev[data-kind=external]")
+
+    view |> element("button[data-calendar-key='ext:#{sub.id}']") |> render_click()
+    refute has_element?(view, ".cal-ev[data-kind=external]")
+
+    view |> element("button[data-calendar-key=native]") |> render_click()
+    assert has_element?(view, ".cal-ev[data-kind=native]", "Own block")
+  end
+
+  test "a Meetings-off scope renders no meeting row, legend item or chip", %{
+    conn: conn,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+    seed_meeting!(zone, today, "live")
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    assert has_element?(
+             view,
+             "button[data-calendar-key=meetings]",
+             "Burrow meetings you are invited to"
+           )
+
+    assert has_element?(view, "[data-legend=meeting]")
+    assert has_element?(view, ".cal-ev[data-kind=meeting]")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, user.id},
+        permission: "meetings",
+        resource: {:module, Platform.TenancyFixtures.acme_org_id()}
+      })
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    refute has_element?(view, "button[data-calendar-key=meetings]")
+    refute has_element?(view, "[data-legend=meeting]")
+    refute has_element?(view, ".cal-ev[data-kind=meeting]")
+    assert has_element?(view, "[data-role=calendar-legend]", "Your events")
+  end
+
+  test "the phone day strip selects a day and the single-day column follows", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    today = local_today("Etc/UTC")
+    days = PlatformWeb.CalendarLive.week_days(today)
+    other = Enum.find(days, &(&1 != today))
+
+    assert has_element?(view, ".lg\\:hidden [data-role=calendar-day-strip]")
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-day-strip] button[aria-selected=true][phx-value-date='#{today}']"
+           )
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{today}']"
+           )
+
+    view
+    |> element("[data-role=calendar-day-strip] button[phx-value-date='#{other}']")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-day-strip] button[aria-selected=true][phx-value-date='#{other}']"
+           )
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{other}']"
+           )
+
+    refute has_element?(
+             view,
+             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{today}']"
+           )
+
+    # The phone's prev/next step one day.
+    view
+    |> element("[data-role=calendar-phone-header] button[aria-label=Next]")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{Date.add(other, 1)}']"
+           )
   end
 end

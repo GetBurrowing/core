@@ -9393,3 +9393,203 @@ body.screen-share-fullscreen-active {
     transform: translateY(0);
   }
 }
+
+/* calendar v4 (task 01a18d9f stage 1). Prototype 01a178d2 v4, cal.css
+   `.ev`/`.k-*` and index.html `.wk`/`.now`/`.mo`, on main's slots: ground
+   base-200, surface base-100, raised base-300, muted --color-subtle, accent
+   primary, active success, danger error. The four chip kinds must read
+   apart at a glance: native = info tint + full info outline; meeting =
+   primary wash + 3px primary rail (success while live); external = hatched
+   raised/surface + dashed muted outline; tentative = ground + dashed primary.
+   Chip radius is the prototype's r-xs (6px), written as field - 3px.
+   Type is 12px (text-xs): subtle_text_ratchet_test.exs freezes subtle text
+   under 12px, so the prototype's 11px fs-xs is not used. */
+.cal-ev {
+  position: absolute;
+  border-radius: calc(var(--radius-field) - 3px);
+  padding: 3px 6px;
+  text-align: left;
+  overflow: hidden;
+  z-index: 1;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--color-base-content);
+}
+.cal-ev b {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-ev small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cal-ev[aria-current="true"] {
+  box-shadow: 0 0 0 2px var(--color-interactive);
+  z-index: 3;
+}
+.cal-k-native {
+  background: color-mix(in srgb, var(--color-info) 16%, var(--color-base-200));
+  border: 1px solid var(--color-info);
+}
+.cal-k-meeting {
+  background: color-mix(in srgb, var(--color-primary) 15%, var(--color-base-200));
+  border-left: 3px solid var(--color-primary);
+}
+.cal-k-meeting.cal-live {
+  background: color-mix(in srgb, var(--color-success) 15%, var(--color-base-200));
+  border-left-color: var(--color-success);
+}
+.cal-k-meeting small .cal-cam {
+  color: var(--color-primary);
+}
+.cal-k-meeting.cal-live small .cal-cam {
+  color: var(--color-success);
+}
+.cal-k-external {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-base-300) 0 6px,
+    var(--color-base-100) 6px 12px
+  );
+  border: 1px dashed var(--color-subtle);
+}
+.cal-k-tentative {
+  background: var(--color-base-200);
+  border: 1.5px dashed var(--color-primary);
+}
+.cal-k-tentative small {
+  color: var(--color-interactive);
+}
+.cal-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-success);
+  animation: cal-pulse 1.2s infinite;
+  flex: 0 0 auto;
+}
+@keyframes cal-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cal-pulse {
+    animation: none;
+  }
+}
+/* Legend and calendar-row swatches. */
+.cal-sw {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.cal-sw.cal-k-meeting {
+  border-left-width: 3px;
+}
+/* Week grid: hour lines at 70% edge every 48px, column rule, today tint. */
+.cal-col {
+  position: relative;
+  border-left: 1px solid var(--edge);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 47px,
+    color-mix(in srgb, var(--edge) 70%, transparent) 47px 48px
+  );
+}
+.cal-col.cal-today {
+  background-color: color-mix(in srgb, var(--color-primary) 4%, var(--color-base-200));
+}
+.cal-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  z-index: 0;
+}
+/* Now line: 2px error with an 8px dot at the column's left edge. */
+.cal-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-error);
+  z-index: 3;
+  pointer-events: none;
+}
+.cal-now::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--color-error);
+}
+/* Month grid: chips `<HH:MM> <title>`, out-of-month cells at 50% surface. */
+.cal-mchip {
+  position: relative;
+  display: block;
+  width: 100%;
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: calc(var(--radius-field) - 3px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-base-content);
+  text-align: left;
+}
+.cal-mcell-out {
+  background: color-mix(in srgb, var(--color-base-100) 50%, var(--color-base-200));
+}
+/* Phone month: chips become 8px dots. */
+.cal-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 9999px;
+}
+.cal-dot.cal-k-native {
+  background: var(--color-info);
+  border: 0;
+}
+.cal-dot.cal-k-meeting {
+  background: var(--color-primary);
+  border: 0;
+}
+.cal-dot.cal-k-meeting.cal-live {
+  background: var(--color-success);
+}
+.cal-dot.cal-k-external {
+  background: var(--color-base-100);
+  border: 1.5px solid var(--color-subtle);
+}
+.cal-dot.cal-k-tentative {
+  background: var(--color-base-200);
+  border: 1.5px dashed var(--color-primary);
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .cal-ev:hover {
+    box-shadow: 0 0 0 1.5px var(--color-base-content);
+    z-index: 2;
+  }
+  .cal-slot:hover {
+    background: color-mix(in srgb, var(--color-interactive) 10%, transparent);
+  }
+  .cal-mcell:hover {
+    background: var(--color-base-100);
+  }
+}
