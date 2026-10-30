@@ -22,6 +22,12 @@ defmodule Platform.Meetings.SynthesisFinding do
       briefing); `Platform.Meetings.MeetingBriefings` re-checks the ref and
       every required ref for the viewer at render and at click.
     * `recipient_user_ids` — who the finding is for.
+    * `prompt_refs` — `"kind:id"` refs of every source in the provider
+      prompt that produced `body` (each source plus its required refs). The
+      body can describe any of them, cited or not, so a viewer must be able
+      to read all of them; `MeetingBriefings.finding_visible?/2` re-checks
+      them live. On a dedupe merge they stay the EXISTING row's, because the
+      existing body is the one kept.
     * `receipt` — nil until resolved, then the briefing receipt shape
       `%{"verb", "at", "by", "ref", "kind"}`. Written once.
     * `dedupe_key` — unique per `org_id`, `dedupe_key/2` of kind + the sorted
@@ -49,6 +55,7 @@ defmodule Platform.Meetings.SynthesisFinding do
     field(:body, :string)
     field(:citations, {:array, :map}, default: [])
     field(:recipient_user_ids, {:array, :binary_id}, default: [])
+    field(:prompt_refs, {:array, :string}, default: [])
     field(:receipt, :map)
     field(:dedupe_key, :string)
     field(:run_id, :binary_id)
@@ -89,6 +96,7 @@ defmodule Platform.Meetings.SynthesisFinding do
       :body,
       :citations,
       :recipient_user_ids,
+      :prompt_refs,
       :run_id,
       :snapshot_hash
     ])

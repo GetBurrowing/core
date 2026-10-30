@@ -567,9 +567,12 @@ defmodule Platform.Meetings.MeetingBriefings do
   @doc """
   Whether `user_id` may see `finding` right now: they are one of its
   `recipient_user_ids` AND can read every citation (its ref and every
-  `"requires"` ref), checked live through
-  `Platform.Meetings.Synthesis.Visibility`. A finding with no citations, or
-  a nil user, is never visible. This ONE predicate filters `view/2` items
+  `"requires"` ref) AND every one of its `prompt_refs` (each source that
+  was in the prompt which produced the body, cited or not: the body can
+  describe any of them), all checked live through
+  `Platform.Meetings.Synthesis.Visibility`, so access revoked after the
+  run hides the finding. A finding with no citations, or a nil user, is
+  never visible. This ONE predicate filters `view/2` items
   and counts, the Inbox row count in `deliver/2`, and `act/5`.
   """
   @spec finding_visible?(SynthesisFinding.t() | nil, term()) :: boolean()
@@ -577,7 +580,8 @@ defmodule Platform.Meetings.MeetingBriefings do
     citations = finding.citations || []
 
     user_id in (finding.recipient_user_ids || []) and citations != [] and
-      Enum.all?(citations, &Visibility.citation_readable_by?(user_id, &1))
+      Enum.all?(citations, &Visibility.citation_readable_by?(user_id, &1)) and
+      Visibility.refs_readable_by?(user_id, finding.prompt_refs || [])
   end
 
   def finding_visible?(_finding, _user_id), do: false
@@ -1327,8 +1331,9 @@ defmodule Platform.Meetings.MeetingBriefings do
   # Citations are quoted as inert text, and only those EVERY human in the
   # target space can read: the clicker can read them all, but the space's
   # other members may not. The finding body is model text that can describe
-  # any cited source, so it is included only when every citation is
-  # shareable there; otherwise a neutral line plus the briefing link.
+  # any source in its prompt, so it is included only when every citation
+  # AND every prompt ref is shareable there; otherwise a neutral line plus
+  # the briefing link.
   defp alignment_content(%Meeting{} = meeting, %SynthesisFinding{} = finding) do
     readers =
       meeting.chat_space_id
@@ -1342,8 +1347,11 @@ defmodule Platform.Meetings.MeetingBriefings do
         Enum.all?(readers, &Visibility.citation_readable_by?(&1, c))
       end)
 
+    prompt_shareable =
+      Enum.all?(readers, &Visibility.refs_readable_by?(&1, finding.prompt_refs || []))
+
     head =
-      if length(shareable) == length(citations),
+      if length(shareable) == length(citations) and prompt_shareable,
         do: "Seeking alignment: " <> inert(finding.body),
         else: "Seeking alignment on a finding from this meeting's briefing."
 

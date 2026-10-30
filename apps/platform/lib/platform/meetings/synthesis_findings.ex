@@ -36,10 +36,13 @@ defmodule Platform.Meetings.SynthesisFindings do
   Insert a finding, or merge into the existing one with the same
   `(org_id, dedupe_key)`.
 
-  On a dedupe hit the existing row keeps its id, body, citations and
-  receipt; `meeting_ids` and `recipient_user_ids` are unioned. The row is
-  locked `FOR UPDATE` for the merge, so two concurrent mirrored runs
-  serialise onto one row.
+  On a dedupe hit the existing row keeps its id, body, citations,
+  `prompt_refs` and receipt; `meeting_ids` are unioned, and an incoming
+  recipient is added only if they can read every one of the EXISTING
+  row's `prompt_refs` (stage 6): the kept body came from that prompt, not
+  from the incoming one, so the incoming audience's own readability says
+  nothing about it. The row is locked `FOR UPDATE` for the merge, so two
+  concurrent mirrored runs serialise onto one row.
 
   Returns `{:ok, finding, :created | :merged}` or `{:error, changeset}`.
   """
@@ -89,7 +92,12 @@ defmodule Platform.Meetings.SynthesisFindings do
 
   defp merge!(existing, changeset) do
     incoming_meetings = Ecto.Changeset.get_field(changeset, :meeting_ids)
-    incoming_recipients = Ecto.Changeset.get_field(changeset, :recipient_user_ids)
+    prompt_refs = existing.prompt_refs || []
+
+    incoming_recipients =
+      (Ecto.Changeset.get_field(changeset, :recipient_user_ids) || [])
+      |> Enum.reject(&(&1 in (existing.recipient_user_ids || [])))
+      |> Enum.filter(&Platform.Meetings.Synthesis.Visibility.refs_readable_by?(&1, prompt_refs))
 
     existing
     |> Ecto.Changeset.change(

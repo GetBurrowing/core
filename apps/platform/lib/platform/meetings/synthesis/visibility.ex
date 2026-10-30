@@ -66,6 +66,37 @@ defmodule Platform.Meetings.Synthesis.Visibility do
   def citation_readable_by?(_user_id, _citation), do: false
 
   @doc """
+  Whether `user_id` can read EVERY stored `"kind:id"` ref in `refs` right
+  now. Used for a finding's `prompt_refs`: every source that was in the
+  prompt which produced the finding body (task 01a16974 stage 6). The user
+  and their access scope are loaded once for the whole list. An empty list
+  is vacuously readable; any unparseable ref, or an unknown user, fails
+  closed.
+  """
+  @spec refs_readable_by?(term(), [String.t()]) :: boolean()
+  def refs_readable_by?(_user_id, []), do: true
+
+  def refs_readable_by?(user_id, refs) when is_binary(user_id) and is_list(refs) do
+    with true <- Platform.UUID.valid?(user_id),
+         %{} = user <- Accounts.get_user(user_id) do
+      scope = Access.scope_for(user)
+
+      refs
+      |> Enum.uniq()
+      |> Enum.all?(fn ref ->
+        case parse_ref(ref) do
+          {:ok, {kind, id}} -> Platform.UUID.valid?(id) and readable?(user, scope, kind, id)
+          :error -> false
+        end
+      end)
+    else
+      _ -> false
+    end
+  end
+
+  def refs_readable_by?(_user_id, _refs), do: false
+
+  @doc """
   The `user_id`'s EXISTING participant row in `space_id`, when they can read
   that space right now (same checks as a chat citation). Never creates a
   participant: `:error` for anyone who is not already in the space.
