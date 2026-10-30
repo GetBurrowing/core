@@ -765,7 +765,14 @@ defmodule PlatformWeb.AppIntentsControllerTest do
       reloaded = Tasks.get_task_record(id)
       assert reloaded.status == "in_progress"
       assert reloaded.phase_assignees["planning"] == planning
-      assert reloaded.assignee_id == agent.id
+
+      # Task 01a18e02 stage 2 flipped this deliberately. The planning agent
+      # is the only phase entry, so a HUMAN move into in_progress finds no
+      # execution agent and is inert: the stale flat pointer is cleared
+      # rather than left on the planner, which would dispatch it to
+      # execute. The planning slot itself survives (asserted above) and is
+      # re-derived on the next move back to planning.
+      assert reloaded.assignee_id == nil
     end
 
     test "a project the user cannot see is 403 and creates nothing", %{

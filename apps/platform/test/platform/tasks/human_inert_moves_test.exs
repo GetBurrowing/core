@@ -223,7 +223,7 @@ defmodule Platform.Tasks.HumanInertMovesTest do
       # which is what carries the no-ack and safety-net timers. The
       # `execution_leases` TABLE is NOT written by a dispatch: its rows come
       # from runtime events (ack, start, blocker), so a dispatch with no
-      # runtime reply leaves it empty (measured on moon for this stage). It
+      # runtime reply leaves it empty (measured for this stage). It
       # is still counted in (b) and (c) as a zero, never as a control.
       assert %{} = LeaseManager.get(task.id)
     end
