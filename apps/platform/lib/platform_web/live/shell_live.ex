@@ -1051,6 +1051,10 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AdminVaultLive ->
         "Admin"
 
+      # Task 01a10315 stage 5: "Connect your AI", not the module name.
+      PlatformWeb.ConnectAiLive ->
+        "Connect your AI"
+
       _ ->
         view
         |> Module.split()
