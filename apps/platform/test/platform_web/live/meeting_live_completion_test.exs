@@ -71,7 +71,7 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
   end
 
   test "explicit Join still resumes an ended meeting and joins its call", ctx do
-    {meeting, _filed} = file_completion!(ctx)
+    {meeting, filed} = file_completion!(ctx)
     {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{meeting.slug}")
     assert Repo.get!(Meeting, meeting.id).status == "ended"
 
@@ -80,6 +80,8 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert_push_event(view, "join-meeting", %{token: token, url: "wss://livekit.test"})
     assert is_binary(token)
     assert Repo.get!(Meeting, meeting.id).status == "live"
+    # Joining a room without capture input must not invalidate completed work.
+    assert Repo.get!(CompletionRun, filed.id) == filed
   end
 
   test "scheduled meetings still auto-join on the normal connected URL", ctx do

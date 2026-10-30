@@ -246,6 +246,7 @@ defmodule Platform.Meetings.CompletionTest do
     {meeting, original_run, _} = ready!(ctx.meeting)
     canvas = canvas!(meeting.chat_space_id, ctx.scribe)
     old_args = params(meeting, original_run, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, old_args)
     {:ok, live} = Meetings.resume_meeting(meeting)
 
     {:ok, _capture} =
@@ -256,7 +257,12 @@ defmodule Platform.Meetings.CompletionTest do
     complete_current!(original_run.transcript_id, "Refreshed capture summary")
     refreshed = run!(ended)
     assert refreshed.generation == original_run.generation + 1
+    assert refreshed.snapshot == original_run.snapshot
     refute refreshed.snapshot_hash == original_run.snapshot_hash
+
+    assert {:error, :run_mismatch} =
+             Completion.triage_file(ctx.triage.id, Map.put(old_args, "action_items", []))
+
     assert {:error, :run_mismatch} = Completion.scribe_complete(ctx.scribe.id, old_args)
     refute Platform.Meetings.MeetingBriefings.readiness(ended).ready?
     args = params(ended, refreshed, canvas)
@@ -465,11 +471,20 @@ defmodule Platform.Meetings.CompletionTest do
     task |> Ecto.Changeset.change(status: "done") |> Repo.update!()
     assert {:ok, %{task_ids: [^task_id]}} = Completion.triage_file(ctx.triage.id, args)
 
-    {:ok, _} =
-      Meetings.append_segment(run.transcript_id, %{
-        "text" => "A late final clarification",
-        "start_time" => 4
-      })
+    late = segment("A late final clarification", 4)
+    filed = run!(meeting)
+    {:ok, changed} = Meetings.append_segment(run.transcript_id, late)
+    reopened = run!(meeting)
+    assert reopened.generation == filed.generation + 1
+    assert reopened.status == "waiting"
+    assert reopened.canvas_id == canvas.id
+    assert reopened.item_results == filed.item_results
+    assert {:ok, replayed} = Meetings.append_segment(run.transcript_id, late)
+    assert replayed.segments == changed.segments
+    assert run!(meeting) == reopened
+    Completion.capture_finished_for_space(meeting.chat_space_id)
+    Completion.sweep()
+    assert run!(meeting).status == "waiting"
 
     complete_current!(run.transcript_id, "Summary including the late final clarification")
     refreshed = run!(meeting)
@@ -491,6 +506,33 @@ defmodule Platform.Meetings.CompletionTest do
                ctx.triage.id,
                Map.put(refreshed_args, "action_items", [item])
              )
+
+    final = run!(meeting)
+    document = Repo.get!(Platform.Chat.Canvas, canvas.id).document
+
+    for _ <- 1..2 do
+      assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, refreshed_args)
+
+      assert {:ok, %{task_ids: [^task_id]}} =
+               Completion.triage_file(
+                 ctx.triage.id,
+                 Map.put(refreshed_args, "action_items", [item])
+               )
+
+      Completion.capture_finished_for_space(meeting.chat_space_id)
+      Completion.sweep()
+      Completion.resume(meeting.id)
+      assert {:ok, _} = Meetings.append_segment(run.transcript_id, late)
+    end
+
+    persisted = run!(meeting)
+    assert persisted.status == "filed"
+    assert persisted.generation == final.generation
+    assert persisted.snapshot_hash == final.snapshot_hash
+    assert persisted.canvas_id == canvas.id
+    assert persisted.item_results == final.item_results
+    assert Repo.get!(Platform.Chat.Canvas, canvas.id).document == document
+    assert Repo.get!(Task, task_id).status == "done"
 
     assert Repo.aggregate(
              from(t in Task, where: fragment("?->>'completion_run_id'", t.metadata) == ^run.id),
@@ -676,6 +718,91 @@ defmodule Platform.Meetings.CompletionTest do
     assert run!(meeting).generation == reopened.generation + 1
     complete_current!(transcript.id, "Summary with late input")
     assert run!(meeting).status == "scribe_dispatched"
+  end
+
+  test "empty capture restart fences old output and finalizes without invented speech", ctx do
+    {meeting, filed} = filed!(ctx)
+    {:ok, live} = Meetings.resume_meeting(meeting)
+
+    {:ok, empty} =
+      Meetings.ensure_transcript(%{
+        space_id: meeting.chat_space_id,
+        room_id: meeting.livekit_room_name
+      })
+
+    assert empty.segments == []
+    assert empty.meeting_id == meeting.id
+    reopened = run!(meeting)
+    assert reopened.generation == filed.generation + 1
+    assert reopened.status == "waiting"
+    assert is_nil(reopened.capture_finished_at)
+
+    {:ok, same} =
+      Meetings.ensure_transcript(%{
+        space_id: meeting.chat_space_id,
+        room_id: meeting.livekit_room_name
+      })
+
+    assert same.id == empty.id
+    assert run!(meeting) == reopened
+    {:ok, ended} = Meetings.end_meeting(live)
+    assert {:ok, _} = complete_current!(empty.id, "No additional speech")
+    Completion.capture_finished_for_space(ended.chat_space_id)
+    refreshed = run!(meeting)
+    assert refreshed.snapshot["segments"] == filed.snapshot["segments"]
+    assert refreshed.status == "scribe_dispatched"
+    args = params(ended, refreshed, Repo.get!(Platform.Chat.Canvas, filed.canvas_id))
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    assert {:ok, %{status: "filed", task_ids: []}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+  end
+
+  test "a second meeting in the same room owns new capture without reopening the first", ctx do
+    {first, filed} = filed!(ctx)
+
+    {:ok, second} =
+      Meetings.create_meeting(%{project_id: first.project_id, name: "Separate later call"})
+
+    start = DateTime.add(first.ended_at, 1)
+
+    second =
+      second
+      |> Ecto.Changeset.change(
+        chat_space_id: first.chat_space_id,
+        livekit_room_name: first.livekit_room_name,
+        status: "live",
+        started_at: start
+      )
+      |> Repo.update!()
+
+    {:ok, transcript} =
+      Meetings.create_transcript(%{
+        space_id: second.chat_space_id,
+        room_id: second.livekit_room_name,
+        started_at: DateTime.add(start, 1)
+      })
+
+    assert transcript.meeting_id == second.id
+    input = segment("Only the later call owns this speech", 1)
+    assert {:ok, _} = Meetings.append_segment(transcript.id, input)
+    assert run!(first) == filed
+    {:ok, ended} = Meetings.end_meeting(second)
+    assert {:ok, _} = complete_current!(transcript.id, "Later call summary")
+    Completion.capture_finished_for_space(second.chat_space_id)
+    second_run = run!(ended)
+    assert second_run.status == "scribe_dispatched"
+    assert Enum.map(second_run.snapshot["segments"], & &1["id"]) == [input["id"]]
+    assert run!(first) == filed
+
+    {:ok, _} =
+      Meetings.append_segment(
+        filed.transcript_id,
+        segment("Late speech belongs to first call", 9)
+      )
+
+    assert run!(first).generation == filed.generation + 1
+    assert run!(ended) == second_run
   end
 
   test "wrong role, live state and foreign canvas cannot file", ctx do

@@ -595,6 +595,9 @@ defmodule Platform.Meetings.Completion do
   defp save(run, attrs), do: run |> Ecto.Changeset.change(attrs) |> Repo.update!()
 
   @doc "Callback identity includes the persisted reopen generation, even when speech is unchanged."
+  # A real capture restart can keep the exact same transcript snapshot. A
+  # content-only hash would then admit a prior-capture scribe or triage callback;
+  # generation is the callback epoch fence, not a reason to invalidate on viewing.
   def snapshot_hash(run, snapshot),
     do:
       :crypto.hash(:sha256, :erlang.term_to_binary({run.generation, snapshot})) |> Base.encode16()
