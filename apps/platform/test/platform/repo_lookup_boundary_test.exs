@@ -1485,7 +1485,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task01a17f00: capture-start transcript owner lookup guards caller space_id
     # with Platform.UUID.valid?/1 and casts started_at before pinning either value.
     # Task01a1830b: append/summary success/summary failure lock canonical transcript ids after UUID guards.
-    "platform/meetings.ex" => 23,
+    # 23 -> 24 at task 01a18d0a-ec37 stage 1: `resolve_guest_short_code/1`
+    # pins `i.short_code == ^code`, a text column, so there is no uuid cast to
+    # raise; the code is also refused by `GuestShortCode.valid_format?/1`
+    # before the query runs. No id from the boundary reaches a `where:`.
+    "platform/meetings.ex" => 24,
     # Task01a17f00: row locks/retries pin persisted meeting/transcript FK ids;
     # legacy transcript hook resolves a schema space_id and capture timestamp.
     # Task01a1830b synthesis hook also locks its validated meeting identity.
