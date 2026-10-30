@@ -1,0 +1,9 @@
+Compiling 4 files (.ex)
+[test_helper] platform module preload done: 2422 modules loaded in 2712ms
+Running ExUnit with seed: 720074, max_cases: 8
+Excluding tags: [:files_service, :cascade_repro, :pending_fix, :slow, :isolated_beam]
+
+.................................................
+Finished in 5.1 seconds (1.1s async, 3.9s sync)
+
+Result: 49 passed

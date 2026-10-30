@@ -1,0 +1,12 @@
+Isolated own-runtime OTP28/Elixir1.20.4/PG16; seed79971.
+Finished in 1321.0 seconds (186.1s async, 1134.8s sync)
+
+Result: 26028/26031 passed (52/52 doctests, 25976/25979 tests), 3 skipped, 13 excluded
+Failed: 3 tests
+
+Failures observed before artifact correction:
+  1) test LIB POSITIVE CONTROL: a term planted in a copy of projects.ex is named, and only it (Platform.Regression.InstallIdentityGuardTest)
+  2) test no file on none of the lists has a hit (Platform.Regression.InstallIdentityGuardTest)
+  3) test POSITIVE CONTROL: a fixture carrying a camelCase term and a compound is named, and only it (Platform.Regression.InstallIdentityGuardTest)
+
+All3corrected; original identity suite15passed afterwards; current artifact scan0hits. No full-green claim.

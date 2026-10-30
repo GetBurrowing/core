@@ -1,0 +1,239 @@
+{
+  "test_only": true,
+  "executable": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/clip",
+  "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
+  "imported_module": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/config.py",
+  "source_revision": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "cli_version": {
+    "version": "0.9.0",
+    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+      "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "source_file_sha256": {
+    "config.py": "fd72b9bf2a9ebda8f5c8e8e72351611a26e83fe963e0a7b778956911034e359a",
+    "render.py": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
+    "cli.py": "bbbe8bb288b9ccb5363d80909fed96385221ee6710eb72a5532ee7ad21e97717",
+    "review.py": "a6a9b98e0534333c06971041a725a3992a78fea918b36b3a0e225b50a25d518d",
+    "headline.py": "eca12d6221c205afae31fc1f6c3800bb9fe43347f444610146d3e665df9e3b4c"
+  },
+  "source_patch_sha256": "90e2c476492cd463e7bd28f5accbf2dfb678e905a9a587663003c2b5eb65fdd2",
+  "executable_sha256": "9c713bb0fae3635e5a7c255771053ed469c2af26f73638c2069d77a0051e48b9",
+  "helper_sha256": "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
+  "caption_style": "editorial-punch",
+  "seeded": "Deterministic transcript/proposal, no customer media; real process/resume/review/finalize",
+  "renders": [
+    {
+      "name": "clip1-A-keep",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3444583656269624,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "e364c854a154b488024b51d0dddc8e7cf424c40382405b64d338a1a663fc6abd",
+      "closing_997hz_amplitude": 0.13953478460637048,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "clip2-A-mute",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "1f455dd44d7cd147643e211c6f191aa005d3f5750f8f498c917916bfada0a253",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "replacement-B",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "0db9e000c236f43067c95724a8fcc939b16da871823f16406137ade5da843d4d",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.08343171296296296,
+      "closing_frames": 36
+    },
+    {
+      "name": "disabled",
+      "duration_s": 5.0,
+      "expected_s": 5.0,
+      "source_440hz_amplitude": 0.30652379143905023,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123",
+        "duration_s": 5.0
+      },
+      "sha256": "b82607aeceaad8e60248672886f9afd4a6e235fb9c7ecf8a3100f2b51ede0fba"
+    },
+    {
+      "name": "headline",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3444583656269624,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "f264c4bde0aa8b7c37cb6886994c2fcb29ac74ef108a428553b903c904545e57",
+      "closing_997hz_amplitude": 0.13953478460637048,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "caption",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.30651246137599,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123",
+        "actual_in_s": 0.0,
+        "actual_out_s": 5.0
+      },
+      "sha256": "748f29582f42cc22c2518e4f99935f5f0ad67709021a837c60a0218368b8f44c",
+      "closing_997hz_amplitude": 0.0,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    },
+    {
+      "name": "music",
+      "duration_s": 6.2,
+      "expected_s": 6.2,
+      "source_440hz_amplitude": 0.3172988162165476,
+      "result": {
+        "file_id": "fixture-file",
+        "candidate_id": "abc123"
+      },
+      "sha256": "fa3fa022204e34cb249e073347f284afd49b0d6922873cb87bda09d9d3073641",
+      "closing_997hz_amplitude": 1.0816659365314571e-06,
+      "suffix_delivery_clean_mae": 0.0,
+      "final_asset_mae": 0.0907103587962963,
+      "closing_frames": 36
+    }
+  ],
+  "calls": [
+    {
+      "argv": [
+        "profile",
+        "import",
+        "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-evidence/stage4-closing-editorial/fixture-profile.toml",
+        "--name",
+        "burrow-fixture",
+        "--force",
+        "--yes"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "version",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "process",
+        "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-evidence/stage4-closing-editorial/source-test-only.mp4",
+        "--project",
+        "closing-fixture",
+        "--profile",
+        "burrow-fixture",
+        "--resume"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "review",
+        "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-evidence/stage4-closing-editorial/tool-home/clips/closing-fixture",
+        "--overwrite",
+        "--profile",
+        "burrow-fixture"
+      ],
+      "exit": 0
+    },
+    {
+      "argv": [
+        "review",
+        "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-evidence/stage4-closing-editorial/tool-home/clips/closing-fixture",
+        "--apply",
+        "--profile",
+        "burrow-fixture"
+      ],
+      "exit": 0
+    }
+  ],
+  "source_requests": [
+    {
+      "job_id": "closing-clip1-A-keep",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-clip2-A-mute",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-replacement-B",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-headline",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-caption",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-music",
+      "asset": "music"
+    },
+    {
+      "job_id": "closing-music",
+      "asset": "closing_video"
+    },
+    {
+      "job_id": "closing-invalid",
+      "asset": "closing_video"
+    }
+  ],
+  "invalid_video_failure": "CLIP_EXIT_1"
+}

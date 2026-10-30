@@ -103,6 +103,39 @@ defmodule Platform.Social.ClipVersionsTest do
     assert {:ok, ^first} = ClipVersions.get(w.scope, w.profile.id, clip.id, first.id)
   end
 
+  test "style metadata is immutable per version and duplicate completion cannot relabel it", w do
+    {:ok, [original]} = ClipVersions.recent(w.scope, w.profile.id, w.clip.id)
+    key = "caption-style-fixture"
+
+    {:ok, updated} =
+      Repo.transaction(fn ->
+        ClipVersions.append!(
+          w.clip.id,
+          w.next_file,
+          %{look: %{"cap" => %{"style" => "editorial-punch"}}},
+          %{completion_key: key}
+        )
+      end)
+
+    {:ok, [current, historical]} = ClipVersions.recent(w.scope, w.profile.id, w.clip.id)
+    assert historical == original
+    assert ClipVersions.metadata(current).look["cap"]["style"] == "editorial-punch"
+
+    {:ok, duplicate} =
+      Repo.transaction(fn ->
+        ClipVersions.append!(
+          w.clip.id,
+          w.original_file,
+          %{look: %{"cap" => %{"style" => "type-on"}}},
+          %{completion_key: key}
+        )
+      end)
+
+    assert duplicate.rev == updated.rev
+    assert {:ok, [^current, ^historical]} = ClipVersions.recent(w.scope, w.profile.id, w.clip.id)
+    assert Platform.Files.get_file(historical.file_id).id == w.original_file.id
+  end
+
   test "tool bounds not reported by the runner remain unknown", w do
     {clip, _job} = rerender!(w, %{})
     {:ok, [version | _]} = ClipVersions.recent(w.scope, w.profile.id, clip.id)

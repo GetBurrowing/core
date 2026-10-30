@@ -62,6 +62,10 @@ COPY apps/social/config social/config
 COPY apps/social/assets social/assets
 COPY apps/social/priv social/priv
 COPY apps/social/lib social/lib
+# Social compiles release labels from these pinned artifact manifests; include
+# their sources before compiling the path dependency (no runtime file reads).
+COPY docs/integrations/clip-captions/runner-artifact.json /app/docs/integrations/clip-captions/runner-artifact.json
+COPY docs/integrations/clip-captions/preview-assets.json /app/docs/integrations/clip-captions/preview-assets.json
 COPY apps/burrow_release/config burrow_release/config
 
 # The ADR corpus and the build commit go into CORE's priv/, where

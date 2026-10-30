@@ -1,0 +1,16 @@
+...........                                                              [100%]
+=============================== warnings summary ===============================
+tests/test_dynamic_captions.py: 21 warnings
+  /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_dynamic_captions.py:85: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert not any(r > 180 and g > 150 and b < 100 and a > 200 for im in images for r, g, b, a in im.getdata())
+
+tests/test_dynamic_captions.py::test_intermediate_png_opacity_and_pill_geometry
+  /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_dynamic_captions.py:177: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert max(Image.open(path).getchannel("A").getdata()) == 128
+
+tests/test_dynamic_captions.py::test_intermediate_png_opacity_and_pill_geometry
+  /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_dynamic_captions.py:179: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert max(Image.open(path).getchannel("A").getdata()) == 255
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+11 passed, 23 warnings in 3.99s

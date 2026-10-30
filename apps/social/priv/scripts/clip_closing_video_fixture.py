@@ -25,6 +25,11 @@ def main():
     parser.add_argument("--clip", required=True, type=Path)
     parser.add_argument("--tool-source", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--caption-style",
+        choices=("plain", "type-on", "focus-word", "editorial-punch"),
+        default="plain",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -376,7 +381,7 @@ def main():
                 "closing_video": dict(current),
                 "appearance": True,
                 "clip_overrides": {
-                    "mapped": {"captions.style": "plain"},
+                    "mapped": {"captions.style": args.caption_style},
                     "unmapped": [],
                 },
             }
@@ -631,6 +636,7 @@ def main():
         "source_patch_sha256": hashlib.sha256(source_diff).hexdigest(),
         "executable_sha256": hashlib.sha256(args.clip.read_bytes()).hexdigest(),
         "helper_sha256": helper_sha256,
+        "caption_style": args.caption_style,
         "seeded": "Deterministic transcript/proposal, no customer media; real process/resume/review/finalize",
         "renders": renders,
         "calls": calls,

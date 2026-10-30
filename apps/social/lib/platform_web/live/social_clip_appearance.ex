@@ -2,7 +2,15 @@ defmodule PlatformWeb.SocialClipAppearance do
   @moduledoc "Caption appearance drafts and exact-version rerenders; never mutates a playing render."
   use PlatformWeb, :live_component
   alias Platform.Social
-  alias Platform.Social.{ClipJobs, ClipLook, ClipVersions, ClipMusic}
+
+  alias Platform.Social.{
+    ClipJobs,
+    ClipLook,
+    ClipVersions,
+    ClipMusic,
+    ClipCaptionRenderer,
+    ClipCaptionPreviews
+  }
 
   @impl true
   def mount(socket) do
@@ -64,7 +72,9 @@ defmodule PlatformWeb.SocialClipAppearance do
         can_edit?: !!can?,
         pending?: pending?,
         attempt: attempt,
-        tracks: tracks
+        tracks: tracks,
+        supported_styles: ClipCaptionRenderer.styles(),
+        renderer_receipt: ClipCaptionRenderer.receipt()
       )
 
     socket =
@@ -104,16 +114,17 @@ defmodule PlatformWeb.SocialClipAppearance do
   def handle_event("choose", %{"style" => style}, socket) do
     socket = load(socket)
 
-    if socket.assigns.can_edit? and not socket.assigns.pending? and style in ClipLook.styles(),
-      do: {:noreply, socket |> assign(style: style, error: nil) |> notify()},
-      else: {:noreply, socket}
+    if socket.assigns.can_edit? and not socket.assigns.pending? and
+         style in ClipCaptionRenderer.styles(),
+       do: {:noreply, socket |> assign(style: style, error: nil) |> notify()},
+       else: {:noreply, socket}
   end
 
   def handle_event("render", params, socket) do
     socket = load(socket)
     %{profile: p, clip: clip, user_id: user, style: style} = socket.assigns
 
-    if socket.assigns.can_edit? do
+    if socket.assigns.can_edit? and not is_nil(socket.assigns.base) do
       case ClipJobs.enqueue_appearance(p.org_id, clip.id, user, %{
              "base_render_id" => params["base_render_id"],
              "look" => %{
@@ -201,6 +212,10 @@ defmodule PlatformWeb.SocialClipAppearance do
   defp message(:stale_version),
     do: "A newer version is ready. Reload it before changing captions."
 
+  defp message(:caption_renderer_unavailable),
+    do:
+      "This caption treatment is unavailable. Choose an available style or try again after the renderer is ready."
+
   defp message(:job_in_flight), do: "A render is already running. Wait for it to finish."
   defp message(_), do: "This version cannot be changed. Reload and try again."
 
@@ -213,6 +228,8 @@ defmodule PlatformWeb.SocialClipAppearance do
         dirty?(%{assigns: assigns})
       )
 
+    assigns = assign(assigns, cards: ClipCaptionPreviews.cards())
+
     ~H"""
     <section
       id={@id}
@@ -220,43 +237,113 @@ defmodule PlatformWeb.SocialClipAppearance do
       aria-label="Clip appearance"
       data-role="clip-appearance"
     >
-      <h3 class="text-sm font-semibold">Captions</h3>
-      <div class="grid grid-cols-3 gap-2" role="group" aria-label="Caption style">
+      <h3 id={"#{@id}-style-label"} class="text-sm font-semibold">Caption style</h3>
+      <div
+        id={"#{@id}-previews"}
+        class="caption-preview-row"
+        role="group"
+        aria-labelledby={"#{@id}-style-label"}
+        data-role="caption-preview-group"
+      >
+        <div
+          id={"#{@id}-preview-sync"}
+          phx-hook="SyncedVideoPreviews"
+          phx-update="ignore"
+          data-preview-controls={"#{@id}-previews"}
+          class="hidden"
+        />
         <button
-          :for={
-            {style, label, sample} <- [
-              {"plain", "Plain", "A clean lower caption"},
-              {"phrase-pop", "Phrase pop", "SHORT PHRASES"},
-              {"karaoke", "Word highlight", "Follow each word"}
-            ]
-          }
+          :for={card <- @cards}
+          id={"#{@id}-style-#{card.style}"}
           type="button"
           phx-click="choose"
-          phx-value-style={style}
+          phx-value-style={card.style}
           phx-target={@myself}
-          aria-pressed={to_string(@style == style)}
-          disabled={!@can_edit? or @pending? or is_nil(@base)}
+          aria-pressed={to_string(@style == card.style)}
+          aria-label={"#{card.name}: #{card.description}"}
+          aria-describedby={if applied_style(@base) == card.style, do: "#{@id}-current-#{card.style}"}
+          disabled={!@can_edit? or @pending? or is_nil(@base) or card.style not in @supported_styles}
           class={[
-            "rounded-box border p-2 text-left hover:border-info focus-visible:outline focus-visible:outline-2 focus-visible:outline-info",
-            if(@style == style, do: "border-info bg-base-100", else: "border-base-300")
+            "caption-preview-card rounded-box border border-base-300 bg-base-100 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+            if(@style == card.style, do: "caption-preview-selected")
           ]}
           data-role="caption-style"
-          data-style={style}
+          data-style={card.style}
         >
-          <span
-            class="flex h-16 items-end justify-center rounded bg-neutral p-1 text-center text-[10px] text-neutral-content"
-            aria-hidden="true"
-          >
-            <span class={if style == "karaoke", do: "text-warning", else: ""}>{sample}</span>
+          <span id={"#{@id}-media-#{card.style}"} phx-update="ignore" class="block">
+            <span
+              data-preview-media
+              data-preview-state="loading"
+              class="caption-preview-media"
+              aria-hidden="true"
+            >
+              <video
+                data-preview-video
+                src={card.video}
+                poster={elem(hd(card.frames), 1)}
+                muted
+                loop
+                playsinline
+                preload="auto"
+                tabindex="-1"
+              />
+              <span data-preview-stills class="caption-preview-stills">
+                <img
+                  :for={{phase, src} <- card.frames}
+                  src={src}
+                  alt={"#{card.name}, #{phase}"}
+                  loading="lazy"
+                />
+              </span>
+              <span data-preview-loading class="caption-preview-status">Loading preview…</span>
+              <span data-preview-error class="caption-preview-status">Preview unavailable</span>
+            </span>
           </span>
-          <span class="mt-1 block text-xs font-semibold">{label}</span>
+          <span class="mt-2 flex min-h-5 items-center justify-between gap-1 text-xs font-semibold text-base-content">
+            <span>{card.name}</span>
+            <span
+              :if={applied_style(@base) == card.style}
+              id={"#{@id}-current-#{card.style}"}
+              class="badge badge-info badge-xs"
+              data-role="caption-current"
+            >
+              Current
+            </span>
+          </span>
+          <span
+            class="caption-preview-description mt-1 block text-xs text-subtle"
+            title={card.description}
+          >
+            {card.description}
+          </span>
+          <span
+            :if={card.style not in @supported_styles}
+            class="mt-1 block text-xs text-subtle"
+            data-role="caption-unavailable"
+          >
+            Renderer unavailable
+          </span>
         </button>
       </div>
       <p class="text-xs text-subtle">
-        Sample captions. Render preview to see this clip in the selected style.
+        Same excerpt in every preview. Choose a style to render your clip.
       </p>
-      <p class="font-mono text-xs" data-role="caption-applied">
-        Applied: {applied_style(@base) || "Existing render (style not recorded)"}
+      <details class="text-xs text-subtle" data-role="caption-metadata">
+        <summary>Render details</summary>
+        <p class="font-mono text-xs">
+          Preview v{ClipCaptionPreviews.metadata()["version"]} · CLI {ClipCaptionPreviews.metadata()[
+            "cli_version"
+          ]} · {ClipCaptionPreviews.metadata()["renderer_contract"]}
+        </p>
+        <p :if={@renderer_receipt} class="font-mono text-xs">
+          Qualified renderer · helper {ClipCaptionRenderer.helper_version(@renderer_receipt)}
+        </p>
+        <p :if={!@renderer_receipt}>
+          New treatments are unavailable until the renderer is qualified.
+        </p>
+      </details>
+      <p class="text-xs text-subtle" data-role="caption-applied">
+        Applied: {ClipCaptionPreviews.version_label(@base || %{look: %{}})}
       </p>
       <p :if={@dirty?} class="text-xs text-info" data-role="caption-dirty">
         Captions or music changed. Rerender to review the new version
@@ -272,12 +359,12 @@ defmodule PlatformWeb.SocialClipAppearance do
       <form phx-submit="render" phx-target={@myself} data-role="caption-render-form">
         <input type="hidden" name="base_render_id" value={@base && @base.id} />
         <button
-          class="btn btn-outline btn-sm min-h-11"
+          class="btn btn-primary btn-sm min-h-11 h-auto text-wrap py-2"
           type="submit"
           disabled={!@can_edit? or @pending? or !@dirty? or is_nil(@base)}
           data-role="caption-render"
         >
-          Render preview
+          Apply {ClipCaptionPreviews.label(@style || applied_style(@base) || "phrase-pop")} — queues a new render; approval resets
         </button>
       </form>
       <p :if={@pending?} role="status" class="text-xs text-info" data-role="caption-pending">
@@ -290,7 +377,7 @@ defmodule PlatformWeb.SocialClipAppearance do
         class="text-xs text-error"
         data-role="caption-failure"
       >
-        Render failed. Your previous video is unchanged. Check that the runner has the original project or source and selected audio, then try Render preview again.
+        Render failed. Your previous video is unchanged. Check that the runner has the original project or source and selected audio, then apply the style again.
       </p>
     </section>
     """

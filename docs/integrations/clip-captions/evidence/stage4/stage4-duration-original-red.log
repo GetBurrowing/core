@@ -1,0 +1,135 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+________ test_encoded_track_keeps_full_timeline_and_last_word[type-on] _________
+
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-49/test_encoded_track_keeps_full_0')
+style = 'type-on'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_encoded_track_keeps_full_timeline_and_last_word(tmp_path, style):
+        import subprocess
+        from clip_agent.captions import render_caption_track
+
+        timed = [Word("word", i * 0.2, i * 0.2 + 0.18) for i in range(25)]
+        output = tmp_path / "actual.mov"
+        render_caption_track(
+            timed,
+            output,
+            width=360,
+            height=640,
+            style=style,
+            config=Config(),
+            fonts_dir=FONTS_DIR,
+            clip_start=0,
+            clip_dur=5,
+        )
+        probe = json.loads(
+            subprocess.check_output(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-show_entries",
+                    "stream=nb_read_frames,duration",
+                    "-of",
+                    "json",
+                    str(output),
+                ]
+            )
+        )
+>       assert int(probe["streams"][0]["nb_read_frames"]) == 150
+E       AssertionError: assert 148 == 150
+E        +  where 148 = int('148')
+
+.caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py:229: AssertionError
+_______ test_encoded_track_keeps_full_timeline_and_last_word[focus-word] _______
+
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-49/test_encoded_track_keeps_full_1')
+style = 'focus-word'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_encoded_track_keeps_full_timeline_and_last_word(tmp_path, style):
+        import subprocess
+        from clip_agent.captions import render_caption_track
+
+        timed = [Word("word", i * 0.2, i * 0.2 + 0.18) for i in range(25)]
+        output = tmp_path / "actual.mov"
+        render_caption_track(
+            timed,
+            output,
+            width=360,
+            height=640,
+            style=style,
+            config=Config(),
+            fonts_dir=FONTS_DIR,
+            clip_start=0,
+            clip_dur=5,
+        )
+        probe = json.loads(
+            subprocess.check_output(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-show_entries",
+                    "stream=nb_read_frames,duration",
+                    "-of",
+                    "json",
+                    str(output),
+                ]
+            )
+        )
+>       assert int(probe["streams"][0]["nb_read_frames"]) == 150
+E       AssertionError: assert 147 == 150
+E        +  where 147 = int('147')
+
+.caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py:229: AssertionError
+____ test_encoded_track_keeps_full_timeline_and_last_word[editorial-punch] _____
+
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-49/test_encoded_track_keeps_full_2')
+style = 'editorial-punch'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_encoded_track_keeps_full_timeline_and_last_word(tmp_path, style):
+        import subprocess
+        from clip_agent.captions import render_caption_track
+
+        timed = [Word("word", i * 0.2, i * 0.2 + 0.18) for i in range(25)]
+        output = tmp_path / "actual.mov"
+        render_caption_track(
+            timed,
+            output,
+            width=360,
+            height=640,
+            style=style,
+            config=Config(),
+            fonts_dir=FONTS_DIR,
+            clip_start=0,
+            clip_dur=5,
+        )
+        probe = json.loads(
+            subprocess.check_output(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-show_entries",
+                    "stream=nb_read_frames,duration",
+                    "-of",
+                    "json",
+                    str(output),
+                ]
+            )
+        )
+>       assert int(probe["streams"][0]["nb_read_frames"]) == 150
+E       AssertionError: assert 132 == 150
+E        +  where 132 = int('132')
+
+.caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py:229: AssertionError
+=========================== short test summary info ============================
+FAILED .caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py::test_encoded_track_keeps_full_timeline_and_last_word[type-on]
+FAILED .caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py::test_encoded_track_keeps_full_timeline_and_last_word[focus-word]
+FAILED .caption-tool/baseline/clip-agent/tests/test_dynamic_captions.py::test_encoded_track_keeps_full_timeline_and_last_word[editorial-punch]

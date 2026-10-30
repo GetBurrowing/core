@@ -1,0 +1,628 @@
+diff --git a/clip-agent/THIRD-PARTY.md b/clip-agent/THIRD-PARTY.md
+index a5eda6d..dd9afe1 100644
+--- a/clip-agent/THIRD-PARTY.md
++++ b/clip-agent/THIRD-PARTY.md
+@@ -249,3 +249,5 @@ Licences were read from installed metadata. The dev venv used for that check was
+ |---|---|---|---|
+ | Legal / OSS review | | | |
+ | Engineering owner (register accuracy) | | | |
++
++| weights/Inter-ExtraBold.ttf | Inter v4.1 official release, SHA-256 `e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22` | **OFL-1.1** | Same Inter-OFL.txt; https://github.com/rsms/inter/releases/tag/v4.1. Used only for editorial word emphasis. |
+diff --git a/clip-agent/src/clip_agent/captions.py b/clip-agent/src/clip_agent/captions.py
+index 75502f8..5b12136 100644
+--- a/clip-agent/src/clip_agent/captions.py
++++ b/clip-agent/src/clip_agent/captions.py
+@@ -1191,6 +1191,13 @@ def render_caption_pngs(
+     style = CaptionStyle(style)
+     if style == CaptionStyle.NONE:
+         return []
++    from . import dynamic_captions
++
++    if style in dynamic_captions.STYLES:
++        return dynamic_captions.render_segments(
++            words, out_dir, width=width, height=height, style=style, fonts_dir=fonts_dir,
++            clip_start=clip_start, clip_dur=clip_dur, breaks=breaks,
++        )
+     out_dir = Path(out_dir)
+     look = resolve_look(config)
+     font_path = resolve_font_path(look.font, fonts_dir)
+@@ -1356,11 +1363,18 @@ def render_caption_track(
+         # concat list -> transparent caption track (qtrle .mov keeps alpha)
+         listf = tmpd / "concat.txt"
+         lines = []
++        temporal = style in {CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH}
+         for png, d in timeline:
+             lines.append(f"file {_concat_quote(Path(png).as_posix())}")
+-            lines.append(f"duration {d:.3f}")
++            if temporal:
++                lines.append("option framerate 30")
++            lines.append(f"duration {d:.9f}" if temporal else f"duration {d:.3f}")
+         # repeat the last frame so its duration is applied by the demuxer
+         lines.append(f"file {_concat_quote(Path(timeline[-1][0]).as_posix())}")
++        # The sentinel must use the SAME timebase as every temporal input.
++        # The default 25 Hz PNG timebase otherwise shortens the decoded tail.
++        if temporal:
++            lines.append("option framerate 30")
+         listf.write_text("\n".join(lines) + "\n")
+ 
+         # The concat demuxer gives the repeated last frame extra time, so the
+diff --git a/clip-agent/src/clip_agent/cli.py b/clip-agent/src/clip_agent/cli.py
+index f18005e..0dac6b2 100644
+--- a/clip-agent/src/clip_agent/cli.py
++++ b/clip-agent/src/clip_agent/cli.py
+@@ -29,6 +29,7 @@ Design notes:
+ from __future__ import annotations
+ 
+ import functools
++import hashlib
+ import json
+ import os
+ import re
+@@ -2485,9 +2486,16 @@ def install_info() -> dict:
+     this build implements (:data:`CONTENT_FREE_VERSION`; absent = older builds),
+     which the clip-studio preflight reads.
+     """
++    from . import captions, dynamic_captions
+     from .provenance import install_info as _install_info
+ 
+-    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1}
++    renderer = Path(captions.__file__).resolve()
++    temporal = Path(dynamic_captions.__file__).resolve()
++    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "caption_treatments": 1,
++            "caption_styles": _CAPTION_CHOICES,
++            "caption_renderer": {"path": str(renderer), "sha256": hashlib.sha256(renderer.read_bytes()).hexdigest(),
++                                 "temporal_path": str(temporal),
++                                 "temporal_sha256": hashlib.sha256(temporal.read_bytes()).hexdigest()}}
+ 
+ 
+ @cli.command("version")
+@@ -2621,7 +2629,8 @@ def hooks_prepare_review(project, request_path, profile, config_path, check_appl
+         config = current if profile else hooks_mod.project_config(manifest, current)
+         req = headline.HeadlineRequest.parse(json.loads(Path(request_path).read_text()),
+                                             privacy=config.effective_privacy_mode,
+-                                            capabilities={"headline_review": 1})
++                                            capabilities={"headline_review": 1, "caption_treatments": 1,
++            "caption_styles": _CAPTION_CHOICES})
+         if not check_applied and req.requested_headline is None and config.effective_privacy_mode == "local":
+             _preflight_local_model(config)
+         sweep_expired_logs(config, project_dirs=[project_dir])
+diff --git a/clip-agent/src/clip_agent/config.py b/clip-agent/src/clip_agent/config.py
+index 572ba6c..a26de0b 100644
+--- a/clip-agent/src/clip_agent/config.py
++++ b/clip-agent/src/clip_agent/config.py
+@@ -343,7 +343,7 @@ class ReframeConfig(_Section):
+ 
+ 
+ class CaptionConfig(_Section):
+-    style: str = "phrase-pop"                 # none | plain | phrase-pop | karaoke
++    style: str = "phrase-pop"                 # validated against CaptionStyle, including temporal treatments
+     preset: str | None = None                 # bold-pop | podcast-clean | speaker-color (fills unset look keys)
+     font: str = "Anton-Regular.ttf"           # file in the bundled fonts/ dir, or an absolute path
+     font_size: int = Field(default=72, ge=8, le=400)  # px at the output height when size_frac is unset
+diff --git a/clip-agent/src/clip_agent/dynamic_captions.py b/clip-agent/src/clip_agent/dynamic_captions.py
+new file mode 100644
+index 0000000..52c2552
+--- /dev/null
++++ b/clip-agent/src/clip_agent/dynamic_captions.py
+@@ -0,0 +1,238 @@
++"""Restrained temporal captions on the existing PNG/concat boundary.
++
++Layout is computed once per phrase. Only transition windows are sampled at
++30 Hz; holds reuse one PNG. No new video renderer or transcription path.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFilter, ImageFont
++
++from .models import SENTENCE_ENDERS, CaptionStyle, Phrase, Word
++
++STYLES = frozenset({CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH})
++TEXT = (244, 244, 240, 255)
++TEAL = (46, 196, 182)
++VIOLET = (109, 74, 255, 255)
++FPS = 30
++
++
++@dataclass(frozen=True)
++class Layout:
++    tokens: tuple[str, ...]
++    # Drawing origins and padded word rectangles never change over a phrase.
++    origins: tuple[tuple[float, float], ...]
++    boxes: tuple[tuple[float, float, float, float], ...]
++    font: ImageFont.FreeTypeFont
++    emphasis_font: ImageFont.FreeTypeFont
++    emphasis: int
++    size: tuple[int, int]
++    scrims: tuple[tuple[float, float, float, float], ...]
++
++
++def phrases(words: list[Word], start: float, duration: float, breaks=()) -> list[Phrase]:
++    """No phrase crosses a camera/EDL cut, speaker change or >1.5 second gap.
++
++    Seven words / ~52 characters bound work and keep two short lines. Long
++    individual words stay intact and shrink to fit rather than being clipped.
++    """
++    selected = [w for w in words if start <= w.start < start + duration]
++    chunks: list[list[Word]] = []
++    chunk: list[Word] = []
++    for word in selected:
++        if chunk and (
++            len(chunk) >= 7
++            or len(" ".join(w.text for w in [*chunk, word])) > 52
++            or word.start - chunk[-1].end > 1.5
++            or any(chunk[0].start < b <= word.start for b in breaks)
++            or (word.speaker and chunk[-1].speaker and word.speaker != chunk[-1].speaker)
++        ):
++            chunks.append(chunk)
++            chunk = []
++        chunk.append(word)
++        if word.text and word.text[-1] in SENTENCE_ENDERS:
++            chunks.append(chunk)
++            chunk = []
++    if chunk:
++        chunks.append(chunk)
++    result = []
++    for i, chunk in enumerate(chunks):
++        end = chunks[i + 1][0].start if i + 1 < len(chunks) else chunk[-1].end + 0.3
++        if end - chunk[-1].end > 1.5:
++            end = chunk[-1].end + 0.3
++        end = min(end, *(b for b in breaks if b > chunk[0].start), start + duration)
++        result.append(
++            Phrase(
++                text=" ".join(w.text for w in chunk),
++                words=chunk,
++                start=max(0, chunk[0].start - start),
++                end=max(0, end - start),
++            )
++        )
++    return result
++
++
++def layout(tokens: list[str], width: int, height: int, fonts_dir: Path) -> Layout:
++    """One shared sentence-case grotesque layout in the 62–78% band.
++
++    Measure the heavier word too, so editorial emphasis cannot push its
++    neighbour. Shrinking is shared by all treatments, including long words.
++    """
++    base = fonts_dir / "Inter-SemiBold.ttf"
++    bold = fonts_dir / "weights" / "Inter-ExtraBold.ttf"
++    emphasis = max(range(len(tokens)), key=lambda i: len(tokens[i].strip(".,!?;:")))
++    size = max(8, round(height * 0.0375))
++    left, right = width * 0.09, width * 0.84
++    top, bottom = height * 0.62, height * 0.78
++    # Reserve room for 12px entry rise, shadows, pill and underline.
++    rise = 12 * height / 1920
++    while True:
++        font, heavy = ImageFont.truetype(str(base), size), ImageFont.truetype(str(bold), size)
++        widths = [max(font.getlength(t), heavy.getlength(t)) for t in tokens]
++        space = font.getlength(" ")
++        available = right - left - size * 0.5 - 16
++        split = (
++            min(
++                range(1, len(tokens)),
++                key=lambda k: max(sum(widths[:k]) + space * (k - 1), sum(widths[k:]) + space * (len(tokens) - k - 1)),
++            )
++            if len(tokens) > 1
++            else 1
++        )
++        lines = [list(range(len(tokens)))]
++        if sum(widths) + space * (len(tokens) - 1) > available or sum(map(len, tokens)) + len(tokens) - 1 > 26:
++            lines = [list(range(split)), list(range(split, len(tokens)))] if split < len(tokens) else lines
++        widest = max(sum(widths[i] for i in ids) + space * (len(ids) - 1) for ids in lines)
++        if (widest <= available and size * 1.3 * len(lines) + rise + 16 < bottom - top) or size == 1:
++            break
++        size -= 1
++    if widest > available:
++        raise ValueError("caption token cannot fit the safe band without clipping")
++    line_h = size * 1.3
++    y = (top + bottom - line_h * len(lines) - rise) / 2
++    origins, boxes, scrims = [None] * len(tokens), [None] * len(tokens), []
++    pad = size * 0.15
++    ref = font.getbbox("Hg")
++    for line, ids in enumerate(lines):
++        w = sum(widths[i] for i in ids) + space * (len(ids) - 1)
++        x = (left + right - w) / 2
++        line_y = y + line * line_h
++        scrims.append((x - pad, line_y + ref[1] - pad, x + w + pad, line_y + ref[3] + pad))
++        for i in ids:
++            origins[i] = (x, line_y)
++            boxes[i] = (x - pad, line_y + ref[1] - pad, x + widths[i] + pad, line_y + ref[3] + pad)
++            x += widths[i] + space
++    return Layout(tuple(tokens), tuple(origins), tuple(boxes), font, heavy, emphasis, (width, height), tuple(scrims))
++
++
++def state(style: CaptionStyle, phrase: Phrase, clip_start: float, t: float) -> dict:
++    starts = [w.start - clip_start for w in phrase.words]
++    active = max((i for i, s in enumerate(starts) if s <= t), default=0)
++    age = max(0, t - starts[active])
++    if style == CaptionStyle.TYPE_ON:
++        return {
++            "alpha": tuple(
++                1.0 if phrase.end - s <= 1 / FPS else max(0.0, min(1.0, (t - s) / min(0.08, phrase.end - s - 1 / FPS)))
++                for s in starts
++            ),
++            "active": active,
++            "underline": max(0.0, 1 - age / 0.3),
++            "rise": 0.0,
++            "opacity": 1.0,
++        }
++    if style == CaptionStyle.FOCUS_WORD:
++        weights = [1.0] + [0.0] * (len(starts) - 1)
++        for i in range(1, active + 1):
++            until = starts[i + 1] if i < active else t
++            mix = 1 - (1 - min(1.0, max(0.0, until - starts[i]) / 0.12)) ** 3
++            weights = [w * (1 - mix) for w in weights]
++            weights[i] += mix
++        return {
++            "weights": tuple(weights),
++            "active": active,
++            "previous": max(0, active - 1),
++            "mix": 1 - (1 - min(1.0, age / 0.12)) ** 3,
++            "rise": 0.0,
++            "opacity": 1.0,
++        }
++    progress = 1.0 if phrase.end - phrase.start < 0.25 else min(1.0, max(0.0, (t - phrase.start) / 0.18))
++    return {"rise": 12 * (1 - (1 - (1 - progress) ** 3)), "opacity": progress}
++
++
++def pill_box(plan: Layout, frame: dict) -> tuple[float, float, float, float]:
++    return tuple(sum(box[k] * weight for box, weight in zip(plan.boxes, frame["weights"])) for k in range(4))
++
++
++def render(plan: Layout, style: CaptionStyle, frame: dict, path: Path, *, scrim: bool = True) -> None:
++    image = Image.new("RGBA", plan.size)
++    if scrim:
++        d = ImageDraw.Draw(image)
++        for box in plan.scrims:
++            d.rounded_rectangle(box, radius=plan.font.size * 0.18, fill=(0, 0, 0, 153))
++    if style == CaptionStyle.FOCUS_WORD:
++        ImageDraw.Draw(image).rounded_rectangle(pill_box(plan, frame), radius=plan.font.size * 0.18, fill=VIOLET)
++    text = Image.new("RGBA", plan.size)
++    d = ImageDraw.Draw(text)
++    for i, (token, origin) in enumerate(zip(plan.tokens, plan.origins)):
++        alpha = frame.get("alpha", (1.0,) * len(plan.tokens))[i]
++        font = plan.emphasis_font if style == CaptionStyle.EDITORIAL_PUNCH and i == plan.emphasis else plan.font
++        d.text(origin, token, font=font, fill=(*TEXT[:3], round(255 * alpha)))
++    shadow = Image.new("RGBA", plan.size, (0, 0, 0, 0))
++    shadow.putalpha(text.getchannel("A").point(lambda p: round(p * 0.55)))
++    shadow = shadow.filter(ImageFilter.GaussianBlur(4 * plan.size[1] / 1920))
++    image.alpha_composite(shadow, (0, round(2 * plan.size[1] / 1920)))
++    image.alpha_composite(text)
++    if style == CaptionStyle.TYPE_ON:
++        box = plan.boxes[frame["active"]]
++        ImageDraw.Draw(image).line(
++            (box[0], box[3], box[2], box[3]),
++            fill=(*TEAL, round(255 * frame["underline"])),
++            width=max(1, round(3 * plan.size[1] / 1920)),
++        )
++    if frame["opacity"] < 1:
++        image.putalpha(image.getchannel("A").point(lambda p: round(p * frame["opacity"])))
++    if frame["rise"]:
++        moved = Image.new("RGBA", plan.size)
++        moved.alpha_composite(image, (0, round(frame["rise"] * plan.size[1] / 1920)))
++        image = moved
++    image.save(path)
++
++
++def sample_times(style: CaptionStyle, phrase: Phrase, clip_start: float) -> list[float]:
++    """Bounded 30Hz transitions plus event endpoints; static holds are one PNG."""
++    times = {phrase.start, phrase.end}
++    windows = []
++    if style in (CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD):
++        windows = [(w.start - clip_start, 0.3 if style == CaptionStyle.TYPE_ON else 0.12) for w in phrase.words]
++    elif phrase.end - phrase.start >= 0.25:
++        windows = [(phrase.start, 0.18)]
++    for start, duration in windows:
++        times.update(
++            min(phrase.end, start + i / FPS)
++            for i in range(math.ceil(duration * FPS) + 1)
++            if phrase.start <= start + i / FPS <= phrase.end
++        )
++        times.add(min(phrase.end, start + duration))
++        if style == CaptionStyle.TYPE_ON:
++            times.add(min(phrase.end, start + 0.08))
++    return sorted(times)
++
++
++def render_segments(words, out_dir, *, width, height, style, fonts_dir, clip_start, clip_dur, breaks=()):
++    out_dir = Path(out_dir)
++    out_dir.mkdir(parents=True, exist_ok=True)
++    result = []
++    for phrase in phrases(words, clip_start, clip_dur, breaks):
++        plan = layout([w.text for w in phrase.words], width, height, Path(fonts_dir))
++        times = sample_times(style, phrase, clip_start)
++        for start, end in zip(times, times[1:]):
++            if end - start < 1e-6:
++                continue
++            path = out_dir / f"cap{len(result):05d}.png"
++            render(plan, style, state(style, phrase, clip_start, start), path)
++            result.append((path, start, end))
++    return result
+diff --git a/clip-agent/src/clip_agent/models.py b/clip-agent/src/clip_agent/models.py
+index 9c129d0..552098c 100644
+--- a/clip-agent/src/clip_agent/models.py
++++ b/clip-agent/src/clip_agent/models.py
+@@ -73,6 +73,9 @@ class CaptionStyle(str, Enum):
+     PLAIN = "plain"        # simple bottom subtitle lines
+     PHRASE_POP = "phrase-pop"  # a few words (captions.max_words) pop on at once (default)
+     KARAOKE = "karaoke"    # per-word highlight in sync
++    TYPE_ON = "type-on"
++    FOCUS_WORD = "focus-word"
++    EDITORIAL_PUNCH = "editorial-punch"
+ 
+ 
+ class Clip(BaseModel):
+diff --git a/clip-agent/tests/test_dynamic_captions.py b/clip-agent/tests/test_dynamic_captions.py
+new file mode 100644
+index 0000000..6763c5a
+--- /dev/null
++++ b/clip-agent/tests/test_dynamic_captions.py
+@@ -0,0 +1,253 @@
++"""Temporal, transcript and geometry contracts, independent of config acceptance."""
++
++import json
++import shutil
++import subprocess
++from pathlib import Path
++
++import pytest
++from click.testing import CliRunner
++from clip_agent import dynamic_captions as dc
++from clip_agent.captions import render_caption_pngs
++from clip_agent.cli import cli
++from clip_agent.config import FONTS_DIR, CaptionConfig, Config
++from clip_agent.models import CaptionStyle as S
++from clip_agent.models import Word
++from PIL import Image, ImageChops
++
++
++def words():
++    return [
++        Word(text=t, start=s, end=e)
++        for t, s, e in [
++            ("Most", 10.0, 10.2),
++            ("people", 10.3, 10.55),
++            ("skip", 10.6, 10.8),
++            ("backups.", 10.9, 11.2),
++            ("Wait", 13.0, 13.2),
++            ("please.", 13.3, 13.6),
++        ]
++    ]
++
++
++def test_capability_and_style_validation():
++    r = CliRunner().invoke(cli, ["version", "--json"])
++    assert r.exit_code == 0
++    c = json.loads(r.output)
++    assert c["caption_treatments"] == 1
++    assert c["headline_review"] == 1
++    assert c["caption_styles"] == ["none", "plain", "phrase-pop", "karaoke", "type-on", "focus-word", "editorial-punch"]
++    for style in ["type-on", "focus-word", "editorial-punch"]:
++        assert CaptionConfig(style=style).style == style
++    with pytest.raises(ValueError):
++        CaptionConfig(style="palette-only")
++
++
++def test_actual_intermediate_animation_state():
++    phrase = dc.phrases(words(), 10, 4)[0]
++    f = dc.state(S.TYPE_ON, phrase, 10, 0.34)
++    assert f["alpha"] == pytest.approx((1, 0.5, 0, 0))
++    assert f["underline"] == pytest.approx(1 - 0.04 / 0.3)
++    f = dc.state(S.FOCUS_WORD, phrase, 10, 0.36)
++    assert f["previous"] == 0 and f["active"] == 1
++    assert f["mix"] == pytest.approx(0.875)
++    p = dc.layout([w.text for w in phrase.words], 1080, 1920, Path(FONTS_DIR))
++    box = dc.pill_box(p, f)
++    assert box[0] == pytest.approx(p.boxes[0][0] + 0.875 * (p.boxes[1][0] - p.boxes[0][0]))
++    assert box[2] - box[0] == pytest.approx(
++        (p.boxes[0][2] - p.boxes[0][0]) * 0.125 + (p.boxes[1][2] - p.boxes[1][0]) * 0.875
++    )
++    f = dc.state(S.EDITORIAL_PUNCH, phrase, 10, 0.09)
++    assert f["opacity"] == pytest.approx(0.5)
++    assert f["rise"] == pytest.approx(1.5)
++    assert dc.state(S.EDITORIAL_PUNCH, phrase, 10, 0.2)["rise"] == 0
++
++
++@pytest.mark.parametrize("style", list(dc.STYLES))
++def test_rendered_pixels_change_without_reflow(tmp_path, style):
++    phrase = dc.phrases(words(), 10, 4)[0]
++    plan = dc.layout([w.text for w in phrase.words], 360, 640, Path(FONTS_DIR))
++    frozen = plan.boxes
++    images = []
++    for i, t in enumerate([0.0, 0.04, 0.09, 0.18, 0.34, 0.6, 1.1]):
++        path = tmp_path / f"{i}.png"
++        dc.render(plan, style, dc.state(style, phrase, 10, t), path)
++        images.append(Image.open(path).copy())
++        assert plan.boxes == frozen
++        bbox = images[-1].getbbox()
++        if bbox:
++            assert bbox[0] > 0 and bbox[2] < 360
++            assert bbox[1] >= int(640 * 0.62) and bbox[3] <= int(640 * 0.78)
++    assert (
++        ImageChops.difference(images[0], images[4] if style == S.FOCUS_WORD else images[2]).convert("RGB").getbbox()
++        is not None
++    )
++    assert plan.tokens == ("Most", "people", "skip", "backups.")
++    # No invented yellow fill (allow off-white antialiasing).
++    assert not any(r > 180 and g > 150 and b < 100 and a > 200 for im in images for r, g, b, a in im.getdata())
++
++
++def test_gap_camera_cut_last_word_and_rapid_speech(tmp_path):
++    p = dc.phrases(words(), 10, 4, breaks=(10.65,))
++    assert [x.text for x in p] == ["Most people skip", "backups.", "Wait please."]
++    assert p[0].end == pytest.approx(0.65)
++    assert p[1].end == pytest.approx(1.5)
++    assert p[-1].words[-1].text == "please."
++    assert p[-1].end == pytest.approx(3.9)
++    fast = dc.phrases([Word(text="One.", start=0, end=0.08), Word(text="Two.", start=0.1, end=0.16)], 0, 1)
++    assert dc.state(S.EDITORIAL_PUNCH, fast[0], 0, 0.02) == {"rise": 0, "opacity": 1}
++    for style in dc.STYLES:
++        rendered = render_caption_pngs(
++            words(),
++            tmp_path / style.value,
++            width=360,
++            height=640,
++            style=style,
++            config=Config(),
++            fonts_dir=FONTS_DIR,
++            clip_start=10,
++            clip_dur=4,
++            breaks=(10.65,),
++        )
++        assert all(not (a < 0.65 - 1e-6 and b > 0.65 + 1e-6) for _, a, b in rendered)
++        assert all(not (a < 2.5 and b > 1.5) for _, a, b in rendered)
++        assert len(rendered) < 150
++
++
++def test_long_words_and_bounded_sampling():
++    tokens = ["extraordinarilylongwordthatcannotfitnormally", "still", "spoken."]
++    p = dc.layout(tokens, 360, 640, Path(FONTS_DIR))
++    assert p.tokens == tuple(tokens)
++    assert all(0 < b[0] < b[2] < 360 for b in p.boxes)
++    assert len({x[1] for x in p.origins}) <= 2
++    slow = dc.phrases([Word(text="Hold.", start=0, end=600)], 0, 600)[0]
++    assert len(dc.sample_times(S.TYPE_ON, slow, 0)) <= 13
++    assert len(dc.sample_times(S.FOCUS_WORD, slow, 0)) <= 7
++    assert len(dc.sample_times(S.EDITORIAL_PUNCH, slow, 0)) <= 9
++
++
++def test_interrupted_pill_is_continuous_and_last_word_visible():
++    phrase = dc.phrases([Word("A", 0, 0.02), Word("longer", 0.03, 0.05), Word("end", 0.06, 0.08)], 0, 0.1)[0]
++    plan = dc.layout([w.text for w in phrase.words], 360, 640, Path(FONTS_DIR))
++    before = dc.pill_box(plan, dc.state(S.FOCUS_WORD, phrase, 0, 0.06 - 1e-8))
++    after = dc.pill_box(plan, dc.state(S.FOCUS_WORD, phrase, 0, 0.06))
++    assert before == pytest.approx(after, abs=0.0001)
++    assert dc.state(S.TYPE_ON, phrase, 0, 0.08)["alpha"][-1] > 0
++    tiny = dc.phrases([Word("Last.", 0, 0.01)], 0, 0.02)[0]
++    assert dc.state(S.TYPE_ON, tiny, 0, 0)["alpha"] == (1.0,)
++
++
++def test_legacy_png_snapshots_are_unchanged(tmp_path):
++    # SHA256s captured from unmodified upstream 82ef513 using Pillow 13.0.0.
++    # Pin decoded RGBA rather than encoder byte details in the long term.
++    import hashlib
++
++    expected = {
++        "plain": ["6bd79ef722764780d12487b55290f6fe51d047c96ac33c438bb2b492bb55c328"],
++        "phrase-pop": [
++            "5c3d5f78a1f6339bfc86c15cbcccede5e51134a9273bddcde988fb9411a03a22",
++            "1447035563743498193706e55c68800d752accd12bc03442a83662a30df2caeb",
++        ],
++        "karaoke": [
++            "4529f80db2184e4fc6187f41a6ff467193993d8e9a41b4e66d649dfa9615bc16",
++            "873dee0e3e3670cc74b4af766b61ce5584dfa80b685605c6e30760943b532f2a",
++            "eb392854f972acfd06b4cdd0db5367fac575b8cf5ebe28a77b1aef0a14d6ad28",
++            "6e361f8b564791f4c1e7f8b23819b010adfd32e335ec8108edd95b2326bba7bb",
++        ],
++    }
++    source = [Word("Most", 0, 0.3), Word("people", 0.4, 0.7), Word("skip", 0.8, 1.1), Word("backups.", 1.2, 1.6)]
++    for style, hashes in expected.items():
++        rows = render_caption_pngs(
++            source,
++            tmp_path / style,
++            width=360,
++            height=640,
++            style=style,
++            config=Config(),
++            fonts_dir=FONTS_DIR,
++            clip_start=0,
++            clip_dur=2,
++        )
++        assert [hashlib.sha256(p.read_bytes()).hexdigest() for p, _, _ in rows] == hashes
++
++
++def test_intermediate_png_opacity_and_pill_geometry(tmp_path):
++    phrase = dc.phrases(words(), 10, 4)[0]
++    plan = dc.layout([w.text for w in phrase.words], 1080, 1920, Path(FONTS_DIR))
++    path = tmp_path / "frame.png"
++    dc.render(plan, S.EDITORIAL_PUNCH, dc.state(S.EDITORIAL_PUNCH, phrase, 10, 0.09), path, scrim=False)
++    assert max(Image.open(path).getchannel("A").getdata()) == 128
++    dc.render(plan, S.EDITORIAL_PUNCH, dc.state(S.EDITORIAL_PUNCH, phrase, 10, 0.2), path, scrim=False)
++    assert max(Image.open(path).getchannel("A").getdata()) == 255
++    frame = dc.state(S.FOCUS_WORD, phrase, 10, 0.36)
++    expected = dc.pill_box(plan, frame)
++    dc.render(plan, S.FOCUS_WORD, frame, path, scrim=False)
++    im = Image.open(path)
++    colored = [(x, y) for y in range(im.height) for x in range(im.width) if im.getpixel((x, y)) == dc.VIOLET]
++    assert min(x for x, y in colored) == pytest.approx(expected[0], abs=1)
++    assert max(x for x, y in colored) == pytest.approx(expected[2], abs=1)
++    assert min(y for x, y in colored) == pytest.approx(expected[1], abs=1)
++    assert max(y for x, y in colored) == pytest.approx(expected[3], abs=1)
++
++
++def test_unrepresentable_token_fails_instead_of_clipping():
++    with pytest.raises(ValueError, match="without clipping"):
++        dc.layout(["W" * 10000], 360, 640, Path(FONTS_DIR))
++
++
++@pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
++def test_encoded_track_keeps_full_timeline_and_last_word(tmp_path, style):
++    from clip_agent.captions import render_caption_track
++
++    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
++    assert ffmpeg and ffprobe
++    timed = [Word("word", i * 0.2, i * 0.2 + 0.18) for i in range(25)]
++    output = tmp_path / "actual.mov"
++    render_caption_track(
++        timed,
++        output,
++        width=360,
++        height=640,
++        style=style,
++        config=Config(),
++        fonts_dir=FONTS_DIR,
++        clip_start=0,
++        clip_dur=5,
++    )
++    probe = json.loads(
++        subprocess.check_output(
++            [
++                ffprobe,
++                "-v",
++                "error",
++                "-count_frames",
++                "-show_entries",
++                "stream=nb_read_frames,duration",
++                "-of",
++                "json",
++                str(output),
++            ]
++        )
++    )
++    assert int(probe["streams"][0]["nb_read_frames"]) == 150
++    assert float(probe["streams"][0]["duration"]) == pytest.approx(5, abs=1 / 30)
++    raw = subprocess.check_output(
++        [
++            ffmpeg,
++            "-v",
++            "error",
++            "-i",
++            str(output),
++            "-vf",
++            "select=eq(n\\,149)",
++            "-frames:v",
++            "1",
++            "-f",
++            "rawvideo",
++            "-pix_fmt",
++            "rgba",
++            "-",
++        ]
++    )
++    assert len(raw) == 360 * 640 * 4
++    assert max(raw[3::4]) > 0, "last spoken word disappeared from decoded tail"
+diff --git a/clip-agent/tests/test_models.py b/clip-agent/tests/test_models.py
+index 5d09025..1778a63 100644
+--- a/clip-agent/tests/test_models.py
++++ b/clip-agent/tests/test_models.py
+@@ -28,4 +28,4 @@ def test_transcript_words_between_is_half_open():
+ 
+ def test_caption_style_values():
+     assert CaptionStyle.PHRASE_POP.value == "phrase-pop"
+-    assert {s.value for s in CaptionStyle} == {"none", "plain", "phrase-pop", "karaoke"}
++    assert {s.value for s in CaptionStyle} == {"none", "plain", "phrase-pop", "karaoke", "type-on", "focus-word", "editorial-punch"}

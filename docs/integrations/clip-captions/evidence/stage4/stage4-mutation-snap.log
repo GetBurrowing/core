@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/docs/integrations/clip-captions/verify_decoded_motion.py", line 82, in <module>
+    main()
+    ~~~~^^
+  File "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/docs/integrations/clip-captions/verify_decoded_motion.py", line 62, in main
+    assert all(a[0] < b[0] and a[2] < b[2] for a, b in zip(boxes, boxes[1:]))
+           ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

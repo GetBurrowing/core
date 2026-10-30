@@ -1,0 +1,268 @@
+{
+  "type-on": {
+    "0.0": {
+      "max_red": 46,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 0,
+      "text_y_centroid": null,
+      "violet_bounds": null
+    },
+    "0.033": {
+      "max_red": 130,
+      "brightest_red_alpha": 199,
+      "text_max_alpha": 0,
+      "text_y_centroid": null,
+      "violet_bounds": null
+    },
+    "0.067": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 430.649330314126,
+      "violet_bounds": null
+    },
+    "0.1": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 430.649330314126,
+      "violet_bounds": null
+    },
+    "0.2": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 430.649330314126,
+      "violet_bounds": null
+    },
+    "0.4": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 430.649330314126,
+      "violet_bounds": null
+    },
+    "0.433": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 430.649330314126,
+      "violet_bounds": null
+    },
+    "0.467": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 431.5074963186551,
+      "violet_bounds": null
+    },
+    "0.5": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 431.5074963186551,
+      "violet_bounds": null
+    },
+    "0.6": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 431.5074963186551,
+      "violet_bounds": null
+    }
+  },
+  "focus-word": {
+    "0.0": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.033": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.067": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.1": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.2": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.4": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.42847390114827,
+      "violet_bounds": [
+        90,
+        418,
+        158,
+        447
+      ]
+    },
+    "0.433": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.48122815879265,
+      "violet_bounds": [
+        131,
+        418,
+        212,
+        447
+      ]
+    },
+    "0.467": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.4717175488972,
+      "violet_bounds": [
+        151,
+        418,
+        237,
+        447
+      ]
+    },
+    "0.5": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.4717175488972,
+      "violet_bounds": [
+        156,
+        418,
+        244,
+        447
+      ]
+    },
+    "0.6": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 447.4717175488972,
+      "violet_bounds": [
+        156,
+        418,
+        245,
+        447
+      ]
+    }
+  },
+  "editorial-punch": {
+    "0.0": {
+      "max_red": 0,
+      "brightest_red_alpha": 0,
+      "text_max_alpha": 0,
+      "text_y_centroid": null,
+      "violet_bounds": null
+    },
+    "0.033": {
+      "max_red": 244,
+      "brightest_red_alpha": 47,
+      "text_max_alpha": 47,
+      "text_y_centroid": 451.14037043066634,
+      "violet_bounds": null
+    },
+    "0.067": {
+      "max_red": 244,
+      "brightest_red_alpha": 94,
+      "text_max_alpha": 94,
+      "text_y_centroid": 450.1394377660907,
+      "violet_bounds": null
+    },
+    "0.1": {
+      "max_red": 244,
+      "brightest_red_alpha": 142,
+      "text_max_alpha": 142,
+      "text_y_centroid": 449.1410335153799,
+      "violet_bounds": null
+    },
+    "0.2": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    },
+    "0.4": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    },
+    "0.433": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    },
+    "0.467": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    },
+    "0.5": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    },
+    "0.6": {
+      "max_red": 244,
+      "brightest_red_alpha": 255,
+      "text_max_alpha": 255,
+      "text_y_centroid": 449.14069404565834,
+      "violet_bounds": null
+    }
+  }
+}

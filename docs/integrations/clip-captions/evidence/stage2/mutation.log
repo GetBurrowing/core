@@ -1,0 +1,142 @@
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+___ test_dynamic_style_overrides_saved_none_in_profile_and_finalize[type-on] ___
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88bff8c0>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_dynamic_style_overrides_s0/state')
+style = 'type-on'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x770b88b71ba0>
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_dynamic_style_overrides_saved_none_in_profile_and_finalize(
+        shim, state_dir, style, monkeypatch
+    ):
+        first_new_clip(shim, state_dir)
+        monkeypatch.setenv("FAKE_CAPTION_STYLE", "none")
+        shim.script(version={"stdout": CAPABILITY})
+        n = len(shim.calls())
+        client = FakeJobClient(jobs=[caption_job(style)])
+        assert run(client, state_dir)["status"] == "done"
+        calls = shim.calls()[n:]
+        final = next(c["argv"] for c in calls if c["argv"][0] == "finalize")
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:51: ValueError
+_ test_dynamic_style_overrides_saved_none_in_profile_and_finalize[focus-word] __
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88b60c20>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_dynamic_style_overrides_s1/state')
+style = 'focus-word'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x770b88b71e00>
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_dynamic_style_overrides_saved_none_in_profile_and_finalize(
+        shim, state_dir, style, monkeypatch
+    ):
+        first_new_clip(shim, state_dir)
+        monkeypatch.setenv("FAKE_CAPTION_STYLE", "none")
+        shim.script(version={"stdout": CAPABILITY})
+        n = len(shim.calls())
+        client = FakeJobClient(jobs=[caption_job(style)])
+        assert run(client, state_dir)["status"] == "done"
+        calls = shim.calls()[n:]
+        final = next(c["argv"] for c in calls if c["argv"][0] == "finalize")
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:51: ValueError
+_ test_dynamic_style_overrides_saved_none_in_profile_and_finalize[editorial-punch] _
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88b61550>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_dynamic_style_overrides_s2/state')
+style = 'editorial-punch'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x770b88b44b90>
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_dynamic_style_overrides_saved_none_in_profile_and_finalize(
+        shim, state_dir, style, monkeypatch
+    ):
+        first_new_clip(shim, state_dir)
+        monkeypatch.setenv("FAKE_CAPTION_STYLE", "none")
+        shim.script(version={"stdout": CAPABILITY})
+        n = len(shim.calls())
+        client = FakeJobClient(jobs=[caption_job(style)])
+        assert run(client, state_dir)["status"] == "done"
+        calls = shim.calls()[n:]
+        final = next(c["argv"] for c in calls if c["argv"][0] == "finalize")
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:51: ValueError
+___ test_new_clip_immutable_style_survives_headline_and_empty_delta[type-on] ___
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88bff8c0>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_new_clip_immutable_style_0/state')
+style = 'type-on'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_new_clip_immutable_style_survives_headline_and_empty_delta(
+        shim, state_dir, style
+    ):
+        shim.script(version={"stdout": CAPABILITY})
+        client = first_new_clip(shim, state_dir, look={"cap": {"style": style}})
+        final = next(
+            c["argv"] for c in reversed(shim.calls()) if c["argv"][0] == "finalize"
+        )
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:114: ValueError
+_ test_new_clip_immutable_style_survives_headline_and_empty_delta[focus-word] __
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88bffa10>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_new_clip_immutable_style_1/state')
+style = 'focus-word'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_new_clip_immutable_style_survives_headline_and_empty_delta(
+        shim, state_dir, style
+    ):
+        shim.script(version={"stdout": CAPABILITY})
+        client = first_new_clip(shim, state_dir, look={"cap": {"style": style}})
+        final = next(
+            c["argv"] for c in reversed(shim.calls()) if c["argv"][0] == "finalize"
+        )
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:114: ValueError
+_ test_new_clip_immutable_style_survives_headline_and_empty_delta[editorial-punch] _
+
+shim = <conftest.shim.<locals>.Shim object at 0x770b88bff770>
+state_dir = PosixPath('/tmp/pytest-of-operator/pytest-44/test_new_clip_immutable_style_2/state')
+style = 'editorial-punch'
+
+    @pytest.mark.parametrize("style", ["type-on", "focus-word", "editorial-punch"])
+    def test_new_clip_immutable_style_survives_headline_and_empty_delta(
+        shim, state_dir, style
+    ):
+        shim.script(version={"stdout": CAPABILITY})
+        client = first_new_clip(shim, state_dir, look={"cap": {"style": style}})
+        final = next(
+            c["argv"] for c in reversed(shim.calls()) if c["argv"][0] == "finalize"
+        )
+>       assert final[final.index("--captions") + 1] == style
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: list.index(x): x not in list
+
+docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py:114: ValueError
+=========================== short test summary info ============================
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_dynamic_style_overrides_saved_none_in_profile_and_finalize[type-on]
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_dynamic_style_overrides_saved_none_in_profile_and_finalize[focus-word]
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_dynamic_style_overrides_saved_none_in_profile_and_finalize[editorial-punch]
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_new_clip_immutable_style_survives_headline_and_empty_delta[type-on]
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_new_clip_immutable_style_survives_headline_and_empty_delta[focus-word]
+FAILED docs/integrations/clip-captions/runner/tests/test_dynamic_styles.py::test_new_clip_immutable_style_survives_headline_and_empty_delta[editorial-punch]
+6 failed, 9 deselected in 4.20s

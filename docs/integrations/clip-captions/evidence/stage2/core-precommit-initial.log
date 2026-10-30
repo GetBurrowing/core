@@ -1,0 +1,20 @@
+Compiling 1325 files (.ex)
+Compiling lib/platform/federation/tool_surface.ex (it's taking more than 10s)
+Generated platform app
+Unlocked deps:
+* file_system
+
+...
+Tightest against its floor: disabled subtle / base-300 4.52 (floor 4.5, high-contrast light)
+.........................................................................    error: module Mix.Tasks.Platform.PromptTemplate.Show is not loaded and could not be found
+    │
+ 22 │   doctest Show
+    │   ^^^^^^^^^^^^
+    │
+    └─ test/mix/tasks/platform_prompt_template_show_test.exs:22: Mix.Tasks.Platform.PromptTemplate.ShowTest (module)
+
+
+== Compilation error in file test/mix/tasks/platform_prompt_template_show_test.exs ==
+** (CompileError) test/mix/tasks/platform_prompt_template_show_test.exs: cannot compile module Mix.Tasks.Platform.PromptTemplate.ShowTest (errors have been logged)
+    (ex_unit 1.20.4) expanding macro: ExUnit.DocTest.doctest/1
+    test/mix/tasks/platform_prompt_template_show_test.exs:22: Mix.Tasks.Platform.PromptTemplate.ShowTest (module)

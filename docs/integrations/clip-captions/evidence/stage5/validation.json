@@ -1,0 +1,128 @@
+{
+  "task": "01a18d1b-a5c1-7000-947c-7931a3ec53e5",
+  "stage": 5,
+  "runtime": "isolated Codex Linux runtime; OTP28.1/Elixir1.20.4/PostgreSQL16; private PLATFORM_TEST_DATABASE per run",
+  "base_sha": "7c6943568137808b3d78354345424e801cd475dc",
+  "change": "Render metadata comes from pinned artifact identities, preserving immutable receipt shape. Both compile-time manifests are included before combined release compilation.",
+  "reference_canvas_id": "01a18dbf-c997-7000-a8fe-ee7eab088a1f",
+  "screenshot_canvas_id": "01a18dc4-4384-7000-b805-66139062336c",
+  "browser": [
+    {
+      "viewport": "1280x800",
+      "final_url": "http://127.0.0.1:4501/m/social?tab=clips&view=review",
+      "page_title": "Social",
+      "metadata": "Render details\n    \n      Preview v1 \u00b7 CLI 0.9.0 \u00b7 caption-treatments/1\n    \n    \n      Qualified renderer \u00b7 helper 0.9.1",
+      "known_present_control": true,
+      "cards": 6,
+      "selected_type_on": "true",
+      "current_plain": true,
+      "max_sync_drift_s": 0.0004210000000000047,
+      "reduced_motion": [
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        }
+      ]
+    },
+    {
+      "viewport": "375x812",
+      "final_url": "http://127.0.0.1:4501/m/social?tab=clips&view=review",
+      "page_title": "Social",
+      "metadata": "Render details\n    \n      Preview v1 \u00b7 CLI 0.9.0 \u00b7 caption-treatments/1\n    \n    \n      Qualified renderer \u00b7 helper 0.9.1",
+      "known_present_control": true,
+      "cards": 6,
+      "selected_type_on": "true",
+      "current_plain": true,
+      "max_sync_drift_s": 0.00038599999999999746,
+      "reduced_motion": [
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        },
+        {
+          "mode": "reduced",
+          "paused": true,
+          "stills": 3
+        }
+      ]
+    }
+  ],
+  "design_deviations": [],
+  "prior_deviations": "Earlier declared video and picker deviations unchanged.",
+  "checks": {
+    "appearance_initial": "9passed",
+    "affected_after_preserving_receipt": "43passed",
+    "mutation": "Restored stale helper0.9.0 literal; unchanged new regression failed0/1passed. Production source restored.",
+    "initial_full_social": "1562/1563passed; one snapshot assertion caught added receipt field. Fixed by keeping receipt shape unchanged and resolving helper label separately.",
+    "social_full_final": {
+      "command": "apps/social: MIX_ENV=test mix test with fresh private PLATFORM_TEST_DATABASE",
+      "result": "1563passed in161.4s",
+      "status": "passed"
+    },
+    "format": {
+      "command": "apps/social: mix format --check-formatted",
+      "status": "passed"
+    },
+    "compile": {
+      "command": "apps/social: MIX_ENV=test mix compile --warnings-as-errors",
+      "status": "passed"
+    },
+    "guards": {
+      "command": "apps/social: mix test ../platform/test/platform/regression/install_identity_guard_test.exs ../platform/test/platform/regression/burrow_docs_packaging_test.exs",
+      "result": "21passed",
+      "status": "passed"
+    },
+    "scope": "No renderer/helper/media changes; no publication, deployment or PR. JS/CSS unchanged; browser regression checks use existing real preview assets.",
+    "identity_after_staging": {
+      "result": "15passed in47.7s against all tracked/staged files",
+      "status": "passed"
+    }
+  }
+}
