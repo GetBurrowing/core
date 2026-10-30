@@ -66,7 +66,16 @@ defmodule Platform.Installs.Runner do
   @doc "Start a run under `Platform.TaskSupervisor` (a no-op if one is running)."
   @spec start(String.t()) :: DynamicSupervisor.on_start_child()
   def start(install_id) do
-    Task.Supervisor.start_child(Platform.TaskSupervisor, fn -> run(install_id) end)
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn -> supervised_run(install_id) end)
+  end
+
+  # A run spawned from an `async: true` test is outside the sandbox owner
+  # chain (supervised_task_repo_audit_test.exs). Its row stays where it was;
+  # resume_all/0 restarts it on the next boot.
+  defp supervised_run(install_id) do
+    run(install_id)
+  rescue
+    DBConnection.OwnershipError -> :stopped
   end
 
   @doc "The pid of the install's running run, or nil."

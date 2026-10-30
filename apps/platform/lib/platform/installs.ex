@@ -362,7 +362,7 @@ defmodule Platform.Installs do
     |> Repo.all()
     |> Enum.each(fn
       {id, "destroying"} ->
-        Task.Supervisor.start_child(Platform.TaskSupervisor, fn -> teardown(id) end)
+        Task.Supervisor.start_child(Platform.TaskSupervisor, fn -> supervised_teardown(id) end)
 
       {id, _} ->
         Runner.start(id)
@@ -396,6 +396,13 @@ defmodule Platform.Installs do
           :ok
         end
     end
+  end
+
+  # Spawned by resume_all/0; see Runner's supervised_run/1 for the rescue.
+  defp supervised_teardown(id) do
+    teardown(id)
+  rescue
+    DBConnection.OwnershipError -> :stopped
   end
 
   defp delete_dns(%Install{domain_mode: "ours"} = install) do

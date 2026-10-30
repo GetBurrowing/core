@@ -210,6 +210,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
   # the belt-and-braces pair; the braces half is the runtime
   # `Application.get_env` assertion further down.
   @expected_disabled_flags [
+    :start_installs,
     :start_calendar_refresh,
     :start_attention_router,
     :start_system_event_scheduler,
