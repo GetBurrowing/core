@@ -138,6 +138,12 @@ defmodule PlatformWeb.MeetingAgentController do
       "language" => seg["language"],
       "final" => seg["final"] != false
     }
+    |> then(fn normalized ->
+      case seg["id"] do
+        id when is_binary(id) and id != "" -> Map.put(normalized, "id", id)
+        _ -> normalized
+      end
+    end)
   end
 
   defp space_id_from_room_name("space-" <> uuid) do

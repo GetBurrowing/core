@@ -199,8 +199,8 @@ defmodule PlatformWeb.LivekitWebhookVoice1to1Test do
 
     test "returns an older re-opened row to failed with :voice_1to1_session, posting nothing",
          %{conn: conn, user: user, dm: dm, room: room, room_name: room_name} do
-      # An earlier call's row that failed; the voice session's room_started
-      # re-opens it (it holds the most segments).
+      # Room activation reattaches passively. Actual speech reopens the earlier
+      # failed row; voice-session finish must still suppress its summary/notices.
       {:ok, older} = Meetings.create_transcript(%{room_id: room_name, space_id: dm.id})
 
       {:ok, _} =
@@ -218,11 +218,13 @@ defmodule PlatformWeb.LivekitWebhookVoice1to1Test do
                conn |> event("room_started", room_name) |> json_response(201)
 
       assert reopened_id == older.id
-      assert Meetings.get_transcript(older.id).status == "recording"
+      assert Meetings.get_transcript(older.id).status == "failed"
 
       build_conn()
       |> event("transcription", room_name, %{"segments" => segments(user, ["voice turn"])})
       |> json_response(200)
+
+      assert Meetings.get_transcript(older.id).status == "recording"
 
       assert %{"status" => "ignored", "reason" => "voice_1to1_session", "failed_transcripts" => 1} =
                build_conn() |> event("room_finished", room_name) |> json_response(200)
