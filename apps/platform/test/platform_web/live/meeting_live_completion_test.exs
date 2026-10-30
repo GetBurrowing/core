@@ -146,10 +146,19 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert [%Participant{}] = active_participants(ctx)
     refute has_element?(view, ~s([data-role="meeting-join"]))
 
-    # A queued restore and a tab patch on a joined socket push nothing more.
+    # A queued restore on a joined socket pushes nothing more.
     send(view.pid, :auto_join)
-    render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=people")
+    render(view)
     refute_push_event(view, "join-meeting", %{}, 50)
+
+    # A duplicate Join event (a double tap that beat the re-render) re-pushes
+    # the same room, which the client adopts; it writes no second room and
+    # no second live participant row.
+    render_click(view, "meeting_join", %{})
+    assert_push_event(view, "join-meeting", %{room_name: room_name})
+    assert [%Room{livekit_room_name: ^room_name}] =
+             Repo.all(from(r in Room, where: r.space_id == ^ctx.meeting.chat_space_id))
+
     assert [%Participant{}] = active_participants(ctx)
 
     # A reconnect is a new LiveView process. The viewer joined and never
