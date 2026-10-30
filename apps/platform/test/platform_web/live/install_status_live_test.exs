@@ -38,7 +38,10 @@ defmodule PlatformWeb.InstallStatusLiveTest do
         end
       end)
 
-    Installs.update!(Installs.get(install.id), Map.merge(%{status: "provisioning", steps: steps}, attrs))
+    Installs.update!(
+      Installs.get(install.id),
+      Map.merge(%{status: "provisioning", steps: steps}, attrs)
+    )
   end
 
   defp refute_jargon(html) do
@@ -78,7 +81,13 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(view, "#step-reserve[data-state=done]", "Reserving your server")
       assert has_element?(view, "#step-reserve .text-neutral")
       assert has_element?(view, "#step-reserve", "0:42")
-      assert has_element?(view, "#step-install[data-state=running].bg-info\\/10", "Installing Burrow")
+
+      assert has_element?(
+               view,
+               "#step-install[data-state=running].bg-info\\/10",
+               "Installing Burrow"
+             )
+
       assert has_element?(view, "#step-install .text-info", "Installing Burrow")
       assert has_element?(view, "#step-install", "…")
 
@@ -157,9 +166,19 @@ defmodule PlatformWeb.InstallStatusLiveTest do
 
       {:ok, view, html} = live(conn, path(token))
 
-      assert has_element?(view, "#step-connect[data-state=running]", "Connecting burrow.acme.test")
+      assert has_element?(
+               view,
+               "#step-connect[data-state=running]",
+               "Connecting burrow.acme.test"
+             )
+
       assert has_element?(view, "#install-records [data-record-type=CNAME]", "burrow.acme.test")
-      assert has_element?(view, "#install-records .font-mono", "#{install.slug}.installs.example.test.")
+
+      assert has_element?(
+               view,
+               "#install-records .font-mono",
+               "#{install.slug}.installs.example.test."
+             )
 
       assert has_element?(
                view,
@@ -167,7 +186,9 @@ defmodule PlatformWeb.InstallStatusLiveTest do
                "auth.#{install.slug}.installs.example.test."
              )
 
-      assert length(Floki.find(Floki.parse_document!(html), "#install-records [data-record-type]")) ==
+      assert length(
+               Floki.find(Floki.parse_document!(html), "#install-records [data-record-type]")
+             ) ==
                2
 
       refute_jargon(html)
@@ -218,7 +239,13 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(view, "#handover-burrow.font-mono", "https://#{install.primary_host}")
       assert has_element?(view, "#handover-admin.font-mono", install.owner_email)
       assert has_element?(view, "#handover-signin-masked")
-      assert has_element?(view, "#handover-signin-value.hidden", "https://auth.fake.invalid/lc/FAKECODE")
+
+      assert has_element?(
+               view,
+               "#handover-signin-value.hidden",
+               "https://auth.fake.invalid/lc/FAKECODE"
+             )
+
       assert html =~ "Sign-in link"
       assert html =~ "Opens once. You&#39;ll add a passkey."
       # SSH collapsed by default: a <details> without `open`.
@@ -226,7 +253,13 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(view, "#handover-ssh-host", install.droplet_ip)
       assert has_element?(view, "#handover-ssh-user", "root")
       assert has_element?(view, "#handover-ssh-key", "BEGIN OPENSSH PRIVATE KEY")
-      assert has_element?(view, "#handover-download.btn-outline[phx-hook=HandoverDownload]", "Download as file")
+
+      assert has_element?(
+               view,
+               "#handover-download.btn-outline[phx-hook=HandoverDownload]",
+               "Download as file"
+             )
+
       refute html =~ "fake-oidc-client-secret"
       refute html =~ "fake-static-api-key"
       refute_jargon(html)
@@ -245,7 +278,9 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(view, "#handover-signin-value", "FAKECODE")
 
       url = "https://#{install.primary_host}/setup/connect-ai"
-      assert {:error, {:redirect, %{to: ^url}}} = view |> element("#open-burrow") |> render_click()
+
+      assert {:error, {:redirect, %{to: ^url}}} =
+               view |> element("#open-burrow") |> render_click()
 
       install = Installs.get(install.id)
       assert install.handover_acknowledged_at

@@ -397,7 +397,10 @@ defmodule PlatformWeb.InstallStatusLive do
 
   defp step_icon(assigns) do
     ~H"""
-    <span class="inline-block size-5 shrink-0 rounded-full border-2 border-neutral/40" aria-hidden="true">
+    <span
+      class="inline-block size-5 shrink-0 rounded-full border-2 border-neutral/40"
+      aria-hidden="true"
+    >
     </span>
     """
   end
@@ -422,6 +425,7 @@ defmodule PlatformWeb.InstallStatusLive do
     with {:ok, s, _} <- DateTime.from_iso8601(started),
          {:ok, f, _} <- DateTime.from_iso8601(finished) do
       seconds = max(DateTime.diff(f, s, :second), 0)
+
       "#{div(seconds, 60)}:#{seconds |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")}"
     else
       _ -> nil

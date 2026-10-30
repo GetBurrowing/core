@@ -31,6 +31,8 @@ defmodule PlatformWeb.RouterInstallStatusPlacementTest do
 
   test "a long URL-safe token still resolves here" do
     token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    assert {PlatformWeb.InstallStatusLive, :show, _, _} = info("/install-status/#{token}", @app_host).phoenix_live_view
+
+    assert {PlatformWeb.InstallStatusLive, :show, _, _} =
+             info("/install-status/#{token}", @app_host).phoenix_live_view
   end
 end

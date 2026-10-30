@@ -633,7 +633,10 @@ defmodule Platform.Installs do
   @doc ~S'A monthly price as `"$24/mo"` (nil when unknown).'
   @spec price_label(number() | nil) :: String.t() | nil
   def price_label(nil), do: nil
-  def price_label(price) when is_float(price) and price == trunc(price), do: price_label(trunc(price))
+
+  def price_label(price) when is_float(price) and price == trunc(price),
+    do: price_label(trunc(price))
+
   def price_label(price) when is_integer(price), do: "$#{price}/mo"
   def price_label(price), do: "$#{:erlang.float_to_binary(price / 1, decimals: 2)}/mo"
 

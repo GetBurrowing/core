@@ -67,7 +67,10 @@ defmodule PlatformWeb.AdminInstallsLive do
         value: size,
         label:
           Enum.join(
-            Enum.reject([Installs.size_label(size), Installs.price_label(prices[size])], &is_nil/1),
+            Enum.reject(
+              [Installs.size_label(size), Installs.price_label(prices[size])],
+              &is_nil/1
+            ),
             " · "
           )
       }
@@ -110,7 +113,8 @@ defmodule PlatformWeb.AdminInstallsLive do
     end
   end
 
-  def handle_event("dismiss_link", _params, socket), do: {:noreply, assign(socket, :new_link, nil)}
+  def handle_event("dismiss_link", _params, socket),
+    do: {:noreply, assign(socket, :new_link, nil)}
 
   def handle_event("ask_destroy", %{"slug" => slug}, socket) do
     {:noreply, socket |> assign(:confirm_slug, slug) |> assign(:confirm_text, "")}
@@ -317,7 +321,9 @@ defmodule PlatformWeb.AdminInstallsLive do
                     <p class="truncate font-mono text-xs text-subtle">{install.primary_host}</p>
                   </div>
                   <span class={["badge badge-sm", status_tone(install.status)]}>
-                    {if MapSet.member?(@destroying, install.slug), do: "destroying", else: install.status}
+                    {if MapSet.member?(@destroying, install.slug),
+                      do: "destroying",
+                      else: install.status}
                   </span>
                   <button
                     :if={install.status != "destroyed" and @confirm_slug != install.slug}
@@ -357,7 +363,11 @@ defmodule PlatformWeb.AdminInstallsLive do
                     >
                       Destroy {install.slug}
                     </button>
-                    <button type="button" phx-click="cancel_destroy" class="btn btn-ghost btn-sm min-h-11">
+                    <button
+                      type="button"
+                      phx-click="cancel_destroy"
+                      class="btn btn-ghost btn-sm min-h-11"
+                    >
                       Cancel
                     </button>
                   </div>
