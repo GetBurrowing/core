@@ -39,8 +39,6 @@ Installing it (settings.json hooks) is stage 4's job.
 
 import json
 import os
-import contextlib
-import io
 import re
 import sys
 import tempfile
