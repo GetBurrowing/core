@@ -124,6 +124,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "janitor.cron_drain.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
+    "meetings.brief_synthesis.v1",
     "meetings.brief_worthy.v1",
     "meetings.decision_recorded.v1",
     "meetings.intent_classify.v1",

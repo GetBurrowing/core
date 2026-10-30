@@ -42,6 +42,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.roster",
                "game_stream.touch",
                "mail.draft.generator",
+               "meetings.brief_synthesis",
                "meetings.open_question_classifier",
                "memory.insight_synthesis",
                "planner.stage_budget"
@@ -64,6 +65,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.roster",
                "game_stream.touch",
                "mail.draft.generator",
+               "meetings.brief_synthesis",
                "meetings.open_question_classifier",
                "memory.insight_synthesis",
                "planner.stage_budget"

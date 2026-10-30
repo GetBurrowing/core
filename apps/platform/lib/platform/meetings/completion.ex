@@ -17,6 +17,7 @@ defmodule Platform.Meetings.Completion do
       )
 
       outcome = locked(meeting.id, fn run -> advance(run, meeting) end)
+      Platform.Responsibilities.Handlers.MeetingBriefSynthesis.run(meeting.id)
       refresh_briefing(meeting)
       outcome
     else
@@ -129,7 +130,14 @@ defmodule Platform.Meetings.Completion do
           {:error, :canvas_mismatch}
 
         true ->
-          run = save(run, canvas_id: canvas.id, status: "triage_pending", last_error: nil)
+          run =
+            save(run,
+              canvas_id: canvas.id,
+              status: "triage_pending",
+              last_error: nil
+            )
+
+          :ok = synthesis_changed(meeting.id, run.id, run.snapshot_hash, "pending")
           dispatch_triage(run, meeting)
           result(Repo.get!(CompletionRun, run.id))
       end
@@ -265,6 +273,7 @@ defmodule Platform.Meetings.Completion do
           end
         end)
 
+      Platform.Responsibilities.Handlers.MeetingBriefSynthesis.run(meeting.id)
       refresh_briefing(meeting)
       outcome
     else

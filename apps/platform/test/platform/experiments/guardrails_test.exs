@@ -89,6 +89,7 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "dispatch.prompt",
                  "mail.draft.generator",
                  "mail.test.generator",
+                 "meetings.brief_synthesis",
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
                  "planner.stage_budget",

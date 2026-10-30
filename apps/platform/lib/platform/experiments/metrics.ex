@@ -121,6 +121,12 @@ defmodule Platform.Experiments.Metrics do
     # Task 01a13867 stage 1, for the `memory.insight_synthesis` surface.
     # Counts dreaming-run subjects, not tasks, and each judged insight once
     # under its worst label (see the module).
+    "meeting_synthesis_resolution_rate" => %{
+      module: Platform.Experiments.Metrics.MeetingSynthesisResolutionRate,
+      label: "Meeting synthesis resolution rate",
+      description: "Share of judged findings confirmed or aligned rather than dismissed.",
+      direction: :higher_is_better
+    },
     "insight_acceptance_rate" => %{
       module: Platform.Experiments.Metrics.InsightAcceptanceRate,
       label: "Insight acceptance rate",

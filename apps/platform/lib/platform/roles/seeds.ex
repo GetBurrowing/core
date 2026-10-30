@@ -122,6 +122,8 @@ defmodule Platform.Roles.Seeds do
       icon: "hero-calendar-days",
       bundle: [
         "meetings.summarize",
+        # Native direct-provider execution; the bundle records ownership.
+        "meetings.brief_synthesis",
         "meetings.action_items",
         "meetings.attendance_followup",
         # Mid-meeting intent key (2026-07-31). The scribe already owns

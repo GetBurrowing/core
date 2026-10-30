@@ -103,7 +103,8 @@ defmodule Platform.Responsibilities.Providers.Meetings do
 
   @impl true
   def register do
-    MeetingSummarize.register() ++
+    Handlers.MeetingBriefSynthesis.register() ++
+      MeetingSummarize.register() ++
       IntentClassify.register() ++
       MeetingActionItems.register() ++
       MeetingAttendanceFollowup.register() ++
@@ -127,6 +128,7 @@ defmodule Platform.Responsibilities.Providers.Meetings do
           module() | nil
   def handler_for(%Responsibility{key: key}), do: handler_for(key)
   def handler_for(%{key: key}), do: handler_for(key)
+  def handler_for("meetings.brief_synthesis"), do: Handlers.MeetingBriefSynthesis
   def handler_for("meetings.summarize"), do: Handlers.MeetingSummarize
   def handler_for("meetings.intent_classify"), do: Handlers.IntentClassify
   def handler_for("meetings.action_items"), do: Handlers.MeetingActionItems

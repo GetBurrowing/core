@@ -411,7 +411,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
     @main_kinds_tool_schemas_digest_on "d5525de283443869efe51122adc1649e78e95da27bab2b2adc1deee59855878d"
     # Task 01a13867 adds the core metric insight_acceptance_rate to the catalog.
-    @main_metrics_catalog_digest "3a5e4c9bd2a90f895185dea9a79084f151e73f9cb4eebd9ec42a2cb8500a260a"
+    # Task 01a16974 stage 3 adds meeting_synthesis_resolution_rate. Removing
+    # only that catalog entry recovers the previous 3a5e4c9b... pin exactly.
+    @main_metrics_catalog_digest "1a76c535dbc7fd46727a65d7985a6bfe1507056715c452885666050e604526b7"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
@@ -435,7 +437,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :changelog,
       :admin
     ]
-    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
+    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
     # main's ORDER: dispatch.prompt, mail.draft.generator, planner.stage_budget,
     # chat.context_summary, game_stream.encoder_preset, game_stream.roster,
     # meetings.open_question_classifier. The stage appends extension surfaces
@@ -452,8 +454,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a13867 adds memory.insight_synthesis, a core surface appended
     # after agents.tool_profile, so it precedes the Play keys as well; it also
     # adds the core metric insight_acceptance_rate.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis game_stream.encoder_preset game_stream.roster game_stream.touch)
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

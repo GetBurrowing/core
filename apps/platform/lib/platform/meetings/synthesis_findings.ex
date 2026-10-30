@@ -1,0 +1,254 @@
+defmodule Platform.Meetings.SynthesisFindings do
+  @moduledoc """
+  The shared store for meeting brief synthesis findings (task
+  `01a16974-e3db-7000-97e9-8ec9611189bc`, stage 1).
+
+  A finding is written once per `(org_id, dedupe_key)` by `upsert/1` and
+  referenced from each briefing it appears in by an item of kind
+  `"finding"` with ref `"finding:<id>"` (`ref/1`, `item/1`). The item's
+  resolution is the finding's `receipt`, read and written by
+  `Platform.Meetings.MeetingBriefings.view/2` and `act/5`.
+  """
+
+  import Ecto.Query
+
+  alias Platform.Meetings.SynthesisFinding
+  alias Platform.Repo
+
+  @doc "The briefing item ref for `finding`."
+  @spec ref(SynthesisFinding.t() | binary()) :: String.t()
+  def ref(%SynthesisFinding{id: id}), do: ref(id)
+  def ref(id) when is_binary(id), do: "finding:" <> id
+
+  @doc """
+  The `{key, item}` pair a briefing stores for `finding`: kind
+  `"finding"`, ref `ref/1`, keyed by `MeetingBriefings.node_key/1`.
+  """
+  @spec item(SynthesisFinding.t()) :: {String.t(), map()}
+  def item(%SynthesisFinding{} = finding) do
+    ref = ref(finding)
+
+    {Platform.Meetings.MeetingBriefings.node_key(ref),
+     %{"kind" => "finding", "ref" => ref, "title" => finding.body || "", "filed_status" => nil}}
+  end
+
+  @doc """
+  Insert a finding, or merge into the existing one with the same
+  `(org_id, dedupe_key)`.
+
+  On a dedupe hit the existing row keeps its id, body, citations,
+  `prompt_refs` and receipt; `meeting_ids` are unioned, and an incoming
+  recipient is added only if they can read every one of the EXISTING
+  row's `prompt_refs` (stage 6): the kept body came from that prompt, not
+  from the incoming one, so the incoming audience's own readability says
+  nothing about it. The row is locked `FOR UPDATE` for the merge, so two
+  concurrent mirrored runs serialise onto one row.
+
+  Returns `{:ok, finding, :created | :merged}` or `{:error, changeset}`.
+  """
+  @spec upsert(map()) ::
+          {:ok, SynthesisFinding.t(), :created | :merged} | {:error, Ecto.Changeset.t()}
+  def upsert(attrs) when is_map(attrs) do
+    changeset = SynthesisFinding.changeset(%SynthesisFinding{}, attrs)
+
+    if changeset.valid? do
+      Repo.transaction(fn -> do_upsert(changeset) end)
+      |> case do
+        {:ok, {finding, status}} -> {:ok, finding, status}
+        {:error, %Ecto.Changeset{} = cs} -> {:error, cs}
+      end
+    else
+      {:error, changeset}
+    end
+  end
+
+  defp do_upsert(changeset) do
+    org_id = Ecto.Changeset.get_field(changeset, :org_id)
+    dedupe_key = Ecto.Changeset.get_field(changeset, :dedupe_key)
+
+    # The id is generated client-side, so an ON CONFLICT DO NOTHING insert
+    # returns a struct carrying an id even when no row was written. The
+    # re-read under lock is the arbiter: same id means this call created it.
+    case Repo.insert(changeset, on_conflict: :nothing, conflict_target: [:org_id, :dedupe_key]) do
+      {:ok, attempted} ->
+        existing =
+          Repo.one!(
+            from(f in SynthesisFinding,
+              where: f.org_id == ^org_id and f.dedupe_key == ^dedupe_key,
+              lock: "FOR UPDATE"
+            )
+          )
+
+        if existing.id == attempted.id do
+          {existing, :created}
+        else
+          {merge!(existing, changeset), :merged}
+        end
+
+      {:error, cs} ->
+        Repo.rollback(cs)
+    end
+  end
+
+  defp merge!(existing, changeset) do
+    incoming_meetings = Ecto.Changeset.get_field(changeset, :meeting_ids)
+    prompt_refs = existing.prompt_refs || []
+
+    incoming_recipients =
+      (Ecto.Changeset.get_field(changeset, :recipient_user_ids) || [])
+      |> Enum.reject(&(&1 in (existing.recipient_user_ids || [])))
+      |> Enum.filter(&Platform.Meetings.Synthesis.Visibility.refs_readable_by?(&1, prompt_refs))
+
+    existing
+    |> Ecto.Changeset.change(
+      meeting_ids: merge_ids(existing.meeting_ids, incoming_meetings),
+      recipient_user_ids: merge_ids(existing.recipient_user_ids, incoming_recipients)
+    )
+    |> Repo.update!()
+  end
+
+  defp merge_ids(a, b), do: Enum.uniq((a || []) ++ (b || []))
+
+  @doc "The finding with `id`, or nil (malformed ids answer nil)."
+  @spec get(term()) :: SynthesisFinding.t() | nil
+  def get(id) when is_binary(id) do
+    if Platform.UUID.valid?(id), do: Repo.get(SynthesisFinding, id)
+  end
+
+  def get(_id), do: nil
+
+  @doc "The findings among `ids`, as `%{id => finding}`. Malformed ids are dropped."
+  @spec get_many([binary()]) :: %{binary() => SynthesisFinding.t()}
+  def get_many(ids) when is_list(ids) do
+    case Enum.filter(ids, &(is_binary(&1) and Platform.UUID.valid?(&1))) do
+      [] ->
+        %{}
+
+      valid ->
+        from(f in SynthesisFinding, where: f.id in ^valid)
+        |> Repo.all()
+        |> Map.new(&{&1.id, &1})
+    end
+  end
+
+  @doc """
+  Every finding whose `meeting_ids` contains `meeting_id`, oldest first.
+  Uses array containment (`@>`) so the GIN index on `meeting_ids` serves it.
+  """
+  @spec list_for_meeting(binary()) :: [SynthesisFinding.t()]
+  def list_for_meeting(meeting_id) when is_binary(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      from(f in SynthesisFinding,
+        where: fragment("? @> ?", f.meeting_ids, type(^[meeting_id], {:array, :binary_id})),
+        order_by: [asc: f.inserted_at, asc: f.id]
+      )
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  @signal_source_type "meeting_synthesis_finding"
+  @surface_key "meetings.brief_synthesis"
+
+  @doc "The signal `source_type` finding resolutions are recorded under."
+  @spec signal_source_type() :: String.t()
+  def signal_source_type, do: @signal_source_type
+
+  @doc """
+  Record ONE experiment signal for a resolved `finding` (stage 4): for every
+  live `meetings.brief_synthesis` assignment of its origin meeting, a
+  `labelled` signal whose label is the receipt verb (`"aligned"`,
+  `"confirmed"`, `"dismissed"`, `"reverted"`). Idempotent on the finding id
+  (`Platform.Experiments.Signals.record/1`), so a retry cannot count one
+  resolution twice. Id + label only, never the body. Called after the
+  receipt commits; a failure is logged and never fails the click.
+  """
+  @spec record_outcome_signal(SynthesisFinding.t()) :: :ok
+  def record_outcome_signal(%SynthesisFinding{receipt: %{"verb" => verb}} = finding)
+      when is_binary(verb) do
+    origin = finding.origin_meeting_id
+
+    from(a in Platform.Experiments.Assignment,
+      join: e in Platform.Experiments.Experiment,
+      on: e.id == a.experiment_id,
+      where:
+        a.subject_type == "meeting" and a.subject_id == ^origin and
+          e.surface_key == @surface_key and is_nil(a.excluded_reason),
+      select: a.experiment_id
+    )
+    |> Repo.all()
+    |> Enum.each(fn experiment_id ->
+      Platform.Experiments.Signals.record(%{
+        experiment_id: experiment_id,
+        subject_type: "meeting",
+        subject_id: origin,
+        label: verb,
+        source_type: @signal_source_type,
+        source_id: finding.id,
+        labeler: @surface_key,
+        status: "labelled"
+      })
+    end)
+  rescue
+    error ->
+      require Logger
+      Logger.warning("[meetings.synthesis] outcome signal failed: " <> Exception.message(error))
+      :ok
+  end
+
+  def record_outcome_signal(_finding), do: :ok
+
+  @doc """
+  Where a stored citation links to in the Inbox (task 01a16974 stage 5):
+  `"/tasks/<id>"`, `"/canvases/<id>"`, a chat message's space
+  `"/chat/<slug>"`, and a meeting's page `"/meetings/<slug>"` for a
+  `meeting_briefing` or `meeting_candidate` ref. nil for any other kind
+  (memory, journal, mail), a malformed ref, or a source that is gone; the
+  Inbox then shows the citation's title as plain text.
+
+  Resolution only: it does NOT check readability. Callers pass citations
+  `MeetingBriefings.view/2` already filtered for the viewer.
+  """
+  @spec citation_url(term()) :: String.t() | nil
+  def citation_url("task:" <> id), do: if(Platform.UUID.valid?(id), do: "/tasks/" <> id)
+  def citation_url("canvas:" <> id), do: if(Platform.UUID.valid?(id), do: "/canvases/" <> id)
+
+  def citation_url("message:" <> id) do
+    with %{space_id: space_id} <- Platform.Chat.get_message(id),
+         %{slug: slug} when is_binary(slug) and slug != "" <- Platform.Chat.get_space(space_id) do
+      "/chat/" <> slug
+    else
+      _ -> nil
+    end
+  end
+
+  def citation_url("meeting_briefing:" <> id), do: meeting_url(id)
+
+  def citation_url("meeting_candidate:" <> id) do
+    case Platform.Meetings.Candidates.get(id) do
+      %{meeting_id: meeting_id} -> meeting_url(meeting_id)
+      _ -> nil
+    end
+  end
+
+  def citation_url(_ref), do: nil
+
+  defp meeting_url(id) do
+    case Platform.Meetings.get_meeting(id) do
+      %{slug: slug} when is_binary(slug) and slug != "" -> "/meetings/" <> slug
+      _ -> nil
+    end
+  end
+
+  @doc false
+  # Lock the finding row inside the caller's transaction (MeetingBriefings.act/5).
+  @spec lock(binary()) :: SynthesisFinding.t() | nil
+  def lock(id) when is_binary(id) do
+    if Platform.UUID.valid?(id) do
+      Repo.one(from(f in SynthesisFinding, where: f.id == ^id, lock: "FOR UPDATE"))
+    end
+  end
+
+  def lock(_id), do: nil
+end

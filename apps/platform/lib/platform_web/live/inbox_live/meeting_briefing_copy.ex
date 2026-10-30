@@ -58,12 +58,45 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingCopy do
   def action_label(:revert), do: "Revert"
   def action_label(:confirm), do: "Looks right"
   def action_label(:ask), do: "Ask"
+  def action_label(:align), do: "Seek alignment"
+  def action_label(:dismiss), do: "Not a conflict"
 
   @doc "The item's kind tag."
   @spec kind_tag(String.t() | nil) :: String.t()
   def kind_tag("task"), do: "Task filed"
   def kind_tag("canvas"), do: "Canvas created"
+  def kind_tag("finding"), do: "Finding"
   def kind_tag(_), do: "Item"
+
+  @doc """
+  A synthesis finding's label, by finding kind (task 01a16974 stage 5):
+  "Alignment needed" for a conflict, "Possible duplicate", "Contradicts a
+  decision", and "Related work" for a dependency.
+  """
+  @spec finding_label(String.t() | nil) :: String.t()
+  def finding_label("conflicts_with"), do: "Alignment needed"
+  def finding_label("duplicates"), do: "Possible duplicate"
+  def finding_label("contradicts"), do: "Contradicts a decision"
+  def finding_label("depends_on"), do: "Related work"
+  def finding_label(_), do: "Finding"
+
+  @doc """
+  The row's finding hint from the kinds of the viewer's open findings: nil
+  for none, "Alignment needed" when any is a conflict, otherwise the first
+  one's label.
+  """
+  @spec row_finding([String.t()]) :: String.t() | nil
+  def row_finding([]), do: nil
+
+  def row_finding(kinds) when is_list(kinds) do
+    if "conflicts_with" in kinds,
+      do: finding_label("conflicts_with"),
+      else: finding_label(hd(kinds))
+  end
+
+  @doc "The heading over a finding's citations."
+  @spec citations_heading() :: String.t()
+  def citations_heading, do: "Sources"
 
   @doc """
   A resolved item's receipt, as `{lead, time}`: "Reverted by Ada" and
@@ -77,6 +110,8 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingCopy do
   defp verb_label("reverted"), do: "Reverted"
   defp verb_label("confirmed"), do: "Confirmed"
   defp verb_label("asked"), do: "Asked"
+  defp verb_label("aligned"), do: "Aligned"
+  defp verb_label("dismissed"), do: "Dismissed"
   defp verb_label(_), do: "Handled"
 
   @doc "The note a stale click gets: \"Already handled by Ada\"."
@@ -93,7 +128,18 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingCopy do
   def error_text(:not_revertible), do: "This task has moved on, so it can't be reverted here."
   def error_text(:unauthorized), do: "You don't have permission to revert this task."
   def error_text(:not_found), do: "That item isn't available."
+  def error_text(:unsupported), do: "That action isn't available for this item."
   def error_text(_), do: "That didn't work. Try again."
+
+  @doc """
+  `error_text/1` for a refusal of `verb`: "Seek alignment" refused as
+  `:unauthorized` means the clicker can post in neither meeting's chat.
+  """
+  @spec error_text(term(), atom()) :: String.t()
+  def error_text(:unauthorized, :align),
+    do: "You can't post in either meeting's chat, so alignment can't be sought from here."
+
+  def error_text(reason, _verb), do: error_text(reason)
 
   @doc "The row's time: when the meeting ended, in `zone`, e.g. \"Oct 23, 14:05\"."
   @spec ended(DateTime.t() | nil, String.t() | nil) :: String.t()

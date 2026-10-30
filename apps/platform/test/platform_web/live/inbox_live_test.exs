@@ -2514,4 +2514,358 @@ defmodule PlatformWeb.InboxLiveTest do
         |> String.trim()
         |> html_unescape()
   end
+
+  # ── Synthesis findings in the meeting briefing (task 01a16974 stage 5) ──
+
+  describe "meeting briefing findings" do
+    alias Platform.Access.Scope
+    alias Platform.Meetings.MeetingBriefings
+    alias Platform.Meetings.Synthesis
+    alias Platform.Meetings.SynthesisFinding
+    alias Platform.Meetings.SynthesisFindings
+
+    # Meeting A (attendees a, b) from `concluded_meeting!/0`, both in A's
+    # chat space; a private space P (another meeting's) that only `a` reads.
+    setup do
+      ctx = concluded_meeting!()
+      for u <- [ctx.a, ctx.b], do: join_space!(ctx.meeting.chat_space_id, u)
+      p = concluded_meeting!()
+      join_space!(p.meeting.chat_space_id, ctx.a)
+
+      in_a = space_message!(ctx.meeting.chat_space_id, ctx.a, "Move billing to Paddle")
+      in_p = space_message!(p.meeting.chat_space_id, ctx.a, "Billing stays on Stripe")
+
+      %{ctx: ctx, p_space: Chat.get_space(p.meeting.chat_space_id), in_a: in_a, in_p: in_p}
+    end
+
+    defp join_space!(space_id, user) do
+      unless Chat.participant?(space_id, user.id) do
+        {:ok, _} =
+          Chat.add_participant(space_id, %{
+            participant_type: "user",
+            participant_id: user.id,
+            display_name: user.name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      :ok
+    end
+
+    defp space_message!(space_id, user, text) do
+      participant = Repo.get_by!(Chat.Participant, space_id: space_id, participant_id: user.id)
+
+      Repo.insert!(%Chat.Message{
+        space_id: space_id,
+        participant_id: participant.id,
+        content: text
+      })
+    end
+
+    defp cite(%Chat.Message{id: id}, title),
+      do: %{source_kind: "message", ref: "message:" <> id, title: title}
+
+    # A finding placed through the synthesis placement path, so the Inbox
+    # rows are updated by deliver/2 exactly as in production.
+    defp place_finding!(meeting, citations, recipients, attrs \\ %{}) do
+      {:ok, finding, _} =
+        SynthesisFindings.upsert(
+          Map.merge(
+            %{
+              org_id: acme_org_id(),
+              origin_meeting_id: meeting.id,
+              meeting_ids: [meeting.id],
+              kind: "conflicts_with",
+              confidence: "high",
+              body: "Billing moves to Paddle here; elsewhere it stays on Stripe.",
+              citations: citations,
+              recipient_user_ids: Enum.map(recipients, & &1.id)
+            },
+            attrs
+          )
+        )
+
+      :ok = Synthesis.place_findings([finding])
+      finding
+    end
+
+    defp finding_key(finding), do: elem(SynthesisFindings.item(finding), 0)
+
+    defp open_card(finding),
+      do: ~s([data-role="meeting-briefing-card"][data-key="#{finding_key(finding)}"])
+
+    defp resolved_card(finding),
+      do: ~s([data-role="meeting-briefing-resolved-card"][data-key="#{finding_key(finding)}"])
+
+    defp meeting_row(meeting),
+      do: ~s([data-role="inbox-meeting-briefing-row"][data-meeting-id="#{meeting.id}"])
+
+    defp inbox_item(user, meeting) do
+      Repo.one!(
+        from(i in Item,
+          where:
+            i.user_id == ^user.id and i.kind == "meeting_briefing" and
+              i.url == ^("/inbox/meeting/" <> meeting.id)
+        )
+      )
+    end
+
+    test "a finding renders its label, body, readable citations as links, and its actions",
+         %{conn: conn} = c do
+      %{ctx: ctx} = c
+
+      # Readable by a only (cites P): a's positive control, hidden from b.
+      private =
+        place_finding!(
+          ctx.meeting,
+          [cite(c.in_a, "Move billing to Paddle"), cite(c.in_p, "P thread title")],
+          [ctx.a, ctx.b]
+        )
+
+      # Readable by both: one citation, a duplicate.
+      shared =
+        place_finding!(ctx.meeting, [cite(c.in_a, "Move billing to Paddle")], [ctx.a, ctx.b], %{
+          kind: "duplicates",
+          body: "This repeats an open billing task."
+        })
+
+      {:ok, a_lv, _} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      card = open_card(private)
+      assert has_element?(a_lv, card)
+
+      assert a_lv
+             |> element(card <> ~s( [data-role="meeting-briefing-finding-label"]))
+             |> render()
+             |> strip_tags() ==
+               "Alignment needed"
+
+      assert a_lv |> element(card <> ~s( [data-role="meeting-briefing-finding-body"])) |> render() =~
+               "Billing moves to Paddle here"
+
+      a_space = Chat.get_space(ctx.meeting.chat_space_id)
+
+      assert has_element?(
+               a_lv,
+               card <>
+                 ~s( [data-role="meeting-briefing-citation-link"][href="/chat/#{a_space.slug}"]),
+               "Move billing to Paddle"
+             )
+
+      assert has_element?(
+               a_lv,
+               card <>
+                 ~s( [data-role="meeting-briefing-citation-link"][href="/chat/#{c.p_space.slug}"]),
+               "P thread title"
+             )
+
+      actions =
+        for {verb, label} <- [
+              {"align", "Seek alignment"},
+              {"confirm", "Looks right"},
+              {"dismiss", "Not a conflict"}
+            ] do
+          assert has_element?(
+                   a_lv,
+                   card <> ~s( [data-action="#{verb}"][phx-value-verb="#{verb}"]),
+                   label
+                 )
+
+          verb
+        end
+
+      assert length(actions) == 3
+
+      assert a_lv
+             |> element(open_card(shared) <> ~s( [data-role="meeting-briefing-finding-label"]))
+             |> render()
+             |> strip_tags() ==
+               "Possible duplicate"
+
+      # b is a recipient of both but cannot read P: the private finding is
+      # absent, with no trace of P; the shared one shows its one citation.
+      {:ok, b_lv, b_html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+      refute has_element?(b_lv, card)
+      refute has_element?(b_lv, resolved_card(private))
+      refute b_html =~ "P thread title"
+      refute render(b_lv) =~ "P thread title"
+      refute render(b_lv) =~ c.p_space.slug
+      assert has_element?(b_lv, open_card(shared))
+
+      assert b_lv
+             |> element(open_card(shared))
+             |> render()
+             |> then(&Regex.scan(~r/data-role="meeting-briefing-citation"/, &1))
+             |> length() == 1
+    end
+
+    test "a resolution in another session re-renders the finding as resolved, live",
+         %{conn: conn} = c do
+      %{ctx: ctx} = c
+
+      finding =
+        place_finding!(ctx.meeting, [cite(c.in_a, "Move billing to Paddle")], [ctx.a, ctx.b])
+
+      {:ok, a_lv, _} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      {:ok, b_lv, _} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+      assert has_element?(b_lv, open_card(finding) <> ~s( [data-action="align"]))
+
+      a_lv |> element(open_card(finding) <> ~s( [data-action="align"])) |> render_click()
+      assert has_element?(a_lv, resolved_card(finding))
+
+      # b's session repaints from the PubSub broadcast, not from a click.
+      Platform.AsyncAssertions.assert_eventually(fn ->
+        has_element?(b_lv, resolved_card(finding))
+      end)
+
+      refute has_element?(b_lv, open_card(finding))
+
+      refute has_element?(
+               b_lv,
+               resolved_card(finding) <> ~s( [data-role="meeting-briefing-action"])
+             )
+
+      assert b_lv
+             |> element(
+               resolved_card(finding) <> ~s( [data-role="meeting-briefing-receipt-lead"])
+             )
+             |> render()
+             |> strip_tags() == "Aligned by " <> ctx.a.name
+
+      # The label and body stay on the resolved card.
+      assert b_lv |> element(resolved_card(finding)) |> render() =~ "Alignment needed"
+    end
+
+    test "dismissed renders Dismissed by <name>", %{conn: conn} = c do
+      %{ctx: ctx} = c
+
+      finding =
+        place_finding!(ctx.meeting, [cite(c.in_a, "Move billing to Paddle")], [ctx.a, ctx.b])
+
+      {:ok, lv, _} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      lv |> element(open_card(finding) <> ~s( [data-action="dismiss"])) |> render_click()
+
+      assert lv
+             |> element(
+               resolved_card(finding) <> ~s( [data-role="meeting-briefing-receipt-lead"])
+             )
+             |> render()
+             |> strip_tags() == "Dismissed by " <> ctx.a.name
+    end
+
+    test "a stale click on a resolved finding is a no-op that re-renders it resolved",
+         %{conn: conn} = c do
+      %{ctx: ctx} = c
+
+      finding =
+        place_finding!(ctx.meeting, [cite(c.in_a, "Move billing to Paddle")], [ctx.a, ctx.b])
+
+      key = finding_key(finding)
+
+      {:ok, b_lv, _} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+
+      # Positive control: b's page holds the Seek alignment button carrying
+      # exactly the params the stale click below sends.
+      assert has_element?(
+               b_lv,
+               open_card(finding) <>
+                 ~s( [data-action="align"][phx-click="act"][phx-value-key="#{key}"][phx-value-verb="align"])
+             )
+
+      briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
+
+      assert {:ok, _} =
+               MeetingBriefings.act(
+                 briefing,
+                 key,
+                 :dismiss,
+                 Scope.for_user(Repo.get!(User, ctx.a.id)),
+                 %{}
+               )
+
+      receipt = Repo.get!(SynthesisFinding, finding.id).receipt
+      messages = message_count(ctx.meeting.chat_space_id)
+
+      b_lv
+      |> with_target("#meeting-briefing-#{ctx.meeting.id}")
+      |> render_click("act", %{"key" => key, "verb" => "align"})
+
+      assert b_lv
+             |> element(~s([data-role="meeting-briefing-notice"]))
+             |> render()
+             |> strip_tags() ==
+               "Already handled by " <> ctx.a.name
+
+      assert has_element?(b_lv, resolved_card(finding))
+      refute has_element?(b_lv, open_card(finding))
+      # Nothing changed: same receipt, no alignment message posted.
+      assert Repo.get!(SynthesisFinding, finding.id).receipt == receipt
+      assert receipt["verb"] == "dismissed"
+      assert message_count(ctx.meeting.chat_space_id) == messages
+    end
+
+    test "a non-recipient's Inbox shows neither the finding nor a count including it",
+         %{conn: conn} = c do
+      %{ctx: ctx} = c
+      # a is the only recipient; b attended the same meeting.
+      finding = place_finding!(ctx.meeting, [cite(c.in_a, "Move billing to Paddle")], [ctx.a])
+
+      # Positive control: the recipient's row and count include it.
+      {:ok, a_lv, _} = live(auth(conn, ctx.a), "/inbox?f=briefing")
+
+      assert a_lv
+             |> element(
+               meeting_row(ctx.meeting) <> ~s( [data-role="inbox-meeting-briefing-summary"])
+             )
+             |> render()
+             |> strip_tags() ==
+               "3 items · 3 open"
+
+      assert a_lv
+             |> element(
+               meeting_row(ctx.meeting) <> ~s( [data-role="inbox-meeting-briefing-finding"])
+             )
+             |> render()
+             |> strip_tags() ==
+               "Alignment needed"
+
+      assert inbox_item(ctx.a, ctx.meeting).body == "3 items"
+
+      {:ok, b_lv, _} = live(auth(conn, ctx.b), "/inbox?f=briefing")
+      assert has_element?(b_lv, meeting_row(ctx.meeting))
+
+      assert b_lv
+             |> element(
+               meeting_row(ctx.meeting) <> ~s( [data-role="inbox-meeting-briefing-summary"])
+             )
+             |> render()
+             |> strip_tags() ==
+               "2 items · 2 open"
+
+      refute has_element?(
+               b_lv,
+               meeting_row(ctx.meeting) <> ~s( [data-role="inbox-meeting-briefing-finding"])
+             )
+
+      assert inbox_item(ctx.b, ctx.meeting).body == "2 items"
+
+      {:ok, b_detail, _} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+      assert has_element?(b_detail, ~s([data-role="meeting-briefing-detail"]))
+      refute has_element?(b_detail, open_card(finding))
+      refute has_element?(b_detail, ~s([data-kind="finding"]))
+      refute render(b_detail) =~ "Billing moves to Paddle here"
+
+      assert b_detail |> element(~s([data-role="meeting-briefing-meta"])) |> render() =~
+               "2 items · 2 open"
+
+      # A direct act from b's session is refused and resolves nothing.
+      b_detail
+      |> with_target("#meeting-briefing-#{ctx.meeting.id}")
+      |> render_click("act", %{"key" => finding_key(finding), "verb" => "dismiss"})
+
+      assert is_nil(Repo.get!(SynthesisFinding, finding.id).receipt)
+    end
+
+    defp message_count(space_id),
+      do: Repo.aggregate(from(m in Chat.Message, where: m.space_id == ^space_id), :count)
+  end
 end

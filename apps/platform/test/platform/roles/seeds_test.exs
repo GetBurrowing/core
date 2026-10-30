@@ -109,10 +109,10 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts ten roles and thirty-one bundle rows on a fresh DB" do
+    test "inserts ten roles and thirty-two bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
-      # 8 roles: designer, historian, meeting_producer, meeting_scribe,
+      # 10 roles: designer, historian, meeting_producer, meeting_scribe,
       # triage_officer, security_guard, architect (ADR-0044 stage 1),
       # agents_leader (task 01a0b491 stage 1), scientist (task 01a0d415
       # stage 3), janitor (task 019fa1ac-6685 stage 1).
@@ -162,7 +162,9 @@ defmodule Platform.Roles.SeedsTest do
       # unattended chore execution is a separate trust decision from triage:
       # pinning it onto `triage_officer` would hand autonomous execution to an
       # agent chosen for sorting.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 31
+      # 31 -> 32 in task 01a16974 stage 3: native brief synthesis belongs
+      # to the existing meeting_scribe role; the role count stays at 10.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 32
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
@@ -171,11 +173,11 @@ defmodule Platform.Roles.SeedsTest do
 
       assert Repo.aggregate(Role, :count, :key) == 10
 
-      # Same 30 as the fresh-DB case above — the point of this test is
+      # Same 32 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 31
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 32
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do
