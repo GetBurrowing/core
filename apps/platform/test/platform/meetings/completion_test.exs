@@ -558,6 +558,18 @@ defmodule Platform.Meetings.CompletionTest do
 
       assert passive.id == run.transcript_id
       assert passive.status == "complete"
+
+      conn =
+        PlatformWeb.LivekitWebhookController.handle(
+          Plug.Test.conn(:post, "/api/webhooks/livekit"),
+          %{
+            "event" => "room_started",
+            "room" => %{"name" => meeting.livekit_room_name, "sid" => "RM_replay"}
+          }
+        )
+
+      assert conn.status == 201
+      assert Jason.decode!(conn.resp_body)["transcript_id"] == run.transcript_id
     end
 
     assert run!(meeting) == run
@@ -1100,7 +1112,7 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
       changed = Repo.get!(Platform.Meetings.CompletionRun, run.id)
       assert changed.generation > run.generation
       assert changed.status == "waiting"
-      assert changed.canvas_id == run.canvas_id
+      assert changed.canvas_id == canvas.id
       assert changed.item_results != %{}
 
       Platform.Chat.Canvas.Server.stop(canvas.id)
