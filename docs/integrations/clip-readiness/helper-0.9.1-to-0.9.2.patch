@@ -1,0 +1,94 @@
+--- a/clip_runner.py
++++ b/clip_runner.py
+@@ -62,7 +62,7 @@
+ from pathlib import Path
+ from typing import Any, Protocol
+ 
+-VERSION = "0.9.1"
++VERSION = "0.9.2"
+ 
+ KINDS = ("new_clip", "rerender", "save_default", "episode")
+ RESULT_KEYS = (
+@@ -964,7 +964,7 @@
+ # ── Preflight, privacy, profiles ─────────────────────────────────────────
+ 
+ 
+-def _preflight(runner: Runner) -> None:
++def _preflight(runner: Runner, job: dict) -> None:
+     info = runner.clip("version", ["version", "--json"])
+     version = parse_version(info.get("version"))
+     if version is None:
+@@ -975,7 +975,14 @@
+     runner.headline_capability = type(info.get("headline_review")) is int and info["headline_review"] == 1
+     cf = info.get("content_free")
+     runner.content_free = isinstance(cf, int) and not isinstance(cf, bool) and cf >= MIN_CONTENT_FREE
+-    doctor = runner.clip("doctor", ["doctor", "--json"], fraction=0.05)
++    profile = _check_profile_name((job.get("payload") or {}).get("clip_user_profile"))
++    _ensure_user_profile(runner, profile)
++    _doctor_profile(runner, profile)
++
++
++def _doctor_profile(runner: Runner, profile: str, fraction: float = 0.05) -> None:
++    """Keep every readiness check, using the exact profile for this operation."""
++    doctor = runner.clip("doctor", ["doctor", "--json", "--profile", profile], fraction=fraction)
+     code = None
+     if doctor.get("ok") is False:
+         code = doctor.get("code") or (doctor.get("error") or {}).get("code") or "CLIP_DOCTOR"
+@@ -1495,7 +1502,9 @@
+         _qualify_caption_style(runner, mapped.get("captions.style"))
+     receipt = None
+     with music_profile(runner, job, base, mapped) as mapped, closing_profile(runner, job, base, mapped) as mapped, derived_profile(runner, job, base, mapped) as look_profile:
+-        profile_args = ["--profile", look_profile or base] if consumer or appearance or look_profile else []
++        profile_args = ["--profile", look_profile or base]
++        if look_profile:
++            _doctor_profile(runner, look_profile, fraction=0.58)
+         runner.clip("review_apply", ["review", str(project), "--apply", *profile_args], fraction=0.6)
+         if payload.get("fix") or consumer or appearance:
+             alternate = runner.review_entry.get("alternate")
+@@ -1521,9 +1530,7 @@
+         if consumer:
+             receipt = _apply_headline(runner, job, project, look_profile or base, consumer)
+         render_started = time.time_ns()
+-        args = ["finalize", str(project)]
+-        if look_profile:
+-            args += ["--profile", look_profile]
++        args = ["finalize", str(project), *profile_args]
+         if consumer or appearance or "captions.style" in mapped:
+             # Explicit CLI style overrides a saved process-time --captions none.
+             args += ["--captions", mapped["captions.style"]]
+@@ -1589,7 +1596,7 @@
+ 
+ def handle_new_clip(runner: Runner, job: dict) -> dict:
+     _check_rev(runner, job, 0)
+-    _preflight(runner)
++    _preflight(runner, job)
+     payload = job.get("payload") or {}
+     if payload.get("episode_job_id"):
+         mapping = runner.clips.get(job.get("clip_id") or "")
+@@ -1605,7 +1612,7 @@
+ def handle_rerender(runner: Runner, job: dict) -> dict:
+     """Re-render and trim (a trim is a rerender with new in_s/out_s and no look change)."""
+     _check_rev(runner, job, 1)
+-    _preflight(runner)
++    _preflight(runner, job)
+     payload = job.get("payload") or {}
+     _check_profile_name(payload.get("clip_user_profile"))
+     mapping = runner.clips.get(job.get("clip_id") or payload.get("clip_id") or "")
+@@ -1647,7 +1654,7 @@
+     Generated headline text never leaves the tool. MCP carries ids/bounds and
+     an applied receipt only. A partial failure preserves completed children.
+     """
+-    _preflight(runner)
++    _preflight(runner, job)
+     source = runner.client.request("social_clip_job_source", {"job_id": job["id"]}, wait=runner.heartbeat)
+     if not isinstance(source.get("url"), str):
+         raise ClipError("SOURCE_FILE_NO_DOWNLOAD", "fetch")
+@@ -1699,7 +1706,7 @@
+     if profile == payload.get("base_profile"):
+         raise ClipError("BAD_PAYLOAD", "dispatch")
+     mapped = _overrides(payload)
+-    _preflight(runner)
++    _preflight(runner, job)
+     if "captions.style" in mapped:
+         _qualify_caption_style(runner, mapped["captions.style"])
+     _import_profile(runner, profile, BASE_PROFILE, mapped, "profile_import")
