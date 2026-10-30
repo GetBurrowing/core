@@ -88,3 +88,9 @@ Ruff F/E9 checks pass. Deleting immutable-content restore kills the unchanged
 replay test (exit1); restored helper passes. Earlier failed legacy-shape and
 reused-database fixture-collision runs are not counted as passes. Raw logs and
 exact hashes are recorded in runner-artifact.json and evidence/runner-v1/.
+
+Full configured helper Ruff additionally reports three inherited findings
+(two BLE001, one PIE810); the unchanged 0.9.2 helper reproduces all three.
+They are not reported as a full lint pass or weakened. The new Python test
+and materializer files pass the full configured rules; helper F/E9 passes.
+The original runner cleanup/error guards are preserved.

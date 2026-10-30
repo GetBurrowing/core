@@ -5043,11 +5043,10 @@ import json
 import os
 from pathlib import Path
 
+import clip_runner as c
 import pytest
 from conftest import FakeJobClient, make_job
 from test_stage2 import first_new_clip, proj, rerender_job, run
-
-import clip_runner as c
 
 BUNDLE = Path(os.environ.get('CLIP_TEMPLATE_TEST_ASSETS', str(Path(__file__).resolve().parents[2] / 'docs/integrations/clip-headlines')))
 

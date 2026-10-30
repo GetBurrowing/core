@@ -8,8 +8,8 @@
   "database": "platform_test_htc_templates_s2_clean",
   "helper_version": "0.10.0",
   "helper_sha256": "2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1",
-  "skill_sha256": "7ba6e32876a7e9e31c20f0dddbccca7c94fac4e2aafd900f0993fbbd8e2ccf7b",
-  "skill_updated_at": "2026-10-30T23:35:44.869178Z",
+  "skill_sha256": "800c59e2a010a2683046e4dadb93792cc56ca7fdba4db98d75879d330e5b541d",
+  "skill_updated_at": "2026-10-30T23:38:53.650474Z",
   "archive_byte_matches_published_skill": true,
   "skill_source_concurrent_changes_checked": true,
   "helper_tests": {
@@ -35,7 +35,9 @@
   "lint": {
     "helper": "Ruff F/E9 passes; inherited source formatting preserved",
     "materializer": "Ruff F/E9/I and format passes",
-    "elixir": "compile --warnings-as-errors; mix format --check-formatted"
+    "elixir": "compile --warnings-as-errors; mix format --check-formatted",
+    "full_helper": "3 existing configured Ruff findings (BLE001 twice, PIE810 once), independently reproduced in original0.9.2 helper; no new configured findings",
+    "new_python": "Full configured Ruff passes on new template tests and materializer"
   },
   "snapshot": "immutable render provenance.headline; content-addressed private canonical JSON; no generated wording exported",
   "canonical_skill": "burrow-clip-runner",
