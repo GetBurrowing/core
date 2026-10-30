@@ -487,6 +487,12 @@ defmodule PlatformWeb.LivekitWebhookController do
       "language" => seg["language"],
       "final" => seg["final"] != false
     }
+    |> then(fn normalized ->
+      case seg["id"] do
+        id when is_binary(id) and id != "" -> Map.put(normalized, "id", id)
+        _ -> normalized
+      end
+    end)
   end
 
   defp maybe_trigger_summary(transcript) do

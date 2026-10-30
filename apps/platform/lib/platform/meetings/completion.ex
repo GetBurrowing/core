@@ -72,10 +72,13 @@ defmodule Platform.Meetings.Completion do
         :ok
 
       meeting ->
-        Repo.transaction(fn ->
-          Meetings.lock_transcript_space(meeting)
-          finish_capture(meeting, space_id)
-        end)
+        case Repo.transaction(fn ->
+               Meetings.lock_transcript_space(meeting)
+               finish_capture(meeting, space_id)
+             end) do
+          {:ok, result} -> result
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 

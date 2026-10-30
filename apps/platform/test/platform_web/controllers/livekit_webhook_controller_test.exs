@@ -926,6 +926,29 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
   # ── transcription tests ─────────────────────────────────────────────────
 
   describe "POST #{@livekit_webhook_path} — transcription" do
+    test "source segment IDs survive normalization so delivery replay does not append twice", %{
+      conn: conn
+    } do
+      room_name = app_room_name()
+      input = sample_segment(%{"id" => "source-segment-one"})
+      payload = transcription_payload(room_name, [input])
+      response = conn |> post(@livekit_webhook_path, payload) |> json_response(200)
+      transcript_id = response["transcript_id"]
+      assert [%{"id" => "source-segment-one"}] = Meetings.get_transcript(transcript_id).segments
+      conn |> recycle() |> post(@livekit_webhook_path, payload) |> json_response(200)
+      assert length(Meetings.get_transcript(transcript_id).segments) == 1
+
+      conn
+      |> recycle()
+      |> post(
+        @livekit_webhook_path,
+        transcription_payload(room_name, [Map.put(input, "id", "source-segment-two")])
+      )
+      |> json_response(200)
+
+      assert length(Meetings.get_transcript(transcript_id).segments) == 2
+    end
+
     test "appends segments to an existing transcript", %{conn: conn} do
       room_id = unique_room_id()
       {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
