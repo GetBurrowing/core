@@ -1,0 +1,278 @@
+{
+  "contract": 1,
+  "upstream_base": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "core_base": "a433cb9c",
+  "helper_version_preserved": "0.8.0",
+  "helper_changed": false,
+  "headline_patch_sha256": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
+  "caption_patch_sha256": "364571881647bd354e0a489bab058508db7c69d21c60c234e25cdae4710029ad",
+  "installed_source_sha256": {
+    "clip-agent/src/clip_agent/captions.py": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+    "clip-agent/src/clip_agent/dynamic_captions.py": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
+    "clip-agent/src/clip_agent/cli.py": "bbbe8bb288b9ccb5363d80909fed96385221ee6710eb72a5532ee7ad21e97717",
+    "clip-agent/src/clip_agent/config.py": "fd72b9bf2a9ebda8f5c8e8e72351611a26e83fe963e0a7b778956911034e359a",
+    "clip-agent/src/clip_agent/models.py": "ee6d29a8f65b80319b574f2ebf5c18d30cac49336e675c211d3cc81da90fd440",
+    "clip-agent/src/clip_agent/fonts/weights/Inter-ExtraBold.ttf": "e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22"
+  },
+  "cli": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
+    "commit": "c71e2ac88d681bf5b368971c9250a31f3b63f196",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
+      "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+      "temporal_path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "runtime": {
+    "platform": "Linux-6.6.87.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "ffmpeg": "ffmpeg version 8.0.1-3ubuntu2 Copyright (c) 2000-2025 the FFmpeg developers"
+  },
+  "decoded_temporal_evidence": {
+    "test_only": true,
+    "module": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
+    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "styles": {
+      "type-on": {
+        "track_sha256": "e74054223e5957c531e824c8be3f17d8440c1dfdca02e53c39a57ad7468eceef",
+        "frames": {
+          "0": "f3e284a68faab7ae18c5a67667842e60305df516d195b2d62c823347107b67b3",
+          "0.033": "f5cc7b352d110c873800b81acbda5b6c80653287cf24910e439d48255a8d27c8",
+          "0.067": "9b88ba4ad8b5257774e9d6c73fbf11039bb0deb8a82e330c98fc99f9ff035ff2",
+          "0.1": "30ca9175631a943b44c725746ac267f70a2d66bd9052bd45114a5c372fadfb66",
+          "0.2": "0d5c66acc785c49c6a5c11be8f5e8e28c8cda82095e82562da193c2d89f5926d",
+          "0.4": "6ad85741252754c3fa53e4bfec675d82b20db10dfe776d0098e884bc74d00820",
+          "0.433": "cdcd1dd2d12d53fbbf95c6149164e5ceeb06499b11f730b16a31ece2d2fde293",
+          "0.467": "edbb78d3ce3bc29803958f7067196f19d0ce40c7078aa8edb6374f91d079faf1",
+          "0.5": "199a6b115af501f55e31dd10705cae54b040594b0d714b137b0a58be6263319c",
+          "0.6": "6afc52fbcee9fde5733aebf1321db45d20f75e2b1bad30ecf23e8ff7dc37ed7a",
+          "1.5": "bc0a79760dd49defefc712bd87839815456d722ff63522f9f8b9862a5d040c7d",
+          "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
+          "4.5": "6622cb98dfd0f93f4b2f1bc0180a859ca8c3016291807b9d67c037d57cb19aa0"
+        },
+        "frame_count": 143
+      },
+      "focus-word": {
+        "track_sha256": "11b43d993bb1a5d185089251e3186f1a27a28080cad8f4d1665644aba03604bb",
+        "frames": {
+          "0": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.033": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.067": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.1": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.2": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.4": "f230edc103c363b1f8d1e3fd443cd5949e3453891710c24938f40f6b50401466",
+          "0.433": "545521146eaa90789916098f38fbbb9dfd797a8dc3c31bb04384c6e722dd569f",
+          "0.467": "0cf15bd5503ba301487a529704bde3b96116f3bdee0ed37fa8b5ca9833d019af",
+          "0.5": "23bad01910befaa9c3d2ec2d4bd305e37eb298607446fd6596d95ade40fb346d",
+          "0.6": "44b2a5eb15329577b9339e1ea639f4797919f2e213629ca732075ac68f3dcad5",
+          "1.5": "456ec9dd5808eb606e38414216e42e4f15241eea1c35a0e7d13eb7d75cac2289",
+          "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
+          "4.5": "c7ba9bd8f9f8abb7982f4d6d320865815892b3c58d8a5f7bb0a09faf0dfb2689"
+        },
+        "frame_count": 144
+      },
+      "editorial-punch": {
+        "track_sha256": "112220037b8e6fb9e08bbc3c6ebe0de44758f6236d588e2fc8dc8e19651cd391",
+        "frames": {
+          "0": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
+          "0.033": "4ad04bc711fc7816583fce820f5538fae3c5cd2fa550d49f0eb976088b7ccbb9",
+          "0.067": "50acaed695facd2412fdc0d74c2f906542810104975bd0d4845f4648195ef41b",
+          "0.1": "6267420ae31ef7edeaa4bf68289be90e38ad21e0567bb91e67fa10e0c4278638",
+          "0.2": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "0.4": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "0.433": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "0.467": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "0.5": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "0.6": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "1.5": "a51e421de75d31a5dcc59f88f5dfd14afb683303df7711640cb5f59e861b76c0",
+          "2.4": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
+          "4.5": "57a121a85731598c35eea1c9bab989707086ee1b3080c415cc9bad2c3a64f78e"
+        },
+        "frame_count": 144
+      }
+    }
+  },
+  "design_reference_canvas": "01a18d28-1c19-7000-a812-deed35fa8208",
+  "decoded_evidence_canvas": "01a18d2b-6980-7000-9fab-2a854909ce2c",
+  "design_deviations": [
+    "canvas 01a18d1c-57fd-7000-8ebd-6d0ad909fb33 node md | 60% black per-line scrim is always present, including dark shots | deterministic phrase-local contrast without adding a second frame-analysis path; actual light/dark decoded frames inspected."
+  ],
+  "scope_limit": "Stage1 synthetic temporal fixtures only; original-source 8\u201312s comparison samples and UI previews are later approved stages, not delivered here.",
+  "dependencies": [
+    "annotated-types==0.8.0",
+    "anthropic==1.17.0",
+    "anyio==4.15.1",
+    "ast-serialize==0.13.1",
+    "certifi==2026.10.23",
+    "cffi==2.1.1",
+    "click==8.5.0",
+    "-e file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
+    "cryptography==50.0.2",
+    "docstring-parser==0.18.0",
+    "fonttools==4.68.0",
+    "h11==0.16.0",
+    "httpcore==1.0.9",
+    "httpcore2==2.16.0",
+    "httpx==0.28.1",
+    "httpx2==2.16.0",
+    "icalendar==7.3.0",
+    "idna==3.20",
+    "iniconfig==2.3.1",
+    "jaraco-classes==3.4.0",
+    "jaraco-context==6.1.2",
+    "jaraco-functools==4.6.0",
+    "jeepney==0.9.0",
+    "jiter==0.18.0",
+    "keyring==25.7.0",
+    "librt==0.16.0",
+    "more-itertools==11.2.1",
+    "mypy==2.4.1",
+    "mypy-extensions==1.1.0",
+    "numpy==2.5.4",
+    "ollama==0.6.3",
+    "opentelemetry-api==1.45.2",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pillow==13.0.0",
+    "pluggy==1.7.0",
+    "pycparser==3.12",
+    "pydantic==2.14.2",
+    "pydantic-core==2.50.2",
+    "pygments==2.21.0",
+    "pytest==9.2.0",
+    "python-dateutil==3.0.0",
+    "ruff==0.17.3",
+    "secretstorage==3.5.0",
+    "six==1.17.0",
+    "sniffio==1.3.1",
+    "tqdm==4.70.1",
+    "truststore==0.10.5",
+    "typing-extensions==4.16.0",
+    "typing-inspection==0.4.4",
+    "tzdata==2026.6"
+  ],
+  "wheel_font_bundling_verified": true,
+  "helper_sha256_preserved": "1a226a8675082a87b90d7e74a1f757b6bae3f6cea87e1e2738ea51e874969077",
+  "test_source_sha256": {
+    "clip-agent/tests/test_dynamic_captions.py": "050a100dbdb2d41121a4264ff655ba7217c0deeefcba6ec56d7b5c72820bfdf2",
+    "clip-agent/tests/test_models.py": "7dba17709acad72991b8191ea3df915008294b61dc185db2fe7f7cffa0cc3c08"
+  },
+  "validation": {
+    "focused": {
+      "command": "python -m pytest tests/test_dynamic_captions.py tests/test_captions*.py tests/test_config.py tests/test_cli.py tests/test_headline_contract.py tests/test_models.py tests/test_prefs_schema.py --deselect tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+      "result": "425 passed; 1 explicitly deselected pre-existing hook-title baseline failure; 23 Pillow deprecation warnings",
+      "host": "Linux/Codex own runtime",
+      "status": "passed"
+    },
+    "new_temporal": {
+      "result": "11 passed",
+      "status": "passed"
+    },
+    "clean_install": {
+      "result": "36 passed; actual imported source digests/paths, caption/headline capabilities and music/outro config qualified",
+      "status": "passed"
+    },
+    "initial_full": {
+      "command": "python -m pytest",
+      "result": "3479 passed, 20 skipped, 8 failed in 523.30s",
+      "failures": [
+        "tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+        "tests/test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message",
+        "tests/test_models.py::test_caption_style_values - AssertionError: asse...",
+        "tests/test_prefs_schema.py::test_choices_are_values_the_config_accepts",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[steady]",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[edited]",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[unnormalised]",
+        "tests/test_render_finish.py::test_a_bed_already_under_the_margin_is_left_as_it_is"
+      ],
+      "status": "failed",
+      "disposition": "Caption enum expectation and internal-font picker regression fixed and green in final focused run; remaining unrelated hook/PTY/audio failures are retained and controlled against pristine source, not counted as passes."
+    },
+    "mutation": {
+      "change": "Replace actual focus pill transition easing with mix=1.0 (instant snap)",
+      "result": "Both unchanged intermediate-position/width and rapid-interruption continuity tests failed; mutation restored; new tests green",
+      "status": "killed"
+    },
+    "lint": {
+      "result": "All checks passed!\n4 files already formatted",
+      "status": "passed"
+    },
+    "decoded_frames": {
+      "result": "All three actual 30fps alpha tracks decoded, first/intermediate/hold/last-word/safe bounds/gap checks pass; white and dark MP4 composites viewed",
+      "status": "passed"
+    },
+    "full_pristine_control": {
+      "command": "PYTHONPATH=src <same fixture venv>/python -m pytest",
+      "upstream_base": "82ef5132b926fed33a80a304364fdda14335c2d5",
+      "result": "3451 passed, 20 skipped, 5 failed, 1 warning in 526.76s",
+      "status": "failed",
+      "failures": [
+        "tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+        "tests/test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[steady]",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[unnormalised]",
+        "tests/test_render_finish.py::test_a_bed_already_under_the_margin_is_left_as_it_is"
+      ],
+      "disposition": "Hook-title, PTY EOF and music metric failures reproduce without any patch. Music test outcomes vary across unchanged runs (edited/wider variants flip between pass and fail); recorded as flakes/order-sensitive failures, not passes. Audio renderer/test source is byte-identical to pristine."
+    },
+    "final_patch_apply": {
+      "status": "passed",
+      "result": "Fresh local clone at actual pinned upstream; headline patch and final caption patch apply cleanly; all installed source/font and test digests match."
+    }
+  },
+  "clean_install_qualification": {
+    "verified": true,
+    "cli": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/clip",
+    "checkout": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline",
+    "version": "0.9.0",
+    "caption_treatments": 1,
+    "headline_review": 1
+  },
+  "qualified_cli": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+      "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+      "temporal_path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "unchanged_audio_sha256": {
+    "clip-agent/src/clip_agent/render.py": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
+    "clip-agent/tests/test_render_finish.py": "572ce520068b12ba4e77171a758175978b33f6b46b9eef07cb967dc6999be70d"
+  }
+}

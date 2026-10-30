@@ -1,0 +1,35 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_hook_title_png_in_top_band_and_safe_area _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-23/test_hook_title_png_in_top_ban0')
+fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/fonts')
+
+    def test_hook_title_png_in_top_band_and_safe_area(tmp_path, fonts_dir):
+        c = podcast_cfg(hook_title=True)
+        look = captions.resolve_look(c)
+        p = captions.render_hook_title_png("Why small models win: the 3 rules nobody follows at scale",
+                                           tmp_path / "t.png", width=W, height=H, look=look, fonts_dir=fonts_dir)
+        band = captions.hook_title_box(W, H, look)
+        assert band[1] >= 0.15 * H - 1 and band[3] <= 0.27 * H + 1
+>       assert_inside(p, band)
+
+tests/test_captions_safe.py:268:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = PosixPath('/tmp/pytest-of-jordan/pytest-23/test_hook_title_png_in_top_ban0/t.png')
+box = (120, 288, 900, 518)
+
+    def assert_inside(path, box):
+        l, t, r, b = box
+        bb = ink_bbox(alpha(path))
+        assert bb is not None, f"{Path(path).name} is empty"
+        x0, y0, x1, y1 = bb
+>       assert x0 >= l and y0 >= t and x1 < r and y1 < b, f"{Path(path).name}: ink {bb} outside safe {box}"
+E       AssertionError: t.png: ink (np.int64(120), np.int64(321), np.int64(900), np.int64(486)) outside safe (120, 288, 900, 518)
+E       assert (np.int64(120) >= 120 and np.int64(321) >= 288 and np.int64(900) < 900)
+
+tests/test_captions_safe.py:74: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area
+1 failed in 0.55s

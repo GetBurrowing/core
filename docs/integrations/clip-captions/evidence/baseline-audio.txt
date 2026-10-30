@@ -1,0 +1,33 @@
+......F                                                                  [100%]
+=================================== FAILURES ===================================
+_____________ test_a_bed_already_under_the_margin_is_left_as_it_is _____________
+
+speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-30/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-30/low_bed0/bed.wav')
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-30/test_a_bed_already_under_the_m0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x77be39f05400>
+
+    def test_a_bed_already_under_the_margin_is_left_as_it_is(speech_src, loud_low_bed, tmp_path, monkeypatch):
+        """level_db = -24 puts the bed about 21 LU under the speech: the cap leaves it alone
+        (it never turns a bed up). The render is the one the finish made before the cap
+        existed: the same render with the cap step taken out. Within 40 dB under the signal:
+        two runs of the same bed graph are not always sample-identical (measured up to about
+        50 dB under it, before the cap existed too); a bed turned up to the margin is about
+        10 dB under it."""
+        c = build_config([("t", {"reframe": {"mode": "fit"}, "audio": {"normalize": True, "fade_ms": 0},
+                                 "music": {"enabled": True, "path": str(loud_low_bed), "level_db": -24,
+                                           "duck_db": 8}})])
+        out = _render_long(speech_src, tmp_path / "q.mp4", c)
+        monkeypatch.setattr(render, "_capped_bed", lambda src, finish, **kw: finish)
+        before = _render_long(speech_src, tmp_path / "r.mp4", c)
+        a, b = _pcm(out), _pcm(before)
+        assert a.shape == b.shape
+        diff_db = 20 * np.log10(np.sqrt(np.mean((a - b) ** 2)) / np.sqrt(np.mean(b ** 2)) + 1e-15)
+>       assert diff_db <= -40, diff_db
+E       AssertionError: np.float32(-32.2098)
+E       assert np.float32(-32.2098) <= -40
+
+tests/test_render_finish.py:383: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_render_finish.py::test_a_bed_already_under_the_margin_is_left_as_it_is
+1 failed, 6 passed, 14 deselected in 21.61s

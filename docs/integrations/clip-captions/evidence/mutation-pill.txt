@@ -1,0 +1,44 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___________________ test_actual_intermediate_animation_state ___________________
+
+    def test_actual_intermediate_animation_state():
+        phrase = dc.phrases(words(), 10, 4)[0]
+        f = dc.state(S.TYPE_ON, phrase, 10, 0.34)
+        assert f["alpha"] == pytest.approx((1, 0.5, 0, 0))
+        assert f["underline"] == pytest.approx(1 - 0.04 / 0.3)
+        f = dc.state(S.FOCUS_WORD, phrase, 10, 0.36)
+        assert f["previous"] == 0 and f["active"] == 1
+        assert f["mix"] == pytest.approx(0.875)
+        p = dc.layout([w.text for w in phrase.words], 1080, 1920, Path(FONTS_DIR))
+        box = dc.pill_box(p, f)
+>       assert box[0] == pytest.approx(p.boxes[0][0] + 0.875 * (p.boxes[1][0] - p.boxes[0][0]))
+E       assert 469.4546875 == 444.526953125 ± 4.4e-04
+E
+E         comparison failed
+E         Obtained: 469.4546875
+E         Expected: 444.526953125 ± 4.4e-04
+
+clip-agent/tests/test_dynamic_captions.py:55: AssertionError
+__________ test_interrupted_pill_is_continuous_and_last_word_visible ___________
+
+    def test_interrupted_pill_is_continuous_and_last_word_visible():
+        phrase = dc.phrases([Word("A", 0, 0.02), Word("longer", 0.03, 0.05), Word("end", 0.06, 0.08)], 0, 0.1)[0]
+        plan = dc.layout([w.text for w in phrase.words], 360, 640, Path(FONTS_DIR))
+        before = dc.pill_box(plan, dc.state(S.FOCUS_WORD, phrase, 0, 0.06 - 1e-8))
+        after = dc.pill_box(plan, dc.state(S.FOCUS_WORD, phrase, 0, 0.06))
+>       assert before == pytest.approx(after, abs=0.0001)
+E       assert (112.16718749...999997, 463.0) == approx((194.9....0 ± 1.0e-04))
+E
+E         comparison failed. Mismatched elements: 2 / 4:
+E         Max absolute difference: 82.796875
+E         Max relative difference: 0.7381559335255689
+E         Index | Obtained           | Expected
+E         0     | 112.16718749999998 | 194.96406249999998 ± 1.0e-04
+E         2     | 196.11718749999997 | 247.14843749999997 ± 1.0e-04
+
+clip-agent/tests/test_dynamic_captions.py:133: AssertionError
+=========================== short test summary info ============================
+FAILED clip-agent/tests/test_dynamic_captions.py::test_actual_intermediate_animation_state
+FAILED clip-agent/tests/test_dynamic_captions.py::test_interrupted_pill_is_continuous_and_last_word_visible
+2 failed in 0.22s
