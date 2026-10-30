@@ -64,6 +64,14 @@ island_profiles =
 
 config :esbuild, island_profiles
 
+# Social players are a separate ESM island; build_islands/1 deploys this profile.
+config :esbuild,
+  clip_players: [
+    args:
+      ~w(js/clip_players.js --bundle --format=esm --target=es2022 --outfile=#{static}/js/clip_players.js),
+    cd: Path.expand("../../social/assets", __DIR__)
+  ]
+
 # The generated wrapper stylesheet imports core's app.css and adds each
 # module's stylesheet and Tailwind `@source`.
 #

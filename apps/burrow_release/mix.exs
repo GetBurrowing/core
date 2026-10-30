@@ -49,7 +49,8 @@ defmodule BurrowRelease.MixProject do
         "compile",
         "platform.extensions.assets --out assets/generated",
         "tailwind platform",
-        "esbuild platform"
+        "esbuild platform",
+        "esbuild clip_players"
       ],
       # The image's asset build (stage 4): core's `assets.deploy` with this
       # host's generated inputs and output directory. Core's
