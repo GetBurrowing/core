@@ -673,6 +673,60 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert view |> element(avatar) |> render() =~ ">B<"
     end
 
+    # Task 01a18940 stage 2: a human DM row drew the person's initial always,
+    # because the list carried no human image at all. It now draws the other
+    # person's image by the message flow's rule: the participant row's
+    # `avatar_url`, else the user's. Never the viewer's own.
+    test "a human DM row draws the other person's image, the participant's first",
+         %{conn: conn} do
+      viewer = create_user!(%{avatar_url: "/images/viewer-self.png"})
+      plain_member!(viewer, acme())
+      other = create_user!(%{name: "Jordan Person", avatar_url: "/images/other-user.png"})
+
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(dm, viewer.id, viewer.name)
+      other_row = join!(dm, other.id, "Jordan Person")
+
+      conn = login(conn, viewer.id)
+      avatar = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-avatar']"
+
+      # The user's image, on fresh /chat and on direct entry into the DM.
+      for path <- [~p"/chat", ~p"/chat/#{ChatLive.space_nav_target(dm)}"] do
+        {:ok, view, _} = live(conn, path)
+        human_img = ~s(#{avatar}[data-avatar="human"] img[src="/images/other-user.png"])
+        assert has_element?(view, human_img)
+        refute has_element?(view, ~s(#{avatar} img[src="/images/viewer-self.png"]))
+        refute view |> element(avatar) |> render() =~ ">J<"
+      end
+
+      # The participant row's own image wins over the user's.
+      {:ok, _} = Chat.update_participant(other_row, %{avatar_url: "/images/participant-own.png"})
+      {:ok, view, _} = live(conn, ~p"/chat")
+      assert has_element?(view, ~s(#{avatar} img[src="/images/participant-own.png"]))
+      refute has_element?(view, ~s(#{avatar} img[src="/images/other-user.png"]))
+    end
+
+    test "a human DM row with no image anywhere keeps the person's initial and no img",
+         %{conn: conn} do
+      w = world(conn)
+      viewer = Repo.get!(Platform.Accounts.User, w.user.id)
+      Repo.update!(Ecto.Changeset.change(viewer, avatar_url: "/images/viewer-self.png"))
+
+      # `world/1`'s Moore has no user row and no participant image.
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      avatar = "#chat-list [data-space-id='#{w.dm.id}'] [data-role='chat-list-avatar']"
+      assert has_element?(view, "#{avatar}[data-avatar='initial']")
+      refute has_element?(view, "#{avatar} img")
+      assert avatar_text(list_html(view), w.dm.id) == "M"
+
+      # Positive control on the same row: an image on Moore's participant
+      # row turns the initial into that image.
+      {:ok, _} = Chat.update_participant(w.moore, %{avatar_url: "/images/moore.png"})
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, ~s(#{avatar}[data-avatar="human"] img[src="/images/moore.png"]))
+      refute has_element?(view, "#{avatar}[data-avatar='initial']")
+    end
+
     test "a restricted channel renders the restricted row with no excerpt and no link",
          %{conn: conn} do
       org = acme()

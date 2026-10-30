@@ -423,6 +423,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                     kind={kind}
                     name={row_name(kind, space, @list_identities)}
                     agent={row_agent(space, @list_identities)}
+                    human={row_human(space, @list_identities)}
                     unread={Map.get(@unread_counts, space.id, 0)}
                     excerpt={Map.get(@list_excerpts, space.id)}
                     mask_assigns={@mask_assigns}
@@ -495,6 +496,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       kind={:dm}
                       name={row_name(:dm, space, @list_identities)}
                       agent={row_agent(space, @list_identities)}
+                      human={row_human(space, @list_identities)}
                       unread={Map.get(@unread_counts, space.id, 0)}
                       excerpt={Map.get(@list_excerpts, space.id)}
                       mask_assigns={@mask_assigns}
@@ -854,6 +856,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       kind={@kind}
       name={row_name(@kind, @space, @list_identities)}
       agent={row_agent(@space, @list_identities)}
+      human={row_human(@space, @list_identities)}
       unread={Map.get(@unread_counts, @space.id, 0)}
       excerpt={Map.get(@list_excerpts, @space.id)}
       mask_assigns={@mask_assigns}
@@ -1229,6 +1232,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:kind, :atom, required: true)
   attr(:name, :string, required: true)
   attr(:agent, :any, required: true)
+  # The other person of a one-to-one DM, when they have an image
+  # (`ChatListData.load_identities/1`): `%{avatar_url: url}` or nil.
+  attr(:human, :any, default: nil)
   attr(:unread, :integer, required: true)
   attr(:excerpt, :any, required: true)
   attr(:mask_assigns, :map, required: true)
@@ -1394,6 +1400,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
               kind={@kind}
               name={@name}
               agent={@agent}
+              human={@human}
               group?={@group?}
               masked?={@name_masked?}
             />
@@ -1500,13 +1507,16 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:kind, :atom, required: true)
   attr(:name, :string, required: true)
   attr(:agent, :any, required: true)
+  attr(:human, :any, default: nil)
   attr(:group?, :boolean, default: false)
   attr(:masked?, :boolean, required: true)
 
-  # 42px disc. Masked: neutral, no initial, no accent. Agent: the agent's
-  # image or initial, ringed in its rung-3 slot. Group: a people-stack glyph,
-  # so "Sam, Alex" does not read as a DM with Sam. Task: a check glyph.
-  # Otherwise the name's first letter (a channel's without its `#`).
+  # 42px disc. Masked: neutral, no initial, no accent, no image. Agent: the
+  # agent's image or initial, ringed in its rung-3 slot. Human: the other
+  # person's image (a DM whose person has one; else the initial below).
+  # Group: a people-stack glyph, so "Sam, Alex" does not read as a DM with
+  # Sam. Task: a check glyph. Otherwise the name's first letter (a channel's
+  # without its `#`).
   defp avatar(assigns) do
     ~H"""
     <%= cond do %>
@@ -1534,6 +1544,15 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             loading="lazy"
           />
           <span :if={!@agent.avatar_url}>{initial(@agent.name)}</span>
+        </span>
+      <% @human -> %>
+        <span
+          data-role="chat-list-avatar"
+          data-avatar="human"
+          class="flex size-[42px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-base-300"
+          aria-hidden="true"
+        >
+          <img src={@human.avatar_url} alt="" class="size-full object-cover" loading="lazy" />
         </span>
       <% @group? -> %>
         <span
@@ -1822,6 +1841,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   defp row_agent(space, identities) do
     case Map.get(identities, space.id) do
       %{agent: agent} -> agent
+      _ -> nil
+    end
+  end
+
+  defp row_human(space, identities) do
+    case Map.get(identities, space.id) do
+      %{human: human} -> human
       _ -> nil
     end
   end
