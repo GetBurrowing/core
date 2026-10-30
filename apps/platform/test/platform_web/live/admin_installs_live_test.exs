@@ -111,6 +111,36 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
     assert install.size == "s-4vcpu-8gb"
   end
 
+  test "the list never holds an install's sealed private key", %{conn: conn} do
+    {install, _token} = create_install!()
+    assert Installs.get(install.id).handover_sealed =~ "BEGIN OPENSSH"
+
+    {:ok, view, html} = live(conn, ~p"/admin/installs")
+    assert html =~ install.slug
+    # Walked, not inspected: Install's derived Inspect hides handover_sealed,
+    # so `inspect/2` would pass even with the key in an assign.
+    state = :sys.get_state(view.pid)
+    # Positive control: the walker does reach the list.
+    assert deep_holds?(state, install.slug)
+    refute deep_holds?(state, "BEGIN OPENSSH")
+  end
+
+  defp deep_holds?(term, needle) when is_binary(term), do: String.contains?(term, needle)
+
+  defp deep_holds?(%_{} = struct, needle),
+    do: struct |> Map.from_struct() |> deep_holds?(needle)
+
+  defp deep_holds?(term, needle) when is_map(term),
+    do: Enum.any?(term, fn {k, v} -> deep_holds?(k, needle) or deep_holds?(v, needle) end)
+
+  defp deep_holds?([head | tail], needle),
+    do: deep_holds?(head, needle) or deep_holds?(tail, needle)
+
+  defp deep_holds?(term, needle) when is_tuple(term),
+    do: term |> Tuple.to_list() |> deep_holds?(needle)
+
+  defp deep_holds?(_term, _needle), do: false
+
   test "Destroy requires the typed slug, then tears down", %{conn: conn} do
     {install, _token} = create_install!()
     {:ok, view, _html} = live(conn, ~p"/admin/installs")

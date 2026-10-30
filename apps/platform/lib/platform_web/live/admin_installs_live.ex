@@ -79,7 +79,10 @@ defmodule PlatformWeb.AdminInstallsLive do
 
   defp load_installs(socket) do
     case Installs.list(socket.assigns[:current_user_record]) do
-      {:ok, installs} -> assign(socket, :installs, installs)
+      # `handover_sealed` decrypts on load; it never enters an assign.
+      {:ok, installs} ->
+        assign(socket, :installs, Enum.map(installs, &%{&1 | handover_sealed: nil}))
+
       {:error, _} -> assign(socket, :installs, [])
     end
   end

@@ -28,6 +28,10 @@ defmodule PlatformWeb.InstallStatusLive do
 
   ## The credentials are never a long-lived assign
 
+  `@install` is the row with `handover_sealed` set to nil (`put_install/2`):
+  `Platform.Vault.EncryptedBinary` decrypts it on load, so the row as read
+  holds the private key.
+
   `reveal_handover/1` mints a fresh sign-in link and returns the private key;
   the result goes into `:handover`, a `temporary_assigns` slot that LiveView
   resets to nil right after the render that sends it. The card that shows it
@@ -62,11 +66,17 @@ defmodule PlatformWeb.InstallStatusLive do
 
         %Install{} = install ->
           if connected?(socket), do: Installs.subscribe(install.id)
-          socket |> assign(:install, install) |> enter_screen()
+          socket |> put_install(install) |> enter_screen()
       end
 
     {:ok, socket, temporary_assigns: [handover: nil]}
   end
+
+  # The schema decrypts `handover_sealed` on load, so a row read from the
+  # database carries the private key in plaintext. It never enters an assign:
+  # every Installs call that needs it re-reads the row by id.
+  defp put_install(socket, %Install{} = install),
+    do: assign(socket, :install, %{install | handover_sealed: nil})
 
   defp rate_key(socket) do
     case get_connect_info(socket, :peer_data) do
@@ -85,7 +95,7 @@ defmodule PlatformWeb.InstallStatusLive do
 
       install ->
         previous = socket.assigns.screen
-        socket = assign(socket, :install, install)
+        socket = put_install(socket, install)
 
         # Already showing the hand-over: never reveal (mint) again for a
         # broadcast. Anything else re-derives the screen.
@@ -101,10 +111,10 @@ defmodule PlatformWeb.InstallStatusLive do
   def handle_event("retry", _params, %{assigns: %{install: %Install{} = install}} = socket) do
     case Installs.retry(install, socket.assigns.token) do
       {:ok, install} ->
-        {:noreply, socket |> assign(:install, install) |> enter_screen()}
+        {:noreply, socket |> put_install(install) |> enter_screen()}
 
       {:error, _} ->
-        {:noreply, socket |> assign(:install, Installs.get(install.id)) |> enter_screen()}
+        {:noreply, socket |> put_install(Installs.get(install.id)) |> enter_screen()}
     end
   end
 
@@ -119,12 +129,12 @@ defmodule PlatformWeb.InstallStatusLive do
       {:ok, install} ->
         {:noreply,
          socket
-         |> assign(:install, install)
+         |> put_install(install)
          |> assign(:screen, :done)
          |> redirect(external: "https://#{install.primary_host}/setup/connect-ai")}
 
       {:error, _} ->
-        {:noreply, socket |> assign(:install, Installs.get(install.id)) |> enter_screen()}
+        {:noreply, socket |> put_install(Installs.get(install.id)) |> enter_screen()}
     end
   end
 
@@ -165,7 +175,7 @@ defmodule PlatformWeb.InstallStatusLive do
           |> assign(:handover_error, nil)
 
         {:error, reason} when reason in [:already_handed_over, :handover_expired] ->
-          socket |> assign(:install, Installs.get(install.id)) |> assign(:screen, :done)
+          socket |> put_install(Installs.get(install.id)) |> assign(:screen, :done)
 
         {:error, _reason} ->
           socket |> assign(:screen, :handover) |> assign(:handover_error, :unavailable)

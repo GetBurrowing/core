@@ -225,7 +225,8 @@ defmodule PlatformWeb.InstallStatusLiveTest do
 
     test "the plain HTTP response carries no credential", %{conn: conn, token: token} do
       html = conn |> get(path(token)) |> html_response(200)
-      assert html =~ "Save these now. We don&#39;t keep a copy."
+      assert html =~ ~r/Save these now\. We don(&#39;|')t keep a copy\./
+      assert html =~ "Preparing your details"
       refute html =~ "FAKECODE"
       refute html =~ "BEGIN OPENSSH"
     end
@@ -269,7 +270,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(view, "#open-burrow[disabled]", "Open Burrow")
 
       # A forged click while unticked does nothing.
-      view |> element("#open-burrow") |> render_click()
+      render_click(view, "open_burrow", %{})
       refute Installs.get(install.id).handover_acknowledged_at
 
       view |> form("#handover-ack", %{saved: "true"}) |> render_change()
