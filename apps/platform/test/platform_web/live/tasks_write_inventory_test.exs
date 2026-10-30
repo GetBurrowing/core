@@ -37,6 +37,9 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"task_detail_component", "detail_update_task_field"},
     {"task_detail_component", "detail_update_task_field"},
     {"task_detail_component", "detail_transition"},
+    # Task 01a18e02 stage 3: the plan-first confirm re-reads the task
+    # through `writable_detail/2` (`tasks.write`) before moving it.
+    {"task_detail_component", "confirm_plan_first"},
     {"task_detail_component", "plan_approve"},
     {"task_detail_component", "plan_reject"},
     {"task_detail_component", "plan_submit_reject_with_feedback"},
@@ -58,6 +61,8 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     # board
     {"board_component", "board_promote_task"},
     {"board_component", "board_drop"},
+    # Task 01a18e02 stage 3: re-reads through `Selection.permits?/2`.
+    {"board_component", "confirm_plan_first"},
     # stacks
     {"stacks_component", "stack_open_detail"},
     {"stacks_component", "stack_feedback_approve_item"},
@@ -106,6 +111,8 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"assignees_component", "set_assignee_modal_mode"},
     {"board_component", "board_open_task_actions"},
     {"board_component", "board_close_task_actions"},
+    # Task 01a18e02 stage 3: clears the pending confirm; writes nothing.
+    {"board_component", "cancel_move"},
     {"board_component", "board_toggle_done"},
     {"board_component", "board_done_more"},
     {"filters_component", "filter_search"},
@@ -201,6 +208,7 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"task_detail_component", "detail_cancel_delete"},
     {"task_detail_component", "detail_open_reopen_modal"},
     {"task_detail_component", "detail_close_reopen_modal"},
+    {"task_detail_component", "cancel_move"},
     {"task_detail_component", "detail_reopen_reason_changed"},
     {"task_detail_component", "plan_toggle_reject_feedback"},
     {"task_detail_component", "plan_update_reject_feedback_text"},

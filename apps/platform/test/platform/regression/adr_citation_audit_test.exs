@@ -470,8 +470,6 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     {"lib/platform/tasks/stack_graph.ex", "0041", 1},
     {"lib/platform/tasks/stacks.ex", "0041", 9},
     {"lib/platform_web/controllers/github_webhook_controller.ex", "0041", 1},
-    {"lib/platform_web/live/tasks/board_component.ex", "0042", 1},
-    {"lib/platform_web/live/tasks/task_detail_component.ex", "0042", 1},
     {"priv/repo/migrations/20260501202512_add_owner_identity_to_runtime_tables.exs", "0040", 1},
     {"priv/repo/migrations/20260512000000_add_metadata_to_task_stacks.exs", "0041", 1},
     {"test/platform/federation/task_attrs_test.exs", "0044", 3},
