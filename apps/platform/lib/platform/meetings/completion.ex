@@ -185,6 +185,7 @@ defmodule Platform.Meetings.Completion do
                        transcript_id: run.transcript_id,
                        agent_id: agent_id,
                        action_items: [triage_item(item)],
+                       render_junk_control: false,
                        extra_metadata: %{
                          "completion_run_id" => run.id,
                          "completion_item_id" => key,
@@ -209,6 +210,16 @@ defmodule Platform.Meetings.Completion do
                 end
             end
           end)
+
+        errors =
+          if Enum.any?(ledger, fn {_key, entry} -> (entry["task_ids"] || []) != [] end) do
+            case Triage.ensure_completion_batch_control(canvas, run.id) do
+              :ok -> errors
+              {:error, reason} -> ["batch control: #{inspect(reason)}" | errors]
+            end
+          else
+            errors
+          end
 
         run =
           save(run,
