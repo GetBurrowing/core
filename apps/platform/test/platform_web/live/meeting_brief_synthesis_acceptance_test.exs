@@ -592,9 +592,12 @@ defmodule PlatformWeb.MeetingBriefSynthesisAcceptanceTest do
   # ── Case 2 ──────────────────────────────────────────────────────────────
 
   for variant <- [:no_cite, :cites_only_a_item] do
+    # Read from the context, not unquoted, so the type checker does not
+    # flag the other variant's branch as unreachable.
+    @tag variant: variant
     test "case 2 (#{variant}): a source J cannot read never appears in J's view",
          %{conn: conn} = ctx do
-      variant = unquote(variant)
+      variant = ctx.variant
       r = user!("R")
       j = user!("J")
 
@@ -791,8 +794,9 @@ defmodule PlatformWeb.MeetingBriefSynthesisAcceptanceTest do
   # ── Case 3 ──────────────────────────────────────────────────────────────
 
   for mode <- [:empty_provider, :provider_none] do
+    @tag mode: mode
     test "case 3 (#{mode}): no conflict, no items, not delayed", ctx do
-      mode = unquote(mode)
+      mode = ctx.mode
       r = user!("R")
 
       if mode == :provider_none do
