@@ -251,6 +251,9 @@ defmodule Platform.Role do
     Platform.Chat.ContextPlane,
     Platform.Chat.ReplyFailure.Watchdog,
     Platform.AgentHost.Reconciler,
+    # Dev only (BURROW_FAKE_AGENT_HOST=1, task 01a10315 stage 4): joins the
+    # Reconciler as a host, so it goes where the Reconciler goes.
+    Platform.AgentHost.FakeHost,
     Platform.Meetings.IntentQueue.Supervisor,
     Platform.Vault.RefreshWorker,
     Platform.Chat.AttachmentReaper,

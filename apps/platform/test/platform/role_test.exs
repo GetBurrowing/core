@@ -161,6 +161,7 @@ defmodule Platform.RoleTest do
                Platform.Chat.ReplyFailure.Dedupe,
                Platform.Chat.ReplyFailure.Watchdog,
                Platform.AgentHost.Reconciler,
+               Platform.AgentHost.FakeHost,
                Platform.Chat.ActiveAgentStore,
                Platform.ExternalAgents.EphemeralCredentials,
                Platform.Chat.Presence,

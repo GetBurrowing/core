@@ -515,6 +515,10 @@ defmodule PlatformWeb.Router do
       # Dev stub mode for one-click installs (task 01a10315 stage 2): the fake
       # DigitalOcean API and its _calls / _fail / _dns / _reset controls.
       forward("/fake-digitalocean", Dev.FakeDigitalOcean)
+
+      # Dev stand-in agent host (task 01a10315 stage 4, BURROW_FAKE_AGENT_HOST=1):
+      # POST /dev/fake-agent-host/<agent_id>/complete finishes a fake Codex login.
+      forward("/fake-agent-host", Dev.FakeAgentHost)
     end
   end
 

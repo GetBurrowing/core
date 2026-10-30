@@ -13,11 +13,21 @@ defmodule Platform.AgentHost.State do
 
       {agent_id, %{state: observed(), detail: String.t() | nil,
                    files_applied: term(), profile: String.t() | nil,
+                   login_code: String.t() | nil, device_url: String.t() | nil,
                    observed_at: DateTime.t()}}
 
-  There is deliberately no login page or login code here (task 01a17b10): a
-  `needs_login` agent is a state and a step name only. Burrow never relays or
-  handles a Claude login; a human logs in at the agent's own pane.
+  There is deliberately no Claude login page or login code here (task
+  01a17b10): a `needs_login` Claude agent is a state and a step name only.
+  Burrow never relays or handles a Claude login; a human logs in at the
+  agent's own pane.
+
+  The one login value kept is Codex's DEVICE login (task 01a10315 stage 4):
+  `login_code` and `device_url` are set only for step `device_code`, when the
+  URL is on auth.openai.com and the code matches `^[A-Z0-9-]{4,16}$`
+  (`Platform.AgentHost.Reconciler`). They are only ever DISPLAYED to the
+  agent's owner, who enters the code on OpenAI's own page; nothing in Burrow
+  sends either back to the host or the agent, and the code grants nothing
+  until that person approves it there.
 
   plus one `{:__host__, %{profile, connected_at}}` row for the connected host.
 
@@ -37,6 +47,8 @@ defmodule Platform.AgentHost.State do
           files_applied: term(),
           files_drifted: [String.t()] | nil,
           profile: String.t() | nil,
+          login_code: String.t() | nil,
+          device_url: String.t() | nil,
           observed_at: DateTime.t()
         }
 
@@ -104,6 +116,8 @@ defmodule Platform.AgentHost.State do
       files_applied: Map.get(attrs, :files_applied),
       files_drifted: Map.get(attrs, :files_drifted),
       profile: Map.get(attrs, :profile) || host_profile(),
+      login_code: Map.get(attrs, :login_code),
+      device_url: Map.get(attrs, :device_url),
       observed_at: Map.get(attrs, :observed_at) || DateTime.utc_now()
     }
 

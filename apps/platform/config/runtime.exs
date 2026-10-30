@@ -960,6 +960,14 @@ case System.get_env("BURROW_INSTALLS_REGISTRY_AUTH_SLUG") do
     :ok
 end
 
+# Dev stand-in agent host: BURROW_FAKE_AGENT_HOST=1, dev only (task 01a10315
+# stage 4). Platform.AgentHost.FakeHost joins the reconciler as the install's
+# host; a codex agent waits at a fake device login (code FAKE-1234) until
+# POST /dev/fake-agent-host/<agent_id>/complete.
+if config_env() == :dev and System.get_env("BURROW_FAKE_AGENT_HOST") == "1" do
+  config :platform, :fake_agent_host, true
+end
+
 # The release image copies the installer package here (apps/platform/Dockerfile);
 # dev and test run it from the repo's deployment/installer.
 if config_env() == :prod do

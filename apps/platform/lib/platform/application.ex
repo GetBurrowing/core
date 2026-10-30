@@ -222,6 +222,13 @@ defmodule Platform.Application do
          # channel (task 01a10322 stage 2). ETS, rebuilt from the host's
          # inventory on every join.
          Platform.AgentHost.Reconciler,
+         # Dev stand-in agent host (task 01a10315 stage 4): joins the
+         # Reconciler as the install's host. Only with BURROW_FAKE_AGENT_HOST=1
+         # in dev (config/runtime.exs sets `:fake_agent_host`); never in prod.
+         if(flag.(:platform, :fake_agent_host, false),
+           do: Platform.AgentHost.FakeHost,
+           else: []
+         ),
          # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
          Platform.Chat.ActiveAgentStore,
          # External-agent ephemeral credentials — ETS-backed, lost on
