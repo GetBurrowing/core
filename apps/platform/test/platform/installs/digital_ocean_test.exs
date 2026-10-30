@@ -94,7 +94,8 @@ defmodule Platform.Installs.DigitalOceanTest do
       assert_received {:req, "GET", "/v2/droplets", %{"tag_name" => "burrow-install-abc"}, _, _}
 
       assert :ok = DigitalOcean.delete_droplets_by_tag("burrow-install-abc")
-      assert_received {:req, "DELETE", "/v2/droplets", %{"tag_name" => "burrow-install-abc"}, _, _}
+      tag = %{"tag_name" => "burrow-install-abc"}
+      assert_received {:req, "DELETE", "/v2/droplets", ^tag, _, _}
     end
 
     test "public_ipv4 picks the public v4 address" do

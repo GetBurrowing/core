@@ -347,7 +347,12 @@ def build(
     if p.agents == "full_machine" and not manifest["images"]["refs"].get(registry.AGENT_HOST):
         # Not a container here, but the host pulls the image at first boot.
         private_defaults.append(registry.AGENT_HOST)
-    if not p.images_preloaded and private_defaults and registry_auth is None:
+    if (
+        not p.images_preloaded
+        and private_defaults
+        and registry_auth is None
+        and not manifest["images"]["public"]
+    ):
         raise RenderError(
             "registry_auth_required",
             "images.source",

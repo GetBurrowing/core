@@ -949,10 +949,15 @@ case System.get_env("BURROW_INSTALLS_DNS_ZONE") do
   _ -> :ok
 end
 
-# BURROW_INSTALLS_IMAGES_PUBLIC=1 once the ghcr.io images are public: the
-# render then reads no registry pull credential from the vault.
-if System.get_env("BURROW_INSTALLS_IMAGES_PUBLIC") in ["1", "true"] do
-  config :platform, Platform.Installs, images_public: true
+# The install images are public, so no pull credential is used by default.
+# BURROW_INSTALLS_REGISTRY_AUTH_SLUG names a vault slug holding a docker
+# config.json to pass as --registry-auth instead (a private registry).
+case System.get_env("BURROW_INSTALLS_REGISTRY_AUTH_SLUG") do
+  slug when is_binary(slug) and slug != "" ->
+    config :platform, Platform.Installs, registry_auth_slug: slug
+
+  _ ->
+    :ok
 end
 
 # The release image copies the installer package here (apps/platform/Dockerfile);

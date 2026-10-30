@@ -54,25 +54,30 @@ defmodule Platform.Installs.RenderTest do
     end
   end
 
-  test "a missing registry pull credential is :registry_auth_missing, before any python" do
+  defp with_auth_slug(slug) do
+    previous = Application.get_env(:platform, Platform.Installs, [])
+    configured = Keyword.put(previous, :registry_auth_slug, slug)
+    Application.put_env(:platform, Platform.Installs, configured)
+    on_exit(fn -> Application.put_env(:platform, Platform.Installs, previous) end)
+  end
+
+  test "by default the images are public: no vault read, no auth, public = true" do
+    assert {:ok, :public} = Render.Python.registry_auth()
+    toml = Render.manifest(install(), "ssh-ed25519 AAAA x")
+    assert toml =~ ~s(source = "registry"\npublic = true\n)
+    refute Render.manifest(install(), "ssh-ed25519 AAAA x", public: false) =~ "public = true"
+  end
+
+  test "a configured slug missing from the vault is :registry_auth_missing, before any python" do
+    with_auth_slug("install-registry-pull-auth")
+    assert {:error, :registry_auth_missing} = Render.Python.registry_auth()
+
     assert {:error, :registry_auth_missing} =
              Render.Python.render(install(), SshKey.generate().public)
   end
 
-  test "with public images no vault slug is read and the auth is an empty docker config" do
-    previous = Application.get_env(:platform, Platform.Installs, [])
-    Application.put_env(:platform, Platform.Installs, Keyword.put(previous, :images_public, true))
-    on_exit(fn -> Application.put_env(:platform, Platform.Installs, previous) end)
-
-    # The slug does not exist here; private mode is the :registry_auth_missing case above.
-    assert {:ok, auth} = Render.Python.registry_auth()
-    assert Jason.decode!(auth) == %{"auths" => %{}}
-
-    Application.put_env(:platform, Platform.Installs, Keyword.put(previous, :images_public, false))
-    assert {:error, :registry_auth_missing} = Render.Python.registry_auth()
-  end
-
-  test "with a vault slug in private mode, its value is the auth" do
+  test "a configured slug present in the vault is the auth" do
+    with_auth_slug("install-registry-pull-auth")
     value = ~s({"auths": {"ghcr.io": {"auth": "ZmFrZS1yZWFkLW9ubHk="}}})
     {:ok, _} = Platform.Vault.put("install-registry-pull-auth", :custom, value)
     assert {:ok, ^value} = Render.Python.registry_auth()
@@ -123,14 +128,7 @@ defmodule Platform.Installs.RenderTest do
 
   @tag :python
   @tag skip: if(@python_ok, do: false, else: "python3 with tomllib is not on PATH here")
-  test "renders for real: cloud-init with the org name, the key and the VAPID unit" do
-    {:ok, _} =
-      Platform.Vault.put(
-        "install-registry-pull-auth",
-        :custom,
-        ~s({"auths": {"ghcr.io": {"auth": "ZmFrZS1yZWFkLW9ubHk="}}})
-      )
-
+  test "renders for real, public images: org name, the key and the VAPID unit" do
     key = SshKey.generate().public
     before = tmp_dirs()
 
@@ -142,6 +140,8 @@ defmodule Platform.Installs.RenderTest do
     assert user_data =~ "ExecStartPre=/opt/burrow/bin/burrow-vapid"
     assert user_data =~ "ssh_authorized_keys:\n  - #{Jason.encode!(key)}"
     assert byte_size(user_data) < 65_536
+    # Public images: no pull credential reaches the droplet.
+    refute user_data =~ "/root/.docker/config.json"
     assert Map.keys(secrets) |> Enum.sort() == ["OIDC_CLIENT_SECRET", "STATIC_API_KEY"]
     assert tmp_dirs() == before
   end

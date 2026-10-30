@@ -160,6 +160,12 @@ SCHEMA = {
         "registry": _str(),
         "image_namespace": _str(),
         "source": _enum(IMAGE_SOURCES, "registry"),
+        # The default images are public (core task 01a10315 stage 2: the
+        # ghcr.io/getburrowing images went public 2026-10-30), so source =
+        # "registry" needs no pull credential. Default false keeps every
+        # earlier manifest's behaviour: a private default image then needs
+        # --registry-auth.
+        "public": _bool(False),
         "refs": {container: _str() for container in registry.ALL_CONTAINERS},
     },
     # target = "mac" only: how the public hostnames reach this machine.

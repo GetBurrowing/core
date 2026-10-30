@@ -46,7 +46,9 @@ defmodule Platform.Installs.Render do
   `install.org_name` rule by `Platform.Installs.create/2`.
   """
   @spec manifest(Install.t(), String.t()) :: String.t()
-  def manifest(%Install{} = install, ssh_public_key) do
+  def manifest(%Install{} = install, ssh_public_key, opts \\ []) do
+    public = if Keyword.get(opts, :public, true), do: "\npublic = true", else: ""
+
     q = &Jason.encode!/1
 
     """
@@ -78,7 +80,7 @@ defmodule Platform.Installs.Render do
 
     [images]
     registry = #{q.(image_registry())}
-    source = "registry"
+    source = "registry"#{public}
 
     [agents]
     profile = "full_machine"
@@ -94,17 +96,18 @@ defmodule Platform.Installs.Render.Python do
   The real renderer: `python3 -m burrow_install render <manifest> --out <dir>
   --registry-auth <file>` in a private temp dir (`Platform.Installs.Python`).
 
-  `images.source = "registry"` pulls private images, so the render needs a
-  docker `config.json`: the shared vault slug `install-registry-pull-auth`.
-  The droplet's root (the customer) can read it at `/root/.docker/config.json`,
-  so it must be a read-only pull token. A missing slug is
-  `{:error, :registry_auth_missing}`.
+  The `ghcr.io/getburrowing` images are public (2026-10-30), so by default
+  the manifest says `[images] public = true` and the render runs with NO
+  `--registry-auth`: nothing is read from the vault and no docker config
+  lands on the droplet.
 
-  Once the images are public (`config :platform, Platform.Installs,
-  images_public: true`, from `BURROW_INSTALLS_IMAGES_PUBLIC=1`), nothing is
-  read from the vault and no error is raised: the render gets an empty docker
-  config (`{"auths": {}}`), because the renderer still requires the flag for
-  images it lists as private, and an empty `auths` pulls anonymously.
+  Only when a pull credential is explicitly configured
+  (`config :platform, Platform.Installs, registry_auth_slug: "<vault slug>"`,
+  from `BURROW_INSTALLS_REGISTRY_AUTH_SLUG`) is it read and passed as
+  `--registry-auth`; a configured slug that is missing from the vault is
+  `{:error, :registry_auth_missing}`. The droplet's root (the customer) can
+  read that file at `/root/.docker/config.json`, so it must be a read-only
+  pull token.
 
   Of the rendered files only `user-data` and two values of `secrets.env`
   (`STATIC_API_KEY`, `OIDC_CLIENT_SECRET`) are read; the directory is removed
@@ -116,22 +119,29 @@ defmodule Platform.Installs.Render.Python do
   alias Platform.Installs.Python
   alias Platform.Installs.Render
 
-  @registry_auth_slug "install-registry-pull-auth"
   @accessor {:system, "installs-provisioner"}
   @kept ~w(STATIC_API_KEY OIDC_CLIENT_SECRET)
-  @anonymous_auth ~s({"auths": {}}\n)
 
   @impl true
   def render(install, ssh_public_key) do
     with {:ok, auth} <- registry_auth() do
       Python.with_private_dir(fn dir ->
         manifest = Path.join(dir, "install.toml")
-        auth_file = Path.join(dir, "registry-auth.json")
         out = Path.join(dir, "out")
-        File.write!(manifest, Render.manifest(install, ssh_public_key))
-        Python.write_private!(auth_file, auth)
+        File.write!(manifest, Render.manifest(install, ssh_public_key, public: auth == :public))
 
-        case Python.run(["render", manifest, "--out", out, "--registry-auth", auth_file]) do
+        auth_args =
+          case auth do
+            :public ->
+              []
+
+            value ->
+              auth_file = Path.join(dir, "registry-auth.json")
+              Python.write_private!(auth_file, value)
+              ["--registry-auth", auth_file]
+          end
+
+        case Python.run(["render", manifest, "--out", out | auth_args]) do
           {:error, _} = error -> error
           {_output, 0} -> read_render(out)
           # The CLI prints error lines and file NAMES, never a value.
@@ -141,15 +151,22 @@ defmodule Platform.Installs.Render.Python do
     end
   end
 
-  @doc false
+  @doc """
+  `{:ok, :public}` (no credential configured: the default), `{:ok, json}`
+  for a configured slug, or `{:error, :registry_auth_missing}` when the
+  configured slug is not in the vault.
+  """
   def registry_auth do
-    if Keyword.get(Application.get_env(:platform, Platform.Installs, []), :images_public, false),
-      do: {:ok, @anonymous_auth},
-      else: vault_registry_auth()
+    config = Application.get_env(:platform, Platform.Installs, [])
+
+    case Keyword.get(config, :registry_auth_slug) do
+      slug when is_binary(slug) and slug != "" -> vault_registry_auth(slug)
+      _ -> {:ok, :public}
+    end
   end
 
-  defp vault_registry_auth do
-    case Platform.Vault.get(@registry_auth_slug, accessor: @accessor) do
+  defp vault_registry_auth(slug) do
+    case Platform.Vault.get(slug, accessor: @accessor) do
       {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
       {:error, :not_found} -> {:error, :registry_auth_missing}
       {:ok, _} -> {:error, :registry_auth_missing}

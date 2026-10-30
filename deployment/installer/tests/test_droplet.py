@@ -153,6 +153,38 @@ class DropletRenderTest(unittest.TestCase):
         self.assertEqual(base, drop)
 
 
+class PublicImagesTest(unittest.TestCase):
+    """images.public: source = "registry" without --registry-auth (task 01a10315 stage 2)."""
+
+    def raw(self, public):
+        raw = load(DO_DROPLET)
+        if public is not None:
+            raw["images"]["public"] = public
+        return raw
+
+    def test_private_default_still_needs_a_registry_auth(self):
+        from burrow_install.render import RenderError
+
+        for public in (None, False):
+            with self.subTest(public=public), self.assertRaises(RenderError) as ctx:
+                build(valid(self.raw(public)))
+            self.assertEqual(ctx.exception.code, "registry_auth_required")
+
+    def test_public_renders_with_no_auth_and_writes_no_docker_config(self):
+        rendered = build(valid(self.raw(True)))
+        self.assertNotIn("registry-auth.json", rendered.files)
+        self.assertNotIn("/root/.docker/config.json", rendered.files["user-data"][0])
+        self.assertIn('image: "ghcr.io/example/core:core"', rendered.files["compose.yaml"][0])
+        self.assertNotIn("pull_policy", rendered.files["compose.yaml"][0])
+
+    def test_public_with_an_auth_still_writes_it(self):
+        rendered = build(valid(self.raw(True)), registry_auth=DO_AUTH)
+        self.assertIn("/root/.docker/config.json", rendered.files["user-data"][0])
+
+    def test_public_must_be_a_bool(self):
+        self.assertEqual(pairs(self.raw("yes")), [("invalid_type", "images.public")])
+
+
 class KnobIsolationTest(unittest.TestCase):
     """Each knob alone changes only the files it must; off changes nothing."""
 
