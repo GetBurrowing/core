@@ -69,7 +69,7 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
       |> Floki.find("#install-new-link-url")
       |> Enum.map(&String.trim(Floki.text(&1)))
 
-    assert url =~ ~r{/install-status/[A-Za-z0-9_-]{43}$}
+    assert url =~ ~r|/install-status/[A-Za-z0-9_-]{43}$|
     token = url |> String.split("/") |> List.last()
     assert Installs.get_by_token(token).id == install.id
     assert has_element?(view, "#install-#{install.slug}", install.primary_host)
