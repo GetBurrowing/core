@@ -756,8 +756,12 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         >
           <.human_avatar name={user.name || user.email} seed={user.id} size="sm" class="shrink-0" />
           <span class="flex min-w-0 flex-1 items-baseline gap-2">
+            <%!-- `shrink-0` so the email truncates FIRST; `max-w-full` plus
+                 the ellipsis only for a name too wide for the row on its
+                 own, which would otherwise be clipped mid-glyph by the
+                 row's `overflow-hidden` with no sign that it was cut. --%>
             <span
-              class="shrink-0 whitespace-nowrap text-sm font-medium text-base-content"
+              class="max-w-full shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium text-base-content"
               data-role="meeting-human-invite-user-name"
             >
               {user.name || user.email}
