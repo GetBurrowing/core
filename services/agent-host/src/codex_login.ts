@@ -14,7 +14,7 @@
  * This is NOT a Claude login. Burrow never relays a Claude login (core task
  * 01a17b10); nothing here is used for the `claude_code` harness.
  *
- * MEASURED, not remembered (codex-cli 0.162.0, node:22 container on moon,
+ * MEASURED, not remembered (codex-cli 0.162.0, a throwaway node:22 container,
  * fresh HOME and CODEX_HOME, 2026-10-30; the transcript, with the code
  * replaced, is test/fixtures/codex-device-auth-0.162.0.txt):
  *
