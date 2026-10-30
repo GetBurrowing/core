@@ -65,6 +65,7 @@ defmodule PlatformWeb.ChatLive.MeetingHumanInvite do
     |> assign_new(:human_invite_result, fn -> nil end)
     |> assign_new(:human_invite_error, fn -> nil end)
     |> assign_new(:human_invite_invited_ids, fn -> MapSet.new() end)
+    |> assign_new(:human_invite_gen, fn -> 0 end)
   end
 
   @doc """
@@ -105,7 +106,8 @@ defmodule PlatformWeb.ChatLive.MeetingHumanInvite do
         users: assigns[:human_invite_users] || [],
         guest_host?: GuestInvite.guest_host_configured?(),
         result: assigns[:human_invite_result],
-        error: assigns[:human_invite_error]
+        error: assigns[:human_invite_error],
+        gen: assigns[:human_invite_gen] || 0
       }
     else
       _ -> nil
@@ -282,8 +284,13 @@ defmodule PlatformWeb.ChatLive.MeetingHumanInvite do
     |> assign(:human_invite_error, nil)
   end
 
+  # Bumping `:human_invite_gen` re-keys the input (see `InviteControl.
+  # human_invite/1`): LiveView never overwrites the value of a FOCUSED input
+  # from the server, so without a fresh element the field would keep showing
+  # the name that was just invited while the server holds "".
   defp clear_search(socket) do
     socket
+    |> assign(:human_invite_gen, (socket.assigns[:human_invite_gen] || 0) + 1)
     |> assign(:human_invite_query, "")
     |> assign(:human_invite_users, [])
     |> assign(:human_invite_error, nil)
