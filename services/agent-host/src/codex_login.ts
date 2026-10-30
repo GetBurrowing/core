@@ -23,7 +23,12 @@
  *     an indented `https://auth.openai.com/codex/device`;
  *   - "2. Enter this one-time code (expires in 15 minutes)", then an indented
  *     code shaped `XXXX-XXXXX` (upper-case letters and digits);
- *   - `codex login status` exits 1 and prints "Not logged in" when it is not.
+ *   - `codex login status` exits 1 and prints "Not logged in" when it is not;
+ *   - left alone, the login ends exactly 15 minutes later with exit 1 and, on
+ *     stderr, "Error logging in with device code: device auth timed out after
+ *     15 minutes" (measured 21:18:24Z to 21:33:24Z);
+ *   - killed with SIGTERM it exited 0 without logging in, so an exit code is
+ *     never taken as a login: `codex login status` decides.
  *
  * Runs inside the agent's unit (runner.ts), so as the agent's own uid, with
  * CODEX_HOME at the path burrow-cli's `codexHomeFor` resolves for the work
