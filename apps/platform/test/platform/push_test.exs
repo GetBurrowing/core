@@ -952,6 +952,15 @@ defmodule Platform.PushTest do
       assert details[:subject] =~ "mailto:push@"
     end
 
+    test "the default subject is a mailto on the endpoint's host, never a literal fallback" do
+      host = PlatformWeb.Endpoint.struct_url().host
+
+      assert Push.vapid_subject([]) == "mailto:push@" <> host
+      assert Push.vapid_subject(subject: "") == "mailto:push@" <> host
+      refute Push.vapid_subject([]) =~ "suite.app"
+      assert Push.vapid_subject(subject: "mailto:ops@example.net") == "mailto:ops@example.net"
+    end
+
     # ── Fixture 3: NEITHER ────────────────────────────────────────────────────
 
     test "NEITHER: no key advertised, not configured, and a send attempt fails visibly" do
