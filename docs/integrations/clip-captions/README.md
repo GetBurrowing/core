@@ -23,6 +23,8 @@ git apply --check /absolute/core/docs/integrations/clip-headlines/htc-headline-r
 git apply /absolute/core/docs/integrations/clip-headlines/htc-headline-review-v1.patch
 git apply --check /absolute/core/docs/integrations/clip-captions/htc-caption-treatments-v1.patch
 git apply /absolute/core/docs/integrations/clip-captions/htc-caption-treatments-v1.patch
+mkdir -p clip-agent/src/clip_agent/fonts/weights
+cp /absolute/core/docs/integrations/clip-captions/fonts/Inter-ExtraBold.ttf clip-agent/src/clip_agent/fonts/weights/
 uv venv .venv
 uv pip install --python .venv/bin/python -e './clip-agent[dev]'
 .venv/bin/python /absolute/core/docs/integrations/clip-captions/verify_install.py \
@@ -35,8 +37,8 @@ If either patch fails its applicability check, stop and reconcile against the
 actual source; do not force it. For an install already carrying headline-review/1,
 verify its tracked source rather than applying headline twice. Never run reset
 or clean in an operator's existing installation to make these instructions fit.
-The patch contains the Inter ExtraBold font bytes, with the upstream OFL notice
-and source URL; there is no runtime font download. Digest receipts are in
+The companion `fonts/Inter-ExtraBold.ttf` contains the unchanged Inter ExtraBold
+bytes, with the upstream OFL notice and source URL; there is no runtime font download. Digest receipts are in
 [artifact.json](artifact.json). Qualification requires the digests of all changed
 installed source/font files and checks paths and digests reported from the actual
 `clip version --json` process's imported renderer modules. Distribution metadata
@@ -97,9 +99,9 @@ new styles. Legacy concat inputs and style branches are left unchanged.
 The design direction was read whole and recreated through
 `Platform.Chat.create_canvas` on this runtime's dev server; screenshots at
 1280×800 and 375×812 were posted before the implementation commit:
-[reference canvas](https://suite.kobo-ai.com/canvases/01a18d28-1c19-7000-a812-deed35fa8208).
+reference canvas `01a18d28-1c19-7000-a812-deed35fa8208` (deployment canvas viewer).
 Actual decoded motion phases are in the
-[evidence canvas](https://suite.kobo-ai.com/canvases/01a18d2b-6980-7000-9fab-2a854909ce2c)
+evidence canvas `01a18d2b-6980-7000-9fab-2a854909ce2c` (deployment canvas viewer)
 and [decoded phase grid](decoded-phases.png).
 
 Reproduce the real alpha-track/MP4 fixture with the qualified tool's Python:
@@ -156,3 +158,89 @@ Research basis: [Captions styles](https://captions.ai/help/docs/captions/styles)
 and [Descript word-level animations](https://www.descript.com/blog/article/new-in-descript-word-level-animations-on-fancy-captions-santa-overdub-voice)
 describe available design approaches. These original restrained interpretations
 make no engagement or retention improvement claim.
+
+## Stage 2 — canonical runner and immutable job integration
+
+The registered `burrow-clip-runner` is extended in place from 0.8.0 to **0.9.0**.
+Its reproducible source and all eleven test modules are in [runner](runner/);
+[the complete skill](burrow-clip-runner-0.9.0.md) retains the existing music,
+closing video, headline, source-project, privacy and child request/reply rules.
+[runner-artifact.json](runner-artifact.json) pins the helper digest and validation
+receipts. This version does not replace a running worker or operator state.
+
+After installing the combined renderer under a stable operator-owned checkout,
+materialize the helper from the current registered skill into your stable runner
+installation and verify its SHA256. Run its protocol tests with Python/pytest:
+
+```bash
+python -m pytest /absolute/core/docs/integrations/clip-captions/runner/tests
+python /absolute/core/docs/integrations/clip-captions/verify_install.py \
+  --clip /operator/htc-clip-tool/.venv/bin/clip \
+  --checkout /operator/htc-clip-tool \
+  --helper /operator/clip-runner/bin/clip_runner.py \
+  --receipt /operator/private/caption-renderer-receipt.json
+```
+
+Configure the JSON receipt as `CLIP_CAPTION_RENDERER_RECEIPT` in the Social
+server's process environment and restart it through the normal deployment
+procedure. This stage does not configure production. The exact receipt must
+contain the imported renderer and temporal-module digests, canonical helper
+digest, invoked executable digest and explicit styles. Paths, credentials,
+transcript text and signed URLs are omitted. The checked
+[qualification example](qualification-example.json) is actual isolated fixture
+qualification evidence, **not** a production host's receipt; qualify the
+operator's actual install instead of copying that example to enable service.
+
+`Platform.Social.ClipCaptionRenderer.styles/0` is the server-authoritative UI
+availability API: only the three legacy values are returned without a matching
+receipt. `ClipLook.styles/0` remains the validation vocabulary, now six values;
+UI stages must use the availability API to choose cards. Unknown styles remain
+invalid. Enqueue rejects new styles with `:caption_renderer_unavailable` even
+if a browser supplies a receipt. Valid qualification is pinned in the immutable
+job payload; completion does not reinterpret that job against later server
+configuration. Every worker additionally verifies its *actual invoked CLI*
+capabilities/source digests before a dynamic-style render and fails
+`CAPTION_CLI_UNSUPPORTED` before finalize/upload if they differ. The unchanged
+0.9.0 CLI label alone never establishes support.
+
+An explicit immutable `look.cap.style` overrides an empty show-default delta
+in the helper. The combined disposable USER profile **and** finalize
+`--captions STYLE` both receive it, including new-clip/headline jobs; saved
+process-time `none` cannot win. Existing original-project/candidate recovery
+rules prevent recutting a captioned delivery. No built-in profile, internal
+manifest, picks file, separate renderer or approval/publishing workflow is added.
+
+Existing `ClipVersions.append!/4` already snapshots `look`, and
+`ClipVersions.metadata/1` already returns it; no new column or dual write is
+needed. Tests observe the selected style through the actual completed version
+metadata. Enqueue leaves the current approved file alone, completion creates a
+new pending-review version, and old file/look snapshots remain unchanged.
+There is no compatibility shim or parallel UI in this change.
+
+
+Stage-2 public-artifact correction: evidence paths and host labels are neutralized
+for the repository's install-identity guard; exact private invocation details
+remain in the task journal. The font is shipped as a licensed binary companion
+rather than encoded inside the text patch: encoded bytes incidentally matched
+an identity token. Both installed font/source digests remain unchanged. No guard
+allowlist or test assertion was weakened. Apply the text patch, copy the font as
+shown above, then install and qualify; do not reuse the older binary patch.
+
+
+Stage-2 final checks on the executor's isolated OTP28/Elixir1.20.4/PostgreSQL16
+rig: helper **153 passed**; focused look/job/version **49 passed**; full Social
+**1,558 passed** (with the final additional version regression covered in the
+49-case run); identity suite **15 passed**, plus zero hits in the final artifact
+scan. Removing explicit finalize style forwarding kills six unchanged literal
+assertions; all **15** dynamic cases pass after restoring the final helper.
+
+Core `mix precommit` completed **26,028/26,031 passed**, 3 skipped and 13 excluded.
+Its three failures were the identity assertions against the earlier stage-1
+artifact paths/font encoding, corrected during the run and followed by the
+15-case original guard passing. This is **not** a full-suite-green claim. The
+first precommit attempt also exposed build invalidation after unused-dependency
+cleanup; the rebuilt run completed, and its unrelated lockfile cleanup was
+restored rather than shipped. Social warning-free compilation/formatting,
+configured Python lint, syntax, qualification, patch applicability and source
+integrity pass. Receipts and dispositions are in
+[runner-artifact.json](runner-artifact.json) and [stage2 evidence](evidence/stage2/).

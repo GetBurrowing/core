@@ -18,7 +18,7 @@ tests/test_installer.py:85: in _plan_at_terminal
     self._check_timeout(endtime, orig_timeout, stdout, stderr)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-self = <Popen: returncode: None args: ['/bin/bash', '/home/jordan/openai/worktrees/...>
+self = <Popen: returncode: None args: ['/bin/bash', '/operator/workspace/worktrees/...>
 endtime = 80656.390170345, orig_timeout = 120, stdout_seq = []
 stderr_seq = [b"\nFirst, your show. The AI reads these answers when it picks clips. Only the name is\nneeded: press Return to skip a question (you can fill it in later in the show's profile).\n\n", b"What's your show called? "]
 skip_check_and_raise = False
@@ -33,7 +33,7 @@ skip_check_and_raise = False
                     self.args, orig_timeout,
                     output=b''.join(stdout_seq) if stdout_seq else None,
                     stderr=b''.join(stderr_seq) if stderr_seq else None)
-E           subprocess.TimeoutExpired: Command '['/bin/bash', '/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/pristine/clip-agent/install.sh', '--print-plan']' timed out after 120 seconds
+E           subprocess.TimeoutExpired: Command '['/bin/bash', '/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/pristine/clip-agent/install.sh', '--print-plan']' timed out after 120 seconds
 
 /usr/lib/python3.14/subprocess.py:1268: TimeoutExpired
 =========================== short test summary info ============================

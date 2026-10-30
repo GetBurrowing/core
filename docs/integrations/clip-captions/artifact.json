@@ -5,7 +5,7 @@
   "helper_version_preserved": "0.8.0",
   "helper_changed": false,
   "headline_patch_sha256": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
-  "caption_patch_sha256": "364571881647bd354e0a489bab058508db7c69d21c60c234e25cdae4710029ad",
+  "caption_patch_sha256": "925e3f5e1d74ccf00fe21d1db33032420dfb6ca10733e0ede5f1b6053a87a9d8",
   "installed_source_sha256": {
     "clip-agent/src/clip_agent/captions.py": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
     "clip-agent/src/clip_agent/dynamic_captions.py": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
@@ -16,11 +16,11 @@
   },
   "cli": {
     "version": "0.9.0",
-    "source": "file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
+    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
     "commit": "c71e2ac88d681bf5b368971c9250a31f3b63f196",
     "ref": null,
     "editable": true,
-    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
     "content_free": 2,
     "headline_review": 1,
     "caption_treatments": 1,
@@ -34,9 +34,9 @@
       "editorial-punch"
     ],
     "caption_renderer": {
-      "path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
+      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
       "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
-      "temporal_path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/dynamic_captions.py",
       "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
     }
   },
@@ -47,8 +47,8 @@
   },
   "decoded_temporal_evidence": {
     "test_only": true,
-    "module": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
-    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
+    "module": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/captions.py",
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv/bin/python",
     "styles": {
       "type-on": {
         "track_sha256": "e74054223e5957c531e824c8be3f17d8440c1dfdca02e53c39a57ad7468eceef",
@@ -123,7 +123,7 @@
     "certifi==2026.10.23",
     "cffi==2.1.1",
     "click==8.5.0",
-    "-e file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
+    "-e file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent",
     "cryptography==50.0.2",
     "docstring-parser==0.18.0",
     "fonttools==4.68.0",
@@ -239,19 +239,19 @@
   },
   "clean_install_qualification": {
     "verified": true,
-    "cli": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/clip",
-    "checkout": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline",
+    "cli": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/clip",
+    "checkout": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline",
     "version": "0.9.0",
     "caption_treatments": 1,
     "headline_review": 1
   },
   "qualified_cli": {
     "version": "0.9.0",
-    "source": "file:///home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
+    "source": "file:///operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent",
     "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
     "ref": null,
     "editable": true,
-    "python": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
+    "python": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/.qualify-venv/bin/python",
     "content_free": 2,
     "headline_review": 1,
     "caption_treatments": 1,
@@ -265,14 +265,16 @@
       "editorial-punch"
     ],
     "caption_renderer": {
-      "path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
+      "path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/captions.py",
       "sha256": "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
-      "temporal_path": "/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_path": "/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/dynamic_captions.py",
       "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
     }
   },
   "unchanged_audio_sha256": {
     "clip-agent/src/clip_agent/render.py": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
     "clip-agent/tests/test_render_finish.py": "572ce520068b12ba4e77171a758175978b33f6b46b9eef07cb967dc6999be70d"
-  }
+  },
+  "font_companion_sha256": "e6756ad5690b77606aa62249a7b420d9902d45cae4b0048a24911fd4324b0a22",
+  "packaging_note": "Stage2 moves identical font bytes from encoded binary patch to licensed companion; installed source/font digests are unchanged. Evidence paths/hosts neutralized for public repository."
 }

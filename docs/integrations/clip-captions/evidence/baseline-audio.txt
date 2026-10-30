@@ -2,9 +2,9 @@
 =================================== FAILURES ===================================
 _____________ test_a_bed_already_under_the_margin_is_left_as_it_is _____________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-30/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-30/low_bed0/bed.wav')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-30/test_a_bed_already_under_the_m0')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-30/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-30/low_bed0/bed.wav')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-30/test_a_bed_already_under_the_m0')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x77be39f05400>
 
     def test_a_bed_already_under_the_margin_is_left_as_it_is(speech_src, loud_low_bed, tmp_path, monkeypatch):

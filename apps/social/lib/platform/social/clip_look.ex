@@ -28,7 +28,7 @@ defmodule Platform.Social.ClipLook do
   | studio key    | clip profile key | translation |
   |---------------|------------------|-------------|
   | cap.preset    | captions.preset | same values (legacy visual presets) |
-  | cap.style     | captions.style | plain, phrase-pop or karaoke; an explicit finalize --captions overrides saved process-time style |
+  | cap.style     | captions.style | plain, phrase-pop, karaoke, type-on, focus-word or editorial-punch; an explicit finalize --captions overrides saved process-time style |
   | cap.font      | captions.font | Anton -> Anton-Regular.ttf; Inter SemiBold -> Inter-SemiBold.ttf. PARTIAL: Inter Black and Georgia Bold are not bundled (fonts/ holds only Anton-Regular and Inter-SemiBold), so they go in unmapped |
   | cap.size      | captions.size_frac | size / 100 (5.8 -> 0.058, the HTC value) |
   | cap.color     | captions.primary_color | hex |
@@ -51,7 +51,7 @@ defmodule Platform.Social.ClipLook do
   """
 
   @presets ~w(bold-pop podcast-clean speaker-color)
-  @styles ~w(plain phrase-pop karaoke)
+  @styles ~w(plain phrase-pop karaoke type-on focus-word editorial-punch)
   @fonts ["Anton", "Inter Black", "Inter SemiBold", "Georgia Bold"]
   @reframes ~w(shots splits fit)
 

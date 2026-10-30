@@ -1,5 +1,5 @@
-<frozen site>:107: RuntimeWarning: Unexpected value in sys.prefix, expected /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
-<frozen site>:107: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.prefix, expected /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
 ........................................................................ [  2%]
 ..................................................................s..... [  4%]
 ........................................................................ [  6%]
@@ -52,8 +52,8 @@
 =================================== FAILURES ===================================
 ________________ test_hook_title_png_in_top_band_and_safe_area _________________
 
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_hook_title_png_in_top_ban0')
-fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/fonts')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_hook_title_png_in_top_ban0')
+fonts_dir = PosixPath('/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/src/clip_agent/fonts')
 
     def test_hook_title_png_in_top_band_and_safe_area(tmp_path, fonts_dir):
         c = podcast_cfg(hook_title=True)
@@ -67,7 +67,7 @@ fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-793
 tests/test_captions_safe.py:268:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_hook_title_png_in_top_ban0/t.png')
+path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_hook_title_png_in_top_ban0/t.png')
 box = (120, 288, 900, 518)
 
     def assert_inside(path, box):
@@ -98,7 +98,7 @@ tests/test_installer.py:85: in _plan_at_terminal
     self._check_timeout(endtime, orig_timeout, stdout, stderr)
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-self = <Popen: returncode: None args: ['/bin/bash', '/home/jordan/openai/worktrees/...>
+self = <Popen: returncode: None args: ['/bin/bash', '/operator/workspace/worktrees/...>
 endtime = 80134.99345691, orig_timeout = 120, stdout_seq = []
 stderr_seq = [b"\nFirst, your show. The AI reads these answers when it picks clips. Only the name is\nneeded: press Return to skip a question (you can fill it in later in the show's profile).\n\n", b"What's your show called? "]
 skip_check_and_raise = False
@@ -113,7 +113,7 @@ skip_check_and_raise = False
                     self.args, orig_timeout,
                     output=b''.join(stdout_seq) if stdout_seq else None,
                     stderr=b''.join(stderr_seq) if stderr_seq else None)
-E           subprocess.TimeoutExpired: Command '['/bin/bash', '/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/install.sh', '--print-plan']' timed out after 120 seconds
+E           subprocess.TimeoutExpired: Command '['/bin/bash', '/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/install.sh', '--print-plan']' timed out after 120 seconds
 
 /usr/lib/python3.14/subprocess.py:1268: TimeoutExpired
 __________________________ test_caption_style_values ___________________________
@@ -154,10 +154,10 @@ E         Use -v to get more diff
 tests/test_prefs_schema.py:149: AssertionError
 ______________ test_a_loud_bed_is_capped_under_the_speech[steady] ______________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-22/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-22/low_bed0/bed.wav')
-loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-22/loud_outro0/outro.mp4')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_a_loud_bed_is_capped_unde0')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-22/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-22/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-operator/pytest-22/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_a_loud_bed_is_capped_unde0')
 case = 'steady'
 
     @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
@@ -206,10 +206,10 @@ E       assert (-13.09 - -23.85) >= (11.0 - 0.2)
 tests/test_render_finish.py:364: AssertionError
 ______________ test_a_loud_bed_is_capped_under_the_speech[edited] ______________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-22/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-22/low_bed0/bed.wav')
-loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-22/loud_outro0/outro.mp4')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_a_loud_bed_is_capped_unde3')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-22/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-22/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-operator/pytest-22/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_a_loud_bed_is_capped_unde3')
 case = 'edited'
 
     @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
@@ -258,10 +258,10 @@ E       assert (-12.65 - -23.44) >= (11.0 - 0.2)
 tests/test_render_finish.py:364: AssertionError
 ___________ test_a_loud_bed_is_capped_under_the_speech[unnormalised] ___________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-22/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-22/low_bed0/bed.wav')
-loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-22/loud_outro0/outro.mp4')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_a_loud_bed_is_capped_unde4')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-22/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-22/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-operator/pytest-22/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_a_loud_bed_is_capped_unde4')
 case = 'unnormalised'
 
     @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
@@ -310,9 +310,9 @@ E       assert (-14.67 - -25.37) >= (11.0 - 0.2)
 tests/test_render_finish.py:364: AssertionError
 _____________ test_a_bed_already_under_the_margin_is_left_as_it_is _____________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-22/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-22/low_bed0/bed.wav')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-22/test_a_bed_already_under_the_m0')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-22/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-22/low_bed0/bed.wav')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-22/test_a_bed_already_under_the_m0')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fcd17e1f4d0>
 
     def test_a_bed_already_under_the_margin_is_left_as_it_is(speech_src, loud_low_bed, tmp_path, monkeypatch):
@@ -338,11 +338,11 @@ E       assert np.float32(-36.20851) <= -40
 tests/test_render_finish.py:383: AssertionError
 =============================== warnings summary ===============================
 tests/test_dynamic_captions.py: 21 warnings
-  /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_dynamic_captions.py:75: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_dynamic_captions.py:75: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
     assert plan.boxes == frozen
 
 tests/test_prefs_page.py::test_cli_page_writes_file
-  /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_prefs_page.py:945: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+  /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/tests/test_prefs_page.py:945: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
     with runner.isolated_filesystem(temp_dir=tmp_path):
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

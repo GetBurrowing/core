@@ -1,0 +1,5 @@
+isolated-linux-runtime isolated OTP28/Elixir1.20.4/PG16
+.................
+Finished in 176.3 seconds (14.1s async, 162.1s sync)
+
+Result: 1558 passed

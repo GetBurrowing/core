@@ -2,8 +2,8 @@ F                                                                        [100%]
 =================================== FAILURES ===================================
 ________________ test_hook_title_png_in_top_band_and_safe_area _________________
 
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-23/test_hook_title_png_in_top_ban0')
-fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/fonts')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-23/test_hook_title_png_in_top_ban0')
+fonts_dir = PosixPath('/operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/baseline/clip-agent/src/clip_agent/fonts')
 
     def test_hook_title_png_in_top_band_and_safe_area(tmp_path, fonts_dir):
         c = podcast_cfg(hook_title=True)
@@ -17,7 +17,7 @@ fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-793
 tests/test_captions_safe.py:268:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
-path = PosixPath('/tmp/pytest-of-jordan/pytest-23/test_hook_title_png_in_top_ban0/t.png')
+path = PosixPath('/tmp/pytest-of-operator/pytest-23/test_hook_title_png_in_top_ban0/t.png')
 box = (120, 288, 900, 518)
 
     def assert_inside(path, box):

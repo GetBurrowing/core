@@ -930,3 +930,12 @@ if files_service_url do
     token: System.get_env("FILES_SERVICE_TOKEN"),
     timeout: files_service_timeout
 end
+
+# Operator qualification of the exact installed caption executable/helper.
+# Malformed input fails closed; never accepts a receipt from a LiveView event.
+if receipt = System.get_env("CLIP_CAPTION_RENDERER_RECEIPT") do
+  case Jason.decode(receipt) do
+    {:ok, value} when is_map(value) -> config :platform, :clip_caption_renderer, value
+    _ -> config :platform, :clip_caption_renderer, nil
+  end
+end

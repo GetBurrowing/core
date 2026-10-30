@@ -146,6 +146,96 @@ defmodule Platform.Social.ClipJobsTest do
              })
   end
 
+  test "dynamic styles require server qualification; browser receipt cannot enable them", w do
+    clip = rendered_clip!(w)
+    [base] = renders(clip.id)
+    previous = Application.get_env(:platform, :clip_caption_renderer)
+    Application.delete_env(:platform, :clip_caption_renderer)
+    on_exit(fn -> Application.put_env(:platform, :clip_caption_renderer, previous) end)
+
+    assert Platform.Social.ClipCaptionRenderer.styles() == ~w(plain phrase-pop karaoke)
+
+    assert {:error, :caption_renderer_unavailable} =
+             ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "type-on"}},
+               caption_renderer: qualified_caption_renderer()
+             })
+
+    assert renders(clip.id) == [base]
+    assert Repo.get!(Clip, clip.id).render_file_id == base.file_id
+
+    Application.put_env(:platform, :clip_caption_renderer, qualified_caption_renderer())
+
+    assert Platform.Social.ClipCaptionRenderer.styles() ==
+             ~w(plain phrase-pop karaoke type-on focus-word editorial-punch)
+
+    for key <- ~w(renderer_sha256 temporal_sha256 helper_sha256 executable_sha256) do
+      Application.put_env(
+        :platform,
+        :clip_caption_renderer,
+        Map.put(qualified_caption_renderer(), key, "invalid")
+      )
+
+      assert Platform.Social.ClipCaptionRenderer.receipt() == nil
+    end
+  end
+
+  test "qualified styles snapshot look and preserve approved bytes until new completion", w do
+    previous = Application.get_env(:platform, :clip_caption_renderer)
+    Application.put_env(:platform, :clip_caption_renderer, qualified_caption_renderer())
+    on_exit(fn -> Application.put_env(:platform, :clip_caption_renderer, previous) end)
+    clip = rendered_clip!(w)
+    [base] = renders(clip.id)
+    Repo.update!(Clip.review_changeset(clip, {:approve, w.approver.id}))
+
+    {:ok, job} =
+      ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+        base_render_id: base.id,
+        look: %{cap: %{style: "focus-word"}}
+      })
+
+    assert job.payload["look"]["cap"]["style"] == "focus-word"
+    assert job.payload["clip_overrides"]["mapped"]["captions.style"] == "focus-word"
+    assert job.payload["caption_renderer"] == qualified_caption_renderer()
+    assert Repo.get!(Clip, clip.id).review_status == "approved"
+    assert renders(clip.id) == [base]
+
+    assert {:error, :job_in_flight} =
+             ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "editorial-punch"}}
+             })
+
+    # Existing queued snapshots remain executable even after operator config changes.
+    Application.delete_env(:platform, :clip_caption_renderer)
+    claimed!(w, job)
+    {:ok, %{clip: updated}} = ClipJobs.complete(w.scope, job.id, w.agent.id, %{file_id: w.f2.id})
+    assert updated.review_status == "pending"
+    [original, current] = renders(clip.id)
+    assert original == base
+    assert original.file_id == w.f1.id
+    assert current.look["cap"]["style"] == "focus-word"
+    assert Platform.Social.ClipVersions.metadata(current).look["cap"]["style"] == "focus-word"
+
+    assert {:error, :stale_version} =
+             ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "plain"}}
+             })
+  end
+
+  defp qualified_caption_renderer do
+    %{
+      "caption_treatments" => 1,
+      "renderer_sha256" => "25595724985663807fb7f9976cdabf9f2d4a04c1bb98df73fd92b47b7e056141",
+      "temporal_sha256" => "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7",
+      "helper_sha256" => "67152ecee851db7df9d5bf99200270dfcfb58320358e8da0d8052c386e9a5b21",
+      "executable_sha256" => String.duplicate("a", 64),
+      "caption_styles" => ~w(none plain phrase-pop karaoke type-on focus-word editorial-punch)
+    }
+  end
+
   describe "enqueue_new_clip" do
     test "a new_clip job's clip is never in rendering", w do
       {clip, job} = new_clip!(w, %{title: "Who makes Total War?"})

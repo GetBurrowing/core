@@ -471,6 +471,7 @@ defmodule Platform.Social.ClipJobs do
           |> insert_or_rollback(:update)
 
         full = ClipLook.effective(look)
+        caption_renderer = ok_or_rollback(Platform.Social.ClipCaptionRenderer.qualify(full))
         ok_or_rollback(Platform.Social.ClipMusic.payload(profile, full))
         delta = ClipLook.delta(full, ClipLook.default())
 
@@ -479,7 +480,8 @@ defmodule Platform.Social.ClipJobs do
           |> base_payload("save_default", nil, full, nil, nil, nil, nil)
           |> Map.merge(%{
             "look_delta" => delta,
-            "clip_overrides" => ClipLook.to_clip_overrides(delta)
+            "clip_overrides" => ClipLook.to_clip_overrides(delta),
+            "caption_renderer" => caption_renderer
           })
 
         job = insert_job!(profile, nil, "save_default", payload, user_id)
@@ -595,6 +597,7 @@ defmodule Platform.Social.ClipJobs do
          closing \\ :current
        ) do
     profile = ClipClosingVideo.lock_profile(profile.id)
+    caption_renderer = ok_or_rollback(Platform.Social.ClipCaptionRenderer.qualify(look))
 
     closing =
       if closing == :current,
@@ -610,7 +613,8 @@ defmodule Platform.Social.ClipJobs do
       "look_delta" => delta,
       "clip_overrides" => ClipLook.to_clip_overrides(delta),
       "music" => music,
-      "closing_video" => closing
+      "closing_video" => closing,
+      "caption_renderer" => caption_renderer
     })
   end
 

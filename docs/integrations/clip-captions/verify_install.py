@@ -13,6 +13,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clip", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
+    parser.add_argument("--helper", type=Path)
+    parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
     artifact = json.loads(Path(__file__).with_name("artifact.json").read_text())
     result = subprocess.run(
@@ -60,6 +62,24 @@ def main() -> None:
             check=True,
             timeout=30,
         )
+    if args.receipt:
+        assert args.helper, "--receipt requires --helper"
+        expected = json.loads(
+            Path(__file__).with_name("runner-artifact.json").read_text()
+        )
+        helper_digest = hashlib.sha256(args.helper.read_bytes()).hexdigest()
+        assert helper_digest == expected["helper_sha256"], "helper source mismatch"
+        receipt = {
+            "caption_treatments": 1,
+            "renderer_sha256": report["sha256"],
+            "temporal_sha256": report["temporal_sha256"],
+            "helper_sha256": helper_digest,
+            "executable_sha256": hashlib.sha256(
+                Path(args.clip).read_bytes()
+            ).hexdigest(),
+            "caption_styles": version["caption_styles"],
+        }
+        args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")
     print(
         json.dumps(
             {

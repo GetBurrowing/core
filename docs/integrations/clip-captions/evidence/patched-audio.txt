@@ -1,13 +1,13 @@
-<frozen site>:107: RuntimeWarning: Unexpected value in sys.prefix, expected /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
-<frozen site>:107: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /home/jordan/openai/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.prefix, expected /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/.venv, got /operator/workspace/worktrees/01a18d1b-a5c1-7000-947c-7931a3ec53e5/.caption-tool/clip-agent/clip-agent/../.venv
 F....FF                                                                  [100%]
 =================================== FAILURES ===================================
 ______________ test_a_loud_bed_is_capped_under_the_speech[steady] ______________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-33/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-33/low_bed0/bed.wav')
-loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-33/loud_outro0/outro.mp4')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-33/test_a_loud_bed_is_capped_unde0')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-33/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-33/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-operator/pytest-33/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-33/test_a_loud_bed_is_capped_unde0')
 case = 'steady'
 
     @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
@@ -56,10 +56,10 @@ E       assert (-13.09 - -23.87) >= (11.0 - 0.2)
 tests/test_render_finish.py:364: AssertionError
 ______________ test_a_loud_bed_is_capped_under_the_speech[wider] _______________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-33/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-33/low_bed0/bed.wav')
-loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-33/loud_outro0/outro.mp4')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-33/test_a_loud_bed_is_capped_unde5')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-33/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-33/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-operator/pytest-33/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-33/test_a_loud_bed_is_capped_unde5')
 case = 'wider'
 
     @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
@@ -108,9 +108,9 @@ E       assert (-14.3 - -29.05) >= (15.0 - 0.2)
 tests/test_render_finish.py:364: AssertionError
 _____________ test_a_bed_already_under_the_margin_is_left_as_it_is _____________
 
-speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-33/speech0/s.mp4')
-loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-33/low_bed0/bed.wav')
-tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-33/test_a_bed_already_under_the_m0')
+speech_src = PosixPath('/tmp/pytest-of-operator/pytest-33/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-operator/pytest-33/low_bed0/bed.wav')
+tmp_path = PosixPath('/tmp/pytest-of-operator/pytest-33/test_a_bed_already_under_the_m0')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x784f6d969e50>
 
     def test_a_bed_already_under_the_margin_is_left_as_it_is(speech_src, loud_low_bed, tmp_path, monkeypatch):
