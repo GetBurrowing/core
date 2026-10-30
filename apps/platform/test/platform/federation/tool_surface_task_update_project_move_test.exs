@@ -99,7 +99,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
     )
   end
 
-  defp update(ctx, args), do: ToolSurface.execute("task_update", args, ctx)
+  defp call_update(ctx, args), do: ToolSurface.execute("task_update", args, ctx)
 
   setup do
     s = tenant_org_id("pmove_s_#{n()}")
@@ -112,7 +112,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       b = project!(s)
       task = task!(a)
 
-      assert {:ok, result} = update(ctx, %{"task_id" => task.id, "project_id" => b.id})
+      assert {:ok, result} = call_update(ctx, %{"task_id" => task.id, "project_id" => b.id})
       assert result.project_id == b.id
       assert Repo.get!(Task, task.id).project_id == b.id
 
@@ -136,7 +136,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       old_epic = epic!(a)
       task = task!(a, %{epic_id: old_epic.id})
 
-      assert {:ok, _} = update(ctx, %{"task_id" => task.id, "project_id" => b.id})
+      assert {:ok, _} = call_update(ctx, %{"task_id" => task.id, "project_id" => b.id})
 
       moved = Repo.get!(Task, task.id)
       assert moved.project_id == b.id
@@ -153,7 +153,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       new_epic = epic!(b)
 
       assert {:ok, _} =
-               update(ctx, %{
+               call_update(ctx, %{
                  "task_id" => task.id,
                  "project_id" => b.id,
                  "epic_id" => new_epic.id
@@ -174,7 +174,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       before = Repo.get!(Task, task.id)
 
       assert {:error, error} =
-               update(ctx, %{
+               call_update(ctx, %{
                  "task_id" => task.id,
                  "project_id" => b.id,
                  "epic_id" => epic!(c).id
@@ -206,7 +206,7 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       task = task!(a, %{stack_id: stack.id, stack_position: 1})
       before = Repo.get!(Task, task.id)
 
-      assert {:error, error} = update(ctx, %{"task_id" => task.id, "project_id" => b.id})
+      assert {:error, error} = call_update(ctx, %{"task_id" => task.id, "project_id" => b.id})
       assert error.recoverable == true
       assert error.suggestion =~ "stack_eject"
 
@@ -223,12 +223,12 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       task = task!(a)
       before = Repo.get!(Task, task.id)
 
-      refused = update(ctx, %{"task_id" => task.id, "project_id" => r.id})
+      refused = call_update(ctx, %{"task_id" => task.id, "project_id" => r.id})
       random = Ecto.UUID.generate()
 
       expected =
         ctx
-        |> update(%{"task_id" => task.id, "project_id" => random})
+        |> call_update(%{"task_id" => task.id, "project_id" => random})
         |> inspect()
         |> String.replace(random, r.id)
 
@@ -249,8 +249,8 @@ defmodule Platform.Federation.ToolSurfaceTaskUpdateProjectMoveTest do
       a = project!(s)
       task = task!(a)
 
-      assert {:ok, _} = update(ctx, %{"task_id" => task.id, "title" => "Renamed"})
-      assert {:ok, _} = update(ctx, %{"task_id" => task.id, "project_id" => a.id})
+      assert {:ok, _} = call_update(ctx, %{"task_id" => task.id, "title" => "Renamed"})
+      assert {:ok, _} = call_update(ctx, %{"task_id" => task.id, "project_id" => a.id})
 
       assert Repo.get!(Task, task.id).project_id == a.id
       assert move_audits(task.id) == []
