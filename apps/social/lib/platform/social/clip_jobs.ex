@@ -488,7 +488,8 @@ defmodule Platform.Social.ClipJobs do
       profile =
         if Repo.in_transaction?(), do: ClipClosingVideo.lock_profile(profile.id), else: profile
 
-      with :ok <- Social.approver_check(profile.org_id, profile, user_id),
+      with true <- not is_nil(profile) and profile.org_id == org_id,
+           :ok <- Social.approver_check(profile.org_id, profile, user_id),
            {:ok, project} <- Social.render_project(profile),
            true <- is_nil(project.archived_at) do
         {:ok, profile}

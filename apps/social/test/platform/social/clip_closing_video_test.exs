@@ -379,6 +379,82 @@ defmodule Platform.Social.ClipClosingVideoTest do
     assert job.payload["closing_video"]["content_hash"] == b.content_hash
   end
 
+  test "a profile moved to another tenant while enqueue waits is not authorized by stale org scope" do
+    w = committed_world!()
+
+    {org, project} =
+      unboxed(fn ->
+        org = w.other_org_id
+        member!(w.approver, org)
+        {org, project!(org)}
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Repo.delete_all(from(p in Profile, where: p.id == ^w.profile.id))
+        Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^project.id))
+        Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^org))
+      end)
+    end)
+
+    parent = self()
+
+    mover =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.update_all(from(p in Profile, where: p.id == ^w.profile.id),
+              set: [org_id: org, project_id: project.id]
+            )
+
+            send(parent, {:tenant_move_locked, self()})
+
+            receive do
+              :commit -> :ok
+            after
+              5000 -> raise "tenant-move barrier timed out"
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:tenant_move_locked, mover_pid}, 5000
+
+    enqueuer =
+      Task.async(fn ->
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          %{rows: [[backend_pid]]} = Repo.query!("SELECT pg_backend_pid()")
+          send(parent, {:enqueue_backend, backend_pid})
+
+          ClipJobs.enqueue_new_clip(w.org_id, w.profile.id, w.approver.id, %{
+            source_url: "https://example.com/episode",
+            in_s: 0,
+            out_s: 3
+          })
+        end)
+      end)
+
+    assert_receive {:enqueue_backend, backend_pid}, 5000
+    # Observe an actual database lock wait, so a late-starting worker cannot
+    # make this race test pass without reaching the stale pre-lock lookup.
+    assert_eventually(fn ->
+      unboxed(fn ->
+        %{rows: [[n]]} = Repo.query!("SELECT cardinality(pg_blocking_pids($1))", [backend_pid])
+        n > 0
+      end)
+    end)
+
+    send(mover_pid, :commit)
+    assert {:ok, :ok} = Task.await(mover)
+    assert {:error, :not_found} = Task.await(enqueuer)
+
+    refute unboxed(fn ->
+             Repo.exists?(
+               from(j in Platform.Social.ClipJob, where: j.profile_id == ^w.profile.id)
+             )
+           end)
+  end
+
   test "revocation or project reassignment during probing rejects upload completion and save",
        %{bytes: bytes} do
     original = Application.get_env(:social, :ffprobe_path)
