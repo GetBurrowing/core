@@ -482,8 +482,7 @@ defmodule Platform.Regression.AdrCitationAuditTest do
     {"test/platform/tasks/plan_engine_stack_member_merge_test.exs", "0041", 1},
     {"test/platform_web/controllers/github_webhook_controller_test.exs", "0041", 2},
     {"test/platform_web/live/tasks_live_test.exs", "0018", 3},
-    {"test/platform_web/live/tasks_live_test.exs", "0041", 4},
-    {"test/platform_web/live/tasks_live_test.exs", "0042", 1}
+    {"test/platform_web/live/tasks_live_test.exs", "0041", 4}
   ]
 
   setup_all do

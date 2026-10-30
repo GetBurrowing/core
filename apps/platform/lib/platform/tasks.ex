@@ -143,7 +143,7 @@ defmodule Platform.Tasks do
 
   # ── Human transition table (task 01a18e02) ───────────────────────────────
   #
-  # "Agents need limits, humans generally don't" (Ryan, 2026-10-30). A
+  # "Agents need limits, humans generally don't" (the ticket, 2026-10-30). A
   # `{:user, _}` actor may move a task from any status to any of the human
   # targets below, `backlog`/`planning` -> `done` included. This is a
   # SEPARATE table on purpose: `@valid_task_transitions` stays the agent and
