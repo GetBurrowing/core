@@ -41,7 +41,7 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
 
   defp n, do: System.unique_integer([:positive])
 
-  defp user! do
+  defp user!(org_id \\ acme_org_id()) do
     i = n()
 
     user =
@@ -54,7 +54,7 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: "member"})
     |> Repo.insert!()
 
     user
@@ -84,7 +84,7 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
 
   # A concluded meeting attended by A and B, two backlog tasks, and the
   # briefing delivered by the bounded fallback.
-  defp concluded! do
+  defp concluded!(opts \\ []) do
     {:ok, project} =
       Tasks.create_project(%{name: "Follow-up Project #{n()}", org_id: acme_org_id()})
 
@@ -107,8 +107,9 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
 
     a = user!()
     b = user!()
+    extra_attendees = Keyword.get(opts, :extra_attendees, [])
 
-    for user <- [a, b] do
+    for user <- [a, b | extra_attendees] do
       %MeetingParticipant{}
       |> MeetingParticipant.changeset(%{
         room_id: room.id,
@@ -121,6 +122,11 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
 
     t1 = graduate!(live, "somebody should rotate the S3 keys")
     t2 = graduate!(live, "somebody should renew the TLS certs")
+
+    extra_tasks =
+      for i <- 1..Keyword.get(opts, :extra_tasks, 0)//1,
+          do: graduate!(live, "somebody should do extra chore #{i}")
+
     {:ok, ended} = Meetings.end_meeting(live)
 
     ended =
@@ -132,7 +138,16 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
     briefing = MeetingBriefings.get_for_attendee(ended.id, a.id)
     assert %MeetingBriefing{} = briefing
 
-    %{project: project, meeting: ended, briefing: briefing, a: a, b: b, t1: t1, t2: t2}
+    %{
+      project: project,
+      meeting: ended,
+      briefing: briefing,
+      a: a,
+      b: b,
+      t1: t1,
+      t2: t2,
+      tasks: [t1, t2 | extra_tasks]
+    }
   end
 
   defp stamp!(%TaskRecord{} = task, %Agent{} = agent) do
@@ -402,6 +417,141 @@ defmodule Platform.Meetings.MeetingBriefingsFollowUpTest do
       view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
       assert item(view, key(ctx.t2)).follow_up_agent == nil
       assert item(view, key(ctx.t2)).actions == []
+    end
+  end
+
+  # ── Assignee and sponsor (Ryan, 2026-10-30) ───────────────────────────────
+
+  describe "assignee and sponsor" do
+    defp assign!(%TaskRecord{} = task, assignee_id, type, sponsor_id) do
+      Repo.get!(TaskRecord, task.id)
+      |> Ecto.Changeset.change(
+        assignee_id: assignee_id,
+        assignee_type: type,
+        sponsor_user_id: sponsor_id
+      )
+      |> Repo.update!()
+    end
+
+    test "are the current-phase assignee and the human sponsor, read live" do
+      ctx = concluded!()
+      worker = agent!()
+      sponsor = user!()
+      human = user!()
+      assign!(ctx.t1, worker.id, "agent", sponsor.id)
+      assign!(ctx.t2, human.id, "user", nil)
+
+      view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
+
+      assert item(view, key(ctx.t1)).assignee == %{
+               id: worker.id,
+               name: worker.name,
+               type: "agent"
+             }
+
+      assert item(view, key(ctx.t1)).sponsor == %{id: sponsor.id, name: sponsor.name}
+      assert item(view, key(ctx.t2)).assignee == %{id: human.id, name: human.name, type: "user"}
+      assert item(view, key(ctx.t2)).sponsor == nil
+
+      # A per-phase slot for the task's current phase wins over the flat pointer,
+      # exactly as on the board.
+      other = agent!()
+      phase = Tasks.current_phase(Repo.get!(TaskRecord, ctx.t1.id))
+
+      Repo.get!(TaskRecord, ctx.t1.id)
+      |> Ecto.Changeset.change(
+        phase_assignees: %{phase => %{"assignee_id" => other.id, "assignee_type" => "agent"}}
+      )
+      |> Repo.update!()
+
+      view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
+      assert item(view, key(ctx.t1)).assignee == %{id: other.id, name: other.name, type: "agent"}
+    end
+
+    test "are nil when unset" do
+      ctx = concluded!()
+      view = MeetingBriefings.view(ctx.briefing, scope(ctx.a))
+
+      for task <- [ctx.t1, ctx.t2] do
+        assert item(view, key(task)).assignee == nil
+        assert item(view, key(task)).sponsor == nil
+      end
+    end
+
+    test "are nil for a viewer who cannot read the task's project, like the project itself" do
+      outsider = user!(tenant_org_id("follow_up_fenced_#{n()}"))
+      ctx = concluded!(extra_attendees: [outsider])
+      assert outsider.id in ctx.briefing.attendee_user_ids
+      assign!(ctx.t1, agent!().id, "agent", user!().id)
+
+      fenced = item(MeetingBriefings.view(ctx.briefing, scope(outsider)), key(ctx.t1))
+      assert fenced.project == %{id: nil, name: nil}
+      assert fenced.assignee == nil
+      assert fenced.sponsor == nil
+
+      # Positive control: an org member sees all three.
+      member = item(MeetingBriefings.view(ctx.briefing, scope(ctx.a)), key(ctx.t1))
+      assert member.project.id == ctx.project.id
+      assert %{type: "agent"} = member.assignee
+      assert %{id: _} = member.sponsor
+    end
+
+    test "cost a fixed number of queries, not one per task" do
+      small = concluded!()
+      large = concluded!(extra_tasks: 4)
+
+      for ctx <- [small, large],
+          task <- ctx.tasks,
+          do: assign!(task, agent!().id, "agent", user!().id)
+
+      assert length(large.tasks) == length(small.tasks) + 4
+
+      small_count = count_queries(fn -> MeetingBriefings.view(small.briefing, scope(small.a)) end)
+      large_count = count_queries(fn -> MeetingBriefings.view(large.briefing, scope(large.a)) end)
+
+      # Positive control: the counter sees the view's queries at all.
+      assert small_count > 0
+      assert large_count == small_count
+
+      view = MeetingBriefings.view(large.briefing, scope(large.a))
+
+      for task <- large.tasks do
+        assert %{type: "agent"} = item(view, key(task)).assignee
+        assert %{id: _} = item(view, key(task)).sponsor
+      end
+    end
+  end
+
+  @query_event [:platform, :repo, :query]
+
+  defp count_queries(fun) do
+    assert Repo.config()[:telemetry_prefix] ++ [:query] == @query_event
+    test_pid = self()
+    handler = "follow-up-query-count-#{n()}"
+
+    :telemetry.attach(
+      handler,
+      @query_event,
+      fn _event, _measurements, _metadata, _config ->
+        if self() == test_pid, do: send(test_pid, {:counted_query, handler})
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler)
+    end
+
+    drain_queries(handler, 0)
+  end
+
+  defp drain_queries(handler, count) do
+    receive do
+      {:counted_query, ^handler} -> drain_queries(handler, count + 1)
+    after
+      0 -> count
     end
   end
 end

@@ -748,6 +748,13 @@ defmodule Platform.Meetings.MeetingBriefings do
       is in NOW, read live. When the viewer cannot `tasks.read` that
       project both are nil (rendered "in another project"); nil when the
       task is removed or gone.
+    * `assignee` (task items only) is `%{id, name, type}` of the task's
+      CURRENT-phase assignee, resolved exactly as the board does
+      (`Platform.Tasks.assignee_for_phase/2` on `Platform.Tasks.current_phase/1`),
+      and `sponsor` is `%{id, name}` of its human sponsor; either is nil when
+      unset. Both are read live and gated like `project`: nil when the
+      viewer cannot `tasks.read` the task's project, or the task is removed.
+      The whole briefing costs a fixed number of queries, never one per task.
     * `filed_by` and `follow_up_agent` (task items only) are the same
       `%{id, name}` of the agent to follow up with (see "Follow up" in the
       moduledoc), or nil. A removed or missing task has none.
@@ -785,6 +792,7 @@ defmodule Platform.Meetings.MeetingBriefings do
     rows = task_rows(items)
     agents = follow_up_agents(rows)
     readable_projects = readable_project_ids(rows, scope)
+    assignees = current_assignees(rows)
 
     names =
       receipts
@@ -816,6 +824,8 @@ defmodule Platform.Meetings.MeetingBriefings do
           revertible?: revertible?,
           availability: task_availability(item, rows),
           project: project_view(item, rows, readable_projects),
+          assignee: gated(item, rows, readable_projects, &Map.get(assignees, &1.id)),
+          sponsor: gated(item, rows, readable_projects, &sponsor_view/1),
           filed_by: agent,
           follow_up_agent: agent,
           finding: finding_view(finding, revert_ref),
@@ -964,6 +974,60 @@ defmodule Platform.Meetings.MeetingBriefings do
 
   defp project_view(_item, _rows, _readable), do: nil
 
+  # `fun` of the live task, only when the viewer may read its project.
+  defp gated(%{"kind" => "task", "ref" => "task:" <> id}, rows, readable, fun) do
+    case Map.get(rows, id) do
+      {%{deleted_at: nil} = task, %{id: project_id}} ->
+        if MapSet.member?(readable, project_id), do: fun.(task)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp gated(_item, _rows, _readable, _fun), do: nil
+
+  defp sponsor_view(%{sponsor: %{id: id} = user}), do: %{id: id, name: display_name(user)}
+  defp sponsor_view(_task), do: nil
+
+  # The current-phase assignee of every live task in `rows`, named: ONE
+  # agent query and ONE user query for the whole briefing. A pointer that
+  # is not a uuid (legacy slugs) names nobody.
+  defp current_assignees(rows) do
+    pointers =
+      for {id, {%{deleted_at: nil} = task, _p}} <- rows,
+          {assignee_id, type} =
+            Platform.Tasks.assignee_for_phase(task, Platform.Tasks.current_phase(task)),
+          is_binary(assignee_id) and Platform.UUID.valid?(assignee_id),
+          into: %{},
+          do: {id, {assignee_id, type}}
+
+    ids_of = fn wanted -> for {_t, {id, ^wanted}} <- pointers, uniq: true, do: id end
+    agent_ids = ids_of.("agent")
+
+    agents =
+      if agent_ids == [] do
+        %{}
+      else
+        from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.name})
+        |> Repo.all()
+        |> Map.new()
+      end
+
+    users = Platform.Accounts.get_users_map(ids_of.("user"), include_archived: true)
+
+    Map.new(pointers, fn
+      {task_id, {id, "agent"}} ->
+        {task_id, agents[id] && %{id: id, name: agents[id], type: "agent"}}
+
+      {task_id, {id, "user"}} ->
+        {task_id, users[id] && %{id: id, name: display_name(users[id]), type: "user"}}
+
+      {task_id, _other} ->
+        {task_id, nil}
+    end)
+  end
+
   defp item_agent(%{"kind" => "task", "ref" => "task:" <> id}, agents), do: Map.get(agents, id)
   defp item_agent(_item, _agents), do: nil
 
@@ -982,7 +1046,9 @@ defmodule Platform.Meetings.MeetingBriefings do
       from(t in Platform.Tasks.Task,
         left_join: p in Platform.Tasks.Project,
         on: p.id == t.project_id,
+        left_join: s in assoc(t, :sponsor),
         where: t.id in ^ids,
+        preload: [sponsor: s],
         select: {t, p}
       )
       |> Repo.all()
