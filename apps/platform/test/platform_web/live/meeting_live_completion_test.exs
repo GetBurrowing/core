@@ -41,8 +41,8 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
   test "normal connected views and repeated auto-join preserve a genuinely filed run", ctx do
     {meeting, filed} = file_completion!(ctx)
     {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{meeting.slug}")
-    assert has_element?(view, ~s([data-role="meeting-join"]))
     assert_preserved!(meeting, filed)
+    assert has_element?(view, ~s([data-role="meeting-join"]))
 
     # Exercise the handler independently of the mount scheduler guard.
     send(view.pid, :auto_join)

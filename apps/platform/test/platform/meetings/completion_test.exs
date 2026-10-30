@@ -440,6 +440,11 @@ defmodule Platform.Meetings.CompletionTest do
   test "the scribe callback dispatches triage and normalized filing is stable after task completion",
        ctx do
     {meeting, run, seg} = ready!(ctx.meeting)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_scribe_completion"}}
+    }
+
     canvas = canvas!(meeting.chat_space_id, ctx.scribe)
     args = params(meeting, run, canvas)
     assert {:ok, %{status: "triage_dispatched"}} = Completion.scribe_complete(ctx.scribe.id, args)
@@ -487,6 +492,11 @@ defmodule Platform.Meetings.CompletionTest do
     assert run!(meeting).status == "waiting"
 
     complete_current!(run.transcript_id, "Summary including the late final clarification")
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_scribe_completion"}}
+    }
+
     refreshed = run!(meeting)
     assert refreshed.canvas_id == canvas.id
     assert refreshed.status == "scribe_dispatched"
@@ -500,6 +510,10 @@ defmodule Platform.Meetings.CompletionTest do
 
     refreshed_args = params(meeting, refreshed, canvas)
     assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, refreshed_args)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_triage_dispatch"}}
+    }
 
     assert {:ok, %{task_ids: [^task_id]}} =
              Completion.triage_file(
@@ -524,6 +538,14 @@ defmodule Platform.Meetings.CompletionTest do
       Completion.resume(meeting.id)
       assert {:ok, _} = Meetings.append_segment(run.transcript_id, late)
     end
+
+    refute_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_scribe_completion"}}
+    }
+
+    refute_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_triage_dispatch"}}
+    }
 
     persisted = run!(meeting)
     assert persisted.status == "filed"
