@@ -2816,8 +2816,22 @@ defmodule PlatformWeb.MeetingLive do
 
   # The recap's own close control (task 01a07410 stage 6). Rejoining
   # clears it too, through `attach_call_recap_hook/1`.
+  #
+  # Closing the after-action report is the end of the visit (task 01a18d0a
+  # stage 3): it navigates to the canonical Meetings index rather than
+  # leaving the viewer on the meeting they just left. The report stays up
+  # until this control is used; nothing navigates on a timer. A dismiss
+  # with no report showing (a duplicate click that beat the navigation)
+  # does nothing, so the viewer is never redirected twice.
+  def handle_event("dismiss_call_recap", _params, %{assigns: %{call_recap: nil}} = socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("dismiss_call_recap", _params, socket) do
-    {:noreply, assign(socket, :call_recap, nil)}
+    {:noreply,
+     socket
+     |> assign(:call_recap, nil)
+     |> push_navigate(to: ~p"/meetings")}
   end
 
   # Right-rail tab select (task 01a05b14 stage 3). An unrecognised tab
