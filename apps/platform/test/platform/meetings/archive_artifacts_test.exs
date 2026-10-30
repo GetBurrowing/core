@@ -433,16 +433,18 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
       # Pinned exactly, not `> 0`: the telemetry handler silently measuring
       # nothing would make the equality below hold at 0 == 0, and the whole
-      # test would pass on a resolver that never touched the database. Six is
-      # `root_admin?/1`'s membership lookup, `external_user?/1`'s membership
-      # lookup, one query per chip family, and the row context — see the
-      # moduledoc's "Batching".
+      # test would pass on a resolver that never touched the database. Eleven
+      # is `root_admin?/1`'s membership lookup, `external_user?/1`'s
+      # membership lookup, the five queries that build the viewer's
+      # `Platform.Access.Scope` for the `chat.read` deny (task 01a18d38 stage
+      # 1), one query per chip family, and the row context — see the
+      # moduledoc's "Batching". (It was six before the deny landed.)
       #
-      # Both viewer-class lookups are per CALL, not per row, which is why the
-      # equality below still pins the batching property. If a third viewer
-      # class is ever added, this number moves again — that is the point of
-      # pinning it.
-      assert one_row == 6
+      # The viewer-class lookups and the Scope build are per CALL, not per
+      # row, which is why the equality below still pins the batching
+      # property. If a third viewer class is ever added, this number moves
+      # again — that is the point of pinning it.
+      assert one_row == 11
 
       assert six_rows == one_row,
              "artifacts_for/2 issued #{six_rows} queries for six meetings and " <>
@@ -450,7 +452,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "count_queries/1 does not attribute a concurrent sibling process's queries" do
-      # Anti-vacuity fixture for task 01a07783 stage 1's fix. `one_row == 6`
+      # Anti-vacuity fixture for task 01a07783 stage 1's fix. `one_row == 11`
       # above is true for BOTH the pre-fix unfiltered `:telemetry.attach` and
       # the stage-1 `:caller`-filtered `count_queries/1` when nothing else is
       # running concurrently — that assertion alone cannot tell the two
@@ -508,7 +510,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       # Against the PRE-STAGE-1 unfiltered `:telemetry.attach` (no per-
       # process check at all), this same test would observe an INFLATED
       # count — the intruder's query lands in the same handler as the
-      # counted operation's own six, giving 7, because the old handler has
+      # counted operation's own eleven, giving 12, because the old handler has
       # no way to distinguish "my emitting process" from "any emitting
       # process in the BEAM."
       #
@@ -516,11 +518,12 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       # emitting process is `self()` (the counted operation's own process)
       # or appears in that process's `$callers` are counted. The intruder is
       # neither, so its query is correctly excluded and the count stays
-      # exactly 6 — identical to what `one_row == 6` already asserts above
-      # when run with no concurrent noise. That equivalence — same answer
+      # exactly 11 — identical to what `one_row == 11` already asserts above
+      # when run with no concurrent noise (six before task 01a18d38 stage 1
+      # added the per-call Scope build). That equivalence — same answer
       # whether or not something else is running — is the property the
       # ticket asks for and the property a solo assertion cannot exercise.
-      assert one_row == 6
+      assert one_row == 11
     end
   end
 

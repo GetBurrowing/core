@@ -247,6 +247,8 @@ defmodule Platform.Meetings.Archive do
   Four queries for a whole page, independent of how many rows are on it — one
   per chip family plus one for the row context. The page's ids are pushed
   into each as an `IN` list rather than each row fetching its own artifacts.
+  The viewer scoping in front of them (the viewer-class lookups and the
+  `Platform.Access.Scope` build for the `chat.read` deny) is per call, too.
   """
 
   import Ecto.Query
