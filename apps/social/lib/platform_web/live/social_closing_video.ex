@@ -1,9 +1,8 @@
 defmodule PlatformWeb.SocialClosingVideo do
   @moduledoc "Shared show ending and an actual pending-version join preview."
   use PlatformWeb, :live_component
-  import Ecto.Query
   alias Platform.{Files, Repo, Social}
-  alias Platform.Social.{ClipClosingVideo, ClosingAsset, ClipRender, ClipJob, ClipJobs, Post}
+  alias Platform.Social.{ClipClosingVideo, ClosingAsset, ClipJob, ClipJobs}
 
   @impl true
   def mount(socket) do
@@ -130,38 +129,8 @@ defmodule PlatformWeb.SocialClosingVideo do
     }
   end
 
-  defp same?(nil, s), do: not s["enabled"]
-
-  defp same?(r, s),
-    do:
-      r.enabled == s["enabled"] and
-        (not r.enabled or (r.file_id == s["file_id"] and to_string(r.audio) == s["audio"]))
-
-  defp current_renders(p) do
-    Social.list_clips(p.org_id, profile_id: p.id)
-    |> Enum.reverse()
-    |> Enum.filter(&(is_nil(&1.removed_at) and &1.review_status != "approved"))
-    |> Enum.flat_map(fn c ->
-      r =
-        Repo.one(
-          from(r in ClipRender,
-            where: r.clip_id == ^c.id and r.rev == ^c.rev and is_nil(r.removed_at)
-          )
-        )
-
-      approved? =
-        r &&
-          Repo.exists?(
-            from(post in Post,
-              where:
-                post.clip_render_id == ^r.id and
-                  post.status in ["approved", "scheduled", "published"]
-            )
-          )
-
-      if r && not approved?, do: [{c, r}], else: []
-    end)
-  end
+  defp same?(r, s), do: ClipClosingVideo.same_ending?(r, s)
+  defp current_renders(p), do: ClipClosingVideo.review_renders(p)
 
   defp poll_preview(%{assigns: %{preview_job: nil}} = socket), do: socket
 

@@ -24,6 +24,22 @@ suffix, caption/headline cutoff, identifiable final frames and duration within
 one frame. FFT tone measurements check kept/muted closing and preserved source.
 PNG seam/end frames and receipt.json are local evidence; no signed URL is saved.
 
+For the browser/ClipJobs integration seed, use a private test database that has
+already run the Social migrations and fixtures. From apps/social run:
+
+CLOSING_FIXTURE_ROOT=/private/test-only-closing \
+CLOSING_FIXTURE_STORAGE_ROOT=/private/test-only-blobs \
+CLOSING_FIXTURE_MANIFEST=/private/test-only-identities.json \
+PLATFORM_TEST_DATABASE=platform_test_closing_private MIX_ENV=test \
+mix run --no-start priv/scripts/clip_closing_video_fixture.exs
+
+The browser server must use the same chat_attachments_root as the seed's private
+storage root. The seed creates a fresh TEST ONLY show with two pending clips
+using real A/keep and A/mute outputs, then saves B/mute as the next default. It
+writes identities with mode0600, never a session cookie or signed URL. It does
+not approve clips or create publication jobs. Browser authentication belongs to
+the rig's normal dev-login/session fixture, outside this durable script.
+
 The canonical runner patch is an audit artifact of the centrally registered skill,
 not a second maintained helper. It uses zero-context unified hunks to avoid blank
 context lines being flagged as trailing whitespace. Verify the before/after hashes

@@ -65,6 +65,7 @@ defmodule PlatformWeb.SocialClipsReview do
     ClipReviewFeed,
     ClipJobs,
     ClipVersions,
+    ClipClosingVideo,
     Profile
   }
 
@@ -93,6 +94,12 @@ defmodule PlatformWeb.SocialClipsReview do
        toast: nil,
        landed: MapSet.new(),
        selected_render: nil,
+       selected_version_id: nil,
+       versions: [],
+       closing_filter: nil,
+       closing_error: nil,
+       closing_attempt: nil,
+       closing_change?: false,
        headline_attempt: nil,
        headline_error: nil,
        appearance_dirty: false,
@@ -138,7 +145,7 @@ defmodule PlatformWeb.SocialClipsReview do
 
     socket =
       socket
-      |> assign(Map.take(assigns, [:id, :profile, :user_id, :view, :clip_id]))
+      |> assign(Map.take(assigns, [:id, :profile, :user_id, :view, :clip_id, :closing_filter]))
       |> then(fn s ->
         if url_changed? or s.assigns.selected_id == nil,
           do: assign(s, :selected_id, s.assigns.clip_id),
@@ -151,18 +158,15 @@ defmodule PlatformWeb.SocialClipsReview do
   end
 
   defp refresh_job_state(socket) do
-    socket =
-      case socket.assigns do
-        %{profile: %Profile{} = p} ->
-          socket
-          |> assign(:jobs, ClipReviewFeed.rendering(p.org_id, p.id))
-          |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(p.org_id, p.id))
+    previous = MapSet.new(socket.assigns.queue, & &1.id)
+    socket = load(socket)
 
-        _ ->
-          socket
-      end
-
-    headline_state(socket)
+    # A job's completion broadcast may arrive before its clip broadcast. Keep
+    # the existing "New clip in Review" notification when polling loads it first.
+    case Enum.find(socket.assigns.queue, &(not MapSet.member?(previous, &1.id))) do
+      %Clip{} = clip -> landed(socket, socket.assigns.profile, clip)
+      _ -> socket
+    end
   end
 
   # ── Events ───────────────────────────────────────────────────────────
@@ -186,7 +190,9 @@ defmodule PlatformWeb.SocialClipsReview do
 
     case ClipReviewFeed.fetch_clip(profile.org_id, profile.id, id) do
       {:ok, %Clip{} = clip} ->
-        if reviewable?(clip), do: {:noreply, select_clip(socket, clip)}, else: {:noreply, socket}
+        if reviewable?(clip) and Enum.any?(socket.assigns.queue, &(&1.id == clip.id)),
+          do: {:noreply, select_clip(socket, clip)},
+          else: {:noreply, socket}
 
       _ ->
         {:noreply, socket}
@@ -215,6 +221,48 @@ defmodule PlatformWeb.SocialClipsReview do
     |> authorize()
     |> save(%{"title" => title})
     |> then(&{:noreply, assign(&1, :editing_title?, false)})
+  end
+
+  def handle_event("pick_version", %{"render_id" => id}, socket) do
+    socket = authorize(socket)
+    %{profile: p, clip: clip} = socket.assigns
+
+    with %Clip{} <- clip, {:ok, version} <- ClipVersions.get(p.org_id, p.id, clip.id, id) do
+      {:noreply,
+       socket
+       |> assign(
+         selected_version_id: if(version.rev == clip.rev, do: nil, else: id),
+         closing_error: nil
+       )
+       |> headline_state()
+       |> authorize()}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("use_closing_video", params, socket) do
+    socket = authorize(socket)
+    %{profile: p, clip: clip, selected_render: selected} = socket.assigns
+
+    if socket.assigns.can_decide? and not is_nil(clip) and not is_nil(selected) and
+         selected.rev == clip.rev and params["base_render_id"] == selected.id do
+      case ClipJobs.enqueue_closing_video(p.org_id, clip.id, socket.assigns.user_id, %{
+             "base_render_id" => params["base_render_id"]
+           }) do
+        {:ok, job} ->
+          {:noreply,
+           socket
+           |> assign(closing_error: nil, closing_attempt: job)
+           |> load()
+           |> schedule_jobs_refresh()}
+
+        {:error, reason} ->
+          {:noreply, assign(socket, :closing_error, closing_message(reason))}
+      end
+    else
+      {:noreply, assign(socket, :closing_error, closing_message(:stale_version))}
+    end
   end
 
   def handle_event("rerender_headline", params, socket) do
@@ -449,6 +497,8 @@ defmodule PlatformWeb.SocialClipsReview do
 
   # ── Live: clips-topic events forwarded by the parent ─────────────────
 
+  defp clip_event(%{assigns: %{closing_filter: "previous"}} = socket, %Clip{}), do: load(socket)
+
   defp clip_event(%{assigns: %{profile: %Profile{} = profile}} = socket, %Clip{} = clip) do
     in_list? = Enum.any?(socket.assigns.queue, &(&1.id == clip.id))
     waiting? = clip.profile_id == profile.id and reviewable?(clip)
@@ -471,7 +521,7 @@ defmodule PlatformWeb.SocialClipsReview do
   # A newly pending clip goes into the list in queue order (re-read), with
   # the "New clip in Review" toast and a 3s highlight on its queue item.
   defp landed(socket, profile, %Clip{} = clip) do
-    queue = ClipReviewFeed.review_queue(profile.org_id, profile.id)
+    queue = review_queue(profile, socket.assigns.closing_filter)
 
     if Enum.any?(queue, &(&1.id == clip.id)) do
       clip = Enum.find(queue, &(&1.id == clip.id))
@@ -575,11 +625,15 @@ defmodule PlatformWeb.SocialClipsReview do
       selected_id: clip.id,
       editing_title?: false,
       note: "",
-      appearance_dirty: false
+      appearance_dirty: false,
+      selected_version_id: nil,
+      closing_error: nil,
+      closing_attempt: nil
     )
     |> assign(:byline, ClipReviewFeed.byline(socket.assigns.profile.org_id, clip))
     |> assign(:headline_error, nil)
     |> headline_state()
+    |> authorize()
     |> push_event("clips:url", url_params(socket.assigns.view, clip))
   end
 
@@ -606,12 +660,35 @@ defmodule PlatformWeb.SocialClipsReview do
 
   # The queue, the jobs, the accounts, the selected clip and `can_decide?`,
   # all re-read now.
-  defp load(%{assigns: %{profile: %Profile{} = profile}} = socket) do
+  defp review_queue(profile, filter) do
+    profile = Social.get_profile(profile.org_id, profile.id) || profile
     queue = ClipReviewFeed.review_queue(profile.org_id, profile.id)
+
+    queue =
+      if filter == "previous" do
+        ids =
+          ClipClosingVideo.review_renders(profile)
+          |> Enum.reject(fn {_, r} ->
+            ClipClosingVideo.same_ending?(r.closing_video, profile.closing_video)
+          end)
+          |> Enum.map(fn {c, _} -> c.id end)
+
+        Enum.filter(queue, &(&1.id in ids))
+      else
+        queue
+      end
+
+    queue
+  end
+
+  defp load(%{assigns: %{profile: %Profile{} = profile}} = socket) do
+    profile = Social.get_profile(profile.org_id, profile.id) || profile
+    queue = review_queue(profile, socket.assigns.closing_filter)
     clip = select(profile, queue, socket.assigns.selected_id)
     previous = socket.assigns.clip
 
     socket
+    |> assign(:profile, profile)
     |> assign(:queue, queue)
     |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
     |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
@@ -642,19 +719,82 @@ defmodule PlatformWeb.SocialClipsReview do
   # Shares the selected immutable version with the sibling version picker.
   # Re-read on promotion; queueing/failure never changes the playable clip.
   defp headline_state(%{assigns: %{clip: %Clip{} = clip, profile: profile}} = socket) do
-    selected =
-      case ClipVersions.recent(profile.org_id, profile.id, clip.id) do
-        {:ok, versions} -> Enum.find(versions, &(&1.rev == clip.rev))
-        _ -> nil
+    versions =
+      case ClipVersions.recent(profile.org_id, profile.id, clip.id, 50) do
+        {:ok, rows} -> rows
+        _ -> []
       end
 
+    selected =
+      Enum.find(versions, &(&1.id == socket.assigns.selected_version_id)) ||
+        Enum.find(versions, &(&1.rev == clip.rev))
+
+    attempt =
+      case ClipJobs.list_jobs(profile.org_id, profile.id) do
+        {:ok, jobs} ->
+          Enum.find(
+            Enum.reverse(jobs),
+            &(&1.clip_id == clip.id and &1.payload["appearance"] == true)
+          )
+
+        _ ->
+          nil
+      end
+
+    fresh_profile = Social.get_profile(profile.org_id, profile.id) || profile
+
+    change? =
+      not is_nil(selected) and selected.rev == clip.rev and clip.review_status != "approved" and
+        not ClipClosingVideo.approved_render?(selected.id) and clip.origin == "burrow" and
+        is_map(selected.source) and map_size(selected.source) > 0 and is_binary(selected.file_id) and
+        not ClipClosingVideo.same_ending?(selected.closing_video, fresh_profile.closing_video)
+
     assign(socket,
+      versions: versions,
       selected_render: selected,
+      closing_attempt: attempt,
+      closing_change?: !!change?,
       headline_attempt: ClipReviewFeed.headline_attempt(profile.org_id, profile.id, clip.id)
     )
   end
 
-  defp headline_state(socket), do: assign(socket, selected_render: nil, headline_attempt: nil)
+  defp headline_state(socket),
+    do:
+      assign(socket,
+        selected_render: nil,
+        versions: [],
+        closing_attempt: nil,
+        closing_change?: false,
+        headline_attempt: nil
+      )
+
+  defp closing_message(:job_in_flight),
+    do: "A render is already running. Your playing version is unchanged."
+
+  defp closing_message(:stale_version),
+    do: "Select the current version before applying the closing video."
+
+  defp closing_message(_),
+    do: "This closing video could not be applied. Your playing version is unchanged."
+
+  defp playback_clip(clip, nil), do: clip
+
+  defp playback_clip(clip, render),
+    do: %{
+      clip
+      | render_file_id: render.file_id,
+        rev: render.rev,
+        duration_s: render.duration_s,
+        look: render.look
+    }
+
+  defp version_state(render, clip) do
+    cond do
+      ClipClosingVideo.approved_render?(render.id) -> "Approved"
+      render.rev == clip.rev -> String.capitalize(clip.review_status || "pending")
+      true -> "Previous"
+    end
+  end
 
   defp headline_message(:stale_version),
     do: "A newer version is ready. Reload it before changing the headline."
@@ -686,7 +826,12 @@ defmodule PlatformWeb.SocialClipsReview do
   # The server-side approver check every handle_event runs first: the user
   # and the profile are re-read, then `Social.approver_check/3`.
   defp authorize(%{assigns: %{profile: %Profile{} = profile, user_id: user_id}} = socket) do
-    assign(socket, :can_decide?, approver?(profile, user_id))
+    selected = socket.assigns.selected_render
+
+    current? =
+      is_nil(selected) or is_nil(socket.assigns.clip) or selected.rev == socket.assigns.clip.rev
+
+    assign(socket, :can_decide?, current? and approver?(profile, user_id))
   end
 
   defp authorize(socket), do: assign(socket, :can_decide?, false)
@@ -722,6 +867,16 @@ defmodule PlatformWeb.SocialClipsReview do
     >
       <div id="social-clips-review-keys" phx-hook="ClipReview" data-role="clips-review-keys">
         <.subhead view={@view} count={length(@queue)} jobs={@jobs} myself={@myself} />
+        <div
+          :if={@closing_filter == "previous" and @view == "review"}
+          class="alert alert-info mb-3"
+          data-role="closing-impact-filter"
+        >
+          Clips with a previous closing video.
+          <.link href={"/m/social?tab=clips&view=review&profile=#{@profile.id}"}>
+            Show all clips
+          </.link>
+        </div>
         <.episode_outcomes :if={@view == "review"} jobs={@episode_jobs} />
 
         <div
@@ -738,7 +893,7 @@ defmodule PlatformWeb.SocialClipsReview do
 
           <%= if @clip do %>
             <.stage
-              clip={@clip}
+              clip={playback_clip(@clip, @selected_render)}
               queue={@queue}
               position={@position}
               total={length(@queue)}
@@ -758,6 +913,10 @@ defmodule PlatformWeb.SocialClipsReview do
               can_decide?={@can_decide?}
               editing_title?={@editing_title?}
               selected_render={@selected_render}
+              versions={@versions}
+              closing_change?={@closing_change?}
+              closing_error={@closing_error}
+              closing_attempt={@closing_attempt}
               headline_attempt={@headline_attempt}
               headline_error={@headline_error}
               myself={@myself}
@@ -1211,6 +1370,86 @@ defmodule PlatformWeb.SocialClipsReview do
     """
   end
 
+  attr :clip, :any, required: true
+  attr :profile, :any, required: true
+  attr :selected, :any, required: true
+  attr :versions, :list, required: true
+  attr :change?, :boolean, required: true
+  attr :pending?, :boolean, required: true
+  attr :error, :any, required: true
+  attr :attempt, :any, required: true
+  attr :can_decide?, :boolean, required: true
+  attr :myself, :any, required: true
+
+  defp closing_versions(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :ending,
+        ClipClosingVideo.ending_name(
+          assigns.selected && assigns.selected.closing_video,
+          assigns.profile
+        )
+      )
+
+    ~H"""
+    <section class="min-w-0 space-y-2" aria-label="Render versions" data-role="closing-versions">
+      <div class="flex min-w-0 items-center gap-2 text-xs text-subtle" data-role="selected-ending">
+        <span :if={@selected} class="shrink-0">
+          v{@selected.rev} · {version_state(@selected, @clip)}
+        </span>
+        <span :if={@ending} class="min-w-0 truncate" title={@ending}>Ends with: {@ending}</span>
+        <span :if={!@ending} class="min-w-0 truncate">No closing video</span>
+      </div>
+      <div :if={length(@versions) > 1} class="flex flex-wrap gap-1" aria-label="Select render version">
+        <button
+          :for={r <- @versions}
+          type="button"
+          class="btn btn-ghost btn-xs shrink-0"
+          aria-pressed={to_string(@selected && r.id == @selected.id)}
+          phx-click="pick_version"
+          phx-value-render_id={r.id}
+          phx-target={@myself}
+          data-role="pick-render-version"
+          data-render-id={r.id}
+        >
+          v{r.rev} · {version_state(r, @clip)}
+        </button>
+      </div>
+      <form
+        :if={@can_decide? and @change?}
+        phx-submit="use_closing_video"
+        phx-target={@myself}
+        data-role="use-closing-video"
+      >
+        <input type="hidden" name="base_render_id" value={@selected && @selected.id} />
+        <button
+          type="submit"
+          class="btn btn-outline btn-sm rounded-field"
+          disabled={@pending?}
+          phx-disable-with="Rendering…"
+        >
+          Use current closing video
+        </button>
+      </form>
+      <p :if={@pending?} role="status" class="text-xs text-subtle" data-role="closing-render-pending">
+        Rendering a new pending version. You can keep playing this one.
+      </p>
+      <p :if={@error} role="alert" class="text-xs text-error" data-role="closing-render-error">
+        {@error}
+      </p>
+      <p
+        :if={@attempt && @attempt.status in ["failed", "cancelled"]}
+        role="alert"
+        class="text-xs text-error"
+        data-role="closing-render-failure"
+      >
+        Render failed. Your previous video is unchanged.
+      </p>
+    </section>
+    """
+  end
+
   # [detailsHTML] title, meta, byline, caption, Post to, note, footer.
   attr :clip, :any, required: true
   attr :byline, :map, required: true
@@ -1222,6 +1461,10 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :myself, :any, required: true
 
   attr :selected_render, :any, default: nil
+  attr :versions, :list, default: []
+  attr :closing_change?, :boolean, default: false
+  attr :closing_error, :any, default: nil
+  attr :closing_attempt, :any, default: nil
   attr :headline_attempt, :any, default: nil
   attr :headline_error, :any, default: nil
   attr :review_id, :string, required: true
@@ -1235,7 +1478,29 @@ defmodule PlatformWeb.SocialClipsReview do
     assigns =
       assigns
       |> assign(:agent, assigns.byline.agent_name)
-      |> assign(:caption, assigns.clip.caption || "")
+      |> assign(
+        :caption,
+        if(assigns.selected_render && assigns.selected_render.rev != assigns.clip.rev,
+          do: assigns.selected_render.caption || "",
+          else: assigns.clip.caption || ""
+        )
+      )
+      |> assign(
+        :display_title,
+        if(assigns.selected_render && assigns.selected_render.rev != assigns.clip.rev,
+          do: assigns.selected_render.headline,
+          else: assigns.clip.title
+        )
+      )
+      |> assign(
+        :current_version?,
+        is_nil(assigns.selected_render) or assigns.selected_render.rev == assigns.clip.rev
+      )
+      |> assign(
+        :closing_pending?,
+        assigns.closing_attempt != nil and
+          assigns.closing_attempt.status in ~w(queued claimed running)
+      )
       |> assign(
         :headline_pending?,
         assigns.headline_attempt != nil and
@@ -1291,7 +1556,7 @@ defmodule PlatformWeb.SocialClipsReview do
             data-role="clip-title"
           >
             <span class="flex-1" data-role="clips-selected-title">
-              {@clip.title || "Untitled clip"}
+              {@display_title || "Untitled clip"}
             </span>
             <.icon
               :if={@can_decide?}
@@ -1302,9 +1567,9 @@ defmodule PlatformWeb.SocialClipsReview do
           <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
             {join_dot([
               @clip.episode_code,
-              mmss(@clip.duration_s),
+              mmss((@selected_render && @selected_render.duration_s) || @clip.duration_s),
               @clip.source_label,
-              "v#{@clip.rev}"
+              "v#{(@selected_render && @selected_render.rev) || @clip.rev}"
             ])}
           </p>
           <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
@@ -1343,7 +1608,21 @@ defmodule PlatformWeb.SocialClipsReview do
           </div>
         </div>
 
+        <.closing_versions
+          clip={@clip}
+          profile={@profile}
+          selected={@selected_render}
+          versions={@versions}
+          change?={@closing_change?}
+          pending?={@closing_pending?}
+          error={@closing_error}
+          attempt={@closing_attempt}
+          can_decide?={@can_decide?}
+          myself={@myself}
+        />
+
         <.live_component
+          :if={@current_version?}
           module={PlatformWeb.SocialClipAppearance}
           id={"appearance-#{@clip.id}"}
           refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}

@@ -269,4 +269,34 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
     refute html =~ ~r/\son(touch|pointer)\w*=/i
     refute html =~ ~r/phx-(touch|pointer)/i
   end
+
+  test "ending marker protects version width and no closing is honest for legacy renders", %{
+    conn: conn,
+    w: w
+  } do
+    clip!(w, "Phone ending marker")
+    child = open(conn, w.approver)
+
+    assert has_element?(
+             child,
+             "[data-role=selected-ending].text-xs.text-subtle",
+             "No closing video"
+           )
+
+    assert has_element?(child, "[data-role=selected-ending] span.shrink-0")
+    assert has_element?(child, "[data-role=selected-ending] span.min-w-0.truncate")
+    refute has_element?(child, "[data-role=use-closing-video]")
+  end
+
+  test "a legacy playable clip without an immutable snapshot has no invented closing contract", %{
+    conn: conn,
+    w: w
+  } do
+    clip = clip!(w, "Unknown legacy snapshot")
+    import Ecto.Query
+    Repo.delete_all(from(r in Platform.Social.ClipRender, where: r.clip_id == ^clip.id))
+    child = open(conn, w.approver)
+    assert has_element?(child, "[data-role=selected-ending]", "No closing video")
+    refute has_element?(child, "[data-role=use-closing-video]")
+  end
 end

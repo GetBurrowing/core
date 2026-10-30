@@ -3,11 +3,71 @@ defmodule Platform.Social.ClipClosingVideo do
   import Ecto.Query
   alias Platform.{Files, Repo, Social}
   alias Platform.Files.File, as: SourceFile
-  alias Platform.Social.{ClosingAsset, ClosingVideoSettings, ClipJob, Profile, Toolchain}
+
+  alias Platform.Social.{
+    ClosingAsset,
+    ClosingVideoSettings,
+    ClipJob,
+    ClipRender,
+    Post,
+    Profile,
+    Toolchain
+  }
+
   alias Platform.Social.Renderer.Ffmpeg
 
   @max_bytes 200 * 1024 * 1024
   @types ~w(video/mp4 video/quicktime video/webm)
+  @doc "Compare the saved choice with an immutable render contract, including disabled choices."
+  def same_ending?(a, b), do: ending_key(a) == ending_key(b)
+
+  defp ending_key(nil), do: {false, nil, "mute"}
+
+  defp ending_key(s) do
+    value = fn key, default -> Map.get(s, key, Map.get(s, to_string(key), default)) end
+    {value.(:enabled, false), value.(:file_id, nil), to_string(value.(:audio, :mute))}
+  end
+
+  @doc "Current unapproved snapshots used by both the Settings count and Review filter."
+  def review_renders(profile) do
+    Social.list_clips(profile.org_id, profile_id: profile.id)
+    |> Enum.reverse()
+    |> Enum.filter(&(is_nil(&1.removed_at) and &1.review_status != "approved"))
+    |> Enum.flat_map(fn c ->
+      r =
+        Repo.one(
+          from(r in ClipRender,
+            where: r.clip_id == ^c.id and r.rev == ^c.rev and is_nil(r.removed_at)
+          )
+        )
+
+      if r && not approved_render?(r.id), do: [{c, r}], else: []
+    end)
+  end
+
+  def approved_render?(id),
+    do:
+      Repo.exists?(
+        from(p in Post,
+          where: p.clip_render_id == ^id and p.status in ["approved", "scheduled", "published"]
+        )
+      )
+
+  @doc "The pinned file's name, never the latest show default; deletion retains an honest identity."
+  def ending_name(nil, _profile), do: nil
+  def ending_name(%{enabled: false}, _profile), do: nil
+
+  def ending_name(%{file_id: id}, profile) do
+    case Files.get_file(id) do
+      %{project_id: project_id, org_id: org_id, name: name}
+      when project_id == profile.project_id and org_id in [nil, profile.org_id] ->
+        name
+
+      _ ->
+        "Unavailable video (#{id})"
+    end
+  end
+
   def max_bytes, do: @max_bytes
   def content_types, do: @types
 

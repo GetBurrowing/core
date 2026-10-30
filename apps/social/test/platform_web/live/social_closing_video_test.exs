@@ -254,4 +254,49 @@ defmodule PlatformWeb.SocialClosingVideoTest do
 
     assert Social.get_clip(c.w.org_id, clip.id).render_file_id == output.id
   end
+
+  test "Settings impact notice links to the same scoped previous-ending Review filter", c do
+    {:ok, %{job: job}} =
+      ClipJobs.enqueue_new_clip(c.w.org_id, c.w.profile.id, c.w.approver.id, %{
+        source_url: "https://example.com/TEST-ONLY-source",
+        in_s: 0,
+        out_s: 5
+      })
+
+    {:ok, _} = ClipJobs.claim(c.w.scope, job.id, c.w.agent.id)
+
+    output =
+      stored_file!(c.w.project, "TEST ONLY output metadata", "test-only-output.mp4", "video/mp4")
+
+    {:ok, _} =
+      ClipJobs.complete(c.w.scope, job.id, c.w.agent.id, %{
+        file_id: output.id,
+        candidate_id: "original",
+        actual_in_s: 0,
+        actual_out_s: 5
+      })
+
+    {:ok, _} =
+      ClipClosingVideo.save(c.w.org_id, c.w.profile.id, c.w.approver.id, %{
+        file_id: c.closing_file.id,
+        enabled: true
+      })
+
+    v = open(c.conn, c.w)
+
+    assert has_element?(
+             v,
+             "#{card(c.w)} p.text-info",
+             "1 clips in review still end with the previous video."
+           )
+
+    assert has_element?(
+             v,
+             "#{card(c.w)} a[href='/m/social?tab=clips&view=review&profile=#{c.w.profile.id}&closing=previous']",
+             "Review them"
+           )
+
+    assert length(ClipClosingVideo.review_renders(Social.get_profile(c.w.org_id, c.w.profile.id))) ==
+             1
+  end
 end
