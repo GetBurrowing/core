@@ -411,6 +411,33 @@ defmodule PlatformWeb.MeetingLiveHumanInviteTest do
     end
   end
 
+  describe "after a same-meeting ?tab= live patch" do
+    # Task 01a18d0a-c5f4 stage 4 made a `?tab=` patch on the same meeting skip
+    # the room setup in `handle_params/3`, which is where `MeetingHooks.attach/2`
+    # (and with it the hook that routes these events) is installed. The control
+    # must keep working after such a patch, and each event must be handled once.
+    test "the invite events still route, exactly once",
+         %{conn: conn, meeting: meeting} do
+      view = mount(conn, meeting)
+      render_patch(view, "/meetings/#{meeting.slug}?tab=people")
+      render_patch(view, "/meetings/#{meeting.slug}?tab=canvas")
+      render_patch(view, "/meetings/#{meeting.slug}?tab=people")
+
+      hook_ids =
+        :sys.get_state(view.pid).socket.private.lifecycle.handle_event
+        |> Enum.map(& &1.id)
+
+      assert Enum.count(hook_ids, &(&1 == :meeting_events)) == 1
+
+      assert has_element?(view, @control)
+      type(view, "Guest After Tab Patch")
+      render_click(view, "meeting_human_invite_guest", %{})
+
+      assert [%Invite{user_id: nil, display_name: "Guest After Tab Patch"}] = invites(meeting)
+      assert has_element?(view, ~s([data-role="meeting-human-invite-result"]))
+    end
+  end
+
   describe "Meetings.human_inviter?/2" do
     test "is not host-only, and refuses nil and a no-access user",
          %{meeting: meeting, viewer: viewer} do
