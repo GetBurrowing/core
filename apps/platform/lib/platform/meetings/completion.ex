@@ -72,53 +72,71 @@ defmodule Platform.Meetings.Completion do
         :ok
 
       meeting ->
-        resume(meeting.id)
-
-        Repo.all(
-          from(t in Transcript, where: t.space_id == ^space_id and t.status == "recording")
-        )
-        |> Enum.filter(&(&1.segments != [] and belongs_to_meeting?(&1, meeting)))
-        |> Enum.each(fn transcript ->
-          case Meetings.finalize_transcript(transcript.id) do
-            {:ok, finalized} -> Platform.Meetings.Summarizer.summarize_async(finalized)
-            _ -> :ok
-          end
+        Repo.transaction(fn ->
+          Meetings.lock_transcript_space(meeting)
+          finish_capture(meeting, space_id)
         end)
-
-        Repo.update_all(from(r in CompletionRun, where: r.meeting_id == ^meeting.id),
-          set: [capture_finished_at: DateTime.utc_now()]
-        )
-
-        resume(meeting.id)
     end
   end
 
-  def reopened(meeting_id) do
-    Repo.update_all(from(r in CompletionRun, where: r.meeting_id == ^meeting_id),
-      inc: [generation: 1],
-      set: [
-        capture_finished_at: nil,
-        dispatched_at: nil,
-        status: "waiting",
-        snapshot_hash: nil
-      ]
+  defp finish_capture(meeting, space_id) do
+    resume(meeting.id)
+
+    Repo.all(from(t in Transcript, where: t.space_id == ^space_id and t.status == "recording"))
+    |> Enum.filter(&(&1.segments != [] and belongs_to_meeting?(&1, meeting)))
+    |> Enum.each(fn transcript ->
+      case Meetings.finalize_transcript(transcript.id) do
+        {:ok, finalized} -> Platform.Meetings.Summarizer.summarize_async(finalized)
+        _ -> :ok
+      end
+    end)
+
+    Repo.update_all(
+      from(r in CompletionRun,
+        where: r.meeting_id == ^meeting.id and is_nil(r.capture_finished_at)
+      ),
+      set: [capture_finished_at: DateTime.utc_now()]
     )
 
-    if meeting = Repo.get(Meeting, meeting_id) do
-      ids =
+    resume(meeting.id)
+  end
+
+  # Called only inside the successful capture/segment write transaction. The
+  # space lock orders input writes against snapshots and callback acceptance.
+  def input_changed(%Transcript{} = transcript, opts \\ []) do
+    meeting =
+      if transcript.meeting_id do
+        Repo.get(Meeting, transcript.meeting_id)
+      else
         Repo.all(
-          from(t in Transcript,
-            where: t.space_id == ^meeting.chat_space_id and t.status != "complete"
+          from(m in Meeting,
+            where: m.chat_space_id == ^transcript.space_id,
+            order_by: [desc: m.started_at]
           )
         )
-        |> Enum.filter(&belongs_to_meeting?(&1, meeting))
-        |> Enum.map(& &1.id)
+        |> Enum.find(&belongs_to_meeting?(transcript, &1))
+      end
 
-      Repo.update_all(from(t in Transcript, where: t.id in ^ids),
-        inc: [summary_epoch: 1],
-        set: [summary_input_hash: nil, router_dispatched_at: nil]
-      )
-    end
+    if meeting, do: reopened(meeting.id, opts), else: :ok
+  end
+
+  def reopened(meeting_id, opts \\ []) do
+    locked(meeting_id, fn run ->
+      # Coalesce input within an already-open capture. Replayed capture starts
+      # do not mint a new callback identity, but a late append after a snapshot does.
+      if run.status != "waiting" or not is_nil(run.capture_finished_at) do
+        save(run,
+          generation: run.generation + 1,
+          capture_finished_at:
+            if(Keyword.get(opts, :capture_started, false), do: nil, else: run.capture_finished_at),
+          dispatched_at: nil,
+          status: "waiting",
+          snapshot_hash: nil
+        )
+      end
+
+      :ok
+    end)
 
     :ok
   end
@@ -375,6 +393,8 @@ defmodule Platform.Meetings.Completion do
   defp canvas_item_ids(list) when is_list(list), do: Enum.flat_map(list, &canvas_item_ids/1)
   defp canvas_item_ids(_), do: []
 
+  defp advance(%CompletionRun{status: "filed"} = run, _meeting), do: result(run)
+
   defp advance(run, meeting) do
     case if(run.capture_finished_at, do: snapshot(meeting), else: {:error, :capture_active}) do
       {:ok, snap, transcript} ->
@@ -552,6 +572,8 @@ defmodule Platform.Meetings.Completion do
 
   defp locked(meeting_id, fun) do
     case Repo.transaction(fn ->
+           Meetings.lock_transcript_space(Repo.get!(Meeting, meeting_id))
+
            case Repo.one(
                   from(r in CompletionRun, where: r.meeting_id == ^meeting_id, lock: "FOR UPDATE")
                 ) do

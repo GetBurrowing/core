@@ -241,14 +241,19 @@ defmodule Platform.Meetings.CompletionTest do
     refute Transcript.summary_current?(Meetings.get_transcript(transcript.id))
   end
 
-  test "meeting reopen fences old completion callbacks even if the transcript has not changed",
+  test "real capture reopen fences old completion callbacks even if speech has not changed",
        ctx do
     {meeting, original_run, _} = ready!(ctx.meeting)
     canvas = canvas!(meeting.chat_space_id, ctx.scribe)
     old_args = params(meeting, original_run, canvas)
     {:ok, live} = Meetings.resume_meeting(meeting)
+
+    {:ok, _capture} =
+      Meetings.reopen_transcript(Meetings.get_transcript(original_run.transcript_id))
+
     {:ok, ended} = Meetings.end_meeting(live)
     Completion.capture_finished_for_space(ended.chat_space_id)
+    complete_current!(original_run.transcript_id, "Refreshed capture summary")
     refreshed = run!(ended)
     assert refreshed.generation == original_run.generation + 1
     refute refreshed.snapshot_hash == original_run.snapshot_hash
@@ -522,14 +527,101 @@ defmodule Platform.Meetings.CompletionTest do
            ) == 1
   end
 
-  test "resuming a meeting clears the old capture fence", ctx do
+  defp filed!(ctx) do
     {meeting, run, _} = ready!(ctx.meeting)
-    assert run.capture_finished_at
+    canvas = canvas!(meeting.chat_space_id, ctx.scribe)
+    args = params(meeting, run, canvas)
+    assert {:ok, _} = Completion.scribe_complete(ctx.scribe.id, args)
+
+    assert {:ok, %{status: "filed"}} =
+             Completion.triage_file(ctx.triage.id, Map.put(args, "action_items", []))
+
+    {meeting, run!(meeting)}
+  end
+
+  test "resume, sweep and duplicate capture finish preserve a filed run without new input", ctx do
+    {meeting, run} = filed!(ctx)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_scribe_completion"}}
+    }
+
     {:ok, resumed} = Meetings.resume_meeting(meeting)
-    assert run!(meeting).capture_finished_at == nil
-    {:ok, _} = Meetings.end_meeting(resumed)
-    assert run!(meeting).status == "waiting"
-    assert run!(meeting).id == run.id
+    assert run!(meeting) == run
+    {:ok, ended} = Meetings.end_meeting(resumed)
+
+    for _ <- 1..2 do
+      Completion.capture_finished_for_space(ended.chat_space_id)
+      Completion.sweep()
+      Completion.transcript_changed(Meetings.get_transcript(run.transcript_id))
+    end
+
+    assert run!(meeting) == run
+
+    refute_receive %Phoenix.Socket.Broadcast{
+      payload: %{signal: %{reason: "meeting_scribe_completion"}}
+    }
+  end
+
+  test "real recording starts clear the capture fence but processing is not a speech fence",
+       ctx do
+    {meeting, run} = filed!(ctx)
+    {:ok, _live} = Meetings.resume_meeting(meeting)
+
+    room =
+      Repo.insert!(%Platform.Meetings.Room{
+        space_id: meeting.chat_space_id,
+        livekit_room_name: meeting.livekit_room_name
+      })
+
+    {:ok, recording} = Meetings.start_recording(room.id)
+    reopened = run!(meeting)
+    assert reopened.status == "waiting"
+    assert reopened.generation == run.generation + 1
+    assert is_nil(reopened.capture_finished_at)
+    assert reopened.id == run.id
+    assert reopened.canvas_id == run.canvas_id
+    assert reopened.item_results == run.item_results
+    {:ok, _} = Meetings.stop_recording(recording.id)
+    room |> Ecto.Changeset.change(status: "idle") |> Repo.update!()
+    {:ok, _} = Meetings.end_meeting(Meetings.get_meeting(meeting.id))
+    Completion.capture_finished_for_space(meeting.chat_space_id)
+    assert run!(meeting).status == "scribe_dispatched"
+  end
+
+  test "new capture transcript and duplicate reopen invalidate once and preserve summary epochs",
+       ctx do
+    {meeting, run} = filed!(ctx)
+    {:ok, live} = Meetings.resume_meeting(meeting)
+    attrs = %{space_id: meeting.chat_space_id, room_id: meeting.livekit_room_name}
+    {:ok, transcript} = Meetings.ensure_transcript(attrs)
+    assert transcript.meeting_id == live.id
+    reopened = run!(meeting)
+    assert reopened.generation == run.generation + 1
+    assert is_nil(reopened.capture_finished_at)
+    {:ok, same} = Meetings.ensure_transcript(attrs)
+    assert same.id == transcript.id
+    {:ok, same} = Meetings.reopen_transcript(same)
+    assert same.summary_epoch == transcript.summary_epoch
+    assert run!(meeting) == reopened
+  end
+
+  test "late segments reopen filed output, stable segment replay does not", ctx do
+    {meeting, run} = filed!(ctx)
+    transcript = Meetings.get_transcript(run.transcript_id)
+    input = segment("Late actual input", 42)
+    {:ok, changed} = Meetings.append_segment(transcript.id, input)
+    reopened = run!(meeting)
+    assert reopened.generation == run.generation + 1
+    assert reopened.status == "waiting"
+    assert reopened.capture_finished_at == run.capture_finished_at
+    assert reopened.canvas_id == run.canvas_id
+    assert reopened.item_results == run.item_results
+    {:ok, same} = Meetings.append_segment(transcript.id, input)
+    assert same.segments == changed.segments
+    assert run!(meeting) == reopened
+    complete_current!(transcript.id, "Summary with late input")
+    assert run!(meeting).status == "scribe_dispatched"
   end
 
   test "wrong role, live state and foreign canvas cannot file", ctx do
@@ -962,6 +1054,41 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
         :persistent_term.erase({recorder, :owner})
         Repo.delete_all(from(i in Platform.Inbox.Item, where: i.user_id in ^attendee_ids))
       end
+
+      # Real PostgreSQL connections prove appends and replayed capture-finish
+      # notifications serialize with the completion run, rather than the sandbox.
+      original = Platform.Meetings.get_transcript(run.transcript_id)
+
+      late =
+        for n <- 1..2,
+            do: %{"id" => Ecto.UUID.generate(), "text" => "Late #{n}", "start_time" => n + 10}
+
+      workers =
+        for input <- late do
+          Elixir.Task.async(fn ->
+            :ok = Sandbox.checkout(Repo, sandbox: false)
+
+            try do
+              Platform.Meetings.append_segment(original.id, input)
+            after
+              Sandbox.checkin(Repo)
+            end
+          end)
+        end
+
+      assert Enum.all?(Enum.map(workers, &Elixir.Task.await(&1, 30_000)), &match?({:ok, _}, &1))
+      updated = Platform.Meetings.get_transcript(original.id)
+      assert length(updated.segments) == length(original.segments) + 2
+
+      assert Enum.all?(late, fn input ->
+               Enum.any?(updated.segments, &(&1["id"] == input["id"]))
+             end)
+
+      changed = Repo.get!(Platform.Meetings.CompletionRun, run.id)
+      assert changed.generation > run.generation
+      assert changed.status == "waiting"
+      assert changed.canvas_id == run.canvas_id
+      assert changed.item_results != %{}
 
       Platform.Chat.Canvas.Server.stop(canvas.id)
     after

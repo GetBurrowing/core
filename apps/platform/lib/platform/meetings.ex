@@ -1111,7 +1111,6 @@ defmodule Platform.Meetings do
           {:meeting_resumed, updated}
         )
 
-        Platform.Meetings.Completion.reopened(updated.id)
         ok
 
       error ->
@@ -4856,9 +4855,20 @@ defmodule Platform.Meetings do
         })
 
       result =
-        %Recording{}
-        |> Recording.changeset(recording_attrs)
-        |> Repo.insert()
+        Repo.transaction(fn ->
+          lock_transcript_space(room.space_id)
+
+          recording =
+            case %Recording{} |> Recording.changeset(recording_attrs) |> Repo.insert() do
+              {:ok, recording} -> recording
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          if owner = transcript_meeting_at(room.space_id, DateTime.utc_now()),
+            do: Platform.Meetings.Completion.reopened(owner.id, capture_started: true)
+
+          recording
+        end)
 
       with {:ok, _recording} <- result do
         room
@@ -4956,9 +4966,23 @@ defmodule Platform.Meetings do
       |> Map.put("started_at", started_at)
       |> Map.put("meeting_id", if(owner, do: owner.id))
 
-    %Transcript{}
-    |> Transcript.changeset(attrs)
-    |> Repo.insert()
+    Repo.transaction(fn ->
+      lock_transcript_space(attrs["space_id"])
+
+      transcript =
+        case %Transcript{} |> Transcript.changeset(attrs) |> Repo.insert() do
+          {:ok, transcript} -> transcript
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+
+      if transcript.status == "recording" or transcript.segments != [],
+        do:
+          Platform.Meetings.Completion.input_changed(transcript,
+            capture_started: transcript.status == "recording"
+          )
+
+      transcript
+    end)
   end
 
   @doc """
@@ -5362,7 +5386,18 @@ defmodule Platform.Meetings do
   of that index is a decision, not an oversight.
   """
   @spec ensure_transcript(map()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
-  def ensure_transcript(%{room_id: room_id} = attrs) do
+  def ensure_transcript(%{room_id: _room_id} = attrs) do
+    Repo.transaction(fn ->
+      lock_transcript_space(Map.get(attrs, :space_id))
+
+      case do_ensure_transcript(attrs) do
+        {:ok, transcript} -> transcript
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  defp do_ensure_transcript(%{room_id: room_id} = attrs) do
     started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
     owner = transcript_meeting_at(Map.get(attrs, :space_id), started_at)
 
@@ -5456,16 +5491,24 @@ defmodule Platform.Meetings do
       lock_transcript_space(get_transcript(id))
       transcript = Repo.one!(from(t in Transcript, where: t.id == ^id, lock: "FOR UPDATE"))
 
-      transcript
-      |> Ecto.Changeset.change(
-        status: "recording",
-        completed_at: nil,
-        summary_input_hash: nil,
-        summary_epoch: transcript.summary_epoch + 1,
-        router_dispatched_at: nil,
-        failure_reason: nil
-      )
-      |> Repo.update!()
+      if transcript.status == "recording" do
+        transcript
+      else
+        updated =
+          transcript
+          |> Ecto.Changeset.change(
+            status: "recording",
+            completed_at: nil,
+            summary_input_hash: nil,
+            summary_epoch: transcript.summary_epoch + 1,
+            router_dispatched_at: nil,
+            failure_reason: nil
+          )
+          |> Repo.update!()
+
+        Platform.Meetings.Completion.input_changed(updated, capture_started: true)
+        updated
+      end
     end)
   end
 
@@ -5724,34 +5767,42 @@ defmodule Platform.Meetings do
             Repo.rollback(:not_found)
 
           transcript ->
-            segment = enrich_speaker_name(segment, transcript)
+            if Enum.any?(transcript.segments || [], &(&1["id"] == segment["id"])) do
+              {transcript, segment, :duplicate}
+            else
+              segment = enrich_speaker_name(segment, transcript)
 
-            owner =
-              if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
-                do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
+              owner =
+                if is_nil(transcript.meeting_id) and (transcript.segments || []) == [],
+                  do: transcript_meeting_at(transcript.space_id, segment["spoken_at"])
 
-            refresh? = transcript.status in ["complete", "processing", "failed"]
-            changes = %{segments: (transcript.segments || []) ++ [segment]}
-            changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
+              refresh? = transcript.status in ["complete", "processing", "failed"]
+              changes = %{segments: (transcript.segments || []) ++ [segment]}
+              changes = if owner, do: Map.put(changes, :meeting_id, owner.id), else: changes
 
-            changes =
-              if refresh?,
-                do:
-                  Map.merge(changes, %{
-                    status: "processing",
-                    summary_input_hash: nil,
-                    completed_at: nil,
-                    router_dispatched_at: nil,
-                    failure_reason: nil
-                  }),
-                else: changes
+              changes =
+                if refresh?,
+                  do:
+                    Map.merge(changes, %{
+                      status: "processing",
+                      summary_input_hash: nil,
+                      completed_at: nil,
+                      router_dispatched_at: nil,
+                      failure_reason: nil
+                    }),
+                  else: changes
 
-            updated = transcript |> Ecto.Changeset.change(changes) |> Repo.update!()
-            {updated, segment, refresh?}
+              updated = transcript |> Ecto.Changeset.change(changes) |> Repo.update!()
+              Platform.Meetings.Completion.input_changed(updated)
+              {updated, segment, refresh?}
+            end
         end
       end)
 
     case result do
+      {:ok, {updated, _segment, :duplicate}} ->
+        {:ok, updated}
+
       {:ok, {updated, segment, refresh?}} ->
         Platform.Meetings.PubSub.broadcast_transcript_chunk(updated.room_id, %{
           room_id: updated.room_id,
