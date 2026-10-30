@@ -193,6 +193,23 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
     })
   end
 
+  # A guest chosen by NAME: `invite_guest/2` needs only a display name, so
+  # no email-only path is required (task 01a18d0a-ec37 stage 2). A blank
+  # name writes nothing.
+  def deliver(meeting, "guest", %{"name" => name}, _candidates, inviter_user_id) do
+    case String.trim(to_string(name)) do
+      "" ->
+        {:error, :blank_name}
+
+      trimmed ->
+        Meetings.invite_guest(meeting, %{
+          display_name: trimmed,
+          email: nil,
+          host_user_id: inviter_user_id
+        })
+    end
+  end
+
   def deliver(meeting, "external", %{"email" => email}, _candidates, _inviter_user_id) do
     address = email |> to_string() |> String.trim()
 

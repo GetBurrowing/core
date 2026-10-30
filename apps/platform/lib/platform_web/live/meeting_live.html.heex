@@ -2893,6 +2893,7 @@
               now={assigns[:agent_activity_now]}
               invite_rows={assigns[:invite_rows] || []}
               invite_event={if is_binary(assigns[:user_id]), do: "meeting_invite_agent"}
+              human_invite={MeetingHumanInvite.rail_state(assigns, "meeting-call-rail")}
               candidates={@meeting_candidates}
               candidates_closed={@meeting_candidates_closed}
               candidate_events={@meeting_candidate_events}

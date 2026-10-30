@@ -167,8 +167,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   use Phoenix.Component
 
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
+  alias PlatformWeb.Components.Meetings.InviteControl
 
   import PlatformWeb.AvatarComponents
+  import PlatformWeb.CoreComponents, only: [chip: 1]
   import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   alias Platform.Agents.Agent
@@ -426,6 +428,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     ran), so this draws as its OWN list item rather than literally the
     departed row staying in place — same undo, same 8-second window,
     different presentation of the same fact.
+    """
+  )
+
+  attr(:human_invite, :map,
+    default: nil,
+    doc: """
+    The name-first Invite control's state (task 01a18d0a-ec37 stage 2), from
+    `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`, or `nil` for no
+    control. When set, `InviteControl.human_invite/1` renders INSIDE the
+    humans section, after the rows (and after the empty state when there are
+    none), so the person invited appears in the list they were invited
+    from. `CallShell.call_rail/1` forwards it; the desktop left rail passes
+    nothing, so the control exists once per document.
     """
   )
 
@@ -1002,11 +1017,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               class="flex-shrink-0"
             />
             <div class="min-w-0 flex-1">
-              <div
-                class="truncate text-xs font-medium text-base-content"
-                data-role="participant-name"
-              >
-                {p.display_name || "Unknown participant"}
+              <div class="flex min-w-0 items-center gap-1.5">
+                <div
+                  class="truncate text-xs font-medium text-base-content"
+                  data-role="participant-name"
+                >
+                  {p.display_name || "Unknown participant"}
+                </div>
+                <%!-- The info Guest badge (design canvas 01a18d0b-4f5a): the
+                     same badge the human invite control's guest row and
+                     result carry, so the person invited as a guest reads the
+                     same once they are in the list. --%>
+                <.chip
+                  :if={MeetingLive.via_guest_link?(p)}
+                  tone="info"
+                  class="shrink-0 text-[10px]"
+                  data-role="participant-guest-badge"
+                >
+                  Guest
+                </.chip>
               </div>
               <%!-- Stage 4 of task 019f2483: participants joined via a
                    guest invite carry a `" (guest)"` suffix on their
@@ -1053,6 +1082,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             No people yet.
           </li>
         </ul>
+
+        <InviteControl.human_invite :if={@human_invite} state={@human_invite} />
       </section>
 
       <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0 ("Design direction:

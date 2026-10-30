@@ -33,17 +33,32 @@ function execCommandCopy(text) {
   }
 }
 
+// Shows the outcome of one copy on the button. `data-copy-state` is
+// "copied" only when the text reached the clipboard and "failed" otherwise,
+// so a style keyed on it (the call rail's guest link turns `success` on
+// "copied") can never claim a copy that did not happen. The success label
+// defaults to "Copied!" and a button can name its own with
+// `data-copied-label`. Returns the label to restore.
+export function showCopyResult(el, ok) {
+  const original = el.dataset.copyLabel ?? el.innerText
+  el.dataset.copyLabel = original
+  el.dataset.copyState = ok ? "copied" : "failed"
+  el.innerText = ok ? (el.dataset.copiedLabel || "Copied!") : "Couldn't copy"
+  return original
+}
+
+export function resetCopyResult(el, original) {
+  el.innerText = original
+  delete el.dataset.copyState
+}
+
 const CopyToClipboard = {
   mounted() {
     this.el.addEventListener("click", async () => {
       const ok = await copyText(this.el.dataset.clipboardText || "")
-      const original = this.el.dataset.copyLabel ?? this.el.innerText
-      this.el.dataset.copyLabel = original
-      this.el.innerText = ok ? "Copied!" : "Couldn't copy"
+      const original = showCopyResult(this.el, ok)
       clearTimeout(this.timer)
-      this.timer = setTimeout(() => {
-        this.el.innerText = original
-      }, 2000)
+      this.timer = setTimeout(() => resetCopyResult(this.el, original), 2000)
     })
   },
 }

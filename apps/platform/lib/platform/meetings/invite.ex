@@ -113,8 +113,16 @@ defmodule Platform.Meetings.Invite do
   @cast_fields ~w(meeting_id user_id display_name email expires_at revoked_at
                   delivered_at delivery_carrier delivery_space_id)a
 
+  # The same predicate `Platform.Accounts.User.changeset/2` validates `:email`
+  # with, and the one `Meetings.resolve_invite_candidates/2` offers an address
+  # under. Checked only when an email is present: a guest invite needs no
+  # address at all (task 01a18d0a-ec37 stage 2, "+ Add email (optional)").
+  @email_format ~r/^[^\s]+@[^\s]+$/
+
   @doc """
   Changeset for creating or updating an invite.
+
+  `email` is optional; when given it must look like an address (`@email_format`).
 
   `meeting_id` is the only required field at the changeset level. The
   "who is this?" rule — a row must carry either a `user_id` or a
@@ -126,6 +134,7 @@ defmodule Platform.Meetings.Invite do
     invite
     |> cast(attrs, @cast_fields)
     |> validate_required([:meeting_id])
+    |> validate_format(:email, @email_format, message: "must be an email address")
     |> check_constraint(:display_name, name: :meeting_invites_identity_check)
     |> unique_constraint([:meeting_id, :user_id])
     |> unique_constraint(:short_code, name: :meeting_invites_short_code_index)

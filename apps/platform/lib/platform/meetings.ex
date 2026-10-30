@@ -2463,6 +2463,63 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── In-call human invites (task 01a18d0a-ec37 stage 2) ───────────────────
+
+  @doc """
+  Whether `user` may invite people into `meeting` from inside the live call.
+
+  Not host-only: any signed-in human with access to the meeting may invite.
+  Access is either of the two rules the call surfaces already admit on:
+
+    * a `chat_participants` row in the meeting's bound space
+      (`SpaceAccess.authorize_writer/2`), which is how a quickmeet caller and
+      every room participant got into the call, or
+    * the meeting listing rule (`get_meeting_for_user/2`), which is how a
+      `/meetings/:slug` viewer got onto the page.
+
+  A `nil` user (an anonymous guest) and a user record with no binary id are
+  refused before any query.
+  """
+  @spec human_inviter?(Meeting.t() | nil, map() | nil) :: boolean()
+  def human_inviter?(%Meeting{} = meeting, %{id: user_id} = user) when is_binary(user_id) do
+    space_member? =
+      is_binary(meeting.chat_space_id) and
+        match?({:ok, _}, SpaceAccess.authorize_writer(meeting.chat_space_id, {:user, user_id}))
+
+    space_member? or match?({:ok, _}, get_meeting_for_user(user, meeting.id))
+  end
+
+  def human_inviter?(_meeting, _user), do: false
+
+  @doc """
+  Record an email address on an EXISTING guest invite ("+ Add email
+  (optional)" in the call's human invite control).
+
+  The row is the one `invite_guest/2` returned, held by the caller; nothing is
+  looked up. It must belong to `meeting` and be a guest row (`user_id` nil),
+  or this raises `FunctionClauseError` naming the shape. The address goes
+  through `Invite.changeset/2`, so a malformed one answers
+  `{:error, changeset}` and leaves the invite (and its link) untouched. A row
+  deleted in the meantime answers `{:error, changeset}` with the error on
+  `:id` rather than raising.
+
+  No delivery is attempted: there is no outbound email path in this
+  repository (see `Platform.Meetings.InviteDelivery`), so the address is
+  recorded on the row, not sent to.
+  """
+  @spec add_guest_invite_email(Meeting.t(), Invite.t(), term()) ::
+          {:ok, Invite.t()} | {:error, Ecto.Changeset.t()}
+  def add_guest_invite_email(
+        %Meeting{id: meeting_id},
+        %Invite{meeting_id: meeting_id, user_id: nil} = invite,
+        email
+      ) do
+    invite
+    |> Invite.changeset(%{email: email |> to_string() |> String.trim()})
+    |> Ecto.Changeset.validate_required([:email], message: "enter an email address")
+    |> Repo.update(stale_error_field: :id)
+  end
+
   # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
   #
   # One input from the host's picker has to answer three questions — is this
