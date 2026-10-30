@@ -283,6 +283,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.ChatLive.MeetingHooks
+  alias PlatformWeb.ChatLive.MeetingHumanInvite
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.MeetingLive.LiveInvites
@@ -8641,6 +8642,27 @@ defmodule PlatformWeb.MeetingLive do
       subtitle: "expires in #{Meetings.guest_invite_default_expiry_hours()}h",
       avatar_url: nil
     }
+  end
+
+  # A guest chosen by NAME (task 01a18d0a-ec37 stage 2): no address, so
+  # `deliver_draft_invite/2` mints the link with `email: nil`. A blank name
+  # stages nothing a host could not see, so it raises like any forged event.
+  defp build_draft_invite("guest", %{"name" => name}, _socket) do
+    case String.trim(to_string(name)) do
+      "" ->
+        raise ArgumentError, "cannot stage a guest with a blank name"
+
+      trimmed ->
+        %{
+          id: "guest-name:" <> trimmed,
+          kind: :guest,
+          user_id: nil,
+          email: nil,
+          display_name: trimmed,
+          subtitle: "expires in #{Meetings.guest_invite_default_expiry_hours()}h",
+          avatar_url: nil
+        }
+    end
   end
 
   defp build_draft_invite("external", %{"email" => email}, _socket) do

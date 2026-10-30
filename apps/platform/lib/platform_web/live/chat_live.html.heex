@@ -541,6 +541,9 @@
       candidate_error={@candidate_error}
       candidate_order={@candidate_order}
       captions_available={@meetings_enabled}
+      human_invite={
+        PlatformWeb.ChatLive.MeetingHumanInvite.rail_state(assigns, "quickmeet-call-rail")
+      }
     />
   </div>
 

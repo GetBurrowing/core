@@ -568,6 +568,18 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   )
 
+  attr(:human_invite, :map,
+    default: nil,
+    doc: """
+    Forwarded to `ParticipantRail.participant_rail/1` (task 01a18d0a-ec37
+    stage 2): the name-first human Invite control's state from
+    `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`, or `nil` for no
+    control. Both callers (`/meetings` and the quickmeet) pass it, so the
+    desktop rail, the phone sheet and the quickmeet render one control with
+    one behaviour.
+    """
+  )
+
   # ── Canvas pane ──────────────────────────────────────────────────
   attr(:candidates, :list, default: [])
   attr(:candidates_closed, :list, default: [])
@@ -815,6 +827,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               mute_errors={@mute_errors}
               kick_confirm_id={@kick_confirm_id}
               agent_removal_undo={@agent_removal_undo}
+              human_invite={@human_invite}
             />
             {render_slot(@people_extra)}
             <.invite_section
