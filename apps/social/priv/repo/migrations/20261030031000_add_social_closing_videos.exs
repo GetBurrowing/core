@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.AddSocialClosingVideos do
+  @moduledoc """
+  Task 01a18ab6: stores typed show closing-video defaults and durable asset
+  provenance so replaced or canceled closing uploads never become episodes.
+  """
   use Ecto.Migration
 
   def change do
