@@ -251,6 +251,8 @@ defmodule PlatformWeb.SocialCardLiveTest do
       from(p in Post, where: p.id == ^ctx.post.id),
       set: [
         status: "approved",
+        # This fixture represents a refusal BEFORE a vendor post was created.
+        external_id: nil,
         refused_reason: "media_rejected",
         refused_at: DateTime.utc_now(),
         error: "Instagram Reels need a Business or Creator account."

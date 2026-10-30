@@ -87,6 +87,140 @@ defmodule Platform.Social.Publisher.ZernioTest do
     Req.Test.stub(Zernio, fn _conn -> flunk("a request reached Zernio without credentials") end)
   end
 
+  test "Fake retry records the existing id and consumes programmed account outcomes", ctx do
+    alias Platform.Social.Publisher.Fake
+    {_, account} = account!(ctx.org_id, "linkedin")
+    Fake.reset()
+    on_exit(fn -> Fake.reset() end)
+    Fake.put_next_for(account.id, :retry, {:error, :retry_refused})
+    assert {:error, :retry_refused} = Fake.retry(account, "zp_existing")
+
+    assert {:ok, %{external_id: "zp_existing", status: :scheduled}} =
+             Fake.retry(account, "zp_existing")
+
+    assert [{:retry, [^account, "zp_existing"], _}, {:retry, [^account, "zp_existing"], _}] =
+             Fake.calls(:retry)
+  end
+
+  describe "retry/2 existing post" do
+    test "POST existing retry has bearer auth, no body or create idempotency key", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+
+      Req.Test.expect(Zernio, fn conn ->
+        assert conn.method == "POST"
+        assert conn.request_path == "/api/v1/posts/zp_existing/retry"
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer " <> @key]
+        assert Plug.Conn.get_req_header(conn, "idempotency-key") == []
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert raw == ""
+
+        Req.Test.json(conn, %{
+          post: %{
+            status: "published",
+            platforms: [
+              %{
+                accountId: %{_id: "zacct_1"},
+                status: "published",
+                platformPostId: "native_1",
+                platformPostUrl: "https://example.test/p/1"
+              }
+            ]
+          }
+        })
+      end)
+
+      assert {:ok,
+              %{
+                external_id: "zp_existing",
+                status: :published,
+                platform_post_id: "native_1",
+                external_url: "https://example.test/p/1",
+                error: nil
+              }} = Zernio.retry(account, "zp_existing")
+    end
+
+    test "207 failed, partial and scheduled inspect our account including populated ids", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+
+      for {post_status, entry_status, expected} <- [
+            {"failed", "failed", :failed},
+            {"partial", "failed", :failed},
+            {"partial", "published", :published},
+            {"scheduled", "failed", :scheduled}
+          ] do
+        Req.Test.stub(Zernio, fn conn ->
+          conn
+          |> Plug.Conn.put_status(207)
+          |> Req.Test.json(%{
+            post: %{
+              status: post_status,
+              platforms: [
+                %{accountId: "other", status: "published", platformPostId: "other_native"},
+                %{
+                  accountId: %{_id: "zacct_1"},
+                  status: entry_status,
+                  errorMessage: "platform refused"
+                }
+              ]
+            }
+          })
+        end)
+
+        assert {:ok, result} = Zernio.retry(account, "zp_existing")
+        assert result.status == expected
+        assert result.external_id == "zp_existing"
+        assert result.platform_post_id == nil
+        assert result.error == if(expected == :failed, do: "platform refused", else: nil)
+      end
+    end
+
+    test "string account id works but a lone other account is never adopted", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+
+      for ref <- ["zacct_1", "other"] do
+        Req.Test.stub(Zernio, fn conn ->
+          Req.Test.json(conn, %{
+            post: %{status: "published", platforms: [%{accountId: ref, status: "published"}]}
+          })
+        end)
+
+        result = Zernio.retry(account, "zp_existing")
+
+        if ref == "zacct_1",
+          do: assert(match?({:ok, %{status: :published}}, result)),
+          else: assert(result == {:error, :unexpected_response})
+      end
+    end
+
+    test "missing credentials sends no retry request", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      refuse_any_request()
+      assert {:error, :credentials_unavailable} = Zernio.retry(account, "zp_existing")
+    end
+
+    test "429 and 409 are not automatically retried or classified as create dedup", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+
+      for code <- [429, 409] do
+        Req.Test.expect(Zernio, fn conn ->
+          conn |> Plug.Conn.put_status(code) |> Req.Test.json(%{error: "retry already running"})
+        end)
+
+        result = Zernio.retry(account, "zp_existing")
+
+        if code == 429 do
+          assert result == {:error, :rate_limited}
+        else
+          assert result == {:error, "Zernio refused the retry (HTTP 409): retry already running"}
+        end
+      end
+    end
+  end
+
   describe "publish/2 request mapping" do
     test "linkedin: POST /v1/posts with Bearer, Idempotency-Key and publishNow", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
