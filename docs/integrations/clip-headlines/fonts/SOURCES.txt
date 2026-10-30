@@ -1,0 +1,26 @@
+Bundled caption fonts — provenance and licences
+================================================
+
+Every font here is licensed under the SIL Open Font License 1.1 (OFL-1.1).
+The OFL permits bundling and redistribution with software as long as the
+licence text travels with the font and the font is not sold on its own.
+
+Anton-Regular.ttf
+  Use:      "bold-pop" caption preset (the original look) and the default
+            caption font
+  Version:  2.116 (name table)
+  Source:   Google Fonts, https://github.com/googlefonts/AntonFont
+  Licence:  OFL-1.1, text in Anton-OFL.txt
+            (fetched from https://raw.githubusercontent.com/google/fonts/main/ofl/anton/OFL.txt)
+  SHA-256:  a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab
+
+Inter-SemiBold.ttf
+  Use:      "podcast-clean" / "speaker-color" presets, and the glyph-coverage
+            fallback for any font that lacks a character (Latin, Latin
+            Extended, Greek, Cyrillic)
+  Version:  4.001 (release v4.1)
+  Source:   https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+            (zip SHA-256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e),
+            file extras/ttf/Inter-SemiBold.ttf, unmodified
+  Licence:  OFL-1.1, text in Inter-OFL.txt (LICENSE.txt from the same zip)
+  SHA-256:  78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3

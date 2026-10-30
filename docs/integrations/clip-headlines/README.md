@@ -1,5 +1,9 @@
 # Shared clip headline contract v1
 
+The reusable Chrome Hook, Neon Broadcast and Arcade Punch extension, isolated
+installer and actual-source sample checks are documented in [TEMPLATES.md](TEMPLATES.md).
+The existing headline-review/1 text policy below remains the generation boundary.
+
 Task: 01a17e37-6f5f-7000-b57b-564bc84dbf2d, stage 1.
 
 This artifact extends JackEFoster/htc-clip-tool commit
