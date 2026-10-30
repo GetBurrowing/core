@@ -336,7 +336,7 @@ def _rules(m, bad, errors, present=frozenset()):
             add(
                 "vapid_requires_single_host",
                 "push.vapid",
-                'generate-on-host runs bin/burrow-vapid from the stack unit, which only '
+                "generate-on-host runs bin/burrow-vapid from the stack unit, which only "
                 'target = "single-host" renders',
             )
         if "host.ssh_authorized_key" in present:

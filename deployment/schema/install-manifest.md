@@ -387,4 +387,4 @@ stdout is one JSON document, `{"ok": true, "admin": "created"|"exists", "link_fi
 link and the API key are never printed. A re-run mints a fresh link. Exit codes: `0` ok, `1`
 pocket-id unreachable or erroring (`{"ok": false, "error": ..., "kind": ...}`, `kind` being the
 connection class such as `connection_refused`, or `http`), `2` usage (including an API key file
-readable by anyone but its owner). `python3 -m suite_install bootstrap-admin` runs the same command.
+readable by anyone but its owner).

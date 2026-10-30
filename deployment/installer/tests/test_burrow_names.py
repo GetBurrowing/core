@@ -166,6 +166,7 @@ ALLOWLIST = (
     # suite-cli-owned names (stage 2 deferred them).
     Allow("burrow_install/agents.py", "_AGENT_SESSION=suite-agent", CLI_SESSION),
     Allow("tests/golden/single-host-agents-full/", "_AGENT_SESSION=suite-agent", CLI_SESSION),
+    Allow("tests/golden/do-droplet/", "_AGENT_SESSION=suite-agent", CLI_SESSION),
     # The pre-rename upgrade (stage 4). The scripts define each legacy name once,
     # on a line carrying MIGRATE_MARK; every render embeds the script, so the
     # goldens carry the same lines.
@@ -175,6 +176,7 @@ ALLOWLIST = (
     Allow("tests/golden/single-host-agents-contained/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/single-host-agents-full/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/single-host-memory-off/", MIGRATE_MARK, MIGRATE),
+    Allow("tests/golden/do-droplet/", MIGRATE_MARK, MIGRATE),
     Allow(
         "burrow_install/setup/migrate.py",
         'LEGACY_BACKUP_ROOT = "SuiteBackups"',

@@ -392,9 +392,8 @@ class VapidScriptTest(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual(self.run_script(other).returncode, 0)
         mine = self.keys()["VAPID_PRIVATE_KEY"]
-        theirs = dict(
-            line.split("=", 1) for line in env_lines(other) if line.startswith("VAPID_")
-        )["VAPID_PRIVATE_KEY"]
+        pairs_ = (line.split("=", 1) for line in env_lines(other) if line.startswith("VAPID_"))
+        theirs = dict(pairs_)["VAPID_PRIVATE_KEY"]
         self.assertTrue(mine != theirs)
 
     def test_missing_secrets_env_fails_and_creates_nothing(self):
@@ -534,22 +533,19 @@ class BootstrapAdminTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.link_file))
 
     def test_runs_as_the_documented_module_command(self):
-        # Both entry points: burrow_install, and the suite_install shim.
         env = dict(os.environ, PYTHONPATH=INSTALLER)
-        for module in ("burrow_install", "suite_install"):
-            with self.subTest(module=module):
-                proc = subprocess.run(
-                    [sys.executable, "-m", module, "bootstrap-admin", "--base", self.fake.url]
-                    + ["--api-key-file", self.key_file, "--email", EMAIL]
-                    + ["--link-file", self.link_file],
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    check=False,
-                )
-                self.assertEqual(proc.returncode, 0, proc.stdout)
-                self.assertTrue(json.loads(proc.stdout)["ok"])
-                self.assertEqual(self.secret_hits(proc.stdout + proc.stderr), [])
+        proc = subprocess.run(
+            [sys.executable, "-m", "burrow_install", "bootstrap-admin", "--base", self.fake.url]
+            + ["--api-key-file", self.key_file, "--email", EMAIL]
+            + ["--link-file", self.link_file],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertTrue(json.loads(proc.stdout)["ok"])
+        self.assertEqual(self.secret_hits(proc.stdout + proc.stderr), [])
 
 
 if __name__ == "__main__":
