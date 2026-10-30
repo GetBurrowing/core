@@ -40,6 +40,12 @@ defmodule Platform.Social.Profile do
     # Clip Studio 1/9: the show's default clip look (`Platform.Social.ClipLook`),
     # possibly partial. Not editable here: ClipJobs.save_show_default writes it.
     field(:show_look, :map, default: %{})
+
+    embeds_one(:closing_video, Platform.Social.ClosingVideoSettings,
+      on_replace: :update,
+      defaults_to_struct: true
+    )
+
     # Social authoring 4/11: the brand's clock (IANA), structured voice, who
     # is notified (a subset of the approvers) and the drafting agent.
     field(:timezone, :string, default: "Etc/UTC")

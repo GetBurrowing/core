@@ -367,6 +367,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/federation/tool_surface.ex", :get, "Task", 1, :safe_internal,
      "ADR-0046 member 7 / task 019fa504 stage 2: `design_decline_task/1` behind `task_design_decline`. The agent-supplied task_id is gated by Platform.UUID.cast/1 in the same `with`, so Repo.get receives a canonical uuid or is never reached. The lookup exists HERE rather than being delegated to `PreplanStep.decline/3` (which resolves its own id) because `decline/3` collapses an unknown task and an already-closed step into the same `{:ok, :noop}` — resolving first is what lets the tool refuse `task_not_found` distinctly from `step_not_open`"},
     # ── Files ──────────────────────────────────────────────────────────
+    {"platform/files.ex", :get, "File", 1, :safe_internal,
+     "add_bytes_registered/6 rollback cleanup reads file.id from the Files.add_bytes/5 persisted or deduplicated %File{} row, whose UUIDv7 primary key was generated or loaded by Ecto; no caller-supplied id reaches this lookup (task 01a18ab6)"},
     {"platform/files.ex", :get, "Text", 1, :safe_internal,
      "fetch_extracted_text/1 checks Platform.UUID.valid?/1. Files.Text keys on a bare :binary_id, so before the guard a 16-byte binary returned nil silently while \"higgins\" raised — one lookup, two symptoms"},
     {"platform/files.ex", :get, "~q:File", 1, :safe_internal,

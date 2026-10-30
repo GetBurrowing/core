@@ -80,7 +80,7 @@ defmodule Platform.Social.Renderer.Ffmpeg do
          {:ok, json} <-
            run(
              ffprobe,
-             ~w(-v error -show_entries format=duration:stream=codec_type,codec_name,width,height -of json) ++
+             ~w(-v error -show_entries format=duration,format_name:stream=codec_type,codec_name,width,height -of json) ++
                [path],
              60_000
            ),
@@ -98,6 +98,7 @@ defmodule Platform.Social.Renderer.Ffmpeg do
         {v, duration} ->
           {:ok,
            %{
+             format_name: get_in(decoded, ["format", "format_name"]),
              duration_s: duration,
              width: v["width"],
              height: v["height"],

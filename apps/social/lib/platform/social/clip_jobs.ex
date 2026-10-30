@@ -80,7 +80,7 @@ defmodule Platform.Social.ClipJobs do
       pipeline = Repo.get(Platform.Social.EpisodePipeline, pipeline_id)
       profile = pipeline && Repo.get(Profile, pipeline.profile_id)
 
-      source = Platform.Files.get_file(source_file_id)
+      source = Platform.Social.ClipClosingVideo.lock_file(source_file_id)
 
       project = profile && Repo.get(Platform.Tasks.Project, profile.project_id)
 

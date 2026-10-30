@@ -116,6 +116,48 @@ defmodule Platform.Files do
     end
   end
 
+  @doc """
+  Persist bytes and a caller's database registration atomically. The callback runs
+  before the finalized row is visible and returns `{:ok, value}` or `{:error, reason}`.
+  On rollback, remove only a newly allocated object, never a deduplicated sibling.
+  This keeps compensating storage cleanup inside the Files boundary.
+  """
+  def add_bytes_registered(project, bytes, filename, content_type, opts, register) do
+    result =
+      Repo.transaction(fn ->
+        case add_bytes(project, bytes, filename, content_type, Keyword.put(opts, :ingest, false)) do
+          {:ok, file, dedup?} ->
+            registration =
+              try do
+                register.(file)
+              rescue
+                _ -> {:error, :registration_failed}
+              catch
+                _, _ -> {:error, :registration_failed}
+              end
+
+            case registration do
+              {:ok, value} -> value
+              {:error, reason} -> Repo.rollback({:registration_failed, reason, file, dedup?})
+            end
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:error, {:registration_failed, reason, file, dedup?}} ->
+        unless dedup? or Repo.get(File, file.id),
+          do: Platform.Files.Storage.delete(file.storage_key)
+
+        {:error, reason}
+
+      other ->
+        other
+    end
+  end
+
   defp insert_added_bytes(project, filename, content_type, size, storage_key, hash, opts) do
     attrs = %{
       project_id: project.id,
