@@ -461,7 +461,10 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       on_exit(fn -> Platform.Meetings.State.broadcast_left(int.id) end)
 
       room = Repo.get_by(Room, space_id: meeting.chat_space_id)
-      assert [%{user_id: user_id}] = Repo.all(from(p in Participant, where: p.room_id == ^room.id))
+
+      assert [%{user_id: user_id}] =
+               Repo.all(from(p in Participant, where: p.room_id == ^room.id))
+
       assert user_id == int.id
     end
 

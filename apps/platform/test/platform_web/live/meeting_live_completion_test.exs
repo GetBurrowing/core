@@ -156,6 +156,7 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     # no second live participant row.
     render_click(view, "meeting_join", %{})
     assert_push_event(view, "join-meeting", %{room_name: room_name})
+
     assert [%Room{livekit_room_name: ^room_name}] =
              Repo.all(from(r in Room, where: r.space_id == ^ctx.meeting.chat_space_id))
 

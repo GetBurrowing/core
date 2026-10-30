@@ -393,6 +393,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -478,6 +479,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       {:ok, view, _html} =
         conn |> login(user!("ack-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -510,6 +512,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       {:ok, view, _html} =
         conn |> login(user!("ack-ok-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -533,6 +536,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       {:ok, view, _html} =
         conn |> login(user!("ack-retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -616,6 +620,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("orphan-capability")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -1548,6 +1553,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("forger")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       # Auto-join has landed: the room is active, so the only thing between
@@ -1891,6 +1897,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("voice-offline-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
@@ -1920,6 +1927,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("orphan-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
       join_call!(view)
 
       _ = render(view)
