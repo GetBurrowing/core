@@ -5817,7 +5817,12 @@ defmodule PlatformWeb.MeetingLiveTest do
 
         # …with its own link, minted for the row that was just written.
         assert [url] = surface |> copy_controls() |> LazyHTML.attribute("data-clipboard-text")
-        assert {:ok, payload} = GuestInvite.verify(guest_token(url))
+        # A row written by `invite_guest/2` carries a short code, so its link
+        # is `/g/<code>` (task 01a18d0a-ec37); the token behind it is
+        # re-minted from the row.
+        assert %URI{path: "/g/" <> code} = URI.parse(url)
+        assert {:ok, %{token: token}} = Meetings.resolve_guest_short_code(code)
+        assert {:ok, payload} = GuestInvite.verify(token)
         assert payload.invite_id == invite.id
       end
     end
