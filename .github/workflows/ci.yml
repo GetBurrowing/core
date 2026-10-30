@@ -1159,7 +1159,6 @@ jobs:
         # does not have.
         run: |
           export BURROW_EXTENSIONS_JS="$GITHUB_WORKSPACE/apps/burrow_release/assets/generated/extensions.js"
-          export SUITE_EXTENSIONS_JS="$BURROW_EXTENSIONS_JS"
           npm ci
           if ! node --test test/no_excalidraw_in_app_bundle_test.mjs test/no_emoji_data_in_app_bundle_test.mjs; then
             echo "::error::a bundle guard failed on the WITH-Play app.js (BURROW_EXTENSIONS_JS=$BURROW_EXTENSIONS_JS)."

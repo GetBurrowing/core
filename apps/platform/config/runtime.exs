@@ -1,25 +1,12 @@
 import Config
 
-# Burrow rename (task 01a14b9e): read BURROW_<NAME> first and fall back to the old
-# SUITE_<NAME> name. An empty string counts as unset, because systemd
-# `Environment=X=` and compose `X: ""` both produce "" and treating that as
-# set would mask a real SUITE_ value. On fallback, print one deprecation line
-# to stderr; Logger is not running while config is evaluated. Every call site
-# names both full literals so the stage-5 text guard can see them.
-compat_env = fn burrow, suite, default ->
-  case System.get_env(burrow) do
-    value when is_binary(value) and value != "" ->
-      value
-
-    _ ->
-      case System.get_env(suite) do
-        value when is_binary(value) and value != "" ->
-          IO.puts(:stderr, "deprecated: #{suite} is set; rename it to #{burrow}")
-          value
-
-        _ ->
-          default
-      end
+# An empty string counts as unset, because systemd `Environment=X=` and
+# compose `X: ""` both produce "". Only BURROW_ names are read (task 01a18dab
+# removed the SUITE_ fallback).
+env_or = fn name, default ->
+  case System.get_env(name) do
+    value when is_binary(value) and value != "" -> value
+    _ -> default
   end
 end
 
@@ -605,9 +592,8 @@ config :platform, :execution,
     author_email: proof_author_email
   ],
   suite_runnerd: [
-    base_url:
-      compat_env.("BURROW_RUNNERD_BASE_URL", "SUITE_RUNNERD_BASE_URL", "http://127.0.0.1:4101"),
-    token: compat_env.("BURROW_RUNNERD_TOKEN", "SUITE_RUNNERD_TOKEN", nil)
+    base_url: env_or.("BURROW_RUNNERD_BASE_URL", "http://127.0.0.1:4101"),
+    token: env_or.("BURROW_RUNNERD_TOKEN", nil)
   ]
 
 config :platform, :proof_of_life,

@@ -114,9 +114,7 @@ defmodule Platform.MixProject do
   end
 
   # Experiment surface for the Elixir 1.20 `module_definition` compiler option
-  # (task 01a0fd73). BURROW_MODULE_DEFINITION selects the variant; the old
-  # name SUITE_MODULE_DEFINITION is still read as a fallback, with one
-  # deprecation line per mix process (task 01a14b9e):
+  # (task 01a0fd73). BURROW_MODULE_DEFINITION selects the variant:
   #
   #   * "compiled" (default) returns [], so the default build passes no
   #     1.20-only option at all and stays identical to a build without this
@@ -155,31 +153,12 @@ defmodule Platform.MixProject do
     end
   end
 
-  # BURROW_ first, SUITE_ fallback; "" counts as unset. Returns the name that
-  # was actually read so the raise above names it. project/0 can be evaluated
-  # more than once per mix invocation, so the deprecation line is memoised in
-  # :persistent_term to print once per process.
+  # BURROW_MODULE_DEFINITION only; "" counts as unset. Returns the name so the
+  # raise above names it.
   defp module_definition_env do
-    case {System.get_env("BURROW_MODULE_DEFINITION"), System.get_env("SUITE_MODULE_DEFINITION")} do
-      {burrow, _} when is_binary(burrow) and burrow != "" ->
-        {"BURROW_MODULE_DEFINITION", burrow}
-
-      {_, suite} when is_binary(suite) and suite != "" ->
-        key = {:burrow_env_deprecated, "SUITE_MODULE_DEFINITION"}
-
-        unless :persistent_term.get(key, false) do
-          :persistent_term.put(key, true)
-
-          IO.puts(
-            :stderr,
-            "deprecated: SUITE_MODULE_DEFINITION is set; rename it to BURROW_MODULE_DEFINITION"
-          )
-        end
-
-        {"SUITE_MODULE_DEFINITION", suite}
-
-      _ ->
-        {"BURROW_MODULE_DEFINITION", "compiled"}
+    case System.get_env("BURROW_MODULE_DEFINITION") do
+      value when is_binary(value) and value != "" -> {"BURROW_MODULE_DEFINITION", value}
+      _ -> {"BURROW_MODULE_DEFINITION", "compiled"}
     end
   end
 

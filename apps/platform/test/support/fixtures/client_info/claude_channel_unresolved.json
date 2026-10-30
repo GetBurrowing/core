@@ -4,6 +4,6 @@
   "features": [
     "system_event_prompt"
   ],
-  "build_error": "not a git checkout and SUITE_CHANNEL_BUILD unset (fatal: not a git repository (or any parent up to mount point /Volumes) Stopping at filesystem boundary (GIT_DISCOVERY_AC)",
+  "build_error": "not a git checkout and BURROW_CHANNEL_BUILD unset (fatal: not a git repository (or any parent up to mount point /Volumes) Stopping at filesystem boundary (GIT_DISCOVERY_AC)",
   "started_at": "2026-09-28T23:08:44.113Z"
 }

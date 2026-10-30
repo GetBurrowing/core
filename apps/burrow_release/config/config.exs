@@ -75,9 +75,7 @@ config :esbuild,
 # The generated wrapper stylesheet imports core's app.css and adds each
 # module's stylesheet and Tailwind `@source`.
 #
-# BURROW_HEROICONS_DIR (and its old name SUITE_HEROICONS_DIR, written with the
-# same value so a core that reads only the old name still finds it; task
-# 01a14b9e) points core's heroicons plugin at THIS host's deps:
+# BURROW_HEROICONS_DIR points core's heroicons plugin at THIS host's deps:
 # core's plugin otherwise looks in apps/platform/deps, which a host build does
 # not have, and silently renders no vendored `hero-*` icon (stage 4,
 # scripts/check-flavour-css.sh is the guard).
@@ -86,7 +84,6 @@ config :tailwind,
     args: ~w(--input=#{generated}/app.css --output=#{static}/css/app.css),
     cd: Path.expand("..", __DIR__),
     env: %{
-      "BURROW_HEROICONS_DIR" => Path.expand("../deps/heroicons/optimized", __DIR__),
-      "SUITE_HEROICONS_DIR" => Path.expand("../deps/heroicons/optimized", __DIR__)
+      "BURROW_HEROICONS_DIR" => Path.expand("../deps/heroicons/optimized", __DIR__)
     }
   ]
