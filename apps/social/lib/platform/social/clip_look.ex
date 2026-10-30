@@ -163,6 +163,8 @@ defmodule Platform.Social.ClipLook do
   defp title_error("template", v),
     do: unless(v in @templates, do: "template is unsupported")
 
+  defp title_error("enabled", v), do: bool_error("enabled", v)
+
   defp title_error("emphasis", v),
     do:
       unless(
@@ -276,6 +278,12 @@ defmodule Platform.Social.ClipLook do
         end
       end)
 
+    mapped =
+      case get_in(delta || %{}, ["title", "enabled"]) do
+        enabled when is_boolean(enabled) -> Map.put(mapped, "captions.hook_title", enabled)
+        _ -> mapped
+      end
+
     %{"mapped" => mapped, "unmapped" => Enum.sort(unmapped)}
   end
 
@@ -313,6 +321,7 @@ defmodule Platform.Social.ClipLook do
   defp translate("cap.vpos", v), do: {:mapped, [{"captions.vpos", v}]}
 
   defp translate("title.template", _), do: {:mapped, []}
+  defp translate("title.enabled", v), do: {:mapped, [{"captions.hook_title", v}]}
   defp translate("title.emphasis", _), do: {:mapped, []}
   defp translate("title.emphasis_text", _), do: {:mapped, []}
 

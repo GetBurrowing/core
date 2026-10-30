@@ -267,34 +267,6 @@ defmodule PlatformWeb.SocialClipsReview do
     end
   end
 
-  def handle_event("rerender_headline", params, socket) do
-    socket = authorize(socket)
-
-    if socket.assigns.can_decide? and socket.assigns.clip do
-      %{profile: profile, clip: clip, user_id: user_id} = socket.assigns
-
-      # Never replace the browser's base with the newest version: stale forms must fail.
-      case ClipJobs.enqueue_fix(profile.org_id, clip.id, user_id, %{
-             "base_render_id" => params["base_render_id"],
-             "operation" => "edit_headline",
-             "headline" => params["headline"]
-           }) do
-        {:ok, _job} ->
-          {:noreply,
-           socket
-           |> assign(:headline_error, nil)
-           |> headline_state()
-           |> load()
-           |> schedule_jobs_refresh()}
-
-        {:error, reason} ->
-          {:noreply, assign(socket, :headline_error, headline_message(reason))}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
   def handle_event("save_caption", params, socket) do
     caption = params["caption"] || params["value"]
     {:noreply, socket |> authorize() |> save(%{"caption" => caption})}
@@ -797,16 +769,6 @@ defmodule PlatformWeb.SocialClipsReview do
       true -> "Previous"
     end
   end
-
-  defp headline_message(:stale_version),
-    do: "A newer version is ready. Reload it before changing the headline."
-
-  defp headline_message(:job_in_flight), do: "A render is already running. Wait for it to finish."
-
-  defp headline_message(:invalid_headline),
-    do: "Enter a headline of 1–200 characters on one line."
-
-  defp headline_message(_), do: "This version cannot be changed. Reload and try again."
 
   defp byline(_profile, nil), do: %{source_label: nil, agent_name: nil}
   defp byline(profile, clip), do: ClipReviewFeed.byline(profile.org_id, clip)
@@ -1634,67 +1596,18 @@ defmodule PlatformWeb.SocialClipsReview do
           user_id={@user_id}
         />
 
-        <section aria-label="Clip headline" data-role="clip-headline-section" class="space-y-2">
-          <form phx-submit="rerender_headline" phx-target={@myself} data-role="clip-headline-form">
-            <input
-              type="hidden"
-              name="base_render_id"
-              value={@selected_render && @selected_render.id}
-            />
-            <label for="clip-headline" class="text-xs font-semibold text-base-content">
-              Headline
-            </label>
-            <input
-              id="clip-headline"
-              name="headline"
-              type="text"
-              maxlength="200"
-              value={(@selected_render && @selected_render.headline) || ""}
-              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-              aria-describedby="clip-headline-help"
-              class="input input-bordered mt-1 w-full bg-base-100 text-sm"
-              data-role="clip-headline-input"
-            />
-            <p id="clip-headline-help" class="mt-1 text-xs text-subtle">
-              Headlines are generated automatically. Enter new text to render another version.
-              Local generated text stays on the clip runner.
-            </p>
-            <button
-              type="submit"
-              class="btn btn-primary btn-sm mt-2 min-h-11"
-              disabled={!@can_decide? or @headline_pending? or is_nil(@selected_render)}
-              phx-disable-with="Rendering…"
-              data-role="clip-headline-render"
-            >
-              {if @headline_pending?, do: "Rendering…", else: "Render headline"}
-            </button>
-          </form>
-          <p
-            :if={@headline_pending?}
-            role="status"
-            class="text-xs text-subtle"
-            data-role="clip-headline-pending"
-          >
-            Rendering a new version. You can keep playing this one.
-          </p>
-          <p
-            :if={@headline_error}
-            role="alert"
-            class="text-xs text-error"
-            data-role="clip-headline-error"
-          >
-            {@headline_error}
-          </p>
-          <p
-            :if={@headline_attempt && @headline_attempt.status == "failed"}
-            role="alert"
-            class="text-xs text-error"
-            data-role="clip-headline-failure"
-          >
-            Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
-            Check the clip runner, then enter a headline and try again.
-          </p>
-        </section>
+        <.live_component
+          module={PlatformWeb.SocialClipHeadline}
+          id={"headline-#{@clip.id}"}
+          base={@selected_render}
+          current?={@current_version?}
+          can_edit?={@can_decide?}
+          clip={@clip}
+          profile={@profile}
+          user_id={@user_id}
+          review_id={@review_id}
+          refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}
+        />
 
         <form phx-change="save_caption" phx-target={@myself}>
           <div class="mb-1 flex items-center justify-between text-xs">

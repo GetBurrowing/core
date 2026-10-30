@@ -16,6 +16,9 @@ defmodule Platform.Social.ClipHeadlines do
     text = title["emphasis_text"]
 
     cond do
+      title["enabled"] == false ->
+        {:ok, nil}
+
       template == "legacy" and not Map.has_key?(title, "template") ->
         {:ok, nil}
 

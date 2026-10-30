@@ -1,8 +1,8 @@
 # Canonical runner template contract
 
 Stage 2 extends `burrow-clip-runner`; it adds no rendering pipeline or generator.
-The immutable `canonical-runner-0.10.0.md` archive contains the exact shared
-skill helper and tests. Its accompanying patch is against the canonical 0.9.2
+The immutable `canonical-runner-0.10.1.md` archive contains the current shared
+skill helper and tests. The 0.10.0 archive remains the stage 2 receipt; its accompanying patch is against the canonical 0.9.2
 skill read at 2026-10-30T21:34:47Z. Operator processes and installed renderers are
 not updated by publishing the skill. Do not replace a serving process mid-job.
 
@@ -25,6 +25,42 @@ whitelists code-block paths. The archived helper is the canonical helper itself,
 not another worker. The canonical skill is updated only after materialized tests
 pass. Keep both selected-profile and combined-profile doctor checks; retain
 all existing caption/music/closing/privacy tests.
+
+## Social controls (helper 0.10.1)
+
+The existing Clips Review headline form selects Chrome Hook, Neon Broadcast,
+Arcade Punch, original style, or no opening headline. Selecting a treatment is
+a draft: **Render headline** queues the canonical runner against the selected
+immutable base, never edits the current MP4. Failures leave that player intact.
+The application uses existing Social controls and semantic tokens, with no new
+timeline/editor or caption default. Jordan selected Chrome Hook as the direction;
+the other treatments remain available. Existing production caption selections
+are preserved; stage 1 comparison samples use independent single-line captions.
+
+Word emphasis is independently editable using the numbered words below the
+headline. The UI converts 1-based numbers to validated 0-based indices. Editing
+wording visibly clears the old selection. Core rejects an edit whose emphasis
+text is bound to different wording; the renderer still validates fit and face
+safety. Private generated wording is never displayed by the metadata controls.
+
+Use/save/reset show-default actions affect only headline configuration. Saving
+strips per-clip emphasis/wording and preserves other defaults. Reset removes the
+headline override, without rewriting any clip, File, approval or prior snapshot.
+Applied render details read the immutable receipt, not the current draft.
+
+`look.title.enabled=false` turns off a title on an **existing clip** via an
+appearance rerender. The helper forwards the complete resolved boolean after
+other overrides, so an inherited setting cannot turn it back on. Caption style,
+music and closing remain independent. A disabled show default is explicitly
+refused in the UI: automatic episode generation still requires the headline
+policy. Direct disabled generation fails HEADLINE_DISABLED_GENERATION_UNSUPPORTED
+without finalize/upload/completion; it is not silently accepted.
+
+`canonical-runner-0.10.1.patch` is the exact change from 0.10.0. Materialize into
+a new directory using the command above: both helper and archive hashes are
+pinned by the materializer. Run its tests before switching an idle operator
+process; publishing the skill does not install or restart a production runner.
+No parallel legacy UI event or dual-write shim is retained.
 
 `look.title.template` accepts `chrome-hook`, `neon-broadcast`, `arcade-punch`,
 and explicit `legacy` to reverse the treatment. Omitting it leaves historical

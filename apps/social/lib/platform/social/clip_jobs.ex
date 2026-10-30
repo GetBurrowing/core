@@ -169,7 +169,14 @@ defmodule Platform.Social.ClipJobs do
           do: Repo.rollback(:version_unplayable)
 
         fix = ok_or_rollback(Platform.Social.ClipFixes.validate(base, attrs))
-        look = ClipLook.effective(base.look)
+        requested = ok_or_rollback(validate_look(attrs["look"] || %{}))
+        look = ClipLook.effective(ClipLook.merge(base.look, requested))
+        ok_or_rollback(validate_look(look))
+        emphasis = get_in(look, ["title", "emphasis"]) || []
+
+        if emphasis != [] and is_map(fix["headline"]) and
+             get_in(look, ["title", "emphasis_text"]) != fix["headline"]["requested_headline"],
+           do: Repo.rollback(:headline_emphasis_stale)
 
         payload =
           payload(

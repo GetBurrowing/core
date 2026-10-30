@@ -1,0 +1,6 @@
+{
+  "liveInteractions": "select/emphasis/default save/word edit clear/queue selection/enqueue",
+  "playerRetained": true,
+  "overflow": false,
+  "errors": []
+}

@@ -2,6 +2,14 @@ defmodule Platform.Social.ClipHeadlinesTest do
   use ExUnit.Case, async: true
   alias Platform.Social.{ClipHeadlines, ClipLook}
 
+  test "disabled title snapshots remain explicit in look and override changed duration" do
+    look = %{"title" => %{"enabled" => false, "template" => "legacy", "secs" => 4.0}}
+    assert {:ok, ^look} = ClipLook.validate(look)
+    assert {:ok, nil} = ClipHeadlines.snapshot(look)
+    assert ClipLook.to_clip_overrides(look)["mapped"]["captions.hook_title"] == false
+    assert {:error, _} = ClipLook.validate(%{"title" => %{"enabled" => "false"}})
+  end
+
   test "explicit templates pin exact assets, safe timing and emphasis; legacy absent stays unknown" do
     assert {:ok, nil} = ClipHeadlines.snapshot(ClipLook.default())
 
