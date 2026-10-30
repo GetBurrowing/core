@@ -314,7 +314,7 @@ defmodule Platform.SkillsTest do
             "source_segment_ids",
             "dedup and caps",
             "checklist_item",
-            "high|medium|low"
+            "low|medium|high|critical"
           ] do
         assert skill.content =~ token,
                "meeting-triage-officer content must reference #{token}"
