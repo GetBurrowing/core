@@ -1151,20 +1151,41 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
         if agent_id, do: Roles.assign_role(role, agent_id)
       end
 
-      # These connections intentionally bypass sandbox rollback. Their telemetry
-      # audit rows must be removed with the fixture, not leak into later modules.
-      Repo.delete_all(owned_audit)
-      assert Repo.aggregate(owned_audit, :count) == 0
+      # These connections intentionally bypass sandbox rollback. Summary failures
+      # carry a transcript resource ID, not metadata.meeting_id. Serialize cleanup
+      # with producers: an earlier producer finishes before deletion; a later one
+      # sees no transcript and cannot recreate a committed failure audit row.
+      Repo.transaction(fn ->
+        Platform.Meetings.lock_transcript_space(ctx.meeting.chat_space_id)
 
-      Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
-      Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
+        transcript_ids =
+          Repo.all(
+            from(t in Platform.Meetings.Transcript,
+              where: t.space_id == ^ctx.meeting.chat_space_id,
+              select: t.id
+            )
+          )
 
-      Repo.delete_all(
-        from(t in Platform.Meetings.Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)
-      )
+        transcript_audit =
+          from(e in Platform.Audit.Event,
+            where: e.resource_type == "meeting_transcript" and e.resource_id in ^transcript_ids
+          )
 
-      Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^ctx.meeting.chat_space_id))
-      Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^ctx.project.id))
+        Repo.delete_all(owned_audit)
+        Repo.delete_all(transcript_audit)
+        assert Repo.aggregate(owned_audit, :count) == 0
+        assert Repo.aggregate(transcript_audit, :count) == 0
+
+        Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
+        Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))
+
+        Repo.delete_all(
+          from(t in Platform.Meetings.Transcript, where: t.space_id == ^ctx.meeting.chat_space_id)
+        )
+
+        Repo.delete_all(from(s in Platform.Chat.Space, where: s.id == ^ctx.meeting.chat_space_id))
+        Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^ctx.project.id))
+      end)
 
       for {agent_id, runtime_id, user_id} <- resources do
         Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^agent_id),
