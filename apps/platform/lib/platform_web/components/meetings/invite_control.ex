@@ -662,7 +662,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`'s map: `:id`
     (DOM id prefix), `:query`, `:users` (the resolver's `users`),
     `:guest_host?`, `:result` (`nil` or the created guest invite with its
-    `:url`, `:name`, `:email_open?`, `:email_error`) and `:error`.
+    `:url`, `:name`, `:email_open?`, `:email_error`), `:error` and `:gen`
+    (bumped when the field is cleared, so the input is re-keyed and a focused
+    field does not keep the invited name).
     """
   )
 
@@ -712,7 +714,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           <input
             type="text"
             name="query"
-            id={"#{@prefix}-search"}
+            id={"#{@prefix}-search-#{Map.get(@state, :gen, 0)}"}
             data-role="meeting-human-invite-search"
             value={@state.query}
             placeholder="Type a name…"

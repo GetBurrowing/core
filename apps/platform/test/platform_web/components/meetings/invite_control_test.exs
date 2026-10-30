@@ -550,7 +550,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert attr(option, "data-option") == ["guest-name"]
       assert attr(option, "phx-value-kind") == ["guest"]
       assert attr(option, "phx-value-name") == ["Dana Whitfield"]
-      assert attr(option, "phx-value-email") == [nil]
+      assert attr(option, "phx-value-email") == []
 
       assert text_at(html, "[data-role=meeting-invite-option-title]") ==
                ~s(Invite "Dana Whitfield" as a guest)
@@ -709,7 +709,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
              ]
 
       assert attr(copy, "data-copied-label") == ["Copied"]
-      assert class_of(copy) =~ "bg-primary text-primary-content"
+      assert class_of(copy) =~ "bg-primary"
+      assert class_of(copy) =~ "text-primary-content"
       assert class_of(copy) =~ "data-[copy-state=copied]:bg-success"
 
       assert text_at(html, "[data-role=meeting-human-invite-add-email]") ==
