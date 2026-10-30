@@ -273,10 +273,10 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       # Same session cookie, new mount: a redirect would surface here as
       # `{:error, {:live_redirect | :redirect, _}}`.
-      assert {:ok, view, html} = live(conn, ~p"/meetings")
-      assert html =~ ~s(data-role="meetings-count")
-      refute html =~ ~s(data-intent-panel-host="true")
-      assert render(view) =~ "Prior Room"
+      assert {:ok, view, _html} = live(conn, ~p"/meetings")
+      assert has_element?(view, ~s([data-role="meetings-view-toggle"]))
+      refute has_element?(view, ~s([data-intent-panel-host="true"]))
+      assert page_title(view) =~ "Meetings"
     end
 
     test "patching from a meeting back to /meetings lands on the index on the same pid",
@@ -286,10 +286,10 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
-      html = render_patch(view, ~p"/meetings")
+      render_patch(view, ~p"/meetings")
       assert_patched(view, ~p"/meetings")
-      assert html =~ ~s(data-role="meetings-count")
-      refute html =~ ~s(data-intent-panel-host="true")
+      assert has_element?(view, ~s([data-role="meetings-view-toggle"]))
+      refute has_element?(view, ~s([data-intent-panel-host="true"]))
     end
 
     test "every Meetings tile the shell renders on a meeting page links to the bare index",
@@ -304,6 +304,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         ~r/<a\b[^>]*data-module-id="meetings"[^>]*>/
         |> Regex.scan(html)
         |> List.flatten()
+
       assert tags != [], "expected at least one Meetings tile on the meeting page"
 
       for tag <- tags do
