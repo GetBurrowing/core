@@ -835,6 +835,12 @@ defmodule Platform.Tasks do
   precedence over the plan gate. A refusal writes nothing and leaves
   `updated_at` unmoved, so a caller can retry with the same base.
 
+  A `project_id` change (task 01a18d37) is checked first: a stacked task is
+  refused with `:task_in_stack`, a same-call `epic_id` outside the new
+  project with `:epic_project_mismatch`, and otherwise an epic left behind
+  in the old project is cleared in the same changeset. After the write, ONE
+  `platform.tasks.project_moved` audit row records the move.
+
   Atomicity covers the fields and the base. The gates are read-then-write:
   a plan revoked between the pre-check and the write is not caught, which
   matches the behaviour of every other status writer.
@@ -880,6 +886,8 @@ defmodule Platform.Tasks do
     field_changeset = Task.changeset(task, with_phase_assignee_attrs(task, fields, phase_attrs))
 
     with :ok <- valid_changeset(field_changeset),
+         {:ok, field_changeset, cleared_epic_id} <-
+           precheck_project_move(task, field_changeset, fields),
          projected = Ecto.Changeset.apply_changes(field_changeset),
          {:ok, status_changes, pointer_attrs} <- precheck_status(projected, status, actor) do
       changeset = Ecto.Changeset.change(field_changeset, status_changes)
@@ -890,6 +898,7 @@ defmodule Platform.Tasks do
       |> case do
         {:ok, updated} ->
           {:ok, updated} = after_task_update(task, updated, actor: actor)
+          _ = maybe_audit_project_move(task, updated, cleared_epic_id, actor)
 
           if status do
             TransitionActor.with_actor(actor, "mcp_task_update", fn ->
@@ -930,6 +939,84 @@ defmodule Platform.Tasks do
     |> put.(:phase_assignees, merged)
     |> put.(:assignee_id, derived_id)
     |> put.(:assignee_type, derived_type)
+  end
+
+  # Task 01a18d37 stage 1: `task_update` can re-file a task into another
+  # project. The cast and the two-sided write fence already existed; what
+  # the move lacked was consistency with the task's stack and epic, both of
+  # which belong to exactly one project. Runs BEFORE the write, so a
+  # refusal writes nothing and leaves `updated_at` unmoved.
+  #
+  #   * a stacked task cannot move (eject it first) -> `:task_in_stack`;
+  #   * an `epic_id` supplied in the same call must belong to the NEW
+  #     project -> otherwise `:epic_project_mismatch`;
+  #   * no `epic_id` supplied and the current epic is not in the new
+  #     project -> the epic is cleared in the same changeset, and its id is
+  #     returned so the audit row can record it.
+  defp precheck_project_move(%Task{} = task, %Ecto.Changeset{} = changeset, fields) do
+    case Ecto.Changeset.fetch_change(changeset, :project_id) do
+      {:ok, new_project_id} when new_project_id != task.project_id ->
+        cond do
+          not is_nil(task.stack_id) ->
+            {:error, :task_in_stack}
+
+          epic_supplied?(fields) ->
+            epic_id = Ecto.Changeset.get_field(changeset, :epic_id)
+
+            if epic_in_project?(epic_id, new_project_id),
+              do: {:ok, changeset, nil},
+              else: {:error, :epic_project_mismatch}
+
+          not is_nil(task.epic_id) and not epic_in_project?(task.epic_id, new_project_id) ->
+            {:ok, Ecto.Changeset.put_change(changeset, :epic_id, nil), task.epic_id}
+
+          true ->
+            {:ok, changeset, nil}
+        end
+
+      _ ->
+        {:ok, changeset, nil}
+    end
+  end
+
+  defp epic_supplied?(fields),
+    do: Map.has_key?(fields, :epic_id) or Map.has_key?(fields, "epic_id")
+
+  # An explicit `epic_id: nil` alongside the move is a clear, not a mismatch.
+  defp epic_in_project?(nil, _project_id), do: true
+
+  defp epic_in_project?(epic_id, project_id) do
+    Repo.exists?(from(e in Epic, where: e.id == ^epic_id and e.project_id == ^project_id))
+  end
+
+  # ONE `platform.tasks.project_moved` row per successful write that changed
+  # `project_id`, recorded AFTER the write (never for a refused call).
+  # Mirrors `Platform.Tasks.MergeControl`'s direct `Audit.record/1`.
+  defp maybe_audit_project_move(%Task{} = before, %Task{} = updated, cleared_epic_id, actor) do
+    if updated.project_id != before.project_id do
+      {actor_type, actor_id} =
+        case TransitionActor.normalize(actor) do
+          {kind, id} when kind in ["user", "agent"] -> {kind, id}
+          _ -> {"system", nil}
+        end
+
+      Platform.Audit.record(%{
+        event_type: "platform.tasks.project_moved",
+        action: "move",
+        actor_type: actor_type,
+        actor_id: actor_id,
+        resource_type: "task",
+        resource_id: updated.id,
+        metadata: %{
+          "from_project_id" => before.project_id,
+          "to_project_id" => updated.project_id,
+          "cleared_epic_id" => cleared_epic_id,
+          "via" => "mcp_task_update"
+        }
+      })
+    else
+      :ok
+    end
   end
 
   defp valid_changeset(%Ecto.Changeset{valid?: true}), do: :ok

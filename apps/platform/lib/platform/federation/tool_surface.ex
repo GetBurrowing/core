@@ -2448,7 +2448,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_update",
         description:
-          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044); with auto_approve_plan true and an agent-typed flat assignee, task_update also fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent, while explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees for auto-approve. Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins. This tool is LAST-WRITE-WINS by default: pass base_updated_at (the `updated_at` you read the task at) to be REFUSED with a recoverable stale_base error instead of silently overwriting a concurrent writer. When you write or replace a `description`, OPEN the body with a falsifier sentence — before any prescription, ideally under a leading `## Wrong` heading — naming the concrete observation that would show the ticket's premise is wrong (a grep that comes back empty, a status that differs, a test that passes) and telling the reader to stop and re-derive if they see it. A caveat or a confidence rating is not a falsifier.",
+          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044); with auto_approve_plan true and an agent-typed flat assignee, task_update also fills the absent phase slots (judged against the task's persisted phase_assignees overlaid with this call's routed slots) from the flat agent, while explicit phase_assignees entries win and present slots are never overwritten. User-typed or missing flat assignees still need explicit agent-typed phase_assignees for auto-approve. Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins. Pass project_id to re-file the task into another project. This tool is LAST-WRITE-WINS by default: pass base_updated_at (the `updated_at` you read the task at) to be REFUSED with a recoverable stale_base error instead of silently overwriting a concurrent writer. When you write or replace a `description`, OPEN the body with a falsifier sentence — before any prescription, ideally under a leading `## Wrong` heading — naming the concrete observation that would show the ticket's premise is wrong (a grep that comes back empty, a status that differs, a test that passes) and telling the reader to stop and re-derive if they see it. A caveat or a confidence rating is not a falsifier.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -2495,6 +2495,12 @@ defmodule Platform.Federation.ToolSurface do
               "Durable external issue number. Immutable after create; rewrite attempts are refused."
           },
           epic_id: %{type: "string", required: false, description: "Move to a different epic"},
+          project_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Move the task to another project. You need write access to both the task and the target project. An epic from the old project is cleared unless you pass an epic_id in the new project; a task in a stack cannot be moved (eject it first)."
+          },
           assignee_type: %{type: "string", required: false, description: "Assignee type"},
           assignee_id: %{type: "string", required: false, description: "Assignee ID"},
           sponsor_user_id: %{
@@ -8651,6 +8657,33 @@ defmodule Platform.Federation.ToolSurface do
                      "or configure a project-level default via " <>
                      "project_update(deploy_config: %{\"default_deploy_target\" => ...}) " <>
                      "before transitioning to deploying."
+               }}
+
+            # Task 01a18d37 stage 1: project-move consistency guards
+            # (`Tasks.apply_task_update/3`).
+            {:error, :task_in_stack} ->
+              {:error,
+               %{
+                 error:
+                   "Cannot move task #{task.id} to another project: it is a member of stack #{task.stack_id}, " <>
+                     "and a stack belongs to one project. " <> @task_update_nothing_written,
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   "Remove the task from its stack first with stack_eject(stack_id, task_id), then retry the move."
+               }}
+
+            {:error, :epic_project_mismatch} ->
+              {:error,
+               %{
+                 error:
+                   "epic_project_mismatch: the epic_id you supplied does not belong to the target project #{args["project_id"]}. " <>
+                     @task_update_nothing_written,
+                 recoverable: true,
+                 submitted_args: args,
+                 suggestion:
+                   "Pass an epic_id from the target project, pass epic_id: null, or omit epic_id " <>
+                     "(an epic from the old project is then cleared automatically)."
                }}
 
             {:error, %Ecto.Changeset{} = changeset} ->
