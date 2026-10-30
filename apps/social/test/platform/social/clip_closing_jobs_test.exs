@@ -198,9 +198,68 @@ defmodule Platform.Social.ClipClosingJobsTest do
     assert Repo.get!(Platform.Social.Post, approved_post.id) == approved_post
     assert Files.get_file(c.output.id).content_hash == c.output.content_hash
     # An old approved post does not prevent updating today's unapproved version.
+    save!(c.w, c.a)
+
     assert {:ok, _} =
              ClipJobs.enqueue_closing_video(c.w.org_id, pending.id, c.w.approver.id, %{
                base_render_id: current(c.w, pending).id
+             })
+  end
+
+  test "matching closing-only request is refused but appearance rerenders remain available", c do
+    save!(c.w, c.a)
+    original = enqueue!(c.w)
+    clip = complete!(c.w, original.job, c.output)
+    base = current(c.w, clip)
+    before = Repo.aggregate(ClipJob, :count)
+
+    assert {:error, :closing_video_unchanged} =
+             ClipJobs.enqueue_closing_video(c.w.org_id, clip.id, c.w.approver.id, %{
+               base_render_id: base.id
+             })
+
+    assert Repo.aggregate(ClipJob, :count) == before
+    assert Repo.get!(Clip, clip.id).render_file_id == c.output.id
+    assert current(c.w, clip) == base
+
+    assert {:ok, appearance} =
+             ClipJobs.enqueue_appearance(c.w.org_id, clip.id, c.w.approver.id, %{
+               base_render_id: base.id,
+               look: %{cap: %{style: "plain"}}
+             })
+
+    assert appearance.payload["closing_video"]["file_id"] == c.a.id
+  end
+
+  test "closing-only comparison reads fresh saved audio and enabled settings", c do
+    save!(c.w, c.a)
+    original = enqueue!(c.w)
+    clip = complete!(c.w, original.job, c.output)
+    base = current(c.w, clip)
+    save!(c.w, c.a, "mute")
+
+    assert {:ok, audio_job} =
+             ClipJobs.enqueue_closing_video(c.w.org_id, clip.id, c.w.approver.id, %{
+               base_render_id: base.id
+             })
+
+    assert audio_job.payload["closing_video"]["audio"] == "mute"
+    clip = complete!(c.w, audio_job, c.output)
+    base = current(c.w, clip)
+    save!(c.w, c.a, "mute", false)
+
+    assert {:ok, off_job} =
+             ClipJobs.enqueue_closing_video(c.w.org_id, clip.id, c.w.approver.id, %{
+               base_render_id: base.id
+             })
+
+    refute off_job.payload["closing_video"]["enabled"]
+    clip = complete!(c.w, off_job, c.output)
+    base = current(c.w, clip)
+
+    assert {:error, :closing_video_unchanged} =
+             ClipJobs.enqueue_closing_video(c.w.org_id, clip.id, c.w.approver.id, %{
+               base_render_id: base.id
              })
   end
 

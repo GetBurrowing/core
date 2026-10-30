@@ -564,6 +564,15 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(child, "[data-role=selected-ending]", "Ends with: #{b.name}")
     refute has_element?(child, "[data-role=use-closing-video]")
 
+    # Hiding a form must not authorize a forged matching submission.
+    {:ok, before_forged} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    bay(child) |> render_click("use_closing_video", %{"base_render_id" => current.id})
+    assert has_element?(child, "[data-role=closing-render-error]")
+    refute has_element?(child, "[data-role=closing-render-pending]")
+    {:ok, after_forged} = ClipJobs.list_jobs(w.org_id, w.profile.id)
+    assert length(after_forged) == length(before_forged)
+    assert has_element?(child, "#clip-player-#{clip.id}-r#{updated.rev}")
+
     child
     |> element("[data-role=pick-render-version][data-render-id='#{old.id}']")
     |> render_click()

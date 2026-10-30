@@ -221,6 +221,12 @@ defmodule Platform.Social.ClipJobs do
 
         if base.rev != clip.rev, do: Repo.rollback(:stale_version)
 
+        # human_profile/3 holds the same profile lock as default writes. Check
+        # here, not just in the form visibility, against that current choice.
+        if closing_only and
+             ClipClosingVideo.same_ending?(base.closing_video, profile.closing_video),
+           do: Repo.rollback(:closing_video_unchanged)
+
         if closing_only and
              (clip.review_status == "approved" or
                 Repo.exists?(
