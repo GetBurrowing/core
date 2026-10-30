@@ -10,15 +10,16 @@ defmodule Platform.Social.ToolDefinitionsTest do
   @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_source social_clip_job_progress
                 social_clip_job_complete social_clip_job_fail)
 
-  @nineteen ~w(social_profile_list social_profile_get social_draft_create social_draft_update
+  @expected_names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
               social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
               social_clip_list social_task_request) ++
-              @job_tools ++ ~w(social_idea_create social_idea_list social_idea_note_add)
+                    @job_tools ++
+                    ~w(social_idea_create social_idea_list social_idea_note_add social_weekly_note_submit social_weekly_note_list)
 
   @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  test "exactly the twenty tools, names() and definitions() agree" do
-    assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@nineteen)
+  test "exactly the twenty-two tools, names() and definitions() agree" do
+    assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@expected_names)
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
   end
 
@@ -76,21 +77,26 @@ defmodule Platform.Social.ToolDefinitionsTest do
       assert is_binary(meta.description) and meta.description != "", "#{tool.name}.#{param}"
 
       if meta.type == "array" do
-        if param == :picks do
-          assert tool.name == "social_clip_job_progress"
-          assert meta.schema.type == "array"
-          assert meta.schema.maxItems == 100
+        if param == :items do
+          assert tool.name == "social_weekly_note_submit"
           assert meta.schema.items.type == "object"
-          assert meta.schema.items.required == ["candidate_id", "in_s", "out_s"]
-          assert meta.schema.items.additionalProperties == false
-
-          assert Map.keys(meta.schema.items.properties) |> Enum.sort() == [
-                   :candidate_id,
-                   :in_s,
-                   :out_s
-                 ]
         else
-          assert meta.schema == %{type: "array", items: %{type: "string"}}
+          if param == :picks do
+            assert tool.name == "social_clip_job_progress"
+            assert meta.schema.type == "array"
+            assert meta.schema.maxItems == 100
+            assert meta.schema.items.type == "object"
+            assert meta.schema.items.required == ["candidate_id", "in_s", "out_s"]
+            assert meta.schema.items.additionalProperties == false
+
+            assert Map.keys(meta.schema.items.properties) |> Enum.sort() == [
+                     :candidate_id,
+                     :in_s,
+                     :out_s
+                   ]
+          else
+            assert meta.schema == %{type: "array", items: %{type: "string"}}
+          end
         end
       end
     end

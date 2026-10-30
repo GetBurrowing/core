@@ -112,6 +112,32 @@ defmodule Platform.Social.ResultsTest do
              Enum.sort(["post:#{a.id}", "post:#{b.id}"])
   end
 
+  test "explicit calendar bounds are inclusive-start/exclusive-end without changing UTC defaults",
+       c do
+    start = ~U[2026-10-26 04:00:00.000000Z]
+    finish = ~U[2026-11-02 05:00:00.000000Z]
+    post(c, %{"likes" => 999}, at: DateTime.add(start, -1, :microsecond))
+    first = post(c, %{"likes" => 2}, at: start)
+    last = post(c, %{"likes" => 3}, at: DateTime.add(finish, -1, :microsecond))
+    boundary = post(c, %{"likes" => 4}, at: finish)
+    post(c, %{"likes" => 999}, status: "draft")
+    rows = Results.by_idea([c.profile], 7, start_at: start, end_at: finish)
+    assert Enum.map(rows, & &1.key) == ["post:#{last.id}", "post:#{first.id}"]
+
+    assert Enum.any?(
+             Results.by_idea([c.profile], 7, now: finish),
+             &(&1.key == "post:#{boundary.id}")
+           )
+
+    assert_raise ArgumentError, fn -> Results.by_idea([c.profile], 7, start_at: start) end
+
+    assert_raise ArgumentError, fn ->
+      Results.by_idea([c.profile], 7, start_at: finish, end_at: start)
+    end
+
+    assert_raise ArgumentError, fn -> Results.by_idea([c.profile], 7, end_at: finish) end
+  end
+
   test "9/10 gate excludes other accounts, unsynced and old posts; mean differs from total", c do
     c.profile |> Ecto.Changeset.change(timezone: "America/Denver") |> Repo.update!()
     for _ <- 1..9, do: post(c, %{"likes" => 10}, at: ~U[2026-10-29 15:00:00.000000Z])

@@ -5,7 +5,7 @@ defmodule Platform.Social.TransportParityTest do
   `apps/game_stream/test/security/transport_capability_parity_test.exs`; the
   HTTP and WS helpers are that file's, copied.
 
-    * A runtime granted `social` sees exactly the twenty `social_*` tools on the
+    * A runtime granted `social` sees exactly the twenty-two `social_*` tools on the
       MCP `tools/list` (`POST /mcp`) AND in the runtime channel's
       `capabilities` push, each description carrying the human-approves
       sentence.
@@ -32,11 +32,11 @@ defmodule Platform.Social.TransportParityTest do
   # Social 6/7's social_task_request, and Clip Studio 1/9's social_clip_submit
   # and six clip job tools, Social authoring 2/11's two idea tools, and
   # 7/11's social_idea_note_add. Sorted.
-  @twenty ~w(social_clip_job_claim social_clip_job_complete social_clip_job_fail
+  @twenty_two ~w(social_clip_job_claim social_clip_job_complete social_clip_job_fail
               social_clip_job_list social_clip_job_progress social_clip_job_source social_clip_list
               social_clip_propose social_clip_render social_clip_submit social_draft_create
               social_draft_update social_idea_create social_idea_list social_idea_note_add
-              social_post_list social_profile_get social_profile_list social_results_get social_task_request)
+              social_post_list social_profile_get social_profile_list social_results_get social_task_request social_weekly_note_list social_weekly_note_submit)
 
   @granted ~w(federation space context_read messaging review canvas task plan memory skill attachment social)
 
@@ -63,7 +63,7 @@ defmodule Platform.Social.TransportParityTest do
     %{owner: owner, org: org}
   end
 
-  test "exactly the twenty tools on both transports", ctx do
+  test "exactly the twenty-two tools on both transports", ctx do
     {runtime, token} = runtime_for(ctx, @granted)
     {_socket, capabilities} = join_runtime(runtime, token)
 
@@ -75,11 +75,11 @@ defmodule Platform.Social.TransportParityTest do
     ws_social =
       capabilities |> ws_tool_names() |> Enum.filter(&String.starts_with?(&1, "social_"))
 
-    assert http_social == @twenty
-    assert ws_social == @twenty
+    assert http_social == @twenty_two
+    assert ws_social == @twenty_two
     assert http |> Map.keys() |> Enum.sort() == ws_tool_names(capabilities)
 
-    for name <- @twenty do
+    for name <- @twenty_two do
       assert http[name]["description"] =~ @sentence
       ws_tool = Enum.find(capabilities.tools, &(&1.name == name))
       assert ws_tool.description =~ @sentence
@@ -98,7 +98,7 @@ defmodule Platform.Social.TransportParityTest do
     {runtime, token} = runtime_for(ctx, ["social"])
 
     assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
-             @twenty
+             @twenty_two
 
     assert Platform.Access.can?(Platform.Access.Scope.for_runtime(runtime), "social.use")
     {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, %{})
@@ -107,7 +107,7 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, nil)
 
     assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
-             @twenty
+             @twenty_two
 
     {:ok, _} =
       Platform.Tenancy.mark_membership_external(%{user_id: ctx.owner.id, org_id: ctx.org.id})
@@ -136,8 +136,8 @@ defmodule Platform.Social.TransportParityTest do
       (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
       |> Enum.filter(&social?/1)
 
-    # twenty names, once per transport
-    assert length(names) == 40
+    # Twenty-two names, once per transport
+    assert length(names) == 44
     assert Enum.filter(names, &(&1 =~ "publish" or &1 =~ "approve")) == []
   end
 
@@ -162,7 +162,8 @@ defmodule Platform.Social.TransportParityTest do
     {runtime, token} = runtime_for(ctx, @granted)
     {socket, _capabilities} = join_runtime(runtime, token)
 
-    for name <- ~w(social_profile_list social_results_get social_task_request) do
+    for name <-
+          ~w(social_profile_list social_results_get social_task_request social_weekly_note_list social_weekly_note_submit) do
       assert http_verdict(token, name) == :allowed
       assert ws_verdict(socket, name) == :allowed
     end

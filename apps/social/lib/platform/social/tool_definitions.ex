@@ -15,7 +15,7 @@ defmodule Platform.Social.ToolDefinitions do
   and six tools a clip runner uses to work Clip Studio's
   job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Twenty in all. No tool
+  Twenty-two in all, including weekly-note submission and listing. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -34,7 +34,7 @@ defmodule Platform.Social.ToolDefinitions do
             social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
-            social_idea_create social_idea_list social_idea_note_add)
+            social_idea_create social_idea_list social_idea_note_add social_weekly_note_submit social_weekly_note_list)
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -823,6 +823,68 @@ defmodule Platform.Social.ToolDefinitions do
           "not_found for an idea outside your org, exactly as for a missing id. invalid_argument for a blank or over-long body. You are recorded as the author. A note writes no post and approves nothing.",
         when_to_use:
           "To answer a human's note on an idea, or to say what you are doing with it (a question, a plan, why a version differs)."
+      },
+      %{
+        name: "social_weekly_note_submit",
+        description:
+          "Submit a weekly note as this profile's assigned drafting agent. " <> @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "Authorized profile id."},
+          week_start: %{
+            type: "string",
+            required: true,
+            description:
+              "Monday delivery week YYYY-MM-DD in profile timezone; summarizes preceding completed local week."
+          },
+          summary: %{
+            type: "string",
+            required: true,
+            description: "Summary, at most 2000 characters."
+          },
+          items: %{
+            type: "array",
+            required: true,
+            description:
+              "Suggestions: optional UUID id, kind, text and payload only; no decisions or attribution.",
+            schema: %{
+              type: "array",
+              items: %{
+                type: "object",
+                required: ["kind", "text", "payload"],
+                additionalProperties: false,
+                properties: %{
+                  id: %{type: "string"},
+                  kind: %{type: "string", enum: ~w(voice timing recycle other)},
+                  text: %{type: "string"},
+                  payload: %{type: "object"}
+                }
+              }
+            }
+          }
+        },
+        returns:
+          "%{id, profile_id, week_start, author_kind, author_id, summary, items with decision and attribution}",
+        limitations:
+          "One note per delivery week. Voice payload text <=280; timing account_id in this profile, weekday 1..7 and time HH:MM; recycle idea_id in profile; other empty payload. No posts means no note. Does not change voice, slots or publish.",
+        when_to_use: "After the weekly mention, submit suggestions based on linked facts."
+      },
+      %{
+        name: "social_weekly_note_list",
+        description: "Read weekly notes and each human decision. " <> @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "Authorized profile id."},
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Page size default 50, maximum 500."
+          },
+          offset: %{type: "integer", required: false, description: "Notes to skip, default zero."}
+        },
+        returns:
+          "%{notes: [latest first notes with decisions, decided_by_user_id and decided_at], total, has_more}",
+        limitations:
+          "Read-only. Monday delivery week summarizes preceding local week. Foreign profiles refused. Humans decide separately.",
+        when_to_use: "See which suggestions humans used or ignored before drafting."
       }
     ]
   end
