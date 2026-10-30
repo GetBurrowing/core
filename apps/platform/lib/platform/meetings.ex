@@ -3169,9 +3169,30 @@ defmodule Platform.Meetings do
         %Room{}
         |> Room.changeset(%{livekit_room_name: room_name, space_id: space_id})
         |> Repo.insert()
+        |> adopt_concurrent_room(space_id)
 
       room ->
         {:ok, room}
+    end
+  end
+
+  # Two joins on a room-less space race the read above: both see no row,
+  # both insert, and the loser trips the `space_id` unique index. Before
+  # task 01a18d0a stage 4 that error reached `join_for_user/3`, so the
+  # second person's Join silently did nothing (two people pressing Join on
+  # a scheduled meeting at the same instant). The winner's row is the room
+  # both of them want; return it.
+  defp adopt_concurrent_room({:ok, room}, _space_id), do: {:ok, room}
+
+  defp adopt_concurrent_room({:error, %Ecto.Changeset{errors: errors}} = error, space_id) do
+    unique? =
+      Enum.any?(errors, fn {field, {_msg, opts}} ->
+        field in [:space_id, :livekit_room_name] and opts[:constraint] == :unique
+      end)
+
+    case unique? && Repo.get_by(Room, space_id: space_id) do
+      %Room{} = room -> {:ok, room}
+      _ -> error
     end
   end
 
