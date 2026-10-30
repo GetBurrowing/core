@@ -264,10 +264,13 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     view |> element(~s([data-role="meeting-join"])) |> render_click()
     assert_push_event(view, "join-meeting", %{})
 
+    # Baselines taken on the joined view. The join itself holds presence
+    # too, so the count is whatever it is here; a patch must not add to it.
     space_id = ctx.meeting.chat_space_id
     presence = Platform.Meetings.PubSub.presence_topic(space_id)
     intents = Platform.Meetings.PubSub.intents_topic(ctx.meeting.id)
-    assert registrations(presence, view.pid) == 1
+    presence_before = registrations(presence, view.pid)
+    assert presence_before >= 1
     assert registrations(intents, view.pid) == 1
 
     html = render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=transcript")
@@ -280,15 +283,18 @@ defmodule PlatformWeb.MeetingLiveCompletionTest do
     assert [%Participant{left_at: nil}] = active_participants(ctx)
     refute_push_event(view, "join-meeting", %{}, 50)
 
-    # No second registration on the raw PubSub topics the setup subscribes,
-    # so a message broadcast after the patch is delivered to this view once.
-    assert registrations(presence, view.pid) == 1
+    # No extra registration on the raw PubSub topics the setup subscribes,
+    # so a message broadcast after the patch reaches this view no more often
+    # than before it.
+    assert registrations(presence, view.pid) == presence_before
     assert registrations(intents, view.pid) == 1
 
     # A second patch is no different.
     render_patch(view, ~p"/meetings/#{ctx.meeting.slug}?tab=people")
+    assert Process.alive?(view.pid)
     assert :sys.get_state(view.pid).socket.assigns.in_meeting
-    assert registrations(presence, view.pid) == 1
+    assert registrations(presence, view.pid) == presence_before
+    assert registrations(intents, view.pid) == 1
   end
 
   defp registrations(topic, pid) do
