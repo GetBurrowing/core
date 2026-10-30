@@ -681,11 +681,11 @@ defmodule PlatformWeb.ChatLiveChatListTest do
          %{conn: conn} do
       viewer = create_user!(%{avatar_url: "/images/viewer-self.png"})
       plain_member!(viewer, acme())
-      other = create_user!(%{name: "Jordan Person", avatar_url: "/images/other-user.png"})
+      other = create_user!(%{name: "Riley Person", avatar_url: "/images/other-user.png"})
 
       {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
       _ = join!(dm, viewer.id, viewer.name)
-      other_row = join!(dm, other.id, "Jordan Person")
+      other_row = join!(dm, other.id, "Riley Person")
 
       conn = login(conn, viewer.id)
       avatar = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-avatar']"
@@ -696,7 +696,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
         human_img = ~s(#{avatar}[data-avatar="human"] img[src="/images/other-user.png"])
         assert has_element?(view, human_img)
         refute has_element?(view, ~s(#{avatar} img[src="/images/viewer-self.png"]))
-        refute view |> element(avatar) |> render() =~ ">J<"
+        refute view |> element(avatar) |> render() =~ ">R<"
       end
 
       # The participant row's own image wins over the user's.
@@ -734,7 +734,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
          %{conn: conn} do
       viewer = create_user!(%{avatar_url: "/images/viewer-self.png"})
       plain_member!(viewer, acme())
-      person = create_user!(%{name: "Jordan Person", avatar_url: "/images/jordan.png"})
+      person = create_user!(%{name: "Riley Person", avatar_url: "/images/riley.png"})
 
       agent =
         Repo.insert!(%Agent{
@@ -747,12 +747,12 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
       {:ok, group} = Chat.create_space(%{kind: "group"})
       _ = join!(group, viewer.id, viewer.name)
-      _ = join!(group, person.id, "Jordan Person")
+      _ = join!(group, person.id, "Riley Person")
       {:ok, _} = Chat.add_agent_participant(group.id, agent)
 
       {:ok, human_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
       _ = join!(human_dm, viewer.id, viewer.name)
-      jordan = join!(human_dm, person.id, "Jordan Person")
+      riley = join!(human_dm, person.id, "Riley Person")
 
       {:ok, agent_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
       _ = join!(agent_dm, viewer.id, viewer.name)
@@ -763,7 +763,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
       conn = login(conn, viewer.id)
       avatar = &"#chat-list [data-space-id='#{&1}'] [data-role='chat-list-avatar']"
-      human_img = ~s(#{avatar.(human_dm.id)}[data-avatar="human"] img[src="/images/jordan.png"])
+      human_img = ~s(#{avatar.(human_dm.id)}[data-avatar="human"] img[src="/images/riley.png"])
       agent_img = ~s(#{avatar.(agent_dm.id)}[data-avatar="agent"] img[src="/images/life-bot.png"])
 
       both = fn view, where ->
@@ -785,9 +785,9 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       both.(view, "after patching into the agent DM")
 
       # A live top-level message in the human DM patches its excerpt.
-      say!(human_dm, jordan, "fresh from Jordan")
+      say!(human_dm, riley, "fresh from Riley")
       _ = render(view)
-      assert lv_assigns(view).list_excerpts[human_dm.id].content == "fresh from Jordan"
+      assert lv_assigns(view).list_excerpts[human_dm.id].content == "fresh from Riley"
       both.(view, "after a live message")
 
       # A sidebar invalidation reloads every list assign.
