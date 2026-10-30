@@ -52,6 +52,22 @@ defmodule Platform.Chat.AgentSlotMapTest do
     assert map == %{teal.id => "teal", rose.id => "rose", none.id => "blue", odd.id => "blue"}
   end
 
+  # Task 01a18940: a batch spanning several spaces carries one row per space
+  # for the same agent; every row gets the slot, in either input order (a
+  # last-wins `agent_id => participant.id` map kept only one of them).
+  test "one agent batched across several spaces gets its slot in EVERY space" do
+    agent = agent!("teal")
+    {:ok, in_a} = Chat.add_agent_participant(space!().id, agent)
+    {:ok, in_b} = Chat.add_agent_participant(space!().id, agent)
+
+    for batch <- [[in_a, in_b], [in_b, in_a]] do
+      assert Chat.agent_slot_map_for_participants(batch) == %{
+               in_a.id => "teal",
+               in_b.id => "teal"
+             }
+    end
+  end
+
   test "human participants are not in the map, and no agents is an empty map" do
     human = %Participant{
       id: Ecto.UUID.generate(),

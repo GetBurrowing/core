@@ -28,10 +28,13 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   query applies).
   """
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.Component, only: [assign: 3, update: 3]
 
+  alias Platform.Accounts.User
   alias Platform.Chat
   alias Platform.Chat.Participant
+  alias Platform.Repo
 
   @doc """
   Load `@list_excerpts`, `@list_identities` and `@list_private_ids` for the
@@ -217,15 +220,22 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   end
 
   @doc """
-  `%{space_id => %{name: String.t(), agent: nil | %{name, avatar_url, slot}}}`
-  for the DMs and group conversations (pinned ones included) and the pinned
-  task conversations.
+  `%{space_id => %{name: String.t(), agent: nil | %{name, avatar_url, slot},
+  human: nil | %{avatar_url: String.t()}}}` for the DMs and group
+  conversations (pinned ones included) and the pinned task conversations.
 
   A conversation's name comes from `Chat.display_name_for_space/3`, the same
   function the drawer's `sidebar_row_label/2` ends in, fed one batched
   participant read instead of one read per row. `agent` is set for a
   one-to-one DM whose other participant is an agent, so its row can draw that
   agent's avatar in its rung-3 slot.
+
+  `human` is set for a one-to-one DM whose other participant is a person WITH
+  an image, by the message flow's rule (`PresenceHooks.participant_identity/3`):
+  the participant row's `avatar_url`, else that user's `avatar_url`. The users
+  are read in one batched query, only for the rows the participant does not
+  already answer; a missing user is no image. With no image it is nil and the
+  row draws the person's initial.
   """
   def load_identities(assigns) do
     user_id = assigns[:user_id]
@@ -240,6 +250,8 @@ defmodule PlatformWeb.ChatLive.ChatListData do
     slots = Chat.agent_slot_map_for_participants(agent_participants)
     avatars = Chat.agent_avatar_map_for_participants(agent_participants)
 
+    user_avatars = user_avatar_map(conversations, participants_by_space, user_id)
+
     conversation_identities =
       Map.new(conversations, fn space ->
         participants = Map.get(participants_by_space, space.id, [])
@@ -247,13 +259,15 @@ defmodule PlatformWeb.ChatLive.ChatListData do
         {space.id,
          %{
            name: Chat.display_name_for_space(space, participants, user_id),
-           agent: dm_agent(space, participants, user_id, slots, avatars)
+           agent: dm_agent(space, participants, user_id, slots, avatars),
+           human: dm_human(space, participants, user_id, user_avatars)
          }}
       end)
 
     task_identities =
       Map.new(List.wrap(assigns[:pinned_task_spaces]), fn space ->
-        {space.id, %{name: Platform.Tasks.ChatPins.display_name_for_space(space), agent: nil}}
+        {space.id,
+         %{name: Platform.Tasks.ChatPins.display_name_for_space(space), agent: nil, human: nil}}
       end)
 
     Map.merge(task_identities, conversation_identities)
@@ -272,7 +286,7 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   # A one-to-one DM whose other participant is an agent: that agent's name
   # (the participant's display name, as the row's own label), avatar and slot.
   defp dm_agent(%{kind: "dm"}, participants, user_id, slots, avatars) do
-    case Enum.find(participants, &(&1.participant_id != user_id)) do
+    case dm_other(participants, user_id) do
       %Participant{participant_type: "agent", id: pid, display_name: name} ->
         %{
           name: name || "",
@@ -286,4 +300,60 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   end
 
   defp dm_agent(_space, _participants, _user_id, _slots, _avatars), do: nil
+
+  # A one-to-one DM whose other participant is a person: their image, the
+  # participant row's own first, then the user's. nil when neither is set, so
+  # the row keeps the initial.
+  defp dm_human(%{kind: "dm"}, participants, user_id, user_avatars) do
+    case dm_other(participants, user_id) do
+      %Participant{participant_type: "user"} = other ->
+        case present(other.avatar_url) || Map.get(user_avatars, other.participant_id) do
+          nil -> nil
+          url -> %{avatar_url: url}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp dm_human(_space, _participants, _user_id, _user_avatars), do: nil
+
+  # `user_id => avatar_url` for the people across the list's DMs whose
+  # participant row carries no image of its own: one query for the whole
+  # list, never one per row. Users with no image are absent.
+  defp user_avatar_map(conversations, participants_by_space, user_id) do
+    ids =
+      conversations
+      |> Enum.filter(&(&1.kind == "dm"))
+      |> Enum.map(&dm_other(Map.get(participants_by_space, &1.id, []), user_id))
+      |> Enum.filter(&match?(%Participant{participant_type: "user"}, &1))
+      |> Enum.reject(&present(&1.avatar_url))
+      |> Enum.map(& &1.participant_id)
+      |> Enum.uniq()
+
+    case ids do
+      [] ->
+        %{}
+
+      ids ->
+        from(u in User, where: u.id in ^ids, select: {u.id, u.avatar_url})
+        |> Repo.all()
+        |> Enum.reduce(%{}, fn {id, url}, acc ->
+          case present(url) do
+            nil -> acc
+            url -> Map.put(acc, id, url)
+          end
+        end)
+    end
+  end
+
+  defp dm_other(participants, user_id),
+    do: Enum.find(participants, &(&1.participant_id != user_id))
+
+  defp present(url) when is_binary(url) do
+    if String.trim(url) == "", do: nil, else: url
+  end
+
+  defp present(_url), do: nil
 end

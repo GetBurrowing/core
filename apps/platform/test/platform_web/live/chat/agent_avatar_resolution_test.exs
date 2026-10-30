@@ -135,6 +135,28 @@ defmodule PlatformWeb.ChatLive.AgentAvatarResolutionTest do
       assert Map.get(map, p2.id) == "/agents/two/avatar?v=BBB"
       assert Map.get(map, p3.id) == nil
     end
+
+    # Task 01a18940: the Chat list batches every DM and group into ONE call,
+    # so one agent arrives with a participant row per space. The map used to
+    # key `agent_id => participant.id` with `Map.new/2`, which kept only the
+    # last row: the agent's avatar resolved in one space and was nil in the
+    # rest. Both input orders are asserted so the test does not depend on
+    # which row a last-wins map would happen to keep.
+    test "one agent batched across several spaces resolves in EVERY space" do
+      agent = agent!(%{avatar_url: "/agents/many/avatar?v=MANY"})
+      {:ok, in_a} = Chat.add_agent_participant(space!().id, agent)
+      {:ok, in_b} = Chat.add_agent_participant(space!().id, agent)
+      {:ok, in_c} = Chat.add_agent_participant(space!().id, agent)
+      rows = [in_a, in_b, in_c]
+
+      for batch <- [rows, Enum.reverse(rows)] do
+        assert Chat.agent_avatar_map_for_participants(batch) == %{
+                 in_a.id => "/agents/many/avatar?v=MANY",
+                 in_b.id => "/agents/many/avatar?v=MANY",
+                 in_c.id => "/agents/many/avatar?v=MANY"
+               }
+      end
+    end
   end
 
   # ── End-to-end through the view-model the templates actually read ────────

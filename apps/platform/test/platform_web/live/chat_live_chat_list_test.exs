@@ -24,6 +24,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
   alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
+  alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListHooks
   alias PlatformWeb.ChatLive.Partials.ChatList
   alias PlatformWeb.SpaceTopics
@@ -600,6 +601,285 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       Repo.update!(Ecto.Changeset.change(agent, avatar_url: "/images/agent-blank.png"))
       {:ok, view2, _} = live(w.conn, ~p"/chat")
       assert has_element?(view2, "#{avatar} img[src='/images/agent-blank.png']")
+    end
+
+    # Task 01a18940 stage 1, measured on prod: Brosnan's DM row drew "B" on a
+    # blue ring while the message flow showed his image. `load_identities/1`
+    # resolves avatars and slots for every DM and group in ONE batch, and the
+    # Chat helpers keyed that batch `agent_id => participant.id`, keeping only
+    # the LAST row of an agent present in several listed spaces. Here the
+    # agent shares groups with the viewer listed before AND after the DM, so
+    # the DM row is never the one a last-wins map would keep, and the test
+    # asserts that precondition rather than trusting it.
+    test "an agent DM keeps its image and slot when the agent is also in listed groups",
+         %{conn: conn} do
+      w = world(conn)
+      url = "/agents/list-batch/avatar?v=BATCH"
+
+      agent =
+        Repo.insert!(%Agent{
+          slug: "list-batch-#{System.unique_integer([:positive])}",
+          name: "Batch Bot",
+          status: "active",
+          avatar_url: url,
+          color: "teal"
+        })
+
+      group_with_agent = fn ->
+        {:ok, group} = Chat.create_space(%{kind: "group"})
+        _ = join!(group, w.user.id, w.user.name)
+        {:ok, _} = Chat.add_agent_participant(group.id, agent)
+        group
+      end
+
+      before_group = group_with_agent.()
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(dm, w.user.id, w.user.name)
+      {:ok, dm_row} = Chat.add_agent_participant(dm.id, agent)
+      after_group = group_with_agent.()
+
+      batch =
+        [before_group.id, dm.id, after_group.id]
+        |> Chat.participants_by_space()
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.filter(&(&1.participant_id == agent.id))
+
+      assert length(batch) == 3
+      refute List.last(batch).id == dm_row.id
+
+      avatar = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-avatar']"
+
+      # Fresh /chat and direct entry into the DM (`ensure_loaded/1`) both
+      # load identities through the same batch.
+      for path <- [~p"/chat", ~p"/chat/#{ChatLive.space_nav_target(dm)}"] do
+        {:ok, view, _} = live(w.conn, path)
+
+        assert has_element?(view, "#{avatar}[data-avatar='agent'][data-agent-slot='teal']"),
+               "#{path}: the DM row lost the agent's slot"
+
+        assert has_element?(view, ~s(#{avatar} img[src="#{url}"])),
+               "#{path}: the DM row lost the agent's image"
+
+        refute view |> element(avatar) |> render() =~ ">B<"
+      end
+
+      # Negative arm on the same fixture: no avatar is the agent's initial on
+      # its own ring, with no image.
+      Repo.update!(Ecto.Changeset.change(agent, avatar_url: nil))
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, "#{avatar}[data-avatar='agent'][data-agent-slot='teal']")
+      refute has_element?(view, "#{avatar} img")
+      assert view |> element(avatar) |> render() =~ ">B<"
+    end
+
+    # Task 01a18940 stage 2: a human DM row drew the person's initial always,
+    # because the list carried no human image at all. It now draws the other
+    # person's image by the message flow's rule: the participant row's
+    # `avatar_url`, else the user's. Never the viewer's own.
+    test "a human DM row draws the other person's image, the participant's first",
+         %{conn: conn} do
+      viewer = create_user!(%{avatar_url: "/images/viewer-self.png"})
+      plain_member!(viewer, acme())
+      other = create_user!(%{name: "Riley Person", avatar_url: "/images/other-user.png"})
+
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(dm, viewer.id, viewer.name)
+      other_row = join!(dm, other.id, "Riley Person")
+
+      conn = login(conn, viewer.id)
+      avatar = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-avatar']"
+
+      # The user's image, on fresh /chat and on direct entry into the DM.
+      for path <- [~p"/chat", ~p"/chat/#{ChatLive.space_nav_target(dm)}"] do
+        {:ok, view, _} = live(conn, path)
+        human_img = ~s(#{avatar}[data-avatar="human"] img[src="/images/other-user.png"])
+        assert has_element?(view, human_img)
+        refute has_element?(view, ~s(#{avatar} img[src="/images/viewer-self.png"]))
+        refute view |> element(avatar) |> render() =~ ">R<"
+      end
+
+      # The participant row's own image wins over the user's.
+      {:ok, _} = Chat.update_participant(other_row, %{avatar_url: "/images/participant-own.png"})
+      {:ok, view, _} = live(conn, ~p"/chat")
+      assert has_element?(view, ~s(#{avatar} img[src="/images/participant-own.png"]))
+      refute has_element?(view, ~s(#{avatar} img[src="/images/other-user.png"]))
+    end
+
+    test "a human DM row with no image anywhere keeps the person's initial and no img",
+         %{conn: conn} do
+      w = world(conn)
+      viewer = Repo.get!(Platform.Accounts.User, w.user.id)
+      Repo.update!(Ecto.Changeset.change(viewer, avatar_url: "/images/viewer-self.png"))
+
+      # `world/1`'s Moore has no user row and no participant image.
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      avatar = "#chat-list [data-space-id='#{w.dm.id}'] [data-role='chat-list-avatar']"
+      assert has_element?(view, "#{avatar}[data-avatar='initial']")
+      refute has_element?(view, "#{avatar} img")
+      assert avatar_text(list_html(view), w.dm.id) == "M"
+
+      # Positive control on the same row: an image on Moore's participant
+      # row turns the initial into that image.
+      {:ok, _} = Chat.update_participant(w.moore, %{avatar_url: "/images/moore.png"})
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, ~s(#{avatar}[data-avatar="human"] img[src="/images/moore.png"]))
+      refute has_element?(view, "#{avatar}[data-avatar='initial']")
+    end
+
+    # Task 01a18940 stage 3: both DM images through the list's lifecycle. A
+    # human DM and an agent DM (the agent also in a listed group, so its
+    # identity comes out of the batched lookup), each with its own image.
+    test "both DM images survive navigation, a live message, a sidebar refresh and pinning",
+         %{conn: conn} do
+      viewer = create_user!(%{avatar_url: "/images/viewer-self.png"})
+      plain_member!(viewer, acme())
+      person = create_user!(%{name: "Riley Person", avatar_url: "/images/riley.png"})
+
+      agent =
+        Repo.insert!(%Agent{
+          slug: "list-life-#{System.unique_integer([:positive])}",
+          name: "Life Bot",
+          status: "active",
+          avatar_url: "/images/life-bot.png",
+          color: "teal"
+        })
+
+      {:ok, group} = Chat.create_space(%{kind: "group"})
+      _ = join!(group, viewer.id, viewer.name)
+      _ = join!(group, person.id, "Riley Person")
+      {:ok, _} = Chat.add_agent_participant(group.id, agent)
+
+      {:ok, human_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(human_dm, viewer.id, viewer.name)
+      riley = join!(human_dm, person.id, "Riley Person")
+
+      {:ok, agent_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(agent_dm, viewer.id, viewer.name)
+      {:ok, _} = Chat.add_agent_participant(agent_dm.id, agent)
+
+      channel = channel_in(acme(), "Lifecycle")
+      add_user!(channel.id, viewer.id)
+
+      conn = login(conn, viewer.id)
+      avatar = &"#chat-list [data-space-id='#{&1}'] [data-role='chat-list-avatar']"
+      human_img = ~s(#{avatar.(human_dm.id)}[data-avatar="human"] img[src="/images/riley.png"])
+      agent_img = ~s(#{avatar.(agent_dm.id)}[data-avatar="agent"] img[src="/images/life-bot.png"])
+
+      both = fn view, where ->
+        assert has_element?(view, human_img), "#{where}: the human DM lost its image"
+        assert has_element?(view, agent_img), "#{where}: the agent DM lost its image"
+      end
+
+      {:ok, view, _} = live(conn, ~p"/chat")
+      both.(view, "fresh /chat")
+
+      # Group and channel keep their own markers beside the images.
+      assert has_element?(view, "#{avatar.(group.id)}[data-avatar='group'] .hero-user-group")
+      refute has_element?(view, "#{avatar.(group.id)} img")
+      assert has_element?(view, "#chat-list [data-space-id='#{channel.id}'] [data-glyph='hash']")
+
+      # Live navigation into the agent DM: the desktop list pane stays.
+      view |> element("#chat-list-row-#{agent_dm.id}") |> render_click()
+      assert_patch(view, ~p"/chat/#{ChatLive.space_nav_target(agent_dm)}")
+      both.(view, "after patching into the agent DM")
+
+      # A live top-level message in the human DM patches its excerpt.
+      say!(human_dm, riley, "fresh from Riley")
+      _ = render(view)
+      assert lv_assigns(view).list_excerpts[human_dm.id].content == "fresh from Riley"
+      both.(view, "after a live message")
+
+      # A sidebar invalidation reloads every list assign.
+      send(view.pid, :sidebar_changed)
+      _ = render(view)
+      both.(view, "after :sidebar_changed")
+
+      # Back to the list.
+      render_patch(view, ~p"/chat")
+      both.(view, "after patching back to /chat")
+
+      # Pinned: both DMs leave Direct for the Pinned block, images intact,
+      # beside a pinned task conversation that keeps its own glyph.
+      {:ok, project} =
+        Platform.Tasks.create_project(%{name: "List Life #{System.unique_integer([:positive])}"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Lifecycle task",
+          status: "backlog",
+          sponsor_user_id: viewer.id
+        })
+
+      {:ok, %{space: task_space}} =
+        Platform.Tasks.ChatPins.pin(task.id, %{kind: "user", id: viewer.email}, viewer.email)
+
+      {:ok, _} = Sidebar.set_space_pinned(viewer.id, human_dm.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(viewer.id, agent_dm.id, true)
+      {:ok, pinned, _} = live(conn, ~p"/chat")
+      both.(pinned, "pinned")
+
+      assert has_element?(pinned, "#{avatar.(task_space.id)}[data-avatar='task'] .hero-check")
+      refute has_element?(pinned, "#{avatar.(task_space.id)} img")
+
+      for id <- [human_dm.id, agent_dm.id] do
+        assert has_element?(pinned, "#chat-list-rows-pinned [data-space-id='#{id}']")
+        refute has_element?(pinned, "#chat-list-rows-direct [data-space-id='#{id}']")
+      end
+    end
+
+    # A DM row masks only when its name is org-derived (a person's name names
+    # no org, see "masked: a project-code channel and a person's name stay
+    # verbatim"), so both counterparts here carry the seeded `Globex` org's
+    # name: the human exactly, the agent by a leading `globex-` token.
+    test "masking hides both DM images and initials; unmasking restores the images",
+         %{conn: conn} do
+      viewer = member!()
+      globex = Tenancy.get_org_by_slug!("globex")
+      plain_member!(viewer, globex)
+      # The org's own channel, as `mask_world/1` seeds it, so Globex is a
+      # section of this viewer's list.
+      _ = channel_in(globex, "Globex", "globex-#{System.unique_integer([:positive])}")
+      person = create_user!(%{avatar_url: "/images/globex-person.png"})
+
+      agent =
+        Repo.insert!(%Agent{
+          slug: "list-mask-#{System.unique_integer([:positive])}",
+          name: "globex-bot",
+          status: "active",
+          avatar_url: "/images/mask-bot.png",
+          color: "rose"
+        })
+
+      {:ok, human_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(human_dm, viewer.id, viewer.name)
+      _ = join!(human_dm, person.id, "Globex")
+
+      {:ok, agent_dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+      _ = join!(agent_dm, viewer.id, viewer.name)
+      {:ok, _} = Chat.add_agent_participant(agent_dm.id, agent)
+
+      {:ok, view, _} = live(login(conn, viewer.id), ~p"/chat")
+      human = "#chat-list [data-space-id='#{human_dm.id}'] [data-role='chat-list-avatar']"
+      bot = "#chat-list [data-space-id='#{agent_dm.id}'] [data-role='chat-list-avatar']"
+
+      # Positive control, mask off: both images draw.
+      assert has_element?(view, ~s(#{human} img[src="/images/globex-person.png"]))
+      assert has_element?(view, ~s(#{bot} img[src="/images/mask-bot.png"]))
+
+      mask(view, true)
+      on = list_html(view)
+
+      for {disc, space_id} <- [{human, human_dm.id}, {bot, agent_dm.id}] do
+        assert has_element?(view, "#{disc}[data-avatar='masked']")
+        refute has_element?(view, "#{disc} img")
+        assert avatar_text(on, space_id) == ""
+      end
+
+      mask(view, false)
+      assert has_element?(view, ~s(#{human} img[src="/images/globex-person.png"]))
+      assert has_element?(view, ~s(#{bot} img[src="/images/mask-bot.png"]))
     end
 
     test "a restricted channel renders the restricted row with no excerpt and no link",
