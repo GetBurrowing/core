@@ -405,7 +405,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # and the typed dependency fields on report_blocker. Measured at 5a289a564;
     # removing just those additions recovers both previous digests exactly.
     # Task 01a18b35 adds only meeting_triage_file.action_items.schema.
-    # Measured on moon at 539c5084d. Removing that schema must recover the
+    # Measured on the test rig at 539c5084d. Removing that schema must recover the
     # preceding literal pins, guarding against accepting unrelated drift.
     @previous_tool_digest_off "7aca2e98981962a2c77f4967f5fa429fa995c4baceb0d30ded53e9ce335645fe"
     @previous_tool_digest_on "c5fa92a1117a86778d813e4da43fc88e836ed61381c9f73bea5755a4ab732850"

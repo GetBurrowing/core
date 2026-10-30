@@ -19,7 +19,7 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePrioritiesTest do
 
     for customized <- [false, true] do
       prefix = if customized, do: "HUMAN tenant escalation policy stays.\n", else: ""
-      # Full audited live bodies match across kobo and milv; keep run identity.
+      # Full audited live bodies match across both installations; keep run identity.
       old_prompt =
         File.read!(
           Path.expand("../../../fixtures/meetings/triage_prompt_live_20261030.md", __DIR__)

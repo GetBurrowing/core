@@ -4,7 +4,7 @@ defmodule Platform.Repo.Migrations.ForwardMeetingTriagePriorities do
   @moduledoc """
   Task 01a18b35-249a-7000-97f2-b5acd5c0c99d: add explicit priority forwarding
   and server-owned batch control guidance without overwriting install edits.
-  Kobo and milv full rows/metadata were audited 2026-10-30: bodies match across
+  Both installations’ full rows/metadata were audited 2026-10-30: bodies match across
   installs; their skill label wording predates the imperative-title descriptor.
   Preserve that unrelated difference and the 20261030140000 This run block.
   """
