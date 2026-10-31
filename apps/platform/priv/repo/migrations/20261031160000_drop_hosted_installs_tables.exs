@@ -1,8 +1,8 @@
 defmodule Platform.Repo.Migrations.DropHostedInstallsTables do
   @moduledoc """
-  Task 01a19249-3433-7000-8507-405c6c506cad, stage 5: Kobo's hosted one-click
-  installs moved out of core into Burrow Cloud (GetBurrowing/burrow-cloud),
-  which now owns that data in its own database. The rows were imported there
+  Task 01a19249-3433-7000-8507-405c6c506cad, stage 5: the hosted one-click
+  installs moved out of core into Burrow Cloud, a separate service that now
+  owns that data in its own database. The rows were imported there
   (stage 4) before this ships, and a pg_dump of both tables was taken first.
 
     * Drops `installs` and `install_request_settings`, `IF EXISTS`: a fresh
