@@ -430,8 +430,11 @@ defmodule PlatformWeb.PublicBookingLive do
               </span>
               <button type="button" class="cal-guest-ghost" phx-click="change">Change</button>
             </div>
+            <%!-- v4 booking.js puts the label text and its `*` / `(optional)`
+               span straight into the flex-column field, so the marker sits
+               on its own line (task 01a18d9f fix round 3). --%>
             <label class="cal-field">
-              <span>Your name <span class="text-error" aria-hidden="true">*</span></span>
+              Your name <span class="text-error" aria-hidden="true">*</span>
               <input
                 id="g-n"
                 name="guest[name]"
@@ -446,11 +449,8 @@ defmodule PlatformWeb.PublicBookingLive do
               <span id="g-n-err" class="cal-err">{@errors[:name]}</span>
             </label>
             <label class="cal-field">
-              <span>
-                Email
-                <span :if={@policy.create_meeting} class="text-error" aria-hidden="true">*</span>
-                <span :if={!@policy.create_meeting} class="cal-hint">(optional)</span>
-              </span>
+              Email <span :if={@policy.create_meeting} class="text-error" aria-hidden="true">*</span>
+              <span :if={!@policy.create_meeting} class="cal-hint">(optional)</span>
               <input
                 id="g-e"
                 name="guest[email]"
@@ -471,10 +471,8 @@ defmodule PlatformWeb.PublicBookingLive do
               <span id="g-e-err" class="cal-err">{@errors[:email]}</span>
             </label>
             <label class="cal-field">
-              <span>
-                Anything {first_name(@policy.owner_name)} should know?
-                <span class="cal-hint">(optional)</span>
-              </span>
+              Anything {first_name(@policy.owner_name)} should know?
+              <span class="cal-hint">(optional)</span>
               <textarea id="g-notes" name="guest[notes]" maxlength="2000" class="cal-input">{@guest["notes"]}</textarea>
             </label>
             <div class="cal-segs">

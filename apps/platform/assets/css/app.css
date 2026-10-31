@@ -9770,6 +9770,12 @@ body.screen-share-fullscreen-active {
   flex-direction: column;
   gap: 12px;
 }
+/* `focus_wrap/1` adds an empty focus sentinel before and after the content.
+   As flex items they took two 12px gaps v4's modal does not have (+24px,
+   task 01a18d9f fix round 3); out of flow they take none. */
+.cal-modal > [tabindex="0"][aria-hidden="true"]:empty {
+  position: absolute;
+}
 @media (min-width: 1024px) {
   .cal-modal-scrim {
     align-items: center;
@@ -9866,9 +9872,10 @@ textarea.cal-input {
   font-size: 0.75rem;
   font-weight: 550;
 }
-.cal-err:empty {
-  display: none;
-}
+/* v4 keeps an empty `.err` in flow (app.js `#f-err`, `#ext-err`;
+   booking.js `#g-n-err`, `#g-e-err`), so it takes its container's gap
+   before Cancel/Create: notes to footer is 32px in v4 (task 01a18d9f fix
+   round 3). It is no longer hidden when empty. */
 .cal-hint {
   color: var(--color-subtle);
   font-size: 0.75rem;
@@ -10021,6 +10028,8 @@ textarea.cal-input {
   min-width: 200px;
   font-family: var(--font-mono-system);
   font-size: 0.75rem;
+  font-weight: 400;
+  line-height: normal;
   background: var(--color-base-200);
   border: 1px solid var(--edge);
   border-radius: var(--radius-field);
@@ -10174,6 +10183,7 @@ textarea.cal-input {
    inside the 550 `.field` label (task 01a18d9f fix round 2). */
 .cal-win {
   font-weight: 400;
+  line-height: normal;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -10214,9 +10224,14 @@ textarea.cal-input {
   gap: 6px;
   flex-wrap: wrap;
 }
+/* v4 `.slots span` / `.feed code` set `font: var(--fs-sm) var(--font-mono)`,
+   which resets weight to 400 and line-height to normal inside the 550
+   `.field` label (task 01a18d9f fix round 3). */
 .cal-slots span {
   font-family: var(--font-mono-system);
   font-size: 0.75rem;
+  font-weight: 400;
+  line-height: normal;
   border: 1px solid var(--edge);
   border-radius: var(--radius-field);
   padding: 3px 8px;
@@ -10358,9 +10373,13 @@ textarea.cal-input {
   flex-direction: column;
   gap: 8px;
 }
+/* v4 renders the slot list with an inline `display:flex;
+   flex-direction:column` (booking.js:47), which beats its phone
+   `.times .list` 2-column grid, so it is one column at every width
+   (task 01a18d9f fix round 3). */
 .cal-guest-list {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 .cal-guest-slot {
@@ -10485,10 +10504,6 @@ textarea.cal-input {
     overflow-y: auto;
     max-height: 600px;
   }
-  .cal-guest-list {
-    display: flex;
-    flex-direction: column;
-  }
   .cal-guest-form {
     grid-column: 2 / -1;
     padding: 24px;
@@ -10575,12 +10590,34 @@ textarea.cal-input {
     min-height: 0;
   }
 }
+/* Below lg the pane is v4's phone `.page`: a 16px-gap flex column with
+   16px 12px padding, so margins do not collapse (label to first row 67px,
+   task 01a18d9f fix round 3). The bottom padding is left to
+   `.clears-tab-bar`. */
 .mt-list-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0 12px 12px;
+  padding-top: 16px;
+  padding-left: 12px;
+  padding-right: 12px;
   background: var(--color-base-200);
+}
+.mt-list-pane > [data-section] {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* The pane's `display: flex` is unlayered, so it would beat the
+   `max-lg:hidden` utility that hides the list while a phone shows a
+   meeting; restate the hide here. */
+@media (max-width: 1023.98px) {
+  .mt-list-pane.max-lg\:hidden {
+    display: none;
+  }
 }
 .mt-detail {
   flex: 1;
@@ -10592,13 +10629,20 @@ textarea.cal-input {
   .mt-list-pane {
     flex: 0 0 270px;
     width: 270px;
-    padding: 0 8px 8px;
+    /* v4 `.lbody`: block flow, 8px all round (task 01a18d9f fix round 3). */
+    display: block;
+    padding: 8px;
     border-right: 1px solid var(--edge);
     background: var(--color-base-100);
   }
+  .mt-list-pane > [data-section] {
+    display: block;
+  }
 }
+/* v4 `h3.section-label` keeps the browser's 1em block margin at its
+   11px size: 11px above and below (task 01a18d9f fix round 3). */
 .mt-section-label {
-  margin: 0;
+  margin: 11px 0;
   font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -10642,11 +10686,12 @@ textarea.cal-input {
   align-items: center;
   gap: 8px;
 }
-/* Phone record tabs: 44px tap targets; v4 `.seg` type stays 12px. */
+/* Phone record tabs: 44px tap targets; v4 `.seg` type stays 12px and its
+   0 12px padding (task 01a18d9f fix round 3). */
 @media (max-width: 1023.98px) {
   .mt-tab {
     height: 44px;
-    padding: 0 14px;
+    padding: 0 12px;
   }
 }
 .mt-kind .cal-pill {

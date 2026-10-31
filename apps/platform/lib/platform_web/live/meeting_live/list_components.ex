@@ -281,7 +281,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
           <p>
             {if @row.people == [], do: "No one has joined yet.", else: Enum.join(@row.people, ", ")}
           </p>
-          <p :if={@row.host} class="!mb-0">Hosted by {@row.host}</p>
+          <p :if={@row.host}>Hosted by {@row.host}</p>
         </div>
         <div class="cal-segs">
           <.link
@@ -325,8 +325,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
             <%= case @tab do %>
               <% "recording" -> %>
                 <h3>Recording</h3>
-                <p :if={!@row.recording} class="!mb-0">No recording was saved for this meeting.</p>
-                <p :if={@row.recording} class="!mb-0">
+                <p :if={!@row.recording}>No recording was saved for this meeting.</p>
+                <p :if={@row.recording}>
                   <a
                     href={elem(@row.recording, 0)}
                     class="text-interactive underline"
@@ -338,7 +338,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
                 </p>
               <% "transcript" -> %>
                 <h3>Transcript</h3>
-                <p :if={@row.segments == []} class="!mb-0">
+                <p :if={@row.segments == []}>
                   No transcript was saved for this meeting.
                 </p>
                 <p :for={segment <- @row.segments} class="!text-base-content">
@@ -347,8 +347,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
                 </p>
               <% _ -> %>
                 <h3>Summary</h3>
-                <p :if={!@row.summary} class="!mb-0">No summary was saved for this meeting.</p>
-                <p :if={@row.summary} class="!mb-0 !text-base-content">
+                <p :if={!@row.summary}>No summary was saved for this meeting.</p>
+                <p :if={@row.summary} class="!text-base-content">
                   <span class="whitespace-pre-line">{@row.summary}</span>
                 </p>
             <% end %>
@@ -356,7 +356,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         <% else %>
           <div class="cal-panel">
             <h3>Meeting space</h3>
-            <p class="!mb-0">
+            <p>
               Use this room for the conversation. After the meeting, return here for its summary, recording, transcript, and briefing.
             </p>
           </div>
@@ -390,7 +390,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         phx-key="Escape"
       >
         <h2 id="meetings-new-room-title">New meeting</h2>
-        <form id="meetings-new-room-form" phx-submit="start_room" class="flex flex-col gap-3">
+        <form id="meetings-new-room-form" phx-submit="start_room">
           <label class="cal-field">
             Name<input
               name="title"
@@ -412,7 +412,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
               </option>
             </select>
           </label>
-          <p class="m-0 text-sm text-subtle">
+          <p class="my-[1em] text-sm text-subtle">
             Start a room now. Use Calendar to schedule a future meeting.
           </p>
           <p :if={@error} class="cal-err" role="alert">{@error}</p>
