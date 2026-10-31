@@ -519,7 +519,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           do: "Remove #{@person.name} as admin",
           else: "Make #{@person.name} an admin"
       }
-      class="btn btn-ghost btn-xs min-h-11 min-w-11 shrink-0 text-base-content lg:min-h-0 lg:min-w-0"
+      class="btn btn-ghost btn-xs min-h-11 min-w-11 shrink-0 text-base-content disabled:text-subtle lg:min-h-0 lg:min-w-0"
     >
       {if @person.admin?, do: "Remove admin", else: "Make admin"}
     </button>
