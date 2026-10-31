@@ -185,7 +185,19 @@ defmodule PlatformWeb.MeetingLiveCreateSheetTimeTest do
       view = open_sheet(conn)
       before = meeting_count()
 
-      html = submit(view, project, %{"date" => "", "date_incomplete" => "true"})
+      # Sent as a raw event: `form/3` only accepts the value the server
+      # rendered into the hidden field, and "true" is set by the hook.
+      html =
+        render_submit(view, "start_meeting", %{
+          "start_meeting" => %{
+            "name" => "Planning",
+            "project_id" => project.id,
+            "date" => "",
+            "date_incomplete" => "true",
+            "start_time" => "",
+            "duration_minutes" => "30"
+          }
+        })
 
       assert html =~ "Date is incomplete — pick the month, day and year."
       assert meeting_count() == before
