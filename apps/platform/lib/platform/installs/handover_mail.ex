@@ -175,8 +175,17 @@ defmodule Platform.Installs.HandoverMail do
 
     This page stops working once you've saved your details, or after 7 days.
 
-    Burrow, from Kobo
+    #{signoff()}
     """
+  end
+
+  # "Burrow, from <operator>": the operator is this control install's root
+  # org, read from the database rather than written into the tree.
+  defp signoff do
+    case Platform.Tenancy.get_root_org() do
+      %{name: name} when is_binary(name) and name != "" -> "Burrow, from #{name}"
+      _ -> "Burrow"
+    end
   end
 
   defp handover_url(token), do: PlatformWeb.Endpoint.url() <> "/install-status/" <> token

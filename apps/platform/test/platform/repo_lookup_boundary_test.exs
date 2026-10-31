@@ -152,6 +152,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
     {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
      "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
+    {"platform/installs/handover_mail.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a18f0c stage 4: deliver_ready/1 guards the install id with Platform.UUID.valid?/1 before its CAS `where: i.id == ^id`; it is called from the runner, the sweeper and `bin/platform eval`, and a malformed id answers {:ok, :already_claimed}"},
     {"platform/installs.ex", :platform_uuid_guard, "-", 2, :must_cast,
      "task 01a10315 stage 2: get/1 guards the install id with Platform.UUID.valid?/1 before `where: i.id == ^id`, because teardown/1 takes an id OR a slug from a mix task or `bin/platform eval` argument; a malformed id is nil and teardown falls back to the slug lookup. Task 01a18f0c stage 1: dismiss_request/2 guards the request id from the admin page the same way before its typed delete_all"},
     {"platform/agents/setup_agent.ex", :get_by, "Space", 1, :safe_internal,

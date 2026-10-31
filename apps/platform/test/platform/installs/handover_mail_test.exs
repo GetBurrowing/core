@@ -127,7 +127,8 @@ defmodule Platform.Installs.HandoverMailTest do
     assert draft.body =~ "https://#{install.primary_host}"
     assert draft.body =~ "/install-status/"
     assert draft.body =~ "Connect your AI"
-    assert draft.body =~ "Burrow, from Kobo"
+    # Signed by the control install's root org (prod: the operator).
+    assert draft.body =~ "Burrow, from #{Tenancy.get_root_org().name}"
     refute draft.body =~ ~r/minute|hour|today/i
 
     install = Installs.get(install.id)
