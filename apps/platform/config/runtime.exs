@@ -949,6 +949,19 @@ case System.get_env("BURROW_INSTALLS_DNS_ZONE") do
   _ -> :ok
 end
 
+# Install requests (task 01a18f0c stage 2). BURROW_INSTALL_INTAKE_TOKEN is the
+# bearer the getburrow.ing Pages Function sends to POST /api/install-requests
+# (unset: the route answers 404). BURROW_INSTALLS_MAIL_ORG_ID / _ACCOUNT_ID /
+# _SENDER_KEY name the mail account and sender the hand-over email uses
+# (stage 4; unset: no email is sent).
+config :platform, Platform.Installs,
+  intake_token: System.get_env("BURROW_INSTALL_INTAKE_TOKEN"),
+  mail_sender: %{
+    org_id: System.get_env("BURROW_INSTALLS_MAIL_ORG_ID"),
+    account_id: System.get_env("BURROW_INSTALLS_MAIL_ACCOUNT_ID"),
+    sender_key: System.get_env("BURROW_INSTALLS_MAIL_SENDER_KEY")
+  }
+
 # The install images are public, so no pull credential is used by default.
 # BURROW_INSTALLS_REGISTRY_AUTH_SLUG names a vault slug holding a docker
 # config.json to pass as --registry-auth instead (a private registry).

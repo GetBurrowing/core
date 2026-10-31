@@ -134,6 +134,13 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.VerifyGithubSignature)
   end
 
+  # The getburrow.ing request form's Pages Function (task 01a18f0c stage 2):
+  # JSON, no session, a bearer intake token. 404 while no token is configured.
+  pipeline :install_intake do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.VerifyInstallIntakeToken)
+  end
+
   # Extension HTTP routes (ADR 0055 Follow-up 2): `/api/ext/<prefix>/...` is
   # dispatched at runtime to the extension claiming `<prefix>`
   # (`PlatformWeb.Plugs.ExtensionRoutes`). JSON only and NOTHING else on
@@ -1263,6 +1270,15 @@ defmodule PlatformWeb.Router do
   scope "/api/meetings", PlatformWeb do
     pipe_through(:api)
     post("/segments", MeetingAgentController, :segments)
+  end
+
+  # Install requests from getburrow.ing (task 01a18f0c stage 2). HOST-AGNOSTIC
+  # like every machine caller: the Pages Function posts to a fixed URL.
+  # `log: false`: the params ARE the requester's name, email and note, so
+  # Phoenix's `Parameters:` line must not print them (as /api/webhooks/github).
+  scope "/api", PlatformWeb do
+    pipe_through(:install_intake)
+    post("/install-requests", InstallRequestController, :create, log: false)
   end
 
   scope "/api/webhooks", PlatformWeb do

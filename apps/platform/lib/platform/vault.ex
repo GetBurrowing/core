@@ -68,6 +68,19 @@ defmodule Platform.Vault do
   removed together with the `workspace_id` column. If you are reading this after
   that column is gone, this flag should have gone with it.
 
+  ## Named system readers
+
+  A grant row's `grantee_id` is a uuid, so `{:system, "<name>"}` could never
+  match one. `system_principals/0` gives each named in-BEAM system reader a
+  fixed uuid; a grant with `grantee_type: "system"` and that uuid is honoured
+  for exactly that accessor, and its access-log rows carry that uuid instead
+  of the anonymous system sentinel. Grants are written and removed like agent
+  grants, by a root admin through `Platform.Vault.Shared`
+  (`grant_system/3`, `revoke_system_grant/3`), with an `update` log row each.
+
+    * `"installs-provisioner"` — `Platform.Installs.DigitalOcean` reading
+      the shared `digital-ocean-api-infra` token (task 01a18f0c stage 1).
+
   ## Known limit
 
   The accessor tuple is caller-asserted, not cryptographically bound — any
@@ -96,6 +109,14 @@ defmodule Platform.Vault do
 
   # Sentinel UUID used when the accessor is anonymous/system (accessor_id NOT NULL in DB).
   @system_accessor_id "00000000-0000-0000-0000-000000000000"
+
+  # Named system readers -> their fixed grantee uuid (moduledoc "Named system
+  # readers"). Never reuse or change a uuid: grant and log rows hold it.
+  @system_principals %{"installs-provisioner" => "e3ee1349-ca10-46f7-aaa9-65205a820f86"}
+
+  @doc "Named system readers and their fixed grantee uuids (see the moduledoc)."
+  @spec system_principals() :: %{String.t() => String.t()}
+  def system_principals, do: @system_principals
 
   # Accessor types allowed to mutate platform-scoped credentials without a grant.
   @privileged_accessor_types ~w(system platform)
@@ -917,6 +938,12 @@ defmodule Platform.Vault do
   # All other cases (nil accessor, unknown accessor type): deny.
   defp check_access(_credential, _accessor, _permission), do: {:error, :access_denied}
 
+  # A named system reader matches grant rows by its fixed uuid.
+  defp check_explicit_grant(cred, "system", name, permission)
+       when is_binary(name) and is_map_key(@system_principals, name) do
+    check_explicit_grant(cred, "system", Map.fetch!(@system_principals, name), permission)
+  end
+
   defp check_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id, permission) do
     # A grantee_id that is not a UUID can never match a grant row, and handing it
     # to the query would raise rather than deny. Fail closed instead.
@@ -1012,6 +1039,11 @@ defmodule Platform.Vault do
 
   # Converts accessor tuple to {type_string, id_string}.
   # Falls back to a sentinel UUID for system/nil access (accessor_id NOT NULL in DB).
+  defp parse_accessor({type, name})
+       when type in [:system, "system"] and is_binary(name) and
+              is_map_key(@system_principals, name),
+       do: {"system", Map.fetch!(@system_principals, name)}
+
   defp parse_accessor({type, nil}) when is_atom(type), do: {to_string(type), @system_accessor_id}
   defp parse_accessor({type, id}) when is_atom(type), do: {to_string(type), normalize_uuid(id)}
   defp parse_accessor({type, nil}), do: {to_string(type), @system_accessor_id}

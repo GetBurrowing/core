@@ -227,7 +227,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       html = conn |> get(path(token)) |> html_response(200)
       assert html =~ ~r/Save these now\. We don(&#39;|')t keep a copy\./
       assert html =~ "Preparing your details"
-      refute html =~ "FAKECODE"
+      refute html =~ ~r/FAKE-[0-9a-f]{16}/
       refute html =~ "BEGIN OPENSSH"
     end
 
@@ -244,7 +244,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(
                view,
                "#handover-signin-value.hidden",
-               "https://#{install.primary_host}/auth/handover?code=FAKECODE"
+               "https://#{install.primary_host}/auth/handover?code=FAKE-"
              )
 
       assert html =~ "Sign-in link"
@@ -279,7 +279,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       view |> form("#handover-ack", %{saved: "true"}) |> render_change()
       refute has_element?(view, "#open-burrow[disabled]")
       # Ticking re-rendered the page but not the card: the browser keeps it.
-      assert has_element?(view, "#handover-signin-value", "FAKECODE")
+      assert has_element?(view, "#handover-signin-value", "code=FAKE-")
 
       url = "https://#{install.primary_host}/setup/connect-ai"
 
@@ -296,24 +296,25 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       refute html =~ "sign-in"
       refute html =~ "Sign-in"
       refute html =~ "BEGIN OPENSSH"
-      refute html =~ "FAKECODE"
+      refute html =~ ~r/FAKE-[0-9a-f]{16}/
     end
 
     test "the credentials are not held in the LiveView's state after the render",
          %{conn: conn, token: token, install: install} do
       {:ok, view, _html} = live(conn, path(token))
-      assert render(view) =~ "FAKECODE"
+      [code] = Regex.run(~r/FAKE-[0-9a-f]{16}/, render(view))
 
       state = :sys.get_state(view.pid)
       # Positive control: the walker does reach assigns.
       assert deep_holds?(state, install.business_name)
-      refute deep_holds?(state, "FAKECODE")
+      refute deep_holds?(state, code)
       refute deep_holds?(state, "BEGIN OPENSSH")
 
       # A broadcast while the card is up neither re-reveals nor empties it.
       send(view.pid, {:install_updated, install.id})
-      assert render(view) =~ "FAKECODE"
-      refute deep_holds?(:sys.get_state(view.pid), "FAKECODE")
+      # Same code: a re-reveal would have minted a different one.
+      assert render(view) =~ code
+      refute deep_holds?(:sys.get_state(view.pid), code)
     end
 
     test "an expired hand-over shows the ready page without credentials",
@@ -321,7 +322,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       Installs.update!(install, %{handover_sealed: nil, handover_expired_at: DateTime.utc_now()})
       {:ok, _view, html} = live(conn, path(token))
       assert html =~ "Your Burrow is ready"
-      refute html =~ "FAKECODE"
+      refute html =~ ~r/FAKE-[0-9a-f]{16}/
     end
   end
 
@@ -336,7 +337,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
     Installs.update!(install, %{status: "destroyed"})
     {:ok, _view, html} = live(conn, path(token))
     assert html =~ "This install has been removed"
-    refute html =~ "FAKECODE"
+    refute html =~ ~r/FAKE-[0-9a-f]{16}/
   end
 
   test "step timings format as m:ss" do

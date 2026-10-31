@@ -11,7 +11,9 @@ defmodule Platform.Installs.Fake do
       firewalls, DNS records, per-call counts, injected failures);
     * a `Platform.Installs.Render`, `Platform.Installs.Probe` and
       `Platform.Installs.Bootstrap` that advance each step after
-      `fake_delay_ms` (3 s) and return `https://<primary>/auth/handover?code=FAKECODE`;
+      `fake_delay_ms` (3 s) and return `https://<primary>/auth/handover?code=FAKE-<16 hex>`,
+      a fresh code per call (task 01a18f0c stage 4: a log grep can then look
+      for a value that exists only in this run);
     * the failure injector: `inject_failure("reserve" | "install" | "connect" | "final", times)`
       makes that step fail `times` times.
 
@@ -193,6 +195,8 @@ defmodule Platform.Installs.Fake do
   def admin_link(install, _auth_host, _secrets) do
     if take_failure("final"),
       do: {:error, {:bootstrap_failed, "injected"}},
-      else: {:ok, "https://#{install.primary_host}/auth/handover?code=FAKECODE"}
+      else: {:ok, "https://#{install.primary_host}/auth/handover?code=#{fake_code()}"}
   end
+
+  defp fake_code, do: "FAKE-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 end

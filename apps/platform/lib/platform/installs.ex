@@ -12,11 +12,25 @@ defmodule Platform.Installs do
 
     * `create/2`: a root admin creates an install. Returns the install and
       its status token ONCE; only the token's sha256 is stored. The token is
-      the capability for the customer's progress page (`get_by_token/2`). The
-      marketing-site front door (out of scope here) will call this too.
+      the capability for the customer's progress page (`get_by_token/2`).
+    * `request/1`: the getburrow.ing front door (task 01a18f0c). A request is
+      an `installs` row with status `requested`, one open per email; a root
+      admin turns it into a run with `provision_request/2` (or dismisses it,
+      `dismiss_request/2`), unless the spend gate
+      `Platform.Installs.RequestSettings` provisions it at once.
     * `retry/2`, `teardown/1`, `reveal_handover/1`, `acknowledge_handover/1`.
     * `defaults/0`: the experiment surface,
       `config :platform, Platform.Installs, default_size:, sizes:, regions:`.
+
+  ## Install-request environment (task 01a18f0c)
+
+    * `BURROW_INSTALL_INTAKE_TOKEN` (`intake_token`): the bearer token the
+      getburrow.ing Pages Function sends to `POST /api/install-requests`
+      (`PlatformWeb.Plugs.VerifyInstallIntakeToken`). Unset: the route 404s.
+    * `BURROW_INSTALLS_MAIL_ORG_ID`, `BURROW_INSTALLS_MAIL_ACCOUNT_ID`,
+      `BURROW_INSTALLS_MAIL_SENDER_KEY` (`mail_sender: %{org_id, account_id,
+      sender_key}`): the mail account and sender the requester's hand-over
+      email goes out through. Any unset: no email is sent.
 
   ## Teardown is one command
 
@@ -174,17 +188,8 @@ defmodule Platform.Installs do
   def create(actor, attrs) do
     with :ok <- Access.authorize_install(actor),
          {:ok, fields} <- validate_create(attrs) do
-      token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-      key = SshKey.generate()
-
-      result =
-        insert_with_unique_slug(fields, %{
-          status: "queued",
-          steps: Runner.initial_steps(),
-          ssh_public_key: key.public,
-          status_token_hash: hash_token(token),
-          handover_sealed: Handover.wrap(%{"ssh_private_key" => key.private})
-        })
+      {token, provisioned} = provision_secrets()
+      result = insert_with_unique_slug(fields, provisioned)
 
       with {:ok, install} <- result do
         if config(:start_runs, true), do: Runner.start(install.id)
@@ -263,18 +268,7 @@ defmodule Platform.Installs do
 
   defp insert_with_unique_slug(fields, extra, attempts \\ 3) do
     slug = new_slug(fields.business_name)
-
-    primary =
-      case fields do
-        %{domain_mode: "ours", dns_zone: zone} -> "#{slug}.#{zone}"
-        %{primary_host: host} -> host
-      end
-
-    attrs =
-      fields
-      |> Map.drop([:dns_zone])
-      |> Map.merge(extra)
-      |> Map.merge(%{slug: slug, primary_host: primary})
+    attrs = fields |> provisioned_fields(slug) |> Map.merge(extra) |> Map.put(:slug, slug)
 
     case %Install{} |> Install.create_changeset(attrs) |> Repo.insert(@no_query_log) do
       {:ok, install} ->
@@ -286,6 +280,35 @@ defmodule Platform.Installs do
           do: insert_with_unique_slug(fields, extra, attempts - 1),
           else: error
     end
+  end
+
+  # What `create/2` and `provision_request/2` both write to queue a run: the
+  # install's root key (private half sealed in the hand-over), a status token
+  # (only its hash is stored) and the initial steps. Returns the token too.
+  defp provision_secrets do
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    key = SshKey.generate()
+
+    {token,
+     %{
+       status: "queued",
+       steps: Runner.initial_steps(),
+       ssh_public_key: key.public,
+       status_token_hash: hash_token(token),
+       handover_sealed: Handover.wrap(%{"ssh_private_key" => key.private})
+     }}
+  end
+
+  # `validate_create/1`'s fields for an install whose slug is `slug`: a
+  # subdomain of ours is `<slug>.<zone>`.
+  defp provisioned_fields(fields, slug) do
+    primary =
+      case fields do
+        %{domain_mode: "ours", dns_zone: zone} -> "#{slug}.#{zone}"
+        %{primary_host: host} -> host
+      end
+
+    fields |> Map.drop([:dns_zone]) |> Map.put(:primary_host, primary)
   end
 
   @doc """
@@ -364,15 +387,380 @@ defmodule Platform.Installs do
     end
   end
 
-  @doc "Every install, newest first. Root admins only."
+  @doc """
+  Every install, newest first. Root admins only. A `requested` row is not an
+  install yet and is listed by `list_requests/1` instead.
+  """
   @spec list(term()) :: {:ok, [Install.t()]} | {:error, :unauthorized}
   def list(actor) do
     with :ok <- Access.authorize_install(actor) do
-      {:ok, Repo.all(from(i in Install, order_by: [desc: i.inserted_at]))}
+      {:ok,
+       Repo.all(
+         from(i in Install, where: i.status != "requested", order_by: [desc: i.inserted_at])
+       )}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Install requests (task 01a18f0c stage 1)
+  # ---------------------------------------------------------------------------
+
+  @open_statuses ~w(requested queued provisioning ready)
+  @requests_topic "install-requests"
+  @requester_name_max 120
+  @note_max 1000
+  @email_max 254
+
+  @doc """
+  Record an install request from the public form. `attrs` (string or atom
+  keys): `name`, `email`, `business`, `note` and `website` (the honeypot).
+
+  A request IS an `installs` row with status `requested`; there is no other
+  store. Returns:
+
+    * `{:ok, :ignored}`: the honeypot `website` is filled. Nothing is written.
+    * `{:ok, :duplicate}`: lower(email) already has a `requested`, `queued`,
+      `provisioning` or `ready` install. Nothing is written. Two concurrent
+      requests for one email meet the partial unique index
+      `installs_one_open_request_per_email` and the loser gets this too.
+    * `{:ok, :created}`: one `requested` row.
+    * `{:error, {:invalid, field}}`, `field` one of `:email`, `:name`,
+      `:note`, `:business_name`.
+
+  The business name is NORMALISED to satisfy `valid_business_name?/1` (it
+  becomes the install's ROOT_ORG_NAME): `"`, `$`, backtick and control
+  characters go, whitespace collapses, and it is cut to 80 characters. The
+  operator sees the normalised name before clicking Provision.
+
+  ## The spend gate
+
+  Only when `Platform.Installs.RequestSettings.get().auto_provision_requests`
+  is on does a request provision at once, and even then only while fewer than
+  `auto_provision_max_in_flight` (default 3) installs are queued or
+  provisioning and fewer than `auto_provision_max_per_day` (default 10)
+  requests were provisioned in the last 24 hours. Past either cap the row
+  stays `requested` for an operator. With the switch off (the default) a
+  request makes no provider call at all.
+
+  The requester's email is unverified: whoever types an address gets the
+  hand-over at it. The operator's Provision click is the check, which is why
+  auto-provision is off by default.
+
+  No write or read here is query-logged, and nothing logged carries the
+  requester's name, email or note.
+  """
+  @spec request(map()) ::
+          {:ok, :created | :duplicate | :ignored} | {:error, {:invalid, atom()}}
+  def request(attrs) when is_map(attrs) do
+    attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+
+    if honeypot_filled?(attrs["website"]) do
+      {:ok, :ignored}
+    else
+      with {:ok, fields} <- validate_request(attrs) do
+        if open_install_exists?(fields.owner_email),
+          do: {:ok, :duplicate},
+          else: insert_request(fields)
+      end
+    end
+  end
+
+  def request(_attrs), do: {:error, {:invalid, :email}}
+
+  defp honeypot_filled?(nil), do: false
+  defp honeypot_filled?(value) when is_binary(value), do: String.trim(value) != ""
+  defp honeypot_filled?(_other), do: true
+
+  defp validate_request(attrs) do
+    with {:ok, email} <- request_email(attrs["email"]),
+         {:ok, name} <- requester_name(attrs["name"]),
+         {:ok, note} <- request_note(attrs["note"]),
+         {:ok, business} <- normalise_business_name(attrs["business"]) do
+      {:ok,
+       %{owner_email: email, requester_name: name, request_note: note, business_name: business}}
+    end
+  end
+
+  defp request_email(email) when is_binary(email) do
+    email = email |> String.trim() |> String.downcase()
+
+    if String.valid?(email) and byte_size(email) <= @email_max and Regex.match?(@email, email),
+      do: {:ok, email},
+      else: {:error, {:invalid, :email}}
+  end
+
+  defp request_email(_), do: {:error, {:invalid, :email}}
+
+  defp requester_name(name) when is_binary(name) do
+    name = if String.valid?(name), do: String.trim(name), else: ""
+
+    if String.length(name) in 1..@requester_name_max and not control_chars?(name),
+      do: {:ok, name},
+      else: {:error, {:invalid, :name}}
+  end
+
+  defp requester_name(_), do: {:error, {:invalid, :name}}
+
+  defp request_note(nil), do: {:ok, nil}
+
+  defp request_note(note) when is_binary(note) do
+    cond do
+      not String.valid?(note) -> {:error, {:invalid, :note}}
+      String.trim(note) == "" -> {:ok, nil}
+      String.length(String.trim(note)) <= @note_max -> {:ok, String.trim(note)}
+      true -> {:error, {:invalid, :note}}
+    end
+  end
+
+  defp request_note(_), do: {:error, {:invalid, :note}}
+
+  defp control_chars?(text), do: Regex.match?(~r/\p{Cc}/u, text)
+
+  @doc """
+  `name` made to satisfy `valid_business_name?/1`, or
+  `{:error, {:invalid, :business_name}}` when nothing usable is left.
+  """
+  @spec normalise_business_name(term()) :: {:ok, String.t()} | {:error, {:invalid, atom()}}
+  def normalise_business_name(name) when is_binary(name) do
+    normalised =
+      if String.valid?(name) do
+        name
+        |> String.replace(~r/[\p{Cc}]/u, " ")
+        |> String.replace(["\"", "$", "`"], "")
+        |> String.graphemes()
+        |> Enum.filter(&String.printable?/1)
+        |> Enum.join()
+        |> String.replace(~r/\s+/u, " ")
+        |> String.trim()
+        |> String.slice(0, @org_name_max)
+        |> String.trim()
+      else
+        ""
+      end
+
+    if valid_business_name?(normalised),
+      do: {:ok, normalised},
+      else: {:error, {:invalid, :business_name}}
+  end
+
+  def normalise_business_name(_), do: {:error, {:invalid, :business_name}}
+
+  defp open_install_exists?(email) do
+    from(i in Install,
+      where: fragment("lower(?)", i.owner_email) == ^email and i.status in @open_statuses
+    )
+    |> Repo.exists?(@no_query_log)
+  end
+
+  defp insert_request(fields, attempts \\ 3) do
+    attrs =
+      Map.merge(fields, %{
+        slug: new_slug(fields.business_name),
+        status: "requested",
+        requested_at: DateTime.utc_now()
+      })
+
+    case %Install{} |> Install.request_changeset(attrs) |> Repo.insert(@no_query_log) do
+      {:ok, install} ->
+        Logger.info("[installs] request #{install.id} created")
+        broadcast(install.id)
+        broadcast_requests()
+        maybe_auto_provision(install)
+        {:ok, :created}
+
+      {:error, %Ecto.Changeset{errors: errors}} = error ->
+        cond do
+          Keyword.has_key?(errors, :owner_email) -> {:ok, :duplicate}
+          Keyword.has_key?(errors, :slug) and attempts > 1 -> insert_request(fields, attempts - 1)
+          true -> error
+        end
+    end
+  end
+
+  defp maybe_auto_provision(%Install{id: id}) do
+    cond do
+      not Platform.Installs.RequestSettings.get().auto_provision_requests ->
+        :ok
+
+      auto_provision_capped?() ->
+        Logger.warning(
+          "[installs] request #{id} left for an operator: auto-provision cap reached"
+        )
+
+      true ->
+        case do_provision_request(id) do
+          {:ok, _install} ->
+            Logger.info("[installs] request #{id} auto-provisioned")
+
+          {:error, reason} ->
+            Logger.warning(
+              "[installs] auto-provision of request #{id} failed: #{reason_code(reason)}"
+            )
+        end
+    end
+  end
+
+  # The architecture review's must-have: with the switch on, distinct emails
+  # alone must not be able to buy an unbounded number of servers.
+  defp auto_provision_capped? do
+    in_flight =
+      Repo.aggregate(
+        from(i in Install, where: i.status in ["queued", "provisioning"]),
+        :count
+      )
+
+    since = DateTime.add(DateTime.utc_now(), -24 * 60 * 60, :second)
+
+    provisioned_today =
+      Repo.aggregate(
+        from(i in Install,
+          where: not is_nil(i.requested_at) and i.status != "requested" and i.updated_at >= ^since
+        ),
+        :count
+      )
+
+    in_flight >= config(:auto_provision_max_in_flight, 3) or
+      provisioned_today >= config(:auto_provision_max_per_day, 10)
+  end
+
+  @doc """
+  Provision the `requested` install `id`: one click, nothing retyped.
+  `actor` must be a root admin (`Platform.Access.authorize_install/1`).
+
+  The region is the first of `defaults().regions` (the preferred region the
+  default size can be created in now), the size `defaults().default_size`,
+  and the domain a subdomain of ours (`<slug>.<BURROW_INSTALLS_DNS_ZONE>`).
+  They pass through the same validation `create/2` uses. The row gets the
+  install's root key, sealed hand-over and steps exactly as `create/2` would
+  and goes to `queued`; the run starts (honouring `start_runs`).
+
+  The status token minted here is DISCARDED: the requester's token is minted
+  when the install is ready (stage 4's hand-over email).
+
+  Errors: `:unauthorized`, `:not_found`, `:not_requested` (already
+  provisioned or dismissed), `:dns_zone_missing`, `{:invalid, field}`.
+  """
+  @spec provision_request(term(), term()) :: {:ok, Install.t()} | {:error, term()}
+  def provision_request(:system_auto, _id), do: {:error, :unauthorized}
+
+  def provision_request(actor, id) do
+    with :ok <- Access.authorize_install(actor), do: do_provision_request(id)
+  end
+
+  # Reached by an authorised admin, or by request/1 behind the spend gate.
+  defp do_provision_request(id) do
+    case get(id) do
+      nil ->
+        {:error, :not_found}
+
+      %Install{status: "requested"} = row ->
+        defaults = defaults()
+
+        with {:ok, fields} <-
+               validate_create(%{
+                 "business_name" => row.business_name,
+                 "owner_email" => row.owner_email,
+                 "region" => List.first(defaults.regions),
+                 "size" => defaults.default_size,
+                 "domain_mode" => "ours"
+               }),
+             {_discarded_token, provisioned} = provision_secrets(),
+             attrs =
+               fields
+               |> provisioned_fields(row.slug)
+               |> Map.drop([:business_name, :owner_email])
+               |> Map.merge(provisioned),
+             {:ok, install} <- queue_request(row.id, attrs) do
+          broadcast(install.id)
+          broadcast_requests()
+          if config(:start_runs, true), do: Runner.start(install.id)
+          {:ok, install}
+        end
+
+      %Install{} ->
+        {:error, :not_requested}
+    end
+  end
+
+  # Row-locked, so two concurrent clicks provision once.
+  defp queue_request(id, attrs) do
+    Repo.transaction(
+      fn ->
+        locked =
+          Repo.one(
+            from(i in Install, where: i.id == ^id and i.status == "requested", lock: "FOR UPDATE")
+          )
+
+        with %Install{} <- locked,
+             {:ok, install} <-
+               locked |> Install.update_changeset(attrs) |> Repo.update(@no_query_log) do
+          install
+        else
+          nil -> Repo.rollback(:not_requested)
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end,
+      @no_query_log
+    )
+  end
+
+  @doc "Every `requested` row, oldest first. Root admins only."
+  @spec list_requests(term()) :: {:ok, [Install.t()]} | {:error, :unauthorized}
+  def list_requests(actor) do
+    with :ok <- Access.authorize_install(actor) do
+      {:ok,
+       Repo.all(
+         from(i in Install,
+           where: i.status == "requested",
+           order_by: [asc: i.requested_at, asc: i.inserted_at]
+         )
+       )}
+    end
+  end
+
+  @doc """
+  Hard-delete the `requested` row `id`, so the requester's details go with
+  it. Root admins only. `{:error, :not_requested}` when there is no such
+  requested row (already provisioned, dismissed or never there).
+  """
+  @spec dismiss_request(term(), term()) :: :ok | {:error, :unauthorized | :not_requested}
+  def dismiss_request(actor, id) do
+    with :ok <- Access.authorize_install(actor) do
+      if Platform.UUID.valid?(id) do
+        case Repo.delete_all(
+               from(i in Install, where: i.id == ^id and i.status == "requested"),
+               @no_query_log
+             ) do
+          {1, _} ->
+            Logger.info("[installs] request #{id} dismissed")
+            broadcast(id)
+            broadcast_requests()
+            :ok
+
+          {0, _} ->
+            {:error, :not_requested}
+        end
+      else
+        {:error, :not_requested}
+      end
     end
   end
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)
+
+  @doc """
+  Replace `install`'s status token with a fresh one and return it. Only its
+  sha256 is stored; every earlier token stops resolving. Used by
+  `Platform.Installs.HandoverMail` (task 01a18f0c stage 4), which mints the
+  requester's token at ready time because `provision_request/2` discarded
+  the provision-time one.
+  """
+  @spec mint_status_token(Install.t()) :: String.t()
+  def mint_status_token(%Install{} = install) do
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    update!(install, %{status_token_hash: hash_token(token)})
+    token
+  end
 
   # ---------------------------------------------------------------------------
   # Retry / resume
@@ -469,7 +857,8 @@ defmodule Platform.Installs do
   # ---------------------------------------------------------------------------
 
   @doc "Tear an install down by id or slug. See the moduledoc."
-  @spec teardown(String.t()) :: :ok | {:error, :not_found | :droplets_remain | term()}
+  @spec teardown(String.t()) ::
+          :ok | {:error, :not_found | :not_provisioned | :droplets_remain | term()}
   def teardown(id_or_slug) do
     case get(id_or_slug) || get_by_slug(id_or_slug) do
       nil ->
@@ -477,6 +866,10 @@ defmodule Platform.Installs do
 
       %Install{status: "destroyed"} ->
         :ok
+
+      # Task 01a18f0c: a request owns nothing at the provider; dismiss it.
+      %Install{status: "requested"} ->
+        {:error, :not_provisioned}
 
       install ->
         Runner.stop(install.id)
@@ -748,11 +1141,14 @@ defmodule Platform.Installs do
   @fallback_prices %{"s-2vcpu-4gb" => 24, "s-4vcpu-8gb" => 48}
 
   @doc ~S'A region slug in business terms: `"New York (nyc3)"`.'
-  @spec region_label(String.t()) :: String.t()
+  @spec region_label(String.t() | nil) :: String.t() | nil
+  def region_label(nil), do: nil
   def region_label(region), do: "#{Map.get(@region_names, region, region)} (#{region})"
 
   @doc ~S'A size slug in business terms: `"s-2vcpu-4gb"` is `"2 vCPU / 4 GB"`.'
-  @spec size_label(String.t()) :: String.t()
+  @spec size_label(String.t() | nil) :: String.t() | nil
+  def size_label(nil), do: nil
+
   def size_label(size) do
     case Regex.run(~r/(\d+)vcpu-(\d+)gb/, size) do
       [_, cpu, gb] -> "#{cpu} vCPU / #{gb} GB"
@@ -804,6 +1200,77 @@ defmodule Platform.Installs do
     install = install |> Install.update_changeset(attrs) |> Repo.update!(@no_query_log)
     broadcast(install.id)
     install
+  end
+
+  @doc """
+  Subscribe to `:install_requests_changed`, broadcast whenever a request is
+  created, provisioned or dismissed (task 01a18f0c stage 3).
+  """
+  def subscribe_requests, do: Phoenix.PubSub.subscribe(Platform.PubSub, @requests_topic)
+
+  defp broadcast_requests,
+    do: Phoenix.PubSub.broadcast(Platform.PubSub, @requests_topic, :install_requests_changed)
+
+  @doc """
+  The hand-over email state of each install that came from a request
+  (`requested_at` set), as one word: `"not sent yet"`, `"queued"` (also while
+  sending), `"accepted"`, `"failed"`, `"refused"` or `"not configured"` (a
+  ready install with no email because the mail sender is not configured).
+  Read from `mail_deliveries.status` only; never a body. `%{id => word}`.
+  """
+  @spec handover_email_states([Install.t()]) :: %{String.t() => String.t()}
+  def handover_email_states(installs) do
+    from_request = Enum.filter(installs, & &1.requested_at)
+
+    delivery_ids =
+      from_request |> Enum.map(& &1.handover_email_delivery_id) |> Enum.reject(&is_nil/1)
+
+    statuses =
+      if delivery_ids == [],
+        do: %{},
+        else:
+          Repo.all(
+            from(d in Platform.Mail.Delivery,
+              where: d.id in ^delivery_ids,
+              select: {d.id, d.status}
+            )
+          )
+          |> Map.new()
+
+    configured? = mail_sender_configured?()
+
+    Map.new(from_request, fn install ->
+      {install.id, email_state(install, statuses, configured?)}
+    end)
+  end
+
+  defp email_state(%Install{handover_email_delivery_id: id}, statuses, _configured?)
+       when is_binary(id) do
+    case Map.get(statuses, id) do
+      status when status in ["queued", "sending"] -> "queued"
+      status when status in ["accepted", "failed", "refused"] -> status
+      _ -> "not sent yet"
+    end
+  end
+
+  defp email_state(%Install{status: "ready"}, _statuses, false), do: "not configured"
+  defp email_state(_install, _statuses, _configured?), do: "not sent yet"
+
+  @doc """
+  Whether the requester hand-over email can be sent: mail is enabled and
+  `mail_sender` (`BURROW_INSTALLS_MAIL_*`) names an org, account and sender.
+  """
+  @spec mail_sender_configured?() :: boolean()
+  def mail_sender_configured? do
+    sender = config(:mail_sender, %{}) || %{}
+
+    Platform.Mail.Config.enabled?() and
+      Enum.all?([:org_id, :account_id, :sender_key], fn key ->
+        case Map.get(sender, key) do
+          value when is_binary(value) -> String.trim(value) != ""
+          _ -> false
+        end
+      end)
   end
 
   @doc "Subscribe to `{:install_updated, id}` for one install."

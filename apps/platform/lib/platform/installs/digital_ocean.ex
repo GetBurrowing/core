@@ -14,6 +14,12 @@ defmodule Platform.Installs.DigitalOcean do
   module and is never logged. `GET /v2/account` is 403 for this token and is
   never called.
 
+  A shared secret is readable only through an explicit grant. That read is
+  admitted by a `system` grant for `"installs-provisioner"` (task 01a18f0c:
+  `Platform.Vault.system_principals/0`, written on prod by migration
+  `20261031010100_grant_installs_provisioner_do_token`, revocable at
+  `/admin/vault`). Without it every call is `{:error, :access_denied}`.
+
   `config :platform, #{inspect(__MODULE__)}, token_source:` overrides where the
   token comes from: `{:vault, slug}` (default) or `{:static, token}` (tests
   and dev stub mode, so stub mode never reads the real token).

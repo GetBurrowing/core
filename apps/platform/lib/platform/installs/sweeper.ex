@@ -5,6 +5,11 @@ defmodule Platform.Installs.Sweeper do
   keep a customer's root key around because nobody came back for it.
   `Process.send_after/3` ticks, the shape of `Platform.Calendar.BookingRateLimit`'s
   sweep; core has no job queue.
+
+  Task 01a18f0c stage 4: each tick also sends any requester hand-over email
+  still owed (`Platform.Installs.HandoverMail.deliver_pending/0`): a crash
+  between ready and the claim, or mail configured after the fact. The CAS
+  claim makes it safe beside the runner.
   """
   use GenServer
 
@@ -29,6 +34,13 @@ defmodule Platform.Installs.Sweeper do
     rescue
       exception ->
         Logger.error("[installs] hand-over sweep raised #{inspect(exception.__struct__)}")
+    end
+
+    try do
+      Platform.Installs.HandoverMail.deliver_pending()
+    rescue
+      exception ->
+        Logger.error("[installs] hand-over email sweep raised #{inspect(exception.__struct__)}")
     end
 
     Process.send_after(self(), :sweep, state.interval)
