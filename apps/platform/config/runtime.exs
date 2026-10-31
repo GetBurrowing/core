@@ -940,89 +940,10 @@ if files_service_url do
     timeout: files_service_timeout
 end
 
-# ── One-click installs (task 01a10315 stage 2) ───────────────────────────────
-# BURROW_INSTALLS_DNS_ZONE: the DigitalOcean-managed zone an install on a
-# subdomain of ours lives under (<slug>.<zone> and auth.<slug>.<zone>). Unset:
-# only customer-domain installs can be created.
-case System.get_env("BURROW_INSTALLS_DNS_ZONE") do
-  zone when is_binary(zone) and zone != "" -> config :platform, Platform.Installs, dns_zone: zone
-  _ -> :ok
-end
-
-# Install requests (task 01a18f0c stage 2). BURROW_INSTALL_INTAKE_TOKEN is the
-# bearer the getburrow.ing Pages Function sends to POST /api/install-requests
-# (unset: the route answers 404). BURROW_INSTALLS_MAIL_ORG_ID / _ACCOUNT_ID /
-# _SENDER_KEY name the mail account and sender the hand-over email uses
-# (stage 4; unset: no email is sent).
-config :platform, Platform.Installs,
-  intake_token: System.get_env("BURROW_INSTALL_INTAKE_TOKEN"),
-  mail_sender: %{
-    org_id: System.get_env("BURROW_INSTALLS_MAIL_ORG_ID"),
-    account_id: System.get_env("BURROW_INSTALLS_MAIL_ACCOUNT_ID"),
-    sender_key: System.get_env("BURROW_INSTALLS_MAIL_SENDER_KEY")
-  }
-
-# The install images are public, so no pull credential is used by default.
-# BURROW_INSTALLS_REGISTRY_AUTH_SLUG names a vault slug holding a docker
-# config.json to pass as --registry-auth instead (a private registry).
-case System.get_env("BURROW_INSTALLS_REGISTRY_AUTH_SLUG") do
-  slug when is_binary(slug) and slug != "" ->
-    config :platform, Platform.Installs, registry_auth_slug: slug
-
-  _ ->
-    :ok
-end
-
-# BURROW_INSTALLS_CORE_IMAGE (stage 6 round 2): a dev/staging test seam that
-# makes installs pull a pinned core build (e.g. ghcr.io/getburrowing/core:
-# core-<sha>) instead of core:core. Recorded with the release env and the
-# explicit opt-in BURROW_INSTALLS_CORE_IMAGE_OPT_IN=1; Platform.Installs.
-# core_image_override/0 ignores it, with a logged warning, in a :prod release,
-# without the opt-in, or for a moving tag (core, play, latest).
-case System.get_env("BURROW_INSTALLS_CORE_IMAGE") do
-  ref when is_binary(ref) and ref != "" ->
-    config :platform, Platform.Installs,
-      core_image_override: %{
-        ref: ref,
-        env: config_env(),
-        opt_in: System.get_env("BURROW_INSTALLS_CORE_IMAGE_OPT_IN") == "1"
-      }
-
-  _ ->
-    :ok
-end
-
 # Dev stand-in agent host: BURROW_FAKE_AGENT_HOST=1, dev only (task 01a10315
 # stage 4). Platform.AgentHost.FakeHost joins the reconciler as the install's
 # host; a codex agent waits at a fake device login (code FAKE-1234) until
 # POST /dev/fake-agent-host/<agent_id>/complete.
 if config_env() == :dev and System.get_env("BURROW_FAKE_AGENT_HOST") == "1" do
   config :platform, :fake_agent_host, true
-end
-
-# The release image copies the installer package here (apps/platform/Dockerfile);
-# dev and test run it from the repo's deployment/installer.
-if config_env() == :prod do
-  config :platform, Platform.Installs, installer_path: "/app/installer"
-end
-
-# Dev stub mode: BURROW_INSTALLS_FAKE=1, dev only. DigitalOcean is the
-# in-process PlatformWeb.Dev.FakeDigitalOcean (also at /dev/fake-digitalocean),
-# and render, probes and bootstrap are Platform.Installs.Fake. Never reads the
-# real token.
-if config_env() == :dev and System.get_env("BURROW_INSTALLS_FAKE") == "1" do
-  config :platform, Platform.Installs,
-    fake: true,
-    render: Platform.Installs.Fake,
-    probe: Platform.Installs.Fake,
-    bootstrap: Platform.Installs.Fake,
-    dns_zone: "fake.invalid",
-    poll_interval_ms: 1_000,
-    # Three consecutive fake memory polls a second apart, not a minute.
-    memory_poll_interval_ms: 1_000
-
-  config :platform, Platform.Installs.DigitalOcean,
-    base_url: "http://fake-digitalocean.invalid",
-    token_source: {:static, "dop_v1_fake_dev_only"},
-    req_options: [plug: PlatformWeb.Dev.FakeDigitalOcean]
 end

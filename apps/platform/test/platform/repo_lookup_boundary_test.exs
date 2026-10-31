@@ -152,10 +152,6 @@ defmodule Platform.RepoLookupBoundaryTest do
      "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
     {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
      "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
-    {"platform/installs/handover_mail.ex", :platform_uuid_guard, "-", 1, :must_cast,
-     "task 01a18f0c stage 4: deliver_ready/1 guards the install id with Platform.UUID.valid?/1 before its CAS `where: i.id == ^id`; it is called from the runner, the sweeper and `bin/platform eval`, and a malformed id answers {:ok, :already_claimed}"},
-    {"platform/installs.ex", :platform_uuid_guard, "-", 2, :must_cast,
-     "task 01a10315 stage 2: get/1 guards the install id with Platform.UUID.valid?/1 before `where: i.id == ^id`, because teardown/1 takes an id OR a slug from a mix task or `bin/platform eval` argument; a malformed id is nil and teardown falls back to the slug lookup. Task 01a18f0c stage 1: dismiss_request/2 guards the request id from the admin page the same way before its typed delete_all"},
     {"platform/agents/setup_agent.ex", :get_by, "Space", 1, :safe_internal,
      "task 01a10315 stage 5: getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/setup_agent.ex", :get_by, "Participant", 1, :safe_internal,
@@ -1105,11 +1101,6 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
-    # Task 01a10315 stage 2: get/1 (Platform.UUID.valid?/1 first), get_by_slug/1
-    # (a string column) and get_by_token/2 (a sha256 binary) — no unguarded id.
-    # Task 01a18f0c stage 1: queue_request/2's FOR UPDATE read takes the id of
-    # a row get/1 (guarded) just loaded.
-    "platform/installs.ex" => 4,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.

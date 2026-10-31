@@ -181,15 +181,6 @@ USER app
 
 COPY --from=build --chown=app:app /app/_build/prod/rel/platform ./
 
-# One-click installs (task 01a10315 stage 2): Platform.Installs runs the ONE
-# install template (`python3 -m burrow_install render`) and its
-# `bootstrap-admin` from here (config :platform, Platform.Installs,
-# installer_path: "/app/installer"). The renderer reads backup/ and migrate/
-# beside the package. python3 above is for this; stdlib only, 3.11+ (tomllib).
-COPY --chown=app:app deployment/installer/burrow_install /app/installer/burrow_install
-COPY --chown=app:app deployment/installer/backup /app/installer/backup
-COPY --chown=app:app deployment/installer/migrate /app/installer/migrate
-
 EXPOSE 4000
 
 CMD ["/bin/sh", "-c", "/app/bin/platform eval 'Platform.Release.migrate()' && /app/bin/platform start"]
