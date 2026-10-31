@@ -57,6 +57,10 @@ defmodule PlatformWeb do
     quote do
       use Phoenix.LiveView
 
+      # Full reload when the client's app.css/app.js predate a deploy, so a
+      # page left open never renders new markup with an old stylesheet.
+      on_mount PlatformWeb.StaticReload
+
       unquote(html_helpers())
 
       # Route-resume signal helper (`handle_route_stale/2`). Imported here
