@@ -324,7 +324,6 @@ defmodule Platform.Application do
     |> maybe_add_candidate_sweeper(flag)
     |> maybe_add_meeting_completion_sweeper(flag)
     |> maybe_add_security_sweeper(flag)
-    |> add_installs(flag)
     |> maybe_add_space_purger(flag)
     |> maybe_add_experiments_mail_subscriber(flag)
     |> maybe_add_container_purger(flag)
@@ -928,23 +927,6 @@ defmodule Platform.Application do
   # work at boot. Disabled in test env; tests start per-case
   # instances with their own `:name`, shortened intervals, and
   # `respect_cadence: false`.
-  # One-click installs (task 01a10315 stage 2). The run registry is started in
-  # every env (the runner registers in it; tests drive runs themselves). The
-  # supervisor (hand-over sweeper, boot-time resume of unfinished runs, dev
-  # stub mode's fake store) needs Repo, PubSub and Platform.TaskSupervisor,
-  # so it goes before the Endpoint; off in test (`:start_installs`).
-  defp add_installs(children, flag) do
-    idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
-    registry = {Registry, keys: :unique, name: Platform.Installs.Registry}
-
-    added =
-      if flag.(:platform, :start_installs, true),
-        do: [registry, Platform.Installs.Supervisor],
-        else: [registry]
-
-    Enum.take(children, idx) ++ added ++ Enum.drop(children, idx)
-  end
-
   defp maybe_add_security_sweeper(children, flag) do
     if flag.(:platform, :start_security_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)

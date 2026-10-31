@@ -26,7 +26,7 @@ defmodule Platform.Vault.Shared do
 
   `grant_system/3` and `revoke_system_grant/3` give or take a `use` grant for
   one of `Platform.Vault.system_principals/0` (an in-BEAM reader such as
-  `{:system, "installs-provisioner"}`), with an `update` access-log row each,
+  `{:system, "<name>"}`), with an `update` access-log row each,
   exactly as agent grants are written. `set_grants/3` manages agent grants
   only and never touches a system grant. The value is not copied anywhere:
   the reader fetches the one shared row.

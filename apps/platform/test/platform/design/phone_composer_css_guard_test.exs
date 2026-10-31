@@ -153,7 +153,8 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     end
 
     assert decl(border, "border") == decl(bar.body, "border")
-    assert decl(border, "border") == "1px solid var(--color-base-300)"
+    # Prototype 01a178d2 v4's translucent glass edge (task 01a18d9f fix round 2).
+    assert decl(border, "border") == "1px solid var(--tab-bar-edge)"
 
     [bar_fb] =
       Enum.filter(

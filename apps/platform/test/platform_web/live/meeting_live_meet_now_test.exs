@@ -62,7 +62,9 @@ defmodule PlatformWeb.MeetingLiveMeetNowTest do
   end
 
   defp meet_now(conn) do
-    {:ok, view, _html} = live(conn, ~p"/meetings")
+    # The FAB lives on the calendar and archive halves; the v4 list view
+    # (task 01a18d9f stage 4) has its own `+ New meeting` modal.
+    {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
     _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
     _ = render_click(view, "meet_now", %{})
     view

@@ -113,6 +113,9 @@ defmodule Platform.RepoLookupBoundaryTest do
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
+    # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
+    {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
+     "handle_consent/3 reads Consent.briefing_id, a non-null UUID foreign key written by AgentAccess.propose/6, from the Consent row it just loaded; no client value reaches it"},
     {"platform/calendar/agent_access.ex", :get, "AgentRuntime", 1, :safe_internal,
      "authority/3 reads Scope.actor.id from the authenticated AgentRuntime row; CalendarTools resolves the runtime string to that persisted UUIDv7 primary key before building Scope"},
     {"platform/calendar/agent_access.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
@@ -152,14 +155,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
     {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
      "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
-    {"platform/installs/handover_mail.ex", :platform_uuid_guard, "-", 1, :must_cast,
-     "task 01a18f0c stage 4: deliver_ready/1 guards the install id with Platform.UUID.valid?/1 before its CAS `where: i.id == ^id`; it is called from the runner, the sweeper and `bin/platform eval`, and a malformed id answers {:ok, :already_claimed}"},
-    {"platform/installs.ex", :platform_uuid_guard, "-", 2, :must_cast,
-     "task 01a10315 stage 2: get/1 guards the install id with Platform.UUID.valid?/1 before `where: i.id == ^id`, because teardown/1 takes an id OR a slug from a mix task or `bin/platform eval` argument; a malformed id is nil and teardown falls back to the slug lookup. Task 01a18f0c stage 1: dismiss_request/2 guards the request id from the admin page the same way before its typed delete_all"},
     {"platform/agents/setup_agent.ex", :get_by, "Space", 1, :safe_internal,
      "task 01a10315 stage 5: getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/setup_agent.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5: system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    {"platform_web/live/meeting_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a18d9f stage 4: assign_list_selection/2 guards the ?meeting= URL param with Platform.UUID.valid?/1; a malformed id selects nothing, and the id is only compared against already-loaded meeting rows, never passed to Repo"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.
@@ -1105,15 +1106,14 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
-    # Task 01a10315 stage 2: get/1 (Platform.UUID.valid?/1 first), get_by_slug/1
-    # (a string column) and get_by_token/2 (a sha256 binary) — no unguarded id.
-    # Task 01a18f0c stage 1: queue_request/2's FOR UPDATE read takes the id of
-    # a row get/1 (guarded) just loaded.
-    "platform/installs.ex" => 4,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
     "platform/calendar/agent_access.ex" => 3,
+    # handle_consent/3 pins Consent.hold_id to the selected entry's Event.id (a
+    # UUIDv7 primary key from list_entries; select_entry/4 only keeps ids it
+    # found in the loaded entries) and owner_id to current_user_record.id.
+    "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;

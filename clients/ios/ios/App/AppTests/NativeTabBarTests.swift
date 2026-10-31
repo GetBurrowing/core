@@ -8,7 +8,7 @@ import XCTest
 /// (task 01a174e8 stage 2).
 @MainActor
 final class NativeTabBarTests: XCTestCase {
-    private let five = ["chat", "voice", "tasks", "meetings", "more"]
+    private let five = ["chat", "calendar", "meetings", "inbox", "more"]
 
     private func state(_ payload: [String: Any], from start: NativeTabBarState = NativeTabBarState()) -> NativeTabBarState {
         start.applying(payload, log: { _ in })
@@ -16,7 +16,7 @@ final class NativeTabBarTests: XCTestCase {
 
     func testCatalogDrawsTheFiveWebKeys() {
         XCTAssertEqual(NativeTab.catalog.map(\.key), five)
-        XCTAssertEqual(NativeTab.catalog.map(\.title), ["Chat", "Voice", "Tasks", "Meetings", "More"])
+        XCTAssertEqual(NativeTab.catalog.map(\.title), ["Chat", "Calendar", "Meetings", "Inbox", "More"])
         XCTAssertEqual(NativeTab.maxItems, 5)
     }
 
@@ -209,20 +209,20 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertFalse(start.shown)
         XCTAssertEqual(start.items, [])
         XCTAssertNil(start.selected)
-        XCTAssertNil(NativeTabBarFactory.moreBadge(start))
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(start))
     }
 
     func testFullPayloadDecodes() {
-        let next = state(["items": five, "selected": "tasks", "more_dot": true, "visible": true])
-        XCTAssertEqual(next, NativeTabBarState(items: five, selected: "tasks", moreDot: true, visible: true))
+        let next = state(["items": five, "selected": "inbox", "inbox_dot": true, "visible": true])
+        XCTAssertEqual(next, NativeTabBarState(items: five, selected: "inbox", inboxDot: true, visible: true))
         XCTAssertTrue(next.shown)
-        XCTAssertEqual(NativeTabBarFactory.moreBadge(next), "")
+        XCTAssertEqual(NativeTabBarFactory.inboxBadge(next), "")
     }
 
     func testMissingOrGarbageFieldsLeaveTheStateUnchanged() {
-        let start = state(["items": five, "selected": "tasks", "more_dot": true, "visible": true])
+        let start = state(["items": five, "selected": "inbox", "inbox_dot": true, "visible": true])
         XCTAssertEqual(state([:], from: start), start)
-        XCTAssertEqual(state(["selected": "nope", "more_dot": "yes", "visible": 3, "items": "chat"], from: start), start)
+        XCTAssertEqual(state(["selected": "nope", "inbox_dot": "yes", "visible": 3, "items": "chat"], from: start), start)
         XCTAssertEqual(state(["selected": 7, "items": [1, 2]], from: start), start)
         XCTAssertNil(state(["selected": NSNull()], from: start).selected)
     }
@@ -258,11 +258,11 @@ final class NativeTabBarTests: XCTestCase {
         var next = state(["items": five, "selected": "chat", "visible": true])
         next = state(["selected": "meetings"], from: next)
         XCTAssertEqual(next.selected, "meetings")
-        next = state(["more_dot": true], from: next)
-        XCTAssertEqual(NativeTabBarFactory.badge(for: "more", next), "")
+        next = state(["inbox_dot": true], from: next)
+        XCTAssertEqual(NativeTabBarFactory.badge(for: "inbox", next), "")
         XCTAssertNil(NativeTabBarFactory.badge(for: "chat", next), "Chat never carries a native badge")
-        next = state(["more_dot": false], from: next)
-        XCTAssertNil(NativeTabBarFactory.moreBadge(next))
+        next = state(["inbox_dot": false], from: next)
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(next))
         next = state(["visible": false], from: next)
         XCTAssertFalse(next.shown)
         XCTAssertEqual(next.items, five, "hiding keeps the items")
@@ -277,31 +277,31 @@ final class NativeTabBarTests: XCTestCase {
     }
 
     func testAReselectIsDetected() {
-        let next = state(["items": five, "selected": "tasks", "visible": true])
-        XCTAssertTrue(next.isReselect("tasks"))
-        XCTAssertFalse(next.isReselect("voice"))
-        XCTAssertFalse(state(["selected": NSNull()], from: next).isReselect("tasks"))
+        let next = state(["items": five, "selected": "inbox", "visible": true])
+        XCTAssertTrue(next.isReselect("inbox"))
+        XCTAssertFalse(next.isReselect("calendar"))
+        XCTAssertFalse(state(["selected": NSNull()], from: next).isReselect("inbox"))
     }
 
     func testAnUnknownKeyIsDropped() {
-        let next = state(["items": ["chat", "games", "voice", "tasks", "meetings", "more"], "visible": true])
+        let next = state(["items": ["chat", "games", "calendar", "meetings", "inbox", "more"], "visible": true])
         XCTAssertEqual(next.items, five)
         XCTAssertNil(state(["selected": "games"], from: next).selected)
     }
 
     func testARepeatedKeyIsDroppedAfterItsFirstPlace() {
-        XCTAssertEqual(state(["items": ["chat", "voice", "chat", "more"]]).items, ["chat", "voice", "more"])
+        XCTAssertEqual(state(["items": ["chat", "calendar", "chat", "more"]]).items, ["chat", "calendar", "more"])
     }
 
     func testAReorderedListRendersInTheNewOrder() {
         let start = state(["items": five, "visible": true])
-        let reordered = ["more", "meetings", "tasks", "voice", "chat"]
+        let reordered = ["more", "meetings", "inbox", "calendar", "chat"]
         XCTAssertEqual(state(["items": reordered], from: start).items, reordered)
-        XCTAssertEqual(state(["items": ["tasks", "chat"]], from: start).items, ["tasks", "chat"])
+        XCTAssertEqual(state(["items": ["inbox", "chat"]], from: start).items, ["inbox", "chat"])
     }
 
     func testEmptyMissingOrAllUnknownItemsKeepThePreviousItems() {
-        let start = state(["items": ["tasks", "chat", "more"], "visible": true])
+        let start = state(["items": ["inbox", "chat", "more"], "visible": true])
         XCTAssertEqual(state(["items": [String]()], from: start).items, start.items)
         XCTAssertEqual(state(["selected": "chat"], from: start).items, start.items)
         XCTAssertEqual(state(["items": ["games", "store"]], from: start).items, start.items)
@@ -328,22 +328,22 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertTrue(host.bar.isHidden, "hidden before the first state")
         XCTAssertEqual(host.bar.items?.count ?? 0, 0)
 
-        var next = state(["items": ["more", "chat", "games", "tasks"], "selected": "chat", "more_dot": true, "visible": true])
+        var next = state(["items": ["more", "chat", "games", "inbox"], "selected": "chat", "inbox_dot": true, "visible": true])
         host.render(next)
         XCTAssertFalse(host.bar.isHidden)
-        XCTAssertEqual(host.renderedKeys, ["more", "chat", "tasks"])
-        XCTAssertEqual(host.bar.items?.map(\.title), ["More", "Chat", "Tasks"])
-        XCTAssertEqual(host.bar.items?.map(\.accessibilityIdentifier), ["native-tab-more", "native-tab-chat", "native-tab-tasks"])
+        XCTAssertEqual(host.renderedKeys, ["more", "chat", "inbox"])
+        XCTAssertEqual(host.bar.items?.map(\.title), ["More", "Chat", "Inbox"])
+        XCTAssertEqual(host.bar.items?.map(\.accessibilityIdentifier), ["native-tab-more", "native-tab-chat", "native-tab-inbox"])
         XCTAssertEqual(host.bar.selectedItem, host.bar.items?[1])
-        XCTAssertEqual(host.bar.items?.map(\.badgeValue), ["", nil, nil])
+        XCTAssertEqual(host.bar.items?.map(\.badgeValue), [nil, nil, ""])
 
         var taps: [String] = []
         host.onTap = { taps.append($0) }
         host.tabBar(host.bar, didSelect: host.bar.items![2])
-        XCTAssertEqual(taps, ["tasks"])
+        XCTAssertEqual(taps, ["inbox"])
         XCTAssertEqual(host.bar.selectedItem, host.bar.items?[1], "a tap does not move the selection")
 
-        next = state(["selected": NSNull(), "more_dot": false], from: next)
+        next = state(["selected": NSNull(), "inbox_dot": false], from: next)
         host.render(next)
         XCTAssertNil(host.bar.selectedItem)
         XCTAssertEqual(host.bar.items?.compactMap(\.badgeValue), [])

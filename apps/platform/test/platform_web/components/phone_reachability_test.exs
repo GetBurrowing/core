@@ -157,7 +157,9 @@ defmodule PlatformWeb.Components.PhoneReachabilityTest do
   end
 
   describe "extension rows sit where the sheet opens, not past the fold" do
-    test "every extension row comes right after Inbox, for each actor" do
+    # Task 01a18d9f stage 5: Voice and Tasks lead the sheet (they left the
+    # bar); extension rows follow them, still above the fold.
+    test "every extension row comes right after Voice and Tasks, for each actor" do
       ext_keys = Enum.map(Platform.Extensions.rail_items(), &to_string(&1.key))
 
       for {who, scope} <- actors() do
@@ -165,8 +167,11 @@ defmodule PlatformWeb.Components.PhoneReachabilityTest do
         visible_ext = Enum.filter(ext_keys, &(&1 in rows))
         assert visible_ext != [], "#{who} sees no extension row"
 
-        assert Enum.take(rows, 1 + length(visible_ext)) == ["inbox" | visible_ext],
-               "#{who}: extension rows must follow Inbox, got #{inspect(rows)}"
+        lead = Enum.take_while(rows, &(&1 in ["voice", "tasks"]))
+        assert lead != [], "#{who} sees neither Voice nor Tasks first: #{inspect(rows)}"
+
+        assert Enum.take(rows, length(lead) + length(visible_ext)) == lead ++ visible_ext,
+               "#{who}: extension rows must follow Voice and Tasks, got #{inspect(rows)}"
       end
     end
   end

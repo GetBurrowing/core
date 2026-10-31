@@ -1,6 +1,7 @@
 defmodule PlatformWeb.CalendarLive do
   use PlatformWeb, :live_view
-  import PlatformWeb.Components.Sheet
+  import Ecto.Query, only: [from: 2]
+  import PlatformWeb.CalendarLive.Components
 
   alias Platform.Calendar, as: Events
   alias Platform.Calendar.Event
@@ -19,74 +20,147 @@ defmodule PlatformWeb.CalendarLive do
       Process.send_after(self(), :calendar_tick, 60_000)
     end
 
+    today = today(zone)
+
     {:ok,
      socket
      |> assign(:page_title, "Calendar")
      |> assign(:zone, zone)
-     |> assign(:anchor, DateTime.utc_now() |> DateTime.shift_zone!(zone) |> DateTime.to_date())
+     |> assign(:today, today)
+     |> assign(:cursor, today)
+     |> assign(:sel_day, today)
+     |> assign(:mini_month, Date.beginning_of_month(today))
+     |> assign(:calendars_shown, %{})
+     |> assign(
+       :meetings_on,
+       Platform.Access.module_access?(socket.assigns.access_scope, :meetings)
+     )
      |> assign(:view, "week")
-     |> assign(:sheet, nil)
      |> assign(:selected, nil)
-     |> assign(:feed_url, nil)
-     |> assign(:confirm_rotate, false)
-     |> assign(:error, nil)
+     |> assign(:editing, nil)
+     |> assign(:editor_error, nil)
+     |> assign(:editor_fields, [])
+     |> assign(feed_url: nil, feed_old: nil, feed_modal: false, feed_exists?: false)
+     |> assign(ext_error: nil, ext_url: nil, ext_label: nil)
+     |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
+     |> assign(:grant_form, agent_grant_form(nil, nil))
      |> assign(:form, to_form(%{}, as: :event))}
   end
 
   @impl true
   def handle_params(params, _url, socket) do
-    view = if params["view"] in ~w(week month agenda), do: params["view"], else: "week"
-    {:noreply, socket |> assign(:view, view) |> reload()}
+    view = if params["view"] in ~w(week month), do: params["view"], else: "week"
+
+    socket =
+      case Date.from_iso8601(params["date"] || "") do
+        {:ok, date} -> put_day(socket, date)
+        _ -> socket
+      end
+
+    # Week and Month share one cursor: Month starts at the selected day's
+    # month, Week returns to the selected day (prototype v4 app.js `ds.cv`).
+    socket =
+      cond do
+        view == socket.assigns.view -> socket
+        view == "month" -> put_cursor(socket, Date.beginning_of_month(socket.assigns.sel_day))
+        true -> put_cursor(socket, socket.assigns.sel_day)
+      end
+
+    socket = socket |> assign(:view, view) |> reload()
+
+    # `?select=<id>` opens that entry's details (the Inbox consent card's
+    # "See it on the calendar" lands here with the hold's id).
+    socket =
+      case params["select"] do
+        id when is_binary(id) and id != "" -> select_entry(socket, nil, id, nil)
+        _ -> socket
+      end
+
+    socket =
+      cond do
+        socket.assigns.live_action == :settings -> load_settings(socket, nil)
+        # `?new=1`: the list pane's "+ New" on /calendar/booking.
+        params["new"] == "1" -> new_event_at(socket, socket.assigns.today, 14 * 60)
+        true -> socket
+      end
+
+    {:noreply, socket}
   end
 
   @impl true
-  def handle_event("navigate_date", %{"direction" => direction}, socket) do
+  def handle_event("navigate_date", %{"direction" => direction} = params, socket) do
     sign = if direction == "previous", do: -1, else: 1
+    %{view: view, cursor: cursor, sel_day: sel_day} = socket.assigns
 
-    anchor =
-      if socket.assigns.view == "month",
-        do: shift_month(socket.assigns.anchor, sign),
-        else: Date.add(socket.assigns.anchor, sign * 7)
+    socket =
+      cond do
+        view == "month" ->
+          put_cursor(socket, shift_month(cursor, sign))
 
-    {:noreply, socket |> assign(:anchor, anchor) |> reload()}
+        # The phone steps one day; the desktop steps a week and selects its
+        # Monday (prototype v4 app.js `navStep`).
+        params["step"] == "day" ->
+          day = Date.add(sel_day, sign)
+          socket |> assign(:sel_day, day) |> put_cursor(day)
+
+        true ->
+          next = Date.add(cursor, sign * 7)
+          socket |> put_cursor(next) |> assign(:sel_day, Date.beginning_of_week(next))
+      end
+
+    {:noreply, reload(socket)}
   end
 
   def handle_event("today", _, socket) do
-    today = DateTime.utc_now() |> DateTime.shift_zone!(socket.assigns.zone) |> DateTime.to_date()
-    {:noreply, socket |> assign(:anchor, today) |> reload()}
+    today = today(socket.assigns.zone)
+    {:noreply, socket |> assign(:today, today) |> put_day(today) |> reload()}
   end
 
+  # A phone day-strip tap: the single-day column follows, the week stays.
   def handle_event("select_day", %{"date" => value}, socket) do
     case Date.from_iso8601(value) do
-      {:ok, date} -> {:noreply, socket |> assign(:anchor, date) |> reload()}
+      {:ok, date} -> {:noreply, socket |> put_day(date) |> reload()}
       _ -> {:noreply, socket}
     end
   end
 
-  def handle_event("agent_access", _, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
+  # A mini-month day or a month cell: open that day's week.
+  def handle_event("goday", %{"date" => value}, socket) do
+    case Date.from_iso8601(value) do
+      {:ok, date} ->
+        socket = put_day(socket, date)
 
-    choices = Platform.Calendar.AgentAccess.agents(scope)
-    grants = Platform.Calendar.AgentAccess.list(scope)
+        if socket.assigns.view == "month",
+          do: {:noreply, push_patch(socket, to: ~p"/calendar?#{%{view: "week"}}")},
+          else: {:noreply, reload(socket)}
 
-    agent_id =
-      case choices do
-        [agent | _] -> agent.id
-        _ -> nil
-      end
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("mini_month", %{"direction" => direction}, socket) do
+    sign = if direction == "previous", do: -1, else: 1
+    {:noreply, assign(socket, :mini_month, shift_month(socket.assigns.mini_month, sign))}
+  end
+
+  def handle_event("toggle_calendar", %{"key" => key}, socket) do
+    shown = socket.assigns.calendars_shown
 
     {:noreply,
-     assign(socket,
-       sheet: :agent_access,
-       agent_choices: choices,
-       calendar_grants: grants,
-       grant_form: agent_grant_form(Enum.find(grants, &(&1.agent_id == agent_id)), agent_id),
-       error: nil
-     )}
+     socket |> assign(:calendars_shown, Map.put(shown, key, not shown?(shown, key))) |> reload()}
   end
+
+  def handle_event("new_at", %{"date" => date, "minute" => minute}, socket) do
+    with {:ok, date} <- Date.from_iso8601(date),
+         {minute, ""} when minute in 0..1439 <- Integer.parse(minute) do
+      {:noreply, new_event_at(socket, date, minute)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # ── Calendar settings: agents (v4 `Agents with calendar access`) ────────
 
   def handle_event("choose_grant_agent", %{"grant" => %{"agent_id" => id}}, socket) do
     grants = Map.get(socket.assigns, :calendar_grants, [])
@@ -96,170 +170,290 @@ defmodule PlatformWeb.CalendarLive do
   end
 
   def handle_event("grant_agent", %{"grant" => attrs}, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
-
-    case Platform.Calendar.AgentAccess.grant(scope, attrs["agent_id"], attrs) do
+    case Platform.Calendar.AgentAccess.grant(owner_scope(socket), attrs["agent_id"], attrs) do
       {:ok, grant} ->
         {:noreply,
          socket
-         |> assign(
-           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
-           grant_form: agent_grant_form(grant, grant.agent_id),
-           error: nil
-         )}
+         |> load_settings(grant.agent_id)
+         |> put_flash(:info, "#{agent_name(socket, grant.agent_id)}’s calendar access saved")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Couldn't save agent access.")}
+        {:noreply, put_flash(socket, :error, "Couldn't save agent access.")}
     end
   end
 
+  # Revoking also removes any hold the agent is still waiting on (PR #51
+  # AgentAccess.revoke/2).
   def handle_event("revoke_agent", %{"id" => id}, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
-
-    case Platform.Calendar.AgentAccess.revoke(scope, id) do
-      {:ok, grant} ->
+    case Platform.Calendar.AgentAccess.revoke(owner_scope(socket), id) do
+      {:ok, _} ->
         {:noreply,
          socket
-         |> assign(
-           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
-           grant_form: agent_grant_form(grant, id),
-           error: nil
-         )
-         |> reload()}
+         |> load_settings(id)
+         |> reload()
+         |> put_flash(:info, "#{agent_name(socket, id)}’s calendar access revoked")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Couldn't revoke agent access.")}
+        {:noreply, put_flash(socket, :error, "Couldn't revoke agent access.")}
     end
   end
 
-  def handle_event("new", _, socket), do: {:noreply, assign(socket, :sheet, :choose)}
+  # "Grant again" restores the grant's own permissions (revoke keeps them).
+  def handle_event("grant_again", %{"id" => id}, socket) do
+    grant = Enum.find(socket.assigns.calendar_grants, &(&1.agent_id == id))
 
-  def handle_event("new_event", _, socket) do
-    {:noreply, event_form(socket, %Event{time_zone: socket.assigns.zone})}
+    attrs =
+      case grant do
+        nil -> %{read: true}
+        g -> Map.take(g, ~w(read read_private create move preapprove)a)
+      end
+
+    attrs = if Enum.any?(Map.values(attrs)), do: attrs, else: %{read: true}
+
+    case Platform.Calendar.AgentAccess.grant(owner_scope(socket), id, attrs) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> load_settings(id)
+         |> put_flash(:info, "#{agent_name(socket, id)} can read your calendar again")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Couldn't grant agent access.")}
+    end
   end
 
-  def handle_event("close_sheet", _, socket),
-    do: {:noreply, assign(socket, sheet: nil, selected: nil, error: nil)}
+  # "+ New" / "+ New event": the editor preset to 14:00 (prototype v4
+  # app.js `ds.newEv`), on the phone's selected day when one is passed.
+  def handle_event("new", params, socket) do
+    day =
+      case Date.from_iso8601(params["date"] || "") do
+        {:ok, date} -> date
+        _ -> socket.assigns.today
+      end
 
-  def handle_event("select", %{"id" => id, "kind" => "event"}, socket) do
+    {:noreply, new_event_at(socket, day, 14 * 60)}
+  end
+
+  def handle_event("new_event", _, socket),
+    do: {:noreply, new_event_at(socket, socket.assigns.today, 14 * 60)}
+
+  # Details (app.js `renderDetails`): a chip opens its entry; `start` picks
+  # the occurrence of a recurring event.
+  def handle_event("select", %{"id" => id, "kind" => kind} = params, socket)
+      when kind in ~w(event meeting external) do
+    socket = select_entry(socket, kind, id, params["start"])
+
+    if socket.assigns.selected,
+      do: {:noreply, socket},
+      else: {:noreply, put_flash(socket, :error, "Event is no longer available.")}
+  end
+
+  def handle_event("select", _, socket), do: {:noreply, socket}
+
+  def handle_event("close_details", _, socket), do: {:noreply, assign(socket, :selected, nil)}
+
+  # Escape closes the editor first, then the details (app.js keydown).
+  def handle_event("escape", _, %{assigns: %{editing: %Event{}}} = socket),
+    do: {:noreply, close_editor(socket)}
+
+  def handle_event("escape", _, socket), do: {:noreply, assign(socket, :selected, nil)}
+
+  def handle_event("close_editor", _, socket), do: {:noreply, close_editor(socket)}
+
+  # Approve / Revert on a tentative hold: the same AgentAccess.handle/4 the
+  # Inbox consent card calls, keyed by the hold's consent.
+  def handle_event("consent", %{"verb" => verb}, socket) when verb in ~w(approve revert) do
+    with %{kind: "tentative", id: hold_id} <- socket.assigns.selected,
+         {:ok, _} <- handle_consent(socket, hold_id, verb) do
+      flash = if verb == "approve", do: "Approved", else: "Reverted · hold removed"
+      {:noreply, socket |> put_flash(:info, flash) |> reload()}
+    else
+      _ -> {:noreply, socket |> put_flash(:error, "This hold was already handled.") |> reload()}
+    end
+  end
+
+  # ── Calendar settings: external calendars ───────────────────────────────
+
+  # v4 accepts https:// and webcal:// (app.js `#ext-add`); PR #51 stores
+  # HTTPS, so webcal:// is rewritten to https:// before it is saved.
+  def handle_event("add_external", %{"url" => url} = params, socket) do
+    url = String.trim(url)
+    label = String.trim(params["label"] || "")
+    error = "Paste an iCal link that starts with https:// or webcal://"
+
+    if Regex.match?(~r{\A(https?|webcal)://\S+\z}i, url) do
+      count = length(socket.assigns.external_subscriptions)
+      label = if label == "", do: "Calendar #{count + 1}", else: label
+      https = Regex.replace(~r{\Awebcal://}i, url, "https://")
+
+      case Platform.Calendar.Subscriptions.create(socket.assigns.access_scope, %{
+             name: label,
+             url: https
+           }) do
+        {:ok, sub} ->
+          scope = socket.assigns.access_scope
+
+          {:noreply,
+           socket
+           |> assign(ext_error: nil, ext_label: nil, ext_url: nil)
+           |> start_async({:external_added, sub.id, label}, fn ->
+             Platform.Calendar.Subscriptions.refresh(scope, sub.id)
+           end)
+           |> reload()}
+
+        _ ->
+          {:noreply, assign(socket, ext_error: error, ext_url: url, ext_label: label)}
+      end
+    else
+      {:noreply, assign(socket, ext_error: error, ext_url: url, ext_label: label)}
+    end
+  end
+
+  def handle_event("remove_external", %{"id" => id}, socket) do
+    sub = Enum.find(socket.assigns.external_subscriptions, &(&1.id == id))
+
+    case Platform.Calendar.Subscriptions.delete(socket.assigns.access_scope, id) do
+      {:ok, _} -> {:noreply, socket |> reload() |> put_flash(:info, "#{sub && sub.name} removed")}
+      _ -> {:noreply, put_flash(socket, :error, "Calendar is no longer available.")}
+    end
+  end
+
+  def handle_event(
+        "edit",
+        _,
+        %{assigns: %{selected: %{kind: "native", owner?: true, id: id}}} = socket
+      ) do
     case Events.get_event(socket.assigns.access_scope, id) do
-      {:ok, event} -> {:noreply, assign(socket, selected: event, sheet: :detail)}
+      {:ok, event} -> {:noreply, event_form(socket, event)}
       _ -> {:noreply, put_flash(socket, :error, "Event is no longer available.")}
     end
   end
 
-  def handle_event("select", %{"id" => id, "kind" => "meeting"}, socket) do
-    entry = Enum.find(socket.assigns.entries, &(&1.kind == :meeting and &1.id == id))
-    {:noreply, assign(socket, selected: entry, sheet: if(entry, do: :meeting, else: nil))}
-  end
-
-  def handle_event("select", %{"id" => id, "kind" => "external"}, socket) do
-    entry = Enum.find(socket.assigns.entries, &(&1.kind == :external and &1.id == id))
-    {:noreply, assign(socket, selected: entry, sheet: if(entry, do: :external, else: nil))}
-  end
-
-  def handle_event("add_external", %{"subscription" => attrs}, socket) do
-    case Platform.Calendar.Subscriptions.create(socket.assigns.access_scope, attrs) do
-      {:ok, _} ->
-        {:noreply,
-         socket |> put_flash(:info, "Calendar added. Refresh runs shortly.") |> reload()}
-
-      _ ->
-        {:noreply, assign(socket, :error, "Enter a name and a valid HTTPS calendar URL.")}
-    end
-  end
-
-  def handle_event("refresh_external", %{"id" => id}, socket) do
-    scope = socket.assigns.access_scope
-    # A supervised task keeps the sheet responsive; the context rechecks ownership.
-    start_async(socket, {:external_refresh, id}, fn ->
-      Platform.Calendar.Subscriptions.refresh(scope, id)
-    end)
-    |> then(&{:noreply, &1})
-  end
-
-  def handle_event("remove_external", %{"id" => id}, socket) do
-    case Platform.Calendar.Subscriptions.delete(socket.assigns.access_scope, id) do
-      {:ok, _} -> {:noreply, reload(socket)}
-      _ -> {:noreply, assign(socket, :error, "Calendar is no longer available.")}
-    end
-  end
-
-  def handle_event("edit", _, %{assigns: %{selected: %Event{} = event}} = socket) do
-    {:noreply, event_form(socket, event)}
-  end
+  def handle_event("edit", _, socket), do: {:noreply, socket}
 
   def handle_event("event_change", %{"event" => params}, socket),
     do:
       {:noreply,
        assign(socket, :form, to_form(Map.merge(socket.assigns.form.params, params), as: :event))}
 
-  def handle_event("save", %{"event" => params}, socket) do
+  # The v4 editor's three messages (app.js `#f-save`) come from PR #51's
+  # changeset, `Platform.Calendar.change_event/2`, which stays the source of
+  # truth; anything else it rejects is shown as its own message.
+  def handle_event("save", %{"event" => params}, %{assigns: %{editing: %Event{}}} = socket) do
     params = Map.merge(socket.assigns.form.params, params)
     attrs = parse_event(params)
+    editing = socket.assigns.editing
 
-    result =
-      if socket.assigns.selected && socket.assigns.selected.id do
-        Events.update_event(socket.assigns.access_scope, socket.assigns.selected.id, attrs)
-      else
-        Events.create_event(socket.assigns.access_scope, attrs)
+    case editor_errors(Events.change_event(%Event{owner_id: editing.owner_id}, attrs)) do
+      {message, fields} ->
+        {:noreply,
+         assign(socket,
+           form: to_form(params, as: :event),
+           editor_error: message,
+           editor_fields: fields
+         )}
+
+      nil ->
+        result =
+          if editing.id,
+            do: Events.update_event(socket.assigns.access_scope, editing.id, attrs),
+            else: Events.create_event(socket.assigns.access_scope, attrs)
+
+        case result do
+          {:ok, event} ->
+            date = event_date(event)
+
+            {:noreply,
+             socket
+             |> close_editor()
+             |> put_flash(:info, if(editing.id, do: "Event saved", else: "Event created"))
+             |> put_day(date)
+             |> reload()
+             |> select_entry("event", event.id, nil)}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {message, fields} = editor_errors(changeset) || {"You cannot save this event.", []}
+
+            {:noreply,
+             assign(socket,
+               form: to_form(params, as: :event),
+               editor_error: message,
+               editor_fields: fields
+             )}
+
+          _ ->
+            {:noreply,
+             assign(socket, editor_error: "You cannot save this event.", editor_fields: [])}
+        end
+    end
+  end
+
+  def handle_event("save", _, socket), do: {:noreply, socket}
+
+  # Delete from the editor (Edit event footer) or the details footer; v4
+  # deletes straight away and toasts `Event deleted`.
+  def handle_event("delete", _, socket) do
+    id =
+      case socket.assigns do
+        %{editing: %Event{id: id}} when is_binary(id) -> id
+        %{selected: %{kind: "native", owner?: true, id: id}} -> id
+        _ -> nil
       end
 
-    case result do
-      {:ok, _} ->
-        {:noreply, socket |> assign(sheet: nil, selected: nil, error: nil) |> reload()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        errors = Ecto.Changeset.traverse_errors(changeset, fn {message, _} -> message end)
-
-        message =
-          Enum.map_join(errors, ". ", fn {field, messages} ->
-            "#{Phoenix.Naming.humanize(field)} #{Enum.join(messages, ", ")}"
-          end)
-
-        {:noreply, assign(socket, form: to_form(params, as: :event), error: message)}
-
-      _ ->
-        {:noreply, assign(socket, :error, "You cannot save this event.")}
+    with true <- is_binary(id),
+         {:ok, _} <- Events.delete_event(socket.assigns.access_scope, id) do
+      {:noreply,
+       socket
+       |> close_editor()
+       |> assign(:selected, nil)
+       |> put_flash(:info, "Event deleted")
+       |> reload()}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "You cannot delete this event.")}
     end
   end
 
-  def handle_event("delete", _, %{assigns: %{selected: %Event{}}} = socket) do
-    case Events.delete_event(socket.assigns.access_scope, socket.assigns.selected.id) do
-      {:ok, _} -> {:noreply, socket |> assign(sheet: nil, selected: nil) |> reload()}
-      _ -> {:noreply, assign(socket, :error, "You cannot delete this event.")}
-    end
-  end
+  # ── Calendar settings: private iCal feed ────────────────────────────────
 
-  def handle_event("delete", _, socket),
-    do: {:noreply, put_flash(socket, :error, "Select an event first.")}
+  # v4 `Revoke` (and the at-rest `Make a new URL`) open the confirm modal.
+  def handle_event("confirm_rotate", _, socket), do: {:noreply, assign(socket, :feed_modal, true)}
 
-  def handle_event("subscribe", _, socket), do: {:noreply, assign(socket, :sheet, :subscribe)}
+  def handle_event("cancel_rotate", _, socket), do: {:noreply, assign(socket, :feed_modal, false)}
 
-  def handle_event("confirm_rotate", _, socket),
-    do: {:noreply, assign(socket, :confirm_rotate, true)}
-
+  # Revoke and make a new URL: Calendar.rotate_feed/1 replaces the hash, so
+  # the old URL stops working at once. Only a URL shown this session has a
+  # known prefix (FeedToken stores the hash).
   def handle_event("rotate_feed", _, socket) do
+    old =
+      case socket.assigns.feed_url do
+        url when is_binary(url) -> url |> String.split("/") |> List.last() |> String.slice(0, 5)
+        _ -> "•••••"
+      end
+
     case Events.rotate_feed(socket.assigns.access_scope) do
       {:ok, token} ->
         url = PlatformWeb.Endpoint.url() <> "/calendar/feed/" <> token
-        {:noreply, assign(socket, feed_url: url, confirm_rotate: false)}
+
+        {:noreply,
+         socket
+         |> assign(
+           feed_url: url,
+           feed_modal: false,
+           feed_old: if(socket.assigns.feed_exists?, do: old),
+           feed_exists?: true
+         )
+         |> put_flash(:info, "Feed URL revoked · new URL ready")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Could not create a subscription link.")}
+        {:noreply,
+         socket
+         |> assign(:feed_modal, false)
+         |> put_flash(:error, "Could not create a subscription link.")}
     end
   end
 
-  def handle_event("revoke_feed", _, socket) do
-    :ok = Events.revoke_feed(socket.assigns.access_scope)
-    {:noreply, assign(socket, feed_url: nil, confirm_rotate: false)}
-  end
+  def handle_event("copied", _, socket),
+    do: {:noreply, put_flash(socket, :info, "Copied to clipboard")}
 
   @impl true
   def handle_info(:calendar_tick, socket) do
@@ -270,79 +464,347 @@ defmodule PlatformWeb.CalendarLive do
   def handle_info(_, socket), do: {:noreply, reload(socket)}
 
   @impl true
-  def handle_async({:external_refresh, _id}, _result, socket), do: {:noreply, reload(socket)}
+  def handle_async({:external_added, _id, label}, result, socket) do
+    flash =
+      case result do
+        {:ok, {:ok, %{snapshot: rows}}} when is_list(rows) ->
+          "#{label} added · #{length(rows)} events imported, read-only"
 
+        _ ->
+          "#{label} added"
+      end
+
+    {:noreply, socket |> reload() |> put_flash(:info, flash)}
+  end
+
+  # The grid's visible window: the cursor's week, or the month grid around
+  # the cursor (whole weeks, Monday first). Entries are loaded once for it.
   defp reload(socket) do
-    socket =
-      assign(
-        socket,
-        :external_subscriptions,
-        Platform.Calendar.Subscriptions.list(socket.assigns.access_scope)
-      )
+    %{access_scope: scope, zone: zone, view: view, cursor: cursor} = socket.assigns
 
-    anchor = socket.assigns.anchor
-    first = if socket.assigns.view == "month", do: Date.beginning_of_month(anchor), else: anchor
-    {from, _} = CalendarWindow.week_bounds(first, socket.assigns.zone)
-    days = if socket.assigns.view == "month", do: 42, else: 7
-    first_date = Date.beginning_of_week(first)
-    last = Date.add(first_date, days)
-    {to, _} = CalendarWindow.day_bounds(last, socket.assigns.zone)
+    subscriptions = Platform.Calendar.Subscriptions.list(scope)
 
-    entries =
-      Events.list_entries(socket.assigns.access_scope, from, to, time_zone: socket.assigns.zone)
+    {first, last} =
+      if view == "month" do
+        days = month_days(cursor)
+        {List.first(days), List.last(days)}
+      else
+        monday = Date.beginning_of_week(cursor)
+        {monday, Date.add(monday, 6)}
+      end
 
-    now = DateTime.utc_now()
+    {from, _} = CalendarWindow.day_bounds(first, zone)
+    {_, to} = CalendarWindow.day_bounds(last, zone)
+    entries = Events.list_entries(scope, from, to, time_zone: zone)
+    agents = hold_agents(entries, socket.assigns.current_user_record)
 
-    candidates =
-      Enum.filter(entries, fn entry ->
-        case entry do
-          %{kind: :meeting, meeting: %{status: status}} when status in ["ended", "cancelled"] ->
-            false
+    visible =
+      entries
+      |> Enum.filter(&shown?(socket.assigns.calendars_shown, calendar_key(&1)))
+      |> Enum.reject(&(&1.kind == :meeting and not socket.assigns.meetings_on))
+      |> Enum.map(&Map.put(&1, :agent, Map.get(agents, &1.id)))
 
-          %{kind: :meeting, meeting: %{status: "live"}} ->
-            true
-
-          _ ->
-            DateTime.compare(entry.ends_at || DateTime.add(entry.starts_at, 1800), now) == :gt
-        end
-      end)
-
-    next = Enum.find(candidates, &(!&1.all_day)) || List.first(candidates)
-    spaces = Platform.Calendar.list_spaces(socket.assigns.access_scope)
-    projects = Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
-
-    assign(socket,
+    socket
+    |> assign(
+      today: today(zone),
+      external_subscriptions: subscriptions,
+      booking_link_count: length(Platform.Calendar.BookingLinks.list(scope)),
       entries: entries,
-      hours:
-        CalendarWindow.hour_window(
-          Enum.reject(entries, & &1.all_day) |> Enum.map(&projection/1),
-          socket.assigns.zone
-        ),
-      days: Enum.map(0..(days - 1), &Date.add(first_date, &1)),
-      up_next: next,
-      spaces: spaces,
-      projects: projects
+      visible_entries: visible,
+      calendars: calendar_rows(socket.assigns, subscriptions),
+      spaces: Platform.Calendar.list_spaces(scope),
+      projects: Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
+    )
+    |> refresh_selected()
+  end
+
+  # The open details follow the data: a PubSub change or a tick rebuilds
+  # them, and an entry that left the window (deleted, reverted, hidden)
+  # closes them.
+  defp refresh_selected(%{assigns: %{selected: %{entry: entry}}} = socket) do
+    select_entry(
+      socket,
+      Atom.to_string(entry.kind),
+      entry.id,
+      Integer.to_string(DateTime.to_unix(entry.starts_at))
     )
   end
 
+  defp refresh_selected(socket), do: socket
+
+  defp select_entry(socket, kind, id, start) do
+    candidates =
+      Enum.filter(
+        socket.assigns.visible_entries,
+        &(&1.id == id and (is_nil(kind) or Atom.to_string(&1.kind) == kind))
+      )
+
+    entry =
+      Enum.find(candidates, &(Integer.to_string(DateTime.to_unix(&1.starts_at)) == start)) ||
+        List.first(candidates)
+
+    assign(socket, :selected, entry && detail(socket.assigns, entry))
+  end
+
+  # Everything the details panel prints for one entry (app.js
+  # `renderDetails`), resolved once here so the component stays markup.
+  defp detail(assigns, entry) do
+    %{zone: zone, current_user_record: user} = assigns
+    date = entry.starts_at |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+    {first, last} = day_minutes(entry, date, zone)
+    kind = chip_kind(entry)
+
+    base = %{
+      id: entry.id,
+      kind: kind,
+      entry: entry,
+      title: chip_title(entry),
+      date: date,
+      when:
+        if(entry.all_day,
+          do: "#{day_label(date)} · All day",
+          else: "#{day_label(date)} · #{hm(first)}–#{hm(min(last, 1439))}"
+        )
+    }
+
+    case kind do
+      k when k in ["native", "tentative"] ->
+        event = entry.event
+        owner? = user && event.owner_id == user.id
+
+        Map.merge(base, %{
+          owner?: owner?,
+          busy?: event.visibility == "busy",
+          notes: event.description,
+          recurrence: recurrence_label(event),
+          calendar: if(owner?, do: (user && user.name) || "You"),
+          agent: entry[:agent] || "an agent"
+        })
+
+      "meeting" ->
+        Map.merge(base, meeting_info(entry.meeting))
+
+      "external" ->
+        Map.merge(base, %{
+          calendar: entry.subscription || "External calendar",
+          stale: entry[:stale]
+        })
+    end
+  end
+
+  # The meeting's space, host and invitees, read from the chat rows the
+  # Meetings context already keeps for it (no new backend call).
+  defp meeting_info(meeting) do
+    space = meeting.chat_space_id && Platform.Chat.get_space(meeting.chat_space_id)
+
+    people =
+      if space,
+        do: Platform.Chat.list_participants(space.id),
+        else: []
+
+    host =
+      Enum.find(people, &(&1.id == meeting.host_participant_id)) ||
+        (meeting.host_participant_id && Platform.Chat.get_participant(meeting.host_participant_id))
+
+    %{
+      live?: meeting.status == "live",
+      slug: meeting.slug,
+      meeting_id: meeting.id,
+      space: space && "#" <> space.name,
+      host: host && host.display_name,
+      invited: people |> Enum.map(& &1.display_name) |> Enum.reject(&is_nil/1)
+    }
+  end
+
+  defp handle_consent(socket, hold_id, verb) do
+    owner_id = socket.assigns.current_user_record.id
+
+    consent =
+      Platform.Repo.one(
+        from(c in Platform.Calendar.Consent,
+          where: c.hold_id == ^hold_id and c.owner_id == ^owner_id,
+          order_by: [desc: c.inserted_at],
+          limit: 1
+        )
+      )
+
+    with %Platform.Calendar.Consent{} <- consent,
+         %Platform.Memory.Briefing{} = briefing <-
+           Platform.Repo.get(Platform.Memory.Briefing, consent.briefing_id) do
+      Platform.Calendar.AgentAccess.handle(
+        briefing,
+        "calendar:" <> consent.id,
+        verb,
+        socket.assigns.access_scope
+      )
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp close_editor(socket),
+    do: assign(socket, editing: nil, editor_error: nil, editor_fields: [])
+
+  defp event_date(%Event{all_day: true, start_date: %Date{} = date}), do: date
+
+  defp event_date(%Event{starts_at: at, time_zone: zone}),
+    do: at |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  # The scope Calendar's owner-only contexts expect, rebuilt from the user row
+  # as PR #51's agent-access handlers did.
+  defp owner_scope(socket),
+    do:
+      Platform.Access.Scope.for_user(
+        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
+      )
+
+  # v4 settings panels: the agents (grants plus the agent rows they name)
+  # and whether a feed URL exists (FeedToken stores only its hash).
+  defp load_settings(socket, agent_id) do
+    scope = owner_scope(socket)
+    user_id = socket.assigns.current_user_record.id
+    choices = Platform.Calendar.AgentAccess.agents(scope)
+    grants = Platform.Calendar.AgentAccess.list(scope)
+    ids = Enum.map(grants, & &1.agent_id)
+
+    agents =
+      Platform.Repo.all(from(a in Platform.Agents.Agent, where: a.id in ^ids))
+      |> Map.new(&{&1.id, &1})
+
+    rows =
+      grants
+      |> Enum.filter(&Map.has_key?(agents, &1.agent_id))
+      |> Enum.sort_by(&agents[&1.agent_id].name)
+      |> Enum.map(&%{grant: &1, agent: agents[&1.agent_id]})
+
+    agent_id = agent_id || (List.first(choices) && List.first(choices).id)
+
+    assign(socket,
+      agent_choices: choices,
+      calendar_grants: grants,
+      agent_rows: rows,
+      grant_form: agent_grant_form(Enum.find(grants, &(&1.agent_id == agent_id)), agent_id),
+      feed_exists?:
+        Platform.Repo.exists?(
+          from(f in Platform.Calendar.FeedToken, where: f.owner_id == ^user_id)
+        )
+    )
+  end
+
+  defp agent_name(socket, id) do
+    Enum.find_value(socket.assigns.agent_choices, "The agent", &(&1.id == id && &1.name))
+  end
+
+  defp put_cursor(socket, date),
+    do: assign(socket, cursor: date, mini_month: Date.beginning_of_month(date))
+
+  defp put_day(socket, date), do: socket |> assign(:sel_day, date) |> put_cursor(date)
+
+  defp today(zone), do: DateTime.utc_now() |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  defp new_event_at(socket, date, minute) do
+    zone = socket.assigns.zone
+
+    start =
+      case DateTime.new(date, Time.new!(div(minute, 60), rem(minute, 60), 0), zone) do
+        {:ok, at} -> at
+        # A slot inside a DST change takes the instant either side of it.
+        {:ambiguous, first, _} -> first
+        {:gap, _, after_gap} -> after_gap
+      end
+
+    event_form(socket, %Event{
+      time_zone: zone,
+      starts_at: start,
+      ends_at: DateTime.add(start, 1800)
+    })
+  end
+
+  # The agent behind each pending hold, for the tentative chip's
+  # "Tentative · <Agent> · needs OK" line. Read-only; PR #51's consent rows
+  # are the record of who proposed the hold.
+  defp hold_agents(entries, %{id: owner_id}) do
+    ids = for %{kind: :event, event: %{tentative: true, id: id}} <- entries, do: id
+
+    if ids == [] do
+      %{}
+    else
+      Platform.Repo.all(
+        from(c in Platform.Calendar.Consent,
+          join: a in Platform.Agents.Agent,
+          on: a.id == c.agent_id,
+          where: c.hold_id in ^ids and c.owner_id == ^owner_id,
+          select: {c.hold_id, a.name}
+        )
+      )
+      |> Map.new()
+    end
+  end
+
+  defp hold_agents(_, _), do: %{}
+
+  @doc """
+  The list pane's Calendars rows (native, Meetings when on, one per external
+  subscription). Shared with `BookingSettingsLive`, whose list pane is the
+  same (task 01a18d9f stage 3). `assigns` needs `current_user_record` and
+  `meetings_on`.
+  """
+  def calendar_rows(assigns, subscriptions) do
+    native = %{
+      key: "native",
+      label: (assigns.current_user_record && assigns.current_user_record.name) || "You",
+      note: "your Burrow calendar",
+      kind: "native"
+    }
+
+    meetings = %{
+      key: "meetings",
+      label: "Meetings",
+      note: "Burrow meetings you are invited to",
+      kind: "meeting"
+    }
+
+    external =
+      Enum.map(
+        subscriptions,
+        &%{key: "ext:" <> &1.id, label: &1.name, note: "read-only · iCal", kind: "external"}
+      )
+
+    [native] ++ if(assigns.meetings_on, do: [meetings], else: []) ++ external
+  end
+
   defp event_form(socket, event) do
+    zone = event.time_zone || socket.assigns.zone
+
     rule =
       case Platform.Calendar.Recurrence.parse(event.recurrence) do
         {:ok, %{} = rule} -> rule
         _ -> %{frequency: "WEEKLY", interval: 1, count: nil, until: nil}
       end
 
+    local = fn at -> at && DateTime.shift_zone!(at, zone) end
+    starts = local.(event.starts_at)
+    ends = local.(event.ends_at)
+
     attrs = %{
       "title" => event.title || "",
       "description" => event.description || "",
-      "time_zone" => event.time_zone,
+      "time_zone" => zone,
       "all_day" => event.all_day,
-      "starts_at" => local_input(event.starts_at, event.time_zone),
-      "ends_at" => local_input(event.ends_at, event.time_zone),
-      "start_date" => event.start_date,
-      "end_date" => if(event.end_date, do: Date.add(event.end_date, -1)),
+      "date" =>
+        cond do
+          event.all_day && event.start_date -> Date.to_iso8601(event.start_date)
+          starts -> starts |> DateTime.to_date() |> Date.to_iso8601()
+          true -> ""
+        end,
+      "start" => if(starts, do: Calendar.strftime(starts, "%H:%M"), else: ""),
+      "end" => if(ends, do: Calendar.strftime(ends, "%H:%M"), else: ""),
+      "end_date" =>
+        if(event.all_day && event.end_date,
+          do: event.end_date |> Date.add(-1) |> Date.to_iso8601(),
+          else: ""
+        ),
       "visibility" => event.visibility || "details",
-      "recurrence" => event.recurrence || "",
       "custom_frequency" => rule.frequency,
       "custom_interval" => rule.interval,
       "custom_count" => rule.count,
@@ -360,41 +822,98 @@ defmodule PlatformWeb.CalendarLive do
         end
     }
 
-    assign(socket, sheet: :edit, selected: event, form: to_form(attrs, as: :event), error: nil)
+    assign(socket,
+      editing: event,
+      form: to_form(attrs, as: :event),
+      editor_error: nil,
+      editor_fields: []
+    )
   end
 
+  # The v4 editor submits a Date plus Start/End times in the event's zone;
+  # an all-day event submits its first and last day (PR #51 stores an
+  # exclusive end date).
   defp parse_event(params) do
     zone = params["time_zone"] || "Etc/UTC"
-    attrs = Map.drop(params, ["where", "repeat"])
+    all_day? = params["all_day"] in [true, "true"]
+    date = blank_nil(params["date"])
+
+    attrs = %{
+      "title" => params["title"],
+      "description" => params["description"],
+      "time_zone" => zone,
+      "visibility" => params["visibility"],
+      "all_day" => all_day?,
+      "recurrence" =>
+        if(params["repeat"] == "custom", do: custom_rule(params), else: params["repeat"]),
+      "space_id" => nil,
+      "project_id" => nil
+    }
 
     attrs =
-      Map.put(
-        attrs,
-        "recurrence",
-        if(params["repeat"] == "custom", do: custom_rule(params), else: params["repeat"])
-      )
+      if all_day? do
+        last = blank_nil(params["end_date"]) || date
 
-    attrs =
-      if params["all_day"] in [true, "true"] do
-        case Date.from_iso8601(params["end_date"] || "") do
-          {:ok, date} -> Map.put(attrs, "end_date", Date.add(date, 1))
-          _ -> attrs
-        end
+        Map.merge(attrs, %{
+          "start_date" => date,
+          "end_date" =>
+            case Date.from_iso8601(last || "") do
+              {:ok, day} -> Date.add(day, 1)
+              _ -> nil
+            end
+        })
       else
-        attrs
+        at = fn time ->
+          if date && blank_nil(time), do: parse_local(date <> "T" <> time, zone)
+        end
+
+        Map.merge(attrs, %{
+          "starts_at" => at.(params["start"]),
+          "ends_at" => at.(params["end"]),
+          "start_date" => nil,
+          "end_date" => nil
+        })
       end
-
-    attrs =
-      Enum.reduce(~w(starts_at ends_at), attrs, fn key, acc ->
-        Map.put(acc, key, parse_local(params[key], zone))
-      end)
-
-    attrs = Map.merge(attrs, %{"space_id" => nil, "project_id" => nil})
 
     case String.split(params["where"] || "private", ":", parts: 2) do
       ["space", id] -> Map.put(attrs, "space_id", id)
       ["project", id] -> Map.put(attrs, "project_id", id)
       _ -> attrs
+    end
+  end
+
+  defp blank_nil(value) when value in [nil, ""], do: nil
+  defp blank_nil(value), do: value
+
+  # app.js `#f-save` order: title, then a missing date/start/end, then end
+  # not after start. Returns `{message, invalid_fields}` or nil.
+  @doc false
+  def editor_errors(%Ecto.Changeset{} = changeset) do
+    errors = Ecto.Changeset.traverse_errors(changeset, fn {message, _} -> message end)
+    blank? = fn field -> "can't be blank" in Map.get(errors, field, []) end
+
+    cond do
+      errors == %{} ->
+        nil
+
+      Map.has_key?(errors, :title) ->
+        {"Give the event a title.", [:title]}
+
+      Enum.any?(~w(starts_at ends_at start_date end_date)a, blank?) ->
+        fields =
+          [date: [:starts_at, :start_date], start: [:starts_at], end: [:ends_at, :end_date]]
+          |> Enum.filter(fn {_, keys} -> Enum.any?(keys, blank?) end)
+          |> Enum.map(&elem(&1, 0))
+
+        {"Pick a date, start and end.", fields}
+
+      Map.has_key?(errors, :ends_at) or Map.has_key?(errors, :end_date) ->
+        {"End has to be after the start.", [:end]}
+
+      true ->
+        {Enum.map_join(errors, ". ", fn {field, messages} ->
+           "#{Phoenix.Naming.humanize(field)} #{Enum.join(messages, ", ")}"
+         end), []}
     end
   end
 
@@ -421,137 +940,231 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  defp parse_local(_, _), do: nil
-  defp local_input(nil, _), do: ""
-
-  defp local_input(at, zone),
-    do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%Y-%m-%dT%H:%M")
-
-  def date_label(date), do: Calendar.strftime(date, "%A %-d %B")
-  def agenda_days(days, anchor), do: Enum.filter(days, &(Date.compare(&1, anchor) != :lt))
-  def time_label(at, zone), do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%H:%M")
-
-  def entries_on(entries, date, zone),
-    do:
-      Enum.filter(entries, fn entry ->
-        {from, to} = CalendarWindow.day_bounds(date, zone)
-
-        DateTime.compare(entry.starts_at, to) == :lt and
-          DateTime.compare(entry.ends_at || DateTime.add(entry.starts_at, 1800), from) == :gt
-      end)
-
-  def joinable?(%{kind: :meeting, meeting: meeting, starts_at: at}),
-    do:
-      meeting.status == "live" or
-        (meeting.status == "scheduled" and
-           abs(DateTime.diff(at, DateTime.utc_now(), :second)) <= 600)
-
-  def joinable?(_), do: false
-  def cancelled?(%{kind: :meeting, meeting: %{status: "cancelled"}}), do: true
-  def cancelled?(_), do: false
-
-  def scope_label(%{kind: :meeting, meeting: %{project_id: id}}, _, projects) do
-    (Enum.find(projects, &(&1.id == id)) || %{name: "Meeting"}).name
-  end
-
-  def scope_label(%{kind: :meeting}, _, _), do: "Meeting"
-
-  def scope_label(%{kind: :external, subscription: name, stale: stale}, _, _),
-    do: name <> if(stale, do: " · Refresh required", else: " · Read-only")
-
-  def scope_label(%{event: %{space_id: id}}, spaces, _) when not is_nil(id),
-    do: "#" <> (Enum.find(spaces, &(&1.id == id)) || %{name: "Space"}).name
-
-  def scope_label(%{event: %{project_id: id}}, _, projects) when not is_nil(id),
-    do: (Enum.find(projects, &(&1.id == id)) || %{name: "Project"}).name
-
-  def scope_label(%{event: %{visibility: "busy"}}, _, _), do: "Busy"
-  def scope_label(_, _, _), do: "Only you"
-
   def where_options(spaces, projects),
     do:
       [{"Only you", "private"}] ++
         Enum.map(spaces, &{"#" <> &1.name, "space:" <> &1.id}) ++
         Enum.map(projects, &{&1.name, "project:" <> &1.id})
 
-  def visibility_label(value, spaces, projects) do
-    case List.keyfind(where_options(spaces, projects), value, 1) do
-      {"Only you", _} -> "Visible only to you"
-      {name, _} -> "Visible to members of #{name}"
-      _ -> "Choose where this event belongs"
+  # ── Calendar v4 data (prototype 01a178d2 v4, app.js) ──────────────────
+
+  @first_hour 7
+  @last_hour 21
+  @hour_px 48
+
+  @doc "The week grid's hour window, 07:00 to 21:00 (app.js `H0`/`H1`)."
+  def hour_window, do: {@first_hour, @last_hour}
+  def hour_px, do: @hour_px
+  def grid_px, do: (@last_hour - @first_hour) * @hour_px
+
+  @doc "Which calendar row an entry belongs to; the toggles key on this."
+  def calendar_key(%{kind: :meeting}), do: "meetings"
+
+  def calendar_key(%{kind: :external, id: id}),
+    do: "ext:" <> (id |> String.split(":", parts: 2) |> hd())
+
+  def calendar_key(_), do: "native"
+
+  def shown?(shown, key), do: Map.get(shown, key, true)
+
+  @doc "The chip kind: native, meeting, external or tentative."
+  def chip_kind(%{kind: :event, event: %{tentative: true}}), do: "tentative"
+  def chip_kind(%{kind: :event}), do: "native"
+  def chip_kind(%{kind: :meeting}), do: "meeting"
+  def chip_kind(%{kind: :external}), do: "external"
+
+  def live?(%{kind: :meeting, meeting: %{status: "live"}}), do: true
+  def live?(_), do: false
+
+  @doc "The title a chip shows: the hold's own title, never the list prefix."
+  def chip_title(%{kind: :event, event: %{title: title}}) when is_binary(title), do: title
+  def chip_title(%{title: title}), do: title || ""
+
+  @doc "`Mon 26 Oct`, the prototype's `dateLabel`."
+  def day_label(date), do: Calendar.strftime(date, "%a %-d %b")
+
+  def hm(minute), do: pad(div(minute, 60)) <> ":" <> pad(rem(minute, 60))
+  defp pad(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  @doc """
+  The details' recurrence line (app.js `recLabel`): `Every day`, `Weekly on
+  Tuesday`, `Monthly on day 26`; a PR #51 custom rule reads `Every 2 weeks,
+  3 times` or `…, until Mon 30 Nov`. nil when the event does not repeat.
+  """
+  def recurrence_label(%{recurrence: rule} = event) do
+    case Platform.Calendar.Recurrence.parse(rule) do
+      {:ok, %{frequency: freq, interval: interval, count: count, until: until}} ->
+        local = event.starts_at && DateTime.shift_zone!(event.starts_at, event.time_zone)
+
+        base =
+          case {freq, interval} do
+            {"DAILY", 1} -> "Every day"
+            {"WEEKLY", 1} when not is_nil(local) -> "Weekly on " <> Calendar.strftime(local, "%A")
+            {"WEEKLY", 1} -> "Weekly"
+            {"MONTHLY", 1} when not is_nil(local) -> "Monthly on day #{local.day}"
+            {"MONTHLY", 1} -> "Monthly"
+            {"DAILY", n} -> "Every #{n} days"
+            {"WEEKLY", n} -> "Every #{n} weeks"
+            {"MONTHLY", n} -> "Every #{n} months"
+          end
+
+        base <>
+          if(count, do: ", #{count} times", else: "") <>
+          if(until, do: ", until #{day_label(until)}", else: "")
+
+      _ ->
+        nil
     end
   end
 
-  def scope_style(entry) do
-    id =
-      case entry do
-        %{event: event} -> event.space_id || event.project_id || event.owner_id
-        %{meeting: meeting} -> meeting.project_id || meeting.id
-      end
+  def recurrence_label(_), do: nil
 
-    slots = Platform.Agents.ColorPalette.ids()
-    slot = Enum.at(slots, :erlang.phash2(id, length(slots)))
+  @doc """
+  An entry's local minutes on `date`, clipped to that day: `{start, end}`
+  with end up to 1440. A missing end reads as 30 minutes.
+  """
+  def day_minutes(entry, date, zone) do
+    {from, to} = CalendarWindow.day_bounds(date, zone)
+    ends_at = entry.ends_at || DateTime.add(entry.starts_at, 1800)
 
-    "border-left-color: var(--ag-#{slot});"
+    first =
+      if DateTime.compare(entry.starts_at, from) == :gt,
+        do: local_minute(entry.starts_at, zone),
+        else: 0
+
+    last =
+      if DateTime.compare(ends_at, to) == :lt,
+        do: local_minute(ends_at, zone),
+        else: 1440
+
+    {first, max(last, first)}
   end
 
-  def countdown(at) do
-    minutes = div(DateTime.diff(at, DateTime.utc_now()), 60)
-
-    cond do
-      minutes <= 0 -> "Now"
-      minutes < 60 -> "in #{minutes} min"
-      minutes < 1440 -> "in #{div(minutes, 60)} hr"
-      true -> "in #{div(minutes, 1440)} days"
-    end
+  defp local_minute(at, zone) do
+    local = DateTime.shift_zone!(at, zone)
+    local.hour * 60 + local.minute
   end
 
-  def day_blocks(entries, date, zone, hours \\ {0, 24}) do
+  @doc "Entries that overlap `date` in `zone`."
+  def entries_on(entries, date, zone) do
     {from, to} = CalendarWindow.day_bounds(date, zone)
 
-    entries_on(entries, date, zone)
-    |> Enum.reject(& &1.all_day)
-    |> Enum.flat_map(fn entry ->
-      first = if DateTime.compare(entry.starts_at, from) == :lt, do: from, else: entry.starts_at
-      last = entry.ends_at || DateTime.add(first, 1800)
-      last = if DateTime.compare(last, to) == :gt, do: to, else: last
-
-      projection = %Platform.Meetings.Meeting{
-        status: "scheduled",
-        scheduled_start_at: first,
-        scheduled_end_at: last
-      }
-
-      case CalendarWindow.place(projection, date, zone, hours) do
-        {:ok, placement} -> [{entry, placement}]
-        _ -> []
-      end
+    Enum.filter(entries, fn entry ->
+      DateTime.compare(entry.starts_at, to) == :lt and
+        DateTime.compare(entry.ends_at || DateTime.add(entry.starts_at, 1800), from) == :gt
     end)
-    |> CalendarWindow.assign_lanes()
   end
 
-  def block_style(pos),
-    do:
-      "top: #{pos.top}%; height: #{min(pos.height, 100 - pos.top)}%; left: #{pos.left}%; width: #{pos.width}%;"
+  @doc """
+  The timed chips of one day column, laid out like app.js `dayColumn`:
+  px offsets from 07:00 at 48px an hour, at least 22px tall, compact
+  (title only) under 34px, and overlap lanes side by side. Every chip in a
+  day shares the day's lane count, as `lanes()` does.
+  """
+  def day_chips(entries, date, zone) do
+    window_start = @first_hour * 60
+    window_end = @last_hour * 60
 
-  def now_style(date, zone, {first, last}) do
-    now = DateTime.shift_zone!(DateTime.utc_now(), zone)
+    placed =
+      entries_on(entries, date, zone)
+      |> Enum.reject(& &1.all_day)
+      |> Enum.map(fn entry ->
+        {first, last} = day_minutes(entry, date, zone)
+        %{entry: entry, date: date, s: first, e: last}
+      end)
+      |> Enum.sort_by(&{&1.s, -&1.e})
 
-    if DateTime.to_date(now) == date and now.hour >= first and now.hour < last,
-      do: "top: #{((now.hour - first) * 60 + now.minute) / ((last - first) * 60) * 100}%;",
+    {placed, columns} =
+      Enum.map_reduce(placed, [], fn chip, columns ->
+        case Enum.find_index(columns, &(&1 <= chip.s)) do
+          nil -> {Map.put(chip, :lane, length(columns)), columns ++ [chip.e]}
+          lane -> {Map.put(chip, :lane, lane), List.replace_at(columns, lane, chip.e)}
+        end
+      end)
+
+    lanes = max(length(columns), 1)
+
+    Enum.map(placed, fn chip ->
+      top_min = chip.s |> max(window_start) |> min(window_end)
+      top = min((top_min - window_start) / 60 * @hour_px, grid_px() - 22)
+      height = max(22, (min(chip.e, window_end) - top_min) / 60 * @hour_px - 2)
+      Map.merge(chip, %{lanes: lanes, top: top, height: height, compact: height < 34})
+    end)
+  end
+
+  @doc "The now line's px offset in today's column, or nil outside 07–21."
+  def now_top(zone) do
+    minute = local_minute(DateTime.utc_now(), zone)
+
+    if minute >= @first_hour * 60 and minute < @last_hour * 60,
+      do: (minute - @first_hour * 60) / 60 * @hour_px,
       else: nil
   end
 
-  def hour_labels({first, last}), do: Enum.to_list(first..(last - 1))
-  def hour_top(hour, {first, last}), do: "top: #{(hour - first) / (last - first) * 100}%;"
-  def grid_height({first, last}), do: "height: #{(last - first) * 64}px;"
+  @doc "The chip's aria-label (app.js `chipLabel`)."
+  def chip_label(entry, date, first, last) do
+    kind =
+      case chip_kind(entry) do
+        "meeting" -> "Meeting"
+        "external" -> "External, read-only"
+        "tentative" -> "Tentative hold by " <> (entry[:agent] || "an agent")
+        _ -> "Event"
+      end
 
-  defp projection(entry),
-    do: %Platform.Meetings.Meeting{
-      status: "scheduled",
-      scheduled_start_at: entry.starts_at,
-      scheduled_end_at: entry.ends_at
-    }
+    "#{kind}: #{chip_title(entry)}, #{day_label(date)} #{hm(first)} to #{hm(last)}"
+  end
+
+  @doc "The external calendar's label up to ` (`, as app.js `chipInner`."
+  def external_label(%{subscription: name}) when is_binary(name),
+    do: name |> String.split(" (", parts: 2) |> hd()
+
+  def external_label(_), do: ""
+
+  def busy?(%{kind: :event, event: %{visibility: "busy"}}), do: true
+  def busy?(_), do: false
+
+  def recurring?(%{kind: :event, event: %{recurrence: rule}}) when rule not in [nil, ""],
+    do: true
+
+  def recurring?(_), do: false
+
+  @doc "The month grid's dates: whole weeks from the Monday on or before the 1st."
+  def month_days(date) do
+    first = Date.beginning_of_month(date)
+    start = Date.beginning_of_week(first)
+    last = Date.end_of_month(first)
+    weeks = div(Date.diff(last, start), 7) + 1
+    Enum.map(0..(weeks * 7 - 1), &Date.add(start, &1))
+  end
+
+  @doc "The mini month's 6 weeks (app.js `miniMonth`)."
+  def mini_days(month) do
+    start = month |> Date.beginning_of_month() |> Date.beginning_of_week()
+    Enum.map(0..41, &Date.add(start, &1))
+  end
+
+  def week_days(date) do
+    monday = Date.beginning_of_week(date)
+    Enum.map(0..6, &Date.add(monday, &1))
+  end
+
+  @doc "`Oct 26 – Nov 1, 2026` (cross-month) or `Oct 5 – 11, 2026`."
+  def range_label("month", cursor, _), do: Calendar.strftime(cursor, "%B %Y")
+
+  def range_label(_, cursor, _) do
+    monday = Date.beginning_of_week(cursor)
+    sunday = Date.add(monday, 6)
+
+    tail =
+      if sunday.month != monday.month,
+        do: Calendar.strftime(sunday, "%b %-d"),
+        else: Integer.to_string(sunday.day)
+
+    "#{Calendar.strftime(monday, "%b %-d")} – #{tail}, #{sunday.year}"
+  end
+
+  def phone_range_label("month", cursor, _), do: Calendar.strftime(cursor, "%B %Y")
+  def phone_range_label(_, _, sel_day), do: Calendar.strftime(sel_day, "%B %Y")
 
   defp shift_month(date, sign) do
     base = Date.beginning_of_month(date)

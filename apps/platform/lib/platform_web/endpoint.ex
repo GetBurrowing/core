@@ -105,10 +105,10 @@ defmodule PlatformWeb.Endpoint do
   # Plug.Telemetry `log:` callback; see the plug above.
   def request_log_level(%Plug.Conn{path_info: ["vault", "fetch" | _]}), do: false
   def request_log_level(%Plug.Conn{path_info: ["calendar", "feed" | _]}), do: false
-  # Task 01a18f0c stage 2: `/install-status/<token>` carries a live capability
-  # (a hand-over link until acknowledged or 7 days pass). The live route's
-  # `log: false` silences only LiveView's mount line; this silences the
-  # request line, which would otherwise print the raw path.
+  # Task 01a18f0c stage 2: `/install-status/<token>` carried a live capability
+  # (a hand-over link). The page moved to Burrow Cloud (task 01a19249 stage 5),
+  # but links emailed earlier still point here, and the 404 they now get would
+  # otherwise print the raw token in the request line. Keep this clause.
   def request_log_level(%Plug.Conn{path_info: ["install-status" | _]}), do: false
   def request_log_level(_conn), do: :info
 end

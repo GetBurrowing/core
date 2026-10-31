@@ -60,17 +60,22 @@ defmodule PlatformWeb.NativeTabBridgeTest do
 
     expected = Enum.map_join(IconRail.mobile_tab_keys(), ",", &to_string/1) <> ",more"
     assert items_attr(html) == [expected]
-    assert expected == "chat,voice,tasks,meetings,more"
+    assert expected == "chat,calendar,meetings,inbox,more"
   end
 
   test "/chat selects chat, More closed, no unread", %{conn: conn} do
     {:ok, view, _html} = live(authenticated_conn(conn), ~p"/chat")
 
     assert has_element?(view, @bridge)
-    assert has_element?(view, "#native-tab-bridge[data-items='chat,voice,tasks,meetings,more']")
+
+    assert has_element?(
+             view,
+             "#native-tab-bridge[data-items='chat,calendar,meetings,inbox,more']"
+           )
+
     assert has_element?(view, "#native-tab-bridge[data-active-key='chat']")
     assert has_element?(view, "#native-tab-bridge[data-more-open='false']")
-    assert has_element?(view, "#native-tab-bridge[data-more-unread='false']")
+    assert has_element?(view, "#native-tab-bridge[data-inbox-unread='false']")
   end
 
   # Task 01a174e8 stage 1: the hook reads the bar's inks off these two probes.
@@ -97,13 +102,19 @@ defmodule PlatformWeb.NativeTabBridgeTest do
     assert probes == ["selected", "unselected"]
   end
 
-  test "/tasks selects tasks", %{conn: conn} do
+  # Task 01a18d9f stage 5: Tasks is a More-sheet row, so /tasks selects More.
+  test "/tasks selects more", %{conn: conn} do
     {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
-    assert has_element?(view, "#native-tab-bridge[data-active-key='tasks']")
+    assert has_element?(view, "#native-tab-bridge[data-active-key='more']")
+  end
+
+  test "/inbox selects inbox", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/inbox")
+    assert has_element?(view, "#native-tab-bridge[data-active-key='inbox']")
   end
 
   test "More open selects more and sets data-more-open, and closing restores", %{conn: conn} do
-    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/chat")
 
     view |> element(@more) |> render_click()
     assert has_element?(view, "#native-tab-bridge[data-active-key='more'][data-more-open='true']")
@@ -112,17 +123,22 @@ defmodule PlatformWeb.NativeTabBridgeTest do
 
     assert has_element?(
              view,
-             "#native-tab-bridge[data-active-key='tasks'][data-more-open='false']"
+             "#native-tab-bridge[data-active-key='chat'][data-more-open='false']"
            )
   end
 
-  test "inbox unread above 0 sets data-more-unread true", %{conn: conn} do
+  test "inbox unread above 0 sets data-inbox-unread true", %{conn: conn} do
     conn = authenticated_conn(conn)
     user_id = conn.private.plug_session["current_user_id"]
     {:ok, _} = Inbox.emit(inbox_attrs(user_id))
 
     {:ok, view, _html} = live(conn, ~p"/tasks")
-    assert has_element?(view, "#native-tab-bridge[data-more-unread='true']")
-    refute has_element?(view, "#native-tab-bridge[data-more-unread='false']")
+    assert has_element?(view, "#native-tab-bridge[data-inbox-unread='true']")
+    refute has_element?(view, "#native-tab-bridge[data-inbox-unread='false']")
+
+    assert has_element?(
+             view,
+             "#bottom-nav a[data-destination='inbox'] [data-role='inbox-unread-dot']"
+           )
   end
 end

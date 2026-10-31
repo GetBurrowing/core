@@ -8,6 +8,7 @@ import AppBadge from "./app_badge"
 import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
+import CalendarScroll from "./calendar_scroll"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
@@ -21,7 +22,6 @@ import CodeBlock from "./code_block"
 import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
-import HandoverDownload from "./handover_download"
 import DateEntryGuard from "./date_entry_guard"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
@@ -97,6 +97,7 @@ export default {
   AttachFailedPreview,
   AttachSheet,
   ButtonLoading,
+  CalendarScroll,
   CandidateClock,
   CanvasRoomBridge,
   ChatClip,
@@ -110,7 +111,6 @@ export default {
   CommandPalette,
   ComposeInput,
   CopyToClipboard,
-  HandoverDownload,
   DateEntryGuard,
   DoneColumnState,
   DragDropUpload,

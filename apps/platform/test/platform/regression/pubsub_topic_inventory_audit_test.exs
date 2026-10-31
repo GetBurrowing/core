@@ -194,12 +194,6 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
     # ── resource ──
     {"audit:<id>:<id>", :resource},
-    # Task 01a10315 stage 2: one one-click install's progress. Subscribers are
-    # the customer's progress page (it holds the install's status token,
-    # checked by `Installs.get_by_token/2` before subscribing) and root-admin
-    # screens. The message is `{:install_updated, id}` only; a receiver re-reads
-    # the row, so a non-subscriber learns nothing and no secret is broadcast.
-    {"install:<id>", :resource},
     # Task 01a10322 stage 2. One-shot rendezvous for `AgentHost.logs/2`: the
     # caller subscribes under a fresh random ref, the agent-host channel
     # broadcasts the host's reply (journal lines of ONE native agent) there,

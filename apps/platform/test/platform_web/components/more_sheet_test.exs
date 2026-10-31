@@ -72,7 +72,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
   The More sheet's rows, order, copy and states (task 01a1557a-807f stage 2).
 
   One ordered list (`IconRail.more_sheet_order/0`) of module rows, extension
-  rows right after Inbox, no headings, and Settings pinned in the footer. Paint
+  rows right after Voice and Tasks (task 01a18d9f stage 5), no headings, and Settings pinned in the footer. Paint
   is stage 3 and dismissal stage 4; neither is asserted here.
 
   async: false — flips `:mail_enabled` and `:extensions`.
@@ -104,8 +104,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
           open: true,
           root_user: false,
           current_user: nil,
-          current_path: nil,
-          inbox_unread_count: 0
+          current_path: nil
         },
         assigns
       )
@@ -116,7 +115,6 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       root_user={@root_user}
       current_user={@current_user}
       current_path={@current_path}
-      inbox_unread_count={@inbox_unread_count}
     />
     """)
   end
@@ -152,7 +150,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{root_user: true})
 
       assert row_keys(html) ==
-               ~w(inbox fixture calendar email files canvases skills context agents experiments changelog)
+               ~w(voice tasks fixture email files canvases skills context agents experiments changelog)
 
       footer = html |> doc() |> LazyHTML.query(".sheet-actions [data-destination=settings]")
       assert Enum.count(footer) == 1
@@ -166,8 +164,8 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     test "the order list holds Canvases (a row, after Files) and Games (a row only with games)" do
       assert IconRail.more_sheet_order() ==
                [
-                 :inbox,
-                 :calendar,
+                 :voice,
+                 :tasks,
                  :email,
                  :files,
                  :canvases,
@@ -241,14 +239,16 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       put_env(:mail_enabled, false)
       keys = row_keys(render_more_sheet(%{root_user: true}))
       refute "email" in keys
-      assert Enum.take(keys, 3) == ["inbox", "calendar", "files"]
+      assert Enum.take(keys, 3) == ["voice", "tasks", "files"]
     end
 
     test "no bar tab, no Admin, no Prompts, no Activity row; no headings" do
       html = render_more_sheet(%{root_user: true})
       keys = row_keys(html)
 
-      for key <- ~w(chat tasks meetings admin prompts activity), do: refute(key in keys, key)
+      for key <- ~w(chat calendar meetings inbox admin prompts activity),
+          do: refute(key in keys, key)
+
       refute html =~ "more-sheet-section-label"
       refute html =~ ">Working<"
       refute html =~ ">Admin<"
@@ -299,39 +299,14 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       assert bare == []
     end
 
-    test "Inbox carries the count badge with the rail's grammar, after a truncating label" do
-      for {n, text} <- [{1, "1"}, {99, "99"}, {150, "99+"}] do
-        badge =
-          render_more_sheet(%{inbox_unread_count: n})
-          |> doc()
-          |> LazyHTML.query(~s([data-destination="inbox"] [data-role="more-sheet-inbox-badge"]))
-
-        assert Enum.count(badge) == 1
-        assert badge |> LazyHTML.text() |> String.trim() == text
-        assert badge |> LazyHTML.attribute("class") |> hd() =~ "shrink-0"
-      end
-
-      label =
-        render_more_sheet(%{})
-        |> doc()
-        |> LazyHTML.query(~s([data-destination="inbox"] span.truncate))
-
-      assert label |> LazyHTML.attribute("class") |> hd() =~ "min-w-0"
+    test "Inbox is a bar tab, so the sheet has no Inbox row and no Inbox badge" do
+      html = render_more_sheet(%{root_user: true})
+      refute "inbox" in row_keys(html)
+      refute html =~ "more-sheet-inbox-badge"
     end
 
-    test "the badge is primary (stage 3 paint) and the sheet root carries more-sheet" do
-      html = render_more_sheet(%{inbox_unread_count: 3})
-
-      [class] =
-        html
-        |> doc()
-        |> LazyHTML.query(~s([data-role="more-sheet-inbox-badge"]))
-        |> LazyHTML.attribute("class")
-
-      assert class =~ "badge-primary"
-      refute class =~ "badge-error"
-
-      root = html |> doc() |> LazyHTML.query("#more-sheet")
+    test "the sheet root carries more-sheet" do
+      root = render_more_sheet(%{}) |> doc() |> LazyHTML.query("#more-sheet")
 
       assert root
              |> LazyHTML.attribute("class")
@@ -365,15 +340,6 @@ defmodule PlatformWeb.Components.MoreSheetTest do
              |> doc()
              |> LazyHTML.query("footer.sheet-actions [data-destination=settings]")
              |> Enum.count() == 1
-    end
-
-    test "no badge at 0" do
-      badge =
-        render_more_sheet(%{inbox_unread_count: 0})
-        |> doc()
-        |> LazyHTML.query(~s([data-role="more-sheet-inbox-badge"]))
-
-      assert Enum.count(badge) == 0
     end
   end
 
@@ -422,7 +388,12 @@ defmodule PlatformWeb.Components.MoreSheetTest do
         {"/admin", "settings"},
         {"/admin/users", "settings"},
         {"/admin/prompts", "settings"},
-        {"/changelog", "changelog"}
+        {"/changelog", "changelog"},
+        # Task 01a18d9f stage 5: Voice and Tasks are sheet rows now.
+        {"/voice", "voice"},
+        {"/tasks", "tasks"},
+        {"/tasks/abc", "tasks"},
+        {"/tasks/pipeline", "tasks"}
       ]
 
       for {path, key} <- cases do
@@ -438,7 +409,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     end
 
     test "no row is current on a bar page" do
-      for path <- ["/chat", "/tasks", "/meetings"] do
+      for path <- ["/chat", "/calendar", "/meetings", "/inbox"] do
         html = render_more_sheet(%{root_user: true, current_path: path})
         assert current_keys(html) == [], path
         refute html =~ "hero-check", path

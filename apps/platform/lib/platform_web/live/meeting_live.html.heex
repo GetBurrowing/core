@@ -3478,7 +3478,68 @@
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3">
+      <%!-- v4 list view header (task 01a18d9f fix round): at lg the list pane's
+         own head (h2 `Meetings` 17px/650 in the 270px pane, prototype
+         01a178d2 v4 `.lhead`) beside the main pane's head (h1 `Meetings`
+         15px/650 + `+ New meeting`). The Meetings/Archive switch (main's
+         Archive view, #54; v4 has none) rides glyph-only in the list head.
+         Below lg one row: title, switch, `+ New meeting`. --%>
+      <header
+        :if={@meetings_view == :list}
+        class="flex h-[52px] flex-shrink-0 items-stretch border-b border-edge bg-base-100"
+        data-role="meetings-list-header"
+      >
+        <div class="flex min-w-0 flex-1 items-center gap-2 px-3 lg:w-[270px] lg:flex-none lg:border-r lg:border-edge">
+          <h2 class="m-0 min-w-0 truncate text-[17px] font-[650]">Meetings</h2>
+          <div
+            class="ml-auto flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-200 p-0.5"
+            data-role="meetings-view-toggle"
+            role="group"
+            aria-label="Meetings view"
+          >
+            <.link
+              :for={entry <- meetings_view_shelf()}
+              patch={meetings_view_path(assigns, entry.id)}
+              data-view={entry.id}
+              aria-current={@meetings_view == entry.id && "page"}
+              aria-label={entry.label}
+              title={entry.label}
+              class={[
+                "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition lg:min-h-9",
+                @meetings_view == entry.id && "bg-base-100 text-base-content shadow-sm",
+                @meetings_view != entry.id && "text-subtle lg:hover:text-base-content"
+              ]}
+            >
+              <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
+            </.link>
+          </div>
+          <button
+            type="button"
+            phx-click="open_new_room"
+            data-role="list-new-meeting"
+            class={[PlatformWeb.CalendarLive.Components.primary_btn(), "lg:hidden"]}
+          >
+            + New meeting
+          </button>
+        </div>
+        <div class="hidden min-w-0 flex-1 items-center gap-2 px-4 lg:flex">
+          <h1 class="m-0 truncate text-[15px] font-[650]" data-role="meetings-main-title">
+            Meetings
+          </h1>
+          <button
+            type="button"
+            phx-click="open_new_room"
+            data-role="list-new-meeting-main"
+            class={[PlatformWeb.CalendarLive.Components.primary_btn(), "ml-auto"]}
+          >
+            + New meeting
+          </button>
+        </div>
+      </header>
+      <header
+        :if={@meetings_view != :list}
+        class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3"
+      >
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
@@ -3518,8 +3579,11 @@
             ]}
           >
             <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
+            <%!-- Phones show the glyph only (the aria-label names it): with
+               the short labels, the toggle and `+ New meeting` left the
+               title about 28px at 375 and it truncated to "M…" (task
+               01a18d9f stage 5). --%>
             <span class="hidden sm:inline">{entry.label}</span>
-            <span class="sm:hidden">{entry.short_label}</span>
           </.link>
         </div>
 
@@ -3614,75 +3678,43 @@
          archive — every ended or cancelled meeting the viewer can see. A
          bounded range would be an additive control in the same bar and
          would not change this heading. --%>
+      <%!-- ── v4 list view (task 01a18d9f stage 4) ─────────────────────────
+         Prototype 01a178d2 v4 `meetingsList` / `renderMeetings`: a 270px
+         list pane of meeting cards (Live now / Upcoming / Past) beside the
+         detail; on the phone the list is the page and a row pushes its
+         detail via `?meeting=<id>`. --%>
+      <% list_zone = assigns[:calendar_time_zone] || "Etc/UTC" %>
+      <% list_rows =
+        if @meetings_view == :list,
+          do: PlatformWeb.MeetingLive.ListComponents.rows(@grouped_meetings, list_zone),
+          else: %{} %>
       <div
         :if={@meetings_view == :list}
-        class="clears-tab-bar min-h-0 flex-1 overflow-y-auto bg-base-200 p-3 lg:bg-base-100 lg:p-5"
+        class="flex min-h-0 flex-1 overflow-hidden bg-base-200"
         data-region="meetings-workspace"
       >
-        <.link
-          :if={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
-          navigate={~p"/calendar"}
-          class="btn btn-ghost mb-4 min-h-11"
-        >
-          View on calendar
-        </.link>
-        <div :if={@index_empty?} data-empty-state="meetings-index" class="mb-4 text-left">
-          <h2 class="text-base font-semibold" data-role="meetings-index-empty-heading">
-            No meetings yet.
-          </h2>
-          <p
-            :if={@viewer_external?}
-            data-viewer="external"
-            data-role="meetings-index-empty-note"
-            class="text-sm text-subtle"
-          >
-            You'll see a meeting here once you've been invited.
-          </p>
-          <p
-            :if={!@viewer_external?}
-            data-viewer="internal"
-            data-role="meetings-index-empty-note"
-            class="text-sm text-subtle"
-          >
-            Meetings for your organisation will appear here.
-          </p>
-        </div>
-        <section
-          :for={{key, label} <- [{:live, "Live"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]}
-          class="mb-6"
-        >
-          <h2 class="mb-2 text-sm font-semibold">{label}</h2>
-          <p :if={@grouped_meetings[key] == []} class="py-3 text-sm text-subtle">
-            No {String.downcase(label)} meetings.
-          </p>
-          <div
-            :for={meeting <- @grouped_meetings[key]}
-            id={"workspace-meeting-#{meeting.id}"}
-            data-role="workspace-meeting"
-            data-meeting-id={meeting.id}
-            data-meeting-status={meeting.status}
-            class="mb-2 flex min-w-0 items-center gap-3 rounded-xl border border-edge bg-base-100 p-3 lg:bg-base-200"
-          >
-            <.icon name="hero-video-camera" class="size-5 shrink-0" />
-            <div class="min-w-0 flex-1">
-              <h3 class="truncate text-[15px] font-medium">{meeting.name}</h3>
-              <p :if={meeting.scheduled_start_at} class="font-mono text-xs text-subtle">
-                {Calendar.strftime(meeting.scheduled_start_at, "%b %-d · %H:%M UTC")}
-              </p>
-            </div>
-            <.link
-              navigate={~p"/meetings/#{meeting.slug}"}
-              class={[
-                "btn btn-sm min-h-11 shrink-0",
-                key == :live && "btn-primary",
-                key != :live && "btn-ghost"
-              ]}
-            >
-              {if key == :live, do: "Join", else: "Open"}
-            </.link>
-          </div>
-        </section>
+        <PlatformWeb.MeetingLive.ListComponents.list_pane
+          rows={list_rows}
+          selected_id={@list_meeting_id}
+          empty?={@index_empty?}
+          external?={@viewer_external?}
+        />
+        <PlatformWeb.MeetingLive.ListComponents.detail
+          row={
+            @list_meeting_id &&
+              PlatformWeb.MeetingLive.ListComponents.find_row(list_rows, @list_meeting_id)
+          }
+          zone={list_zone}
+          tab={@list_tab}
+          calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
+        />
       </div>
+      <PlatformWeb.MeetingLive.ListComponents.new_room_modal
+        :if={@meetings_view == :list and @show_new_room}
+        projects={@projects}
+        project_id={@meet_now_project_id}
+        error={@new_room_error}
+      />
 
       <div
         :if={@meetings_view == :archive}
@@ -4862,6 +4894,7 @@
          the nav — the offset is measured from the button's own bottom
          edge, so a taller button grows upward into empty space. --%>
       <button
+        :if={@meetings_view != :list}
         type="button"
         phx-click="open_start_meeting_sheet"
         aria-label="New meeting"

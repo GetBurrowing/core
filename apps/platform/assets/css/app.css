@@ -1319,10 +1319,19 @@ body, .font-suite {
      theme_presets.css, outside any plugin block. */
   --font-sans: "Public Sans", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Prototype 01a178d2 v4 `--font-mono` (theme.js): the system mono stack the
+     calendar surfaces use for times, URLs and slot chips (task 01a18d9f fix
+     round 2). */
+  --font-mono-system: ui-monospace, SFMono-Regular, Menlo, monospace;
   --shadow-card: 0 1px 2px rgb(9 12 16 / 0.05), 0 1px 3px rgb(9 12 16 / 0.06);
   --shadow-card-hover: 0 2px 4px rgb(9 12 16 / 0.06), 0 6px 16px rgb(9 12 16 / 0.08);
   --shadow-dropdown: 0 4px 6px -2px rgb(9 12 16 / 0.08), 0 10px 24px -4px rgb(9 12 16 / 0.12);
   --shadow-modal: 0 8px 12px -4px rgb(9 12 16 / 0.10), 0 24px 48px -12px rgb(9 12 16 / 0.22);
+  /* The phone tab bar's glass shadow: prototype 01a178d2 v4 theme.js
+     `--glass-shadow` (light 0 10px 30px rgba(40,30,20,.18); dark below). */
+  --shadow-tab-bar: 0 10px 30px rgb(40 30 20 / 0.18);
+  /* v4 `--glass-edge` (theme.js): ink at 8% light, 9% dark. */
+  --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 8%, transparent);
   --sheet-form-max-width: 36rem; /* 576px — form-modal standard (max-w-xl, 8px grid); desktop width of the New Task / form sheets */
   --duration-fast: 100ms;      /* micro-interactions: hover, press */
   --duration-base: 200ms;      /* standard transitions: reveals, tint fades */
@@ -1369,6 +1378,8 @@ body, .font-suite {
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+  --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
+  --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 9%, transparent);
   --color-interactive: #ff9b55;
   --native-tab-selected: var(--color-primary);
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -1381,6 +1392,8 @@ body, .font-suite {
     --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+    --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
+    --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 9%, transparent);
     --color-interactive: #ff9b55;
     --native-tab-selected: var(--color-primary);
     --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -3486,7 +3499,7 @@ body, .font-suite {
   }
 
   .compose-input-area .compose-pill-bar:not(:focus-within) {
-    border: 1px solid var(--color-base-300);
+    border: 1px solid var(--tab-bar-edge);
   }
 
   .compose-input-area .compose-pill-attach,
@@ -3684,7 +3697,7 @@ body, .font-suite {
     );
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
     backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-    border: 1px solid var(--color-base-300);
+    border: 1px solid var(--tab-bar-edge);
   }
 
   @media (prefers-reduced-transparency: reduce) {
@@ -4962,7 +4975,7 @@ body, .font-suite {
 :root {
   --bottom-nav-height: 0px;
   --bottom-nav-gap: 0px;
-  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 8px);
+  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 12px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
   /* Persistent meeting bar height. Set inline on the shell root to 3rem
@@ -5023,6 +5036,9 @@ body, .font-suite {
    paint within 0.88 of a byte of the exact composite on Chrome 147 and within
    0.80 on Chrome 151, pixel-identical to each other. color-mix is kept
    because the build pipeline already emits it with an opaque fallback. */
+/* Prototype 01a178d2 v4 `.tabbar` (task 01a18d9f fix round): radius --r-xl
+   22px, the v4 glass shadow (--shadow-tab-bar) and a 12px floor on
+   --bottom-nav-offset, all measured from the v4 render. */
 .bottom-nav {
   /* Tab ink. A bar-scoped variable so High contrast can raise it without
      touching its own --subtle; see the override below. */
@@ -5033,7 +5049,7 @@ body, .font-suite {
      the viewport bottom (21px at inset 34, 8px at inset 0), 64px tall
      (--tab-h 64 x density 1), radius the masters' --r-xl
      (round(radius x 1.57)) from --radius-box. No shadow: the glass and its
-     1px base-300 border are the only separation. Content scrolls UNDER the
+     1px edge (now v4 --glass-edge, --tab-bar-edge) separate it. Content scrolls UNDER the
      glass; scrollers pad their end with --phone-chrome-bottom. z-index 30
      keeps every modal and sheet above it; the More sheet alone goes UNDER it
      (rule below). */
@@ -5042,7 +5058,8 @@ body, .font-suite {
   right: 12px;
   bottom: var(--bottom-nav-offset);
   height: 64px;
-  border-radius: round(calc(var(--radius-box) * 1.57), 1px);
+  border-radius: 22px;
+  box-shadow: var(--shadow-tab-bar);
   overflow: hidden;
   z-index: 30;
   display: flex;
@@ -5052,7 +5069,7 @@ body, .font-suite {
     var(--color-base-200) calc(var(--glass-alpha) * 100%),
     transparent
   );
-  border: 1px solid var(--color-base-300);
+  border: 1px solid var(--tab-bar-edge);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
   /* Hide and return: a 150ms slide plus fade. Visibility flips at the END of
@@ -5438,6 +5455,7 @@ body, .font-suite {
    lg:hover:text-base-content`; current `bg-base-300 text-base-content`), so
    this rule sets neither: an unlayered colour here would beat the layered
    hover utilities. */
+/* font-size 13px: prototype 01a178d2 v4 `.nav` (task 01a18d9f fix round). */
 .sidebar-row {
   position: relative;
   display: flex;
@@ -5448,7 +5466,7 @@ body, .font-suite {
   flex-shrink: 0;
   padding: 0 0.5rem;
   border-radius: var(--radius-field);
-  font-size: 0.875rem;
+  font-size: 13px;
   text-align: left;
   text-decoration: none;
 }
@@ -5474,14 +5492,16 @@ body, .font-suite {
 
 /* Tab label (Saru's type note): 11px, regular at rest, medium when active,
    no letter-spacing. */
+/* Prototype 01a178d2 v4 `.tab`: 550 at rest and selected alike (task
+   01a18d9f fix round). */
 .bottom-nav-label {
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 550;
   line-height: 1;
 }
 
 .bottom-nav-tab--active .bottom-nav-label {
-  font-weight: 500;
+  font-weight: 550;
 }
 
 /* ── More sheet paint (task 01a1557a-807f stage 3) ─────────────────────
@@ -5639,7 +5659,7 @@ body, .font-suite {
 }
 
 .bottom-nav-tab[data-nav-pending] .bottom-nav-label {
-  font-weight: 500;
+  font-weight: 550;
 }
 
 .bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
@@ -5652,7 +5672,7 @@ body, .font-suite {
 }
 
 .bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label {
-  font-weight: 400;
+  font-weight: 550;
 }
 
 /* Desktop sidebar: the raised fill and the leading bar move to the tapped
@@ -9392,4 +9412,1300 @@ body.screen-share-fullscreen-active {
   #canvas-history-sheet.sheet-right.sheet-open .sheet-panel {
     transform: translateY(0);
   }
+}
+
+/* calendar v4 (task 01a18d9f stage 1). Prototype 01a178d2 v4, cal.css
+   `.ev`/`.k-*` and index.html `.wk`/`.now`/`.mo`, on main's slots: ground
+   base-200, surface base-100, raised base-300, muted --color-subtle, accent
+   primary, active success, danger error. The four chip kinds must read
+   apart at a glance: native = info tint + full info outline; meeting =
+   primary wash + 3px primary rail (success while live); external = hatched
+   raised/surface + dashed muted outline; tentative = ground + dashed primary.
+   Chip radius is the prototype's r-xs (6px), written as field - 3px.
+   Type is 12px (text-xs): subtle_text_ratchet_test.exs freezes subtle text
+   under 12px, so the prototype's 11px fs-xs is not used. */
+.cal-ev {
+  position: absolute;
+  border-radius: calc(var(--radius-field) - 3px);
+  padding: 3px 6px;
+  text-align: left;
+  overflow: hidden;
+  z-index: 1;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--color-base-content);
+}
+.cal-ev b {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-ev small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cal-ev[aria-current="true"] {
+  box-shadow: 0 0 0 2px var(--color-interactive);
+  z-index: 3;
+}
+.cal-k-native {
+  background: color-mix(in srgb, var(--color-info) 16%, var(--color-base-200));
+  border: 1px solid var(--color-info);
+}
+.cal-k-meeting {
+  background: color-mix(in srgb, var(--color-primary) 15%, var(--color-base-200));
+  border-left: 3px solid var(--color-primary);
+}
+.cal-k-meeting.cal-live {
+  background: color-mix(in srgb, var(--color-success) 15%, var(--color-base-200));
+  border-left-color: var(--color-success);
+}
+.cal-k-meeting small .cal-cam {
+  color: var(--color-primary);
+}
+.cal-k-meeting.cal-live small .cal-cam {
+  color: var(--color-success);
+}
+.cal-k-external {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-base-300) 0 6px,
+    var(--color-base-100) 6px 12px
+  );
+  border: 1px dashed var(--color-subtle);
+}
+.cal-k-tentative {
+  background: var(--color-base-200);
+  border: 1.5px dashed var(--color-primary);
+}
+.cal-k-tentative small {
+  color: var(--color-interactive);
+}
+.cal-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-success);
+  animation: cal-pulse 1.2s infinite;
+  flex: 0 0 auto;
+}
+@keyframes cal-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cal-pulse {
+    animation: none;
+  }
+}
+/* Legend and calendar-row swatches. */
+.cal-sw {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.cal-sw.cal-k-meeting {
+  border-left-width: 3px;
+}
+/* Week grid: hour lines at 70% edge every 48px, column rule, today tint. */
+.cal-col {
+  position: relative;
+  border-left: 1px solid var(--edge);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 47px,
+    color-mix(in srgb, var(--edge) 70%, transparent) 47px 48px
+  );
+}
+.cal-col.cal-today {
+  background-color: color-mix(in srgb, var(--color-primary) 4%, var(--color-base-200));
+}
+.cal-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  z-index: 0;
+}
+/* Now line: 2px error with an 8px dot at the column's left edge. */
+.cal-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-error);
+  z-index: 3;
+  pointer-events: none;
+}
+.cal-now::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--color-error);
+}
+/* Month grid: chips `<HH:MM> <title>`, out-of-month cells at 50% surface. */
+.cal-mchip {
+  position: relative;
+  display: block;
+  width: 100%;
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: calc(var(--radius-field) - 3px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-base-content);
+  text-align: left;
+}
+.cal-mcell-out {
+  background: color-mix(in srgb, var(--color-base-100) 50%, var(--color-base-200));
+}
+/* Phone month: chips become 8px dots. */
+.cal-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 9999px;
+}
+.cal-dot.cal-k-native {
+  background: var(--color-info);
+  border: 0;
+}
+.cal-dot.cal-k-meeting {
+  background: var(--color-primary);
+  border: 0;
+}
+.cal-dot.cal-k-meeting.cal-live {
+  background: var(--color-success);
+}
+.cal-dot.cal-k-external {
+  background: var(--color-base-100);
+  border: 1.5px solid var(--color-subtle);
+}
+.cal-dot.cal-k-tentative {
+  background: var(--color-base-200);
+  border: 1.5px dashed var(--color-primary);
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .cal-ev:hover {
+    box-shadow: 0 0 0 1.5px var(--color-base-content);
+    z-index: 2;
+  }
+  .cal-slot:hover {
+    background: color-mix(in srgb, var(--color-interactive) 10%, transparent);
+  }
+  .cal-mcell:hover {
+    background: var(--color-base-100);
+  }
+}
+/* calendar v4, stage 2: event details and the New/Edit editor. Prototype
+   01a178d2 v4 index.html `.details`/`.dhead`/`.dbody`/`.dl`/`.dfoot`,
+   `.modal`/`.visopt`/`.formgrid` and cal.css `.field`/`.input`/`.pill`/
+   `.err`/`.hint`/`.danger-btn`. Desktop at lg (1024px, the shell's
+   breakpoint): details are a 320px column, the editor a 520px modal. Below
+   lg both are bottom sheets over --scrim, above the tab bar (z 30). The
+   prototype's r-lg 18px modal and r-xl 22px sheet corners use --radius-box. */
+.cal-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--color-base-100);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 78dvh;
+  z-index: 60;
+  border-top: 1px solid var(--edge);
+  border-radius: var(--radius-box) var(--radius-box) 0 0;
+  box-shadow: var(--shadow-modal);
+}
+.cal-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  z-index: 59;
+}
+@media (min-width: 1024px) {
+  .cal-details {
+    position: static;
+    width: 320px;
+    flex: 0 0 320px;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid var(--edge);
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .cal-sheet-scrim {
+    display: none;
+  }
+}
+.cal-dhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 52px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--edge);
+  flex: 0 0 auto;
+}
+/* v4 `.dhead b` inherits the 14px body (measured, task 01a18d9f fix round). */
+.cal-dhead b {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 700;
+}
+.cal-dbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.cal-dbody h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.cal-dl {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--color-base-content);
+}
+.cal-dl > [class*="hero-"] {
+  color: var(--color-subtle);
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+.cal-dl small {
+  display: block;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-dfoot {
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--edge);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (min-width: 1024px) {
+  .cal-dfoot {
+    padding-bottom: 12px;
+  }
+}
+.cal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--edge);
+  color: var(--color-subtle);
+  white-space: nowrap;
+  background: var(--color-base-100);
+}
+.cal-pill-ok {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+.cal-pill-acc {
+  color: var(--color-interactive);
+  border-color: var(--color-interactive);
+}
+.cal-pill-info {
+  color: var(--color-info);
+  border-color: var(--color-info);
+}
+.cal-danger-btn {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  background: var(--color-base-200);
+}
+/* Editor: modal at lg, bottom sheet below. */
+.cal-modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 70;
+}
+.cal-modal {
+  width: 100vw;
+  max-width: 100vw;
+  max-height: 92dvh;
+  overflow-y: auto;
+  background: var(--color-base-100);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box) var(--radius-box) 0 0;
+  box-shadow: var(--shadow-modal);
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* `focus_wrap/1` adds an empty focus sentinel before and after the content.
+   As flex items they took two 12px gaps v4's modal does not have (+24px,
+   task 01a18d9f fix round 3); out of flow they take none. */
+.cal-modal > [tabindex="0"][aria-hidden="true"]:empty {
+  position: absolute;
+}
+@media (min-width: 1024px) {
+  .cal-modal-scrim {
+    align-items: center;
+  }
+  .cal-modal {
+    width: 520px;
+    max-width: 94vw;
+    max-height: 90vh;
+    border-radius: var(--radius-box);
+    padding: 20px;
+  }
+}
+.cal-modal h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.cal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+  font-weight: 550;
+}
+.cal-input {
+  height: 38px;
+  border-radius: var(--radius-field);
+  border: 1px solid var(--color-subtle);
+  background: var(--color-base-200);
+  padding: 0 10px;
+  color: var(--color-base-content);
+  font-size: 13px;
+  font-weight: 450;
+  outline: none;
+  width: 100%;
+}
+textarea.cal-input {
+  height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.cal-input::placeholder {
+  color: var(--color-subtle);
+}
+.cal-input:focus {
+  border-color: var(--color-interactive);
+  box-shadow: 0 0 0 1px var(--color-interactive);
+}
+.cal-input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+.cal-formgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.cal-formgrid .cal-field-date,
+.cal-formgrid .cal-field-full {
+  grid-column: 1 / -1;
+}
+@media (min-width: 1024px) {
+  .cal-formgrid {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+  .cal-formgrid .cal-field-date {
+    grid-column: auto;
+  }
+  .cal-formgrid .cal-field-span {
+    grid-column: span 2;
+  }
+}
+.cal-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-base-content);
+}
+.cal-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+}
+/* v4 `.err` is 11px/550 (fs-xs); it renders at 12px under the declared
+   12px small-text floor every calendar error already uses.
+   `.cal-panel .cal-err` beats the panel's 13px subtle paragraph rule, which
+   had painted the settings URL error 13px and subtle (task 01a18d9f fix
+   round 2). */
+.cal-err,
+.cal-panel .cal-err {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+/* v4 keeps an empty `.err` in flow (app.js `#f-err`, `#ext-err`;
+   booking.js `#g-n-err`, `#g-e-err`), so it takes its container's gap
+   before Cancel/Create: notes to footer is 32px in v4 (task 01a18d9f fix
+   round 3). It is no longer hidden when empty. */
+.cal-hint {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  font-weight: 450;
+}
+.cal-visopt {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+@media (min-width: 1024px) {
+  .cal-visopt {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.cal-visopt label {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-base-content);
+  background: var(--color-base-200);
+  cursor: pointer;
+}
+.cal-visopt label small {
+  font-weight: 450;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-visopt label:has(input:checked) {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.cal-visopt label:has(input:focus-visible) {
+  outline: 2px solid var(--color-interactive);
+  outline-offset: 2px;
+}
+.cal-ft {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .cal-visopt label:hover {
+    border-color: var(--color-subtle);
+  }
+}
+/* calendar v4, stage 3: Booking links, Calendar settings and the guest
+   booking page. Prototype 01a178d2 v4 index.html `.page`/`.panel`/`.setrow`/
+   `.feed`/`.addrow`/`.links`/`.linkcard`/`.winrow`/`.win`/`.meetopt`/
+   `.slots`, cal.css `.seg`/`.switch`, and booking.html's card. The
+   prototype's radius 14px and r-md 12px use --radius-box, r-sm 10px uses
+   --radius-field, and the guest card's r-lg 18px uses --radius-box. */
+.cal-mainhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--edge);
+}
+.cal-mainhead h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+@media (min-width: 1024px) {
+  .cal-mainhead {
+    padding: 0 16px;
+  }
+  .cal-mainhead h1 {
+    font-size: 15px;
+    font-weight: 650;
+  }
+}
+.cal-page {
+  padding: 16px 12px;
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 1024px) {
+  .cal-page {
+    padding: 20px;
+  }
+}
+.cal-page.cal-page-wide {
+  max-width: 1000px;
+}
+.cal-page h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+.cal-sub {
+  color: var(--color-subtle);
+  font-size: 13px;
+  margin-top: -8px;
+}
+.cal-panel {
+  background: var(--color-base-100);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  padding: 16px;
+}
+.cal-panel h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 650;
+}
+.cal-panel p {
+  margin: 0 0 12px;
+  color: var(--color-subtle);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.cal-setrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--edge);
+  font-size: 13px;
+}
+.cal-panel > p + .cal-setrow,
+.cal-panel > h3 + .cal-setrow {
+  border-top: 0;
+}
+.cal-setrow small {
+  display: block;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-feed {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.cal-feed code {
+  flex: 1;
+  min-width: 200px;
+  font-family: var(--font-mono-system);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: normal;
+  background: var(--color-base-200);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-field);
+  padding: 8px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-base-content);
+}
+.cal-addrow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.cal-addrow .cal-field {
+  min-width: 220px;
+}
+.cal-addrow .cal-addrow-label {
+  flex: 0 1 200px;
+  min-width: 160px;
+}
+.cal-grant-editor {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--edge);
+  gap: 4px;
+}
+.cal-segs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cal-seg {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+  border: 1px solid var(--edge);
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.cal-seg[aria-pressed="true"] {
+  background: var(--color-base-300);
+  color: var(--color-base-content);
+  border-color: var(--color-subtle);
+}
+.cal-switch {
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--color-base-100);
+  border: 1.5px solid var(--color-subtle);
+  position: relative;
+  flex: 0 0 auto;
+  transition: background 0.15s;
+}
+.cal-switch::after {
+  content: "";
+  position: absolute;
+  top: 2.5px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: var(--color-subtle);
+  transition: left 0.15s;
+}
+.cal-switch[aria-checked="true"] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.cal-switch[aria-checked="true"]::after {
+  left: 19px;
+  background: var(--color-primary-content);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cal-switch,
+  .cal-switch::after {
+    transition: none;
+  }
+}
+.cal-links {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 1024px) {
+  .cal-links {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+}
+/* v4 `.linkcard b`: 14px (measured, task 01a18d9f fix round). */
+.cal-linkcard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+  text-align: left;
+  width: 100%;
+  font-size: 14px;
+}
+.cal-linkcard[aria-current="true"] {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.cal-linkcard small {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.cal-formgrid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+@media (min-width: 1024px) {
+  /* Equal columns (minmax(0, 1fr)): v4's bare 1fr 1fr sizes the Public link
+     column to its content, and a real /book/<43-char token> URL would push
+     the editor past the panel. The 200px code minimum still wraps Copy under
+     the URL, as v4 does (task 01a18d9f fix round). */
+  .cal-formgrid2 {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+.cal-winrow {
+  display: grid;
+  grid-template-columns: 44px 52px 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--edge);
+  font-size: 13px;
+}
+.cal-wins {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* v4 `.win`: `font: var(--fs-sm) var(--font-mono)` resets the weight to 400
+   inside the 550 `.field` label (task 01a18d9f fix round 2). */
+.cal-win {
+  font-weight: 400;
+  line-height: normal;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-subtle);
+  border-radius: var(--radius-field);
+  padding: 0 2px 0 8px;
+  height: 30px;
+  font-family: var(--font-mono-system);
+  font-size: 0.75rem;
+  color: var(--color-base-content);
+}
+.cal-win select {
+  background: transparent;
+  border: 0;
+  color: var(--color-base-content);
+  font: inherit;
+  padding: 0;
+}
+.cal-win button {
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-subtle);
+}
+/* v4 `.meetopt b`: 14px (measured, task 01a18d9f fix round). */
+.cal-meetopt {
+  border: 1px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
+  border-radius: var(--radius-box);
+  padding: 12px;
+  font-size: 14px;
+}
+.cal-slots {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* v4 `.slots span` / `.feed code` set `font: var(--fs-sm) var(--font-mono)`,
+   which resets weight to 400 and line-height to normal inside the 550
+   `.field` label (task 01a18d9f fix round 3). */
+.cal-slots span {
+  font-family: var(--font-mono-system);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: normal;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-field);
+  padding: 3px 8px;
+  color: var(--color-base-content);
+}
+/* Guest booking page (booking.html `.wrap`/`.card`/`.host`/`.picker`/
+   `.cal`/`.times`/`.slot`/`.form`/`.done`/`.invite`/`.foot`). */
+.cal-guest-wrap {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 12px 32px;
+  gap: 20px;
+}
+.cal-guest-card {
+  width: 960px;
+  max-width: 100%;
+  background: var(--color-base-100);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-modal);
+  display: grid;
+  grid-template-columns: 1fr;
+  overflow: hidden;
+}
+@media (min-width: 1024px) {
+  .cal-guest-wrap {
+    padding: 48px 16px 32px;
+  }
+  .cal-guest-card {
+    grid-template-columns: 280px 1fr 240px;
+    min-height: 520px;
+  }
+  .cal-guest-card.cal-guest-card-empty {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+}
+.cal-guest-host {
+  padding: 18px;
+  border-bottom: 1px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+.cal-guest-host h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.cal-guest-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 9999px;
+  background: var(--color-base-300);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 650;
+  font-size: 22px;
+}
+.cal-guest-who {
+  color: var(--color-subtle);
+}
+.cal-guest-ln {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cal-guest-ln > [class*="hero-"] {
+  color: var(--color-subtle);
+  flex: 0 0 auto;
+}
+.cal-guest-picker {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cal-guest-picker h2,
+.cal-guest-times h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.cal-guest-mh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 15px;
+}
+.cal-guest-mh button:disabled {
+  opacity: 0.4;
+}
+.cal-guest-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  text-align: center;
+}
+.cal-guest-dw {
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 0;
+}
+.cal-guest-cal button {
+  height: 44px;
+  width: 100%;
+  max-width: 44px;
+  aspect-ratio: 1;
+  justify-self: center;
+  border-radius: 9999px;
+  font-weight: 450;
+  font-size: 13px;
+  color: var(--color-subtle);
+}
+.cal-guest-cal button.cal-open {
+  font-weight: 600;
+  color: var(--color-interactive);
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--color-base-100));
+}
+.cal-guest-cal button[aria-pressed="true"] {
+  background: var(--color-primary);
+  color: var(--color-primary-content);
+}
+.cal-guest-cal button.cal-today-ring {
+  box-shadow: inset 0 0 0 1.5px var(--color-subtle);
+}
+.cal-guest-times {
+  padding: 18px;
+  border-top: 1px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* v4 renders the slot list with an inline `display:flex;
+   flex-direction:column` (booking.js:47), which beats its phone
+   `.times .list` 2-column grid, so it is one column at every width
+   (task 01a18d9f fix round 3). */
+.cal-guest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-guest-slot {
+  height: 44px;
+  border: 1.5px solid var(--color-interactive);
+  color: var(--color-interactive);
+  border-radius: var(--radius-field);
+  font-weight: 600;
+  font-family: var(--font-mono-system);
+  width: 100%;
+}
+.cal-guest-slot[aria-pressed="true"] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-content);
+}
+.cal-guest-form {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 520px;
+}
+.cal-guest-chosen {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  background: var(--color-base-200);
+  font-size: 13px;
+}
+.cal-guest-ghost {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-subtle);
+  color: var(--color-base-content);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.cal-guest-confirm {
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  color: var(--color-primary-content);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.cal-guest-done {
+  padding: 48px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  font-size: 15px;
+}
+.cal-guest-done h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+}
+.cal-guest-tick {
+  width: 56px;
+  height: 56px;
+  border-radius: 9999px;
+  background: var(--color-success);
+  color: var(--color-base-200);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cal-guest-box {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  padding: 14px 18px;
+  background: var(--color-base-200);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 300px;
+  font-size: 13px;
+}
+.cal-guest-invite {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, var(--color-base-100));
+  border-radius: var(--radius-box);
+  padding: 12px 14px;
+  text-align: left;
+  max-width: 460px;
+  font-size: 13px;
+}
+.cal-guest-foot {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (min-width: 1024px) {
+  .cal-guest-host {
+    padding: 24px;
+    border-bottom: 0;
+    border-right: 1px solid var(--edge);
+  }
+  .cal-guest-picker {
+    padding: 24px;
+  }
+  .cal-guest-times {
+    padding: 24px 16px;
+    border-top: 0;
+    border-left: 1px solid var(--edge);
+    overflow-y: auto;
+    max-height: 600px;
+  }
+  .cal-guest-form {
+    grid-column: 2 / -1;
+    padding: 24px;
+  }
+  .cal-guest-done {
+    grid-column: 1 / -1;
+  }
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .cal-linkcard:hover {
+    border-color: var(--color-subtle);
+  }
+  .cal-seg:hover {
+    color: var(--color-base-content);
+  }
+  .cal-guest-cal button.cal-open:not([aria-pressed="true"]):hover {
+    background: color-mix(in srgb, var(--color-primary) 26%, var(--color-base-100));
+  }
+  .cal-guest-slot:not([aria-pressed="true"]):hover {
+    background: color-mix(in srgb, var(--color-primary) 14%, var(--color-base-100));
+  }
+}
+/* calendar v4, stage 4: the Inbox consent card and the Meetings list.
+   Prototype 01a178d2 v4 index.html `.consent`, cal.css `.brief-row`/
+   `.brief-kind`/`.section-label`/`.meeting-row`. Radius 14px and r-lg 18px
+   use --radius-box. */
+.cal-consent {
+  border: 1.5px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
+  border-radius: var(--radius-box);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-consent.cal-consent-done {
+  border-color: var(--edge);
+  background: var(--color-base-100);
+}
+.cal-consent-avatar {
+  display: none;
+}
+.cal-consent-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-consent-q {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.cal-consent-meta {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-consent-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.cal-consent-acts > * {
+  min-height: 44px;
+}
+.cal-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+@media (min-width: 1024px) {
+  .cal-consent {
+    flex-direction: row;
+    padding: 16px;
+    gap: 12px;
+  }
+  .cal-consent-avatar {
+    display: inline-flex;
+  }
+  .cal-consent-acts > * {
+    min-height: 0;
+  }
+}
+/* Below lg the pane is v4's phone `.page`: a 16px-gap flex column with
+   16px 12px padding, so margins do not collapse (label to first row 67px,
+   task 01a18d9f fix round 3). The bottom padding is left to
+   `.clears-tab-bar`. */
+.mt-list-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding-top: 16px;
+  padding-left: 12px;
+  padding-right: 12px;
+  background: var(--color-base-200);
+}
+.mt-list-pane > [data-section] {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* The pane's `display: flex` is unlayered, so it would beat the
+   `max-lg:hidden` utility that hides the list while a phone shows a
+   meeting; restate the hide here. */
+@media (max-width: 1023.98px) {
+  .mt-list-pane.max-lg\:hidden {
+    display: none;
+  }
+}
+.mt-detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-base-200);
+}
+@media (min-width: 1024px) {
+  .mt-list-pane {
+    flex: 0 0 270px;
+    width: 270px;
+    /* v4 `.lbody`: block flow, 8px all round (task 01a18d9f fix round 3). */
+    display: block;
+    padding: 8px;
+    border-right: 1px solid var(--edge);
+    background: var(--color-base-100);
+  }
+  .mt-list-pane > [data-section] {
+    display: block;
+  }
+}
+/* v4 `h3.section-label` keeps the browser's 1em block margin at its
+   11px size: 11px above and below (task 01a18d9f fix round 3). */
+.mt-section-label {
+  margin: 11px 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-subtle);
+  font-weight: 650;
+  padding: 12px 8px 4px;
+}
+.mt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  margin-top: 8px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+}
+.mt-row[aria-current="true"] {
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-base-300);
+}
+.mt-row strong {
+  font-size: 13px;
+  color: var(--color-base-content);
+  overflow-wrap: anywhere;
+}
+.mt-row small {
+  overflow-wrap: anywhere;
+}
+.mt-kind {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-subtle);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Phone record tabs: 44px tap targets; v4 `.seg` type stays 12px and its
+   0 12px padding (task 01a18d9f fix round 3). */
+@media (max-width: 1023.98px) {
+  .mt-tab {
+    height: 44px;
+    padding: 0 12px;
+  }
+}
+.mt-kind .cal-pill {
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 700;
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .mt-row:not([aria-current="true"]):hover {
+    border-color: var(--color-subtle);
+  }
+}
+
+/* Calendar mono text: v4's system mono stack (task 01a18d9f fix round 2). */
+.cal-mono {
+  font-family: var(--font-mono-system);
 }

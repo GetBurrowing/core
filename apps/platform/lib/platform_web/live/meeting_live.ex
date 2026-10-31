@@ -1395,6 +1395,11 @@ defmodule PlatformWeb.MeetingLive do
      # and the calendar is an additional projection, not a replacement.
      |> assign(:meetings, meetings)
      |> assign(:grouped_meetings, grouped)
+     # v4 list view (task 01a18d9f stage 4): `?meeting=<id>` selects a row
+     # (the phone pushes its detail), so back and a pasted link both work.
+     |> assign_list_selection(params)
+     |> assign_new(:show_new_room, fn -> false end)
+     |> assign_new(:new_room_error, fn -> nil end)
      # ── Why the index needs an empty state again (019f9cb7 stage 5) ──────
      # Scoping the index changed the shape of a CORRECT answer. Before it,
      # `@meetings` held every meeting in the system and was empty only on a
@@ -1436,6 +1441,20 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_calendar_week(calendar_today(socket))
      |> assign_archive(params)
      |> maybe_open_scheduler(params)}
+  end
+
+  defp assign_list_selection(socket, params) do
+    id =
+      case params["meeting"] do
+        id when is_binary(id) -> if Platform.UUID.valid?(id), do: id
+        _ -> nil
+      end
+
+    tab = if id == socket.assigns[:list_meeting_id], do: socket.assigns[:list_tab], else: nil
+
+    socket
+    |> assign(:list_meeting_id, id)
+    |> assign(:list_tab, tab || "summary")
   end
 
   defp maybe_open_scheduler(socket, %{"schedule" => "true"}),
@@ -2393,12 +2412,13 @@ defmodule PlatformWeb.MeetingLive do
   # as a single styled, extensible shelf and a future view is one more entry
   # here (plus a `meetings_view_path/2` clause) rather than another
   # hand-copied `<.link>`. Each entry carries its own hero-icon and a label;
-  # `id` is the `data-view` test contract, `short_label` is the phone label.
+  # `id` is the `data-view` test contract. Phones draw the glyph alone, the
+  # label riding on aria-label (task 01a18d9f stage 5).
   # The glyph names are string literals so Tailwind's `matchComponents`
   # scanner emits their CSS — a computed name would render blank.
   @meetings_view_shelf [
-    %{id: :list, label: "Meetings", short_label: "List", icon: "hero-video-camera"},
-    %{id: :archive, label: "Archive", short_label: "Archive", icon: "hero-archive-box"}
+    %{id: :list, label: "Meetings", icon: "hero-video-camera"},
+    %{id: :archive, label: "Archive", icon: "hero-archive-box"}
   ]
 
   @doc "The meetings index view-switcher entries, in display order."
@@ -3854,6 +3874,50 @@ defmodule PlatformWeb.MeetingLive do
   # client that has already sent one can send another — a double-tap on a
   # slow connection must not commit two meetings. The template's `disabled`
   # is the courtesy; this clause is the gate.
+  # ── v4 list view (task 01a18d9f stage 4) ─────────────────────────────────
+
+  def handle_event("meetings_list_tab", %{"tab" => tab}, socket)
+      when tab in ~w(summary recording transcript),
+      do: {:noreply, assign(socket, :list_tab, tab)}
+
+  def handle_event("open_new_room", _params, socket),
+    do: {:noreply, assign(socket, show_new_room: true, new_room_error: nil)}
+
+  def handle_event("close_new_room", _params, socket),
+    do: {:noreply, assign(socket, show_new_room: false, new_room_error: nil)}
+
+  # v4 `Start a room now`: the same create path Meet now takes
+  # (`create_from_sheet/7` in `:enter` mode), with the typed name and the
+  # chosen project.
+  def handle_event("start_room", %{"title" => title} = params, socket) do
+    title = String.trim(title)
+    projects = socket.assigns[:projects] || []
+    project_id = Enum.find_value(projects, &(&1.id == params["project_id"] && &1.id))
+
+    cond do
+      title == "" ->
+        {:noreply, assign(socket, :new_room_error, "Give the meeting a name.")}
+
+      is_nil(project_id) ->
+        {:noreply, assign(socket, :new_room_error, "Create a project before starting a meeting.")}
+
+      true ->
+        starts_at = DateTime.utc_now()
+        ends_at = DateTime.add(starts_at, @default_duration_minutes * 60, :second)
+
+        socket
+        |> assign(show_new_room: false, new_room_error: nil)
+        |> create_from_sheet(
+          socket.assigns.start_meeting_form,
+          title,
+          project_id,
+          starts_at,
+          ends_at,
+          :enter
+        )
+    end
+  end
+
   def handle_event("meet_now", _params, %{assigns: %{meet_now_pending?: true}} = socket) do
     {:noreply, socket}
   end

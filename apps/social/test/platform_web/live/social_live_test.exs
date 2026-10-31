@@ -64,9 +64,10 @@ defmodule PlatformWeb.SocialLiveTest do
       refute bar =~ "/m/social"
     end
 
-    test "is the More sheet's row right after Inbox, for a member", %{j: j} do
+    # Task 01a18d9f stage 5: Voice and Tasks lead the sheet now.
+    test "is the More sheet's row right after Voice and Tasks, for a member", %{j: j} do
       rows = j |> Platform.Access.Scope.for_user() |> IconRail.more_sheet_rows(false)
-      assert [:inbox, :social | _] = Enum.map(rows, & &1.key)
+      assert [:voice, :tasks, :social | _] = Enum.map(rows, & &1.key)
     end
 
     test "is on the page's desktop rail", %{conn: conn, j: j} do

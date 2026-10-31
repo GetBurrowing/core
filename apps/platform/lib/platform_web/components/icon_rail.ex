@@ -5,19 +5,21 @@ defmodule PlatformWeb.Components.IconRail do
   One render function and the list every navigation surface reads:
 
     * `bottom_rail/1` — mobile tab bar (<`lg` breakpoint). Link tabs from
-                       `mobile_tab_keys/0` (Chat, Voice, Tasks, Meetings,
+                       `mobile_tab_keys/0` (Chat, Calendar, Meetings, Inbox,
                        filtered by Scope) plus a More button that fires
                        `phx-click="open_more_sheet"` (`close_more_sheet`
-                       while the sheet is open). Inbox and Activity are
-                       not in the bar (task 01a1557a-7a71 stage 2): Inbox
-                       is the More sheet's first row, and its unread signal
-                       is a dot on More.
+                       while the sheet is open). Voice and Tasks are the
+                       More sheet's first rows (task 01a18d9f stage 5,
+                       the product lead's four-tab rule), and Inbox's unread signal is
+                       a dot on the Inbox tab.
     * `tab_destinations/1` and `more_sheet_rows/2` — the bar's link tabs and
-      the More sheet's rows. The desktop sidebar
-      (`PlatformWeb.Components.Sidebar`, Burrow redesign 22) renders exactly
-      these two lists, so phone and desktop list the same destinations in
-      the same order. The desktop icon rail that used to draw its own
-      clusters from this module was deleted with that rung.
+      the More sheet's rows.
+    * `desktop_rail_destinations/1` and `desktop_more_rows/2` — the desktop
+      sidebar's (`PlatformWeb.Components.Sidebar`) rows: the v4 rail
+      (`desktop_rail_keys/0`), then a More group led by Inbox. The phone and
+      desktop lists differ in order and split (task 01a18d9f stage 5), but
+      cover the same destinations: the More rows on both derive from the one
+      `@more_sheet_order`.
 
   Active state uses segment-boundary longest-prefix matching against
   `current_path` (`active_destination_key/2`), so a nested route
@@ -49,9 +51,9 @@ defmodule PlatformWeb.Components.IconRail do
   @doc """
   Mobile tab bar. Hidden at the `lg` breakpoint and above.
 
-  Link tabs for `mobile_tab_keys/0` (Chat, Voice, Tasks, Meetings; a Scope that does
-  not admit one drops its cell, and the rest stay equal width), then a More
-  button. Admin and the long tail live in the More sheet, never in the bar.
+  Link tabs for `mobile_tab_keys/0` (Chat, Calendar, Meetings, Inbox; a Scope
+  that does not admit one drops its cell, and the rest stay equal width), then
+  a More button. Admin and the long tail live in the More sheet, never in the bar.
 
   Active state (task 01a1557a-7a71 stage 2, Saru rules 3 and 4): the winner
   is computed over the link tabs by `current_path`. More is active instead
@@ -63,9 +65,9 @@ defmodule PlatformWeb.Components.IconRail do
   (the `TabPill` hook, `assets/js/hooks/tab_pill.js`; prototype t1). Its
   layer is `phx-update="ignore"` so a patch keeps the hook's geometry.
 
-  When `inbox_unread_count` is above 0, More carries a dot
-  (`data-role="more-unread-dot"`, no count) and its aria-label reads
-  "More, unread in Inbox". At 0 the dot is absent from the DOM.
+  When `inbox_unread_count` is above 0, the Inbox tab carries a dot
+  (`data-role="inbox-unread-dot"`, no count) and its aria-label reads
+  "Inbox, unread". At 0 the dot is absent from the DOM.
   """
   attr(:current_path, :string, default: "/")
   attr(:root_user, :boolean, default: false)
@@ -82,7 +84,7 @@ defmodule PlatformWeb.Components.IconRail do
 
   attr(:inbox_unread_count, :integer,
     default: 0,
-    doc: "the viewer's unread inbox count; above 0 puts the unread dot on More"
+    doc: "the viewer's unread inbox count; above 0 puts the unread dot on the Inbox tab"
   )
 
   def bottom_rail(assigns) do
@@ -104,7 +106,7 @@ defmodule PlatformWeb.Components.IconRail do
       |> assign(:mobile_destinations, primary)
       |> assign(:active_key, if(more_active?, do: :more, else: link_winner))
       |> assign(:more_active?, more_active?)
-      |> assign(:more_unread?, unread?)
+      |> assign(:inbox_unread?, unread?)
 
     ~H"""
     <nav
@@ -130,7 +132,7 @@ defmodule PlatformWeb.Components.IconRail do
         data-destination={dest.key}
         data-module-id={dest.key}
         data-nav-label={dest.label}
-        aria-label={dest.label}
+        aria-label={tab_aria_label(dest, @inbox_unread?)}
         aria-current={aria_current_for(dest, @active_key)}
       >
         <.icon
@@ -138,6 +140,12 @@ defmodule PlatformWeb.Components.IconRail do
           class="bottom-nav-icon size-5"
         />
         <span class="bottom-nav-label">{dest.label}</span>
+        <span
+          :if={dest.key == :inbox and @inbox_unread?}
+          class="bottom-nav-dot"
+          data-role="inbox-unread-dot"
+        >
+        </span>
       </.link>
 
       <button
@@ -145,13 +153,12 @@ defmodule PlatformWeb.Components.IconRail do
         phx-click={if @more_open, do: "close_more_sheet", else: "open_more_sheet"}
         class={["bottom-nav-tab press-hold", @more_active? && "bottom-nav-tab--active"]}
         data-destination="more"
-        aria-label={if @more_unread?, do: "More, unread in Inbox", else: "More"}
+        aria-label="More"
         aria-expanded={to_string(@more_open)}
         aria-haspopup="dialog"
       >
         <.icon name={tab_icon(:more, @more_active?)} class="bottom-nav-icon size-5" />
         <span class="bottom-nav-label">More</span>
-        <span :if={@more_unread?} class="bottom-nav-dot" data-role="more-unread-dot"></span>
       </button>
 
       <%!-- Bridge to the iOS app's native tab bar (task 01a1557b stage 3, the
@@ -167,7 +174,7 @@ defmodule PlatformWeb.Components.IconRail do
         hidden
         data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
         data-active-key={@active_key}
-        data-more-unread={to_string(@more_unread?)}
+        data-inbox-unread={to_string(@inbox_unread?)}
         data-more-open={to_string(@more_open)}
       >
         <span data-native-ink="selected"></span>
@@ -178,13 +185,25 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   @doc """
-  The bar's link-tab keys, in order (task 01a1557a-7a71 stage 2; the product lead:
-  chat, voice, tasks, meetings, more). Voice joined between Chat and Tasks
-  in rung 20 (task 01a1557a-eab7 stage 2). More is not a key here; it is the
-  button after the links.
+  The bar's link-tab keys, in order. At most four (the product lead, 2026-10-30: "we can
+  have at most 4 items on the lower rail on mobile ... chat, calendar,
+  meetings, and inbox. We can move tasks and voice into the more menu";
+  task 01a18d9f stage 5). More is not a key here; it is the button after
+  the links.
   """
   @spec mobile_tab_keys() :: [atom()]
-  def mobile_tab_keys, do: [:chat, :voice, :tasks, :meetings]
+  def mobile_tab_keys, do: [:chat, :calendar, :meetings, :inbox]
+
+  @doc """
+  The desktop sidebar's module-row keys, in order: prototype 01a178d2 v4's
+  rail (`index.html` `.side`). The More group follows (`desktop_more_rows/2`).
+  """
+  @spec desktop_rail_keys() :: [atom()]
+  def desktop_rail_keys, do: [:chat, :voice, :tasks, :calendar, :meetings]
+
+  @aria_unread "Inbox, unread"
+  defp tab_aria_label(%{key: :inbox}, true), do: @aria_unread
+  defp tab_aria_label(dest, _), do: dest.label
 
   # Bar-only icon mapping (task 01a1557a-7a71 stage 2): outline at rest,
   # `-solid` when active (Saru rule 3). Chosen against the masters'
@@ -197,12 +216,16 @@ defmodule PlatformWeb.Components.IconRail do
   #   tasks    three check-mark rows                -> list-bullet (Heroicons has no
   #            checklist-rows glyph; three rows is the nearer half of the shape)
   #   meetings video camera                         -> video-camera
+  #   calendar v4 tabbar calendar (box, two rings)   -> calendar (task 01a18d9f stage 5)
+  #   inbox    v4 tabbar tray                       -> inbox
   #   more     three dots                           -> ellipsis-horizontal
   @tab_icons %{
     chat: {"hero-chat-bubble-oval-left-ellipsis", "hero-chat-bubble-oval-left-ellipsis-solid"},
     voice: {"hero-microphone", "hero-microphone-solid"},
     tasks: {"hero-list-bullet", "hero-list-bullet-solid"},
     meetings: {"hero-video-camera", "hero-video-camera-solid"},
+    calendar: {"hero-calendar", "hero-calendar-solid"},
+    inbox: {"hero-inbox", "hero-inbox-solid"},
     more: {"hero-ellipsis-horizontal", "hero-ellipsis-horizontal-solid"}
   }
 
@@ -218,9 +241,11 @@ defmodule PlatformWeb.Components.IconRail do
   # Canvases opens the Files browser filtered to canvases (rung 16); Games
   # opens it filtered to games (rung 21), and only while the game_stream
   # kind is registered.
+  # Voice and Tasks lead it since they left the bar (task 01a18d9f stage 5);
+  # Inbox and Calendar left it for the bar.
   @more_sheet_order [
-    :inbox,
-    :calendar,
+    :voice,
+    :tasks,
     :email,
     :files,
     :canvases,
@@ -254,13 +279,15 @@ defmodule PlatformWeb.Components.IconRail do
   The mobile More sheet's module rows, for an actor (task 01a1557a-807f
   stage 2): the destinations for `more_sheet_order/0`, in that order, with
   every `Platform.Extensions.rail_items/0` item the actor may see placed
-  right after Inbox, in rail_items order.
+  right after Tasks (after Voice and Tasks, whichever the actor sees), in
+  rail_items order.
 
   Extension rows lead the long tail rather than trailing it. The list is
   taller than the sheet on a phone browser (at 390x664, Safari's visible
   viewport on a 390x844 phone, the last rows sit below the fold), and
   a module appended after Changelog was the row nobody scrolled to: Social
-  read as missing on mobile. Inbox stays first.
+  read as missing on mobile. Voice and Tasks stay first (task 01a18d9f
+  stage 5: they left the bar for the sheet).
 
   Every row goes through the same `rail_filter/2` and `enabled?/1` as the
   rails (via `destinations/1`), so a module the actor may not open, or one
@@ -274,12 +301,42 @@ defmodule PlatformWeb.Components.IconRail do
     by_key = Map.new(visible, &{&1.key, &1})
     extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
 
-    {inbox, rest} =
+    {lead, rest} =
       @more_sheet_order
       |> Enum.flat_map(&List.wrap(Map.get(by_key, &1)))
-      |> Enum.split_while(&(&1.key == :inbox))
+      |> Enum.split_while(&(&1.key in [:voice, :tasks]))
 
-    inbox ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
+    lead ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
+  end
+
+  @doc """
+  The desktop sidebar's module rows for an actor: `desktop_rail_keys/0`, in
+  that order, filtered like the bar's tabs (`tab_destinations/1`).
+  """
+  @spec desktop_rail_destinations(Scope.t() | nil) :: [map()]
+  def desktop_rail_destinations(access_scope), do: keyed(desktop_rail_keys(), access_scope)
+
+  @doc """
+  The desktop sidebar's More group for an actor (task 01a18d9f stage 5):
+  Inbox first (v4 `.side`), then every extension row the actor may see,
+  then the rest of `more_sheet_order/0` minus the rail's own rows
+  (`desktop_rail_keys/0`). Filtered exactly as `more_sheet_rows/2`, so
+  `desktop_rail_destinations/1 ++ desktop_more_rows/2` and
+  `tab_destinations/1 ++ more_sheet_rows/2` cover the same destinations.
+  """
+  @spec desktop_more_rows(Scope.t() | nil, boolean()) :: [map()]
+  def desktop_more_rows(scope, root_user) do
+    visible = scope |> rail_filter(root_user) |> destinations()
+    by_key = Map.new(visible, &{&1.key, &1})
+    extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
+
+    rest =
+      @more_sheet_order
+      |> Enum.reject(&(&1 in desktop_rail_keys()))
+      |> Enum.flat_map(&List.wrap(Map.get(by_key, &1)))
+
+    List.wrap(Map.get(by_key, :inbox)) ++
+      Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
   end
 
   @doc """
@@ -385,15 +442,17 @@ defmodule PlatformWeb.Components.IconRail do
   The tab bar's link tabs for an actor, in `mobile_tab_keys/0` order (not the
   canonical list's order). With a Scope they are filtered through it (task
   01a1386d-fb6e stage 1); without one they render unfiltered. The phone tab
-  bar (`bottom_rail/1`) and the desktop sidebar's module rows
-  (`PlatformWeb.Components.Sidebar`) both read this, so they cannot disagree.
+  bar (`bottom_rail/1`) reads this; the desktop sidebar reads
+  `desktop_rail_destinations/1`.
   """
   @spec tab_destinations(Scope.t() | nil) :: [map()]
-  def tab_destinations(access_scope) do
+  def tab_destinations(access_scope), do: keyed(mobile_tab_keys(), access_scope)
+
+  defp keyed(keys, access_scope) do
     by_key = Map.new(canonical_destinations(), &{&1.key, &1})
 
     primary =
-      mobile_tab_keys()
+      keys
       |> Enum.flat_map(&List.wrap(Map.get(by_key, &1)))
       |> Enum.filter(&enabled?/1)
 

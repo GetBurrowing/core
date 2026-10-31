@@ -118,25 +118,22 @@ defmodule PlatformWeb.VoiceLiveTest do
       :ok
     end
 
-    test "is Chat, Voice, Tasks, Meetings, More, and only Voice is current", %{conn: conn} do
+    # Task 01a18d9f stage 5: Voice is a More-sheet row, so /voice lights More.
+    test "is Chat, Calendar, Meetings, Inbox, More, and More is current", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/voice")
       d = doc(view)
 
       keys =
         d |> q("[data-bottom-rail] [data-destination]") |> LazyHTML.attribute("data-destination")
 
-      assert keys == ["chat", "voice", "tasks", "meetings", "more"]
+      assert keys == ["chat", "calendar", "meetings", "inbox", "more"]
 
-      assert attr(d, "[data-bottom-rail] [aria-current=page]", "data-destination") == ["voice"]
+      # More is a sheet trigger, never aria-current; it carries the active class.
+      assert attr(d, "[data-bottom-rail] [aria-current=page]", "data-destination") == []
 
       assert has_element?(
                view,
-               ~s([data-bottom-rail] [data-destination="voice"] .hero-microphone-solid)
-             )
-
-      refute has_element?(
-               view,
-               ~s([data-bottom-rail] [data-destination="tasks"] .hero-list-bullet-solid)
+               ~s([data-bottom-rail] [data-destination="more"].bottom-nav-tab--active .hero-ellipsis-horizontal-solid)
              )
     end
   end

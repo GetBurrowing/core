@@ -8,9 +8,10 @@ defmodule PlatformWeb.Components.MoreSheet do
   ## Rows (task 01a1557a-807f stage 2)
 
   One list, no headings (Saru: it is a list), from
-  `IconRail.more_sheet_rows/2`: Inbox, then every extension row the actor
-  may see (Social), then Email, Files, Skills, Org memory, Agents,
-  Experiments, Changelog.
+  `IconRail.more_sheet_rows/2`: Voice and Tasks (they left the bar for the
+  sheet, task 01a18d9f stage 5), then every extension row the actor may see
+  (Social), then Email, Files, Skills, Org memory, Agents, Experiments,
+  Changelog. Inbox and Calendar are tabs in the bar, not rows here.
   Canvases opens the Files browser filtered to canvases
   (`/files?tab=browse&type=canvas`, rung 16). Games, after Canvases, opens
   the Files browser filtered to games (`/files?tab=browse&type=game`, rung
@@ -29,8 +30,6 @@ defmodule PlatformWeb.Components.MoreSheet do
   navigation fails, the marks come off, the sheet is back as it was and a
   toast says so (`data-nav-label` is the toast's name for the row).
 
-    * Inbox carries its unread count (`data-role="more-sheet-inbox-badge"`,
-      the `IconRail.badge_text/1` grammar).
     * The row for the page you are on (`IconRail.more_sheet_current_key/2`,
       the rails' own longest-prefix matcher) carries `aria-current="page"`,
       `more-sheet-row--current` and a check.
@@ -86,11 +85,6 @@ defmodule PlatformWeb.Components.MoreSheet do
         "`Platform.Access.module_access?/3` (task 01a1386d-fb6e stage 1)"
   )
 
-  attr(:inbox_unread_count, :integer,
-    default: 0,
-    doc: "the viewer's unread inbox count; above 0 renders a badge on the Inbox row"
-  )
-
   attr(:current_path, :string,
     default: nil,
     doc: "the current request path; marks the current row"
@@ -114,7 +108,6 @@ defmodule PlatformWeb.Components.MoreSheet do
       |> assign(:rows, rows)
       |> assign(:last_index, length(rows) - 1)
       |> assign(:current_key, IconRail.more_sheet_current_key(rows, assigns[:current_path]))
-      |> assign(:inbox_badge, IconRail.badge_text(assigns[:inbox_unread_count]))
       |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
       |> assign(:avatar_url, Map.get(assigns[:user] || %{}, :avatar_url))
       |> assign(:avatar_seed, Map.get(assigns[:user] || %{}, :id))
@@ -152,24 +145,13 @@ defmodule PlatformWeb.Components.MoreSheet do
             data-destination={dest.key}
             data-nav-label={dest.label}
             aria-current={if dest.key == @current_key, do: "page"}
-            aria-label={
-              if dest.key == :inbox and @inbox_badge,
-                do: "#{dest.label}, #{@inbox_unread_count} unread",
-                else: dest.label
-            }
+            aria-label={dest.label}
           >
             <.icon
               name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
               class="more-sheet-icon size-5"
             />
             <span class="min-w-0 truncate">{dest.label}</span>
-            <span
-              :if={dest.key == :inbox and @inbox_badge}
-              class="badge badge-primary badge-sm shrink-0 text-xs font-medium tabular-nums"
-              data-role="more-sheet-inbox-badge"
-            >
-              {@inbox_badge}
-            </span>
             <.icon
               :if={dest.key == @current_key}
               name="hero-check"
