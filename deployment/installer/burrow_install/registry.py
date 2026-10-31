@@ -445,7 +445,14 @@ EMBEDDINGS_IMAGE = (
 #   wait inside llama.cpp, on memory-service's 30 s clock; at 1 it waits in
 #   memory-service's own semaphore, off the clock. Searches queue behind an
 #   ingest in progress.
-# - core_ingest_timeout_ms: @@INGEST_PROVENANCE@@
+# - core_ingest_timeout_ms 2_700_000 (45 min): proof droplet 614448430,
+#   rendered from this table: the 120 KB org page and a 132 KB day's journal
+#   ingested CONCURRENTLY through memory-service took 1626.9 s and 1701.9 s
+#   (770 embed requests, 0 timeouts or retries, 0 restarts, no oom-kill in
+#   journalctl -k, MemAvailable >= 1390 MiB, llama-server VmHWM 1591 MiB);
+#   1.5 x 1701.9 s = 2553 s. A larger page can outlast it: memory-service
+#   keeps embedding after core gives up, and its single-flight and content
+#   hash keep a resend from embedding the entry twice.
 EMBEDDINGS_FALLBACK_TIER = "small"
 EMBEDDINGS_PROFILES = {
     "small": {
@@ -468,7 +475,7 @@ EMBEDDINGS_PROFILES = {
             "MEMORY_EMBEDDING_MAX_INPUT_TOKENS": "200",
             "MEMORY_EMBEDDING_MAX_CONCURRENCY": "1",
         },
-        "core_ingest_timeout_ms": 1_800_000,
+        "core_ingest_timeout_ms": 2_700_000,
     },
 }
 

@@ -26,7 +26,7 @@ services:
     environment:
       APP_URL: "https://burrow-01a0d69d.test"
       FILES_SERVICE_URL: "http://files-service:8200"
-      MEMORY_SERVICE_INGEST_TIMEOUT_MS: "1800000"
+      MEMORY_SERVICE_INGEST_TIMEOUT_MS: "2700000"
       MEMORY_SERVICE_URL: "http://memory-service:8100"
       NATIVE_AGENT_LOGIN: "api_key"
       OIDC_CLIENT_ID: "suite-core"
