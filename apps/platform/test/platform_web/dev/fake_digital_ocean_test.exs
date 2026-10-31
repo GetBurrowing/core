@@ -31,7 +31,7 @@ defmodule PlatformWeb.Dev.FakeDigitalOceanTest do
       DigitalOcean.create_droplet(%{
         install_id: "abc",
         name: "acme",
-        region: "nyc3",
+        region: "nyc1",
         size: "s-2vcpu-4gb",
         user_data: "#cloud-config\n"
       })

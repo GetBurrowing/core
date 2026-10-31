@@ -56,6 +56,7 @@ defmodule Platform.Installs.DigitalOceanTest do
                "size" => "s-2vcpu-4gb",
                "image" => "ubuntu-24-04-x64",
                "user_data" => "#cloud-config\n",
+               "ssh_keys" => [],
                "tags" => ["burrow-install", "burrow-install-abc"],
                "monitoring" => true,
                "ipv6" => false

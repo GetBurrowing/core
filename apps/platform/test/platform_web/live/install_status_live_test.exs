@@ -99,7 +99,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
 
       assert has_element?(view, "#step-final[data-state=pending]", "Final checks")
       assert html =~ "About 8 minutes. You can close this tab; this link keeps working."
-      assert has_element?(view, "#install-plan", "New York (nyc3) · 2 vCPU / 4 GB · $24/mo")
+      assert has_element?(view, "#install-plan", "New York (nyc1) · 2 vCPU / 4 GB · $24/mo")
       refute has_element?(view, "#install-failed")
       refute has_element?(view, "#install-records")
       refute_jargon(html)

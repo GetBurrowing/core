@@ -294,13 +294,19 @@ defmodule Platform.Installs.Runner do
 
       install = Installs.update!(install, %{handover_sealed: Jason.encode!(sealed)})
 
-      with {:ok, droplet} <-
+      # Stage 6: root's key registered with the provider and named in the
+      # create, or the provider expires root's password and key login stops at
+      # "Password change required". Found by name first, so never registered twice.
+      with {:ok, key_id} <- DigitalOcean.ensure_ssh_key(install.id, install.ssh_public_key),
+           install = Installs.update!(install, %{ssh_key_id: key_id}),
+           {:ok, droplet} <-
              DigitalOcean.create_droplet(%{
                install_id: install.id,
                name: install.slug,
                region: install.region,
                size: install.size,
-               user_data: rendered.user_data
+               user_data: rendered.user_data,
+               ssh_keys: [key_id]
              }) do
         {:ok, Installs.update!(install, %{droplet_id: droplet["id"]})}
       end

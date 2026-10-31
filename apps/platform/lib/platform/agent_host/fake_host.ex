@@ -20,6 +20,10 @@ defmodule Platform.AgentHost.FakeHost do
       and otherwise `needs_login` at step `login`. Never a Claude login URL or
       code (task 01a17b10).
 
+  It joins only once `PlatformWeb.Endpoint` is running: it starts before the
+  Endpoint in the supervision tree, so it waits and retries every second
+  (`join/1`).
+
   `agent.stop` reports `stopped`. Logs, pane, file and auth requests get no
   answer; their callers time out as they would against a host that is slow.
 
@@ -69,6 +73,7 @@ defmodule Platform.AgentHost.FakeHost do
       agents: %{},
       completed: MapSet.new(),
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
+      endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
       reconciler: nil
     }
 
@@ -174,13 +179,17 @@ defmodule Platform.AgentHost.FakeHost do
     end
   end
 
+  # It joins only once the Endpoint is up (task 01a10315 stage 6): joining
+  # converges every native agent, and an `agent.start` broadcasts the runtime
+  # disconnect through the Endpoint, which at boot is not started yet (the
+  # reconciler crashed on it at every dev boot).
   defp join(state) do
-    case GenServer.whereis(Reconciler) do
-      nil ->
+    case {GenServer.whereis(Reconciler), Process.whereis(state.endpoint)} do
+      {pid, endpoint} when is_nil(pid) or is_nil(endpoint) ->
         Process.send_after(self(), :rejoin, @rejoin_after_ms)
         state
 
-      pid ->
+      {pid, _endpoint} ->
         with :ok <- Reconciler.host_joined(self(), %{"profile" => "fake"}),
              :ok <- Reconciler.inventory(self(), %{"profile" => "fake", "agents" => []}) do
           %{state | reconciler: Process.monitor(pid)}

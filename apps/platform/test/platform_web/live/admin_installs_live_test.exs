@@ -13,6 +13,8 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
 
   setup %{conn: conn} do
     use_fake_backend()
+    Platform.Installs.DigitalOcean.clear_sizes_cache()
+    on_exit(&Platform.Installs.DigitalOcean.clear_sizes_cache/0)
     admin = admin!()
     %{conn: Plug.Test.init_test_session(conn, %{"current_user_id" => admin.id}), admin: admin}
   end
@@ -30,11 +32,17 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
        %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/admin/installs")
 
-    for region <- ~w(nyc1 nyc2 nyc3 sfo2 sfo3 atl1 ric1) do
+    # Stage 6: only the regions that offer the default size (the fake answers
+    # as DigitalOcean did on 2026-10-30), the first of them selected.
+    for region <- ~w(nyc1 sfo2 sfo3) do
       assert has_element?(view, "#install-form option[value=#{region}]")
     end
 
-    assert has_element?(view, "#install-form option[value=nyc3][selected]")
+    for region <- ~w(nyc2 nyc3 atl1 ric1) do
+      refute has_element?(view, "#install-form option[value=#{region}]")
+    end
+
+    assert has_element?(view, "#install-form option[value=nyc1][selected]")
     assert html =~ "2 vCPU / 4 GB · $24/mo"
     assert html =~ "4 vCPU / 8 GB · $48/mo"
     assert has_element?(view, "input[name='install[size]'][value=s-2vcpu-4gb][checked]")
@@ -52,7 +60,7 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
         install: %{
           business_name: "Acme Bakery",
           owner_email: "owner@acme.test",
-          region: "nyc3",
+          region: "nyc1",
           size: "s-2vcpu-4gb",
           domain_mode: "ours"
         }
@@ -87,7 +95,7 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
     params = %{
       business_name: "Acme Bakery",
       owner_email: "owner@acme.test",
-      region: "nyc3",
+      region: "nyc1",
       size: "s-4vcpu-8gb",
       domain_mode: "customer"
     }

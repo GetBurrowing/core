@@ -35,7 +35,17 @@ defmodule Platform.Installs.DigitalOcean do
 
   Droplets are tagged `burrow-install` and `burrow-install-<install id>`; the
   Cloud Firewall is named `burrow-install-<install id>` and targets that tag,
-  so attaching it follows the tag and is idempotent.
+  so attaching it follows the tag and is idempotent. The account SSH key
+  registered for the install's root key (stage 6) has the same name, so it is
+  found again by name (never created twice) and removed by teardown.
+
+  ## Sizes and regions (stage 6)
+
+  `/v2/sizes` says which regions offer each size. `availability/0` caches
+  `%{size => [region]}` (available sizes only) for an hour with the prices,
+  so the admin form offers only regions that have the size, and a create is
+  refused before any droplet POST. Measured 2026-10-30: `s-2vcpu-4gb` and
+  `s-4vcpu-8gb` were offered in nyc1, sfo2 and sfo3 of our US list, NOT nyc3.
   """
 
   require Logger
@@ -99,7 +109,8 @@ defmodule Platform.Installs.DigitalOcean do
 
   @doc """
   Create one droplet. `attrs`: `:install_id`, `:name`, `:region`, `:size`,
-  `:user_data`. The image, tags, monitoring and ipv6 are fixed here.
+  `:user_data` and `:ssh_keys` (account key ids; stage 6). The image, tags,
+  monitoring and ipv6 are fixed here.
   """
   @spec create_droplet(map()) :: {:ok, map()} | {:error, term()}
   def create_droplet(%{region: region} = attrs) do
@@ -110,6 +121,7 @@ defmodule Platform.Installs.DigitalOcean do
         size: attrs.size,
         image: @image,
         user_data: attrs.user_data,
+        ssh_keys: Map.get(attrs, :ssh_keys, []),
         tags: ["burrow-install", install_tag(attrs.install_id)],
         monitoring: true,
         ipv6: false
@@ -140,10 +152,71 @@ defmodule Platform.Installs.DigitalOcean do
     |> Enum.find_value(fn net -> net["type"] == "public" && net["ip_address"] end)
   end
 
+  @doc "Reboot one droplet (`POST /v2/droplets/:id/actions`, type `reboot`)."
+  @spec reboot_droplet(integer()) :: :ok | {:error, term()}
+  def reboot_droplet(id) do
+    with {:ok, _} <- request(:post, "/v2/droplets/#{id}/actions", json: %{type: "reboot"}),
+         do: :ok
+  end
+
   @doc "Delete every droplet carrying `tag` (`DELETE /v2/droplets?tag_name=`)."
   @spec delete_droplets_by_tag(String.t()) :: :ok | {:error, term()}
   def delete_droplets_by_tag(tag) do
     with {:ok, _} <- request(:delete, "/v2/droplets", params: [tag_name: tag]), do: :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Account SSH key (stage 6)
+  # ---------------------------------------------------------------------------
+
+  @doc "The name of the install's account SSH key (same as its tag)."
+  def ssh_key_name(install_id), do: install_tag(install_id)
+
+  @doc """
+  Find the install's account SSH key by name, or register `public_key` under
+  it (`POST /v2/account/keys`). Returns its id. Passing that id in the
+  droplet create is what keeps the provider from expiring root's password.
+  """
+  @spec ensure_ssh_key(String.t(), String.t()) :: {:ok, integer()} | {:error, term()}
+  def ensure_ssh_key(install_id, public_key) do
+    with {:ok, nil} <- find_ssh_key(install_id),
+         {:ok, %{"ssh_key" => %{"id" => id}}} <-
+           request(:post, "/v2/account/keys",
+             json: %{name: ssh_key_name(install_id), public_key: public_key}
+           ) do
+      {:ok, id}
+    else
+      {:ok, %{"id" => id}} -> {:ok, id}
+      {:error, _} = error -> error
+      {:ok, _unexpected} -> {:error, :unexpected_response}
+    end
+  end
+
+  @doc "Delete the install's account SSH key(s), by name. `:ok` when there is none."
+  @spec delete_ssh_key(String.t()) :: :ok | {:error, term()}
+  def delete_ssh_key(install_id) do
+    name = ssh_key_name(install_id)
+
+    with {:ok, body} <- request(:get, "/v2/account/keys", params: [per_page: 200]) do
+      body
+      |> Map.get("ssh_keys", [])
+      |> Enum.filter(&(&1["name"] == name))
+      |> Enum.reduce_while(:ok, fn %{"id" => id}, :ok ->
+        case request(:delete, "/v2/account/keys/#{id}") do
+          {:ok, _} -> {:cont, :ok}
+          {:error, {:http, 404}} -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp find_ssh_key(install_id) do
+    name = ssh_key_name(install_id)
+
+    with {:ok, body} <- request(:get, "/v2/account/keys", params: [per_page: 200]) do
+      {:ok, Enum.find(Map.get(body, "ssh_keys", []), &(&1["name"] == name))}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -283,19 +356,45 @@ defmodule Platform.Installs.DigitalOcean do
   """
   @spec sizes() :: {:ok, %{String.t() => number()}} | {:error, term()}
   def sizes do
+    with {:ok, info} <- size_info(), do: {:ok, Map.new(info, fn {s, i} -> {s, i.price} end)}
+  end
+
+  @doc """
+  `%{slug => [region]}`: the regions of OUR list (`regions/0`) where each
+  AVAILABLE size can be created right now (stage 6). Same cache as `sizes/0`.
+  """
+  @spec availability() :: {:ok, %{String.t() => [String.t()] | nil}} | {:error, term()}
+  def availability do
+    with {:ok, info} <- size_info(), do: {:ok, Map.new(info, fn {s, i} -> {s, i.regions} end)}
+  end
+
+  defp size_info do
     now = System.monotonic_time(:millisecond)
 
     case :persistent_term.get(@sizes_cache_key, nil) do
-      {at, sizes} when now - at < @sizes_ttl_ms ->
-        {:ok, sizes}
+      {at, info} when now - at < @sizes_ttl_ms ->
+        {:ok, info}
 
       _ ->
         with {:ok, body} <- request(:get, "/v2/sizes", params: [per_page: 200]) do
-          sizes = Map.new(Map.get(body, "sizes", []), &{&1["slug"], &1["price_monthly"]})
-          :persistent_term.put(@sizes_cache_key, {now, sizes})
-          {:ok, sizes}
+          info = Map.new(Map.get(body, "sizes", []), &{&1["slug"], size_entry(&1)})
+          :persistent_term.put(@sizes_cache_key, {now, info})
+          {:ok, info}
         end
     end
+  end
+
+  # `regions: nil` when the provider did not say (unknown, so nothing is
+  # filtered); `[]` when the size is not available anywhere.
+  defp size_entry(size) do
+    offered =
+      cond do
+        size["available"] == false -> []
+        is_list(size["regions"]) -> Enum.filter(@regions, &(&1 in size["regions"]))
+        true -> nil
+      end
+
+    %{price: size["price_monthly"], regions: offered}
   end
 
   @doc false

@@ -209,6 +209,15 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       %{fake: pid}
     end
 
+    test "waits for the Endpoint before joining (no agent.start before it is up)" do
+      # Stage 6: an Endpoint that is not running holds the join back.
+      stop_supervised!(FakeHost)
+      waiting = start_supervised!({FakeHost, report_after_ms: 0, endpoint: :no_endpoint_here})
+      Process.sleep(200)
+      refute Reconciler.host_pid() == waiting
+      assert Process.alive?(waiting)
+    end
+
     test "joins as the install's host", %{fake: fake} do
       assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
       assert %{profile: "fake"} = State.host()

@@ -17,6 +17,13 @@ defmodule PlatformWeb.Dev.FakeDigitalOcean do
 
   @behaviour Plug
 
+  # Where each size is offered, as DigitalOcean answered on 2026-10-30 for our
+  # US regions (stage 6): NOT nyc3, so a create there is a 422 here too.
+  @offered %{
+    "s-2vcpu-4gb" => ~w(nyc1 sfo2 sfo3),
+    "s-4vcpu-8gb" => ~w(nyc1 sfo2 sfo3)
+  }
+
   import Plug.Conn
 
   alias Platform.Installs.Fake
@@ -65,38 +72,79 @@ defmodule PlatformWeb.Dev.FakeDigitalOcean do
   end
 
   defp route(conn, "POST", ["v2", "droplets"], body) do
-    Fake.count("POST /v2/droplets")
-    tags = Map.get(body, "tags", [])
-    Enum.each(tags, &Fake.count("POST /v2/droplets tag:" <> &1))
-    id = Fake.next_id()
+    if body["region"] in Map.get(@offered, body["size"], []),
+      do: create_droplet(conn, body),
+      else: unprocessable(conn)
+  end
 
-    droplet = %{
-      "id" => id,
-      "name" => body["name"],
-      "region" => body["region"],
-      "size" => body["size"],
-      "tags" => tags,
-      "created_ms" => System.monotonic_time(:millisecond)
-    }
-
-    Fake.put({:droplet, id}, droplet)
-    json(conn, 202, %{"droplet" => present(droplet)})
+  defp route(conn, "POST", ["v2", "droplets", _id, "actions"], body) do
+    Fake.count("POST /v2/droplets/:id/actions #{body["type"]}")
+    json(conn, 201, %{"action" => %{"id" => Fake.next_id(), "type" => body["type"]}})
   end
 
   defp route(conn, "GET", ["v2", "droplets", id], _) do
-    Fake.count("GET /v2/droplets/:id")
-
-    cond do
-      Fake.take_failure("reserve") -> json(conn, 500, %{"message" => "injected failure"})
-      droplet = find_droplet(id) -> json(conn, 200, %{"droplet" => present(droplet)})
-      true -> json(conn, 404, %{"id" => "not_found"})
-    end
+    get_droplet(conn, id)
   end
 
   defp route(conn, "DELETE", ["v2", "droplets"], _) do
     Fake.count("DELETE /v2/droplets")
     Enum.each(tagged(conn.query_params["tag_name"]), &Fake.delete({:droplet, &1["id"]}))
     send_resp(conn, 204, "")
+  end
+
+  # -- account SSH keys (stage 6) --------------------------------------------
+
+  defp route(conn, "GET", ["v2", "account", "keys"], _) do
+    Fake.count("GET /v2/account/keys")
+    json(conn, 200, %{"ssh_keys" => Fake.all(:ssh_key)})
+  end
+
+  defp route(conn, "POST", ["v2", "account", "keys"], body) do
+    Fake.count("POST /v2/account/keys")
+    id = Fake.next_id()
+    key = %{"id" => id, "name" => body["name"], "public_key" => body["public_key"]}
+    Fake.put({:ssh_key, id}, key)
+    json(conn, 201, %{"ssh_key" => key})
+  end
+
+  defp route(conn, "DELETE", ["v2", "account", "keys", id], _) do
+    Fake.count("DELETE /v2/account/keys/:id")
+
+    case Integer.parse(id) do
+      {int, ""} ->
+        if Enum.any?(Fake.all(:ssh_key), &(&1["id"] == int)) do
+          Fake.delete({:ssh_key, int})
+          send_resp(conn, 204, "")
+        else
+          json(conn, 404, %{"id" => "not_found"})
+        end
+
+      _ ->
+        json(conn, 404, %{"id" => "not_found"})
+    end
+  end
+
+  defp route(conn, "GET", ["v2", "sizes"], _) do
+    json(conn, 200, %{
+      "sizes" => [
+        %{
+          "slug" => "s-2vcpu-4gb",
+          "price_monthly" => 24,
+          "vcpus" => 2,
+          "memory" => 4096,
+          "available" => true,
+          "regions" => @offered["s-2vcpu-4gb"]
+        },
+        %{
+          "slug" => "s-4vcpu-8gb",
+          "price_monthly" => 48,
+          "vcpus" => 4,
+          "memory" => 8192,
+          "available" => true,
+          "regions" => @offered["s-4vcpu-8gb"]
+        }
+      ]
+    })
   end
 
   # -- firewalls --------------------------------------------------------------
@@ -168,17 +216,49 @@ defmodule PlatformWeb.Dev.FakeDigitalOcean do
     send_resp(conn, 204, "")
   end
 
-  defp route(conn, "GET", ["v2", "sizes"], _) do
-    json(conn, 200, %{
-      "sizes" => [
-        %{"slug" => "s-2vcpu-4gb", "price_monthly" => 24, "vcpus" => 2, "memory" => 4096},
-        %{"slug" => "s-4vcpu-8gb", "price_monthly" => 48, "vcpus" => 4, "memory" => 8192}
-      ]
+  defp route(conn, method, path, _) do
+    json(conn, 404, %{"id" => "not_found", "message" => "#{method} /#{Enum.join(path, "/")}"})
+  end
+
+  # -- droplets (helpers) -----------------------------------------------------
+
+  defp unprocessable(conn) do
+    Fake.count("POST /v2/droplets 422")
+
+    json(conn, 422, %{
+      "id" => "unprocessable_entity",
+      "message" => "Size is not available in this region."
     })
   end
 
-  defp route(conn, method, path, _) do
-    json(conn, 404, %{"id" => "not_found", "message" => "#{method} /#{Enum.join(path, "/")}"})
+  defp create_droplet(conn, body) do
+    Fake.count("POST /v2/droplets")
+    tags = Map.get(body, "tags", [])
+    Enum.each(tags, &Fake.count("POST /v2/droplets tag:" <> &1))
+    id = Fake.next_id()
+
+    droplet = %{
+      "id" => id,
+      "name" => body["name"],
+      "region" => body["region"],
+      "size" => body["size"],
+      "ssh_keys" => Map.get(body, "ssh_keys", []),
+      "tags" => tags,
+      "created_ms" => System.monotonic_time(:millisecond)
+    }
+
+    Fake.put({:droplet, id}, droplet)
+    json(conn, 202, %{"droplet" => present(droplet)})
+  end
+
+  defp get_droplet(conn, id) do
+    Fake.count("GET /v2/droplets/:id")
+
+    cond do
+      Fake.take_failure("reserve") -> json(conn, 500, %{"message" => "injected failure"})
+      droplet = find_droplet(id) -> json(conn, 200, %{"droplet" => present(droplet)})
+      true -> json(conn, 404, %{"id" => "not_found"})
+    end
   end
 
   # -- helpers ----------------------------------------------------------------

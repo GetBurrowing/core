@@ -58,7 +58,7 @@ defmodule Platform.InstallsFixtures do
         %{
           "business_name" => "Acme Bakery",
           "owner_email" => "owner@acme-bakery.example.test",
-          "region" => "nyc3"
+          "region" => "nyc1"
         },
         attrs
       )

@@ -31,6 +31,8 @@ defmodule Platform.Installs.Install do
     field(:droplet_id, :integer)
     field(:droplet_ip, :string)
     field(:firewall_id, :string)
+    # Stage 6: the DigitalOcean account key registered for ssh_public_key.
+    field(:ssh_key_id, :integer)
     field(:ssh_public_key, :string)
     field(:status_token_hash, :binary)
     field(:handover_sealed, Platform.Vault.EncryptedBinary)
@@ -86,6 +88,7 @@ defmodule Platform.Installs.Install do
       :droplet_id,
       :droplet_ip,
       :firewall_id,
+      :ssh_key_id,
       :handover_sealed,
       :ready_at,
       :handover_acknowledged_at,

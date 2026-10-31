@@ -80,20 +80,65 @@ defmodule Platform.Installs do
   # ---------------------------------------------------------------------------
 
   @doc """
-  `%{default_size:, sizes:, regions:}` from
+  `%{default_size:, sizes:, regions:, available:}` from
   `config :platform, Platform.Installs`. Regions are always a subset of the
   US list DigitalOcean installs may use.
+
+  Stage 6: `regions` are only those where `default_size` can be created right
+  now (`DigitalOcean.availability/0`, cached), with `default_region` (config,
+  default `"nyc1"`) first when it is one of them. So the first region and the
+  default size are ALWAYS a pair the provider offers; a caller that takes
+  both (the admin form, the public front door) never starts with a 422.
+  `available` is `%{size => [region]}` for every offered size. When the
+  provider's list cannot be read, nothing is filtered.
   """
-  @spec defaults() :: %{default_size: String.t(), sizes: [String.t()], regions: [String.t()]}
+  @spec defaults() :: %{
+          default_size: String.t(),
+          sizes: [String.t()],
+          regions: [String.t()],
+          available: %{String.t() => [String.t()]}
+        }
   def defaults do
     sizes = config(:sizes, @default_sizes)
+    default_size = config(:default_size, "s-2vcpu-4gb")
+    allowed = allowed_regions()
+    known = availability()
+    available = Map.new(sizes, &{&1, offered_regions(&1, allowed, known)})
 
     %{
-      default_size: config(:default_size, "s-2vcpu-4gb"),
+      default_size: default_size,
       sizes: sizes,
-      regions:
-        Enum.filter(config(:regions, DigitalOcean.regions()), &(&1 in DigitalOcean.regions()))
+      regions: offered_regions(default_size, allowed, known),
+      available: available
     }
+  end
+
+  @doc "The regions `size` can be created in now, preferred region first (see `defaults/0`)."
+  @spec regions_for(String.t()) :: [String.t()]
+  def regions_for(size), do: offered_regions(size, allowed_regions(), availability())
+
+  defp allowed_regions,
+    do: Enum.filter(config(:regions, DigitalOcean.regions()), &(&1 in DigitalOcean.regions()))
+
+  defp offered_regions(size, allowed, known) do
+    regions =
+      case Map.get(known, size) do
+        list when is_list(list) -> Enum.filter(allowed, &(&1 in list))
+        nil -> allowed
+      end
+
+    preferred = config(:default_region, "nyc1")
+    if preferred in regions, do: [preferred | List.delete(regions, preferred)], else: regions
+  end
+
+  # Unknown (`%{}`) when the provider's list cannot be read: nothing is filtered.
+  defp availability do
+    case DigitalOcean.availability() do
+      {:ok, known} -> known
+      {:error, _} -> %{}
+    end
+  rescue
+    _ -> %{}
   end
 
   # ---------------------------------------------------------------------------
@@ -152,11 +197,15 @@ defmodule Platform.Installs do
       not (is_binary(email) and Regex.match?(@email, email)) ->
         {:error, {:invalid, :owner_email}}
 
-      attrs["region"] not in defaults.regions ->
+      attrs["region"] not in allowed_regions() ->
         {:error, {:invalid, :region}}
 
       size not in defaults.sizes ->
         {:error, {:invalid, :size}}
+
+      # Stage 6: refused here, before any droplet POST (the provider's 422).
+      attrs["region"] not in Map.fetch!(defaults.available, size) ->
+        {:error, {:invalid, :size_unavailable}}
 
       mode not in ["ours", "customer"] ->
         {:error, {:invalid, :domain_mode}}
@@ -317,6 +366,8 @@ defmodule Platform.Installs do
       install = get(install.id)
 
       if install.status == "failed" do
+        maybe_reboot(install)
+
         steps =
           Enum.map(install.steps, fn
             %{"state" => "failed"} = step ->
@@ -340,6 +391,25 @@ defmodule Platform.Installs do
       end
     end
   end
+
+  # Stage 6: a server that never finished installing (its stack never came
+  # up, e.g. the model download gave up) is restarted, so its units run again.
+  # Best effort: the retry goes ahead whatever the reboot answers.
+  defp maybe_reboot(%Install{droplet_id: id, steps: steps}) when is_integer(id) do
+    if Enum.any?(steps, &(&1["key"] == "install" and &1["state"] == "failed")) do
+      case DigitalOcean.reboot_droplet(id) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[installs] reboot before retry failed: #{reason_code(reason)}")
+      end
+    end
+
+    :ok
+  end
+
+  defp maybe_reboot(_install), do: :ok
 
   defp authorize_retry(install, token) when is_binary(token) do
     if Plug.Crypto.secure_compare(hash_token(token), install.status_token_hash),
@@ -391,8 +461,10 @@ defmodule Platform.Installs do
         with :ok <- DigitalOcean.delete_droplets_by_tag(tag),
              :ok <- DigitalOcean.delete_firewall(install.id),
              :ok <- delete_dns(install),
+             # Stage 6: the account SSH key registered for this install.
+             :ok <- DigitalOcean.delete_ssh_key(install.id),
              :ok <- confirm_gone(tag, config(:teardown_confirm_attempts, 6)) do
-          update!(get(install.id), %{status: "destroyed", handover_sealed: nil})
+          update!(get(install.id), %{status: "destroyed", handover_sealed: nil, ssh_key_id: nil})
           :ok
         end
     end
@@ -667,7 +739,14 @@ defmodule Platform.Installs do
   and never infrastructure jargon.
   """
   @spec describe_error(String.t(), term()) :: String.t()
+  def describe_error("install", :timeout),
+    do: "Your server didn't finish installing in time. Retry restarts it and tries again."
+
   def describe_error(_step, :timeout), do: "This step took longer than expected."
+
+  # Stage 6: DigitalOcean answers 422 when the size is not offered in the region.
+  def describe_error("reserve", {:http, 422}),
+    do: "That server size isn't available in this region right now. Pick another region."
   def describe_error(_step, :forbidden), do: "Our hosting provider refused the request."
   def describe_error(_step, :region_not_allowed), do: "That region is not available."
 

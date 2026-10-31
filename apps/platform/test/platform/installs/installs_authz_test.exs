@@ -16,7 +16,7 @@ defmodule Platform.Installs.InstallsAuthzTest do
   @attrs %{
     "business_name" => "Acme Bakery",
     "owner_email" => "owner@acme-bakery.example.test",
-    "region" => "nyc3"
+    "region" => "nyc1"
   }
 
   defp count, do: Repo.aggregate(from(i in Install), :count)
@@ -128,15 +128,52 @@ defmodule Platform.Installs.InstallsAuthzTest do
     end
   end
 
-  test "defaults/0 is the configured experiment surface" do
+  test "defaults/0 is the configured experiment surface, filtered to where the size is offered" do
+    use_fake_backend()
+    Platform.Installs.DigitalOcean.clear_sizes_cache()
+    on_exit(&Platform.Installs.DigitalOcean.clear_sizes_cache/0)
+
+    # Stage 6: the fake answers as DigitalOcean did on 2026-10-30 (not nyc3),
+    # so the first region and the default size are a pair it offers.
     assert Installs.defaults() == %{
              default_size: "s-2vcpu-4gb",
              sizes: ["s-2vcpu-4gb", "s-4vcpu-8gb"],
-             regions: ~w(nyc1 nyc2 nyc3 sfo2 sfo3 atl1 ric1)
+             regions: ~w(nyc1 sfo2 sfo3),
+             available: %{
+               "s-2vcpu-4gb" => ~w(nyc1 sfo2 sfo3),
+               "s-4vcpu-8gb" => ~w(nyc1 sfo2 sfo3)
+             }
            }
 
     put_installs_env(default_size: "s-4vcpu-8gb", regions: ["sfo3", "lon1"])
     assert %{default_size: "s-4vcpu-8gb", regions: ["sfo3"]} = Installs.defaults()
+
+    put_installs_env(regions: ~w(nyc1 sfo3), default_region: "sfo3")
+    assert %{regions: ["sfo3", "nyc1"]} = Installs.defaults()
+  end
+
+  test "defaults/0 filters nothing when the provider's list cannot be read" do
+    Platform.Installs.DigitalOcean.clear_sizes_cache()
+    on_exit(&Platform.Installs.DigitalOcean.clear_sizes_cache/0)
+    Req.Test.stub(Platform.Installs.DigitalOcean, &Plug.Conn.send_resp(&1, 500, ""))
+
+    assert %{regions: ~w(nyc1 nyc2 nyc3 sfo2 sfo3 atl1 ric1)} = Installs.defaults()
+  end
+
+  test "create/2 refuses a size the region does not offer, before any droplet exists" do
+    use_fake_backend()
+    Platform.Installs.DigitalOcean.clear_sizes_cache()
+    on_exit(&Platform.Installs.DigitalOcean.clear_sizes_cache/0)
+    put_installs_env(dns_zone: "installs.example.test")
+
+    before = count()
+
+    assert {:error, {:invalid, :size_unavailable}} =
+             Installs.create(admin!(), Map.put(@attrs, "region", "nyc3"))
+
+    assert count() == before
+    # Positive control: the same request in a region that has the size is created.
+    assert {:ok, _} = Installs.create(admin!(), @attrs)
   end
 
   test "list/1 is root-admin only" do

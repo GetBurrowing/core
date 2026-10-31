@@ -38,6 +38,7 @@ defmodule PlatformWeb.AdminInstallsLive do
      socket
      |> assign(:page_title, "Installs")
      |> assign(:regions, defaults.regions)
+     |> assign(:available, defaults.available)
      |> assign(:size_options, size_options(defaults.sizes))
      |> assign(:new_link, nil)
      |> assign(:form_error, nil)
@@ -52,11 +53,21 @@ defmodule PlatformWeb.AdminInstallsLive do
     %{
       "business_name" => "",
       "owner_email" => "",
-      "region" => if("nyc3" in defaults.regions, do: "nyc3", else: List.first(defaults.regions)),
+      # Stage 6: the first region offering the default size (nyc1 today).
+      "region" => List.first(defaults.regions),
       "size" => defaults.default_size,
       "domain_mode" => "ours",
       "primary_host" => ""
     }
+  end
+
+  defp reset_form(socket) do
+    defaults = Installs.defaults()
+
+    socket
+    |> assign(:regions, defaults.regions)
+    |> assign(:available, defaults.available)
+    |> assign(:form, to_form(blank_params(defaults), as: :install))
   end
 
   defp size_options(sizes) do
@@ -90,7 +101,19 @@ defmodule PlatformWeb.AdminInstallsLive do
 
   @impl true
   def handle_event("validate", %{"install" => params}, socket) do
-    {:noreply, assign(socket, :form, to_form(params, as: :install))}
+    # Stage 6: only regions where the chosen size can be created right now;
+    # a region the new size lacks moves to the first one that has it.
+    regions = Map.get(socket.assigns.available, params["size"]) || socket.assigns.regions
+
+    params =
+      if params["region"] in regions,
+        do: params,
+        else: Map.put(params, "region", List.first(regions))
+
+    {:noreply,
+     socket
+     |> assign(:regions, regions)
+     |> assign(:form, to_form(params, as: :install))}
   end
 
   def handle_event("create", %{"install" => params}, socket) do
@@ -106,7 +129,7 @@ defmodule PlatformWeb.AdminInstallsLive do
            url: url(~p"/install-status/#{token}")
          })
          |> assign(:form_error, nil)
-         |> assign(:form, to_form(blank_params(Installs.defaults()), as: :install))
+         |> reset_form()
          |> load_installs()}
 
       {:error, reason} ->
@@ -182,6 +205,9 @@ defmodule PlatformWeb.AdminInstallsLive do
   defp create_error({:invalid, :owner_email}), do: "Owner email doesn't look like an address."
   defp create_error({:invalid, :region}), do: "Pick one of the listed regions."
   defp create_error({:invalid, :size}), do: "Pick one of the listed sizes."
+
+  defp create_error({:invalid, :size_unavailable}),
+    do: "That server size isn't available in this region right now. Pick another region."
   defp create_error({:invalid, :domain_mode}), do: "Pick how the install is addressed."
 
   defp create_error({:invalid, :primary_host}),
