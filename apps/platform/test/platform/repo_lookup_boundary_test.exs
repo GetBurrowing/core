@@ -1298,7 +1298,16 @@ defmodule Platform.RepoLookupBoundaryTest do
     # off `space.leader_agent_id` and the `%Agent{}` `Roles.assignee_for/1`
     # returned, i.e. column values. A malformed id cannot reach it today; a
     # future boundary caller would need a `Platform.UUID.valid?/1` guard.
-    "platform/chat.ex" => 20,
+    #
+    # 20 -> 21 for task 01a19355 stage 1's `do_set_member_role/4`, the
+    # `FOR UPDATE` lock on the space row behind `set_member_role/4`. Triaged
+    # by hand as this map asks: its `where:` pins `s.id == ^space_id`, and that
+    # id is `space.id` read off the `%Space{}` the caller passes (a loaded
+    # row, matched by the function head), never a raw param. The one
+    # boundary-supplied id, `participant_id`, goes through
+    # `get_space_participant/2`, which already guards with
+    # `Platform.UUID.valid?/1`.
+    "platform/chat.ex" => 21,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by
