@@ -51,6 +51,13 @@ def require_candidate(entry):
         raise RuntimeError("ORIGINAL_CANDIDATE_MISMATCH")
 
 
+def require_measurements(video, duration):
+    if (video.get("width"), video.get("height")) != (1080, 1920):
+        raise RuntimeError("OUTPUT_DIMENSIONS_CHANGED")
+    if abs(duration - 53.428375) > 0.1:
+        raise RuntimeError("OUTPUT_CUT_DURATION_CHANGED")
+
+
 def main():
     ap = argparse.ArgumentParser()
     for key in ("project", "source", "music", "helper", "output_dir"):
@@ -128,6 +135,7 @@ def main():
             capture_output=True, text=True, check=True)
         media = json.loads(probe.stdout)
         video = next(s for s in media["streams"] if s.get("codec_type") == "video")
+        require_measurements(video, float(media["format"]["duration"]))
         receipt = {"validation": "real_authorized_local_original_project_render",
             "production_completion": False, "candidate_id": CANDIDATE,
             "source_sha256": SOURCE_SHA, "music_file_id": "01a18eb0-ce90-7000-a470-ed04b1ba9a14",

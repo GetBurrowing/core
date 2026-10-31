@@ -39,3 +39,11 @@ def test_exact_original_candidate_and_bounds_are_required():
     ):
         with pytest.raises(RuntimeError, match="^ORIGINAL_CANDIDATE_MISMATCH$"):
             validation.require_candidate(changed)
+
+
+def test_original_framing_dimensions_and_cut_duration_are_required():
+    validation.require_measurements({"width": 1080, "height": 1920}, 53.428375)
+    with pytest.raises(RuntimeError, match="^OUTPUT_DIMENSIONS_CHANGED$"):
+        validation.require_measurements({"width": 1920, "height": 1080}, 53.428375)
+    with pytest.raises(RuntimeError, match="^OUTPUT_CUT_DURATION_CHANGED$"):
+        validation.require_measurements({"width": 1080, "height": 1920}, 54.0)
