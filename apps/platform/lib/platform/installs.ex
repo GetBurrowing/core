@@ -386,6 +386,7 @@ defmodule Platform.Installs do
   # ---------------------------------------------------------------------------
 
   @open_statuses ~w(requested queued provisioning ready)
+  @requests_topic "install-requests"
   @requester_name_max 120
   @note_max 1000
   @email_max 254
@@ -543,6 +544,7 @@ defmodule Platform.Installs do
       {:ok, install} ->
         Logger.info("[installs] request #{install.id} created")
         broadcast(install.id)
+        broadcast_requests()
         maybe_auto_provision(install)
         {:ok, :created}
 
@@ -650,6 +652,7 @@ defmodule Platform.Installs do
                |> Map.merge(provisioned),
              {:ok, install} <- queue_request(row.id, attrs) do
           broadcast(install.id)
+          broadcast_requests()
           if config(:start_runs, true), do: Runner.start(install.id)
           {:ok, install}
         end
@@ -711,6 +714,7 @@ defmodule Platform.Installs do
           {1, _} ->
             Logger.info("[installs] request #{id} dismissed")
             broadcast(id)
+            broadcast_requests()
             :ok
 
           {0, _} ->
@@ -1102,11 +1106,14 @@ defmodule Platform.Installs do
   @fallback_prices %{"s-2vcpu-4gb" => 24, "s-4vcpu-8gb" => 48}
 
   @doc ~S'A region slug in business terms: `"New York (nyc3)"`.'
-  @spec region_label(String.t()) :: String.t()
+  @spec region_label(String.t() | nil) :: String.t() | nil
+  def region_label(nil), do: nil
   def region_label(region), do: "#{Map.get(@region_names, region, region)} (#{region})"
 
   @doc ~S'A size slug in business terms: `"s-2vcpu-4gb"` is `"2 vCPU / 4 GB"`.'
-  @spec size_label(String.t()) :: String.t()
+  @spec size_label(String.t() | nil) :: String.t() | nil
+  def size_label(nil), do: nil
+
   def size_label(size) do
     case Regex.run(~r/(\d+)vcpu-(\d+)gb/, size) do
       [_, cpu, gb] -> "#{cpu} vCPU / #{gb} GB"
@@ -1158,6 +1165,77 @@ defmodule Platform.Installs do
     install = install |> Install.update_changeset(attrs) |> Repo.update!(@no_query_log)
     broadcast(install.id)
     install
+  end
+
+  @doc """
+  Subscribe to `:install_requests_changed`, broadcast whenever a request is
+  created, provisioned or dismissed (task 01a18f0c stage 3).
+  """
+  def subscribe_requests, do: Phoenix.PubSub.subscribe(Platform.PubSub, @requests_topic)
+
+  defp broadcast_requests,
+    do: Phoenix.PubSub.broadcast(Platform.PubSub, @requests_topic, :install_requests_changed)
+
+  @doc """
+  The hand-over email state of each install that came from a request
+  (`requested_at` set), as one word: `"not sent yet"`, `"queued"` (also while
+  sending), `"accepted"`, `"failed"`, `"refused"` or `"not configured"` (a
+  ready install with no email because the mail sender is not configured).
+  Read from `mail_deliveries.status` only; never a body. `%{id => word}`.
+  """
+  @spec handover_email_states([Install.t()]) :: %{String.t() => String.t()}
+  def handover_email_states(installs) do
+    from_request = Enum.filter(installs, & &1.requested_at)
+
+    delivery_ids =
+      from_request |> Enum.map(& &1.handover_email_delivery_id) |> Enum.reject(&is_nil/1)
+
+    statuses =
+      if delivery_ids == [],
+        do: %{},
+        else:
+          Repo.all(
+            from(d in Platform.Mail.Delivery,
+              where: d.id in ^delivery_ids,
+              select: {d.id, d.status}
+            )
+          )
+          |> Map.new()
+
+    configured? = mail_sender_configured?()
+
+    Map.new(from_request, fn install ->
+      {install.id, email_state(install, statuses, configured?)}
+    end)
+  end
+
+  defp email_state(%Install{handover_email_delivery_id: id}, statuses, _configured?)
+       when is_binary(id) do
+    case Map.get(statuses, id) do
+      status when status in ["queued", "sending"] -> "queued"
+      status when status in ["accepted", "failed", "refused"] -> status
+      _ -> "not sent yet"
+    end
+  end
+
+  defp email_state(%Install{status: "ready"}, _statuses, false), do: "not configured"
+  defp email_state(_install, _statuses, _configured?), do: "not sent yet"
+
+  @doc """
+  Whether the requester hand-over email can be sent: mail is enabled and
+  `mail_sender` (`BURROW_INSTALLS_MAIL_*`) names an org, account and sender.
+  """
+  @spec mail_sender_configured?() :: boolean()
+  def mail_sender_configured? do
+    sender = config(:mail_sender, %{}) || %{}
+
+    Platform.Mail.Config.enabled?() and
+      Enum.all?([:org_id, :account_id, :sender_key], fn key ->
+        case Map.get(sender, key) do
+          value when is_binary(value) -> String.trim(value) != ""
+          _ -> false
+        end
+      end)
   end
 
   @doc "Subscribe to `{:install_updated, id}` for one install."

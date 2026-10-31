@@ -9,6 +9,9 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
   import Platform.InstallsFixtures
 
   alias Platform.Installs
+  alias Platform.Installs.Fake
+  alias Platform.Installs.RequestSettings
+  alias Platform.Repo
   alias Platform.VaultFixtures
 
   setup %{conn: conn} do
@@ -154,6 +157,179 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
     do: term |> Tuple.to_list() |> deep_holds?(needle)
 
   defp deep_holds?(_term, _needle), do: false
+
+  # ── Install requests (task 01a18f0c stage 3) ───────────────────────────
+
+  @request %{
+    "name" => "Pat Baker",
+    "email" => "pat@acme-requests.test",
+    "business" => "Acme Bakery",
+    "note" => "two locations"
+  }
+
+  defp request!(overrides \\ %{}) do
+    attrs = Map.merge(@request, overrides)
+    {:ok, :created} = Installs.request(attrs)
+    {:ok, requests} = Installs.list_requests(admin!())
+    Enum.find(requests, &(&1.owner_email == attrs["email"]))
+  end
+
+  test "requests render above the form with who, what and exactly what Provision buys",
+       %{conn: conn} do
+    request = request!()
+    {:ok, view, html} = live(conn, ~p"/admin/installs")
+
+    {requests_at, _} = :binary.match(html, ~s(data-role="install-requests"))
+    {form_at, _} = :binary.match(html, ~s(id="install-form"))
+    assert requests_at < form_at
+
+    row = "#install-request-#{request.id}"
+    assert has_element?(view, row, "Acme Bakery")
+    assert has_element?(view, row, "Pat Baker")
+    assert has_element?(view, row, "pat@acme-requests.test")
+    assert has_element?(view, row, "two locations")
+
+    defaults = Installs.defaults()
+
+    expected =
+      "Will use: #{Installs.region_label(hd(defaults.regions))} · 2 vCPU / 4 GB · $24/mo · " <>
+        "#{request.slug}.installs.example.test"
+
+    [line] =
+      html
+      |> Floki.parse_document!()
+      |> Floki.find("#{row} [data-role=install-request-will-use]")
+      |> Enum.map(&(&1 |> Floki.text() |> String.split() |> Enum.join(" ")))
+
+    assert line == expected
+    refute html =~ "No install requests."
+  end
+
+  test "the empty state, and Provision as one click moving the row to the list as queued",
+       %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/admin/installs")
+    assert html =~ "No install requests."
+
+    request = request!()
+    # The broadcast reaches the open page: the row appears without a reload.
+    assert render(view) =~ "install-request-#{request.id}"
+
+    html =
+      view
+      |> element("#install-request-#{request.id} button", "Provision")
+      |> render_click()
+
+    install = Installs.get(request.id)
+    assert install.status == "queued"
+    refute has_element?(view, "#install-request-#{request.id}")
+    assert has_element?(view, "#install-#{install.slug}", "queued")
+    assert has_element?(view, "#install-#{install.slug}", "Requested by pat@acme-requests.test")
+    assert html =~ "Provisioning. pat@acme-requests.test gets an email when it&#39;s ready."
+    assert html =~ "No install requests."
+
+    # A request-made install never shows a progress link or token.
+    refute html =~ "/install-status/"
+    refute html =~ "install-new-link"
+    # start_runs is false here: the click queued the run, it bought nothing yet.
+    assert Map.get(Fake.calls(), "POST /v2/droplets", 0) == 0
+  end
+
+  test "Dismiss deletes the request", %{conn: conn} do
+    request = request!()
+    {:ok, view, _html} = live(conn, ~p"/admin/installs")
+
+    assert has_element?(
+             view,
+             "#install-request-#{request.id} button[data-confirm]",
+             "Dismiss"
+           )
+
+    view |> element("#install-request-#{request.id} button", "Dismiss") |> render_click()
+
+    assert Installs.get(request.id) == nil
+    refute has_element?(view, "#install-request-#{request.id}")
+  end
+
+  test "the spend-gate toggle reflects and persists RequestSettings, asking before on",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/installs")
+    toggle = "[data-role=auto-provision-toggle]"
+
+    refute has_element?(view, "#{toggle}[checked]")
+    assert has_element?(view, "#{toggle}[data-confirm]")
+
+    view |> element(toggle) |> render_click()
+    assert RequestSettings.get().auto_provision_requests
+    assert has_element?(view, "#{toggle}[checked]")
+    refute has_element?(view, "#{toggle}[data-confirm]")
+
+    # A fresh mount reads the row.
+    {:ok, view, _html} = live(conn, ~p"/admin/installs")
+    assert has_element?(view, "#{toggle}[checked]")
+
+    view |> element(toggle) |> render_click()
+    refute RequestSettings.get().auto_provision_requests
+  end
+
+  test "a requester's note renders escaped", %{conn: conn} do
+    request!(%{"note" => "<script>alert('x')</script> hello"})
+    {:ok, _view, html} = live(conn, ~p"/admin/installs")
+
+    refute html =~ "<script>alert"
+    assert html =~ "&lt;script&gt;alert"
+  end
+
+  test "the hand-over email state is a status word read from the delivery", %{conn: conn} do
+    request = request!()
+    {:ok, install} = Installs.provision_request(admin!(), request.id)
+
+    {:ok, _view, html} = live(conn, ~p"/admin/installs")
+    assert email_state(html, install) == "not sent yet"
+
+    org = Platform.Tenancy.get_org_by_slug!("initech")
+    account = Platform.Test.ExperimentsMailFixtures.account!(org.id)
+    id = Platform.Types.UUIDv7.generate()
+
+    %{
+      id: id,
+      org_id: org.id,
+      account_id: account.id,
+      sender_key: "noreply",
+      from_address: "noreply@example.com",
+      recipients: [install.owner_email],
+      subject: "Your Burrow is ready",
+      body: "BODY-MUST-NOT-RENDER",
+      actor_type: "system",
+      message_id_header: "<#{id}@example.com>",
+      status: "queued"
+    }
+    |> Platform.Mail.Delivery.insert_changeset()
+    |> Repo.insert!()
+
+    Installs.update!(Installs.get(install.id), %{handover_email_delivery_id: id})
+
+    {:ok, _view, html} = live(conn, ~p"/admin/installs")
+    assert email_state(html, install) == "queued"
+    refute html =~ "BODY-MUST-NOT-RENDER"
+    refute html =~ "/install-status/"
+  end
+
+  test "a ready request-made install with no mail sender says not configured", %{conn: conn} do
+    request = request!()
+    {:ok, install} = Installs.provision_request(admin!(), request.id)
+    Installs.update!(Installs.get(install.id), %{status: "ready"})
+
+    {:ok, _view, html} = live(conn, ~p"/admin/installs")
+    assert email_state(html, install) == "not configured"
+  end
+
+  defp email_state(html, install) do
+    html
+    |> Floki.parse_document!()
+    |> Floki.find("#install-#{install.slug} [data-role=install-email-state]")
+    |> Enum.map(&String.trim(Floki.text(&1)))
+    |> List.first()
+  end
 
   test "Destroy requires the typed slug, then tears down", %{conn: conn} do
     {install, _token} = create_install!()
