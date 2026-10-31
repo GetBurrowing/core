@@ -86,6 +86,10 @@ config :platform, :oidc,
   # `Platform.OIDC.external_group/0` rather than spelling it.
   external_group: "globex-external"
 
+# `Platform.OIDC.begin_interaction/1` (install hand-over, task 01a10315
+# stage 6): tests stub pocket-id's `GET /authorize` with Req.Test.
+config :platform, :oidc_interaction_req_options, plug: {Req.Test, Platform.OIDC}
+
 # Per-OS-process so two `mix test` runs on one host never share (and never
 # delete) each other's blobs. config/runtime.exs leaves this key alone in
 # the test env, so this value is the one every LocalDisk read resolves to

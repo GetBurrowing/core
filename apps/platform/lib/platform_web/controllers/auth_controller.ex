@@ -40,31 +40,41 @@ defmodule PlatformWeb.AuthController do
   # install. bootstrap-admin points it HERE, at the install's own host, with
   # pocket-id's one-time code: `/auth/handover?code=<code>` (query string, so
   # the request log's `code` filter covers it). Burrow starts its ordinary
-  # OIDC login (state, nonce and PKCE in this signed session) and sends the
-  # browser to pocket-id's `/lc/<code>` with `redirect=` set to the RELATIVE
-  # authorize path: pocket-id signs the owner in with the code, then
-  # navigates to its own `/authorize`, which (the client is registered with
-  # `skipConsent`) returns straight to `/auth/oidc/callback`. The callback
-  # lands on `/setup/connect-ai` instead of `/`. The code is never echoed,
-  # and only ever placed on the configured issuer's host.
+  # OIDC login (state, nonce and PKCE in this signed session), opens the
+  # matching pocket-id sign-in interaction server-side
+  # (`OIDC.begin_interaction/1`) and sends the browser to pocket-id's
+  # `/lc/<code>` with `redirect=` that interaction's relative path. pocket-id
+  # signs the owner in with the code and shows "Sign in to Burrow"; one click
+  # completes the interaction (the client is registered with `skipConsent`,
+  # so no consent step follows) and pocket-id returns to
+  # `/auth/oidc/callback`, which lands on `/setup/connect-ai` instead of `/`.
+  # The code is never echoed, and only ever placed on the issuer's host.
   @handover_code ~r/\A[A-Za-z0-9]{6,64}\z/
   @handover_landing "/setup/connect-ai"
 
   def handover(conn, %{"code" => code}) when is_binary(code) do
     with true <- Regex.match?(@handover_code, code),
          [] <- OIDC.missing_settings(),
-         {:ok, %{url: url, session_params: session_params}} <- OIDC.authorize_url() do
+         {:ok, %{url: url, session_params: session_params}} <- OIDC.authorize_url(),
+         {:ok, interaction} <- OIDC.begin_interaction(url) do
       conn
       |> delete_session(:app_challenge)
       |> put_session(:oidc_session_params, session_params)
       |> put_session(:post_login_path, @handover_landing)
       |> put_session(:signed_in_with_link, true)
       |> LoginOrigin.capture()
-      |> redirect(external: handover_url(url, code))
+      |> redirect(external: handover_url(url, code, interaction))
     else
-      false -> handover_invalid(conn)
-      missing when is_list(missing) -> login_unavailable(conn, missing_settings_message(missing))
-      {:error, _} -> login_unavailable(conn, provider_unreachable_message())
+      false ->
+        handover_invalid(conn)
+
+      missing when is_list(missing) ->
+        login_unavailable(conn, missing_settings_message(missing))
+
+      {:error, error} ->
+        require Logger
+        Logger.warning("[auth_handover] could not open the sign-in: #{handover_error_kind(error)}")
+        login_unavailable(conn, provider_unreachable_message())
     end
   end
 
@@ -76,11 +86,15 @@ defmodule PlatformWeb.AuthController do
     |> text("Sign-in link is invalid or has expired")
   end
 
+  defp handover_error_kind(error) when is_atom(error), do: inspect(error)
+  defp handover_error_kind({kind, _detail}) when is_atom(kind), do: inspect(kind)
+  defp handover_error_kind(error), do: error_kind(error)
+
   @doc false
   # pocket-id's one-time login on the authorize URL's own origin, redirecting
-  # (a same-origin, relative path: pocket-id refuses anything else) to that
-  # authorize request.
-  def handover_url(authorize_url, code) do
+  # (a relative path to one of pocket-id's own pages: it refuses anything
+  # else) to the sign-in interaction `OIDC.begin_interaction/1` opened.
+  def handover_url(authorize_url, code, interaction_path) do
     authorize = URI.parse(authorize_url)
 
     %URI{
@@ -88,7 +102,7 @@ defmodule PlatformWeb.AuthController do
       host: authorize.host,
       port: authorize.port,
       path: "/lc/" <> code,
-      query: URI.encode_query(%{"redirect" => authorize.path <> "?" <> authorize.query})
+      query: URI.encode_query(%{"redirect" => interaction_path})
     }
     |> URI.to_string()
   end

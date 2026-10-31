@@ -11,17 +11,18 @@ For an install provisioned by someone else (a droplet), where the Mac-oriented
 2. Mint a one-time sign-in code with ``LOGIN_TTL`` (30m; it must stay above
    15m, see pocketid.py). With ``--primary`` the link is core's hand-over
    route, ``https://<primary>/auth/handover?code=<code>`` (core task 01a10315
-   stage 6): core starts its OIDC login there and hands the code to
-   pocket-id's ``/lc/<code>`` with ``redirect=`` its authorize request, so the
-   owner lands back in Burrow at ``/setup/connect-ai``. Without it (a
+   stage 6): core starts its OIDC login there, opens the matching pocket-id
+   sign-in interaction and hands the code to pocket-id's ``/lc/<code>`` with
+   ``redirect=`` that interaction, so after one "Sign in" click the owner
+   lands back in Burrow at ``/setup/connect-ai``. Without it (a
    pocket-id-only bootstrap) the link is pocket-id's own
    ``https://<auth host>/lc/<code>?redirect=/settings/account``.
 3. Write that link to ``--link-file`` with mode 0600.
 4. With ``--oidc-secret-file`` (which needs ``--primary``): register core's
    OIDC client the way the Mac setup CLI does (``ensure_client`` with the
    primary's callback and PKCE, ``drop_created_secret``), plus
-   ``skipConsent`` (the install's own first-party app: the hand-over's
-   authorize request returns to core with no consent click) and
+   ``skipConsent`` (the install's own first-party app: no consent step
+   after that click, nor on any later sign-in) and
    ``launchURL`` (pocket-id's "My apps" tile opens Burrow), then the
    render's OIDC_CLIENT_SECRET as its secret unless an active secret with the
    same 4-character prefix is already listed. A single-host render has no

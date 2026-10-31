@@ -277,7 +277,7 @@ defmodule PlatformWeb.ConnectAiLive do
         <div
           :if={@passkey_url}
           id="connect-ai-passkey"
-          class="mb-6 space-y-2 rounded-lg border border-base-300 p-4"
+          class="mb-6 space-y-2 rounded-box border border-edge p-4"
         >
           <p class="flex items-center gap-2 text-base font-semibold text-base-content">
             <span class="hero-finger-print size-5 shrink-0" /> Add a passkey
