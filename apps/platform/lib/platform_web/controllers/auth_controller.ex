@@ -73,7 +73,11 @@ defmodule PlatformWeb.AuthController do
 
       {:error, error} ->
         require Logger
-        Logger.warning("[auth_handover] could not open the sign-in: #{handover_error_kind(error)}")
+
+        Logger.warning(
+          "[auth_handover] could not open the sign-in: #{handover_error_kind(error)}"
+        )
+
         login_unavailable(conn, provider_unreachable_message())
     end
   end

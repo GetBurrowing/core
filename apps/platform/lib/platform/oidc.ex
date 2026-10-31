@@ -135,7 +135,10 @@ defmodule Platform.OIDC do
 
     case Req.get(authorize_url, options) do
       {:ok, %Req.Response{status: status} = response} when status in [302, 303] ->
-        response |> Req.Response.get_header("location") |> List.first() |> interaction_path(authorize_url)
+        response
+        |> Req.Response.get_header("location")
+        |> List.first()
+        |> interaction_path(authorize_url)
 
       {:ok, %Req.Response{status: status}} ->
         {:error, {:unexpected_status, status}}

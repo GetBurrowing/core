@@ -54,7 +54,9 @@ defmodule PlatformWeb.AuthControllerHandoverTest do
 
     assert {uri.scheme, uri.host, uri.path} == {"https", "issuer.example.com", "/lc/#{@code}"}
     # Relative, and one of pocket-id's own pages: its code page refuses anything else.
-    assert URI.decode_query(uri.query) == %{"redirect" => "/interaction?interaction=#{@interaction}"}
+    assert URI.decode_query(uri.query) == %{
+             "redirect" => "/interaction?interaction=#{@interaction}"
+           }
 
     # The interaction was opened with this session's authorize request.
     assert_received {:authorize_request, "issuer.example.com", "/authorize", query}
@@ -70,7 +72,10 @@ defmodule PlatformWeb.AuthControllerHandoverTest do
        %{conn: conn} do
     stub_authorize(302, "https://issuer.example.com/interaction?interaction=#{@interaction}")
     uri = conn |> get(~p"/auth/handover?code=#{@code}") |> redirected_to(302) |> URI.parse()
-    assert URI.decode_query(uri.query) == %{"redirect" => "/interaction?interaction=#{@interaction}"}
+
+    assert URI.decode_query(uri.query) == %{
+             "redirect" => "/interaction?interaction=#{@interaction}"
+           }
   end
 
   test "anything but a same-origin interaction redirect is a 503, with no landing set",
