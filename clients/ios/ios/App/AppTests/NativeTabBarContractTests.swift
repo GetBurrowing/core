@@ -63,7 +63,7 @@ final class NativeTabBarContractTests: XCTestCase {
     func testPayloadKeysMatchTheHook() throws {
         let source = try hook
         for field in [
-            "items: itemsOf(el)", "selected: active ? active : null", "more_dot: el.getAttribute(", "visible: barVisible(",
+            "items: itemsOf(el)", "selected: active ? active : null", "inbox_dot: el.getAttribute(", "visible: barVisible(",
             "ink: inksOf(el, win, normalise)", "scheme: schemeOf(win, doc)",
             "export const INK_KEYS = [\"selected\", \"unselected\"]",
         ] {
@@ -72,8 +72,8 @@ final class NativeTabBarContractTests: XCTestCase {
         let start = NativeTabBarState()
         let quiet: (String) -> Void = { _ in }
         XCTAssertEqual(start.applying(["items": ["chat", "more"]], log: quiet).items, ["chat", "more"])
-        XCTAssertEqual(start.applying(["selected": "voice"], log: quiet).selected, "voice")
-        XCTAssertTrue(start.applying(["more_dot": true], log: quiet).moreDot)
+        XCTAssertEqual(start.applying(["selected": "calendar"], log: quiet).selected, "calendar")
+        XCTAssertTrue(start.applying(["inbox_dot": true], log: quiet).inboxDot)
         XCTAssertTrue(start.applying(["visible": true], log: quiet).visible)
         let ink = start.applying(["ink": ["selected": "#00000001", "unselected": "#00000002"]], log: quiet).ink
         XCTAssertEqual(ink, NativeTabInk(selected: "#00000001", unselected: "#00000002"))
@@ -120,14 +120,16 @@ final class NativeTabBarContractTests: XCTestCase {
 
     // MARK: The masters' glyphs (task 01a174e8 stage 2)
 
-    /// master-mobile.html lines 704-708, verbatim: the five tab glyphs'
+    /// master-mobile.html lines 704-708 (chat, meetings, more) and prototype
+    /// 01a178d2 v4's `.tabbar` (calendar, inbox; task 01a18d9f stage 5),
+    /// verbatim: the five tab glyphs'
     /// SVG bodies (viewBox 0 0 24 24, fill none, stroke-width 1.7, round
     /// caps and joins). The vitest mirror pins the same text.
     static let mastersGlyphs: [String: String] = [
         "tab-chat": #"<path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.3-3.2A8 8 0 0 1 4 12z"/><path d="M9 11.5h.01M12 11.5h.01M15 11.5h.01"/>"#,
-        "tab-voice": #"<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>"#,
-        "tab-tasks": #"<path d="m4 12 2 2 4-4M4 6l2 2 4-4M4 18l2 2 4-4M13 6h7M13 12h7M13 18h7"/>"#,
+        "tab-calendar": #"<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>"#,
         "tab-meetings": #"<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>"#,
+        "tab-inbox": #"<path d="M3 4h18v16H3zM3 14h5l2 3h4l2-3h5"/>"#,
         "tab-more": #"<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>"#,
     ]
 
@@ -138,7 +140,7 @@ final class NativeTabBarContractTests: XCTestCase {
     func testCatalogIsTheMastersGlyphTable() {
         XCTAssertEqual(
             NativeTab.catalog.map { "\($0.key):\($0.image):\($0.title)" },
-            ["chat:tab-chat:Chat", "voice:tab-voice:Voice", "tasks:tab-tasks:Tasks", "meetings:tab-meetings:Meetings", "more:tab-more:More"])
+            ["chat:tab-chat:Chat", "calendar:tab-calendar:Calendar", "meetings:tab-meetings:Meetings", "inbox:tab-inbox:Inbox", "more:tab-more:More"])
     }
 
     /// The asset itself is a template (Contents.json), not only the image

@@ -21,9 +21,9 @@ struct NativeTab: Equatable {
     /// dropped; native never invents a tab.
     static let catalog: [NativeTab] = [
         NativeTab(key: "chat", title: "Chat", image: "tab-chat"),
-        NativeTab(key: "voice", title: "Voice", image: "tab-voice"),
-        NativeTab(key: "tasks", title: "Tasks", image: "tab-tasks"),
+        NativeTab(key: "calendar", title: "Calendar", image: "tab-calendar"),
         NativeTab(key: "meetings", title: "Meetings", image: "tab-meetings"),
+        NativeTab(key: "inbox", title: "Inbox", image: "tab-inbox"),
         NativeTab(key: "more", title: "More", image: "tab-more"),
     ]
 
@@ -132,14 +132,14 @@ struct NativeTabInkColors: Equatable {
 }
 
 /// What the web last said through `SuiteNative.tabBarState`
-/// (`{items, selected, more_dot, visible, ink, scheme}`). The bar is hidden,
+/// (`{items, selected, inbox_dot, visible, ink, scheme}`). The bar is hidden,
 /// has no items and carries no badge until the first state arrives.
 struct NativeTabBarState: Equatable {
     /// The keys to draw, in the web's order: known keys only, no repeats, at
     /// most `NativeTab.maxItems`.
     var items: [String] = []
     var selected: String?
-    var moreDot = false
+    var inboxDot = false
     var visible = false
     /// The web theme's tab inks. A key the web left out (it could not
     /// resolve that colour) keeps its previous value.
@@ -187,7 +187,7 @@ struct NativeTabBarState: Equatable {
                 next.selected = key
             }
         }
-        if let dot = payload["more_dot"] as? Bool { next.moreDot = dot }
+        if let dot = payload["inbox_dot"] as? Bool { next.inboxDot = dot }
         if let visible = payload["visible"] as? Bool { next.visible = visible }
         if let ink = payload["ink"] as? [String: Any] {
             if let selected = ink["selected"] as? String { next.ink.selected = selected }
@@ -341,15 +341,16 @@ enum NativeTabBarFactory {
         bar.overrideUserInterfaceStyle = style
     }
 
-    /// The badge for `key`: `""` (the system red dot) on More while
-    /// `more_dot` is true, nil everywhere else. Chat never has one.
+    /// The badge for `key`: `""` (the system red dot) on Inbox while
+    /// `inbox_dot` is true, nil everywhere else (task 01a18d9f stage 5:
+    /// Inbox is a tab, so its unread dot moved there from More).
     static func badge(for key: String, _ state: NativeTabBarState) -> String? {
-        key == "more" && state.moreDot ? "" : nil
+        key == "inbox" && state.inboxDot ? "" : nil
     }
 
-    /// The More badge (nil before the first state).
-    static func moreBadge(_ state: NativeTabBarState) -> String? {
-        badge(for: "more", state)
+    /// The Inbox badge (nil before the first state).
+    static func inboxBadge(_ state: NativeTabBarState) -> String? {
+        badge(for: "inbox", state)
     }
 
     /// The bar's height above the bottom safe area: what the web pads with

@@ -2411,12 +2411,13 @@ defmodule PlatformWeb.MeetingLive do
   # as a single styled, extensible shelf and a future view is one more entry
   # here (plus a `meetings_view_path/2` clause) rather than another
   # hand-copied `<.link>`. Each entry carries its own hero-icon and a label;
-  # `id` is the `data-view` test contract, `short_label` is the phone label.
+  # `id` is the `data-view` test contract. Phones draw the glyph alone, the
+  # label riding on aria-label (task 01a18d9f stage 5).
   # The glyph names are string literals so Tailwind's `matchComponents`
   # scanner emits their CSS — a computed name would render blank.
   @meetings_view_shelf [
-    %{id: :list, label: "Meetings", short_label: "List", icon: "hero-video-camera"},
-    %{id: :archive, label: "Archive", short_label: "Archive", icon: "hero-archive-box"}
+    %{id: :list, label: "Meetings", icon: "hero-video-camera"},
+    %{id: :archive, label: "Archive", icon: "hero-archive-box"}
   ]
 
   @doc "The meetings index view-switcher entries, in display order."

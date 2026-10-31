@@ -432,8 +432,8 @@ defmodule PlatformWeb.ShellLiveTest do
       conn: conn
     } do
       conn = authenticated_conn(conn)
-      {:ok, view, html} = live(conn, ~p"/tasks")
-      assert bar_active_keys(html) == ["tasks"]
+      {:ok, view, html} = live(conn, ~p"/meetings")
+      assert bar_active_keys(html) == ["meetings"]
 
       html =
         view
@@ -448,12 +448,12 @@ defmodule PlatformWeb.ShellLiveTest do
              |> LazyHTML.attribute("aria-expanded") == ["true"]
     end
 
-    test "the bar shows the More dot when the viewer has an unread inbox item", %{conn: conn} do
+    test "the bar shows the Inbox dot when the viewer has an unread inbox item", %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
-      refute html =~ ~s(data-role="more-unread-dot")
+      refute html =~ ~s(data-role="inbox-unread-dot")
 
       {:ok, _} =
         Platform.Inbox.emit(%{
@@ -470,7 +470,9 @@ defmodule PlatformWeb.ShellLiveTest do
 
       assert html
              |> LazyHTML.from_fragment()
-             |> LazyHTML.query(~s([data-bottom-rail] [data-role="more-unread-dot"]))
+             |> LazyHTML.query(
+               ~s([data-bottom-rail] [data-destination="inbox"] [data-role="inbox-unread-dot"])
+             )
              |> Enum.count() == 1
     end
 

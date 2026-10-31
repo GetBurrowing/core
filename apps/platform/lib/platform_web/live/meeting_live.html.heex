@@ -3518,8 +3518,11 @@
             ]}
           >
             <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
+            <%!-- Phones show the glyph only (the aria-label names it): with
+               the short labels, the toggle and `+ New meeting` left the
+               title about 28px at 375 and it truncated to "M…" (task
+               01a18d9f stage 5). --%>
             <span class="hidden sm:inline">{entry.label}</span>
-            <span class="sm:hidden">{entry.short_label}</span>
           </.link>
         </div>
 

@@ -4,7 +4,7 @@
  *
  * Mounts on `#native-tab-bridge`, a hidden span inside `bottom_rail/1`
  * carrying `data-items` (the bar's tab keys, in order, More last),
- * `data-active-key`, `data-more-unread` and `data-more-open`. Those change on
+ * `data-active-key`, `data-inbox-unread` and `data-more-open`. Those change on
  * every re-render, so `updated()` re-sends the state.
  *
  * ACTIVE ONLY IN A NATIVE BUILD THAT HAS THE BAR: `isNativePlatform()`, a
@@ -14,7 +14,7 @@
  * adds no listener and makes no call, so the web bar behaves as on main.
  *
  * CONTRACT (stage 2, NativeTabBar.swift):
- *   web to native  tabBarState({items, selected, more_dot, visible, ink, scheme})
+ *   web to native  tabBarState({items, selected, inbox_dot, visible, ink, scheme})
  *   native to web  window event `burrowNativeTab`, detail {key, reselect}
  *
  * `ink` (task 01a174e8 stage 1) is `{selected, unselected}`, each a
@@ -205,7 +205,7 @@ export function stateOf(el, win, doc, normalise = null) {
   return {
     items: itemsOf(el),
     selected: active ? active : null,
-    more_dot: el.getAttribute("data-more-unread") === "true",
+    inbox_dot: el.getAttribute("data-inbox-unread") === "true",
     visible: barVisible(win, doc),
     ink: inksOf(el, win, normalise),
     scheme: schemeOf(win, doc),

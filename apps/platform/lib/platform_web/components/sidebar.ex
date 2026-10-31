@@ -5,15 +5,18 @@ defmodule PlatformWeb.Components.Sidebar do
   collapse control and the utility bar at `lg`. Spec: master-desktop.html
   (`#side`, L569-590).
 
-  ## One row list, shared with the phone
+  ## Rows: the v4 rail, then More
 
-  The rows are the phone's: the tab bar's link tabs
-  (`IconRail.tab_destinations/1`, in `IconRail.mobile_tab_keys/0` order),
-  then a "More" label, then exactly `IconRail.more_sheet_rows/2`. Both go
-  through the same Scope filter as the tab bar and the More sheet, so a
-  module the actor may not open leaves no gap, and an extension's row
-  arrives through `Platform.Extensions.rail_items/0` (right after Inbox)
-  without core naming the extension. `rows/2` is that list.
+  The module rows are prototype 01a178d2 v4's rail
+  (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar,
+  Meetings), then a "More" label, then `IconRail.desktop_more_rows/2`:
+  Inbox with its count badge, the extension rows, then the rest of the More
+  sheet's order. The phone bar keeps its own four tabs (Ryan's rule, task
+  01a18d9f stage 5), so the two lists are split, but they go through the
+  same Scope filter and cover the same destinations: a module the actor may
+  not open leaves no gap, and an extension's row arrives through
+  `Platform.Extensions.rail_items/0` without core naming the extension.
+  `rows/2` is that list.
 
   The current row is `IconRail.more_sheet_current_key/2` over every row, so
   the longest-prefix rule decides (`/control/usage` is Settings, not
@@ -304,18 +307,18 @@ defmodule PlatformWeb.Components.Sidebar do
   end
 
   @doc """
-  The sidebar's rows for an actor: `{tab_rows, more_rows}`. Tab rows are the
-  phone tab bar's link tabs (`IconRail.tab_destinations/1`); More rows are
-  exactly the phone More sheet's (`IconRail.more_sheet_rows/2`). With a Scope
-  both are filtered through it; without one the tab rows are unfiltered and
-  the More rows use the legacy `root_user` filter, as the phone does.
+  The sidebar's rows for an actor: `{rail_rows, more_rows}`. Rail rows are
+  `IconRail.desktop_rail_destinations/1`; More rows are
+  `IconRail.desktop_more_rows/2`. With a Scope both are filtered through it;
+  without one the rail rows are unfiltered and the More rows use the legacy
+  `root_user` filter, as the phone does.
   """
   @spec rows(Platform.Access.Scope.t() | nil, boolean()) :: {[map()], [map()]}
   def rows(scope, root_user) do
-    {IconRail.tab_destinations(scope), IconRail.more_sheet_rows(scope, root_user)}
+    {IconRail.desktop_rail_destinations(scope), IconRail.desktop_more_rows(scope, root_user)}
   end
 
-  @doc "The keys `rows/2` renders, in order (tab rows, then More rows)."
+  @doc "The keys `rows/2` renders, in order (rail rows, then More rows)."
   @spec row_keys(Platform.Access.Scope.t() | nil, boolean()) :: [atom()]
   def row_keys(scope, root_user) do
     {tabs, more} = rows(scope, root_user)

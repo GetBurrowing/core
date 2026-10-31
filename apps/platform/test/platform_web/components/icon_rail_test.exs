@@ -219,15 +219,26 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ ~s(aria-label="Main navigation")
     end
 
-    test "renders exactly five tabs, in order: Chat, Voice, Tasks, Meetings, More" do
-      html = render_bottom_rail(%{})
-      assert bar_keys(html) == ["chat", "voice", "tasks", "meetings", "more"]
+    # Task 01a18d9f stage 5 (Ryan, 2026-10-30): at most four link tabs on the
+    # phone, Chat, Calendar, Meetings and Inbox; Tasks and Voice move to More.
+    test "mobile_tab_keys/0 is exactly Chat, Calendar, Meetings, Inbox" do
+      assert mobile_tab_keys() == [:chat, :calendar, :meetings, :inbox]
     end
 
-    test "Inbox and Activity are not in the bar" do
+    test "renders exactly four link tabs plus More, in order: Chat, Calendar, Meetings, Inbox, More" do
+      html = render_bottom_rail(%{})
+      assert bar_keys(html) == ["chat", "calendar", "meetings", "inbox", "more"]
+      doc = LazyHTML.from_fragment(html)
+      assert doc |> LazyHTML.query("[data-bottom-rail] a.bottom-nav-tab") |> Enum.count() == 4
+
+      assert doc |> LazyHTML.query("[data-bottom-rail] button.bottom-nav-tab") |> Enum.count() ==
+               1
+    end
+
+    test "Voice, Tasks and Activity are not in the bar" do
       doc = LazyHTML.from_fragment(render_bottom_rail(%{}))
 
-      for key <- ["inbox", "activity"] do
+      for key <- ["voice", "tasks", "activity"] do
         assert doc
                |> LazyHTML.query(~s([data-bottom-rail] [data-destination="#{key}"]))
                |> Enum.count() == 0
@@ -254,11 +265,12 @@ defmodule PlatformWeb.Components.IconRailTest do
 
   describe "bottom_rail/1 icons" do
     test "inactive tabs render the outline icon, the active tab the -solid one" do
-      html = render_bottom_rail(%{current_path: "/tasks"})
+      html = render_bottom_rail(%{current_path: "/calendar"})
 
-      assert icon_for(html, "tasks") == "hero-list-bullet-solid"
+      assert icon_for(html, "calendar") == "hero-calendar-solid"
       assert icon_for(html, "chat") == "hero-chat-bubble-oval-left-ellipsis"
       assert icon_for(html, "meetings") == "hero-video-camera"
+      assert icon_for(html, "inbox") == "hero-inbox"
       assert icon_for(html, "more") == "hero-ellipsis-horizontal"
     end
 
@@ -278,8 +290,20 @@ defmodule PlatformWeb.Components.IconRailTest do
 
   describe "bottom_rail/1 active state" do
     test "applies .bottom-nav-tab--active only to the tile whose path matches current_path" do
-      html = render_bottom_rail(%{current_path: "/tasks"})
-      assert active_keys(html) == ["tasks"]
+      html = render_bottom_rail(%{current_path: "/inbox"})
+      assert active_keys(html) == ["inbox"]
+    end
+
+    test "/calendar and its subpages light Calendar" do
+      for path <- ["/calendar", "/calendar/booking", "/calendar/settings"] do
+        assert active_keys(render_bottom_rail(%{current_path: path})) == ["calendar"], path
+      end
+    end
+
+    test "/tasks and /voice, now More-sheet rows, light More" do
+      for path <- ["/tasks", "/tasks/123", "/voice"] do
+        assert active_keys(render_bottom_rail(%{current_path: path})) == ["more"], path
+      end
     end
 
     test "active mobile tile carries aria-current=page" do
@@ -293,7 +317,7 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "every mobile tab carries an aria-label" do
       html = render_bottom_rail(%{})
 
-      for label <- ["Chat", "Voice", "Tasks", "Meetings", "More"] do
+      for label <- ["Chat", "Calendar", "Meetings", "Inbox", "More"] do
         assert html =~ ~s(aria-label="#{label}"),
                "expected aria-label=#{inspect(label)} on mobile bottom-rail"
       end
@@ -318,11 +342,6 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert active_keys(html) == ["more"]
     end
 
-    test "/inbox, now a More-sheet row, lights More" do
-      html = render_bottom_rail(%{current_path: "/inbox"})
-      assert active_keys(html) == ["more"]
-    end
-
     test "/changelog, a sheet-only row, lights More" do
       assert active_keys(render_bottom_rail(%{current_path: "/changelog"})) == ["more"]
     end
@@ -341,9 +360,9 @@ defmodule PlatformWeb.Components.IconRailTest do
       end
     end
 
-    test "/tasks/pipeline, linked from the Settings Admin sheet, stays under Tasks" do
+    test "/tasks/pipeline, linked from the Settings Admin sheet, stays under Tasks (in More)" do
       assert active_keys(render_bottom_rail(%{current_path: "/tasks/pipeline", root_user: true})) ==
-               ["tasks"]
+               ["more"]
     end
 
     test "a path nothing lists lights nothing" do
@@ -356,26 +375,29 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
   end
 
-  describe "bottom_rail/1 More unread dot" do
-    test "present at 1 unread, with the More aria-label naming it" do
+  describe "bottom_rail/1 Inbox unread dot (task 01a18d9f stage 5)" do
+    test "present on the Inbox tab at 1 unread, with the Inbox aria-label naming it" do
       html = render_bottom_rail(%{inbox_unread_count: 1})
       doc = LazyHTML.from_fragment(html)
 
       assert doc
              |> LazyHTML.query(
-               ~s([data-destination="more"] .bottom-nav-dot[data-role="more-unread-dot"])
+               ~s([data-destination="inbox"] .bottom-nav-dot[data-role="inbox-unread-dot"])
              )
              |> Enum.count() == 1
 
+      inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
+      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox, unread"]
       [more] = more_button(html)
-      assert LazyHTML.attribute(more, "aria-label") == ["More, unread in Inbox"]
+      assert LazyHTML.attribute(more, "aria-label") == ["More"]
       # The dot carries no count, and never reuses the desktop rail's role.
       refute html =~ "inbox-badge"
+      refute html =~ "more-unread-dot"
     end
 
     test "absent from the DOM at 0" do
       html = render_bottom_rail(%{inbox_unread_count: 0})
-      refute html =~ "more-unread-dot"
+      refute html =~ "inbox-unread-dot"
       refute html =~ "bottom-nav-dot"
     end
   end
