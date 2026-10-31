@@ -47,3 +47,17 @@ def test_original_framing_dimensions_and_cut_duration_are_required():
         validation.require_measurements({"width": 1920, "height": 1080}, 53.428375)
     with pytest.raises(RuntimeError, match="^OUTPUT_CUT_DURATION_CHANGED$"):
         validation.require_measurements({"width": 1080, "height": 1920}, 54.0)
+
+
+def test_local_render_uses_a_fresh_copy_and_preserves_the_original(tmp_path):
+    original = tmp_path / "mapped"
+    original.mkdir()
+    (original / "review.toml").write_bytes(b"original supported review snapshot")
+    copy = validation.disposable_project(original, tmp_path / "private-validation")
+    assert (copy / "review.toml").read_bytes() == b"original supported review snapshot"
+    (copy / "review.toml").write_bytes(b"local validation edit")
+    assert (original / "review.toml").read_bytes() == b"original supported review snapshot"
+    with pytest.raises(FileExistsError):
+        validation.disposable_project(original, tmp_path / "private-validation")
+    with pytest.raises(RuntimeError, match="^VALIDATION_OUTPUT_INSIDE_ORIGINAL$"):
+        validation.disposable_project(original, original / "unsafe-output")

@@ -40,7 +40,12 @@ the closed failed job or forge an enqueue, claim or attribution.
 Supply the actual installed helper, selected USER profile, transferred project,
 original source **at its recorded path**, exact selected music bytes and a private
 output directory. Do not point it at a delivered video. It verifies source/music/
-helper hashes before any CLI call, requires the exact original candidate and
+helper hashes before any CLI call, makes a fresh disposable byte-copy of the
+complete original project inside the private output directory, and runs every
+review/apply/finalize operation on that copy. The output directory must be outside
+the canonical mapped project, and an existing validation copy is never overwritten.
+The canonical mapping and original project's review/final tree stay pristine.
+It requires the exact original candidate and
 bounds, runs deep doctor for selected and combined profiles, and uses only supported
 profile import, review export/apply and finalize. Its disposable USER profile
 combines karaoke, the selected music at -12 dB and disabled closing video. It calls

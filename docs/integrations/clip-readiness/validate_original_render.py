@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -58,6 +59,17 @@ def require_measurements(video, duration):
         raise RuntimeError("OUTPUT_CUT_DURATION_CHANGED")
 
 
+def disposable_project(original, output_dir):
+    original, output_dir = Path(original).resolve(), Path(output_dir).resolve()
+    if output_dir == original or original in output_dir.parents:
+        raise RuntimeError("VALIDATION_OUTPUT_INSIDE_ORIGINAL")
+    output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    copy = output_dir / "original-project-copy"
+    # Refuse reuse; copytree never overwrites an earlier validation or mapping.
+    shutil.copytree(original, copy)
+    return copy
+
+
 def main():
     ap = argparse.ArgumentParser()
     for key in ("project", "source", "music", "helper", "output_dir"):
@@ -68,6 +80,7 @@ def main():
     require_bytes(args.source, SOURCE_SHA)
     require_bytes(args.music, MUSIC_SHA)
     require_bytes(args.helper, HELPER_SHA)
+    args.project = disposable_project(args.project, args.output_dir)
     spec = importlib.util.spec_from_file_location("qualified_readiness_helper", args.helper)
     helper = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = helper
@@ -144,7 +157,9 @@ def main():
             "output_sha256": digest(output), "output_bytes": output.stat().st_size,
             "duration_s": float(media["format"]["duration"]), "width": video["width"],
             "height": video["height"], "decode_exit": decode.returncode,
-            "steps": steps, "process_or_transcribe_called": False}
+            "steps": steps, "process_or_transcribe_called": False,
+            "rendered_disposable_original_project_copy": True,
+            "canonical_mapping_or_project_modified": False}
     finally:
         profile_file.unlink(missing_ok=True)
         # Same supported path lookup and narrowly scoped cleanup as the helper.
