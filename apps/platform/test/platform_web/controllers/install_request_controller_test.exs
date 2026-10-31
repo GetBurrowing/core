@@ -1,6 +1,6 @@
 defmodule PlatformWeb.InstallRequestControllerTest do
   @moduledoc """
-  Task 01a18f0c stage 2: `POST /api/install-requests`, the getburrow.ing
+  Task 01a18f0c stage 2: `POST /api/install-requests`, the marketing site's
   Pages Function's intake. Bearer-authenticated (404 while no token is
   configured, 401 for a missing or wrong one), it hands the request to
   `Platform.Installs.request/1` and never logs a field value.
@@ -40,7 +40,7 @@ defmodule PlatformWeb.InstallRequestControllerTest do
   defp count, do: Repo.aggregate(from(i in Install), :count)
 
   test "the route resolves on the bare app host and on a prefixed host, unfenced" do
-    for host <- ["example.com", "chat.example.com", "burrow.kobo-ai.com"] do
+    for host <- ["example.com", "chat.example.com", "control.example.org"] do
       info = Phoenix.Router.route_info(PlatformWeb.Router, "POST", @path, host)
 
       assert %{plug: PlatformWeb.InstallRequestController, plug_opts: :create} = info
