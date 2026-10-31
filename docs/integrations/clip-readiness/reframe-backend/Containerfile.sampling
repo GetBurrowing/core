@@ -1,0 +1,11 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY reframe-backend /tmp/clip-reframe-sampling
+RUN python3 /tmp/clip-reframe-sampling/install_sampling.py \
+      --module-root /usr/local/lib/python3.12/site-packages/clip_agent \
+      --source-root /opt/clip-agent/src/clip_agent \
+ && python3 -c "from clip_agent.config import Config; assert Config().reframe.face_sampling == 'aligned'" \
+ && python3 -c "from clip_agent.opencv_faces import ready; assert ready()" \
+ && clip version --json
+LABEL org.getburrow.clip-reframe-sampling.version="1" \
+      org.getburrow.clip-reframe-sampling.default="aligned"

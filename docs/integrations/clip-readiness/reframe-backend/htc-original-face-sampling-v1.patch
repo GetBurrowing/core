@@ -1,0 +1,37 @@
+--- a/clip-agent/src/clip_agent/config.py
++++ b/clip-agent/src/clip_agent/config.py
+@@ -330,6 +330,8 @@
+     # shots: edited multi-cam — detect each camera shot and centre a 9:16 crop on its
+     #        face (one face -> crop, two -> split, none/many -> fallback)
+     mode: Literal["off", "seats", "shots", "split", "fit", "center"] = "off"
++    # Opt in only to reproduce a verified older delivery; current sampling stays the default.
++    face_sampling: Literal["aligned", "legacy-half-step"] = "aligned"
+     width: int = Field(default=1080, ge=240, le=4320)
+     height: int = Field(default=1920, ge=240, le=7680)
+     seats: dict[str, SeatBox] = Field(default_factory=dict)   # speaker display name -> seat
+--- a/clip-agent/src/clip_agent/cli.py
++++ b/clip-agent/src/clip_agent/cli.py
+@@ -2493,7 +2493,7 @@
+     """
+     from .provenance import install_info as _install_info
+ 
+-    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "reframe_backend": 1, "reframe_backends": ["vision", "yunet"]}
++    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "reframe_backend": 1, "reframe_backends": ["vision", "yunet"], "reframe_sampling": 1, "reframe_sampling_modes": ["aligned", "legacy-half-step"]}
+ 
+ 
+ @cli.command("version")
+--- a/clip-agent/src/clip_agent/shots.py
++++ b/clip-agent/src/clip_agent/shots.py
+@@ -320,7 +320,11 @@
+     cuts = merge_close_cuts(list(set(detect_shots(src, start, dur, rf.shot_threshold, timeout=timeout))
+                                  | set(scene_cuts(src, start, dur, timeout=timeout))))
+     with tempfile.TemporaryDirectory(prefix="clip-shots-") as tmp:
+-        frames = extract_frames_dense(src, start, dur, Path(tmp), timeout=timeout)
++        # Preserve an explicitly selected original delivery sampling clock, without
++        # changing scene cuts, the planner, output projection or current defaults.
++        phase = 0.5 / DENSE_FPS if rf.face_sampling == "legacy-half-step" else 0.0
++        frames = extract_frames_dense(src, start + phase, max(0.0, dur - phase),
++                                      Path(tmp), timeout=timeout)
+         samples = [(t, _visible(list(detector(p)), min_h)) for t, p in frames]
+     bounds = sorted(set(cuts) | set(layout_boundaries(samples, cuts)))
+     shots: list[ShotFaces] = []

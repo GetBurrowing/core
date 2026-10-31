@@ -6,7 +6,7 @@
   "helper_sha256": "0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4",
   "serving_host_qualified": false,
   "model_and_helper_qualification_passed": true,
-  "readiness_reassessment": "Stage 3 real local finalize failed: selected shots mode requires the missing Linux face backend. Prior model/helper qualification does not establish render readiness. See reframe-backend/README.md.",
+  "readiness_reassessment": "Stage 3 restored the face backend and produced a real local output, but its original-framing comparison failed over five seconds. Retry remains unsafe pending explicit original-sampling compatibility and a passing real comparison. See reframe-backend/SAMPLING.md.",
   "source_role": "Canonical skill provenance only; not the live predecessor",
   "measured_serving_predecessor": {
     "observed_at": "2026-10-30T23:42:15Z",
