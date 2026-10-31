@@ -155,7 +155,18 @@ defmodule Platform.Chat do
   # creator (MCP `space_create`, where an agent is the creator) seats no one.
   defp maybe_seat_creator_admin(%Space{kind: "channel", created_by: user_id} = space)
        when is_binary(user_id) do
-    seat_creator_admin(space, user_id)
+    case seat_user_admin(space, user_id) do
+      {:ok, _participant} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Chat.create_space] creator admin seat failed for space_id=#{space.id}: " <>
+            inspect(reason)
+        )
+
+        :ok
+    end
   rescue
     err ->
       Logger.warning(
@@ -168,12 +179,22 @@ defmodule Platform.Chat do
 
   defp maybe_seat_creator_admin(_space), do: :ok
 
-  # Mirrors `Platform.Federation.Peers.SharedSpaces.seat_admin/2`. If a row for
-  # the creator already exists (a race with `ChatLive.ensure_participant/2`),
-  # ONLY that row's role is promoted; nothing else on it is rewritten.
-  # It only ever ADDS an admin, so it cannot breach the last-human-admin floor
-  # and takes no space-row lock (that lock is `set_member_role/4`'s).
-  defp seat_creator_admin(space, user_id) do
+  @doc """
+  Seat user `user_id` as an admin of `space`.
+
+  Mirrors `Platform.Federation.Peers.SharedSpaces.seat_admin/2`: inserts a
+  `user` participant row with role `"admin"`, or, if a row for that user
+  already exists (e.g. a race with `ChatLive.ensure_participant/2`), promotes
+  ONLY that row's role; nothing else on it is rewritten. Used for a channel's
+  UI creator (`create_space/1`) and for the `admin_user_ids` of the MCP
+  `space_create` tool (task 01a19355 stage 2). The caller decides who may be
+  seated; this function does no authorization.
+
+  It only ever ADDS an admin, so it cannot breach the last-human-admin floor
+  and takes no space-row lock (that lock is `set_member_role/4`'s).
+  """
+  @spec seat_user_admin(Space.t(), binary()) :: {:ok, Participant.t()} | {:error, term()}
+  def seat_user_admin(%Space{} = space, user_id) when is_binary(user_id) do
     attrs = %{
       participant_type: "user",
       participant_id: user_id,
@@ -183,8 +204,8 @@ defmodule Platform.Chat do
     }
 
     case add_participant(space.id, attrs) do
-      {:ok, _participant} ->
-        :ok
+      {:ok, participant} ->
+        {:ok, participant}
 
       {:error, reason} ->
         case Repo.get_by(Participant,
@@ -192,21 +213,55 @@ defmodule Platform.Chat do
                participant_type: "user",
                participant_id: user_id
              ) do
-          %Participant{role: "admin"} ->
-            :ok
-
-          %Participant{} = existing ->
-            {:ok, _} = update_participant(existing, %{role: "admin"})
-            :ok
-
-          nil ->
-            Logger.warning(
-              "[Chat.create_space] creator admin seat failed for space_id=#{space.id}: " <>
-                inspect(reason)
-            )
-
-            :ok
+          %Participant{role: "admin"} = existing -> {:ok, existing}
+          %Participant{} = existing -> update_participant(existing, %{role: "admin"})
+          nil -> {:error, reason}
         end
+    end
+  end
+
+  @doc """
+  Check user ids proposed as admins of a new channel in org `org_id` (task
+  01a19355 stage 2, the `admin_user_ids` of MCP `space_create`).
+
+  Deduplicates, then classifies every id: `"malformed"` (not a UUID),
+  `"unknown"` (no such user), `"archived"` (user archived) or `"not_in_org"`
+  (no NON-external membership of `org_id`; external members are refused
+  because channel admin confers agent summoning and role management).
+
+  Returns `{:ok, unique_ids}` only when every id passes, otherwise
+  `{:error, [%{id, reason}]}` naming each failing id. Never drops an id.
+  """
+  @spec validate_channel_admin_user_ids([binary()], binary()) ::
+          {:ok, [binary()]} | {:error, [%{id: binary(), reason: String.t()}]}
+  def validate_channel_admin_user_ids(ids, org_id) when is_list(ids) and is_binary(org_id) do
+    ids = Enum.uniq(ids)
+
+    invalid =
+      Enum.flat_map(ids, fn id ->
+        case channel_admin_user_problem(id, org_id) do
+          nil -> []
+          reason -> [%{id: id, reason: reason}]
+        end
+      end)
+
+    if invalid == [], do: {:ok, ids}, else: {:error, invalid}
+  end
+
+  defp channel_admin_user_problem(id, org_id) do
+    if Platform.UUID.valid?(id) do
+      case Platform.Accounts.get_user(id) do
+        nil ->
+          "unknown"
+
+        %{archived_at: %DateTime{}} ->
+          "archived"
+
+        user ->
+          if Tenancy.internal_member?(user, org_id), do: nil, else: "not_in_org"
+      end
+    else
+      "malformed"
     end
   end
 
@@ -6432,7 +6487,7 @@ defmodule Platform.Chat do
   `{:participant_role_changed, participant}` is broadcast on the space topic
   and `[:platform, :chat, :participant_role_changed]` telemetry is emitted.
 
-  Write paths that only ADD admins (`seat_creator_admin/2`,
+  Write paths that only ADD admins (`seat_user_admin/2`,
   `Platform.Calendar.BookingLinks`, `Platform.Federation.Peers.SharedSpaces`)
   cannot reduce the admin count, so they take no lock.
   """
