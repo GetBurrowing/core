@@ -337,13 +337,19 @@ defmodule Platform.AgentHost.Reconciler do
        when is_binary(agent_id) do
     case State.parse_state(raw) do
       {:ok, observed} ->
-        # `payload["login"]` is never read (task 01a17b10): whatever a host
-        # sends there, no login page or code is stored or passed on.
+        # `payload["login"]` is read for ONE thing (task 01a10315 stage 4):
+        # Codex's device login. Anything else a host sends there, a Claude
+        # login page or code above all, is never stored or passed on (task
+        # 01a17b10).
+        device = device_login(observed, payload["login"])
+
         State.put(agent_id, observed, %{
           detail: string_or_nil(payload["detail"]),
           files_applied: payload["files_applied"],
           files_drifted: drifted_list(payload["files_drifted"]),
-          profile: profile
+          profile: profile,
+          login_code: device[:code],
+          device_url: device[:url]
         })
 
         {:ok, agent_id}
@@ -354,6 +360,44 @@ defmodule Platform.AgentHost.Reconciler do
   end
 
   defp record_observation(_payload, _profile), do: :error
+
+  @device_code ~r/\A[A-Z0-9-]{4,16}\z/
+
+  @doc """
+  The Codex device login an observation carries, as `%{url: url, code: code}`,
+  or `%{}`. Kept only when the agent is `needs_login` at step `device_code`,
+  the code matches `^[A-Z0-9-]{4,16}$` and the URL is https on
+  `auth.openai.com`, exactly as `codex login --device-auth` prints it
+  (services/agent-host/src/codex_login.ts). Otherwise both are dropped: a
+  code that does not fit is not shown with a URL, nor a URL without its code.
+  """
+  @spec device_login(State.observed() | term(), term()) ::
+          %{url: String.t(), code: String.t()} | %{}
+  def device_login(:needs_login, %{"step" => "device_code", "code" => code, "url" => url})
+      when is_binary(code) and is_binary(url) do
+    if Regex.match?(@device_code, code) and openai_device_url?(url),
+      do: %{url: url, code: code},
+      else: %{}
+  end
+
+  def device_login(_observed, _login), do: %{}
+
+  defp openai_device_url?(url) do
+    case URI.parse(url) do
+      %URI{
+        scheme: "https",
+        host: "auth.openai.com",
+        port: 443,
+        userinfo: nil,
+        query: nil,
+        fragment: nil
+      } ->
+        true
+
+      _ ->
+        false
+    end
+  end
 
   defp drifted_list(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
   defp drifted_list(_), do: nil

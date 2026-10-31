@@ -21,6 +21,7 @@ import CodeBlock from "./code_block"
 import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
+import HandoverDownload from "./handover_download"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
 import SearchFocus from "./search_focus"
@@ -107,6 +108,7 @@ export default {
   CommandPalette,
   ComposeInput,
   CopyToClipboard,
+  HandoverDownload,
   DoneColumnState,
   DragDropUpload,
   SearchFocus,

@@ -174,7 +174,7 @@ COPY --from=ffmpeg /out/ffmpeg /out/ffprobe /usr/local/bin/
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
-      git libstdc++6 openssl libncurses6 locales ca-certificates wget curl \
+      git libstdc++6 openssl libncurses6 locales ca-certificates wget curl python3 \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
  && locale-gen \
@@ -217,6 +217,15 @@ VOLUME ["/data/platform/chat_uploads"]
 USER app
 
 COPY --from=build --chown=app:app /app/apps/burrow_release/_build/prod/rel/platform ./
+
+# One-click installs (task 01a10315 stage 2): Platform.Installs runs the ONE
+# install template (`python3 -m burrow_install render`) and its
+# `bootstrap-admin` from here (config :platform, Platform.Installs,
+# installer_path: "/app/installer"). The renderer reads backup/ and migrate/
+# beside the package. python3 above is for this; stdlib only, 3.11+ (tomllib).
+COPY --chown=app:app deployment/installer/burrow_install /app/installer/burrow_install
+COPY --chown=app:app deployment/installer/backup /app/installer/backup
+COPY --chown=app:app deployment/installer/migrate /app/installer/migrate
 
 EXPOSE 4000
 

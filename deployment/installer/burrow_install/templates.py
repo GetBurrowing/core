@@ -302,6 +302,130 @@ mv "$out.tmp" "$out"
 """
 
 
+FETCH_MODEL_SCRIPT = "bin/burrow-fetch-model"
+MODEL_UNIT_NAME = "burrow-model.service"
+
+
+def fetches_model(plan):
+    """True when the host downloads the local embeddings model (stage 6)."""
+    return plan.model_download and f"models/{registry.EMBEDDINGS_MODEL_FILE}" in plan.host_files
+
+
+def fetch_model_script(plan):
+    """Download the embeddings model from its pinned source, verified (task 01a10315 stage 6).
+
+    Idempotent: a file whose sha256 already matches is kept. A download is
+    written beside the target and moved into place only after its sha256
+    matches, so the stack's `test -s` gate never sees a partial file. Five
+    attempts with a growing pause; then exit 1, which fails the stack unit
+    (it Requires this one), loudly.
+    """
+    src = registry.EMBEDDINGS_MODEL_SOURCE
+    dest = f"{INSTALL_ROOT}/models/{registry.EMBEDDINGS_MODEL_FILE}"
+    return f"""#!/bin/sh
+# {HEADER.format(name=plan.name)}
+# The local embeddings model, from a pinned source (Hugging Face revision
+# {src["revision"]}), checked against its sha256 before it is used.
+set -eu
+dest={dest}
+url={src["url"]}
+sha={src["sha256"]}
+if [ -s "$dest" ] && echo "$sha  $dest" | sha256sum -c --status; then
+  exit 0
+fi
+mkdir -p "$(dirname "$dest")"
+part="$dest.part"
+attempt=1
+while [ "$attempt" -le 5 ]; do
+  rm -f "$part"
+  if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 30 -o "$part" "$url" \\
+    && echo "$sha  $part" | sha256sum -c --status; then
+    chmod 0644 "$part"
+    mv -f "$part" "$dest"
+    echo "burrow-fetch-model: {registry.EMBEDDINGS_MODEL_FILE} downloaded and verified"
+    exit 0
+  fi
+  echo "burrow-fetch-model: attempt $attempt failed (download or sha256 mismatch)" >&2
+  sleep $((attempt * 15))
+  attempt=$((attempt + 1))
+done
+rm -f "$part"
+echo "burrow-fetch-model: giving up; the stack will not start without the model" >&2
+exit 1
+"""
+
+
+def model_unit(plan):
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                "Description=Burrow: fetch the local embeddings model (pinned, sha256-checked)",
+                "Wants=network-online.target",
+                "After=network-online.target",
+                f"Before={STACK_UNIT_NAME}",
+                "",
+                "[Service]",
+                "Type=oneshot",
+                "RemainAfterExit=yes",
+                f"ExecStart={INSTALL_ROOT}/{FETCH_MODEL_SCRIPT}",
+                "TimeoutStartSec=1800",
+            ]
+        )
+        + "\n"
+    )
+
+
+VAPID_SCRIPT = "bin/burrow-vapid"
+
+
+def vapid_script(plan):
+    """Generate this install's Web Push (VAPID) key pair ON THE HOST, once.
+
+    ``[push] vapid = "generate-on-host"`` (task 01a10315). Python's stdlib has
+    no EC key generation, and a key made here never passes through whoever
+    rendered the install. core reads both lines from secrets.env
+    (Platform.Push.vapid_details/0): base64url without padding of the raw
+    32-byte private scalar and of the 65-byte uncompressed public point
+    (0x04 || X || Y). The SEC1 DER of a P-256 key is 121 bytes: the scalar at
+    offset 7, the point in the last 65.
+    """
+    return f"""\
+#!/bin/sh
+# {HEADER.format(name=plan.name)}
+# Appends VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY to secrets.env unless it holds
+# them already. Run by {STACK_UNIT_NAME} before compose up. Prints no key.
+set -eu
+f="${{1:-{INSTALL_ROOT}/secrets.env}}"
+if [ ! -f "$f" ]; then
+  echo "burrow-vapid: $f does not exist" >&2
+  exit 1
+fi
+grep -q '^VAPID_PUBLIC_KEY=' "$f" && exit 0
+umask 077
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+openssl ecparam -name prime256v1 -genkey -noout -out "$tmp/key.pem"
+openssl ec -in "$tmp/key.pem" -outform DER -out "$tmp/key.der" 2>/dev/null
+if [ "$(wc -c < "$tmp/key.der" | tr -d ' ')" != 121 ]; then
+  echo "burrow-vapid: unexpected EC key encoding" >&2
+  exit 1
+fi
+head -c 39 "$tmp/key.der" | tail -c 32 > "$tmp/priv"
+tail -c 65 "$tmp/key.der" > "$tmp/pub"
+if [ "$(head -c 1 "$tmp/pub" | od -An -tx1 | tr -d ' ')" != 04 ]; then
+  echo "burrow-vapid: public point is not uncompressed" >&2
+  exit 1
+fi
+b64url() {{ openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }}
+pub=$(b64url "$tmp/pub")
+priv=$(b64url "$tmp/priv")
+printf 'VAPID_PUBLIC_KEY=%s\\nVAPID_PRIVATE_KEY=%s\\n' "$pub" "$priv" >> "$f"
+chmod 0600 "$f"
+"""
+
+
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backup")
 BACKUP_UNIT_NAME = "burrow-backup.service"
 BACKUP_TIMER_NAME = "burrow-backup.timer"
@@ -418,6 +542,11 @@ def stack_unit(plan):
         # Starting the stack starts the agent host too (task 01a10322), also
         # when the operator starts it by hand after loading images.
         lines.append(f"Wants={agents.HOST_UNIT_NAME}")
+    if fetches_model(plan):
+        # Stage 6: the model is downloaded first; a failed download fails the
+        # stack, and the ExecStartPre gate below still guards the file.
+        lines.append(f"Requires={MODEL_UNIT_NAME}")
+        lines.append(f"After={MODEL_UNIT_NAME}")
     if plan.images_preloaded:
         # images.source = "preloaded": nothing pulls. The operator loads the
         # images, then touches this file and starts the unit.
@@ -433,6 +562,8 @@ def stack_unit(plan):
         lines.append(f"ExecStartPre=/usr/bin/test -s {INSTALL_ROOT}/{rel}")
     if plan.tls == "internal":
         lines.append(f"ExecStartPre={INSTALL_ROOT}/bin/burrow-ca-bundle")
+    if plan.vapid_on_host:
+        lines.append(f"ExecStartPre={INSTALL_ROOT}/{VAPID_SCRIPT}")
     lines += [
         "ExecStart=/usr/bin/docker compose up -d --remove-orphans",
         "ExecStop=/usr/bin/docker compose down",
@@ -468,6 +599,11 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
     if plan.tls == "internal":
         entries["bin/burrow-root-ca"] = (root_ca_script(plan), EXEC_MODE)
         entries["bin/burrow-ca-bundle"] = (ca_bundle_script(plan), EXEC_MODE)
+    if plan.vapid_on_host:
+        entries[VAPID_SCRIPT] = (vapid_script(plan), EXEC_MODE)
+    if fetches_model(plan):
+        entries[FETCH_MODEL_SCRIPT] = (fetch_model_script(plan), EXEC_MODE)
+        entries[f"/etc/systemd/system/{MODEL_UNIT_NAME}"] = (model_unit(plan), FILE_MODE)
     if plan.agents == "full_machine":
         entries.update(agents.full_machine_files(plan, agent_host_env))
     if registry_auth is not None:
@@ -501,6 +637,12 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
         packages += agents.FULL_MACHINE_PACKAGES
     if plan.backup is not None:
         runcmd.append(["systemctl", "enable", "--now", BACKUP_TIMER_NAME])
+    if plan.vapid_on_host:
+        # Ubuntu 24.04 cloud images ship it; bin/burrow-vapid cannot run without it.
+        packages.append("openssl")
+    if fetches_model(plan):
+        # Ubuntu 24.04 cloud images ship both; bin/burrow-fetch-model needs them.
+        packages += ["curl", "coreutils"]
     runcmd.append(["systemctl", "start", "--no-block", STACK_UNIT_NAME])
     doc = {
         "package_update": True,
@@ -508,6 +650,16 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
         "write_files": write_files,
         "runcmd": [_flow(cmd) for cmd in runcmd],
     }
+    if plan.ssh_authorized_key is not None:
+        # The cloud image's default user (task 01a10315): the customer's
+        # optional power-user path. Placed last so a render without it is
+        # byte-identical to one made before the key existed.
+        doc["ssh_authorized_keys"] = [plan.ssh_authorized_key]
+        # Stage 6 (measured on a real droplet): with no password the provider
+        # expires root's, and key login then stops at "Password change
+        # required but no TTY". Keys only, and nothing expired.
+        doc["chpasswd"] = {"expire": False}
+        doc["ssh_pwauth"] = False
     body = yaml_doc(
         doc,
         [

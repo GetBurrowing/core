@@ -478,6 +478,12 @@ defmodule PlatformWeb.Router do
     # live login code in the production log.
     get("/auth/app/handoff", AuthController, :app_handoff)
 
+    # One-click install hand-over (task 01a10315 stage 6): the new install's
+    # sign-in link. Starts OIDC here and hands pocket-id's one-time code to
+    # pocket-id, so the owner lands back in Burrow at /setup/connect-ai.
+    # The code rides the query string for the same log-filter reason.
+    get("/auth/handover", AuthController, :handover)
+
     # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
     # `/org-context[/:file_key]` paths 301-redirect to the new
     # `/org_memory[/:file_key]` surface. Mounted in the unauthenticated
@@ -511,6 +517,14 @@ defmodule PlatformWeb.Router do
 
       post("/meeting_evidence/join", DevMeetingEvidenceController, :join)
       post("/meeting_evidence/leave", DevMeetingEvidenceController, :leave)
+
+      # Dev stub mode for one-click installs (task 01a10315 stage 2): the fake
+      # DigitalOcean API and its _calls / _fail / _dns / _reset controls.
+      forward("/fake-digitalocean", Dev.FakeDigitalOcean)
+
+      # Dev stand-in agent host (task 01a10315 stage 4, BURROW_FAKE_AGENT_HOST=1):
+      # POST /dev/fake-agent-host/<agent_id>/complete finishes a fake Codex login.
+      forward("/fake-agent-host", Dev.FakeAgentHost)
     end
   end
 
@@ -855,6 +869,24 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.BookingRateLimitPlug)
   end
 
+  # Task 01a10315 stage 3: the customer's install progress and shown-once
+  # hand-over. No login: the token in the path is the capability
+  # (`Platform.Installs.get_by_token/2`). Its OWN scope on `:guest_browser`
+  # and its own `live_session :install_status` with the `:guest` layout,
+  # modelled on `:guest_meeting` above: a layout is locked at the
+  # live_session boundary, and this page must carry no app shell and no auth
+  # chrome. App-fenced (`:require_app_surface` LAST): the link is minted on
+  # the app host. No earlier route matches `/install-status/<token>` on the
+  # app host; `router_install_status_placement_test.exs` pins that it
+  # resolves here.
+  scope "/", PlatformWeb do
+    pipe_through([:guest_browser, :require_app_surface])
+
+    live_session :install_status, layout: {PlatformWeb.Layouts, :guest} do
+      live("/install-status/:token", InstallStatusLive, :show, metadata: %{log: false})
+    end
+  end
+
   # Public booking is intentionally app-host fenced, without account authentication.
   # The opaque token reveals available slots only; no owner event details.
   scope "/", PlatformWeb do
@@ -1072,6 +1104,13 @@ defmodule PlatformWeb.Router do
       # live_session's gate is not load-bearing alone.
       live("/admin/vault", AdminVaultLive, :index)
       live("/admin/vault/:slug", AdminVaultLive, :show)
+      # Task 01a10315 stage 3: one-click installs on DigitalOcean.
+      # `Platform.Installs` re-checks the actor on create and list, and the
+      # view re-checks it before a teardown.
+      live("/admin/installs", AdminInstallsLive, :index)
+      # Task 01a10315 stage 5: "Connect your AI", where a new install's
+      # hand-over lands ("Open Burrow"). The view re-checks root admin.
+      live("/setup/connect-ai", ConnectAiLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

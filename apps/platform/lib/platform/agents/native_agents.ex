@@ -175,6 +175,37 @@ defmodule Platform.Agents.NativeAgents do
   end
 
   @doc """
+  Switch a native agent's harness (`"claude_code"` or `"codex"`), seeding the
+  new harness's instructions and settings files. A no-op when it already runs
+  `harness`. The caller stops the agent first and starts it after (task
+  01a10315 stage 5, `Platform.Agents.SetupAgent`).
+  """
+  @spec set_harness(Agent.t(), String.t()) ::
+          {:ok, AgentRuntime.t()} | {:error, :not_managed | term()}
+  def set_harness(%Agent{} = agent, harness) when harness in ~w(claude_code codex) do
+    case get_managed_runtime(agent) do
+      nil ->
+        {:error, :not_managed}
+
+      %AgentRuntime{harness: ^harness} = runtime ->
+        {:ok, runtime}
+
+      %AgentRuntime{} = runtime ->
+        Repo.transaction(fn ->
+          with {:ok, updated} <-
+                 runtime |> AgentRuntime.changeset(%{harness: harness}) |> Repo.update(),
+               :ok <- seed_files(agent, harness) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+    end
+  end
+
+  def set_harness(%Agent{}, harness), do: {:error, {:unsupported_harness, harness}}
+
+  @doc """
   May `user` manage `agent` (start, stop, restart, edit its files, log it in)?
 
   True for the owner of the agent's runtime and for an install admin
@@ -267,7 +298,33 @@ defmodule Platform.Agents.NativeAgents do
 
     This file is managed from Agents in Burrow and is rewritten every time you
     start. Ask your owner to change it there; edits made here do not last.
-    """
+    """ <> setup_guide(name)
+  end
+
+  # The Setup agent (`Platform.Agents.SetupAgent`, task 01a10315 stage 5) is the
+  # one a new install's owner connects first; it also guides them through the
+  # rest of setup. Written for an owner who is not technical.
+  defp setup_guide(name) do
+    if name == Platform.Agents.SetupAgent.name() do
+      """
+
+      ## Helping your owner finish setup
+
+      You are the first agent on a new install, and your owner may not be technical.
+      In the "Getting started" space, help them finish setting up, one step at a time:
+
+      1. Ask what their business does and which tools they already use (email,
+         calendar, files, chat). Suggest connecting the ones that matter most first.
+      2. Help them create a first space for real work, and say what it is for.
+      3. Offer to add more agents later, once the first space is in use.
+
+      Use plain words, not technical ones. Never ask them to open a terminal. When a
+      step needs their consent or a sign-in, give them the link or button in Burrow
+      and wait for them to finish it; never do it for them.
+      """
+    else
+      ""
+    end
   end
 
   @doc """

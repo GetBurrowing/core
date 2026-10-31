@@ -330,6 +330,24 @@ CASTORE_PATH = "/app/lib/castore-1.0.17/priv/cacerts.pem"
 # silently invalidates every stored vector (the reference install's embeddings.container header).
 EMBEDDINGS_MODEL_FILE = "Qwen3-Embedding-0.6B-f16.gguf"
 
+# Where `[embeddings] model_source = "download"` fetches it (core task
+# 01a10315 stage 6): the official Qwen file on Hugging Face at a FIXED
+# revision commit, never a branch. Measured 2026-10-30: the Hugging Face API
+# tree at this revision lists the file with size 1197629632 and LFS sha256
+# below, and `sha256sum` of the reference install's own copy
+# (embeddings.container's /models/Qwen3-Embedding-0.6B-f16.gguf) prints the
+# same sha256, so this is byte-for-byte the model the reference install's
+# stored vectors were made with.
+EMBEDDINGS_MODEL_SOURCE = {
+    "url": (
+        "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/"
+        "370f27d7550e0def9b39c1f16d3fbaa13aa67728/" + EMBEDDINGS_MODEL_FILE
+    ),
+    "revision": "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+    "sha256": "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
+    "size": 1197629632,
+}
+
 POSTGRES_USER = "core_platform"
 POSTGRES_DB = "core_platform"
 
@@ -591,6 +609,9 @@ def _core_env(ctx):
         # cloudflared / tailscale -> Caddy -> core: the client address is in
         # X-Forwarded-For (lib/platform_web/plugs/rewrite_remote_ip.ex).
         env["TRUST_PROXY_HEADERS"] = "true"
+    if ctx.m["install"].get("org_name") is not None:
+        # Task 01a10315: read once, by the first migrate (seed_root_orgs).
+        env["ROOT_ORG_NAME"] = ctx.m["install"]["org_name"]
     for module in sorted(ctx.m["install"]["modules"]):
         env.update(MODULE_CORE_ENV.get(module, {}))
     if ctx.agents != "off":

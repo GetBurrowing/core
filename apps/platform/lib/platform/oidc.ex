@@ -110,6 +110,59 @@ defmodule Platform.OIDC do
   defp claim_contains?(value, group) when is_binary(value), do: value == group
   defp claim_contains?(_value, _group), do: false
 
+  @doc """
+  Open pocket-id's sign-in interaction for `authorize_url` server-side and
+  return its RELATIVE path (`/interaction?interaction=<id>`), for the install
+  hand-over (task 01a10315 stage 6 round 2, `PlatformWeb.AuthController.handover/2`).
+
+  Why: pocket-id's one-time login page (`/lc/<code>?redirect=`) only follows
+  a `redirect` that is one of its own front-end pages (measured on v2.18.0:
+  `/authorize?...` and any absolute URL fail with "Invalid redirect URL").
+  Its `/interaction` page is one, and the interaction it shows is created by
+  an ordinary `GET /authorize` that carries no cookie, so core makes that
+  request itself. The interaction holds this login's state, nonce and PKCE
+  challenge; the browser completes it once signed in with the code, and
+  pocket-id returns it to `/auth/oidc/callback` with the same `state`.
+
+  Only a same-origin `/interaction?interaction=<id>` location is accepted;
+  anything else (an error redirect to the callback, a 200) is an error.
+  """
+  @spec begin_interaction(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def begin_interaction(authorize_url) do
+    options =
+      [redirect: false, retry: false, receive_timeout: 10_000] ++
+        Application.get_env(:platform, :oidc_interaction_req_options, [])
+
+    case Req.get(authorize_url, options) do
+      {:ok, %Req.Response{status: status} = response} when status in [302, 303] ->
+        response
+        |> Req.Response.get_header("location")
+        |> List.first()
+        |> interaction_path(authorize_url)
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:unexpected_status, status}}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
+  @interaction_query ~r/\Ainteraction=[A-Za-z0-9-]{8,64}\z/
+
+  defp interaction_path(nil, _authorize_url), do: {:error, :no_location}
+
+  defp interaction_path(location, authorize_url) do
+    authorize = URI.parse(authorize_url)
+    uri = URI.merge(authorize, location)
+
+    if {uri.scheme, uri.host, uri.port} == {authorize.scheme, authorize.host, authorize.port} and
+         uri.path == "/interaction" and is_binary(uri.query) and
+         Regex.match?(@interaction_query, uri.query),
+       do: {:ok, "/interaction?" <> uri.query},
+       else: {:error, :not_an_interaction}
+  end
+
   def callback_url do
     URI.merge(app_url(), "/auth/oidc/callback")
     |> to_string()

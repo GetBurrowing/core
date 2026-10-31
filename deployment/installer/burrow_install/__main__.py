@@ -17,6 +17,12 @@ Commands:
   proof <command> ...   data-plane proof of a Mac install (init, ports, ram, arch,
                         memory, files, meetings, livekit, grep-transcript); see
                         burrow_install/proof_mac.py and deployment/installer/mac/proof.sh.
+  bootstrap-admin --base https://<auth host> --api-key-file <0600 file> --email <addr>
+         [--username <u>] --link-file <path>
+                        create (or find) the first pocket-id admin and write a fresh
+                        one-time sign-in link to --link-file (0600); print one JSON
+                        document, never the link or the key. Exit 0 ok, 1 pocket-id
+                        unreachable or erroring, 2 usage. See burrow_install/bootstrap.py.
   redact <render-dir> --out <dir>
                         copy a render with every secret value replaced by
                         ``<secret:NAME>``, so two renders can be diffed safely.
@@ -85,6 +91,10 @@ def main(argv=None):
         from .setup.cli import main as setup_main
 
         return setup_main(argv[1:])
+    if argv and argv[0] == "bootstrap-admin":
+        from .bootstrap import main as bootstrap_main
+
+        return bootstrap_main(argv[1:])
     if argv and argv[0] == "proof":
         from .proof_mac import main as proof_main
 
