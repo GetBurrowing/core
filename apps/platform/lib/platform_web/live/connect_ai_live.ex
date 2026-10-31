@@ -70,7 +70,7 @@ defmodule PlatformWeb.ConnectAiLive do
   def label(option), do: Map.fetch!(@labels, option)
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     user = socket.assigns[:current_user_record]
 
     if Tenancy.root_admin?(user) do
@@ -87,6 +87,7 @@ defmodule PlatformWeb.ConnectAiLive do
         |> assign(:key_error, nil)
         |> assign(:key_saved?, false)
         |> assign(:space, nil)
+        |> assign(:passkey_url, passkey_url(session))
         |> refresh()
 
       {:ok, maybe_start_selected(socket)}
@@ -94,6 +95,25 @@ defmodule PlatformWeb.ConnectAiLive do
       {:ok, redirect(socket, to: "/access-denied?module=admin")}
     end
   end
+
+  # Stage 6 round 2: an owner who arrived through the hand-over link signed
+  # in with pocket-id's one-time code and has no passkey yet. pocket-id has no
+  # "add a passkey, then return" page (its add-passkey screen always ends on
+  # its own /settings/account), so the hand-over lands HERE and this card
+  # links to that page in a new tab, the only place a passkey for the
+  # sign-in host can be created.
+  @doc false
+  def passkey_url(%{"signed_in_with_link" => true}) do
+    case Application.get_env(:platform, :oidc, [])[:issuer] do
+      issuer when is_binary(issuer) and issuer != "" ->
+        String.trim_trailing(issuer, "/") <> "/settings/account"
+
+      _ ->
+        nil
+    end
+  end
+
+  def passkey_url(_session), do: nil
 
   # An existing Setup agent decides the option shown first; otherwise the
   # first configured option.
@@ -254,6 +274,27 @@ defmodule PlatformWeb.ConnectAiLive do
     ~H"""
     <div class="h-full overflow-y-auto bg-base-100">
       <div class="mx-auto w-full max-w-[560px] px-4 pt-10 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">
+        <div
+          :if={@passkey_url}
+          id="connect-ai-passkey"
+          class="mb-6 space-y-2 rounded-lg border border-base-300 p-4"
+        >
+          <p class="flex items-center gap-2 text-base font-semibold text-base-content">
+            <span class="hero-finger-print size-5 shrink-0" /> Add a passkey
+          </p>
+          <p class="text-sm text-subtle">
+            You signed in with a one-time link. Add a passkey so you can sign in again.
+          </p>
+          <a
+            id="connect-ai-passkey-link"
+            href={@passkey_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-outline min-h-11"
+          >
+            Add a passkey
+          </a>
+        </div>
         <div :if={@done?} id="connect-ai-connected" class="space-y-4">
           <h1 class="text-2xl font-semibold text-base-content">Your AI is connected</h1>
           <p id="connect-ai-status" class="flex items-center gap-2 text-base text-base-content">

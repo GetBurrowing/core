@@ -45,9 +45,20 @@ defmodule Platform.Installs.Render do
   The business name was already checked against the renderer's
   `install.org_name` rule by `Platform.Installs.create/2`.
   """
-  @spec manifest(Install.t(), String.t()) :: String.t()
+  @spec manifest(Install.t(), String.t(), keyword()) :: String.t()
   def manifest(%Install{} = install, ssh_public_key, opts \\ []) do
     public = if Keyword.get(opts, :public, true), do: "\npublic = true", else: ""
+
+    # `Platform.Installs.core_image_override/0`: absent by default, so the
+    # flavour default (`<registry>/core:core`) is what a droplet pulls.
+    refs =
+      case Keyword.get(opts, :core_image) do
+        ref when is_binary(ref) and ref != "" ->
+          "\n\n[images.refs]\ncore-platform = #{Jason.encode!(ref)}"
+
+        _ ->
+          ""
+      end
 
     q = &Jason.encode!/1
 
@@ -84,7 +95,7 @@ defmodule Platform.Installs.Render do
 
     [images]
     registry = #{q.(image_registry())}
-    source = "registry"#{public}
+    source = "registry"#{public}#{refs}
 
     [agents]
     profile = "full_machine"
@@ -132,7 +143,13 @@ defmodule Platform.Installs.Render.Python do
       Python.with_private_dir(fn dir ->
         manifest = Path.join(dir, "install.toml")
         out = Path.join(dir, "out")
-        File.write!(manifest, Render.manifest(install, ssh_public_key, public: auth == :public))
+        File.write!(
+          manifest,
+          Render.manifest(install, ssh_public_key,
+            public: auth == :public,
+            core_image: Platform.Installs.core_image_override()
+          )
+        )
 
         auth_args =
           case auth do

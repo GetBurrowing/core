@@ -6,6 +6,9 @@ defmodule Platform.Installs.RenderTest do
   """
   use Platform.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
+  alias Platform.Installs
   alias Platform.Installs.Install
   alias Platform.Installs.Python
   alias Platform.Installs.Render
@@ -81,6 +84,77 @@ defmodule Platform.Installs.RenderTest do
     value = ~s({"auths": {"ghcr.io": {"auth": "ZmFrZS1yZWFkLW9ubHk="}}})
     {:ok, _} = Platform.Vault.put("install-registry-pull-auth", :custom, value)
     assert {:ok, ^value} = Render.Python.registry_auth()
+  end
+
+  describe "the core image override (stage 6 round 2)" do
+    @pinned "ghcr.io/getburrowing/core:core-0123456789abcdef0123456789abcdef01234567"
+
+    defp with_override(override) do
+      previous = Application.get_env(:platform, Platform.Installs, [])
+      configured = Keyword.put(previous, :core_image_override, override)
+      Application.put_env(:platform, Platform.Installs, configured)
+      on_exit(fn -> Application.put_env(:platform, Platform.Installs, previous) end)
+    end
+
+    defp override(attrs), do: Map.merge(%{ref: @pinned, env: :dev, opt_in: true}, attrs)
+
+    test "the default is unchanged: no override configured, no [images.refs]" do
+      assert Keyword.get(Application.get_env(:platform, Platform.Installs, []), :core_image_override) ==
+               nil
+
+      assert Installs.core_image_override() == nil
+      toml = Render.manifest(install(), "ssh-ed25519 AAAA x", core_image: Installs.core_image_override())
+      refute toml =~ "[images.refs]"
+      refute toml =~ "core-platform"
+      assert toml == Render.manifest(install(), "ssh-ed25519 AAAA x")
+    end
+
+    test "a dev release with the opt-in and a pinned tag renders it as images.refs.core-platform" do
+      with_override(override(%{}))
+      assert Installs.core_image_override() == @pinned
+
+      toml = Render.manifest(install(), "ssh-ed25519 AAAA x", core_image: Installs.core_image_override())
+      assert toml =~ ~s(source = "registry"\npublic = true\n\n[images.refs]\ncore-platform = "#{@pinned}"\n)
+      # Still one [images] table, and the tables after it are untouched.
+      assert toml =~ "\n[agents]\nprofile = \"full_machine\""
+    end
+
+    test "ignored with a warning in a :prod release, without the opt-in, or for a moving tag" do
+      cases = [
+        {override(%{env: :prod}), "this is a :prod release"},
+        {override(%{opt_in: false}), "BURROW_INSTALLS_CORE_IMAGE_OPT_IN=1 is not set"},
+        {override(%{ref: "ghcr.io/getburrowing/core:core"}), "moving tag"},
+        {override(%{ref: "ghcr.io/getburrowing/core:play"}), "moving tag"},
+        {override(%{ref: "ghcr.io/getburrowing/core:latest"}), "moving tag"},
+        {override(%{ref: "ghcr.io/getburrowing/core"}), "not a <repo>:<tag>"},
+        {override(%{ref: "ghcr.io/x/core:t\"\n[auth]"}), "not a <repo>:<tag>"},
+        {override(%{ref: @pinned <> "\n"}), "not a <repo>:<tag>"}
+      ]
+
+      for {config, reason} <- cases do
+        with_override(config)
+
+        log =
+          capture_log(fn -> assert Installs.core_image_override() == nil, inspect(config) end)
+
+        assert log =~ "BURROW_INSTALLS_CORE_IMAGE ignored: "
+        assert log =~ reason
+      end
+    end
+
+    @tag :python
+    @tag skip: if(@python_ok, do: false, else: "python3 with tomllib is not on PATH here")
+    test "renders for real: the droplet pulls the override, and only with it" do
+      key = SshKey.generate().public
+      assert {:ok, %{user_data: default}} = Render.Python.render(install(), key)
+      assert default =~ ~s(image: "ghcr.io/getburrowing/core:core")
+      refute default =~ "core-0123456789abcdef"
+
+      with_override(override(%{}))
+      assert {:ok, %{user_data: pinned}} = Render.Python.render(install(), key)
+      assert pinned =~ ~s(image: "#{@pinned}")
+      refute pinned =~ ~s(image: "ghcr.io/getburrowing/core:core")
+    end
   end
 
   test "read_render keeps exactly the two values and refuses an incomplete render" do

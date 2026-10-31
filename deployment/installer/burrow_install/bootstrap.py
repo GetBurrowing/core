@@ -2,20 +2,27 @@
 
     python3 -m burrow_install bootstrap-admin --base https://<auth host> \\
         --api-key-file <0600 file> --email <addr> [--username <u>] --link-file <path> \\
-        [--primary <host> --oidc-secret-file <0600 file>]
+        [--primary <host> [--oidc-secret-file <0600 file>]]
 
 For an install provisioned by someone else (a droplet), where the Mac-oriented
-``setup`` CLI does not apply. It reuses ``setup/pocketid.py`` (target-agnostic)
-unchanged:
+``setup`` CLI does not apply. It reuses ``setup/pocketid.py`` (target-agnostic):
 
 1. ``pocketid.ensure_admin``: find or create the first human admin.
-2. ``pocketid.login_link``: mint a one-time sign-in code with ``LOGIN_TTL``
-   (30m; it must stay above 15m, see pocketid.py) and build
+2. Mint a one-time sign-in code with ``LOGIN_TTL`` (30m; it must stay above
+   15m, see pocketid.py). With ``--primary`` the link is core's hand-over
+   route, ``https://<primary>/auth/handover?code=<code>`` (core task 01a10315
+   stage 6): core starts its OIDC login there and hands the code to
+   pocket-id's ``/lc/<code>`` with ``redirect=`` its authorize request, so the
+   owner lands back in Burrow at ``/setup/connect-ai``. Without it (a
+   pocket-id-only bootstrap) the link is pocket-id's own
    ``https://<auth host>/lc/<code>?redirect=/settings/account``.
 3. Write that link to ``--link-file`` with mode 0600.
-4. With ``--primary`` and ``--oidc-secret-file`` (both or neither): register
-   core's OIDC client the way the Mac setup CLI does (``ensure_client`` with
-   the primary's callback and PKCE, ``drop_created_secret``), then the
+4. With ``--oidc-secret-file`` (which needs ``--primary``): register core's
+   OIDC client the way the Mac setup CLI does (``ensure_client`` with the
+   primary's callback and PKCE, ``drop_created_secret``), plus
+   ``skipConsent`` (the install's own first-party app: the hand-over's
+   authorize request returns to core with no consent click) and
+   ``launchURL`` (pocket-id's "My apps" tile opens Burrow), then the
    render's OIDC_CLIENT_SECRET as its secret unless an active secret with the
    same 4-character prefix is already listed. A single-host render has no
    other step that registers the client, so without this core's sign-in
@@ -112,9 +119,16 @@ def read_api_key(path, flag="--api-key-file", code="api_key_file"):
     return key
 
 
+def handover_link(primary, code):
+    """Core's hand-over sign-in route on ``primary`` for one-time ``code``."""
+    return f"https://{primary}/auth/handover?" + urllib.parse.urlencode({"code": code})
+
+
 def ensure_oidc_client(client, primary, secret):
     """Register core's OIDC client and ``secret`` on it. Returns the client action."""
-    record, action = pocketid.ensure_client(client, primary)
+    record, action = pocketid.ensure_client(
+        client, primary, extra={"skipConsent": True, "launchURL": f"https://{primary}"}
+    )
     if action == "created":
         pocketid.drop_created_secret(client, record)
     _status, listed = client.call("GET", f"/api/oidc/clients/{pocketid.CLIENT_ID}/secrets")
@@ -164,8 +178,8 @@ def run(args):
     link_dir = os.path.dirname(os.path.abspath(args.link_file))
     if not os.path.isdir(link_dir):
         raise UsageError("invalid_link_file", "--link-file's directory does not exist")
-    if (args.primary is None) != (args.oidc_secret_file is None):
-        raise UsageError("usage", "--primary and --oidc-secret-file go together")
+    if args.oidc_secret_file is not None and args.primary is None:
+        raise UsageError("usage", "--oidc-secret-file needs --primary")
     if args.primary is not None and not _valid_host(args.primary):
         raise UsageError("invalid_primary", "--primary must be a host name")
     key = read_api_key(args.api_key_file)
@@ -175,12 +189,15 @@ def run(args):
     client = pocketid.Client(args.base, key)
     username = args.username or pocketid.default_username(args.email)
     user, action = pocketid.ensure_admin(client, args.email, username)
-    link = pocketid.login_link(client, user["id"], auth_host)
+    if args.primary is not None:
+        link = handover_link(args.primary, pocketid.mint_code(client, user["id"]))
+    else:
+        link = pocketid.login_link(client, user["id"], auth_host)
     write_link(args.link_file, link)
     extra = {}
     if oidc_secret is not None:
-        action = ensure_oidc_client(client, args.primary, oidc_secret)
-        extra["oidc_client"] = "created" if action == "created" else "exists"
+        oidc_action = ensure_oidc_client(client, args.primary, oidc_secret)
+        extra["oidc_client"] = "created" if oidc_action == "created" else "exists"
     return extra | {
         "ok": True,
         "admin": "created" if action == "created" else "exists",

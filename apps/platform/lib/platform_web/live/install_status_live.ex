@@ -514,7 +514,7 @@ defmodule PlatformWeb.InstallStatusLive do
             </button>
           </dd>
           <p class="mt-1 text-xs text-subtle">
-            Opens once. You'll add a passkey. It works for 30 minutes; reopen this page for a fresh one
+            Opens once and signs you in to Burrow, which then asks you to add a passkey. It works for 30 minutes; reopen this page for a fresh one
             until you tick the box below.
           </p>
         </div>

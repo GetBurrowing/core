@@ -35,7 +35,7 @@ defmodule Platform.Installs.Install do
     field(:ssh_key_id, :integer)
     field(:ssh_public_key, :string)
     field(:status_token_hash, :binary)
-    field(:handover_sealed, Platform.Vault.EncryptedBinary)
+    field(:handover_sealed, Platform.Installs.Handover.Type)
     field(:ready_at, :utc_datetime_usec)
     field(:handover_acknowledged_at, :utc_datetime_usec)
     field(:handover_expired_at, :utc_datetime_usec)

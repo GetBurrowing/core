@@ -478,6 +478,12 @@ defmodule PlatformWeb.Router do
     # live login code in the production log.
     get("/auth/app/handoff", AuthController, :app_handoff)
 
+    # One-click install hand-over (task 01a10315 stage 6): the new install's
+    # sign-in link. Starts OIDC here and hands pocket-id's one-time code to
+    # pocket-id, so the owner lands back in Burrow at /setup/connect-ai.
+    # The code rides the query string for the same log-filter reason.
+    get("/auth/handover", AuthController, :handover)
+
     # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
     # `/org-context[/:file_key]` paths 301-redirect to the new
     # `/org_memory[/:file_key]` surface. Mounted in the unauthenticated

@@ -30,8 +30,11 @@ defmodule Platform.Installs do
 
   ## Hand-over custody
 
-  `handover_sealed` (`Platform.Vault.EncryptedBinary`, AES-GCM) holds JSON
-  `{ssh_private_key, static_api_key, oidc_client_secret}`. The last one is
+  `handover_sealed` (`Platform.Installs.Handover.Type`: AES-GCM
+  `Platform.Vault.EncryptedBinary` in the column) holds JSON
+  `{ssh_private_key, static_api_key, oidc_client_secret}` and loads as a
+  `Platform.Installs.Handover`, which prints `#Handover<redacted>` and gives a
+  value up only through `Handover.fetch/2`. `oidc_client_secret` is
   the render's pocket-id client secret, needed only by `final`'s
   bootstrap to register core's OIDC client. `reveal_handover/1` mints a fresh
   one-time sign-in link each time, so an expired 30-minute link never strands
@@ -59,6 +62,7 @@ defmodule Platform.Installs do
 
   alias Platform.Access
   alias Platform.Installs.DigitalOcean
+  alias Platform.Installs.Handover
   alias Platform.Installs.Install
   alias Platform.Installs.Runner
   alias Platform.Installs.SshKey
@@ -172,7 +176,7 @@ defmodule Platform.Installs do
           steps: Runner.initial_steps(),
           ssh_public_key: key.public,
           status_token_hash: hash_token(token),
-          handover_sealed: Jason.encode!(%{"ssh_private_key" => key.private})
+          handover_sealed: Handover.wrap(%{"ssh_private_key" => key.private})
         })
 
       with {:ok, install} <- result do
@@ -531,14 +535,18 @@ defmodule Platform.Installs do
     with {:ok, sealed} <- unseal(install),
          {:ok, link} <-
            Platform.Installs.Bootstrap.impl().admin_link(install, auth_host(install), %{
-             "STATIC_API_KEY" => sealed["static_api_key"]
+             "STATIC_API_KEY" => Handover.fetch(sealed, "static_api_key")
            }) do
       {:ok,
        %{
          burrow_url: "https://#{install.primary_host}",
          admin_email: install.owner_email,
          sign_in_link: link,
-         ssh: %{host: install.droplet_ip, user: "root", private_key: sealed["ssh_private_key"]}
+         ssh: %{
+           host: install.droplet_ip,
+           user: "root",
+           private_key: Handover.fetch(sealed, "ssh_private_key")
+         }
        }}
     end
   end
@@ -597,17 +605,68 @@ defmodule Platform.Installs do
   # Shared helpers (runner, screens)
   # ---------------------------------------------------------------------------
 
-  @doc "The decoded hand-over blob, or `{:error, :handover_missing}`."
-  @spec unseal(Install.t()) :: {:ok, map()} | {:error, :handover_missing}
-  def unseal(%Install{handover_sealed: sealed}) when is_binary(sealed),
-    do:
-      Jason.decode(sealed)
-      |> then(fn
-        {:ok, map} -> {:ok, map}
-        _ -> {:error, :handover_missing}
-      end)
+  @doc """
+  The hand-over as a redacted `Platform.Installs.Handover` (read a value with
+  `Handover.fetch/2` at its point of use), or `{:error, :handover_missing}`.
+  """
+  @spec unseal(Install.t()) :: {:ok, Handover.t()} | {:error, :handover_missing}
+  def unseal(%Install{handover_sealed: %Handover{} = sealed}), do: {:ok, sealed}
 
   def unseal(_), do: {:error, :handover_missing}
+
+  # A pinned build's tag: never a moving flavour tag (`core`, `play`) and
+  # never `latest`, so an override cannot silently become "whatever main is".
+  @moving_tags ~w(core play latest)
+  @image_ref ~r/^[a-z0-9]([a-z0-9._\/-]*[a-z0-9])?(:[0-9]+)?(\/[a-z0-9._-]+)*:(?<tag>[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})\z/
+
+  @doc """
+  The core image installs pull instead of the flavour default, or nil (the
+  default, which is unchanged: `<registry>/core:core`).
+
+  Dev/staging test seam (stage 6 round 2): `BURROW_INSTALLS_CORE_IMAGE` names
+  a pinned branch build so a droplet can run code main does not have yet. It
+  is honoured ONLY when ALL hold, and otherwise ignored with a logged warning:
+
+    * the release is not `:prod` (`config/runtime.exs` records `config_env()`);
+    * the explicit opt-in `BURROW_INSTALLS_CORE_IMAGE_OPT_IN=1` is set;
+    * the ref is `<repo>:<tag>` with a tag that is not `core`, `play` or
+      `latest` (a pinned build, never a moving tag).
+
+  Rendered as the installer's existing `[images.refs] core-platform`.
+  """
+  @spec core_image_override() :: String.t() | nil
+  def core_image_override do
+    case config(:core_image_override, nil) do
+      %{ref: ref} = override when is_binary(ref) and ref != "" -> honoured_override(override)
+      _ -> nil
+    end
+  end
+
+  defp honoured_override(%{ref: ref} = override) do
+    tag = Regex.named_captures(@image_ref, ref)
+
+    cond do
+      Map.get(override, :env) == :prod ->
+        ignore_override("this is a :prod release")
+
+      Map.get(override, :opt_in) != true ->
+        ignore_override("BURROW_INSTALLS_CORE_IMAGE_OPT_IN=1 is not set")
+
+      tag == nil ->
+        ignore_override("it is not a <repo>:<tag> image reference")
+
+      tag["tag"] in @moving_tags ->
+        ignore_override("its tag is a moving tag (core, play or latest), not a pinned build")
+
+      true ->
+        ref
+    end
+  end
+
+  defp ignore_override(reason) do
+    Logger.warning("[installs] BURROW_INSTALLS_CORE_IMAGE ignored: #{reason}")
+    nil
+  end
 
   @doc """
   The zone a customer-domain install's CNAME targets live in

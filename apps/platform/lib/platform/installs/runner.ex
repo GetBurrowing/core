@@ -33,6 +33,7 @@ defmodule Platform.Installs.Runner do
   alias Platform.Installs
   alias Platform.Installs.Bootstrap
   alias Platform.Installs.DigitalOcean
+  alias Platform.Installs.Handover
   alias Platform.Installs.Install
   alias Platform.Installs.Probe
   alias Platform.Installs.Render
@@ -257,8 +258,8 @@ defmodule Platform.Installs.Runner do
     with {:ok, sealed} <- Installs.unseal(install),
          {:ok, _link} <-
            Bootstrap.impl().admin_link(install, Installs.auth_host(install), %{
-             "STATIC_API_KEY" => sealed["static_api_key"],
-             "OIDC_CLIENT_SECRET" => sealed["oidc_client_secret"]
+             "STATIC_API_KEY" => Handover.fetch(sealed, "static_api_key"),
+             "OIDC_CLIENT_SECRET" => Handover.fetch(sealed, "oidc_client_secret")
            }),
          :ok <- Probe.impl().https_health(install) do
       {:ok, %{}}
@@ -287,12 +288,11 @@ defmodule Platform.Installs.Runner do
       # Sealed BEFORE the POST: a droplet created from this render must never
       # exist without core holding its admin API key.
       sealed =
-        Map.merge(sealed, %{
-          "static_api_key" => rendered.secrets["STATIC_API_KEY"],
-          "oidc_client_secret" => rendered.secrets["OIDC_CLIENT_SECRET"]
-        })
+        sealed
+        |> Handover.put("static_api_key", rendered.secrets["STATIC_API_KEY"])
+        |> Handover.put("oidc_client_secret", rendered.secrets["OIDC_CLIENT_SECRET"])
 
-      install = Installs.update!(install, %{handover_sealed: Jason.encode!(sealed)})
+      install = Installs.update!(install, %{handover_sealed: sealed})
 
       # Stage 6: root's key registered with the provider and named in the
       # create, or the provider expires root's password and key login stops at

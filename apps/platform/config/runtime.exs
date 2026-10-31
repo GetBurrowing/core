@@ -960,6 +960,25 @@ case System.get_env("BURROW_INSTALLS_REGISTRY_AUTH_SLUG") do
     :ok
 end
 
+# BURROW_INSTALLS_CORE_IMAGE (stage 6 round 2): a dev/staging test seam that
+# makes installs pull a pinned core build (e.g. ghcr.io/getburrowing/core:
+# core-<sha>) instead of core:core. Recorded with the release env and the
+# explicit opt-in BURROW_INSTALLS_CORE_IMAGE_OPT_IN=1; Platform.Installs.
+# core_image_override/0 ignores it, with a logged warning, in a :prod release,
+# without the opt-in, or for a moving tag (core, play, latest).
+case System.get_env("BURROW_INSTALLS_CORE_IMAGE") do
+  ref when is_binary(ref) and ref != "" ->
+    config :platform, Platform.Installs,
+      core_image_override: %{
+        ref: ref,
+        env: config_env(),
+        opt_in: System.get_env("BURROW_INSTALLS_CORE_IMAGE_OPT_IN") == "1"
+      }
+
+  _ ->
+    :ok
+end
+
 # Dev stand-in agent host: BURROW_FAKE_AGENT_HOST=1, dev only (task 01a10315
 # stage 4). Platform.AgentHost.FakeHost joins the reconciler as the install's
 # host; a codex agent waits at a fake device login (code FAKE-1234) until

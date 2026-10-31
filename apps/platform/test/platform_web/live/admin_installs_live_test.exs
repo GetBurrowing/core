@@ -121,7 +121,8 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
 
   test "the list never holds an install's sealed private key", %{conn: conn} do
     {install, _token} = create_install!()
-    assert Installs.get(install.id).handover_sealed =~ "BEGIN OPENSSH"
+    assert Installs.get(install.id).handover_sealed
+           |> Platform.Installs.Handover.fetch("ssh_private_key") =~ "BEGIN OPENSSH"
 
     {:ok, view, html} = live(conn, ~p"/admin/installs")
     assert html =~ install.slug
@@ -134,6 +135,10 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
   end
 
   defp deep_holds?(term, needle) when is_binary(term), do: String.contains?(term, needle)
+
+  # A hand-over's values sit behind a closure the walker cannot enter.
+  defp deep_holds?(%Platform.Installs.Handover{} = handover, needle),
+    do: Platform.Installs.Handover.to_json(handover) =~ needle
 
   defp deep_holds?(%_{} = struct, needle),
     do: struct |> Map.from_struct() |> deep_holds?(needle)

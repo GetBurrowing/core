@@ -156,7 +156,8 @@ def passkey_count(client, user_id):
     return len(creds or [])
 
 
-def login_link(client, user_id, auth_host):
+def mint_code(client, user_id):
+    """A fresh one-time sign-in code for ``user_id`` (a credential: never print it)."""
     _status, doc = client.call(
         "POST", f"/api/users/{user_id}/one-time-access-token", body={"ttl": LOGIN_TTL}
     )
@@ -167,17 +168,28 @@ def login_link(client, user_id, auth_host):
             "one-time-access-token returned no token",
             "see pocket-id's logs: docker compose logs pocket-id",
         )
+    return token
+
+
+def login_link(client, user_id, auth_host):
+    token = mint_code(client, user_id)
     return f"https://{auth_host}/lc/{token}?redirect=%2Fsettings%2Faccount"
 
 
-def ensure_client(client, primary):
-    """Find or create ``suite-core`` with the callback and PKCE. Returns (client, action)."""
+def ensure_client(client, primary, extra=None):
+    """Find or create ``suite-core`` with the callback and PKCE. Returns (client, action).
+
+    ``extra`` (e.g. ``{"skipConsent": True}``) is part of the desired client:
+    a client that differs in any of its keys is updated.
+    """
+    extra = dict(extra or {})
     desired = {
         "name": CLIENT_NAME,
         "callbackURLs": [callback_url(primary)],
         "logoutCallbackURLs": [],
         "isPublic": False,
         "pkceEnabled": True,
+        **extra,
     }
     status, current = client.call("GET", f"/api/oidc/clients/{CLIENT_ID}", allow=(404,))
     if status == 404:
@@ -187,12 +199,13 @@ def ensure_client(client, primary):
         current.get("callbackURLs") == desired["callbackURLs"]
         and bool(current.get("pkceEnabled"))
         and not current.get("isPublic")
+        and all(current.get(key) == value for key, value in extra.items())
     ):
         return current, "present"
     body = dict(desired)
     # PUT replaces the client; keep what an admin may have set in the UI.
     for key in ("description", "launchURL", "skipConsent", "isGroupRestricted"):
-        if key in current and current[key] is not None:
+        if key not in extra and key in current and current[key] is not None:
             body[key] = current[key]
     _s, updated = client.call("PUT", f"/api/oidc/clients/{CLIENT_ID}", body=body)
     return updated, "updated"

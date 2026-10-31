@@ -58,8 +58,9 @@ defmodule Platform.Installs.RunnerTest do
       # The render's two kept values were sealed before the droplet existed.
       assert {:ok, sealed} = Installs.unseal(install)
 
-      assert Map.keys(sealed) |> Enum.sort() ==
-               ~w(oidc_client_secret ssh_private_key static_api_key)
+      for key <- ~w(oidc_client_secret ssh_private_key static_api_key) do
+        assert is_binary(Platform.Installs.Handover.fetch(sealed, key)), key
+      end
 
       assert_received {:install_updated, id} when id == install.id
     end

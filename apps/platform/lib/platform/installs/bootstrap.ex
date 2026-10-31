@@ -50,29 +50,18 @@ defmodule Platform.Installs.Bootstrap.Python do
       link_file = Path.join(dir, "login-link")
       Python.write_private!(key_file, Map.fetch!(secrets, "STATIC_API_KEY"))
 
-      oidc =
+      secret_file =
         case Map.get(secrets, "OIDC_CLIENT_SECRET") do
           nil ->
-            []
+            nil
 
           secret ->
             secret_file = Path.join(dir, "oidc-secret")
             Python.write_private!(secret_file, secret)
-            ["--primary", install.primary_host, "--oidc-secret-file", secret_file]
+            secret_file
         end
 
-      args =
-        [
-          "bootstrap-admin",
-          "--base",
-          "https://#{auth_host}",
-          "--api-key-file",
-          key_file,
-          "--email",
-          install.owner_email,
-          "--link-file",
-          link_file
-        ] ++ oidc
+      args = args(install, auth_host, key_file, link_file, secret_file)
 
       case Python.run(args) do
         {:error, _} = error -> error
@@ -80,6 +69,30 @@ defmodule Platform.Installs.Bootstrap.Python do
         {out, _status} -> {:error, classify(out)}
       end
     end)
+  end
+
+  @doc """
+  The CLI's arguments. `--primary` always (stage 6 round 2): the link is then
+  core's `https://<primary>/auth/handover?code=...`, which lands the owner in
+  Burrow at `/setup/connect-ai`. `--oidc-secret-file` only with a secret
+  (the `final` step registers core's OIDC client; a reveal only re-mints).
+  """
+  def args(install, auth_host, key_file, link_file, secret_file) do
+    oidc = if secret_file, do: ["--oidc-secret-file", secret_file], else: []
+
+    [
+      "bootstrap-admin",
+      "--base",
+      "https://#{auth_host}",
+      "--api-key-file",
+      key_file,
+      "--email",
+      install.owner_email,
+      "--link-file",
+      link_file,
+      "--primary",
+      install.primary_host
+    ] ++ oidc
   end
 
   defp read_link(path) do

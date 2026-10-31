@@ -36,7 +36,67 @@ defmodule PlatformWeb.AuthController do
     |> start_login()
   end
 
+  # Task 01a10315 stage 6 round 2: the hand-over sign-in link of a new
+  # install. bootstrap-admin points it HERE, at the install's own host, with
+  # pocket-id's one-time code: `/auth/handover?code=<code>` (query string, so
+  # the request log's `code` filter covers it). Burrow starts its ordinary
+  # OIDC login (state, nonce and PKCE in this signed session) and sends the
+  # browser to pocket-id's `/lc/<code>` with `redirect=` set to the RELATIVE
+  # authorize path: pocket-id signs the owner in with the code, then
+  # navigates to its own `/authorize`, which (the client is registered with
+  # `skipConsent`) returns straight to `/auth/oidc/callback`. The callback
+  # lands on `/setup/connect-ai` instead of `/`. The code is never echoed,
+  # and only ever placed on the configured issuer's host.
+  @handover_code ~r/\A[A-Za-z0-9]{6,64}\z/
+  @handover_landing "/setup/connect-ai"
+
+  def handover(conn, %{"code" => code}) when is_binary(code) do
+    with true <- Regex.match?(@handover_code, code),
+         [] <- OIDC.missing_settings(),
+         {:ok, %{url: url, session_params: session_params}} <- OIDC.authorize_url() do
+      conn
+      |> delete_session(:app_challenge)
+      |> put_session(:oidc_session_params, session_params)
+      |> put_session(:post_login_path, @handover_landing)
+      |> put_session(:signed_in_with_link, true)
+      |> LoginOrigin.capture()
+      |> redirect(external: handover_url(url, code))
+    else
+      false -> handover_invalid(conn)
+      missing when is_list(missing) -> login_unavailable(conn, missing_settings_message(missing))
+      {:error, _} -> login_unavailable(conn, provider_unreachable_message())
+    end
+  end
+
+  def handover(conn, _params), do: handover_invalid(conn)
+
+  defp handover_invalid(conn) do
+    conn
+    |> put_status(:bad_request)
+    |> text("Sign-in link is invalid or has expired")
+  end
+
+  @doc false
+  # pocket-id's one-time login on the authorize URL's own origin, redirecting
+  # (a same-origin, relative path: pocket-id refuses anything else) to that
+  # authorize request.
+  def handover_url(authorize_url, code) do
+    authorize = URI.parse(authorize_url)
+
+    %URI{
+      scheme: authorize.scheme,
+      host: authorize.host,
+      port: authorize.port,
+      path: "/lc/" <> code,
+      query: URI.encode_query(%{"redirect" => authorize.path <> "?" <> authorize.query})
+    }
+    |> URI.to_string()
+  end
+
   defp start_login(conn) do
+    # An ordinary login never inherits an abandoned hand-over's landing.
+    conn = delete_session(conn, :post_login_path)
+
     :telemetry.execute(
       [:platform, :auth, :login],
       %{system_time: System.system_time()},
@@ -140,10 +200,11 @@ defmodule PlatformWeb.AuthController do
       # wipe the key one step before the only function that consumes it, and
       # clearing it after would be a `put_session` on an already-sent conn.
       |> delete_session(:oidc_session_params)
+      |> delete_session(:post_login_path)
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
-      |> land_callback(result)
+      |> land_callback(result, post_login_path(conn))
     else
       false ->
         emit_callback_failure(conn, :invalid_state)
@@ -165,6 +226,16 @@ defmodule PlatformWeb.AuthController do
   def callback(conn, _params) do
     emit_callback_failure(conn, :missing_params)
     invalid_state(conn)
+  end
+
+  # Where a full internal user lands: `/`, or `/setup/connect-ai` when the
+  # login began at `handover/2`. A closed set read from the signed session,
+  # never from a parameter, so this is not an open redirect.
+  defp post_login_path(conn) do
+    case get_session(conn, :post_login_path) do
+      @handover_landing -> @handover_landing
+      _ -> ~p"/"
+    end
   end
 
   # Task 01a10882: an app login (an `:app_challenge` in the session, put there

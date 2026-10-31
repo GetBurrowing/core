@@ -11,6 +11,7 @@ defmodule Platform.Installs.HandoverTest do
 
   alias Platform.Installs
   alias Platform.Installs.Fake
+  alias Platform.Installs.Handover
   alias Platform.Installs.Runner
   alias Platform.Repo
 
@@ -45,7 +46,8 @@ defmodule Platform.Installs.HandoverTest do
     assert {:ok, handover} = Installs.reveal_handover(install)
     assert handover.burrow_url == "https://#{install.primary_host}"
     assert handover.admin_email == install.owner_email
-    assert handover.sign_in_link == "https://auth.fake.invalid/lc/FAKECODE"
+    assert handover.sign_in_link ==
+             "https://#{install.primary_host}/auth/handover?code=FAKECODE"
     assert handover.ssh.host == install.droplet_ip
     assert handover.ssh.user == "root"
     assert handover.ssh.private_key =~ "-----BEGIN OPENSSH PRIVATE KEY-----"
@@ -76,8 +78,8 @@ defmodule Platform.Installs.HandoverTest do
     assert is_binary(raw) and byte_size(raw) > 0
     refute raw =~ "OPENSSH"
     refute raw =~ "ssh_private_key"
-    refute raw =~ sealed["static_api_key"]
-    refute raw =~ sealed["oidc_client_secret"]
+    refute raw =~ Handover.fetch(sealed, "static_api_key")
+    refute raw =~ Handover.fetch(sealed, "oidc_client_secret")
   end
 
   test "no key material reaches the log, at any level" do
@@ -98,14 +100,14 @@ defmodule Platform.Installs.HandoverTest do
       end)
 
     assert_received {:sealed, {:ok, sealed}}
-    private_body = sealed["ssh_private_key"] |> String.split("\n") |> Enum.at(1)
+    private_body = Handover.fetch(sealed, "ssh_private_key") |> String.split("\n") |> Enum.at(1)
 
     # Positive control: the log was captured at debug and is not empty.
     assert log =~ "[installs]"
     refute log =~ private_body
     refute log =~ "OPENSSH"
-    refute log =~ sealed["static_api_key"]
-    refute log =~ sealed["oidc_client_secret"]
+    refute log =~ Handover.fetch(sealed, "static_api_key")
+    refute log =~ Handover.fetch(sealed, "oidc_client_secret")
     refute log =~ "FAKECODE"
   end
 
@@ -150,6 +152,80 @@ defmodule Platform.Installs.HandoverTest do
 
       wait_until(fn -> Installs.get(install.id).handover_sealed == nil end)
       assert Installs.get(install.id).handover_expired_at
+    end
+  end
+
+  describe "the decrypted hand-over is never printable (stage 6 round 2)" do
+    # The secret strings of a real (fake-backend) install, read through the
+    # one accessor, so each refute below has a demonstrated positive: the
+    # value exists and is non-empty.
+    defp secrets_of(install) do
+      {:ok, sealed} = Installs.unseal(install)
+      values = for key <- ~w(ssh_private_key static_api_key oidc_client_secret), do: Handover.fetch(sealed, key)
+      assert Enum.all?(values, &(is_binary(&1) and byte_size(&1) > 8))
+      # The key's base64 body, not just its armour.
+      [Enum.at(String.split(hd(values), "\n"), 1) | values]
+    end
+
+    defp refute_holds(text, secrets) do
+      for secret <- secrets, do: refute(String.contains?(text, secret))
+    end
+
+    test "inspect/1 of a loaded install, its hand-over and its map form hold no secret" do
+      install = ready_install!()
+      secrets = secrets_of(install)
+
+      assert inspect(install.handover_sealed) == "#Handover<redacted>"
+
+      for text <- [
+            inspect(install),
+            inspect(install, structs: false),
+            inspect(install.handover_sealed, structs: false),
+            inspect(Map.from_struct(install)),
+            inspect(Installs.unseal(install)),
+            inspect(Ecto.Changeset.change(install, %{handover_sealed: install.handover_sealed}))
+          ] do
+        refute_holds(text, secrets)
+      end
+
+      # Positive control: the same strings ARE found by the same check.
+      assert String.contains?(Handover.to_json(install.handover_sealed), hd(secrets))
+    end
+
+    test "an exception raised with the install in scope holds no secret" do
+      install = ready_install!()
+      secrets = secrets_of(install)
+
+      {kind, error, stack} =
+        try do
+          # A match failure prints the unsealed result it could not match.
+          {:error, _} = Installs.unseal(install)
+        catch
+          kind, error -> {kind, error, __STACKTRACE__}
+        end
+
+      formatted = Exception.format(kind, error, stack)
+      assert formatted =~ "Handover<redacted>"
+      refute_holds(formatted, secrets)
+
+      # A key error and a function clause error whose arguments carry the
+      # hand-over, formatted with blame (as a crash report formats them).
+      for fun <- [
+            fn -> Map.fetch!(install.handover_sealed, :nope) end,
+            fn -> Handover.fetch(install.handover_sealed, :not_a_string_key) end
+          ] do
+        formatted =
+          try do
+            fun.()
+          rescue
+            error ->
+              {error, stack} = Exception.blame(:error, error, __STACKTRACE__)
+              Exception.format(:error, error, stack)
+          end
+
+        assert formatted =~ "Handover<redacted>"
+        refute_holds(formatted, secrets)
+      end
     end
   end
 end

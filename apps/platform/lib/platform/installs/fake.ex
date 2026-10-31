@@ -11,7 +11,7 @@ defmodule Platform.Installs.Fake do
       firewalls, DNS records, per-call counts, injected failures);
     * a `Platform.Installs.Render`, `Platform.Installs.Probe` and
       `Platform.Installs.Bootstrap` that advance each step after
-      `fake_delay_ms` (3 s) and return `https://auth.fake.invalid/lc/FAKECODE`;
+      `fake_delay_ms` (3 s) and return `https://<primary>/auth/handover?code=FAKECODE`;
     * the failure injector: `inject_failure("reserve" | "install" | "connect" | "final", times)`
       makes that step fail `times` times.
 
@@ -161,9 +161,9 @@ defmodule Platform.Installs.Fake do
   end
 
   @impl Platform.Installs.Bootstrap
-  def admin_link(_install, _auth_host, _secrets) do
+  def admin_link(install, _auth_host, _secrets) do
     if take_failure("final"),
       do: {:error, {:bootstrap_failed, "injected"}},
-      else: {:ok, "https://auth.fake.invalid/lc/FAKECODE"}
+      else: {:ok, "https://#{install.primary_host}/auth/handover?code=FAKECODE"}
   end
 end

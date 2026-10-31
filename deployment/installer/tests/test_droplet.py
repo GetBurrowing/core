@@ -585,6 +585,10 @@ class BootstrapAdminTest(unittest.TestCase):
         client = self.fake.clients[pocketid.CLIENT_ID]
         self.assertEqual(client["callbackURLs"], ["https://acme.example.test/auth/oidc/callback"])
         self.assertTrue(client["pkceEnabled"])
+        # Stage 6 round 2: the install's own app, so no consent click, and
+        # pocket-id's app tile opens Burrow.
+        self.assertIs(client["skipConsent"], True)
+        self.assertEqual(client["launchURL"], "https://acme.example.test")
         # pocket-id's auto-created secret is dropped; ours is the only one.
         listed = self.fake.secrets[pocketid.CLIENT_ID]
         self.assertEqual([s["secret"] == secret for s in listed], [True])
@@ -597,14 +601,38 @@ class BootstrapAdminTest(unittest.TestCase):
             self.assertNotIn(secret, text)
             self.assertEqual(self.secret_hits(text), [])
 
-    def test_primary_and_oidc_secret_go_together(self):
+    def test_oidc_secret_needs_primary(self):
         secret_file = write_secret_file(self.tmp, "oidc", "oidc-secret-01a10315-fake")
-        for extra in (("--primary", "acme.example.test"), ("--oidc-secret-file", secret_file)):
-            with self.subTest(extra=extra[0]):
-                code, out, _err = self.bootstrap(*extra)
-                self.assertEqual(code, 2, out)
-                self.assertEqual(json.loads(out)["error"], "usage")
+        code, out, _err = self.bootstrap("--oidc-secret-file", secret_file)
+        self.assertEqual(code, 2, out)
+        self.assertEqual(json.loads(out)["error"], "usage")
         self.assertEqual(self.fake.requests, [])
+
+    def test_with_primary_the_link_is_cores_handover_route(self):
+        # Stage 6 round 2: the owner lands back in Burrow, not on pocket-id's
+        # settings page. --primary alone (a hand-over re-mint) registers nothing.
+        code, out, err = self.bootstrap("--primary", "acme.example.test")
+        self.assertEqual(code, 0, out)
+        token = self.fake.tokens[-1]
+        self.assertEqual(len(token), 12)
+        self.assertEqual(
+            self.read_link(), f"https://acme.example.test/auth/handover?code={token}\n"
+        )
+        self.assertNotIn("oidc_client", json.loads(out))
+        self.assertEqual(self.fake.clients, {})
+        self.assertEqual(self.secret_hits(out + err), [])
+
+    def test_an_existing_client_without_skip_consent_is_updated(self):
+        secret = "oidc-client-secret-01a10315-fake-abcdef"
+        secret_file = write_secret_file(self.tmp, "oidc", secret)
+        flags = ("--primary", "acme.example.test", "--oidc-secret-file", secret_file)
+        self.assertEqual(self.bootstrap(*flags)[0], 0)
+        client = self.fake.clients[pocketid.CLIENT_ID]
+        client.update(skipConsent=False, description="kept")
+        code, out, _err = self.bootstrap(*flags)
+        self.assertEqual(code, 0, out)
+        self.assertIs(client["skipConsent"], True)
+        self.assertEqual(client["description"], "kept")
 
     def test_runs_as_the_documented_module_command(self):
         env = dict(os.environ, PYTHONPATH=INSTALLER)

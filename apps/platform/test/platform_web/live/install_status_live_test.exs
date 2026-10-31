@@ -244,11 +244,11 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       assert has_element?(
                view,
                "#handover-signin-value.hidden",
-               "https://auth.fake.invalid/lc/FAKECODE"
+               "https://#{install.primary_host}/auth/handover?code=FAKECODE"
              )
 
       assert html =~ "Sign-in link"
-      assert html =~ "Opens once. You&#39;ll add a passkey."
+      assert html =~ "Opens once and signs you in to Burrow, which then asks you to add a passkey."
       # SSH collapsed by default: a <details> without `open`.
       assert has_element?(view, "details#handover-ssh:not([open])", "For technical users (SSH)")
       assert has_element?(view, "#handover-ssh-host", install.droplet_ip)

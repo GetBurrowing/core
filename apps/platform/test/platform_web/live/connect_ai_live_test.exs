@@ -281,4 +281,23 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       refute has_element?(admin_view, "#admin-connect-ai-card")
     end
   end
+
+  describe "the hand-over passkey card (stage 6 round 2)" do
+    test "an owner signed in through the hand-over link is offered a passkey on the sign-in host",
+         %{conn: conn} do
+      conn = Plug.Test.init_test_session(conn, %{"signed_in_with_link" => true})
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+
+      assert has_element?(
+               view,
+               ~s(#connect-ai-passkey-link[href="https://issuer.example.com/settings/account"][target="_blank"][rel="noopener noreferrer"]),
+               "Add a passkey"
+             )
+    end
+
+    test "any other sign-in shows no passkey card", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      refute has_element?(view, "#connect-ai-passkey")
+    end
+  end
 end
