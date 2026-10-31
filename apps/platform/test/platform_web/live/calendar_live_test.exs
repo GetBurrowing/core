@@ -27,7 +27,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     }
   end
 
-  test "agent access loads saved permissions and revocation clears the form", %{
+  test "agent access: v4 rows, the permission editor, revoke and grant again", %{
     conn: conn,
     scope: scope,
     user: user
@@ -45,7 +45,14 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     {:ok, _} = Platform.Calendar.AgentAccess.grant(scope, agent.id, %{read: true, create: true})
     {:ok, view, _} = live(conn, "/calendar/settings")
-    view |> element("#calendar-agent-access") |> render_click()
+    assert has_element?(view, "[data-role=settings-agents] h3", "Agents with calendar access")
+
+    assert has_element?(
+             view,
+             "[data-agent='#{agent.id}']",
+             "Read free/busy, add tentative holds (each one needs your OK) · granted"
+           )
+
     render_change(view, "choose_grant_agent", %{"grant" => %{"agent_id" => agent.id}})
     assert has_element?(view, "#grant_read[checked]")
     assert has_element?(view, "#grant_create[checked]")
@@ -58,11 +65,34 @@ defmodule PlatformWeb.CalendarLiveTest do
     |> render_submit()
 
     assert has_element?(view, "#grant_move[checked]")
+    assert has_element?(view, "[data-agent='#{agent.id}']", "move events (preapproved)")
     view |> element("#calendar-revoke-agent-#{agent.id}") |> render_click()
-    refute has_element?(view, "#grant_read[checked]")
-    refute has_element?(view, "#grant_move[checked]")
+    assert has_element?(view, "[data-agent='#{agent.id}']", "Revoked · no calendar access")
+    assert render(view) =~ "UI grant agent’s calendar access revoked"
     assert [%{revoked_at: revoked_at}] = Platform.Calendar.AgentAccess.list(scope)
     assert revoked_at
+
+    view |> element("#calendar-grant-again-#{agent.id}") |> render_click()
+    assert render(view) =~ "UI grant agent can read your calendar again"
+    assert [%{revoked_at: nil, move: true}] = Platform.Calendar.AgentAccess.list(scope)
+  end
+
+  test "revoking an agent on the settings page removes its pending hold", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+    seed_hold!(user, scope, zone, today)
+    [%{agent_id: agent_id}] = Platform.Calendar.AgentAccess.list(scope)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar/settings")
+    view |> element("#calendar-revoke-agent-#{agent_id}") |> render_click()
+    assert [%{state: "revoked"}] = Repo.all(Calendar.Consent)
+    assert has_element?(view, "[data-agent='#{agent_id}']", "Revoked · no calendar access")
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    refute has_element?(view, ".cal-ev[data-kind=tentative]")
   end
 
   test "event CRUD uses viewer-local time, and deletion removes the calendar entry", %{
@@ -173,22 +203,47 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert first.recurrence == "FREQ=WEEKLY;INTERVAL=2;COUNT=3"
   end
 
-  test "subscription rotation requires confirmation and revokes the previous link", %{
+  test "the feed revoke modal rotates the feed and shows the old-URL hint", %{
     conn: conn,
     scope: scope
   } do
     {:ok, old_token} = Calendar.rotate_feed(scope)
     {:ok, view, _} = live(conn, "/calendar/settings")
-    view |> element("#calendar-subscribe") |> render_click()
+    # FeedToken stores only a hash, so the URL at rest is masked.
+    assert has_element?(view, "#feed-url", "/calendar/feed/••••••.ics")
+    assert has_element?(view, "[data-role=settings-feed] button", "Make a new URL")
     refute has_element?(view, "#calendar-copy-feed")
-    view |> element("button", "Regenerate link") |> render_click()
+
+    view |> element("[data-role=feed-revoke]") |> render_click()
+    assert has_element?(view, "#feed-modal-title", "Revoke this feed URL?")
+
+    assert has_element?(
+             view,
+             "[data-role=feed-modal]",
+             "Apps subscribed with it stop updating right away. You get a new private URL to re-subscribe with."
+           )
+
     assert {:ok, _} = Calendar.feed_scope(old_token)
-    assert render(view) =~ "The old link will stop working"
-    view |> element("button", "Confirm regeneration") |> render_click()
+    view |> element("button", "Cancel") |> render_click()
+    refute has_element?(view, "[data-role=feed-modal]")
+
+    view |> element("[data-role=feed-revoke]") |> render_click()
+    view |> element("button", "Revoke and make a new URL") |> render_click()
     assert {:error, :not_found} = Calendar.feed_scope(old_token)
     assert has_element?(view, "#calendar-copy-feed[data-clipboard-text]")
-    view |> element("button", "Revoke link") |> render_click()
-    refute has_element?(view, "#calendar-copy-feed")
+    assert render(view) =~ "Feed URL revoked · new URL ready"
+
+    assert has_element?(
+             view,
+             "[data-role=feed-old]",
+             "Old URL …/•••••….ics was revoked and has stopped working. Re-subscribe with the new one."
+           )
+
+    new_url = view |> element("#feed-url") |> render() |> text() |> String.trim()
+    prefix = new_url |> String.split("/") |> List.last() |> String.slice(0, 5)
+    view |> element("[data-role=feed-revoke]") |> render_click()
+    view |> element("button", "Revoke and make a new URL") |> render_click()
+    assert has_element?(view, "[data-role=feed-old]", "Old URL …/#{prefix}….ics was revoked")
   end
 
   test "default Meetings destination is its workspace list", %{conn: conn} do
@@ -254,30 +309,49 @@ defmodule PlatformWeb.CalendarLiveTest do
              PlatformWeb.CalendarLive.day_chips([midnight], ~D[2026-10-30], "Etc/UTC")
   end
 
-  test "external calendars are owner-only and never render the bearer URL", %{
+  test "external calendars: v4 add errors, masked URL, show switch and remove", %{
     conn: conn,
     scope: scope
   } do
-    {:ok, view, _} = live(conn, "/calendar")
-    render_click(view, "subscribe")
+    {:ok, view, _} = live(conn, "/calendar/settings")
 
     view
-    |> form("#external-calendar-form",
-      subscription: %{
-        name: "My external calendar",
-        url: "https://calendar.example/private-secret"
-      }
-    )
+    |> form("#external-calendar-form", %{url: "ftp://calendar.example/feed", label: "Work"})
     |> render_submit()
 
+    assert has_element?(
+             view,
+             "#ext-err",
+             "Paste an iCal link that starts with https:// or webcal://"
+           )
+
+    view
+    |> form("#external-calendar-form", %{
+      url: "webcal://calendar.example/private-secret",
+      label: "My external calendar"
+    })
+    |> render_submit()
+
+    render_async(view)
     [sub] = Calendar.Subscriptions.list(scope)
+    assert sub.url == "https://calendar.example/private-secret"
     html = render(view)
     assert html =~ "My external calendar"
-    assert html =~ "Availability unknown"
     assert html =~ "Read-only"
+    assert html =~ "https://calendar.example/••••••"
     refute html =~ "private-secret"
+    assert html =~ "My external calendar added"
+
+    view |> element("button[aria-label='Show My external calendar']") |> render_click()
+
+    assert has_element?(
+             view,
+             "button[aria-label='Show My external calendar'][aria-checked=false]"
+           )
+
     view |> element("#external-calendar-#{sub.id} button", "Remove") |> render_click()
     assert [] == Calendar.Subscriptions.list(scope)
+    assert render(view) =~ "My external calendar removed"
   end
 
   # ── Calendar v4 shell, list pane and grids (task 01a18d9f stage 1) ──────

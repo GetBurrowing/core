@@ -409,4 +409,70 @@ defmodule Platform.Calendar.BookingLinksTest do
     assert refused_id
     assert reason =~ "refused"
   end
+
+  # ── Minimum notice, preview and open days (task 01a18d9f stage 3) ──────
+
+  defp all_day_windows,
+    do: for(day <- 1..7, do: %{"weekday" => day, "start" => "00:00", "end" => "23:30"})
+
+  test "minimum notice is one of the v4 choices and defaults to none" do
+    owner = scope()
+    link = create(owner)
+    assert link.minimum_notice_minutes == 0
+    assert {:error, cs} = BookingLinks.create(owner, attrs(%{minimum_notice_minutes: 30}))
+    assert Keyword.has_key?(cs.errors, :minimum_notice_minutes)
+
+    for minutes <- [120, 240, 1440, 2880] do
+      assert {:ok, %{minimum_notice_minutes: ^minutes}} =
+               BookingLinks.update(owner, link.id, %{minimum_notice_minutes: minutes})
+    end
+  end
+
+  test "minimum notice excludes slots that start too soon, for slots/2 and book/3" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    tomorrow = Date.add(Date.utc_today(), 1)
+
+    link =
+      create(owner, %{
+        start_date: Date.utc_today(),
+        end_date: Date.add(Date.utc_today(), 7),
+        windows: all_day_windows()
+      })
+
+    assert {:ok, [first | _] = open} = BookingLinks.slots(link.token, tomorrow)
+    assert length(open) > 0
+
+    {:ok, link} = BookingLinks.update(owner, link.id, %{minimum_notice_minutes: 2880})
+    earliest = DateTime.add(DateTime.utc_now(), 2880 * 60)
+    # Every start on tomorrow lies within 48 hours of now.
+    assert {:ok, []} = BookingLinks.slots(link.token, tomorrow)
+
+    assert {:ok, later} = BookingLinks.slots(link.token, Date.add(tomorrow, 2))
+    assert Enum.all?(later, &(DateTime.compare(&1.starts_at, earliest) == :gt))
+
+    assert {:error, :slot_unavailable} =
+             BookingLinks.book(link.token, guest(first, %{"email" => ""}), "notice-key-0000001")
+  end
+
+  test "preview is owner-scoped and open_days counts each day's open slots" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    other = scope()
+    date = Date.add(Date.utc_today(), 7)
+    link = create(owner)
+
+    assert {:ok, preview} = BookingLinks.preview(owner, link.id, date, 1)
+    assert {:ok, ^preview} = BookingLinks.slots(link.token, date)
+    assert length(preview) == 6
+    assert {:error, :not_found} = BookingLinks.preview(other, link.id, date, 1)
+
+    assert {:ok, open} = BookingLinks.open_days(link.token, date)
+    assert open[date] == 6
+    assert Enum.all?(Map.keys(open), &(&1.month == date.month))
+
+    {:ok, _} = BookingLinks.revoke(owner, link.id)
+    assert {:error, :not_found} = BookingLinks.preview(owner, link.id, date, 1)
+    assert {:error, :not_found} = BookingLinks.open_days(link.token, date)
+  end
 end

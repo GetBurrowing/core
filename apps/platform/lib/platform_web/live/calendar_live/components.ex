@@ -59,6 +59,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <.nav_row
           href={~p"/calendar"}
           current={@section == :calendar}
+          navigate={@section == :booking}
           icon="hero-calendar"
           label="Calendar"
           note="week and month"
@@ -74,6 +75,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <.nav_row
           href={~p"/calendar/settings"}
           current={@section == :settings}
+          navigate={@section == :booking}
           icon="hero-lock-closed"
           label="Calendar settings"
           note="feed · external · agents"
@@ -343,8 +345,8 @@ defmodule PlatformWeb.CalendarLive.Components do
             {:settings, "Settings", ~p"/calendar/settings"}
           ]
         }
-        patch={key != :booking && href}
-        navigate={key == :booking && href}
+        patch={key != :booking && @section != :booking && href}
+        navigate={(key == :booking or @section == :booking) && href}
         aria-current={@section == key && "page"}
         class={[
           "inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-xs",
@@ -1206,5 +1208,310 @@ defmodule PlatformWeb.CalendarLive.Components do
       </.focus_wrap>
     </div>
     """
+  end
+
+  # ── Calendar settings page (app.js `renderSettings`) ───────────────────
+
+  attr(:feed_url, :string, default: nil)
+  attr(:feed_old, :string, default: nil)
+  attr(:feed_exists?, :boolean, default: false)
+  attr(:feed_modal, :boolean, default: false)
+  attr(:subscriptions, :list, default: [])
+  attr(:calendars_shown, :map, default: %{})
+  attr(:ext_error, :string, default: nil)
+  attr(:ext_url, :string, default: nil)
+  attr(:ext_label, :string, default: nil)
+  attr(:agent_rows, :list, default: [])
+  attr(:agent_choices, :list, default: [])
+  attr(:grant_form, :any, required: true)
+
+  @doc """
+  `/calendar/settings`: the v4 page's three panels, Private iCal feed,
+  External calendars and Agents with calendar access (task 01a18d9f
+  stage 3). PR #51's per-agent permission editor stays under the agents,
+  styled as v4 setrows (declared).
+  """
+  def settings_page(assigns) do
+    ~H"""
+    <div class="cal-page" data-role="calendar-settings-page">
+      <h2>Calendar settings</h2>
+      <div class="cal-panel" data-role="settings-feed">
+        <h3>Private iCal feed</h3>
+        <p>
+          Subscribe from Apple Calendar, Google or Outlook. Anyone with this URL can read your events, so treat it like a password.
+        </p>
+        <div class="cal-feed">
+          <%= if @feed_url do %>
+            <code id="feed-url">{@feed_url}</code>
+            <button
+              id="calendar-copy-feed"
+              type="button"
+              class={ghost_btn()}
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={@feed_url}
+              phx-click="copied"
+            >
+              <.icon name="hero-document-duplicate" class="size-3.5" />Copy
+            </button>
+          <% else %>
+            <code id="feed-url">{PlatformWeb.Endpoint.url()}/calendar/feed/••••••.ics</code>
+            <button type="button" class={ghost_btn()} phx-click="confirm_rotate">
+              Make a new URL
+            </button>
+          <% end %>
+          <button
+            type="button"
+            class={[ghost_btn(), "cal-danger-btn"]}
+            phx-click="confirm_rotate"
+            data-role="feed-revoke"
+          >
+            Revoke
+          </button>
+        </div>
+        <p :if={@feed_old} class="cal-hint !mb-0 !mt-2" data-role="feed-old">
+          Old URL …/{@feed_old}….ics was revoked and has stopped working. Re-subscribe with the new one.
+        </p>
+      </div>
+
+      <div class="cal-panel" data-role="settings-external">
+        <h3>External calendars</h3>
+        <p>
+          Added by iCal URL and read-only. Their events show hatched and block your availability on booking links.
+        </p>
+        <div :for={sub <- @subscriptions} class="cal-setrow" id={"external-calendar-#{sub.id}"}>
+          <i class="cal-sw cal-k-external !size-[22px]"></i>
+          <span class="min-w-0 flex-1">
+            {sub.name}
+            <span class="cal-pill"><.icon name="hero-lock-closed" class="size-3" />Read-only</span>
+            <small class="truncate font-mono">{masked_url(sub)}</small>
+            <small :if={is_nil(sub.error)}>
+              Synced {synced(sub.refreshed_at)} · blocks availability
+            </small>
+            <small :if={sub.error} class="!text-error">{sub.error}</small>
+          </span>
+          <button
+            type="button"
+            class="cal-switch"
+            role="switch"
+            aria-checked={
+              to_string(PlatformWeb.CalendarLive.shown?(@calendars_shown, "ext:" <> sub.id))
+            }
+            aria-label={"Show #{sub.name}"}
+            phx-click="toggle_calendar"
+            phx-value-key={"ext:" <> sub.id}
+          >
+          </button>
+          <button
+            type="button"
+            class={ghost_btn()}
+            phx-click="remove_external"
+            phx-value-id={sub.id}
+          >
+            Remove
+          </button>
+        </div>
+        <form id="external-calendar-form" phx-submit="add_external" class="cal-addrow" novalidate>
+          <label class="cal-field flex-1">
+            Add by iCal URL<input
+              name="url"
+              value={@ext_url}
+              placeholder="https://… or webcal://… .ics"
+              autocomplete="off"
+              class="cal-input"
+              aria-invalid={to_string(!!@ext_error)}
+              aria-describedby="ext-err"
+            />
+          </label>
+          <label class="cal-field cal-addrow-label">
+            Label (optional)<input
+              name="label"
+              value={@ext_label}
+              placeholder="e.g. Work"
+              maxlength="100"
+              class="cal-input"
+            />
+          </label>
+          <button type="submit" class={[primary_btn(), "lg:mt-[22px] !h-[38px]"]}>
+            Add calendar
+          </button>
+        </form>
+        <p id="ext-err" class="cal-err" role="alert">{@ext_error}</p>
+      </div>
+
+      <div class="cal-panel" data-role="settings-agents">
+        <h3>Agents with calendar access</h3>
+        <p>
+          Each grant is per agent. Revoking one stops that agent reading your calendar and removes any hold it is still waiting on.
+        </p>
+        <div
+          :for={%{grant: grant, agent: agent} <- @agent_rows}
+          class="cal-setrow"
+          data-agent={agent.id}
+        >
+          <PlatformWeb.AvatarComponents.agent_avatar
+            name={agent.name}
+            avatar_url={agent.avatar_url}
+            size="sm"
+          />
+          <span class="min-w-0 flex-1">
+            <b>{agent.name}</b>
+            <span :if={agent_role(agent)} class="text-xs text-subtle">· {agent_role(agent)}</span>
+            <small>
+              {if grant.revoked_at,
+                do: "Revoked · no calendar access",
+                else:
+                  "#{grant_summary(grant)} · granted #{Calendar.strftime(grant.inserted_at, "%b %-d")}"}
+            </small>
+          </span>
+          <button
+            :if={is_nil(grant.revoked_at)}
+            id={"calendar-revoke-agent-#{agent.id}"}
+            type="button"
+            class={[ghost_btn(), "cal-danger-btn"]}
+            phx-click="revoke_agent"
+            phx-value-id={agent.id}
+          >
+            Revoke
+          </button>
+          <button
+            :if={grant.revoked_at}
+            id={"calendar-grant-again-#{agent.id}"}
+            type="button"
+            class={ghost_btn()}
+            phx-click="grant_again"
+            phx-value-id={agent.id}
+          >
+            Grant again
+          </button>
+        </div>
+        <.form
+          :if={@agent_choices != []}
+          for={@grant_form}
+          id="calendar-agent-grant-form"
+          phx-submit="grant_agent"
+          class="cal-grant-editor"
+        >
+          <label class="cal-field">
+            Change what an agent may do<select
+              name={@grant_form[:agent_id].name}
+              class="cal-input"
+              phx-change="choose_grant_agent"
+            >
+              <option
+                :for={agent <- @agent_choices}
+                value={agent.id}
+                selected={agent.id == @grant_form[:agent_id].value}
+              >
+                {agent.name}
+              </option>
+            </select>
+          </label>
+          <label
+            :for={
+              {field, label, note} <- [
+                {:read, "Read free/busy", "See when you are busy"},
+                {:read_private, "Read event details", "Titles and notes, including busy-only events"},
+                {:create, "Add tentative holds", "Each one appears on your calendar as a hold"},
+                {:move, "Move events", "Propose a new time for an event"},
+                {:preapprove, "Preapprove changes", "Holds and moves skip your OK in Inbox"}
+              ]
+            }
+            class="cal-setrow cursor-pointer"
+          >
+            <span class="min-w-0 flex-1">{label}<small>{note}</small></span>
+            <input type="hidden" name={@grant_form[field].name} value="false" />
+            <input
+              type="checkbox"
+              id={"grant_#{field}"}
+              name={@grant_form[field].name}
+              value="true"
+              checked={@grant_form[field].value in [true, "true"]}
+              class="cal-checkbox"
+            />
+          </label>
+          <button type="submit" class={[primary_btn(), "self-start"]}>Save access</button>
+        </.form>
+      </div>
+    </div>
+
+    <div :if={@feed_modal} class="cal-modal-scrim" data-role="feed-modal">
+      <.focus_wrap
+        id="calendar-feed-modal"
+        class="cal-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feed-modal-title"
+        phx-click-away="cancel_rotate"
+        phx-window-keydown="cancel_rotate"
+        phx-key="Escape"
+      >
+        <h2 id="feed-modal-title">Revoke this feed URL?</h2>
+        <p class="m-0 text-[13px] text-subtle">
+          Apps subscribed with it stop updating right away. You get a new private URL to re-subscribe with.
+        </p>
+        <div class="cal-ft">
+          <button type="button" class={ghost_btn()} phx-click="cancel_rotate">Cancel</button>
+          <button type="button" class={primary_btn()} phx-click="rotate_feed">
+            Revoke and make a new URL
+          </button>
+        </div>
+      </.focus_wrap>
+    </div>
+    """
+  end
+
+  # The subscription URL is a bearer secret (Subscription.url is an
+  # EncryptedBinary with redact: true), so only scheme and host show.
+  defp masked_url(%{url: url}) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} when is_binary(host) -> "#{scheme}://#{host}/••••••"
+      _ -> "••••••"
+    end
+  end
+
+  defp masked_url(_), do: "••••••"
+
+  defp synced(nil), do: "not yet"
+
+  defp synced(at) do
+    seconds = DateTime.diff(DateTime.utc_now(), at)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3600 -> "#{div(seconds, 60)} min ago"
+      seconds < 86_400 -> "#{div(seconds, 3600)} h ago"
+      true -> "#{div(seconds, 86_400)} days ago"
+    end
+  end
+
+  defp agent_role(%{metadata: %{"role" => role}}) when is_binary(role) and role != "", do: role
+  defp agent_role(_), do: nil
+
+  @doc "`Read free/busy, add tentative holds (each one needs your OK)` from a grant's flags."
+  def grant_summary(grant) do
+    reads =
+      cond do
+        grant.read_private -> ["Read event details"]
+        grant.read -> ["Read free/busy"]
+        true -> []
+      end
+
+    writes =
+      if(grant.create, do: ["add tentative holds"], else: []) ++
+        if(grant.move, do: ["move events"], else: [])
+
+    text =
+      (reads ++ writes)
+      |> Enum.join(", ")
+      |> then(fn
+        "" -> "No permissions"
+        <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest
+      end)
+
+    cond do
+      writes == [] -> text
+      grant.preapprove -> text <> " (preapproved)"
+      true -> text <> " (each one needs your OK)"
+    end
   end
 end

@@ -100,9 +100,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
-    "platform_web/live/calendar_live.html.heex" => :global_default,
-    # The v4 event editor's Title/Notes fields (task 01a18d9f stage 2):
-    # `.cal-input::placeholder` paints --color-subtle in app.css.
+    # The v4 event editor's Title/Notes and the settings page's iCal URL
+    # and Label fields (task 01a18d9f stages 2-3): `.cal-input::placeholder`
+    # paints --color-subtle in app.css.
     "platform_web/live/calendar_live/components.ex" => :global_default,
     "platform_web/components/action_patterns.ex" => :global_default,
     "platform_web/live/agent_config/agent_config_live.ex" => :global_default,

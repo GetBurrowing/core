@@ -20,40 +20,25 @@
     class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-base-200"
     data-role="calendar-settings"
   >
-    <%!-- Interim (stage 1): stage 3 rebuilds this page to v4's three
-         panels. Until then it opens PR #51's feed/external and agent
-         access sheets, so no setting loses its entry point. --%>
-    <div class="flex min-h-[52px] shrink-0 items-center gap-2 border-b border-edge px-3 lg:px-4">
-      <h1 class="m-0 text-[17px] font-[650] lg:text-[15px]">Calendar settings</h1>
+    <div class="cal-mainhead">
+      <h1>Calendar settings</h1>
     </div>
     <.section_tabs section={:settings} />
     <div class="clears-tab-bar min-h-0 flex-1 overflow-y-auto">
-      <div class="flex max-w-[860px] flex-col gap-4 px-3 py-4 lg:p-5">
-        <div class="rounded-[var(--radius-box)] border border-edge bg-base-100 p-4">
-          <h3 class="m-0 mb-1 text-[15px] font-[650]">
-            Private iCal feed and external calendars
-          </h3>
-          <button
-            id="calendar-subscribe"
-            type="button"
-            phx-click="subscribe"
-            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
-          >
-            Open
-          </button>
-        </div>
-        <div class="rounded-[var(--radius-box)] border border-edge bg-base-100 p-4">
-          <h3 class="m-0 mb-1 text-[15px] font-[650]">Agents with calendar access</h3>
-          <button
-            id="calendar-agent-access"
-            type="button"
-            phx-click="agent_access"
-            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
-          >
-            Open
-          </button>
-        </div>
-      </div>
+      <.settings_page
+        feed_url={@feed_url}
+        feed_old={@feed_old}
+        feed_exists?={@feed_exists?}
+        feed_modal={@feed_modal}
+        subscriptions={@external_subscriptions}
+        calendars_shown={@calendars_shown}
+        ext_error={@ext_error}
+        ext_url={@ext_url}
+        ext_label={@ext_label}
+        agent_rows={@agent_rows}
+        agent_choices={@agent_choices}
+        grant_form={@grant_form}
+      />
     </div>
   </section>
 
@@ -112,197 +97,4 @@
     invalid={@editor_fields}
     where_options={where_options(@spaces, @projects)}
   />
-
-  <.sheet
-    id="calendar-sheet"
-    open={@sheet != nil}
-    on_close="close_sheet"
-    placement={:bottom}
-    handle_close
-    swipe_dismiss
-  >
-    <:title>Calendar</:title>
-    <div class="space-y-4">
-      <p :if={@error} role="alert" class="text-sm text-error">{@error}</p>
-      <%= case @sheet do %>
-        <% :agent_access -> %>
-          <h2 class="text-lg font-semibold">Agent access</h2>
-          <p class="mt-2 text-sm text-subtle">
-            Choose what an agent may do. Changes wait for your approval in Inbox unless you preapprove them.
-          </p>
-          <.form
-            for={@grant_form}
-            id="calendar-agent-grant-form"
-            phx-submit="grant_agent"
-            class="mt-4 space-y-3 [&_label]:min-h-11"
-          >
-            <.input
-              field={@grant_form[:agent_id]}
-              type="select"
-              label="Agent"
-              options={Enum.map(@agent_choices, &{&1.name, &1.id})}
-              phx-change="choose_grant_agent"
-              required
-            />
-            <.input
-              :for={
-                {field, label} <- [
-                  read: "Read shared events",
-                  read_private: "Include private events",
-                  create: "Create events",
-                  move: "Move events",
-                  preapprove: "Preapprove changes"
-                ]
-              }
-              field={@grant_form[field]}
-              type="checkbox"
-              label={label}
-            />
-            <button class="btn btn-primary min-h-11" disabled={@agent_choices == []}>
-              Save access
-            </button>
-          </.form>
-          <div
-            :for={grant <- @calendar_grants}
-            class="mt-4 rounded-xl border border-edge p-3 text-sm"
-          >
-            <p>
-              {Enum.find_value(@agent_choices, grant.agent_id, fn agent ->
-                if agent.id == grant.agent_id, do: agent.name
-              end)}
-            </p>
-            <p class="text-subtle">
-              {if grant.revoked_at, do: "Revoked", else: "Active"} · {if grant.preapprove,
-                do: "Preapproved",
-                else: "Approval required"}
-            </p>
-            <button
-              :if={is_nil(grant.revoked_at)}
-              id={"calendar-revoke-agent-#{grant.agent_id}"}
-              phx-click="revoke_agent"
-              phx-value-id={grant.agent_id}
-              class="btn btn-ghost min-h-11 text-error"
-            >
-              Revoke access
-            </button>
-          </div>
-          <p :if={@error} role="alert" class="mt-3 text-sm text-error">{@error}</p>
-        <% :subscribe -> %>
-          <section class="space-y-3 border-b border-edge pb-4">
-            <h2 class="text-lg font-semibold">External calendars</h2>
-            <p class="text-sm">
-              Only you can see these calendars. Read-only; changes stay in the source calendar.
-            </p>
-            <.form
-              for={%{}}
-              as={:subscription}
-              phx-submit="add_external"
-              id="external-calendar-form"
-              class="space-y-2"
-            >
-              <label class="block text-[15px]">
-                Name<input
-                  name="subscription[name]"
-                  required
-                  maxlength="100"
-                  class="input w-full"
-                />
-              </label>
-              <label class="block text-[15px]">
-                Calendar URL<input
-                  name="subscription[url]"
-                  type="url"
-                  required
-                  autocomplete="off"
-                  class="input w-full"
-                  placeholder="https://…/calendar.ics"
-                />
-              </label>
-              <button class="btn min-h-11" type="submit">Add external calendar</button>
-            </.form>
-            <div
-              :for={subscription <- @external_subscriptions}
-              id={"external-calendar-#{subscription.id}"}
-              class="space-y-2 rounded-lg border border-edge p-3"
-            >
-              <h3 class="font-semibold">{subscription.name}</h3>
-              <p class="text-sm">
-                Read-only · {if Platform.Calendar.Subscriptions.fresh?(subscription),
-                  do: "Up to date",
-                  else: "Availability unknown"}
-              </p>
-              <p :if={subscription.refreshed_at} class="text-xs text-subtle">
-                Last refreshed {Calendar.strftime(subscription.refreshed_at, "%b %-d, %H:%M UTC")}
-              </p>
-              <p :if={subscription.error} class="text-sm text-error">{subscription.error}</p>
-              <div class="flex gap-2">
-                <button
-                  phx-click="refresh_external"
-                  phx-value-id={subscription.id}
-                  class="btn min-h-11"
-                  phx-disable-with="Refreshing…"
-                >
-                  Refresh
-                </button>
-                <button
-                  phx-click="remove_external"
-                  phx-value-id={subscription.id}
-                  data-confirm="Remove this external calendar?"
-                  class="btn btn-ghost min-h-11 text-error"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          </section>
-          <h2 class="text-lg font-semibold">Subscribe to your calendar</h2>
-          <p class="text-sm">
-            Shows your Burrow events and meetings. Anyone with this link can read them.
-          </p>
-          <p class="text-sm">External calendars stay private in Calendar.</p>
-          <%= if @feed_url do %>
-            <p class="font-mono text-sm">webcal://••••••••</p>
-            <button
-              id="calendar-copy-feed"
-              phx-hook="CopyToClipboard"
-              data-clipboard-text={@feed_url}
-              class="btn min-h-11"
-            >
-              Copy link
-            </button>
-            <.link
-              href={{:webcal, String.replace(@feed_url, ~r/^https?:/, "")}}
-              class="btn min-h-11"
-            >
-              Add to Apple Calendar
-            </.link>
-            <p class="text-sm">
-              Google and Outlook: paste the link under "Add calendar › From URL"
-            </p>
-          <% else %>
-            <p class="text-sm">
-              Create a new link to subscribe. Existing links stay active until you regenerate or revoke them.
-            </p>
-            <button phx-click="confirm_rotate" class="btn min-h-11">
-              Create subscription link
-            </button>
-          <% end %>
-          <button phx-click="confirm_rotate" class="btn btn-ghost min-h-11 text-error">
-            Regenerate link
-          </button>
-          <button phx-click="revoke_feed" class="btn btn-ghost min-h-11 text-error">
-            Revoke link
-          </button>
-          <div :if={@confirm_rotate} class="rounded-lg border border-edge p-3">
-            <p class="mb-3 text-sm">
-              The old link will stop working in every calendar app that uses it.
-            </p>
-            <button phx-click="rotate_feed" class="btn btn-primary min-h-11">
-              Confirm regeneration
-            </button>
-          </div>
-        <% _ -> %>
-      <% end %>
-    </div>
-  </.sheet>
 </div>

@@ -1,7 +1,6 @@
 defmodule PlatformWeb.CalendarLive do
   use PlatformWeb, :live_view
   import Ecto.Query, only: [from: 2]
-  import PlatformWeb.Components.Sheet
   import PlatformWeb.CalendarLive.Components
 
   alias Platform.Calendar, as: Events
@@ -37,14 +36,14 @@ defmodule PlatformWeb.CalendarLive do
        Platform.Access.module_access?(socket.assigns.access_scope, :meetings)
      )
      |> assign(:view, "week")
-     |> assign(:sheet, nil)
      |> assign(:selected, nil)
      |> assign(:editing, nil)
      |> assign(:editor_error, nil)
      |> assign(:editor_fields, [])
-     |> assign(:feed_url, nil)
-     |> assign(:confirm_rotate, false)
-     |> assign(:error, nil)
+     |> assign(feed_url: nil, feed_old: nil, feed_modal: false, feed_exists?: false)
+     |> assign(ext_error: nil, ext_url: nil, ext_label: nil)
+     |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
+     |> assign(:grant_form, agent_grant_form(nil, nil))
      |> assign(:form, to_form(%{}, as: :event))}
   end
 
@@ -75,6 +74,14 @@ defmodule PlatformWeb.CalendarLive do
       case params["select"] do
         id when is_binary(id) and id != "" -> select_entry(socket, nil, id, nil)
         _ -> socket
+      end
+
+    socket =
+      cond do
+        socket.assigns.live_action == :settings -> load_settings(socket, nil)
+        # `?new=1`: the list pane's "+ New" on /calendar/booking.
+        params["new"] == "1" -> new_event_at(socket, socket.assigns.today, 14 * 60)
+        true -> socket
       end
 
     {:noreply, socket}
@@ -153,30 +160,7 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  def handle_event("agent_access", _, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
-
-    choices = Platform.Calendar.AgentAccess.agents(scope)
-    grants = Platform.Calendar.AgentAccess.list(scope)
-
-    agent_id =
-      case choices do
-        [agent | _] -> agent.id
-        _ -> nil
-      end
-
-    {:noreply,
-     assign(socket,
-       sheet: :agent_access,
-       agent_choices: choices,
-       calendar_grants: grants,
-       grant_form: agent_grant_form(Enum.find(grants, &(&1.agent_id == agent_id)), agent_id),
-       error: nil
-     )}
-  end
+  # ── Calendar settings: agents (v4 `Agents with calendar access`) ────────
 
   def handle_event("choose_grant_agent", %{"grant" => %{"agent_id" => id}}, socket) do
     grants = Map.get(socket.assigns, :calendar_grants, [])
@@ -186,45 +170,55 @@ defmodule PlatformWeb.CalendarLive do
   end
 
   def handle_event("grant_agent", %{"grant" => attrs}, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
-
-    case Platform.Calendar.AgentAccess.grant(scope, attrs["agent_id"], attrs) do
+    case Platform.Calendar.AgentAccess.grant(owner_scope(socket), attrs["agent_id"], attrs) do
       {:ok, grant} ->
         {:noreply,
          socket
-         |> assign(
-           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
-           grant_form: agent_grant_form(grant, grant.agent_id),
-           error: nil
-         )}
+         |> load_settings(grant.agent_id)
+         |> put_flash(:info, "#{agent_name(socket, grant.agent_id)}’s calendar access saved")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Couldn't save agent access.")}
+        {:noreply, put_flash(socket, :error, "Couldn't save agent access.")}
     end
   end
 
+  # Revoking also removes any hold the agent is still waiting on (PR #51
+  # AgentAccess.revoke/2).
   def handle_event("revoke_agent", %{"id" => id}, socket) do
-    scope =
-      Platform.Access.Scope.for_user(
-        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
-      )
-
-    case Platform.Calendar.AgentAccess.revoke(scope, id) do
-      {:ok, grant} ->
+    case Platform.Calendar.AgentAccess.revoke(owner_scope(socket), id) do
+      {:ok, _} ->
         {:noreply,
          socket
-         |> assign(
-           calendar_grants: Platform.Calendar.AgentAccess.list(scope),
-           grant_form: agent_grant_form(grant, id),
-           error: nil
-         )
-         |> reload()}
+         |> load_settings(id)
+         |> reload()
+         |> put_flash(:info, "#{agent_name(socket, id)}’s calendar access revoked")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Couldn't revoke agent access.")}
+        {:noreply, put_flash(socket, :error, "Couldn't revoke agent access.")}
+    end
+  end
+
+  # "Grant again" restores the grant's own permissions (revoke keeps them).
+  def handle_event("grant_again", %{"id" => id}, socket) do
+    grant = Enum.find(socket.assigns.calendar_grants, &(&1.agent_id == id))
+
+    attrs =
+      case grant do
+        nil -> %{read: true}
+        g -> Map.take(g, ~w(read read_private create move preapprove)a)
+      end
+
+    attrs = if Enum.any?(Map.values(attrs)), do: attrs, else: %{read: true}
+
+    case Platform.Calendar.AgentAccess.grant(owner_scope(socket), id, attrs) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> load_settings(id)
+         |> put_flash(:info, "#{agent_name(socket, id)} can read your calendar again")}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Couldn't grant agent access.")}
     end
   end
 
@@ -242,9 +236,6 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_event("new_event", _, socket),
     do: {:noreply, new_event_at(socket, socket.assigns.today, 14 * 60)}
-
-  def handle_event("close_sheet", _, socket),
-    do: {:noreply, assign(socket, sheet: nil, error: nil)}
 
   # Details (app.js `renderDetails`): a chip opens its entry; `start` picks
   # the occurrence of a recurring event.
@@ -281,30 +272,49 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  def handle_event("add_external", %{"subscription" => attrs}, socket) do
-    case Platform.Calendar.Subscriptions.create(socket.assigns.access_scope, attrs) do
-      {:ok, _} ->
-        {:noreply,
-         socket |> put_flash(:info, "Calendar added. Refresh runs shortly.") |> reload()}
+  # ── Calendar settings: external calendars ───────────────────────────────
 
-      _ ->
-        {:noreply, assign(socket, :error, "Enter a name and a valid HTTPS calendar URL.")}
+  # v4 accepts https:// and webcal:// (app.js `#ext-add`); PR #51 stores
+  # HTTPS, so webcal:// is rewritten to https:// before it is saved.
+  def handle_event("add_external", %{"url" => url} = params, socket) do
+    url = String.trim(url)
+    label = String.trim(params["label"] || "")
+    error = "Paste an iCal link that starts with https:// or webcal://"
+
+    if Regex.match?(~r{\A(https?|webcal)://\S+\z}i, url) do
+      count = length(socket.assigns.external_subscriptions)
+      label = if label == "", do: "Calendar #{count + 1}", else: label
+      https = Regex.replace(~r{\Awebcal://}i, url, "https://")
+
+      case Platform.Calendar.Subscriptions.create(socket.assigns.access_scope, %{
+             name: label,
+             url: https
+           }) do
+        {:ok, sub} ->
+          scope = socket.assigns.access_scope
+
+          {:noreply,
+           socket
+           |> assign(ext_error: nil, ext_label: nil, ext_url: nil)
+           |> start_async({:external_added, sub.id, label}, fn ->
+             Platform.Calendar.Subscriptions.refresh(scope, sub.id)
+           end)
+           |> reload()}
+
+        _ ->
+          {:noreply, assign(socket, ext_error: error, ext_url: url, ext_label: label)}
+      end
+    else
+      {:noreply, assign(socket, ext_error: error, ext_url: url, ext_label: label)}
     end
   end
 
-  def handle_event("refresh_external", %{"id" => id}, socket) do
-    scope = socket.assigns.access_scope
-    # A supervised task keeps the sheet responsive; the context rechecks ownership.
-    start_async(socket, {:external_refresh, id}, fn ->
-      Platform.Calendar.Subscriptions.refresh(scope, id)
-    end)
-    |> then(&{:noreply, &1})
-  end
-
   def handle_event("remove_external", %{"id" => id}, socket) do
+    sub = Enum.find(socket.assigns.external_subscriptions, &(&1.id == id))
+
     case Platform.Calendar.Subscriptions.delete(socket.assigns.access_scope, id) do
-      {:ok, _} -> {:noreply, reload(socket)}
-      _ -> {:noreply, assign(socket, :error, "Calendar is no longer available.")}
+      {:ok, _} -> {:noreply, socket |> reload() |> put_flash(:info, "#{sub && sub.name} removed")}
+      _ -> {:noreply, put_flash(socket, :error, "Calendar is no longer available.")}
     end
   end
 
@@ -403,26 +413,47 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  def handle_event("subscribe", _, socket), do: {:noreply, assign(socket, :sheet, :subscribe)}
+  # ── Calendar settings: private iCal feed ────────────────────────────────
 
-  def handle_event("confirm_rotate", _, socket),
-    do: {:noreply, assign(socket, :confirm_rotate, true)}
+  # v4 `Revoke` (and the at-rest `Make a new URL`) open the confirm modal.
+  def handle_event("confirm_rotate", _, socket), do: {:noreply, assign(socket, :feed_modal, true)}
 
+  def handle_event("cancel_rotate", _, socket), do: {:noreply, assign(socket, :feed_modal, false)}
+
+  # Revoke and make a new URL: Calendar.rotate_feed/1 replaces the hash, so
+  # the old URL stops working at once. Only a URL shown this session has a
+  # known prefix (FeedToken stores the hash).
   def handle_event("rotate_feed", _, socket) do
+    old =
+      case socket.assigns.feed_url do
+        url when is_binary(url) -> url |> String.split("/") |> List.last() |> String.slice(0, 5)
+        _ -> "•••••"
+      end
+
     case Events.rotate_feed(socket.assigns.access_scope) do
       {:ok, token} ->
         url = PlatformWeb.Endpoint.url() <> "/calendar/feed/" <> token
-        {:noreply, assign(socket, feed_url: url, confirm_rotate: false)}
+
+        {:noreply,
+         socket
+         |> assign(
+           feed_url: url,
+           feed_modal: false,
+           feed_old: if(socket.assigns.feed_exists?, do: old),
+           feed_exists?: true
+         )
+         |> put_flash(:info, "Feed URL revoked · new URL ready")}
 
       _ ->
-        {:noreply, assign(socket, :error, "Could not create a subscription link.")}
+        {:noreply,
+         socket
+         |> assign(:feed_modal, false)
+         |> put_flash(:error, "Could not create a subscription link.")}
     end
   end
 
-  def handle_event("revoke_feed", _, socket) do
-    :ok = Events.revoke_feed(socket.assigns.access_scope)
-    {:noreply, assign(socket, feed_url: nil, confirm_rotate: false)}
-  end
+  def handle_event("copied", _, socket),
+    do: {:noreply, put_flash(socket, :info, "Copied to clipboard")}
 
   @impl true
   def handle_info(:calendar_tick, socket) do
@@ -433,7 +464,18 @@ defmodule PlatformWeb.CalendarLive do
   def handle_info(_, socket), do: {:noreply, reload(socket)}
 
   @impl true
-  def handle_async({:external_refresh, _id}, _result, socket), do: {:noreply, reload(socket)}
+  def handle_async({:external_added, _id, label}, result, socket) do
+    flash =
+      case result do
+        {:ok, {:ok, %{snapshot: rows}}} when is_list(rows) ->
+          "#{label} added · #{length(rows)} events imported, read-only"
+
+        _ ->
+          "#{label} added"
+      end
+
+    {:noreply, socket |> reload() |> put_flash(:info, flash)}
+  end
 
   # The grid's visible window: the cursor's week, or the month grid around
   # the cursor (whole weeks, Monday first). Entries are loaded once for it.
@@ -469,7 +511,7 @@ defmodule PlatformWeb.CalendarLive do
       booking_link_count: length(Platform.Calendar.BookingLinks.list(scope)),
       entries: entries,
       visible_entries: visible,
-      calendars: calendars(socket.assigns, subscriptions),
+      calendars: calendar_rows(socket.assigns, subscriptions),
       spaces: Platform.Calendar.list_spaces(scope),
       projects: Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
     )
@@ -608,6 +650,51 @@ defmodule PlatformWeb.CalendarLive do
   defp event_date(%Event{starts_at: at, time_zone: zone}),
     do: at |> DateTime.shift_zone!(zone) |> DateTime.to_date()
 
+  # The scope Calendar's owner-only contexts expect, rebuilt from the user row
+  # as PR #51's agent-access handlers did.
+  defp owner_scope(socket),
+    do:
+      Platform.Access.Scope.for_user(
+        Platform.Accounts.get_user(socket.assigns.current_user_record.id)
+      )
+
+  # v4 settings panels: the agents (grants plus the agent rows they name)
+  # and whether a feed URL exists (FeedToken stores only its hash).
+  defp load_settings(socket, agent_id) do
+    scope = owner_scope(socket)
+    user_id = socket.assigns.current_user_record.id
+    choices = Platform.Calendar.AgentAccess.agents(scope)
+    grants = Platform.Calendar.AgentAccess.list(scope)
+    ids = Enum.map(grants, & &1.agent_id)
+
+    agents =
+      Platform.Repo.all(from(a in Platform.Agents.Agent, where: a.id in ^ids))
+      |> Map.new(&{&1.id, &1})
+
+    rows =
+      grants
+      |> Enum.filter(&Map.has_key?(agents, &1.agent_id))
+      |> Enum.sort_by(&agents[&1.agent_id].name)
+      |> Enum.map(&%{grant: &1, agent: agents[&1.agent_id]})
+
+    agent_id = agent_id || (List.first(choices) && List.first(choices).id)
+
+    assign(socket,
+      agent_choices: choices,
+      calendar_grants: grants,
+      agent_rows: rows,
+      grant_form: agent_grant_form(Enum.find(grants, &(&1.agent_id == agent_id)), agent_id),
+      feed_exists?:
+        Platform.Repo.exists?(
+          from(f in Platform.Calendar.FeedToken, where: f.owner_id == ^user_id)
+        )
+    )
+  end
+
+  defp agent_name(socket, id) do
+    Enum.find_value(socket.assigns.agent_choices, "The agent", &(&1.id == id && &1.name))
+  end
+
   defp put_cursor(socket, date),
     do: assign(socket, cursor: date, mini_month: Date.beginning_of_month(date))
 
@@ -656,7 +743,13 @@ defmodule PlatformWeb.CalendarLive do
 
   defp hold_agents(_, _), do: %{}
 
-  defp calendars(assigns, subscriptions) do
+  @doc """
+  The list pane's Calendars rows (native, Meetings when on, one per external
+  subscription). Shared with `BookingSettingsLive`, whose list pane is the
+  same (task 01a18d9f stage 3). `assigns` needs `current_user_record` and
+  `meetings_on`.
+  """
+  def calendar_rows(assigns, subscriptions) do
     native = %{
       key: "native",
       label: (assigns.current_user_record && assigns.current_user_record.name) || "You",
