@@ -1,0 +1,21 @@
+{
+  "runtime": "clip-runner-moon",
+  "operator": "Brosnan",
+  "message_id": "01a18f50-b4a1-7000-9b81-60155994c8fd",
+  "validator_commit": "6e80ab9cfefe4d8af45a9b4efac0499231091d74",
+  "rendered_on_disposable_project_copy": true,
+  "real_runner_lock_held": true,
+  "input_source_music_helper_hashes_verified": true,
+  "selected_and_combined_doctor": {"pass": 15, "warn": 0, "fix": 0},
+  "steps": {"project_info": 0, "selected_doctor": 0, "profile_import": 0, "combined_doctor": 0, "review_export": 0, "review_apply": 0, "review_refresh": 0, "finalize": 1, "profile_path_cleanup": 0},
+  "failure": "Selected shots mode requires the unavailable face detection backend on Linux. Prior deep doctor did not check it.",
+  "output_produced": false,
+  "frame_audio_checks_performed": false,
+  "canonical_project_review_final_and_mapping_unchanged": true,
+  "canonical_review_sha256": "d165e79ce9fbf8dd68d36a285aa7e4b0bbe41b3ffc3448a68f3f3829ab1821dd",
+  "canonical_final_tree_sha256": "a830f7ec49e0dfa8bc867d9ab83dbd9e6af76dddcf4a3cd9a3cb02b0fe1e7850",
+  "temporary_profiles_remaining": 0,
+  "job_or_closed_job_changed": false,
+  "production_completion": false,
+  "retry_safe": false
+}

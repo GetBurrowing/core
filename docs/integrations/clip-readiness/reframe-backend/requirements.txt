@@ -1,0 +1,5 @@
+# The original producer's exact native face backend; NumPy 2.5.4 is already in the measured base.
+# Official PyPI wheels for Linux x86_64; compatible with the serving Python 3.12.
+opencv-python-headless==5.0.0.93 \
+    --hash=sha256:09a872a157c1376ab922a69bbf22f9a95bcc7b658a9d8b436a60212b02b2eeb4 \
+    --hash=sha256:ed709fdf9aa0bd1f2ed8549e71d19449b03a675bb581eb292285f6861953be37

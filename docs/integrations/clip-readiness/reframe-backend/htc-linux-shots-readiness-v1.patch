@@ -1,0 +1,156 @@
+--- a/clip-agent/src/clip_agent/cli.py
++++ b/clip-agent/src/clip_agent/cli.py
+@@ -2344,7 +2344,13 @@
+ 
+ 
+ def _doctor_reframe_checks(cfg, add: _Add) -> None:
+-    """Seat reframing asked for with no seats set."""
++    """Check the selected profile's required face backend without weakening other checks."""
++    if cfg.reframe.mode == "shots":
++        from .shots import face_detection_available
++        ready = face_detection_available()
++        add("pass" if ready else "fix", "reframe-backend",
++            "shots face backend is ready" if ready else
++            "shots face backend is not ready; provision the supported local face backend and verified model")
+     if cfg.reframe.mode == "seats" and not cfg.reframe.seats:
+         add("warn", "seats", "reframe mode is 'seats' but no seats are set, so clips use the "
+             f"'{cfg.reframe.fallback}' layout. Run: clip seats <video> --profile <your profile>")
+@@ -2487,7 +2493,7 @@
+     """
+     from .provenance import install_info as _install_info
+ 
+-    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1}
++    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "reframe_backend": 1, "reframe_backends": ["vision", "yunet"]}
+ 
+ 
+ @cli.command("version")
+--- a/clip-agent/src/clip_agent/shots.py
++++ b/clip-agent/src/clip_agent/shots.py
+@@ -169,6 +169,12 @@
+     return True
+ 
+ 
++def face_detection_available() -> bool:
++    """The original producer's local YuNet backend, with verified model and real inference."""
++    from .opencv_faces import ready
++    return vision_available() or ready()
++
++
+ def vision_box_to_top_left(x: float, y: float, w: float, h: float) -> tuple[float, float, float, float]:
+     """Vision's normalised box (origin BOTTOM-left) → the same box with a TOP-left origin."""
+     return x, 1.0 - y - h, w, h
+@@ -184,8 +190,9 @@
+         import objc
+         import Vision
+         from Foundation import NSURL
+-    except Exception as e:  # noqa: BLE001
+-        raise RuntimeError(_VISION_HINT) from e
++    except Exception:  # noqa: BLE001
++        from .opencv_faces import detect
++        return detect(image)
+     path = Path(image)
+     if not path.is_file():
+         raise RuntimeError(f"face detection: image not found: {path}")
+@@ -305,7 +312,7 @@
+     tiles ``[0, dur]`` and feeds :func:`clip_agent.reframe.plan_shots`.
+     """
+     if detector is None:
+-        if not vision_available():
++        if not face_detection_available():
+             raise RuntimeError(_VISION_HINT)
+         detector = detect_faces
+     rf = config.reframe
+--- a/clip-agent/tests/test_shots.py
++++ b/clip-agent/tests/test_shots.py
+@@ -273,7 +273,7 @@
+ 
+ 
+ def test_analyse_shots_without_vision_is_friendly(monkeypatch):
+-    monkeypatch.setattr(shots, "vision_available", lambda: False)
++    monkeypatch.setattr(shots, "face_detection_available", lambda: False)
+     with pytest.raises(RuntimeError, match=r"pyobjc-framework-Vision.*reframe.mode"):
+         shots.analyse_shots("ep.mp4", 0.0, 5.0, cfg())
+ 
+--- /dev/null
++++ b/clip-agent/src/clip_agent/opencv_faces.py
+@@ -0,0 +1,80 @@
++"""Local YuNet face boxes for the existing shot planner on non-macOS hosts.
++
++Provision the OpenCV Zoo YuNet model before running; inference never downloads
++models or sends images over the network.
++"""
++
++import hashlib
++import os
++from functools import lru_cache
++from pathlib import Path
++
++MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
++
++
++def model_path() -> Path:
++    return Path(
++        os.environ.get("CLIP_FACE_MODEL", str(Path(__file__).parent / "face_models/face_detection_yunet_2023mar.onnx"))
++    ).expanduser()
++
++
++def available() -> bool:
++    try:
++        import cv2
++
++        return (
++            hasattr(cv2, "FaceDetectorYN")
++            and model_path().is_file()
++            and hashlib.sha256(model_path().read_bytes()).hexdigest() == MODEL_SHA256
++        )
++    except (ImportError, OSError):
++        return False
++
++
++@lru_cache(maxsize=1)
++def _detector(path: str):
++    import cv2
++
++    cv2.setNumThreads(1)
++    return cv2.FaceDetectorYN.create(path, "", (640, 640), 0.85, 0.3, 5000)
++
++
++def ready() -> bool:
++    """Verify imports, exact model bytes and a real inference without network I/O."""
++    if not available():
++        return False
++    try:
++        import numpy as np
++
++        detector = _detector(str(model_path()))
++        detector.setInputSize((640, 640))
++        detector.detect(np.zeros((640, 640, 3), dtype=np.uint8))
++    except Exception:  # noqa: BLE001 -- a failed native backend must become doctor FIX
++        return False
++    return True
++
++
++def detect(image: str | Path):
++    if not available():
++        raise RuntimeError("FACE_MODEL_MISSING_OR_MISMATCH: provision the pinned YuNet model")
++    import cv2
++
++    from .shots import Face
++
++    pixels = cv2.imread(str(image))
++    if pixels is None:
++        raise RuntimeError("Face detection could not decode the input image")
++    height, width = pixels.shape[:2]
++    detector = _detector(str(model_path()))
++    detector.setInputSize((width, height))
++    _, rows = detector.detect(pixels)
++    if rows is None:
++        return []
++    faces = []
++    for row in rows:
++        x, y, w, h = map(float, row[:4])
++        x0, y0 = max(0.0, x), max(0.0, y)
++        x1, y1 = min(float(width), x + w), min(float(height), y + h)
++        if x1 > x0 and y1 > y0:
++            faces.append(Face(x0 / width, y0 / height, (x1 - x0) / width, (y1 - y0) / height, float(row[14])))
++    return faces

@@ -1,0 +1,16 @@
+# Overlay the full measured 0.9.2 image, never a moving base tag.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY reframe-backend /tmp/clip-reframe-backend
+RUN python3 -c "import numpy; assert numpy.__version__ == '2.5.4'" \
+ && uv pip install --system --no-deps --require-hashes -r /tmp/clip-reframe-backend/requirements.txt \
+ && python3 /tmp/clip-reframe-backend/install_backend.py \
+      --module-root /usr/local/lib/python3.12/site-packages/clip_agent \
+      --source-root /opt/clip-agent/src/clip_agent \
+ && python3 -c "from clip_agent.opencv_faces import ready; assert ready()" \
+ && echo "0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4  /opt/clip-runner/bin/clip_runner.py" | sha256sum -c - \
+ && echo "359a0e6d0f75ac4103e2195976d2d1948f86191fb7fa691a887081db90f51d09  /opt/clip-runner/driver/driver.py" | sha256sum -c - \
+ && cmp /opt/clip-runner/bin/clip_runner.py /opt/clip-runner/src/clip_runner.py \
+ && clip version --json
+LABEL org.getburrow.clip-reframe-backend.version="1" \
+      org.getburrow.clip-reframe-backend.model-sha256="8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
