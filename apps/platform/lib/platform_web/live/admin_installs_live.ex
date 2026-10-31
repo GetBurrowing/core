@@ -463,13 +463,13 @@ defmodule PlatformWeb.AdminInstallsLive do
                   <span class="shrink-0 text-xs text-subtle">{relative(request.requested_at)}</span>
                 </div>
                 <div :if={request.request_note} class="space-y-1">
+                  <%!-- Inline on purpose: whitespace-pre-line would render indentation. --%>
                   <p
                     id={"install-request-note-#{request.id}"}
                     data-role="install-request-note"
                     class="line-clamp-3 whitespace-pre-line break-words text-sm text-subtle"
-                  >
-                    {request.request_note}
-                  </p>
+                    phx-no-format
+                  >{request.request_note}</p>
                   <button
                     :if={String.length(request.request_note) > 160}
                     type="button"
@@ -589,7 +589,7 @@ defmodule PlatformWeb.AdminInstallsLive do
                     <p class="truncate font-mono text-xs text-subtle">{install.primary_host}</p>
                     <p
                       :if={install.requested_at}
-                      class="truncate text-xs text-subtle"
+                      class="break-all text-xs text-subtle"
                       data-role="install-requested-by"
                     >
                       Requested by {install.owner_email} · email
