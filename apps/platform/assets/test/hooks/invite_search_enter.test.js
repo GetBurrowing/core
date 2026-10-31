@@ -87,6 +87,16 @@ describe("InviteSearchEnter", () => {
     expect(pushes).toEqual([])
   })
 
+  it("Enter's keyup stops propagating so the empty-query search never fires; other keyups pass", () => {
+    const { listeners } = setup()
+    const stopped = []
+    const up = (key) => ({ key, isComposing: false, stopPropagation: () => stopped.push(key) })
+
+    listeners.keyup(up("Enter"))
+    listeners.keyup(up("a"))
+    expect(stopped).toEqual(["Enter"])
+  })
+
   it("handleEnter reports whether it handled the key", () => {
     const { hook } = setup()
     expect(handleEnter(hook, keyEvent("Enter"))).toBe(true)

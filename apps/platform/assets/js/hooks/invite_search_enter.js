@@ -30,14 +30,25 @@ export function handleEnter(hook, e) {
   return true
 }
 
+// Enter's KEYUP must not reach the input's `phx-keyup` search binding: by
+// then the box may already be cleared, and an empty search opens a dropdown
+// of every member. Enter does not change the text, so nothing is lost.
+export function swallowEnterKeyup(e) {
+  if (e.key !== "Enter" || e.isComposing) return false
+  e.stopPropagation()
+  return true
+}
+
 const InviteSearchEnter = {
   mounted() {
     this.onKeydown = (e) => handleEnter(this, e)
     this.el.addEventListener("keydown", this.onKeydown)
+    this.el.addEventListener("keyup", swallowEnterKeyup)
   },
 
   destroyed() {
     this.el.removeEventListener("keydown", this.onKeydown)
+    this.el.removeEventListener("keyup", swallowEnterKeyup)
   },
 }
 
