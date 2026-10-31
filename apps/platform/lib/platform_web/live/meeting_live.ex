@@ -3634,7 +3634,7 @@ defmodule PlatformWeb.MeetingLive do
              socket.assigns.meeting_invite_email
            ) do
         nil -> {:noreply, socket}
-        params -> handle_event("meeting_invite_stage", params, socket)
+        params -> socket |> stage_via("meeting_invite_stage", params) |> reply_staged()
       end
     end
   end
@@ -3789,7 +3789,7 @@ defmodule PlatformWeb.MeetingLive do
              socket.assigns.meeting_create_invite_email
            ) do
         nil -> {:noreply, socket}
-        params -> handle_event("meeting_create_invite_stage", params, socket)
+        params -> socket |> stage_via("meeting_create_invite_stage", params) |> reply_staged()
       end
     end
   end
@@ -8235,6 +8235,17 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:meeting_create_invite_candidates, [])
     |> assign(:meeting_create_invite_email, nil)
   end
+
+  # The search input still has focus after Enter, and LiveView does not
+  # overwrite a focused input's value, so the server clearing its query
+  # assign does not clear the box. The reply tells the hook to clear it;
+  # otherwise the next address is typed into the old one.
+  defp stage_via(socket, event, params) do
+    {:noreply, socket} = handle_event(event, params, socket)
+    socket
+  end
+
+  defp reply_staged(socket), do: {:reply, %{staged: true}, socket}
 
   defp invite_query(attrs),
     do: attrs |> Map.get("invite_query", "") |> to_string() |> String.trim()

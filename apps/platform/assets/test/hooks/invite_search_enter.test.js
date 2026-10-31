@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import InviteSearchEnter, { handleEnter } from "../../js/hooks/invite_search_enter.js"
+import InviteSearchEnter, { clearIfStaged, handleEnter } from "../../js/hooks/invite_search_enter.js"
 
 /**
  * Tests for the `InviteSearchEnter` hook (task 01a192d6 stage 3). The
@@ -20,7 +20,7 @@ function setup({ target = null } = {}) {
   }
   const hook = Object.create(InviteSearchEnter)
   hook.el = el
-  hook.pushEventTo = (to, event, payload) => pushes.push({ to, event, payload })
+  hook.pushEventTo = (to, event, payload, onReply) => pushes.push({ to, event, payload, onReply })
   hook.mounted()
   return { hook, el, pushes, listeners }
 }
@@ -31,6 +31,14 @@ function keyEvent(key, extra = {}) {
   return e
 }
 
+describe("clearIfStaged", () => {
+  it("tolerates a missing reply", () => {
+    const el = { value: "x" }
+    clearIfStaged(el, undefined)
+    expect(el.value).toBe("x")
+  })
+})
+
 describe("InviteSearchEnter", () => {
   it("Enter prevents the form submit and pushes the commit event with the raw value", () => {
     const { el, pushes, listeners } = setup()
@@ -38,9 +46,21 @@ describe("InviteSearchEnter", () => {
     listeners.keydown(e)
 
     expect(e.prevented).toBe(true)
-    expect(pushes).toEqual([
-      { to: el, event: "meeting_create_invite_commit", payload: { value: "guest@example.com" } },
-    ])
+    expect(pushes.length).toBe(1)
+    expect(pushes[0].to).toBe(el)
+    expect(pushes[0].event).toBe("meeting_create_invite_commit")
+    expect(pushes[0].payload).toEqual({ value: "guest@example.com" })
+  })
+
+  it("clears the box when the server replies that it staged, and only then", () => {
+    const { el, pushes, listeners } = setup()
+    listeners.keydown(keyEvent("Enter"))
+
+    pushes[0].onReply({})
+    expect(el.value).toBe("guest@example.com")
+
+    pushes[0].onReply({ staged: true })
+    expect(el.value).toBe("")
   })
 
   it("pushes to the phx-target when the control has one", () => {

@@ -107,6 +107,9 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
 
       assert staged_ids(html) == ["guest:guest@example.com"]
       refute Repo.exists?(Meeting)
+
+      # The reply is what lets the hook clear the still-focused search box.
+      assert_reply(view, %{staged: true})
     end
 
     test "a query matching exactly one member stages that member", %{conn: conn} do

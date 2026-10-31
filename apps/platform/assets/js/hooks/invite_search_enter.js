@@ -9,11 +9,24 @@
 // type-then-Enter would find no option to click. The server re-resolves the
 // value and stages the option the dropdown would highlight.
 
+// The input keeps focus after Enter, and LiveView does not overwrite a
+// focused input's value, so the server emptying its query does not empty the
+// box. The server replies `staged: true` when it staged something; only then
+// is the box cleared, so a refused or ambiguous Enter keeps what was typed.
+export function clearIfStaged(el, reply) {
+  if (reply && reply.staged) el.value = ""
+}
+
 export function handleEnter(hook, e) {
   if (e.key !== "Enter" || e.isComposing) return false
   e.preventDefault()
   const target = hook.el.getAttribute("phx-target")
-  hook.pushEventTo(target || hook.el, hook.el.dataset.commitEvent, { value: hook.el.value })
+  hook.pushEventTo(
+    target || hook.el,
+    hook.el.dataset.commitEvent,
+    { value: hook.el.value },
+    (reply) => clearIfStaged(hook.el, reply),
+  )
   return true
 }
 
