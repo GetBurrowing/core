@@ -1139,12 +1139,15 @@ defmodule PlatformWeb.CalendarLiveTest do
     conn: conn,
     scope: scope
   } do
+    # Today, so the event is in the loaded week and its details can open.
+    today = local_today(@chicago)
+
     {:ok, event} =
       Calendar.create_event(scope, %{
         title: "Odd minute",
         time_zone: @chicago,
-        starts_at: chicago_utc(~T[10:07:00]),
-        ends_at: chicago_utc(~T[11:22:00])
+        starts_at: at(@chicago, today, 10, 7),
+        ends_at: at(@chicago, today, 11, 22)
       })
 
     {:ok, view, _} = live(zoned(conn, @chicago), "/calendar")
