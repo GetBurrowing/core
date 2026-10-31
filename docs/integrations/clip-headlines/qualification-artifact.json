@@ -15,7 +15,7 @@
     "htc-headline-linux-prerequisites-v1.patch": "f6cf1043f9e454d290d74741a970d9ed62f650237a5eea6f13fe7c19f50b3f68"
   },
   "installer_sha256": "e77611cd4be1c17d222e8fb658105158525da4ef15c1d049766f2553652b2c0a",
-  "fixture_sha256": "8cb670d55ffc182718bf78a2f498a50bf3eb143fa35d8b8bbea18ad2c851c0f3",
+  "fixture_sha256": "c800d7afc7f71133984f7a6e1a0fbd1db0a9eb6be65dd96e22194e4be6509d92",
   "tests": {
     "helper_full": 175,
     "materialized_focused": 34,
@@ -108,6 +108,102 @@
     },
     {
       "name": "queued-chrome-replay",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "mutable-edit",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-plain",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-karaoke",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-type-on",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-focus-word",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-editorial-punch",
       "frames": 60,
       "sample_fps": 30,
       "native": {

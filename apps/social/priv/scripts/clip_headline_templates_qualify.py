@@ -779,6 +779,12 @@ enabled=false
                 "neon-broadcast",
                 "arcade-punch",
                 "queued-chrome-replay",
+                "mutable-edit",
+                "caption-plain",
+                "caption-karaoke",
+                "caption-type-on",
+                "caption-focus-word",
+                "caption-editorial-punch",
                 "disabled",
                 "music-closing",
             )

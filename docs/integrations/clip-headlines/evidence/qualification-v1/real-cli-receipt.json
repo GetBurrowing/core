@@ -4,15 +4,15 @@
   "helper_sha256": "b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c",
   "tool": {
     "version": "0.9.0",
-    "source": "file:///home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent",
+    "source": "file:///home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent",
     "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
     "ref": null,
     "editable": true,
-    "python": "/home/jordan/openai/rig/htc-template-s4/release-renderer/.venv/bin/python",
+    "python": "/home/jordan/openai/rig/htc-template-s4/operator-release/.venv/bin/python",
     "content_free": 2,
     "headline_review": 1,
     "headline_template_renderer": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/headline_templates.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/headline_templates.py",
       "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
     },
     "headline_templates": 1,
@@ -32,35 +32,35 @@
       "editorial-punch"
     ],
     "caption_renderer": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/captions.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/captions.py",
       "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603",
-      "temporal_path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/dynamic_captions.py",
       "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
     }
   },
   "modules": {
     "clip_agent.captions": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/captions.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/captions.py",
       "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603"
     },
     "clip_agent.headline_templates": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/headline_templates.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/headline_templates.py",
       "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
     },
     "clip_agent.opencv_faces": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/opencv_faces.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/opencv_faces.py",
       "sha256": "907189949e0c387df4eae75b4e64f01e8b04d4056ac7b575bdb58500360cf523"
     },
     "clip_agent.pipeline": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/pipeline.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/pipeline.py",
       "sha256": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88"
     },
     "clip_agent.reframe": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/reframe.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/reframe.py",
       "sha256": "7db058c1312dad20afc67d2291bad39d37ef4636eabb6cc99fee216a2186c169"
     },
     "clip_agent.shots": {
-      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/shots.py",
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/shots.py",
       "sha256": "df26a73d56c7cfe7c295b711a6e2781bb514f5a1aadb5a82a024a1ab17e2dd49"
     }
   },
@@ -559,6 +559,102 @@
     },
     {
       "name": "queued-chrome-replay",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "mutable-edit",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-plain",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-karaoke",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-type-on",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-focus-word",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-editorial-punch",
       "frames": 60,
       "sample_fps": 30,
       "native": {
