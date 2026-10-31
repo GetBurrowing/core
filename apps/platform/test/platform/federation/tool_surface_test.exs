@@ -9095,7 +9095,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # Most of the budget is used, and no word is cut in half.
       assert String.length(query) > cap - 10
       assert String.starts_with?(query, "Cap probe alpha bravo")
-      assert query |> String.split(" ") |> List.last() in ~w(alpha bravo charlie delta echo)
+      last_word = query |> String.split(" ") |> List.last()
+      assert last_word in ~w(alpha bravo charlie delta echo)
     end
 
     test "a short title + description reaches the search whole" do
