@@ -410,12 +410,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a19355 stage 2: `space_create` gains the optional
     # `admin_user_ids` property and the prose documenting it ("Human users are
     # not added" is gone), so both tool-definition digests move. Names and
-    # bundles are unchanged. Measured by CI on the task branch (0794dc52e),
+    # bundles are unchanged. Previous pins measured by CI at 0794dc52e, main
+    # pins at 8bfd916bd,
     # PR #65.
     @previous_tool_digest_off "b958dd013e97043d9c4842e0ed764821cb4eb08eb36beb2cee64d31cbf0d819d"
     @previous_tool_digest_on "724743df0c8e05175b004b7c9dcd8c1fe54f9fb9deeff3cb1ca9671ecfbc7536"
-    @main_tool_digest_off "f351660cb459f8db49c009dfec2f41eecd086ec100e22acaeea5ea0731e51f3a"
-    @main_tool_digest_on "f2edd70600750225f13f1935ca1569e87bde18a1765aa69174b01a242e9fe34e"
+    @main_tool_digest_off "668874280fa3235439906bc24c9fa6cef8d897c1aab5aa96837bdf8c8685d050"
+    @main_tool_digest_on "cb7feccd3d6f3649e1ec3153c21b94eb42d324e833eafa5eae12952e7772203c"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
