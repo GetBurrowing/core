@@ -108,9 +108,12 @@ defmodule Platform.Mail.Drafts do
   plus `stage_id`, which only the system sets. Not reachable from any tool:
   the MCP draft tools and the Email module build `{:agent, _}` / user
   actors, which `create/3` handles.
+
+  `opts`: `log: false` keeps the draft insert out of the query log (Ecto's
+  :debug line prints CAST params, i.e. the body). Default unchanged.
   """
-  @spec create_system(binary(), map()) :: {:ok, Draft.t()} | {:error, error()}
-  def create_system(org_id, attrs) when is_map(attrs) do
+  @spec create_system(binary(), map(), keyword()) :: {:ok, Draft.t()} | {:error, error()}
+  def create_system(org_id, attrs, opts \\ []) when is_map(attrs) do
     stage_id = fetch_attr(attrs, :stage_id)
 
     with {:ok, org_id} <- fetch_org(org_id),
@@ -126,9 +129,14 @@ defmodule Platform.Mail.Drafts do
           status: "draft"
         })
       )
-      |> Repo.insert()
+      |> Repo.insert(query_log_opts(opts))
     end
   end
+
+  # `log: false` only when asked: an explicit `log: true` is not a valid
+  # Ecto option value, so the default passes no option at all.
+  defp query_log_opts(opts),
+    do: if(Keyword.get(opts, :log, true) == false, do: [log: false], else: [])
 
   defp system_stage_id(:error), do: {:ok, nil}
   defp system_stage_id({:ok, nil}), do: {:ok, nil}

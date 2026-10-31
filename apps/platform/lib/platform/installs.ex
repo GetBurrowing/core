@@ -728,6 +728,20 @@ defmodule Platform.Installs do
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)
 
+  @doc """
+  Replace `install`'s status token with a fresh one and return it. Only its
+  sha256 is stored; every earlier token stops resolving. Used by
+  `Platform.Installs.HandoverMail` (task 01a18f0c stage 4), which mints the
+  requester's token at ready time because `provision_request/2` discarded
+  the provision-time one.
+  """
+  @spec mint_status_token(Install.t()) :: String.t()
+  def mint_status_token(%Install{} = install) do
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    update!(install, %{status_token_hash: hash_token(token)})
+    token
+  end
+
   # ---------------------------------------------------------------------------
   # Retry / resume
   # ---------------------------------------------------------------------------
