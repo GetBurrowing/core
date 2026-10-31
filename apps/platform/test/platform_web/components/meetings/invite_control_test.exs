@@ -100,13 +100,18 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
   defp text_at(html, selector), do: html |> q(selector) |> text_of()
 
   defp control(opts) do
-    render_component(&InviteControl.invite_control/1, %{
+    assigns = %{
       mode: Keyword.get(opts, :mode, :draft),
       query: Keyword.get(opts, :query, ""),
       candidates: Keyword.fetch!(opts, :candidates),
       email_option: Keyword.get(opts, :email_option),
       target: nil
-    })
+    }
+
+    assigns =
+      if Keyword.has_key?(opts, :name), do: Map.put(assigns, :name, opts[:name]), else: assigns
+
+    render_component(&InviteControl.invite_control/1, assigns)
   end
 
   defp row(entry, opts) do
@@ -291,6 +296,39 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert_raise ArgumentError, ~r/no :unstage event exists in invite mode :live/, fn ->
         InviteControl.event(:live, :unstage)
       end
+    end
+  end
+
+  # ── Enter commits (task 01a192d6 stage 3) ──────────────────────────────
+
+  describe "invite_control/1 — Enter in the search box" do
+    test "the search input carries the InviteSearchEnter hook" do
+      input = one(control(candidates: []), "[data-role=meeting-invite-search]")
+
+      assert attr(input, "phx-hook") == ["InviteSearchEnter"]
+    end
+
+    test "data-commit-event names the mode's commit event" do
+      draft = one(control(mode: :draft, candidates: []), "[data-role=meeting-invite-search]")
+      live = one(control(mode: :live, candidates: []), "[data-role=meeting-invite-search]")
+
+      assert attr(draft, "data-commit-event") == ["meeting_create_invite_commit"]
+      assert attr(live, "data-commit-event") == ["meeting_invite_commit"]
+      assert InviteControl.event(:draft, :commit) == "meeting_create_invite_commit"
+      assert InviteControl.event(:live, :commit) == "meeting_invite_commit"
+    end
+
+    test "the input has a name only when one is given" do
+      unnamed = one(control(candidates: []), "[data-role=meeting-invite-search]")
+
+      named =
+        one(
+          control(candidates: [], name: "start_meeting[invite_query]"),
+          "[data-role=meeting-invite-search]"
+        )
+
+      assert attr(unnamed, "name") in [[], [nil]]
+      assert attr(named, "name") == ["start_meeting[invite_query]"]
     end
   end
 

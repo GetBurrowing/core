@@ -35,6 +35,7 @@ import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
 import LargeUpload, { LargeUploadTimeline } from "./large_upload"
 import InlineFocus from "./inline_focus"
+import InviteSearchEnter from "./invite_search_enter"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
@@ -125,6 +126,7 @@ export default {
   LargeUpload,
   LargeUploadTimeline,
   InlineFocus,
+  InviteSearchEnter,
   InlineThread,
   KanbanDragDrop,
   TasksMyListRows,

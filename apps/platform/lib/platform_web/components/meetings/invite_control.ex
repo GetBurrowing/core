@@ -25,6 +25,16 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   | copy control | absent — no token has been minted, so there is no link to copy | present on guest rows |
   | `Add people` row | absent — the search box is already open above the list | present |
   | event names | `meeting_create_invite_*` | `meeting_invite_*` |
+  | Enter in the search box | `meeting_create_invite_commit` | `meeting_invite_commit` |
+
+  ## Enter commits the highlighted option (task 01a192d6)
+
+  The search input carries the `InviteSearchEnter` hook. On Enter it
+  prevents the default (which, inside the create sheet's form, would submit
+  the whole form) and pushes the mode's `:commit` event with the RAW typed
+  value. The server re-resolves that value and stages the option the
+  dropdown highlights: the default guest row, or the single candidate.
+  With several candidates nothing is staged.
 
   ## No revoke control, deliberately
 
@@ -135,12 +145,14 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     draft: %{
       search: "meeting_create_invite_search",
       stage: "meeting_create_invite_stage",
-      unstage: "meeting_create_invite_unstage"
+      unstage: "meeting_create_invite_unstage",
+      commit: "meeting_create_invite_commit"
     },
     live: %{
       search: "meeting_invite_search",
       stage: "meeting_invite_stage",
-      add_people: "meeting_invite_add_people"
+      add_people: "meeting_invite_add_people",
+      commit: "meeting_invite_commit"
     }
   }
 
@@ -235,6 +247,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:id, :string, default: "meeting-invite-control")
   attr(:dropdown, :atom, default: :floating, values: [:floating, :inline])
 
+  attr(:name, :string,
+    default: nil,
+    doc: "the search input's form name; the create sheet names it so submit sees the query"
+  )
+
   @doc """
   The search box plus its dropdown.
 
@@ -277,6 +294,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           placeholder="Name or email"
           aria-label="Invite someone"
           autocomplete="off"
+          name={@name}
+          phx-hook="InviteSearchEnter"
+          data-commit-event={event(@mode, :commit)}
           phx-keyup={event(@mode, :search)}
           phx-debounce="120"
           phx-target={@target}

@@ -3612,6 +3612,33 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign_live_invite_candidates(socket, to_string(query))}
   end
 
+  # Enter in the search box (the `InviteSearchEnter` hook, task 01a192d6).
+  # The hook sends the RAW typed value, because the dropdown only exists
+  # after the debounced search round trip and a fast type-then-Enter would
+  # find no option to click. So this re-resolves the query and then takes
+  # exactly the option the dropdown highlights: the default guest row for
+  # an address that matched nobody, or the one candidate when exactly one
+  # matched. Several candidates is a choice the user has to make, so
+  # nothing happens and the dropdown stays open. It goes through the stage
+  # handler, so every guard on a click applies to Enter too.
+  def handle_event("meeting_invite_commit", %{"value" => value}, socket) do
+    value = to_string(value)
+
+    if String.trim(value) == "" do
+      {:noreply, socket}
+    else
+      socket = assign_live_invite_candidates(socket, value)
+
+      case invite_commit_params(
+             socket.assigns.meeting_invite_candidates,
+             socket.assigns.meeting_invite_email
+           ) do
+        nil -> {:noreply, socket}
+        params -> handle_event("meeting_invite_stage", params, socket)
+      end
+    end
+  end
+
   def handle_event("meeting_invite_stage", %{"kind" => kind} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
@@ -3746,6 +3773,27 @@ defmodule PlatformWeb.MeetingLive do
      |> clear_create_invite_search()}
   end
 
+  # Enter in the create sheet's search box. Same rule as
+  # `meeting_invite_commit` above: re-resolve the raw value, then stage the
+  # option the dropdown highlights, through the stage handler.
+  def handle_event("meeting_create_invite_commit", %{"value" => value}, socket) do
+    value = to_string(value)
+
+    if String.trim(value) == "" do
+      {:noreply, socket}
+    else
+      socket = assign_create_invite_candidates(socket, value)
+
+      case invite_commit_params(
+             socket.assigns.meeting_create_invite_candidates,
+             socket.assigns.meeting_create_invite_email
+           ) do
+        nil -> {:noreply, socket}
+        params -> handle_event("meeting_create_invite_stage", params, socket)
+      end
+    end
+  end
+
   def handle_event("meeting_create_invite_unstage", %{"id" => id}, socket) do
     staged = Enum.reject(socket.assigns.meeting_create_invites, &(&1.id == id))
 
@@ -3755,6 +3803,7 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
     name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
     project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
+    invite_query = invite_query(attrs)
 
     cond do
       name == "" ->
@@ -3765,6 +3814,14 @@ defmodule PlatformWeb.MeetingLive do
       # gate. This clause is the gate.
       project_id == "" ->
         refuse_create(socket, attrs, "Project is required.")
+
+      # A typed but unadded address BLOCKS rather than auto-adding: guest
+      # vs external costs an org grant, and that choice belongs to the user
+      # (task 01a192d6). The staged list and the typed text both survive.
+      invite_query != "" ->
+        socket
+        |> assign_create_invite_candidates(invite_query)
+        |> refuse_create(attrs, "Add #{invite_query} or clear it.")
 
       true ->
         case scheduled_window(attrs, socket.assigns.calendar_time_zone) do
@@ -8178,6 +8235,20 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:meeting_create_invite_candidates, [])
     |> assign(:meeting_create_invite_email, nil)
   end
+
+  defp invite_query(attrs),
+    do: attrs |> Map.get("invite_query", "") |> to_string() |> String.trim()
+
+  # The option the invite dropdown highlights, as stage-event params, or nil
+  # when it highlights none. Mirrors `InviteControl`'s dropdown dispatch:
+  # one candidate is the only row; no candidates plus an address is the
+  # `data-default` guest row.
+  defp invite_commit_params([%{id: id}], _email), do: %{"kind" => "user", "id" => id}
+
+  defp invite_commit_params([], email) when is_binary(email),
+    do: %{"kind" => "guest", "email" => email}
+
+  defp invite_commit_params(_candidates, _email), do: nil
 
   defp assign_create_invite_candidates(socket, query) do
     staged = socket.assigns.meeting_create_invites
