@@ -145,8 +145,6 @@ def main():
             "duration_s": float(media["format"]["duration"]), "width": video["width"],
             "height": video["height"], "decode_exit": decode.returncode,
             "steps": steps, "process_or_transcribe_called": False}
-        (args.output_dir / "local-render-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps(receipt))
     finally:
         profile_file.unlink(missing_ok=True)
         # Same supported path lookup and narrowly scoped cleanup as the helper.
@@ -154,6 +152,9 @@ def main():
         if installed.name != temporary + ".toml" or "clip_agent" in installed.parts:
             raise RuntimeError("PROFILE_CLEANUP_FAILED")
         installed.unlink(missing_ok=True)
+    # No successful receipt survives a failed temporary-profile cleanup.
+    (args.output_dir / "local-render-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(json.dumps(receipt))
 
 
 if __name__ == "__main__":
