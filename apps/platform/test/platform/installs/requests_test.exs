@@ -70,7 +70,7 @@ defmodule Platform.Installs.RequestsTest do
             :ssh_public_key,
             :status_token_hash
           ] do
-        assert Map.fetch!(row, field) == nil, field
+        assert Map.fetch!(row, field) == nil, "#{field}"
       end
 
       assert row.handover_sealed == nil

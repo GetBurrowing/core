@@ -126,7 +126,10 @@ defmodule Platform.Vault.SystemGrantTest do
     assert {:error, :access_denied} = Vault.get(slug, accessor: @provisioner)
 
     assert [%{accessor_type: "system", accessor_id: @principal_id}] =
-             Enum.filter(logs_for_slug(slug), &(&1.action == "denied"))
+             Enum.filter(
+               logs_for_slug(slug),
+               &(&1.action == "denied" and &1.accessor_id == @principal_id)
+             )
   end
 
   test "agent grant edits never touch a system grant" do
