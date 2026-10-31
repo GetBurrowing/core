@@ -248,7 +248,10 @@ defmodule PlatformWeb.InstallStatusLiveTest do
              )
 
       assert html =~ "Sign-in link"
-      assert html =~ "Opens once and signs you in to Burrow, which then asks you to add a passkey."
+
+      assert html =~
+               "Opens once and signs you in to Burrow, which then asks you to add a passkey."
+
       # SSH collapsed by default: a <details> without `open`.
       assert has_element?(view, "details#handover-ssh:not([open])", "For technical users (SSH)")
       assert has_element?(view, "#handover-ssh-host", install.droplet_ip)

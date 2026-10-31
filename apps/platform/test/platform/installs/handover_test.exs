@@ -46,8 +46,10 @@ defmodule Platform.Installs.HandoverTest do
     assert {:ok, handover} = Installs.reveal_handover(install)
     assert handover.burrow_url == "https://#{install.primary_host}"
     assert handover.admin_email == install.owner_email
+
     assert handover.sign_in_link ==
              "https://#{install.primary_host}/auth/handover?code=FAKECODE"
+
     assert handover.ssh.host == install.droplet_ip
     assert handover.ssh.user == "root"
     assert handover.ssh.private_key =~ "-----BEGIN OPENSSH PRIVATE KEY-----"
@@ -161,7 +163,11 @@ defmodule Platform.Installs.HandoverTest do
     # value exists and is non-empty.
     defp secrets_of(install) do
       {:ok, sealed} = Installs.unseal(install)
-      values = for key <- ~w(ssh_private_key static_api_key oidc_client_secret), do: Handover.fetch(sealed, key)
+
+      values =
+        for key <- ~w(ssh_private_key static_api_key oidc_client_secret),
+            do: Handover.fetch(sealed, key)
+
       assert Enum.all?(values, &(is_binary(&1) and byte_size(&1) > 8))
       # The key's base64 body, not just its armour.
       [Enum.at(String.split(hd(values), "\n"), 1) | values]

@@ -121,6 +121,7 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
 
   test "the list never holds an install's sealed private key", %{conn: conn} do
     {install, _token} = create_install!()
+
     assert Installs.get(install.id).handover_sealed
            |> Platform.Installs.Handover.fetch("ssh_private_key") =~ "BEGIN OPENSSH"
 

@@ -99,11 +99,19 @@ defmodule Platform.Installs.RenderTest do
     defp override(attrs), do: Map.merge(%{ref: @pinned, env: :dev, opt_in: true}, attrs)
 
     test "the default is unchanged: no override configured, no [images.refs]" do
-      assert Keyword.get(Application.get_env(:platform, Platform.Installs, []), :core_image_override) ==
+      assert Keyword.get(
+               Application.get_env(:platform, Platform.Installs, []),
+               :core_image_override
+             ) ==
                nil
 
       assert Installs.core_image_override() == nil
-      toml = Render.manifest(install(), "ssh-ed25519 AAAA x", core_image: Installs.core_image_override())
+
+      toml =
+        Render.manifest(install(), "ssh-ed25519 AAAA x",
+          core_image: Installs.core_image_override()
+        )
+
       refute toml =~ "[images.refs]"
       refute toml =~ "core-platform"
       assert toml == Render.manifest(install(), "ssh-ed25519 AAAA x")
@@ -113,8 +121,14 @@ defmodule Platform.Installs.RenderTest do
       with_override(override(%{}))
       assert Installs.core_image_override() == @pinned
 
-      toml = Render.manifest(install(), "ssh-ed25519 AAAA x", core_image: Installs.core_image_override())
-      assert toml =~ ~s(source = "registry"\npublic = true\n\n[images.refs]\ncore-platform = "#{@pinned}"\n)
+      toml =
+        Render.manifest(install(), "ssh-ed25519 AAAA x",
+          core_image: Installs.core_image_override()
+        )
+
+      assert toml =~
+               ~s(source = "registry"\npublic = true\n\n[images.refs]\ncore-platform = "#{@pinned}"\n)
+
       # Still one [images] table, and the tables after it are untouched.
       assert toml =~ "\n[agents]\nprofile = \"full_machine\""
     end

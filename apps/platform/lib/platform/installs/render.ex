@@ -143,6 +143,7 @@ defmodule Platform.Installs.Render.Python do
       Python.with_private_dir(fn dir ->
         manifest = Path.join(dir, "install.toml")
         out = Path.join(dir, "out")
+
         File.write!(
           manifest,
           Render.manifest(install, ssh_public_key,
