@@ -283,6 +283,11 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       ".compose-input-area",
       ".sheet-panel .compose-input-area",
       ".clears-tab-bar",
+      // Task 01a18d9f (Calendar v4): the phone Meetings list pane takes v4's
+      // phone `.page` spacing, and the phone Summary/Recording/Transcript tabs
+      // take v4's 12px padding. Still no `.chat-jump` selector.
+      ".mt-list-pane.max-lg\\:hidden",
+      ".mt-tab",
     ]);
     const token = gated.find((r) => r.selector === ":root:has([data-bottom-rail])");
     expect(token.body).toContain("--bottom-nav-height");
