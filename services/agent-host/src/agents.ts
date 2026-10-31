@@ -55,7 +55,8 @@ import {
   type AgentFile,
   type FilesShas,
 } from "./files.ts";
-import { loadSuiteConventions, renderUserMemory, writeUserMemory } from "./conventions.ts";
+import { loadBurrowConventions, renderUserMemory, writeUserMemory } from "./conventions.ts";
+import { DEVICE_CODE } from "./codex_login.ts";
 
 export type ObservedState = "starting" | "running" | "stopped" | "crashed" | "needs_login";
 
@@ -67,11 +68,17 @@ export interface Observation {
   /** Keys the agent changed on disk since the host wrote them. Absent: not checked. */
   files_drifted?: string[];
   /**
-   * Only for needs_login: the step suite-cli's status file named, and nothing
-   * else. Never a login URL or code (core task 01a17b10): Burrow does not
-   * relay a Claude login; a human logs in at the agent's own pane.
+   * Only for needs_login: the step the status file named. Never a Claude
+   * login URL or code (core task 01a17b10): Burrow does not relay a Claude
+   * login; a human logs in at the agent's own pane.
+   *
+   * The one exception is step `device_code`, Codex's device login (core task
+   * 01a10315 stage 4, codex_login.ts): its auth.openai.com URL and one-time
+   * code are what the owner enters on OpenAI's own page, and grant nothing
+   * until they approve there. Only that step carries `url` and `code`, and
+   * only in the shapes {@link deviceLogin} accepts.
    */
-  login?: { step: string };
+  login?: { step: string; url?: string; code?: string };
 }
 
 export interface StartCommand {
@@ -93,12 +100,12 @@ export interface AgentsDeps {
   /** The command the unit execs as the agent. */
   runnerCommand: string[];
   log(line: string): void;
-  /** suite-cli's conventions text, or null. Defaults to {@link loadSuiteConventions}. */
+  /** suite-cli's conventions text, or null. Defaults to {@link loadBurrowConventions}. */
   conventions?: () => Promise<string | null>;
 }
 
-/** Harnesses this host can run. Codex waits for `suite codex` support here. */
-export const SUPPORTED_HARNESSES = new Set(["claude_code"]);
+/** Harnesses this host can run. Codex logs in with its own device login (runner.ts, codex_login.ts). */
+export const SUPPORTED_HARNESSES = new Set(["claude_code", "codex"]);
 
 export function parseStart(payload: Record<string, unknown>): StartCommand | string {
   const { agent_id, runtime_id, runtime_token, harness, core_url, env, files, force_keys } = payload;
@@ -134,11 +141,15 @@ export async function writeAsUser(runner: Runner, user: AgentUser, path: string,
   if (r.exitCode !== 0) throw new Error(`writing ${path} as ${user.name} failed: ${r.stderr.trim()}`);
 }
 
-/** `KEY=value` lines for systemd's EnvironmentFile. Values are single-quoted. */
-export function renderEnvFile(agentId: string, env: Record<string, string>): string {
+/**
+ * `KEY=value` lines for systemd's EnvironmentFile. Values are single-quoted.
+ * BURROW_AGENT_HARNESS tells the unit's runner which loop to run (runner.ts);
+ * it is reserved, so core's env cannot set it.
+ */
+export function renderEnvFile(agentId: string, env: Record<string, string>, harness?: string): string {
   const lines = ["# Managed by Suite's agent host. This agent's values only."];
   lines.push(`BURROW_AGENT_ID=${agentId}`);
-  lines.push(`SUITE_AGENT_ID=${agentId}`);
+  if (harness !== undefined) lines.push(`BURROW_AGENT_HARNESS=${harness}`);
   for (const [k, v] of Object.entries(env)) {
     lines.push(`${k}='${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`);
   }
@@ -263,7 +274,7 @@ export function refreshedClaudeJson(text: string, work: string, token: string): 
     if (typeof servers !== "object" || servers === null) continue;
     const channel = (servers as Record<string, unknown>)[CHANNEL_SERVER] as { env?: Record<string, unknown> } | undefined;
     if (channel?.env !== undefined && typeof channel.env === "object" && channel.env !== null) {
-      for (const name of ["BURROW_TOKEN", "SUITE_TOKEN"]) {
+      for (const name of ["BURROW_TOKEN"]) {
         const v = channel.env[name];
         if (typeof v === "string" && !ENV_REFERENCE.test(v) && v !== token) {
           channel.env[name] = token;
@@ -335,7 +346,7 @@ export async function prepareAgent(deps: AgentsDeps, cmd: StartCommand): Promise
 
   const user = await ensureAgentUser(deps.runner, cmd.agent_id);
   await writeConnection(deps, user, cmd);
-  writeEnvFile(user, cmd.agent_id, renderEnvFile(cmd.agent_id, cmd.env));
+  writeEnvFile(user, cmd.agent_id, renderEnvFile(cmd.agent_id, cmd.env, cmd.harness));
   await installUnits(deps, cmd.agent_id);
   return user;
 }
@@ -380,7 +391,7 @@ export async function startAgent(deps: AgentsDeps, cmd: StartCommand): Promise<v
  * (SUPPORTED_HARNESSES), and it reads `~/.claude/CLAUDE.md`.
  */
 export async function writeConventions(deps: AgentsDeps, user: AgentUser, agentId: string): Promise<void> {
-  const text = await (deps.conventions ?? loadSuiteConventions)();
+  const text = await (deps.conventions ?? loadBurrowConventions)();
   if (text === null) {
     deps.log(`agent ${agentId}: suite-cli's conventions could not be loaded; wrote the reply rule only`);
   }
@@ -420,8 +431,9 @@ export function parseShow(stdout: string): UnitState {
 
 export interface PaneStatus {
   state?: string;
-  // suite-cli may write more under `login` (a URL); only `step` is read.
-  login?: { step?: unknown };
+  // burrow-cli may write more under `login` (a URL); only `step` is read,
+  // except for codex_login.ts's `device_code` (see deviceLogin).
+  login?: { step?: unknown; url?: unknown; code?: unknown };
   dialog?: string;
   title?: string;
   reason?: string;
@@ -480,7 +492,9 @@ export function observe(
   if (unit.active !== "active") return { ...base, state: "starting", detail: unit.sub || null };
   if (status?.state === "needs_login") {
     const step = typeof status.login?.step === "string" ? status.login.step : "login";
-    // The step only: whatever else suite-cli reported (a login URL) is not
+    const device = step === "device_code" ? deviceLogin(status.login) : null;
+    if (device !== null) return { ...base, state: "needs_login", detail: step, login: { step, ...device } };
+    // The step only: whatever else burrow-cli reported (a login URL) is not
     // copied, so it never leaves this host (core task 01a17b10).
     return { ...base, state: "needs_login", detail: step, login: { step } };
   }
@@ -493,6 +507,20 @@ export function observe(
     return { ...base, state: "starting", detail: `waiting at an unrecognised screen: ${status.title ?? ""}`.trim() };
   }
   return { ...base, state: "starting", detail: status?.state ?? null };
+}
+
+/**
+ * A Codex device login's URL and code, or null. Only OpenAI's own sign-in
+ * host and a code shaped as codex prints it (codex_login.ts) pass; anything
+ * else is dropped and the observation carries the step alone.
+ */
+export function deviceLogin(raw: PaneStatus["login"]): { url: string; code: string } | null {
+  const url = raw?.url;
+  const code = raw?.code;
+  if (typeof url !== "string" || typeof code !== "string") return null;
+  if (!/^https:\/\/auth\.openai\.com\/[A-Za-z0-9/_-]*$/.test(url)) return null;
+  if (!DEVICE_CODE.test(code)) return null;
+  return { url, code };
 }
 
 export async function observeAgent(deps: AgentsDeps, agentId: string): Promise<Observation> {

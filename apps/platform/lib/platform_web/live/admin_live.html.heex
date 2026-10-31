@@ -10,6 +10,27 @@
 
       <div class="flex flex-col gap-2" data-role="admin-card-list">
         <.link
+          :if={@connect_ai?}
+          navigate="/setup/connect-ai"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="connect-ai"
+          id="admin-connect-ai-card"
+        >
+          <h3 class="text-base font-semibold text-base-content">Connect your AI</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Connect the AI subscription your first agent uses. It then helps you finish setting up.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
+          </div>
+        </.link>
+
+        <.link
           :if={Platform.Access.module_access?(@access_scope, :admin)}
           navigate="/access"
           class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"

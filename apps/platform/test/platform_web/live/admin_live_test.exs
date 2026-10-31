@@ -16,8 +16,11 @@ defmodule PlatformWeb.AdminLiveTest do
   alias Platform.Tenancy.OrgMembership
 
   # {data-admin-card, href} for every card visible to a root admin with the
-  # sign-in switch off, in page order.
+  # sign-in switch off, in page order. "Connect your AI" (task 01a10315 stage
+  # 5) leads while no Setup agent is connected, which is the case here; its
+  # own gate is pinned in connect_ai_live_test.exs.
   @always [
+    {"connect-ai", "/setup/connect-ai"},
     {"access", "/access"},
     {"agents", "/control"},
     {"federation", "/admin/federation"},
@@ -75,7 +78,8 @@ defmodule PlatformWeb.AdminLiveTest do
     PlatformWeb.AdminLive.render(%{
       __changed__: nil,
       access_scope: scope,
-      sign_in_admin?: sign_in?
+      sign_in_admin?: sign_in?,
+      connect_ai?: false
     })
     |> rendered_to_string()
   end

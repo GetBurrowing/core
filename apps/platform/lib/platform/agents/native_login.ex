@@ -99,12 +99,83 @@ defmodule Platform.Agents.NativeLogin do
   def env_name, do: @env_name
 
   @doc """
-  Can this harness log in with an API key here? Claude Code only: Codex is
-  not offered on this install yet.
+  Can this harness log in with an Anthropic API key here? Claude Code only.
+  Codex logs in with its own device login instead (`device_login?/1`).
   """
   @spec api_key_harness?(String.t() | nil) :: boolean()
   def api_key_harness?("claude_code"), do: true
   def api_key_harness?(_), do: false
+
+  @doc """
+  Does this harness log in with a device code the owner enters on the
+  provider's own page (task 01a10315 stage 4)? Codex only: `codex login
+  --device-auth` runs on the agent host as the agent, prints an
+  auth.openai.com URL and a one-time code, and finishes by itself once the
+  person approves there. Burrow shows the code and relays nothing back.
+
+  Claude Code has no such login that finishes without a paste-back, and Burrow
+  never relays a Claude login (task 01a17b10): false.
+  """
+  @spec device_login?(String.t() | nil) :: boolean()
+  def device_login?("codex"), do: true
+  def device_login?(_), do: false
+
+  @typedoc "What the owner is shown to log an agent in (`login_view/1`)."
+  @type login_view ::
+          %{kind: :device_code, url: String.t() | nil, code: String.t() | nil}
+          | :api_key
+          | :subscription_terminal_only
+          | :unsupported
+
+  @doc """
+  How `agent` logs in, for a screen to render:
+
+    * `%{kind: :device_code, url: url, code: code}` for Codex. `url` and
+      `code` are the ones the agent host last observed
+      (`Platform.AgentHost.State`, kept only in the shapes the reconciler
+      accepts), or nil until the host has printed one. Display only.
+    * `:api_key` for Claude Code in the default `:api_key` login mode: an
+      Anthropic API key, through `put_api_key/3`.
+    * `:subscription_terminal_only` for Claude Code in `:operator` mode: a
+      Claude Pro or Max login happens at a terminal on the agent's machine,
+      never through Burrow.
+    * `:unsupported` for an agent this install does not run or a harness it
+      does not know.
+  """
+  @spec login_view(Agent.t()) :: login_view()
+  def login_view(%Agent{} = agent) do
+    case NativeAgents.get_managed_runtime(agent) do
+      %AgentRuntime{harness: harness} ->
+        login_view(harness, Platform.AgentHost.status(agent.id), login_mode())
+
+      nil ->
+        :unsupported
+    end
+  end
+
+  @doc "`login_view/1` from a harness, an observed entry and a login mode. Pure."
+  @spec login_view(String.t() | nil, map() | nil, :api_key | :operator) :: login_view()
+  def login_view(harness, observed, mode) do
+    cond do
+      device_login?(harness) ->
+        observed = observed || %{}
+
+        %{
+          kind: :device_code,
+          url: Map.get(observed, :device_url),
+          code: Map.get(observed, :login_code)
+        }
+
+      api_key_harness?(harness) and mode == :operator ->
+        :subscription_terminal_only
+
+      api_key_harness?(harness) ->
+        :api_key
+
+      true ->
+        :unsupported
+    end
+  end
 
   @doc """
   `:ok` when `value` is shaped like an Anthropic API key: one token, starting

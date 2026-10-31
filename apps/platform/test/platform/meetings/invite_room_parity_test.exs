@@ -253,6 +253,13 @@ defmodule Platform.Meetings.InviteRoomParityTest do
 
   # ── T1: same room, both sides ─────────────────────────────────────────────
 
+  # Task 01a18d0a stage 2: an ordinary visit no longer auto-joins, so a
+  # test that needs the viewer in the call presses the call shell's Join.
+  defp join_call!(view) do
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    view
+  end
+
   describe "the /meetings human and the invited agent" do
     test "are minted into ONE room, and it is space-<chat_space_id>, not the meetings column",
          %{conn: conn, meeting: meeting, host: host, runtime_agent: runtime_agent} do
@@ -263,8 +270,9 @@ defmodule Platform.Meetings.InviteRoomParityTest do
       _channel = join_runtime_client!(runtime_agent)
 
       {:ok, view, _html} = conn |> login(host) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
 
-      # The human side: `handle_info(:auto_join)` -> `MeetingHooks.join/1`
+      # The human side: the explicit Join -> `MeetingHooks.join/1`
       # pushes `join-meeting` with the token it minted.
       assert_push_event(
         view,
@@ -275,9 +283,8 @@ defmodule Platform.Meetings.InviteRoomParityTest do
 
       human_room = token_room(human_token)
 
-      # Auto-join has to have landed before the click: it is what activates
-      # the room `invite_agent_into_call/2` reads. `render/1` is a synchronous
-      # round trip, so the `:auto_join` message ahead of it is fully processed.
+      # The join has to have landed before the click: it is what activates
+      # the room `invite_agent_into_call/2` reads.
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -320,6 +327,7 @@ defmodule Platform.Meetings.InviteRoomParityTest do
     test "mints the same room as the /meetings page, and its event names its token's room",
          %{conn: conn, meeting: meeting, space: space, host: host} do
       {:ok, view, _html} = conn |> login(host) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: page_token}, 1_000)
       page_room = token_room(page_token)
 
@@ -348,6 +356,7 @@ defmodule Platform.Meetings.InviteRoomParityTest do
          %{conn: conn, meeting: meeting, space: space, host: host, agent: agent} do
       # Materialise the space room the way production does: a human joins.
       {:ok, view, _html} = conn |> login(host) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 

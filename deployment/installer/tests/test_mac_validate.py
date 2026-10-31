@@ -157,7 +157,7 @@ class MacFixtureTest(PositiveControlMixin, unittest.TestCase):
         self.assertEqual(
             sorted(covered - {"unknown_key", "unknown_service"}), sorted(MAC_ERROR_CODES)
         )
-        self.assertEqual(len(MAC_ERROR_CODES), 7)
+        self.assertEqual(len(MAC_ERROR_CODES), 8)
         self.assertFalse(set(MAC_ERROR_CODES) & set(ERROR_CODES))
 
     def test_each_fixture_differs_from_the_mac_example_in_exactly_one_field(self):

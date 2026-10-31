@@ -192,9 +192,8 @@ start, so the hook takes effect at the next session.
    BURROW_RUNTIME_TOKEN=<the runtime bearer token>
    ```
 
-   The hook still reads the older SUITE_BASE_URL, SUITE_AGENT_ID and
-   SUITE_RUNTIME_TOKEN names when the BURROW_ ones are unset, and prints one
-   deprecation line for each.
+   Only the BURROW_ names are read (task 01a18dab removed the pre-rename
+   fallback).
 
    Copy the token from wherever the agent already keeps it (for Dalton, the
    bearer in its `.mcp.json`). Do it with a file-to-file copy (`jq -r`

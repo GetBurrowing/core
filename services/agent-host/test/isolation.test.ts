@@ -380,7 +380,7 @@ d("agent files are written as the agent, inside its work dir only", () => {
   }, 60_000);
 
   // Stage 7 round 2, gate case 7008: an owner who replaces CLAUDE.md (here
-  // "# E", with no `@SUITE_CONVENTIONS.md`) must not unload the conventions.
+  // "# E", with no `@BURROW_CONVENTIONS.md`) must not unload the conventions.
   test("an owner-replaced CLAUDE.md still leaves Burrow's conventions in the agent's user memory", async () => {
     const memory = `${homeDir(E)}/.claude/CLAUDE.md`;
     expect(readFileSync(`${work()}/CLAUDE.md`, "utf8")).toBe("# E\n");

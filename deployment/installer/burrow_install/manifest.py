@@ -67,6 +67,17 @@ AGENT_PROFILES = ("full_machine", "contained", "off")
 # pane and logs in to Claude Code there). Rendered into core's env as
 # NATIVE_AGENT_LOGIN.
 AGENT_LOGINS = ("api_key", "operator")
+# Web Push keys (core task 01a10315 stage 1). "off" renders nothing (every
+# manifest written before the [push] table renders byte-unchanged);
+# "generate-on-host" makes the host generate a VAPID key pair at first start
+# (bin/burrow-vapid), so the private key never exists anywhere but the box.
+VAPID_MODES = ("off", "generate-on-host")
+# Where the local embeddings model comes from (core task 01a10315 stage 6).
+# "operator" (the default, every manifest written before this knob): the
+# operator places models/<file> on the host before the stack starts.
+# "download": the host fetches it at first boot from a pinned URL and checks
+# its sha256 (bin/burrow-fetch-model, registry.EMBEDDINGS_MODEL_SOURCE).
+MODEL_SOURCES = ("operator", "download")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -83,6 +94,10 @@ SCHEMA = {
         # stage 5). A hosted install must have a backup target: the validator
         # refuses `[backup] target = "none"` unless `backup.hosted_opt_out`.
         "hosted": _bool(False),
+        # The root org's display name (core task 01a10315). Rendered into
+        # core-platform's env as ROOT_ORG_NAME, which core reads at FIRST
+        # migrate only (migration 20260519143620_seed_root_orgs).
+        "org_name": _str(),
     },
     "domain": {
         "primary": _str(),
@@ -95,6 +110,9 @@ SCHEMA = {
     },
     "host": {
         "gpu": _bool(False),
+        # One OpenSSH public key for the cloud image's default user
+        # (cloud-config ssh_authorized_keys; target single-host only).
+        "ssh_authorized_key": _str(),
     },
     "services": {knob: _bool(False) for knob in registry.OPTIONAL_SERVICES},
     "voice": {
@@ -109,6 +127,7 @@ SCHEMA = {
         # BGE prefix, and "" sends queries unprefixed (hosted OpenAI).
         "model": _str(),
         "query_prefix": _str(),
+        "model_source": _enum(MODEL_SOURCES, "operator"),
     },
     "models": {
         "endpoints": ArrayOf(
@@ -148,6 +167,12 @@ SCHEMA = {
         "registry": _str(),
         "image_namespace": _str(),
         "source": _enum(IMAGE_SOURCES, "registry"),
+        # The default images are public (core task 01a10315 stage 2: the
+        # ghcr.io/getburrowing images went public 2026-10-30), so source =
+        # "registry" needs no pull credential. Default false keeps every
+        # earlier manifest's behaviour: a private default image then needs
+        # --registry-auth.
+        "public": _bool(False),
         "refs": {container: _str() for container in registry.ALL_CONTAINERS},
     },
     # target = "mac" only: how the public hostnames reach this machine.
@@ -185,6 +210,10 @@ SCHEMA = {
         # advertises full_root in its hello. Gates the admin_restart,
         # admin_deploy and admin_rollback tools.
         "full_root": _bool(False),
+    },
+    # Web Push (VAPID) keys for core (core task 01a10315 stage 1).
+    "push": {
+        "vapid": _enum(VAPID_MODES, "off"),
     },
 }
 

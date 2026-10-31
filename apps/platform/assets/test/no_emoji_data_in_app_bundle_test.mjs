@@ -35,26 +35,8 @@ const DEPS = resolve(ASSETS, "..", "deps");
 
 // The `@extensions` alias the `platform` profile sets (ADR 0055): the empty
 // registry by default, or a with-modules host's generated entry when
-// BURROW_EXTENSIONS_JS (old name SUITE_EXTENSIONS_JS, still read as a
-// fallback) names one (see no_excalidraw_in_app_bundle_test.mjs).
-// Burrow rename (task 01a14b9e): BURROW_<NAME> first, SUITE_<NAME> fallback, "" counts
-// as unset, one stderr line per name per process on fallback. Both full
-// literals are named at the call site so the stage-5 text guard sees them.
-const warnedDeprecated = new Set();
-function compatEnv(burrow, suite) {
-  const value = process.env[burrow];
-  if (value) return value;
-  const old = process.env[suite];
-  if (old) {
-    if (!warnedDeprecated.has(suite)) {
-      warnedDeprecated.add(suite);
-      process.stderr.write(`deprecated: ${suite} is set; rename it to ${burrow}\n`);
-    }
-    return old;
-  }
-  return undefined;
-}
-const EXTENSIONS_ENV = compatEnv("BURROW_EXTENSIONS_JS", "SUITE_EXTENSIONS_JS");
+// BURROW_EXTENSIONS_JS names one (see no_excalidraw_in_app_bundle_test.mjs).
+const EXTENSIONS_ENV = process.env.BURROW_EXTENSIONS_JS;
 const EXTENSIONS = EXTENSIONS_ENV ? resolve(EXTENSIONS_ENV) : "./js/extensions/none.js";
 
 // CLDR short names that exist in the dataset and nowhere else a human would

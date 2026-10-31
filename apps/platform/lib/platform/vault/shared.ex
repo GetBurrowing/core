@@ -22,6 +22,15 @@ defmodule Platform.Vault.Shared do
   who is now refused here too. The `ExternalUserScope` plug already refuses
   that user over HTTP, so HTTP outcomes are unchanged.
 
+  ## Named system readers
+
+  `grant_system/3` and `revoke_system_grant/3` give or take a `use` grant for
+  one of `Platform.Vault.system_principals/0` (an in-BEAM reader such as
+  `{:system, "installs-provisioner"}`), with an `update` access-log row each,
+  exactly as agent grants are written. `set_grants/3` manages agent grants
+  only and never touches a system grant. The value is not copied anywhere:
+  the reader fetches the one shared row.
+
   ## Write-only
 
   No function here returns or logs a value. `list/1` selects explicit columns
@@ -164,9 +173,99 @@ defmodule Platform.Vault.Shared do
   end
 
   @doc """
+  Grant `use` on the shared credential `credential_id` to the named system
+  reader `name` (a key of `Platform.Vault.system_principals/0`). Idempotent:
+  an existing grant is left alone and logs nothing.
+  """
+  @spec grant_system(map() | nil, String.t(), String.t()) ::
+          :ok | {:error, :unauthorized | :not_found | :unknown_system_principal}
+  def grant_system(actor, credential_id, name) do
+    with_system_principal(actor, credential_id, name, fn cred, grantee_id ->
+      {count, _} =
+        Repo.insert_all(
+          AccessGrant,
+          [
+            %{
+              id: Platform.Types.UUIDv7.generate(),
+              credential_id: cred.id,
+              grantee_type: "system",
+              grantee_id: grantee_id,
+              permissions: ["use"],
+              granted_by: actor.id,
+              inserted_at: DateTime.utc_now()
+            }
+          ],
+          on_conflict: :nothing,
+          conflict_target: [:credential_id, :grantee_type, :grantee_id]
+        )
+
+      if count == 1 do
+        {:ok, _} =
+          Vault.record_access(cred, accessor(actor), "update", %{
+            "grant" => "added",
+            "system_principal" => name
+          })
+      end
+
+      :ok
+    end)
+  end
+
+  @doc """
+  Remove the named system reader `name`'s grant on the shared credential
+  `credential_id`. Its next read is refused. Idempotent.
+  """
+  @spec revoke_system_grant(map() | nil, String.t(), String.t()) ::
+          :ok | {:error, :unauthorized | :not_found | :unknown_system_principal}
+  def revoke_system_grant(actor, credential_id, name) do
+    with_system_principal(actor, credential_id, name, fn cred, grantee_id ->
+      {count, _} =
+        from(g in AccessGrant,
+          where:
+            g.credential_id == ^cred.id and g.grantee_type == "system" and
+              g.grantee_id == ^grantee_id
+        )
+        |> Repo.delete_all()
+
+      if count > 0 do
+        {:ok, _} =
+          Vault.record_access(cred, accessor(actor), "update", %{
+            "grant" => "removed",
+            "system_principal" => name
+          })
+      end
+
+      :ok
+    end)
+  end
+
+  defp with_system_principal(actor, credential_id, name, fun) do
+    with_root_admin(actor, fn ->
+      with {:ok, grantee_id} <- system_principal_id(name),
+           {:ok, id} <- cast_uuid(credential_id),
+           %Credential{} = cred <- shared_credential(id) do
+        case Repo.transaction(fn -> fun.(cred, grantee_id) end) do
+          {:ok, :ok} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        {:error, :unknown_system_principal} = error -> error
+        _ -> {:error, :not_found}
+      end
+    end)
+  end
+
+  defp system_principal_id(name) do
+    case Map.fetch(Vault.system_principals(), name) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :unknown_system_principal}
+    end
+  end
+
+  @doc """
   Every shared secret, metadata only: id, slug, name, note, fingerprint,
-  timestamps, `granted_agent_ids` and `refused_7d` (denied rows in the last
-  seven days). Never a value.
+  timestamps, `granted_agent_ids`, `granted_system_principals` (names) and
+  `refused_7d` (denied rows in the last seven days). Never a value.
   """
   @spec list(map() | nil) :: {:ok, [map()]} | {:error, :unauthorized}
   def list(actor) do
@@ -191,6 +290,7 @@ defmodule Platform.Vault.Shared do
 
       ids = Enum.map(creds, & &1.id)
       grants = grants_by_credential(ids)
+      system_grants = system_grants_by_credential(ids)
       refused = refused_since(ids, DateTime.add(DateTime.utc_now(), -7, :day))
 
       {:ok,
@@ -203,6 +303,7 @@ defmodule Platform.Vault.Shared do
            note: meta["note"],
            fingerprint: meta["fingerprint"],
            granted_agent_ids: Map.get(grants, c.id, []),
+           granted_system_principals: Map.get(system_grants, c.id, []),
            refused_7d: Map.get(refused, c.id, 0)
          })
        end)}
@@ -311,6 +412,22 @@ defmodule Platform.Vault.Shared do
     )
     |> Repo.all()
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp system_grants_by_credential([]), do: %{}
+
+  defp system_grants_by_credential(ids) do
+    names = Map.new(Vault.system_principals(), fn {name, id} -> {id, name} end)
+    known = Map.keys(names)
+
+    from(g in AccessGrant,
+      where: g.credential_id in ^ids and g.grantee_type == "system" and g.grantee_id in ^known,
+      where: fragment("'use' = ANY(?)", g.permissions),
+      order_by: [asc: g.inserted_at],
+      select: {g.credential_id, g.grantee_id}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), &Map.fetch!(names, elem(&1, 1)))
   end
 
   defp refused_since([], _since), do: %{}

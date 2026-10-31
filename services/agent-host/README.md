@@ -32,8 +32,7 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
 
-Environment: `BURROW_CORE_URL` (the legacy `SUITE_CORE_URL` is still read, with a
-deprecation line), `AGENT_HOST_TOKEN`, and `AGENT_HOST_PROFILE`
+Environment: `BURROW_CORE_URL`, `AGENT_HOST_TOKEN`, and `AGENT_HOST_PROFILE`
 (`full_machine` or `contained`). The profile is reported to core as is, and
 core does not branch on it.
 

@@ -114,6 +114,43 @@
           </div>
         </section>
 
+        <section class="mb-6" data-role="vault-system-readers">
+          <h2 class="mb-2 text-sm font-medium text-base-content">System readers</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <span
+              :for={name <- @secret.granted_system_principals}
+              class="inline-flex items-center gap-1 rounded-full border border-edge bg-base-200 py-1 pl-3 pr-1 font-mono text-sm"
+              data-role="vault-system-grant-chip"
+              data-name={name}
+            >
+              {name}
+              <button
+                type="button"
+                phx-click="ungrant_system"
+                phx-value-name={name}
+                class="inline-flex size-6 items-center justify-center rounded-full lg:hover:bg-base-300"
+                aria-label={"Remove #{name}'s grant"}
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </span>
+            <button
+              :for={name <- ungranted_system_principals(@secret)}
+              type="button"
+              phx-click="grant_system"
+              phx-value-name={name}
+              class="btn btn-ghost btn-sm font-mono"
+              data-role="vault-system-grant-open"
+              data-name={name}
+            >
+              <span class="hero-plus size-4"></span> {name}
+            </button>
+          </div>
+          <p class="mt-1 text-xs text-subtle">
+            Built-in services that read this secret in core. No agent sees the value.
+          </p>
+        </section>
+
         <section class="mb-8">
           <h2 class="mb-2 text-sm font-medium text-base-content">Access log</h2>
           <div

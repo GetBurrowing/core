@@ -1159,7 +1159,6 @@ jobs:
         # does not have.
         run: |
           export BURROW_EXTENSIONS_JS="$GITHUB_WORKSPACE/apps/burrow_release/assets/generated/extensions.js"
-          export SUITE_EXTENSIONS_JS="$BURROW_EXTENSIONS_JS"
           npm ci
           if ! node --test test/no_excalidraw_in_app_bundle_test.mjs test/no_emoji_data_in_app_bundle_test.mjs; then
             echo "::error::a bundle guard failed on the WITH-Play app.js (BURROW_EXTENSIONS_JS=$BURROW_EXTENSIONS_JS)."
@@ -1746,7 +1745,7 @@ jobs:
         if: steps.changed.outputs.agent_host == 'true'
         run: |
           docker run --rm -v "$PWD/services/agent-host:/src:ro" ghcr.io/getburrowing/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d sh -c \
-            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts test/no_suite_env_names.test.ts'
 
       - uses: docker/setup-buildx-action@v4
         if: steps.changed.outputs.agent_host == 'true'
@@ -1793,7 +1792,7 @@ jobs:
       - name: Typecheck and unit-test the agent host
         run: |
           docker run --rm -v "$PWD/services/agent-host:/src:ro" ghcr.io/getburrowing/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d sh -c \
-            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts test/no_suite_env_names.test.ts'
 
   # The meeting voice service's unit tests (task 01a17b10 stage 4). Mocked
   # backends only: tests/live is excluded twice over (the path and the

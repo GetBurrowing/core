@@ -194,6 +194,20 @@ defmodule PlatformWeb.AdminVaultLive do
     {:noreply, write_grants(socket, List.delete(secret.granted_agent_ids, id), "Grant removed.")}
   end
 
+  # Named system readers (`Platform.Vault.system_principals/0`): same
+  # grant/ungrant shape as agents, written by `Shared` with a log row each.
+  def handle_event("grant_system", %{"name" => name}, %{assigns: %{secret: secret}} = socket)
+      when not is_nil(secret) do
+    result = Shared.grant_system(socket.assigns[:current_user_record], secret.id, name)
+    {:noreply, after_system_grant(socket, result, "System reader granted.")}
+  end
+
+  def handle_event("ungrant_system", %{"name" => name}, %{assigns: %{secret: secret}} = socket)
+      when not is_nil(secret) do
+    result = Shared.revoke_system_grant(socket.assigns[:current_user_record], secret.id, name)
+    {:noreply, after_system_grant(socket, result, "Grant removed.")}
+  end
+
   def handle_event("ask_revoke", _params, socket) do
     {:noreply, assign(socket, :confirm_revoke, true)}
   end
@@ -217,7 +231,7 @@ defmodule PlatformWeb.AdminVaultLive do
   end
 
   def handle_event(event, _params, socket)
-      when event in ~w(rotate grant ungrant revoke) do
+      when event in ~w(rotate grant ungrant grant_system ungrant_system revoke) do
     {:noreply, put_flash(socket, :error, "Open a secret first.")}
   end
 
@@ -232,6 +246,12 @@ defmodule PlatformWeb.AdminVaultLive do
         put_flash(socket, :error, error_message(reason))
     end
   end
+
+  defp after_system_grant(socket, :ok, ok_message),
+    do: socket |> put_flash(:info, ok_message) |> reload_secret()
+
+  defp after_system_grant(socket, {:error, reason}, _ok_message),
+    do: put_flash(socket, :error, error_message(reason))
 
   defp reload_secret(socket) do
     slug = socket.assigns.secret.slug
@@ -299,6 +319,7 @@ defmodule PlatformWeb.AdminVaultLive do
   defp error_message(:unauthorized), do: "Only an install admin can change the vault."
   defp error_message(:not_found), do: "That secret no longer exists."
   defp error_message(:unknown_agent), do: "One of the selected agents no longer exists."
+  defp error_message(:unknown_system_principal), do: "That system reader does not exist."
   defp error_message({:invalid, messages}) when is_list(messages), do: Enum.join(messages, "; ")
   defp error_message(_), do: "The secret could not be saved."
 
@@ -438,8 +459,22 @@ defmodule PlatformWeb.AdminVaultLive do
   @doc false
   def sealed_at(secret), do: secret.rotated_at || secret.inserted_at
 
+  @doc "The named system readers this secret does not grant yet."
+  def ungranted_system_principals(secret) do
+    granted = Map.get(secret, :granted_system_principals, [])
+    Platform.Vault.system_principals() |> Map.keys() |> Enum.sort() |> Kernel.--(granted)
+  end
+
   @doc false
   def log_actor(names, %{accessor_type: "agent", accessor_id: id}), do: agent_name(names, id)
+
+  def log_actor(_names, %{accessor_type: "system", accessor_id: id}) do
+    case Enum.find(Platform.Vault.system_principals(), fn {_name, uuid} -> uuid == id end) do
+      {name, _uuid} -> name
+      nil -> "system"
+    end
+  end
+
   def log_actor(_names, %{accessor_type: type}) when type in ["platform", "user"], do: "admin"
   def log_actor(_names, %{accessor_type: type}), do: type || "unknown"
 
@@ -462,6 +497,12 @@ defmodule PlatformWeb.AdminVaultLive do
 
       {"update", %{"grant" => "removed", "agent_id" => id}} ->
         "ungranted #{agent_name(names, id)}"
+
+      {"update", %{"grant" => "added", "system_principal" => name}} ->
+        "granted system reader #{name}"
+
+      {"update", %{"grant" => "removed", "system_principal" => name}} ->
+        "ungranted system reader #{name}"
 
       {"create", _} ->
         "created"
@@ -487,8 +528,12 @@ defmodule PlatformWeb.AdminVaultLive do
 
   @doc false
   def revoke_message(names, secret) do
-    case Enum.map(secret.granted_agent_ids, &agent_name(names, &1)) do
-      [] -> "No agent holds a grant on #{secret.slug}. Revoking destroys it."
+    holders =
+      Enum.map(secret.granted_agent_ids, &agent_name(names, &1)) ++
+        Map.get(secret, :granted_system_principals, [])
+
+    case holders do
+      [] -> "Nothing holds a grant on #{secret.slug}. Revoking destroys it."
       [one] -> "#{one} will lose access to #{secret.slug}."
       many -> "#{join_names(many)} will lose access to #{secret.slug}."
     end

@@ -15,7 +15,7 @@ Design:
 - Secret values are only ever compared in memory; no test prints one.
 
 Regenerate golden files after an intended change with
-``BURROW_INSTALL_UPDATE_GOLDEN=1`` (legacy ``SUITE_INSTALL_UPDATE_GOLDEN=1``)
+``BURROW_INSTALL_UPDATE_GOLDEN=1``
 and review the diff.
 """
 
@@ -43,7 +43,7 @@ sys.path.insert(0, INSTALLER)
 from identity_terms import identity_hits, planted_term
 from migrate_embed import cut_migrate_script
 
-from burrow_install import envcompat, registry
+from burrow_install import registry
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
@@ -71,6 +71,12 @@ GOLDEN_CASES = {
     "single-host-agents-contained": os.path.join(
         RENDER_FIXTURES, "single-host-agents-contained.toml"
     ),
+    # One-click DigitalOcean droplet (task 01a10315 stage 1); test_droplet.py covers the rest.
+    "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
+}
+# images.source = "registry" cases need a (fake) pull credential to render.
+GOLDEN_REGISTRY_AUTH = {
+    "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -154,9 +160,11 @@ class PositiveControlMixin:
 
 class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
-        redacted = build(manifest_from(GOLDEN_CASES[case])).redacted()
+        redacted = build(
+            manifest_from(GOLDEN_CASES[case]), registry_auth=GOLDEN_REGISTRY_AUTH.get(case)
+        ).redacted()
         golden_dir = os.path.join(GOLDEN, case)
-        if envcompat.get("BURROW_INSTALL_UPDATE_GOLDEN", "SUITE_INSTALL_UPDATE_GOLDEN") == "1":
+        if os.environ.get("BURROW_INSTALL_UPDATE_GOLDEN") == "1":
             shutil.rmtree(golden_dir, ignore_errors=True)
             for rel, text in redacted.items():
                 path = os.path.join(golden_dir, rel)
@@ -193,6 +201,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_single_host_agents_contained(self):
         self.check_golden("single-host-agents-contained")
+
+    def test_golden_do_droplet(self):
+        self.check_golden("do-droplet")
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES

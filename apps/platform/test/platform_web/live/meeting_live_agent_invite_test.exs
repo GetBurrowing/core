@@ -295,6 +295,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
   # ── The control ──────────────────────────────────────────────────────────
 
+  # Task 01a18d0a stage 2: an ordinary visit no longer auto-joins, so a
+  # test that needs the viewer in the call presses the call shell's Join.
+  defp join_call!(view) do
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    view
+  end
+
   describe "the invite-an-agent control" do
     test "offers each space agent and is wired to the invite event",
          %{conn: conn, meeting: meeting, agent: agent} do
@@ -387,6 +394,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} =
         conn |> login(user!("retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
 
+      join_call!(view)
+
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -471,6 +480,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} =
         conn |> login(user!("ack-inviter")) |> live(~p"/meetings/#{meeting.slug}")
 
+      join_call!(view)
+
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -502,6 +513,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} =
         conn |> login(user!("ack-ok-inviter")) |> live(~p"/meetings/#{meeting.slug}")
 
+      join_call!(view)
+
       _ = render(view)
 
       view
@@ -523,6 +536,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       {:ok, view, _html} =
         conn |> login(user!("ack-retry-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      join_call!(view)
 
       _ = render(view)
 
@@ -605,6 +620,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("orphan-capability")) |> live(~p"/meetings/#{meeting.slug}")
+
+      join_call!(view)
 
       _ = render(view)
 
@@ -1292,6 +1309,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       _channel = join_runtime_client!(ctx)
 
       {:ok, view, _html} = conn |> login(user!("arrival")) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -1536,6 +1554,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} =
         conn |> login(user!("forger")) |> live(~p"/meetings/#{meeting.slug}")
 
+      join_call!(view)
+
       # Auto-join has landed: the room is active, so the only thing between
       # this click and a dispatch is the invite list.
       _ = render(view)
@@ -1587,6 +1607,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       PlatformWeb.Endpoint.subscribe(dead_topic)
 
       {:ok, view, _html} = conn |> login(inviter) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
 
       # Auto-join has to have landed before the click: it is what activates
       # the room the handler reads AND what mints the inviter's space
@@ -1683,6 +1704,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     defp invite_and_read_flash(conn, inviter, meeting, runtime_agent) do
       _channel = join_runtime_client!(runtime_agent)
       {:ok, view, _html} = conn |> login(inviter) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting
 
@@ -1876,6 +1898,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
       {:ok, view, _html} =
         conn |> login(user!("voice-offline-inviter")) |> live(~p"/meetings/#{meeting.slug}")
 
+      join_call!(view)
+
       _ = render(view)
 
       html =
@@ -1903,6 +1927,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
       {:ok, view, _html} =
         conn |> login(user!("orphan-inviter")) |> live(~p"/meetings/#{meeting.slug}")
+
+      join_call!(view)
 
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting

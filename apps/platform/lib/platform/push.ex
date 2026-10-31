@@ -794,11 +794,18 @@ defmodule Platform.Push do
       presence(vault_get(vault_slug))
   end
 
-  # Mirrors the subject `config/runtime.exs` builds, so moving a deployment
-  # between the app-env and Vault paths does not change the JWT audience.
-  defp vapid_subject(app_env) do
-    presence(app_env[:subject]) || "mailto:push@" <> System.get_env("PHX_HOST", "suite.app")
+  # The VAPID `sub` claim: an explicit app-env subject, else a mailto on the
+  # endpoint's own host (PHX_HOST in prod). `config/runtime.exs` no longer
+  # builds one, so the app-env and Vault paths both land here and agree.
+  # Changing it (e.g. when PHX_HOST is renamed) does not invalidate any
+  # subscription: a subscription is bound to the VAPID public key, which is
+  # unchanged, and the subject is only a contact in the signed JWT.
+  @doc false
+  def vapid_subject(app_env) do
+    presence(app_env[:subject]) || "mailto:push@" <> endpoint_host()
   end
+
+  defp endpoint_host, do: PlatformWeb.Endpoint.struct_url().host
 
   # An empty string is an absent credential, not a credential. Env vars set to
   # "" are common in container tooling and must not count as configured.

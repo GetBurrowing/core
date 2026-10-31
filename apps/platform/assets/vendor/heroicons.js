@@ -2,24 +2,6 @@ const plugin = require("tailwindcss/plugin")
 const fs = require("fs")
 const path = require("path")
 
-// Burrow rename (task 01a14b9e): BURROW_<NAME> first, SUITE_<NAME> fallback, "" counts
-// as unset, one stderr line per name per process on fallback. Both full
-// literals are named at the call site so the stage-5 text guard sees them.
-const warnedDeprecated = new Set()
-function compatEnv(burrow, suite) {
-  const value = process.env[burrow]
-  if (value) return value
-  const old = process.env[suite]
-  if (old) {
-    if (!warnedDeprecated.has(suite)) {
-      warnedDeprecated.add(suite)
-      process.stderr.write(`deprecated: ${suite} is set; rename it to ${burrow}\n`)
-    }
-    return old
-  }
-  return undefined
-}
-
 module.exports = plugin(function({matchComponents, theme}) {
   // TWO ROOTS: the vendored Heroicons set first, then our own `assets/icons`,
   // so a same-named local file overwrites the vendored entry.
@@ -42,8 +24,7 @@ module.exports = plugin(function({matchComponents, theme}) {
   // delete `assets/icons/24/outline/microphone-slash.svg` and let the
   // vendored file win again, rather than carrying the fork indefinitely.
   //
-  // BURROW_HEROICONS_DIR (old name SUITE_HEROICONS_DIR, still read as a
-  // fallback; ADR 0055 stage 4): a with-modules release host builds
+  // BURROW_HEROICONS_DIR (ADR 0055 stage 4; "" counts as unset): a with-modules release host builds
   // this stylesheet with core as a path dependency, so the Heroicons dep sits
   // in the HOST's `deps/`, not in apps/platform/deps. The host's Tailwind
   // profile (apps/burrow_release/config/config.exs) passes its own path here.
@@ -51,7 +32,7 @@ module.exports = plugin(function({matchComponents, theme}) {
   // with-Play image shipped no `hero-*` class from the vendored set at all,
   // silently: `existsSync` below skips a missing root.
   let roots = [
-    compatEnv("BURROW_HEROICONS_DIR", "SUITE_HEROICONS_DIR") ||
+    process.env.BURROW_HEROICONS_DIR ||
       path.join(__dirname, "../../deps/heroicons/optimized"),
     path.join(__dirname, "../icons")
   ]

@@ -220,19 +220,34 @@ defmodule PlatformWeb.PushRelayControllerTest do
   end
 
   describe "rate limit" do
-    test "over the per-minute budget is a 429, and a refused batch is not counted",
+    test "a batch larger than the per-minute budget is always a 429",
          %{conn: conn, credential: cred} do
       Application.put_env(:platform, :push_relay_server, enabled: true, rate_per_minute: 3)
 
-      assert relay(conn, cred, %{"notifications" => [android_item(), android_item()]})
-             |> json_response(200)
-
-      assert relay(build_conn(), cred, %{"notifications" => [android_item(), android_item()]})
+      # Four items exceed the entire budget even if the minute rolls over.
+      assert relay(conn, cred, %{"notifications" => List.duplicate(android_item(), 4)})
              |> json_response(429) == %{"error" => "rate_limited"}
 
-      # 2 used of 3: the refused pair was refunded, so one more fits.
-      assert relay(build_conn(), cred, %{"notifications" => [android_item()]})
-             |> json_response(200)
+      refute_received {:fcm_send, _}
+      refute_received {:apns, _}
+
+      # Discriminating refusal-refund and cumulative-budget proof live in
+      # relay_rate_limit_test.exs using check/4. This 200 alone cannot prove
+      # refund across a minute rollover.
+      assert relay(build_conn(), cred, %{"notifications" => List.duplicate(android_item(), 3)})
+             |> json_response(200) == %{
+               "results" => [
+                 %{"status" => "sent"},
+                 %{"status" => "sent"},
+                 %{"status" => "sent"}
+               ]
+             }
+
+      assert_received {:fcm_send, _}
+      assert_received {:fcm_send, _}
+      assert_received {:fcm_send, _}
+      refute_received {:fcm_send, _}
+      refute_received {:apns, _}
     end
 
     test "the budget is per install", %{conn: conn, credential: cred} do

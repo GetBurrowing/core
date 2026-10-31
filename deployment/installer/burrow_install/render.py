@@ -112,6 +112,12 @@ class Plan:
         # [backup] (task 01a17b10 stage 5): None when target = "none".
         self.backup = None if manifest["backup"]["target"] == "none" else manifest["backup"]
         self.full_root = self.agents != "off" and manifest["agents"].get("full_root") is True
+        # Task 01a10315: VAPID keys generated on the host at stack start, and
+        # one SSH key for the cloud image's default user. Both off by default.
+        self.vapid_on_host = manifest.get("push", {}).get("vapid") == "generate-on-host"
+        self.ssh_authorized_key = manifest["host"].get("ssh_authorized_key")
+        # Stage 6: the host downloads the local embeddings model at first boot.
+        self.model_download = manifest["embeddings"].get("model_source") == "download"
 
     def routes(self):
         out = {}
@@ -343,7 +349,12 @@ def build(
     if p.agents == "full_machine" and not manifest["images"]["refs"].get(registry.AGENT_HOST):
         # Not a container here, but the host pulls the image at first boot.
         private_defaults.append(registry.AGENT_HOST)
-    if not p.images_preloaded and private_defaults and registry_auth is None:
+    if (
+        not p.images_preloaded
+        and private_defaults
+        and registry_auth is None
+        and not manifest["images"]["public"]
+    ):
         raise RenderError(
             "registry_auth_required",
             "images.source",

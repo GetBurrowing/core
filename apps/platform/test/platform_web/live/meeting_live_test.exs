@@ -228,6 +228,13 @@ defmodule PlatformWeb.MeetingLiveTest do
     class
   end
 
+  # Task 01a18d0a stage 2: an ordinary visit no longer auto-joins, so a
+  # test that needs the in-call UI presses the call shell's Join.
+  defp join_call!(view) do
+    view |> element(~s([data-role="meeting-join"])) |> render_click()
+    view
+  end
+
   describe "route resolution" do
     test "/meetings/:slug resolves and mounts the meeting shell", %{conn: conn} do
       {meeting, _space} = create_meeting(%{slug: "kickoff-route", name: "Kickoff"})
@@ -251,6 +258,65 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert {:error, {:live_redirect, %{to: "/meetings"}}} =
                live(conn, ~p"/meetings/does-not-exist")
+    end
+  end
+
+  # Task 01a18d0a stage 1: "Going to Meetings opens the meetings top-level
+  # page every time. It must never restore or redirect to the last-visited
+  # meeting route." The client half (RouteResume never saving or restoring a
+  # Meetings route, including a stale `route_resume:meetings` value) is pinned
+  # in `assets/test/hooks/route_resume.test.js`; LiveViewTest has no
+  # localStorage or history. These pin the server half: having opened a
+  # meeting in this session changes nothing about `/meetings`, and every
+  # Meetings tile the shell renders points at the index.
+  describe "Meetings index after visiting a meeting (task 01a18d0a)" do
+    test "a fresh /meetings mount in the same session renders the index, not the prior meeting",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "prior-room", name: "Prior Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _show, show_html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert show_html =~ ~s(data-intent-panel-host="true")
+
+      # Same session cookie, new mount: a redirect would surface here as
+      # `{:error, {:live_redirect | :redirect, _}}`.
+      assert {:ok, view, _html} = live(conn, ~p"/meetings")
+      assert has_element?(view, ~s([data-role="meetings-view-toggle"]))
+      refute has_element?(view, ~s([data-intent-panel-host="true"]))
+      assert page_title(view) =~ "Meetings"
+    end
+
+    test "patching from a meeting back to /meetings lands on the index on the same pid",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "patch-room", name: "Patch Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      render_patch(view, ~p"/meetings")
+      assert_patched(view, ~p"/meetings")
+      assert has_element?(view, ~s([data-role="meetings-view-toggle"]))
+      refute has_element?(view, ~s([data-intent-panel-host="true"]))
+    end
+
+    test "every Meetings tile the shell renders on a meeting page links to the bare index",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "tile-room", name: "Tile Room"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Every `<a ... data-module-id="meetings" ...>` opening tag on the page.
+      tags =
+        ~r/<a\b[^>]*data-module-id="meetings"[^>]*>/
+        |> Regex.scan(html)
+        |> List.flatten()
+
+      assert tags != [], "expected at least one Meetings tile on the meeting page"
+
+      for tag <- tags do
+        assert tag =~ ~s(href="/meetings"), "Meetings tile is not the bare index: #{tag}"
+      end
     end
   end
 
@@ -344,17 +410,20 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  describe "meeting lifecycle (start on auto-join)" do
-    test "auto-joining a scheduled meeting transitions it to live", %{conn: conn} do
+  describe "meeting lifecycle (start on Join)" do
+    test "joining a scheduled meeting transitions it to live", %{conn: conn} do
       {meeting, _space} = create_meeting(%{slug: "lifecycle-start", name: "Lifecycle Start"})
       {conn, _user} = authenticated_conn(conn)
 
       assert meeting.status == "scheduled"
       assert is_nil(meeting.started_at)
 
-      # Connected mount fires `:auto_join`, which now flips a scheduled
-      # meeting to live before delegating to MeetingHooks.join/1.
-      {:ok, _view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # An ordinary connected mount leaves it scheduled (task 01a18d0a
+      # stage 2); the explicit Join flips a scheduled meeting to live before
+      # delegating to MeetingHooks.join/1.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert Repo.get!(Meeting, meeting.id).status == "scheduled"
+      join_call!(view)
 
       started = Repo.get!(Meeting, meeting.id)
       assert started.status == "live"
@@ -7279,9 +7348,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(html, ~s([data-role="meeting-transcript"] [data-role="transcript-empty"])) == 0
     end
 
-    test "auto-joins on connected mount and push_events join-meeting with token + url + room_name",
+    test "Join on a connected mount push_events join-meeting with token + url + room_name",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # An ordinary visit connects nothing until the explicit Join (task
+      # 01a18d0a stage 2).
+      refute_push_event(view, "join-meeting", %{}, 50)
+      join_call!(view)
 
       # The join lifecycle runs in MeetingHooks.do_join — token mint,
       # MeetingState broadcast, then push_event. Asserting the payload
@@ -7367,6 +7441,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "meeting_leave click flips @in_meeting back to false and pushes leave-meeting",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
 
       # The auto-join push must clear from the queue before we assert
       # the leave push lands — render once to flush.
@@ -7390,6 +7465,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The mobile tab bar hides under `:root:has([data-in-call])` (app.css).
       # In the call: present. After leaving: gone, so the bar returns.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       _ = render(view)
       assert :sys.get_state(view.pid).socket.assigns.in_meeting == true
       assert render(view) =~ ~s(data-in-call="true")
@@ -8992,6 +9068,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
 
       # Wait for the auto-join push_event to land before asserting the
       # in-meeting UI — `assert_push_event/3` blocks the test process
@@ -9015,6 +9092,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "clicking the CC toggle flips :captions_visible and mounts the overlay",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html =
@@ -9067,6 +9145,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       # Split into whole class tokens rather than substring-matching:
@@ -9111,6 +9190,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       view
@@ -9133,6 +9213,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       # The JS hook fires this on mount when a stored value differs
@@ -9155,6 +9236,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "the caption host carries data-meeting-id for the stall signal (task 01a0cf5c stage 2)",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html = render_hook(view, "meeting_captions_hydrate", %{"visible" => true})
@@ -9165,6 +9247,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "meeting_captions_stalled logs a low-cardinality warning naming the meeting and elapsed time",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       # Sent by `MeetingCaptions._reportStall` once per stall episode, not
@@ -9186,6 +9269,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "meeting_captions_stalled falls back to the socket's own meeting id when the client omits it",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       log =
@@ -9215,6 +9299,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
       html = render(view)
 
@@ -9293,6 +9378,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       # Toggle CC on and re-render.
@@ -9317,6 +9403,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # viewports. Bump to `z-40` guarantees the caption bar wins the
       # z-order.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html =
@@ -9349,6 +9436,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html =
@@ -9403,6 +9491,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       gallery_html =
@@ -9453,6 +9542,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       view
@@ -9491,6 +9581,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html =
@@ -9551,6 +9642,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "caption bar renders WITHOUT `hidden` class in gallery mode when captions on",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       html =
@@ -9580,6 +9672,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "caption bar renders WITHOUT `hidden` class in canvas mode",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       view
@@ -9599,6 +9692,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "caption bar renders WITHOUT `hidden` class in screen and whiteboard modes",
          %{conn: conn, meeting: meeting} do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       view
@@ -9625,6 +9719,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # is the observable that proves the transition actually happened, so
       # the `hidden` refutes are not passing on a stale render.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       view
@@ -9652,6 +9747,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The `:if={@captions_visible}` gate still short-circuits mount, so
       # the class flip only takes effect once captions are actually on.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
 
       for mode <- ["gallery", "canvas", "screen", "whiteboard"] do
@@ -13191,6 +13287,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       seed_meeting_presence(space, "agent", "Dockless Agent")
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}")
+      join_call!(view)
       html = view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
 
       assert count(html, ~s([data-pane="bottom-strip"] [data-section="humans"])) == 1
@@ -13664,9 +13761,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, probe, _} = live(conn, ~p"/meetings/#{meeting.slug}")
       user_id = :sys.get_state(probe.pid).socket.assigns.user_id
 
-      # Tolerant of the row already existing: the probe mount's auto-join
-      # may have inserted it first, and either way the guard below is the
-      # one that matters.
+      # Tolerant of the row already existing; either way the guard below is
+      # the one that matters.
       Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: user_id,
@@ -13674,7 +13770,8 @@ defmodule PlatformWeb.MeetingLiveTest do
         joined_at: DateTime.utc_now()
       })
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = view |> join_call!() |> render()
 
       me =
         PlatformWeb.MeetingLive.viewer_gallery_identity(:sys.get_state(view.pid).socket.assigns)
@@ -13721,7 +13818,8 @@ defmodule PlatformWeb.MeetingLiveTest do
         joined_at: DateTime.utc_now()
       })
 
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      html = view |> join_call!() |> render()
 
       me =
         PlatformWeb.MeetingLive.viewer_gallery_identity(:sys.get_state(view.pid).socket.assigns)

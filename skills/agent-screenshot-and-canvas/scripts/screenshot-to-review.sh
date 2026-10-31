@@ -15,31 +15,11 @@
 #   SHOT_PATH        default /tmp/agent-shot-<pid>.png
 #   CDP_NAVIGATE     path to cdp_navigate.py (default: sibling of this script,
 #                    or skills/agent-chrome-cdp/scripts/cdp_navigate.py)
-#
-# The legacy SUITE_URL, SUITE_TOKEN and SUITE_SPACE_ID names still work and
-# print a deprecation line on stderr.
 set -euo pipefail
 
-# compat BURROW_NAME LEGACY_NAME: set and export the BURROW_ variable from
-# itself, else from the legacy name with one deprecation line on stderr. An
-# empty value counts as unset; when both are set the BURROW_ value wins.
-compat() {
-  burrow=$1 suite=$2
-  eval "b=\${$burrow:-} s=\${$suite:-}"
-  if [ -z "$b" ]; then
-    if [ -z "$s" ]; then
-      echo "must export $burrow (or legacy $suite)" >&2
-      exit 1
-    fi
-    echo "deprecated: $suite is set; rename it to $burrow" >&2
-    eval "$burrow=\$s"
-  fi
-  export "${burrow?}"
-}
-
-compat BURROW_URL SUITE_URL
-compat BURROW_TOKEN SUITE_TOKEN
-compat BURROW_SPACE_ID SUITE_SPACE_ID
+: "${BURROW_URL:?must export BURROW_URL}"
+: "${BURROW_TOKEN:?must export BURROW_TOKEN}"
+: "${BURROW_SPACE_ID:?must export BURROW_SPACE_ID}"
 : "${VALIDATION_ID:?must export VALIDATION_ID}"
 : "${TARGET_URL:?must export TARGET_URL}"
 : "${LABEL:?must export LABEL}"

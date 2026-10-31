@@ -1,7 +1,7 @@
 """The mac setup CLI under Burrow names, with the legacy layout still found (task 01a14dd8).
 
 - New installs go to ``~/burrow/<name>``. Discovery is ``--dir``, then
-  ``$BURROW_INSTALL_DIR`` (legacy ``$SUITE_INSTALL_DIR``), then the single
+  ``$BURROW_INSTALL_DIR``, then the single
   install under ``~/burrow``, then the single install under the legacy
   ``~/suite`` (read-only discovery, so a Mac that has not migrated keeps working).
 - LaunchAgent labels are ``io.github.getburrowing.install.<name>.<job>``;

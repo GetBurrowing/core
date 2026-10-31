@@ -4,6 +4,8 @@ import RouteResume, {
   sameModulePrefix,
   stripQueryAndFragment,
   stripTransientParams,
+  resumesModule,
+  NO_RESUME_MODULES,
   PATH_MODULE_MAP,
   TRANSIENT_QUERY_PARAMS,
   RESUME_TTL_MS,
@@ -1042,5 +1044,141 @@ describe("RouteResume active tab-bar tab", () => {
     shims.doc.dispatchClick(evt)
 
     expect(historyRedirect).toHaveBeenCalledWith(evt, "/chat/y", "push", null, anchor)
+  })
+})
+
+// ── Meetings never resumes (task 01a18d0a stage 1) ────────────────────
+
+describe("resumesModule / NO_RESUME_MODULES", () => {
+  it("excludes meetings and only meetings", () => {
+    expect(Array.from(NO_RESUME_MODULES)).toEqual(["meetings"])
+    expect(resumesModule("meetings")).toBe(false)
+    for (const [, mod] of PATH_MODULE_MAP) {
+      if (mod !== "meetings") expect(resumesModule(mod)).toBe(true)
+    }
+  })
+
+  it("meetings URLs are still classified as the meetings module", () => {
+    expect(moduleFromPath("/meetings")).toBe("meetings")
+    expect(moduleFromPath("/meetings/standup")).toBe("meetings")
+  })
+})
+
+describe("RouteResume Meetings tile always opens the index", () => {
+  let shims
+  let historyRedirect
+
+  beforeEach(() => {
+    shims = installShims()
+    __resetForTests()
+    historyRedirect = vi.fn()
+    shims.win.liveSocket = { historyRedirect }
+  })
+
+  afterEach(() => {
+    uninstallShims()
+    __resetForTests()
+  })
+
+  function clickMeetingsTile(opts = {}) {
+    const anchor = makeAnchor({ moduleId: "meetings", href: "/meetings", ...opts })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+    return evt
+  }
+
+  it("does not persist a meeting detail route on mount or navigation", () => {
+    shims.win.location.pathname = "/meetings/standup"
+    const hook = buildHook()
+    hook.mounted()
+    expect(ClientState.get("route_resume", "meetings")).toBeNull()
+
+    shims.win.location.pathname = "/meetings/retro"
+    shims.win.location.search = "?tab=notes"
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+    expect(ClientState.get("route_resume", "meetings")).toBeNull()
+    expect(shims.storage.getItem("route_resume:meetings")).toBeNull()
+  })
+
+  it("after visiting a meeting and leaving, the Meetings tile is left to LiveView (lands on /meetings)", () => {
+    shims.win.location.pathname = "/meetings/standup"
+    const hook = buildHook()
+    hook.mounted()
+    shims.win.location.pathname = "/chat/general"
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+
+    const evt = clickMeetingsTile()
+    expect(evt.defaultPrevented).toBe(false)
+    expect(evt.propagationStopped).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+  })
+
+  it("a stale stored route_resume:meetings value never redirects and is removed on click", () => {
+    const hook = buildHook()
+    shims.win.location.pathname = "/tasks"
+    hook.mounted()
+    // Written AFTER mount, as an older build of this hook in another tab would.
+    ClientState.set("route_resume", "meetings", "/meetings/old-room", {
+      ttlMs: RESUME_TTL_MS,
+    })
+    expect(ClientState.get("route_resume", "meetings")).toBe("/meetings/old-room")
+
+    const evt = clickMeetingsTile()
+    expect(evt.defaultPrevented).toBe(false)
+    expect(evt.propagationStopped).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+    expect(ClientState.get("route_resume", "meetings")).toBeNull()
+  })
+
+  it("a stale stored route_resume:meetings value is removed on mount", () => {
+    ClientState.set("route_resume", "meetings", "/meetings/old-room", {
+      ttlMs: RESUME_TTL_MS,
+    })
+    shims.win.location.pathname = "/chat/general"
+    const hook = buildHook()
+    hook.mounted()
+    expect(ClientState.get("route_resume", "meetings")).toBeNull()
+    expect(shims.storage.getItem("route_resume:meetings")).toBeNull()
+  })
+
+  it("a stale value is ignored from the phone tab bar too", () => {
+    shims.win.location.pathname = "/chat/general"
+    const hook = buildHook()
+    hook.mounted()
+    ClientState.set("route_resume", "meetings", "/meetings/old-room")
+
+    const evt = clickMeetingsTile({ bottomRail: true })
+    expect(evt.defaultPrevented).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+  })
+
+  it("other modules keep resuming in the same session", () => {
+    shims.win.location.pathname = "/tasks"
+    shims.win.location.search = "?sponsor=mine"
+    const hook = buildHook()
+    hook.mounted()
+    shims.win.location.pathname = "/meetings/standup"
+    shims.win.location.search = ""
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+
+    const anchor = makeAnchor({ moduleId: "tasks", href: "/tasks" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+    expect(evt.defaultPrevented).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledWith(evt, "/tasks?sponsor=mine", "push", null, anchor)
+  })
+
+  it("modified clicks on the Meetings tile are untouched", () => {
+    const hook = buildHook()
+    shims.win.location.pathname = "/chat/general"
+    hook.mounted()
+    ClientState.set("route_resume", "meetings", "/meetings/old-room")
+
+    const anchor = makeAnchor({ moduleId: "meetings", href: "/meetings" })
+    const evt = makeClickEvent(anchor)
+    evt.metaKey = true
+    shims.doc.dispatchClick(evt)
+    expect(evt.defaultPrevented).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
   })
 })
