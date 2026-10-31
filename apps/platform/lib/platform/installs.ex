@@ -747,6 +747,7 @@ defmodule Platform.Installs do
   # Stage 6: DigitalOcean answers 422 when the size is not offered in the region.
   def describe_error("reserve", {:http, 422}),
     do: "That server size isn't available in this region right now. Pick another region."
+
   def describe_error(_step, :forbidden), do: "Our hosting provider refused the request."
   def describe_error(_step, :region_not_allowed), do: "That region is not available."
 

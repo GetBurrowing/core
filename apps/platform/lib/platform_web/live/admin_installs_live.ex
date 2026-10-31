@@ -208,6 +208,7 @@ defmodule PlatformWeb.AdminInstallsLive do
 
   defp create_error({:invalid, :size_unavailable}),
     do: "That server size isn't available in this region right now. Pick another region."
+
   defp create_error({:invalid, :domain_mode}), do: "Pick how the install is addressed."
 
   defp create_error({:invalid, :primary_host}),
