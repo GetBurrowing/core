@@ -72,6 +72,12 @@ AGENT_LOGINS = ("api_key", "operator")
 # "generate-on-host" makes the host generate a VAPID key pair at first start
 # (bin/burrow-vapid), so the private key never exists anywhere but the box.
 VAPID_MODES = ("off", "generate-on-host")
+# Where the local embeddings model comes from (core task 01a10315 stage 6).
+# "operator" (the default, every manifest written before this knob): the
+# operator places models/<file> on the host before the stack starts.
+# "download": the host fetches it at first boot from a pinned URL and checks
+# its sha256 (bin/burrow-fetch-model, registry.EMBEDDINGS_MODEL_SOURCE).
+MODEL_SOURCES = ("operator", "download")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -121,6 +127,7 @@ SCHEMA = {
         # BGE prefix, and "" sends queries unprefixed (hosted OpenAI).
         "model": _str(),
         "query_prefix": _str(),
+        "model_source": _enum(MODEL_SOURCES, "operator"),
     },
     "models": {
         "endpoints": ArrayOf(

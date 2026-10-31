@@ -390,6 +390,13 @@ def _rules(m, bad, errors, present=frozenset()):
             ["base_url", "api_key_ref", "model", "query_prefix"],
             'only used with mode = "endpoint"',
         )
+    if emb["model_source"] == "download" and (mac or emb["mode"] != "local"):
+        add(
+            "field_not_applicable",
+            "embeddings.model_source",
+            'model_source = "download" fetches the local model on a single-host server; '
+            'only used with target = "single-host" and mode = "local"',
+        )
 
     # memory vs embeddings (single-host; mac has hosted_embeddings_required)
     if (

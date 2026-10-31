@@ -45,7 +45,7 @@ sys.path.insert(0, HERE)
 from identity_terms import identity_hits
 from setup_fakes import FakePocketId, write_secret_file
 
-from burrow_install import templates
+from burrow_install import registry, templates
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
 from burrow_install.render import build, plan
@@ -150,6 +150,7 @@ class DropletRenderTest(unittest.TestCase):
         self.assertEqual(drop["images"]["source"], "registry")
         drop["images"]["source"] = base["images"]["source"]
         self.assertFalse(drop["services"]["voice"])
+        self.assertEqual(drop["embeddings"].pop("model_source"), "download")
         self.assertEqual(base, drop)
 
 
@@ -225,6 +226,16 @@ class KnobIsolationTest(unittest.TestCase):
             raw["push"] = {"vapid": "generate-on-host"}
 
         self.assertEqual(self.changed(vapid), ["user-data"])
+
+    def test_model_download_touches_user_data_only_and_operator_is_the_default(self):
+        def download(raw):
+            raw["embeddings"]["model_source"] = "download"
+
+        def operator(raw):
+            raw["embeddings"]["model_source"] = "operator"
+
+        self.assertEqual(self.changed(operator), [])
+        self.assertEqual(self.changed(download), ["user-data"])
 
 
 # ---------------------------------------------------------------------------
@@ -613,3 +624,187 @@ class BootstrapAdminTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Stage 6: the embeddings model is fetched on the host; keys-only root login
+# ---------------------------------------------------------------------------
+
+
+MODEL_URL = (
+    "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/"
+    "370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-f16.gguf"
+)
+MODEL_SHA = "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340"
+
+
+def _write_files(user_data):
+    """{path: content} of the user-data's write_files (the literal blocks)."""
+    out = {}
+    parts = user_data.split('\n  - path: "')[1:]
+    for part in parts:
+        path = part.split('"', 1)[0]
+        body = part.split("content: |\n", 1)[1]
+        lines = []
+        for line in body.split("\n"):
+            if line.startswith("      ") or line == "":
+                lines.append(line[6:])
+            else:
+                break
+        out[path] = "\n".join(lines).rstrip("\n") + "\n"
+    return out
+
+
+class ModelDownloadTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.user_data = droplet().files["user-data"][0]
+        cls.files = _write_files(cls.user_data)
+
+    def test_00_positive_control_the_operator_default_fetches_nothing(self):
+        baseline = build(valid(load(AGENTS_FULL))).files["user-data"][0]
+        self.assertIn("ExecStartPre=/usr/bin/test -s /opt/burrow/models/", baseline)
+        self.assertNotIn("burrow-model.service", baseline)
+        self.assertNotIn("huggingface.co", baseline)
+
+    def test_the_source_is_pinned_to_a_revision_and_a_sha256(self):
+        src = registry.EMBEDDINGS_MODEL_SOURCE
+        self.assertEqual(src["url"], MODEL_URL)
+        self.assertEqual(src["sha256"], MODEL_SHA)
+        self.assertIn(src["revision"], src["url"])
+        self.assertNotIn("/main/", src["url"])
+
+    def test_the_fetch_script_carries_the_pinned_url_and_sha(self):
+        script = self.files["/opt/burrow/bin/burrow-fetch-model"]
+        self.assertIn(f"url={MODEL_URL}\n", script)
+        self.assertIn(f"sha={MODEL_SHA}\n", script)
+        self.assertIn("dest=/opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf\n", script)
+        entry = self.user_data.split('path: "/opt/burrow/bin/burrow-fetch-model"', 1)[1]
+        self.assertTrue(entry.lstrip().startswith('owner: "root:root"\n    permissions: "0755"'))
+
+    def test_the_fetch_unit_runs_before_the_stack_and_the_stack_requires_it(self):
+        unit = self.files["/etc/systemd/system/burrow-model.service"]
+        self.assertIn("Before=burrow-stack.service\n", unit)
+        self.assertIn("After=network-online.target\n", unit)
+        self.assertIn("ExecStart=/opt/burrow/bin/burrow-fetch-model\n", unit)
+        self.assertIn("Type=oneshot\n", unit)
+        stack = self.files["/etc/systemd/system/burrow-stack.service"]
+        self.assertIn("Requires=burrow-model.service\n", stack)
+        self.assertIn("After=burrow-model.service\n", stack)
+        # The gate stays: a missing or empty model still fails the stack loudly.
+        self.assertIn(
+            "ExecStartPre=/usr/bin/test -s /opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf\n",
+            stack,
+        )
+        self.assertIn('  - "curl"\n', self.user_data)
+
+    def test_download_needs_single_host_and_local_embeddings(self):
+        raw = load(DO_DROPLET)
+        raw["embeddings"] = {
+            "mode": "endpoint",
+            "base_url": "https://embeddings.example.test/v1",
+            "model_source": "download",
+        }
+        self.assertIn(("field_not_applicable", "embeddings.model_source"), pairs(raw))
+        raw = load(DO_DROPLET)
+        raw["embeddings"]["model_source"] = "somewhere"
+        self.assertTrue(any(path == "embeddings.model_source" for _code, path in pairs(raw)))
+
+
+class RootKeyLoginTest(unittest.TestCase):
+    def test_keys_only_and_no_expired_password_with_a_key(self):
+        user_data = droplet().files["user-data"][0]
+        self.assertIn("\nchpasswd:\n  expire: false\n", user_data)
+        self.assertIn("\nssh_pwauth: false\n", user_data)
+
+    def test_positive_control_without_a_key_neither_is_rendered(self):
+        baseline = build(valid(load(AGENTS_FULL))).files["user-data"][0]
+        self.assertNotIn("chpasswd", baseline)
+        self.assertNotIn("ssh_pwauth", baseline)
+
+
+class FetchModelScriptTest(unittest.TestCase):
+    """bin/burrow-fetch-model run for real against a stub curl (no network)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.dest = os.path.join(self.tmp, "models", "model.gguf")
+        self.good = b"the pinned model bytes\n"
+        import hashlib
+
+        self.sha = hashlib.sha256(self.good).hexdigest()
+        self.log = os.path.join(self.tmp, "curl.log")
+        # Stub curl: answer N bad downloads, then the good bytes.
+        with open(os.path.join(self.bin, "curl"), "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/bin/sh\n"
+                'out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\n'
+                f'n=$(cat {self.tmp}/bad 2>/dev/null || echo 0)\n'
+                f'echo call >> {self.log}\n'
+                f'if [ "$n" -gt 0 ]; then echo $((n-1)) > {self.tmp}/bad; printf corrupt > "$out"; exit 0; fi\n'
+                f'cp {self.tmp}/good "$out"\n'
+            )
+        with open(os.path.join(self.bin, "sleep"), "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\nexit 0\n")
+        for name in ("curl", "sleep"):
+            os.chmod(os.path.join(self.bin, name), 0o755)
+        with open(os.path.join(self.tmp, "good"), "wb") as handle:
+            handle.write(self.good)
+        script = templates.fetch_model_script(plan(valid(load(DO_DROPLET))))
+        script = script.replace(
+            "dest=/opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf", f"dest={self.dest}"
+        ).replace(f"sha={MODEL_SHA}", f"sha={self.sha}")
+        self.script = os.path.join(self.tmp, "fetch")
+        with open(self.script, "w", encoding="utf-8") as handle:
+            handle.write(script)
+        os.chmod(self.script, 0o755)
+
+    def run_script(self, bad=0):
+        with open(os.path.join(self.tmp, "bad"), "w", encoding="utf-8") as handle:
+            handle.write(str(bad))
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""))
+        return subprocess.run(
+            [self.script], check=False, env=env, capture_output=True, text=True
+        )
+
+    def calls(self):
+        if not os.path.exists(self.log):
+            return 0
+        with open(self.log, encoding="utf-8") as handle:
+            return len(handle.read().split())
+
+    def test_downloads_verifies_and_is_idempotent(self):
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum is not on PATH")
+        first = self.run_script()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        with open(self.dest, "rb") as handle:
+            self.assertEqual(handle.read(), self.good)
+        self.assertEqual(stat.S_IMODE(os.stat(self.dest).st_mode), 0o644)
+        self.assertEqual(self.calls(), 1)
+        again = self.run_script()
+        self.assertEqual(again.returncode, 0)
+        self.assertEqual(self.calls(), 1)  # a verified file is kept, not re-fetched
+
+    def test_a_corrupt_download_is_retried_and_never_moved_into_place(self):
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum is not on PATH")
+        result = self.run_script(bad=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), 3)
+        self.assertIn("attempt 1 failed", result.stderr)
+        with open(self.dest, "rb") as handle:
+            self.assertEqual(handle.read(), self.good)
+
+    def test_five_failures_exit_1_and_leave_no_file(self):
+        if shutil.which("sha256sum") is None:
+            self.skipTest("sha256sum is not on PATH")
+        result = self.run_script(bad=99)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.calls(), 5)
+        self.assertFalse(os.path.exists(self.dest))
+        self.assertFalse(os.path.exists(self.dest + ".part"))
+        self.assertIn("giving up", result.stderr)

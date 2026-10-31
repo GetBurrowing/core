@@ -302,6 +302,78 @@ mv "$out.tmp" "$out"
 """
 
 
+FETCH_MODEL_SCRIPT = "bin/burrow-fetch-model"
+MODEL_UNIT_NAME = "burrow-model.service"
+
+
+def fetches_model(plan):
+    """True when the host downloads the local embeddings model (stage 6)."""
+    return plan.model_download and f"models/{registry.EMBEDDINGS_MODEL_FILE}" in plan.host_files
+
+
+def fetch_model_script(plan):
+    """Download the embeddings model from its pinned source, verified (task 01a10315 stage 6).
+
+    Idempotent: a file whose sha256 already matches is kept. A download is
+    written beside the target and moved into place only after its sha256
+    matches, so the stack's `test -s` gate never sees a partial file. Five
+    attempts with a growing pause; then exit 1, which fails the stack unit
+    (it Requires this one), loudly.
+    """
+    src = registry.EMBEDDINGS_MODEL_SOURCE
+    dest = f"{INSTALL_ROOT}/models/{registry.EMBEDDINGS_MODEL_FILE}"
+    return f"""#!/bin/sh
+# {HEADER.format(name=plan.name)}
+# The local embeddings model, from a pinned source (Hugging Face revision
+# {src["revision"]}), checked against its sha256 before it is used.
+set -eu
+dest={dest}
+url={src["url"]}
+sha={src["sha256"]}
+if [ -s "$dest" ] && echo "$sha  $dest" | sha256sum -c --status; then
+  exit 0
+fi
+mkdir -p "$(dirname "$dest")"
+part="$dest.part"
+attempt=1
+while [ "$attempt" -le 5 ]; do
+  rm -f "$part"
+  if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 30 -o "$part" "$url" \\
+    && echo "$sha  $part" | sha256sum -c --status; then
+    chmod 0644 "$part"
+    mv -f "$part" "$dest"
+    echo "burrow-fetch-model: {registry.EMBEDDINGS_MODEL_FILE} downloaded and verified"
+    exit 0
+  fi
+  echo "burrow-fetch-model: attempt $attempt failed (download or sha256 mismatch)" >&2
+  sleep $((attempt * 15))
+  attempt=$((attempt + 1))
+done
+rm -f "$part"
+echo "burrow-fetch-model: giving up; the stack will not start without the model" >&2
+exit 1
+"""
+
+
+def model_unit(plan):
+    return "\n".join(
+        [
+            f"# {HEADER.format(name=plan.name)}",
+            "[Unit]",
+            "Description=Burrow: fetch the local embeddings model (pinned, sha256-checked)",
+            "Wants=network-online.target",
+            "After=network-online.target",
+            f"Before={STACK_UNIT_NAME}",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            "RemainAfterExit=yes",
+            f"ExecStart={INSTALL_ROOT}/{FETCH_MODEL_SCRIPT}",
+            "TimeoutStartSec=1800",
+        ]
+    ) + "\n"
+
+
 VAPID_SCRIPT = "bin/burrow-vapid"
 
 
@@ -467,6 +539,11 @@ def stack_unit(plan):
         # Starting the stack starts the agent host too (task 01a10322), also
         # when the operator starts it by hand after loading images.
         lines.append(f"Wants={agents.HOST_UNIT_NAME}")
+    if fetches_model(plan):
+        # Stage 6: the model is downloaded first; a failed download fails the
+        # stack, and the ExecStartPre gate below still guards the file.
+        lines.append(f"Requires={MODEL_UNIT_NAME}")
+        lines.append(f"After={MODEL_UNIT_NAME}")
     if plan.images_preloaded:
         # images.source = "preloaded": nothing pulls. The operator loads the
         # images, then touches this file and starts the unit.
@@ -521,6 +598,9 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
         entries["bin/burrow-ca-bundle"] = (ca_bundle_script(plan), EXEC_MODE)
     if plan.vapid_on_host:
         entries[VAPID_SCRIPT] = (vapid_script(plan), EXEC_MODE)
+    if fetches_model(plan):
+        entries[FETCH_MODEL_SCRIPT] = (fetch_model_script(plan), EXEC_MODE)
+        entries[f"/etc/systemd/system/{MODEL_UNIT_NAME}"] = (model_unit(plan), FILE_MODE)
     if plan.agents == "full_machine":
         entries.update(agents.full_machine_files(plan, agent_host_env))
     if registry_auth is not None:
@@ -557,6 +637,9 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
     if plan.vapid_on_host:
         # Ubuntu 24.04 cloud images ship it; bin/burrow-vapid cannot run without it.
         packages.append("openssl")
+    if fetches_model(plan):
+        # Ubuntu 24.04 cloud images ship both; bin/burrow-fetch-model needs them.
+        packages += ["curl", "coreutils"]
     runcmd.append(["systemctl", "start", "--no-block", STACK_UNIT_NAME])
     doc = {
         "package_update": True,
@@ -569,6 +652,11 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
         # optional power-user path. Placed last so a render without it is
         # byte-identical to one made before the key existed.
         doc["ssh_authorized_keys"] = [plan.ssh_authorized_key]
+        # Stage 6 (measured on a real droplet): with no password the provider
+        # expires root's, and key login then stops at "Password change
+        # required but no TTY". Keys only, and nothing expired.
+        doc["chpasswd"] = {"expire": False}
+        doc["ssh_pwauth"] = False
     body = yaml_doc(
         doc,
         [

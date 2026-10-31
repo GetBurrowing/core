@@ -116,6 +116,8 @@ class Plan:
         # one SSH key for the cloud image's default user. Both off by default.
         self.vapid_on_host = manifest.get("push", {}).get("vapid") == "generate-on-host"
         self.ssh_authorized_key = manifest["host"].get("ssh_authorized_key")
+        # Stage 6: the host downloads the local embeddings model at first boot.
+        self.model_download = manifest["embeddings"].get("model_source") == "download"
 
     def routes(self):
         out = {}

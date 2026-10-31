@@ -75,6 +75,10 @@ defmodule Platform.Installs.Render do
     embeddings = true
     voice = false
 
+    [embeddings]
+    mode = "local"
+    model_source = "download"
+
     [auth]
     mode = "bundled-pocket-id"
 

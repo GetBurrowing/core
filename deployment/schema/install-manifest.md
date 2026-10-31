@@ -57,7 +57,7 @@ are `field_not_applicable` there and no `acme_email` is needed.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `gpu` | bool | `false` | The host has an NVIDIA GPU usable by containers. |
-| `ssh_authorized_key` | string | none | One OpenSSH public key, emitted as top-level cloud-config `ssh_authorized_keys: [<key>]` for the cloud image's default user (core task 01a10315): the customer's optional power-user path. Must match `^(ssh-ed25519\|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\n]*)?$` (one key, optional comment), else `invalid_ssh_authorized_key`. `target = "single-host"` only (`field_not_applicable` on `mac`, which has no cloud-init). |
+| `ssh_authorized_key` | string | none | One OpenSSH public key, emitted as top-level cloud-config `ssh_authorized_keys: [<key>]` for the cloud image's default user (core task 01a10315): the customer's optional power-user path. Must match `^(ssh-ed25519\|ecdsa-sha2-nistp256) [A-Za-z0-9+/=]+( [^\n]*)?$` (one key, optional comment), else `invalid_ssh_authorized_key`. `target = "single-host"` only (`field_not_applicable` on `mac`, which has no cloud-init). With a key set, cloud-init also gets `chpasswd: {expire: false}` and `ssh_pwauth: false` (stage 6: otherwise the provider expires root's password and key login stops at "Password change required but no TTY"). |
 
 ## `[services]`
 
@@ -95,6 +95,7 @@ internal consistency is still checked, so turning the service on later is a one-
 | `api_key_ref` | string | none | Secret ref (see below). Only with `mode = "endpoint"`. Rendered as a 0600 file `secrets/<REF>` mounted into memory-service alone (`MEMORY_EMBEDDING_API_KEY_FILE`, memory-service 2ef3312f). |
 | `model` | string | none | Only with `mode = "endpoint"`. `MEMORY_EMBEDDING_MODEL`; unset keeps the literal `embeddings`. Required on `mac`. |
 | `query_prefix` | string | none | Only with `mode = "endpoint"`. Unset keeps memory-service's BGE query prefix; `""` sends queries unprefixed (hosted OpenAI). |
+| `model_source` | `operator` \| `download` | `operator` | Where the local model file comes from (core task 01a10315 stage 6). `operator`: the operator places `models/Qwen3-Embedding-0.6B-f16.gguf` before the stack starts. `download`: the host fetches it at first boot with `bin/burrow-fetch-model` (mode 0755) from `burrow-model.service`, a oneshot ordered `Before=burrow-stack.service` that the stack `Requires=`. The source is pinned: Hugging Face `Qwen/Qwen3-Embedding-0.6B-GGUF` at revision `370f27d7550e0def9b39c1f16d3fbaa13aa67728`, sha256 `421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340` (`registry.EMBEDDINGS_MODEL_SOURCE`); a file whose sha256 differs is never moved into place, and the stack's `test -s` gate stays. Adds `curl` and `coreutils` to the cloud-init packages. `target = "single-host"` and `mode = "local"` only (`field_not_applicable` otherwise). |
 
 `base_url` for memory-service has no `/v1` suffix: memory-service appends `/v1/embeddings`.
 
