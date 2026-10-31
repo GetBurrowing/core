@@ -42,9 +42,9 @@ function fakeTarget() {
 // the env's current `flags.inks[probe.ink]`.
 function fakeSpan(attrs = {}, { probes = INK_KEYS } = {}) {
   const a = {
-    "data-items": "chat,voice,tasks,meetings,more",
+    "data-items": "chat,calendar,meetings,inbox,more",
     "data-active-key": "chat",
-    "data-more-unread": "false",
+    "data-inbox-unread": "false",
     "data-more-open": "false",
     ...attrs,
   }
@@ -104,7 +104,7 @@ function env({
   }
   const scroller = fakeScroller()
   const tabs = {}
-  for (const k of ["chat", "voice", "tasks", "meetings", "more"]) tabs[k] = { click: vi.fn() }
+  for (const k of ["chat", "calendar", "meetings", "inbox", "more"]) tabs[k] = { click: vi.fn() }
 
   const win = Object.assign(fakeTarget(), {
     Capacitor: {
@@ -220,14 +220,14 @@ describe("feature test", () => {
 })
 
 describe("state payload", () => {
-  it("sends items, selected, more_dot, visible, ink and scheme on mount", () => {
+  it("sends items, selected, inbox_dot, visible, ink and scheme on mount", () => {
     const e = env()
     mount(e)
     expect(calls(e)).toEqual([
       {
-        items: ["chat", "voice", "tasks", "meetings", "more"],
+        items: ["chat", "calendar", "meetings", "inbox", "more"],
         selected: "chat",
-        more_dot: false,
+        inbox_dot: false,
         visible: true,
         ink: { selected: "#ad4b07ff", unselected: "#0000008c" },
         scheme: "light",
@@ -252,21 +252,21 @@ describe("state payload", () => {
     const span = fakeSpan()
     const hook = mount(e, span)
 
-    span.a["data-active-key"] = "tasks"
+    span.a["data-active-key"] = "inbox"
     hook.updated()
-    expect(last(e).selected).toBe("tasks")
+    expect(last(e).selected).toBe("inbox")
 
     span.a["data-active-key"] = null
     hook.updated()
     expect(last(e).selected).toBe(null)
 
-    span.a["data-more-unread"] = "true"
+    span.a["data-inbox-unread"] = "true"
     hook.updated()
-    expect(last(e).more_dot).toBe(true)
+    expect(last(e).inbox_dot).toBe(true)
 
-    span.a["data-items"] = "chat,tasks,more"
+    span.a["data-items"] = "chat,inbox,more"
     hook.updated()
-    expect(last(e).items).toEqual(["chat", "tasks", "more"])
+    expect(last(e).items).toEqual(["chat", "inbox", "more"])
   })
 
   it("does not resend an unchanged state", () => {
@@ -533,7 +533,7 @@ describe("hide predicate", () => {
 })
 
 describe("burrowNativeTab", () => {
-  for (const key of ["chat", "voice", "tasks", "meetings", "more"]) {
+  for (const key of ["chat", "calendar", "meetings", "inbox", "more"]) {
     it(`a tap on ${key} clicks its #bottom-nav tab`, () => {
       const e = env()
       mount(e)
@@ -577,9 +577,9 @@ describe("burrowNativeTab", () => {
   it("reselect at the top clicks the tab (module root)", () => {
     const e = env()
     mount(e)
-    e.win.fire(EVENT, { detail: { key: "tasks", reselect: true } })
+    e.win.fire(EVENT, { detail: { key: "inbox", reselect: true } })
     expect(e.scroller.scrollTo).not.toHaveBeenCalled()
-    expect(e.tabs.tasks.click).toHaveBeenCalledTimes(1)
+    expect(e.tabs.inbox.click).toHaveBeenCalledTimes(1)
   })
 
   it("reduced motion scrolls without smoothing", () => {
@@ -614,9 +614,9 @@ describe("destroyed", () => {
     expect(observers[0].disconnect).toHaveBeenCalled()
     vi.advanceTimersByTime(DESTROY_GRACE_MS)
     expect(last(e)).toEqual({
-      items: ["chat", "voice", "tasks", "meetings", "more"],
+      items: ["chat", "calendar", "meetings", "inbox", "more"],
       selected: "chat",
-      more_dot: false,
+      inbox_dot: false,
       visible: false,
       ink: { selected: "#ad4b07ff", unselected: "#0000008c" },
       scheme: "light",
@@ -627,10 +627,10 @@ describe("destroyed", () => {
     const e = env()
     const hook = mount(e)
     hook.destroyed()
-    mount(e, fakeSpan({ "data-active-key": "tasks" }))
+    mount(e, fakeSpan({ "data-active-key": "inbox" }))
     vi.advanceTimersByTime(DESTROY_GRACE_MS * 2)
     expect(calls(e).every((s) => s.visible)).toBe(true)
-    expect(last(e).selected).toBe("tasks")
+    expect(last(e).selected).toBe("inbox")
   })
 })
 

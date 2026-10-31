@@ -424,7 +424,7 @@ public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["others_unread": Self.othersUnread()])
     }
 
-    /// `{items, selected, more_dot, visible}` for the native tab bar (task
+    /// `{items, selected, inbox_dot, visible}` for the native tab bar (task
     /// 01a1557b). Missing or malformed fields leave the bar's state unchanged;
     /// see `NativeTabBarState.applying`.
     @objc func tabBarState(_ call: CAPPluginCall) {

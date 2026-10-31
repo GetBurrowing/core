@@ -239,6 +239,29 @@ defmodule Platform.CalendarTest do
     assert parsed.summary == "Busy"
   end
 
+  # Task 01a18d9f fix round: the editor promises the iCal feed shows "Busy"
+  # for a busy-only event, and the feed is a bearer URL that leaves Burrow,
+  # so the owner's own feed is redacted too; in-app reads are not.
+  test "the owner's own feed shows a busy-only event as Busy, with no notes" do
+    owner = Scope.for_user(user())
+
+    assert {:ok, event} =
+             Calendar.create_event(owner, attrs(%{visibility: "busy", description: "Secret"}))
+
+    assert {:ok, %{title: "Private interview", description: "Secret"}} =
+             Calendar.get_event(owner, event.id)
+
+    feed = Calendar.Feed.render(owner)
+    [parsed] = ICalendar.from_ics(feed)
+    assert parsed.summary == "Busy"
+    refute feed =~ "Private interview"
+    refute feed =~ "Secret"
+
+    # Positive control: a full-details event keeps its title in the same feed.
+    assert {:ok, _} = Calendar.update_event(owner, event.id, %{visibility: "details"})
+    assert Calendar.Feed.render(owner) =~ "Private interview"
+  end
+
   test "feed request logging excludes credentials and nil scopes fail closed" do
     assert PlatformWeb.Endpoint.request_log_level(%Plug.Conn{
              path_info: ["calendar", "feed", "secret"]

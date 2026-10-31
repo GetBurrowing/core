@@ -65,7 +65,7 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     const doc = { documentElement: { matches: () => false }, querySelector: () => null }
     const sent = Object.keys(stateOf(span, win, doc)).sort()
     const read = [...tabBarSwift.matchAll(/payload\["(\w+)"\]/g)].map((m) => m[1])
-    expect(sent).toEqual(["ink", "items", "more_dot", "scheme", "selected", "visible"])
+    expect(sent).toEqual(["inbox_dot", "ink", "items", "scheme", "selected", "visible"])
     expect([...new Set(read)].sort()).toEqual(sent)
   })
 
@@ -103,7 +103,7 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     const webKeys = m[1].split(",").map((k) => k.trim().replace(/^:/, ""))
     expect(iconRail).toContain('<> ",more"')
     const nativeKeys = [...tabBarSwift.matchAll(/NativeTab\(key: "(\w+)"/g)].map((k) => k[1])
-    expect(webKeys).toEqual(["chat", "voice", "tasks", "meetings"])
+    expect(webKeys).toEqual(["chat", "calendar", "meetings", "inbox"])
     expect(nativeKeys).toEqual([...webKeys, "more"])
     expect(hookJs).toContain('detail.key === "more"')
   })
@@ -122,9 +122,10 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
 const MASTERS_GLYPHS = {
   "tab-chat":
     '<path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.3-3.2A8 8 0 0 1 4 12z"/><path d="M9 11.5h.01M12 11.5h.01M15 11.5h.01"/>',
-  "tab-voice": '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
-  "tab-tasks": '<path d="m4 12 2 2 4-4M4 6l2 2 4-4M4 18l2 2 4-4M13 6h7M13 12h7M13 18h7"/>',
+  // Task 01a18d9f stage 5: prototype 01a178d2 v4's tabbar glyphs (index.html .tabbar).
+  "tab-calendar": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   "tab-meetings": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
+  "tab-inbox": '<path d="M3 4h18v16H3zM3 14h5l2 3h4l2-3h5"/>',
   "tab-more": '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
 }
 const SVG_ATTRIBUTES =
@@ -133,15 +134,15 @@ const SVG_ATTRIBUTES =
 const assets = `${ios}/Assets.xcassets`
 
 describe("native tab bar glyphs: NativeTab.catalog vs the asset catalog", () => {
-  it("the catalog is chat:tab-chat:Chat, voice, tasks, meetings, more, in order", () => {
+  it("the catalog is chat:tab-chat:Chat, calendar, meetings, inbox, more, in order", () => {
     const table = [...tabBarSwift.matchAll(/NativeTab\(key: "(\w+)", title: "(\w+)", image: "([\w-]+)"\)/g)].map(
       (m) => `${m[1]}:${m[3]}:${m[2]}`,
     )
     expect(table).toEqual([
       "chat:tab-chat:Chat",
-      "voice:tab-voice:Voice",
-      "tasks:tab-tasks:Tasks",
+      "calendar:tab-calendar:Calendar",
       "meetings:tab-meetings:Meetings",
+      "inbox:tab-inbox:Inbox",
       "more:tab-more:More",
     ])
     expect(tabBarSwift).not.toMatch(/systemName:/)

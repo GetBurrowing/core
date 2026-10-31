@@ -282,6 +282,7 @@ defmodule Platform.Calendar.AgentAccess do
       )
       |> Enum.map(fn c ->
         event = Repo.get!(Event, c.hold_id)
+        agent = Repo.get!(Platform.Agents.Agent, c.agent_id)
         stored = Map.get(briefing.receipts, key(c))
 
         %{
@@ -297,8 +298,17 @@ defmodule Platform.Calendar.AgentAccess do
           actions: [],
           section: if(c.state == "pending", do: :needs_call, else: :done),
           title: event.title,
-          agent_name: Repo.get!(Platform.Agents.Agent, c.agent_id).name,
+          agent_name: agent.name,
           starts_at: event.starts_at,
+          # Task 01a18d9f stage 4 (additive): the v4 consent card shows the
+          # hold's range in its own zone, the agent's stated reason and role,
+          # and links to the hold (or, once approved, the event it became).
+          ends_at: event.ends_at,
+          time_zone: event.time_zone,
+          description: event.description,
+          agent_role: agent_role(agent),
+          hold_id: c.hold_id,
+          event_id: if(c.state == "approved", do: c.event_id || c.hold_id, else: c.hold_id),
           operation: c.operation,
           state: c.state,
           receipt:
@@ -322,6 +332,9 @@ defmodule Platform.Calendar.AgentAccess do
   end
 
   def view(_, _), do: []
+
+  defp agent_role(%{metadata: %{"role" => role}}) when is_binary(role) and role != "", do: role
+  defp agent_role(_), do: nil
 
   def pending?(%Briefing{id: id, user_id: owner_id}) do
     Repo.exists?(

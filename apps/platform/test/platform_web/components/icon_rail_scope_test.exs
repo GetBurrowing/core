@@ -164,7 +164,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       # working modules.
       member = scope_of(ctx.internal[:sub_member])
       assert Enum.all?([:tasks, :files, :context], &(&1 in desktop_keys(%{access_scope: member})))
-      assert :tasks in mobile_keys(%{access_scope: member})
+      assert :tasks in more_sheet_keys(%{access_scope: member})
       assert Enum.all?([:files, :context], &(&1 in more_sheet_keys(%{access_scope: member})))
 
       diffs =
@@ -206,7 +206,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
     test "a guest without meetings.join gets no Meetings tab in the bar", ctx do
       # Control: a member's bar carries Meetings, in its place.
       member = scope_of(ctx.internal[:sub_member])
-      assert mobile_keys(%{access_scope: member}) == [:chat, :voice, :tasks, :meetings]
+      assert mobile_keys(%{access_scope: member}) == [:chat, :calendar, :meetings, :inbox]
 
       for {row, user} <- ctx.guests do
         scope = scope_of(user)
@@ -230,7 +230,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       # ... but `:tasks` is not guest-admissible in this stage.
       refute Access.module_access?(scope, :tasks)
       refute :tasks in desktop_keys(%{access_scope: scope})
-      refute :tasks in mobile_keys(%{access_scope: scope})
+      refute :tasks in more_sheet_keys(%{access_scope: scope})
       refute :tasks in scope_destination_keys(scope)
     end
   end
@@ -349,10 +349,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
                :voice
              ]
 
-      # Meetings is a bar tab since task 01a1557a-7a71 stage 2, so it left the
-      # sheet; Inbox, the sheet's first row, is locked here.
-      assert mobile_keys(%{access_scope: locked}) == [:chat, :voice, :tasks, :meetings]
-      assert more_sheet_keys(%{access_scope: locked}) == []
+      # Task 01a18d9f stage 5: the bar is Chat, Calendar, Meetings, Inbox
+      # (Calendar and Inbox are locked here); Voice and Tasks lead the sheet.
+      assert mobile_keys(%{access_scope: locked}) == [:chat, :meetings]
+      assert more_sheet_keys(%{access_scope: locked}) == [:voice, :tasks]
 
       sheet = more_sheet_html(%{access_scope: locked})
       refute sheet =~ ">Admin</p>"
@@ -360,6 +360,29 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       # The unlocked twin is unchanged by the other user's locks.
       assert surfaces(scope_of(ctx.twin)) == ctx.before
+    end
+
+    test "a meetings lock leaves three link tabs plus More (task 01a18d9f stage 5)", ctx do
+      assert ctx.before.mobile == [:chat, :calendar, :meetings, :inbox]
+      lock_all_but!(ctx.locked, ctx.org, Grant.lockable_modules() -- ["meetings"])
+      locked = surfaces(scope_of(ctx.locked))
+
+      assert locked.mobile == [:chat, :calendar, :inbox]
+
+      assigns = %{scope: scope_of(ctx.locked)}
+
+      doc =
+        ~H"""
+        <IconRail.bottom_rail current_path="/chat" access_scope={@scope} />
+        """
+        |> rendered_to_string()
+        |> LazyHTML.from_fragment()
+
+      assert doc |> LazyHTML.query("[data-bottom-rail] a.bottom-nav-tab") |> Enum.count() == 3
+
+      assert doc
+             |> LazyHTML.query(~s([data-bottom-rail] button[data-destination="more"]))
+             |> Enum.count() == 1
     end
 
     test "a single lock drops exactly that module's tile", ctx do

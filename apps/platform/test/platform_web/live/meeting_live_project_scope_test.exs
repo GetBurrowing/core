@@ -98,10 +98,11 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       refute Tenancy.root_member?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
-      {:ok, view, _html} = live(conn, "/meetings")
+      {:ok, view, _html} = live(conn, "/meetings?view=calendar")
 
       # The picker only renders inside the start-meeting sheet, which the
-      # FAB opens; the dead render never contains it.
+      # FAB opens (on the calendar half; task 01a18d9f stage 4 gave the list
+      # view the v4 modal); the dead render never contains it.
       options =
         view
         |> element("[data-role=start-meeting-fab]")
@@ -120,7 +121,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
-      {:ok, view, _html} = live(conn, "/meetings")
+      {:ok, view, _html} = live(conn, "/meetings?view=calendar")
 
       options =
         view

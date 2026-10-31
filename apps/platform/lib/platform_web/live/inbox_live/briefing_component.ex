@@ -444,44 +444,68 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   # ── Open cards ────────────────────────────────────────────────────────
 
+  # The v4 consent card (prototype 01a178d2 v4 `consentHTML`, index.html
+  # `.consent`; task 01a18d9f stage 4). Pending: 1.5px primary border on an
+  # 8% primary tint; done: edge border on base-100.
   defp open_card(%{item: %{kind: :calendar}} = assigns) do
     ~H"""
     <article
       data-kind="calendar"
       data-consent-key={@item.key}
-      class="rounded-xl border border-edge bg-base-100 p-4"
+      data-consent-state="pending"
+      class="cal-consent"
+      role="group"
+      aria-label={"#{@item.agent_name} needs your OK"}
     >
-      <p class="text-xs text-subtle">Calendar · Tentative</p>
-      <h3 class="mt-2 font-semibold">{@item.title}</h3>
-      <p class="mt-1 text-sm">
-        {@item.agent_name} is tentatively {if @item.operation == "move", do: "moving", else: "booking"} this time. OK?
-      </p>
-      <p class="mt-1 text-sm text-subtle">
-        {Calendar.strftime(@item.starts_at, "%b %-d, %H:%M UTC")}
-      </p>
-      <div :if={@item.may_handle?} class="mt-3 flex gap-2">
-        <button
-          class="btn btn-primary btn-sm min-h-11"
-          phx-click="act"
-          phx-target={@ui.myself}
-          phx-value-key={@item.key}
-          phx-value-verb="approve"
-        >
-          Approve
-        </button>
-        <button
-          class="btn btn-ghost btn-sm min-h-11"
-          phx-click="act"
-          phx-target={@ui.myself}
-          phx-value-key={@item.key}
-          phx-value-verb="revert"
-        >
-          Revert
-        </button>
+      <PlatformWeb.AvatarComponents.agent_avatar name={@item.agent_name} class="cal-consent-avatar" />
+      <div class="cal-consent-body">
+        <div class="flex flex-wrap gap-1.5">
+          <span class="cal-pill cal-pill-acc">Needs your OK</span>
+          <span class="cal-pill">{agent_line(@item)}</span>
+        </div>
+        <div class="cal-consent-q">
+          “I’m tentatively {if @item.operation == "move", do: "moving", else: "booking"} {@item.title} {consent_short(
+            @item
+          )}, OK?”
+        </div>
+        <div class="cal-consent-meta">
+          {consent_meta(@item)}
+        </div>
+        <div class="cal-consent-acts">
+          <button
+            :if={@item.may_handle?}
+            type="button"
+            class={PlatformWeb.CalendarLive.Components.primary_btn()}
+            phx-click="act"
+            phx-target={@ui.myself}
+            phx-value-key={@item.key}
+            phx-value-verb="approve"
+          >
+            Approve
+          </button>
+          <button
+            :if={@item.may_handle?}
+            type="button"
+            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
+            phx-click="act"
+            phx-target={@ui.myself}
+            phx-value-key={@item.key}
+            phx-value-verb="revert"
+          >
+            Revert
+          </button>
+          <.link
+            navigate={hold_path(@item)}
+            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
+            data-role="consent-see-calendar"
+          >
+            See it on the calendar
+          </.link>
+        </div>
+        <p :if={@ui.errors[@item.key]} role="alert" class="text-sm text-error">
+          {@ui.errors[@item.key]}
+        </p>
       </div>
-      <p :if={@ui.errors[@item.key]} role="alert" class="mt-2 text-sm text-error">
-        {@ui.errors[@item.key]}
-      </p>
     </article>
     """
   end
@@ -967,35 +991,68 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
 
   # ── Done cards ────────────────────────────────────────────────────────
 
+  # Approved / preapproved / reverted / revoked (app.js `consentHTML`).
+  # Reverted and revoked offer no Undo: AgentAccess.handle/4 takes only
+  # approve and revert, so a resolved hold cannot be reopened.
   defp done_card(%{item: %{kind: :calendar}} = assigns) do
     ~H"""
     <article
       data-kind="calendar"
       data-consent-key={@item.key}
-      class="rounded-xl border border-edge bg-base-100 p-4"
+      data-consent-state={@item.state}
+      class="cal-consent cal-consent-done"
     >
-      <h3 class="font-semibold">{@item.title}</h3>
-      <p class="mt-2 text-sm text-subtle">
-        {cond do
-          @item.state == "approved" and @item.receipt.auto? -> "Preapproved by you"
-          @item.state == "approved" -> "Approved by you"
-          @item.state == "revoked" -> "Grant revoked · tentative hold removed"
-          true -> "Reverted by you"
-        end}
-      </p>
-      <button
-        :if={@item.state == "approved" and @item.may_handle?}
-        class="btn btn-ghost btn-sm min-h-11"
-        phx-click="act"
-        phx-target={@ui.myself}
-        phx-value-key={@item.key}
-        phx-value-verb="revert"
-      >
-        Revert
-      </button>
-      <p :if={@ui.errors[@item.key]} role="alert" class="mt-2 text-sm text-error">
-        {@ui.errors[@item.key]}
-      </p>
+      <PlatformWeb.AvatarComponents.agent_avatar name={@item.agent_name} class="cal-consent-avatar" />
+      <div class="cal-consent-body">
+        <div class="flex flex-wrap gap-1.5">
+          <span :if={@item.state == "approved"} class="cal-pill cal-pill-ok">
+            <i class="cal-pill-dot"></i>{if @item.receipt && @item.receipt.auto?,
+              do: "Preapproved by you",
+              else: "Approved by you"}
+          </span>
+          <span :if={@item.state != "approved"} class="cal-pill">Reverted by you</span>
+        </div>
+        <div class="cal-consent-q">
+          {if @item.state == "approved",
+            do: "#{@item.title} is booked for #{consent_when(@item)}.",
+            else: "The #{consent_short(@item)} hold is gone."}
+        </div>
+        <div class="cal-consent-meta">
+          {cond do
+            @item.state == "approved" ->
+              "#{@item.agent_name} turned the hold into a real event."
+
+            @item.state == "revoked" ->
+              "#{@item.agent_name} lost calendar access, so its pending hold was removed."
+
+            true ->
+              "#{@item.agent_name} has been told you passed on that slot."
+          end}
+        </div>
+        <div :if={@item.state == "approved"} class="cal-consent-acts">
+          <button
+            :if={@item.may_handle?}
+            type="button"
+            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
+            phx-click="act"
+            phx-target={@ui.myself}
+            phx-value-key={@item.key}
+            phx-value-verb="revert"
+          >
+            Undo
+          </button>
+          <.link
+            navigate={hold_path(@item)}
+            class={PlatformWeb.CalendarLive.Components.ghost_btn()}
+            data-role="consent-see-calendar"
+          >
+            See it on the calendar
+          </.link>
+        </div>
+        <p :if={@ui.errors[@item.key]} role="alert" class="text-sm text-error">
+          {@ui.errors[@item.key]}
+        </p>
+      </div>
     </article>
     """
   end
@@ -1181,6 +1238,49 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
         </.link></span>
     </p>
     """
+  end
+
+  # ── Calendar consent card helpers (task 01a18d9f stage 4) ─────────────
+
+  defp agent_line(%{agent_role: role} = item) when is_binary(role),
+    do: "#{item.agent_name} · #{role}"
+
+  defp agent_line(item), do: item.agent_name
+
+  defp consent_local(item, at), do: DateTime.shift_zone!(at, item[:time_zone] || "Etc/UTC")
+
+  # `Fri 2pm` / `Fri 2:30pm` (app.js consent question).
+  defp consent_short(item) do
+    at = consent_local(item, item.starts_at)
+    hour = rem(at.hour + 11, 12) + 1
+    minute = if at.minute == 0, do: "", else: ":" <> String.pad_leading("#{at.minute}", 2, "0")
+    "#{Calendar.strftime(at, "%a")} #{hour}#{minute}#{if at.hour < 12, do: "am", else: "pm"}"
+  end
+
+  # `Fri 30 Oct, 14:00–14:45`.
+  defp consent_when(item) do
+    first = consent_local(item, item.starts_at)
+
+    tail =
+      case item[:ends_at] do
+        %DateTime{} = ends -> "–" <> Calendar.strftime(consent_local(item, ends), "%H:%M")
+        _ -> ""
+      end
+
+    Calendar.strftime(first, "%a %-d %b, %H:%M") <> tail
+  end
+
+  defp consent_meta(item) do
+    lead = if item[:description] in [nil, ""], do: "", else: item.description <> " · "
+
+    lead <>
+      consent_when(item) <>
+      ". It’s on your calendar as a tentative hold. Nothing has been sent yet."
+  end
+
+  defp hold_path(item) do
+    date = item |> consent_local(item.starts_at) |> DateTime.to_date() |> Date.to_iso8601()
+    "/calendar?" <> URI.encode_query(%{date: date, select: item[:event_id] || item[:hold_id]})
   end
 
   defp btn_primary, do: @btn_primary

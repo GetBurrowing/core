@@ -91,34 +91,55 @@ defmodule PlatformWeb.Components.SidebarTest do
   defp scope_of(user), do: user.id |> Accounts.get_user() |> Scope.for_user()
 
   describe "rows" do
-    test "equal the tab bar's link tabs then the More sheet's rows, for the legacy path" do
+    # Task 01a18d9f stage 5: the desktop rail follows v4 (Chat, Voice, Tasks,
+    # Calendar, Meetings | More: Inbox first), while the phone bar keeps
+    # the product lead's four tabs. The two splits differ; their destination SETS agree.
+    test "equal desktop_rail_keys then desktop_more_rows, for the legacy path" do
       for root_user <- [true, false] do
         expected =
-          Enum.map(IconRail.tab_destinations(nil), & &1.key) ++
-            Enum.map(IconRail.more_sheet_rows(nil, root_user), & &1.key)
+          Enum.map(IconRail.desktop_rail_destinations(nil), & &1.key) ++
+            Enum.map(IconRail.desktop_more_rows(nil, root_user), & &1.key)
 
-        # Positive control: both halves are populated, and the tab half is
-        # exactly mobile_tab_keys/0.
-        assert Enum.take(expected, 4) == IconRail.mobile_tab_keys()
-        assert length(expected) > 4
+        # Positive control: both halves are populated, and the rail half is
+        # exactly desktop_rail_keys/0.
+        assert Enum.take(expected, 5) == IconRail.desktop_rail_keys()
+        assert Enum.at(expected, 5) == :inbox
+        assert length(expected) > 6
 
         assert row_keys(render_sidebar(%{root_user: root_user})) == expected
         assert Sidebar.row_keys(nil, root_user) == expected
+
+        # The phone's tabs plus its More sheet cover the same destinations.
+        phone =
+          Enum.map(IconRail.tab_destinations(nil), & &1.key) ++
+            Enum.map(IconRail.more_sheet_rows(nil, root_user), & &1.key)
+
+        assert Enum.sort(phone) == Enum.sort(expected)
       end
     end
 
-    test "equal mobile_tab_keys ++ more_sheet_rows for a root admin's Scope and a restricted one" do
+    test "the rail order is Chat, Voice, Tasks, Calendar, Meetings, then More with Inbox first" do
+      assert IconRail.desktop_rail_keys() == [:chat, :voice, :tasks, :calendar, :meetings]
+      keys = row_keys(render_sidebar(%{root_user: true}))
+      assert Enum.take(keys, 6) == [:chat, :voice, :tasks, :calendar, :meetings, :inbox]
+    end
+
+    test "equal desktop rail ++ desktop More rows for a root admin's Scope and a restricted one" do
       root = scope_of(user!("admin"))
       guest = %Scope{actor: :someone, permissions: %{"chat.read" => :all}}
 
       for scope <- [root, guest] do
-        tabs =
-          Enum.filter(IconRail.mobile_tab_keys(), fn key ->
-            key in Enum.map(IconRail.tab_destinations(scope), & &1.key)
-          end)
+        expected =
+          Enum.map(IconRail.desktop_rail_destinations(scope), & &1.key) ++
+            Enum.map(IconRail.desktop_more_rows(scope, false), & &1.key)
 
-        expected = tabs ++ Enum.map(IconRail.more_sheet_rows(scope, false), & &1.key)
         assert row_keys(render_sidebar(%{access_scope: scope})) == expected
+
+        phone =
+          Enum.map(IconRail.tab_destinations(scope), & &1.key) ++
+            Enum.map(IconRail.more_sheet_rows(scope, false), & &1.key)
+
+        assert Enum.sort(phone) == Enum.sort(expected)
       end
 
       # Control: the two scopes really differ, so the restricted render is
@@ -131,7 +152,7 @@ defmodule PlatformWeb.Components.SidebarTest do
       html = render_sidebar(%{root_user: true})
       labels = html |> doc() |> q("#sidebar-nav .sidebar-row span.truncate") |> Enum.map(&text/1)
 
-      assert Enum.take(labels, 4) == ["Chat", "Voice", "Tasks", "Meetings"]
+      assert Enum.take(labels, 6) == ["Chat", "Voice", "Tasks", "Calendar", "Meetings", "Inbox"]
       assert "Inbox" in labels
       assert "Org memory" in labels
 
@@ -168,7 +189,7 @@ defmodule PlatformWeb.Components.SidebarTest do
       assert icon.("chat") == IconRail.tab_icon(:chat, false)
       assert icon.("meetings") == IconRail.tab_icon(:meetings, false)
 
-      inbox = Enum.find(IconRail.more_sheet_rows(nil, true), &(&1.key == :inbox))
+      inbox = Enum.find(IconRail.desktop_more_rows(nil, true), &(&1.key == :inbox))
       assert icon.("inbox") == inbox.hero_icon
     end
   end

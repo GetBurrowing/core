@@ -196,13 +196,23 @@ defmodule Platform.Calendar do
       visible_query(scope)
       |> order_by([e], asc: e.starts_at, asc: e.id)
       |> Repo.all()
-      |> Enum.map(&redact(&1, scope))
+      |> Enum.map(&feed_redact/1)
     else
       []
     end
   end
 
   def feed_events(_), do: []
+
+  # The feed is a bearer URL that leaves Burrow (Apple, Google, Outlook and
+  # whoever holds the URL), so a busy-only event is "Busy" there for EVERY
+  # reader, the owner included: the editor promises "Others, agents and your
+  # iCal feed just see “Busy”" (task 01a18d9f fix round). In-app reads keep
+  # the owner's own titles (`redact/2`).
+  defp feed_redact(%Event{visibility: "busy"} = event),
+    do: %{event | title: "Busy", description: nil, owner: nil, space_id: nil, project_id: nil}
+
+  defp feed_redact(event), do: event
 
   def subscribe(%Scope{actor: %Accounts.User{id: id}}),
     do: Phoenix.PubSub.subscribe(Platform.PubSub, "calendar:#{id}")

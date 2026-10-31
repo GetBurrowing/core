@@ -927,6 +927,7 @@ defmodule PlatformWeb.Router do
       live("/email/accounts/new", EmailLive, :new_account)
       live("/email/accounts/:id", EmailLive, :account)
       live("/calendar", CalendarLive, :index)
+      live("/calendar/settings", CalendarLive, :settings)
       live("/calendar/booking", BookingSettingsLive, :index)
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)

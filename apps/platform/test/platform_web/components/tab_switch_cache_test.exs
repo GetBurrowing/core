@@ -121,7 +121,7 @@ defmodule PlatformWeb.Components.TabSwitchCacheTest do
       assert Enum.count(tabs) >= 3
       keys = LazyHTML.attribute(tabs, "data-destination")
       assert length(keys) == Enum.count(tabs)
-      assert "chat" in keys and "tasks" in keys
+      assert "chat" in keys and "inbox" in keys
     end
 
     test "skeleton fills use semantic tokens only" do

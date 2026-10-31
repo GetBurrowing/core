@@ -87,10 +87,30 @@ defmodule Platform.Calendar.BookingLinks do
     end)
   end
 
+  @doc """
+  What a guest may see about a link before booking. Task 01a18d9f stage 3
+  adds the v4 guest card's host column (title, length, owner name and org,
+  whether a meeting is created) alongside the original zone/email policy.
+  """
   def public_policy(token) do
     with {:ok, link, scope} <- resolve(token),
          :ok <- meeting_policy(scope, link) do
-      {:ok, %{time_zone: link.time_zone, requires_email: link.create_meeting}}
+      org =
+        case Platform.Tenancy.list_user_memberships(scope.actor) do
+          [%{org: %{name: name}} | _] -> name
+          _ -> nil
+        end
+
+      {:ok,
+       %{
+         time_zone: link.time_zone,
+         requires_email: link.create_meeting,
+         title: link.title,
+         duration_minutes: link.duration_minutes,
+         create_meeting: link.create_meeting,
+         owner_name: scope.actor.name,
+         org_name: org
+       }}
     end
   end
 
@@ -101,16 +121,73 @@ defmodule Platform.Calendar.BookingLinks do
   def slots(token, %Date{} = date) do
     with {:ok, link, scope} <- resolve(token),
          :ok <- rate_limit(token, "slots", 120),
+         :ok <- meeting_policy(scope, link) do
+      available(link, scope, date, date)
+    end
+  end
+
+  def slots(_, _), do: {:error, :invalid_date}
+
+  @doc """
+  Open-slot counts per local date for the month containing `month`, for the
+  v4 guest picker's highlighted days (task 01a18d9f stage 3). One public
+  rate-limit unit for the whole month, where calling `slots/2` per day would
+  spend 28-31.
+  """
+  def open_days(token, %Date{} = month) do
+    with {:ok, link, scope} <- resolve(token),
+         :ok <- rate_limit(token, "slots", 120),
          :ok <- meeting_policy(scope, link),
-         {:ok, candidates} <- candidates(link, date),
-         {from, to} <- CalendarWindow.day_bounds(date, link.time_zone),
-         {:ok, busy} <-
-           Subscriptions.availability(scope, DateTime.add(from, -86400), DateTime.add(to, 86400),
+         {:ok, rows} <-
+           available(link, scope, Date.beginning_of_month(month), Date.end_of_month(month)) do
+      {:ok,
+       rows
+       |> Enum.group_by(
+         &(&1.starts_at
+           |> DateTime.shift_zone!(link.time_zone)
+           |> DateTime.to_date())
+       )
+       |> Map.new(fn {date, slots} -> {date, length(slots)} end)}
+    end
+  end
+
+  def open_days(_, _), do: {:error, :invalid_date}
+
+  @doc """
+  The owner's preview of what a guest sees: open slots of the owner's own,
+  unrevoked link `link_id` over `days` days from `from` (v4 "Next open slots").
+  Task 01a18d9f stage 3. Owner-scoped, so it skips the public token rate
+  limit that `slots/2` spends per call.
+  """
+  def preview(%Scope{actor: %Accounts.User{}} = scope, link_id, %Date{} = from, days)
+      when is_integer(days) and days in 1..62 do
+    case Enum.find(list(scope), &(&1.id == link_id and is_nil(&1.revoked_at))) do
+      %BookingLink{} = link -> available(link, scope, from, Date.add(from, days - 1))
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def preview(_, _, _, _), do: {:error, :not_found}
+
+  # Candidate starts on every date in first..last, minus busy time and
+  # existing reservations (each widened by the link's buffers).
+  defp available(link, scope, first, last) do
+    candidates =
+      Date.range(first, last)
+      |> Enum.flat_map(fn date ->
+        {:ok, rows} = candidates(link, date)
+        rows
+      end)
+
+    {from, _} = CalendarWindow.day_bounds(first, link.time_zone)
+    {_, to} = CalendarWindow.day_bounds(last, link.time_zone)
+    reserved_from = DateTime.add(from, -86400)
+    reserved_to = DateTime.add(to, 86400)
+
+    with {:ok, busy} <-
+           Subscriptions.availability(scope, reserved_from, reserved_to,
              time_zone: link.time_zone
            ) do
-      reserved_from = DateTime.add(from, -86400)
-      reserved_to = DateTime.add(to, 86400)
-
       reservations =
         Repo.all(
           from(b in Booking,
@@ -126,8 +203,6 @@ defmodule Platform.Calendar.BookingLinks do
       {:ok, Enum.filter(candidates, &free?(&1, busy, link))}
     end
   end
-
-  def slots(_, _), do: {:error, :invalid_date}
 
   def book(token, attrs, key)
       when is_map(attrs) and is_binary(key) and byte_size(key) in 16..128 do
@@ -308,7 +383,7 @@ defmodule Platform.Calendar.BookingLinks do
                  finish_naive <- NaiveDateTime.add(naive, link.duration_minutes * 60),
                  {:ok, finish} <- DateTime.from_naive(finish_naive, link.time_zone),
                  true <- DateTime.diff(finish, start) == link.duration_minutes * 60,
-                 true <- DateTime.compare(start, DateTime.utc_now()) == :gt do
+                 true <- DateTime.compare(start, earliest_start(link)) == :gt do
               [
                 %{
                   starts_at: utc_usec(start),
@@ -326,6 +401,11 @@ defmodule Platform.Calendar.BookingLinks do
       {:ok, []}
     end
   end
+
+  # Minimum notice (task 01a18d9f stage 3): a start must lie further ahead
+  # than the link's notice; 0 keeps "any future start".
+  defp earliest_start(link),
+    do: DateTime.add(DateTime.utc_now(), 60 * (link.minimum_notice_minutes || 0))
 
   defp free?(slot, busy, link) do
     first = DateTime.add(slot.starts_at, -60 * link.buffer_before_minutes)

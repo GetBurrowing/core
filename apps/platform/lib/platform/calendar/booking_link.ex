@@ -17,6 +17,7 @@ defmodule Platform.Calendar.BookingLink do
     field(:end_date, :date)
     field(:windows, {:array, :map}, default: [])
     field(:create_meeting, :boolean, default: false)
+    field(:minimum_notice_minutes, :integer, default: 0)
     field(:revoked_at, :utc_datetime_usec)
     timestamps(type: :utc_datetime_usec)
   end
@@ -33,7 +34,8 @@ defmodule Platform.Calendar.BookingLink do
       :end_date,
       :windows,
       :create_meeting,
-      :project_id
+      :project_id,
+      :minimum_notice_minutes
     ])
     |> validate_required([
       :title,
@@ -53,6 +55,7 @@ defmodule Platform.Calendar.BookingLink do
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 240
     )
+    |> validate_inclusion(:minimum_notice_minutes, notice_options())
     |> validate_change(:time_zone, fn _, zone ->
       case DateTime.shift_zone(DateTime.utc_now(), zone) do
         {:ok, _} -> []
@@ -67,6 +70,9 @@ defmodule Platform.Calendar.BookingLink do
     |> validate_bounds()
     |> foreign_key_constraint(:project_id)
   end
+
+  @doc "Minimum notice choices in minutes: none, 2 hours, 4 hours, 1 day, 2 days."
+  def notice_options, do: [0, 120, 240, 1440, 2880]
 
   defp valid_window?(%{"weekday" => day, "start" => first, "end" => last}) do
     day in 1..7 and match?({:ok, _}, parse_time(first)) and

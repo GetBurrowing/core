@@ -229,12 +229,12 @@ defmodule Platform.Design.PressFeedbackGuardTest do
                one!(rules, [], ".bottom-nav-tab[data-nav-pending] .bottom-nav-label"),
                "font-weight"
              ) ==
-               "500"
+               "550"
 
       assert decl(
                one!(rules, [], ".bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label"),
                "font-weight"
-             ) == "400"
+             ) == "550"
     end
 
     test "the sidebar row's fill and bar move to the tapped row", %{rules: rules} do

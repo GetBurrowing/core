@@ -1183,7 +1183,10 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
             # 400 at rest, 500 active via a separate rule). Not a contrast fix:
             # the glass guard measures flat patches, so size and weight move no
             # ratio there, and the label got lighter, not bolder.
-            {".bottom-nav-label", %{"font-size" => "11px", "font-weight" => "400"}},
+            # Re-pinned by task 01a18d9f's fix round to prototype 01a178d2 v4's
+            # `.tab` type (11px, 550 at rest and selected). A genuine type
+            # change, not a contrast fix: the colour pairs are unchanged.
+            {".bottom-nav-label", %{"font-size" => "11px", "font-weight" => "550"}},
             # Stage 2's site. The chip's type lives on `.chip-soft`, one selector
             # away from the `.chip-primary` rule the fix touched, so pinning only
             # the tone rule would miss a chip made bold to clear 4.5:1.

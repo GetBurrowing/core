@@ -115,7 +115,9 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
          ctx do
       internal = rail_keys(scope(ctx.member))
       assert :tasks in internal.desktop
-      assert :tasks in internal.mobile
+      # Task 01a18d9f stage 5: Tasks is a More-sheet row on the phone.
+      assert :calendar in internal.mobile
+      assert :tasks in internal.more
       assert :files in internal.more
 
       guest = rail_keys(scope(ctx.guest))
