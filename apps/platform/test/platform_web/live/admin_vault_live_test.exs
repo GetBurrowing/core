@@ -236,31 +236,31 @@ defmodule PlatformWeb.AdminVaultLiveTest do
       {:ok, view, _} = live(ctx.conn, ~p"/admin/vault/#{slug}")
 
       view
-      |> element(~s([data-role="vault-system-grant-open"][data-name="installs-provisioner"]))
+      |> element(~s([data-role="vault-system-grant-open"][data-name="test-reader"]))
       |> render_click()
 
       assert [%{grantee_type: "system"}] = grants_for(cred.id)
-      assert {:ok, @value} = Vault.get(slug, accessor: {:system, "installs-provisioner"})
+      assert {:ok, @value} = Vault.get(slug, accessor: {:system, "test-reader"})
 
       html = render(view)
       assert html =~ ~s(data-role="vault-system-grant-chip")
-      assert html =~ "granted system reader installs-provisioner"
+      assert html =~ "granted system reader test-reader"
       refute html =~ @value
 
       view
       |> element(
-        ~s([data-role="vault-system-grant-chip"][data-name="installs-provisioner"] button)
+        ~s([data-role="vault-system-grant-chip"][data-name="test-reader"] button)
       )
       |> render_click()
 
       assert grants_for(cred.id) == []
-      assert render(view) =~ "ungranted system reader installs-provisioner"
+      assert render(view) =~ "ungranted system reader test-reader"
 
       assert {:error, :access_denied} =
-               Vault.get(slug, accessor: {:system, "installs-provisioner"})
+               Vault.get(slug, accessor: {:system, "test-reader"})
 
       demote!(ctx.admin)
-      render_click(view, "grant_system", %{"name" => "installs-provisioner"})
+      render_click(view, "grant_system", %{"name" => "test-reader"})
       assert grants_for(cred.id) == []
     end
 

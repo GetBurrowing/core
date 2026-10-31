@@ -189,8 +189,6 @@ defmodule Platform.RoleTest do
                Platform.Meetings.SummarizerSweeper,
                Platform.Meetings.CandidateSweeper,
                Platform.Security.Sweeper,
-               Platform.Installs.Registry,
-               Platform.Installs.Supervisor,
                Platform.Chat.SpacePurger,
                Platform.Experiments.Signals.MailSubscriber,
                Platform.Tenancy.ContainerPurger,

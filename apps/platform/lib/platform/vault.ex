@@ -78,8 +78,11 @@ defmodule Platform.Vault do
   grants, by a root admin through `Platform.Vault.Shared`
   (`grant_system/3`, `revoke_system_grant/3`), with an `update` log row each.
 
-    * `"installs-provisioner"` — `Platform.Installs.DigitalOcean` reading
-      the shared `digital-ocean-api-infra` token (task 01a18f0c stage 1).
+  The map is compile-time config (`config :platform, Platform.Vault,
+  system_principals: %{...}`) and is EMPTY by default: core ships no named
+  system reader. Its one former reader, the hosted-installs provisioner,
+  moved to Burrow Cloud with its own secret store (task 01a19249 stage 5);
+  config/test.exs names a test-only reader so the mechanism stays covered.
 
   ## Known limit
 
@@ -112,7 +115,7 @@ defmodule Platform.Vault do
 
   # Named system readers -> their fixed grantee uuid (moduledoc "Named system
   # readers"). Never reuse or change a uuid: grant and log rows hold it.
-  @system_principals %{"installs-provisioner" => "e3ee1349-ca10-46f7-aaa9-65205a820f86"}
+  @system_principals Application.compile_env(:platform, [__MODULE__, :system_principals], %{})
 
   @doc "Named system readers and their fixed grantee uuids (see the moduledoc)."
   @spec system_principals() :: %{String.t() => String.t()}
