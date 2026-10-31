@@ -220,12 +220,12 @@ defmodule PlatformWeb.BookingLiveTest do
           {"minimum_notice_minutes", 1440}
         ] do
       view
-      |> element("button.cal-seg[phx-value-field=#{field}][phx-value-value='#{value}']")
+      |> element("button.cal-seg[phx-value-field=#{field}][phx-value-minutes='#{value}']")
       |> render_click()
 
       assert has_element?(
                view,
-               "button.cal-seg[phx-value-field=#{field}][phx-value-value='#{value}'][aria-pressed=true]"
+               "button.cal-seg[phx-value-field=#{field}][phx-value-minutes='#{value}'][aria-pressed=true]"
              )
     end
 
@@ -264,6 +264,77 @@ defmodule PlatformWeb.BookingLiveTest do
              "[data-role=booking-preview]",
              "Next open slots (what a guest sees)"
            )
+  end
+
+  # The browser's click payload, not LiveViewTest's. LiveView's JS
+  # (`View.extractMeta`, phoenix_live_view view.js) copies every
+  # `phx-value-*` attribute and THEN sets `meta.value = el.value` for any
+  # element with a `.value` property. A <button> without a `value` attribute
+  # has `.value == ""`, so a `phx-value-value` on a button is always
+  # overwritten with "" in a real browser. LiveViewTest only sends `value`
+  # when the attribute is present, so this passes the element's real
+  # `.value` explicitly: the attribute, or "" without one.
+  defp browser_click(view, selector, text) do
+    el = element(view, selector, ~r/^\s*#{Regex.escape(text)}\s*$/)
+
+    dom_value =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(selector)
+      |> Enum.find(&(&1 |> LazyHTML.text() |> String.trim() == text))
+      |> LazyHTML.attribute("value")
+      |> List.first()
+
+    render_click(el, %{"value" => dom_value || ""})
+  end
+
+  test "every Length, Buffer and Minimum notice button saves its value on a browser click", %{
+    auth: conn,
+    scope: scope,
+    link: link
+  } do
+    {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+
+    cases = [
+      {"duration_minutes",
+       [{"15 min", 15}, {"45 min", 45}, {"60 min", 60}, {"90 min", 90}, {"30 min", 30}]},
+      {"buffer_before_minutes",
+       [{"5 min", 5}, {"10 min", 10}, {"15 min", 15}, {"30 min", 30}, {"None", 0}]},
+      {"buffer_after_minutes",
+       [{"5 min", 5}, {"10 min", 10}, {"15 min", 15}, {"30 min", 30}, {"None", 0}]},
+      {"minimum_notice_minutes",
+       [{"2 hours", 120}, {"1 day", 1440}, {"2 days", 2880}, {"4 hours", 240}]}
+    ]
+
+    for {field, buttons} <- cases, {label, minutes} <- buttons do
+      browser_click(view, "button.cal-seg[phx-value-field=#{field}]", label)
+      saved = Enum.find(BookingLinks.list(scope), &(&1.id == link.id))
+
+      assert Map.fetch!(saved, String.to_existing_atom(field)) == minutes,
+             "#{field} #{label}: saved #{inspect(Map.fetch!(saved, String.to_existing_atom(field)))}"
+    end
+  end
+
+  test "an empty or unoffered seg value is an error, not a silent no-op", %{
+    auth: conn,
+    scope: scope,
+    link: link
+  } do
+    {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+
+    for params <- [
+          %{"field" => "duration_minutes", "minutes" => ""},
+          %{"field" => "duration_minutes"},
+          %{"field" => "buffer_after_minutes", "minutes" => "7"},
+          %{"field" => "minimum_notice_minutes", "minutes" => "soon"}
+        ] do
+      html = render_click(view, "set", params)
+      assert html =~ "that choice is not one of the options.", inspect(params)
+    end
+
+    assert %{duration_minutes: 30, buffer_after_minutes: 0, minimum_notice_minutes: 0} =
+             Enum.find(BookingLinks.list(scope), &(&1.id == link.id))
   end
 
   test "the slot preview lists the next open days, or the v4 empty hint", %{

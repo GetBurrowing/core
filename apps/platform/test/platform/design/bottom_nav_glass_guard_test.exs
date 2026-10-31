@@ -422,26 +422,38 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       # A full hairline since the bar floats (stage 3); stage 1 drew border-top.
       assert normalise(declaration(body, "border")) == "1px solid var(--color-base-300)"
 
-      # Task 01a15f2e stage 1 (Saru's canvas 01a15f2f): the glass and its 1px
-      # border are the only separation. No `.bottom-nav` rule, in any at-rule,
-      # may paint a shadow under the bar.
+      # Prototype 01a178d2 v4 (task 01a18d9f fix round) supersedes task
+      # 01a15f2e's no-shadow rule: the bar carries v4's glass shadow, through
+      # the `--shadow-tab-bar` token (light 0 10px 30px rgb(40 30 20 / 0.18),
+      # dark 0 10px 30px rgb(0 0 0 / 0.45), from v4 theme.js `--glass-shadow`),
+      # declared once on the top-level `.bottom-nav` and nowhere else.
       shadowed =
         for r <- rules,
             Enum.any?(split_selectors(r.selector), &String.ends_with?(&1, ".bottom-nav")),
             declarations(r.body, "box-shadow") != [],
-            do: {r.context, r.selector}
+            do: {r.context, r.selector, normalise(declaration(r.body, "box-shadow"))}
 
-      assert shadowed == [], "`.bottom-nav` declares a box-shadow: #{inspect(shadowed)}"
+      assert shadowed == [{[], ".bottom-nav", "var(--shadow-tab-bar)"}]
+
+      tokens =
+        for r <- rules,
+            v <- declarations(r.body, "--shadow-tab-bar"),
+            do: normalise(v)
+
+      assert "0 10px 30px rgb(40 30 20 / 0.18)" in tokens
+      assert "0 10px 30px rgb(0 0 0 / 0.45)" in tokens
     end
 
-    test "tab type: 11px, 400 at rest, 500 active, no letter-spacing", %{rules: rules} do
+    # Prototype 01a178d2 v4 `.tab` (task 01a18d9f fix round): 11px at 550,
+    # at rest and selected alike; it supersedes the earlier 400/500 pair.
+    test "tab type: 11px, 550 at rest and active, no letter-spacing", %{rules: rules} do
       label = top_level_body!(rules, ".bottom-nav-label")
       assert declaration(label, "font-size") == "11px"
-      assert declaration(label, "font-weight") == "400"
+      assert declaration(label, "font-weight") == "550"
       assert declaration(label, "letter-spacing") == nil
 
       active = top_level_body!(rules, ".bottom-nav-tab--active .bottom-nav-label")
-      assert declaration(active, "font-weight") == "500"
+      assert declaration(active, "font-weight") == "550"
     end
   end
 
@@ -458,8 +470,9 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       assert declaration(body, "height") == "64px"
 
       # Task 01a15f2e stage 1 (Saru's canvas 01a15f2f): the bar's bottom edge
-      # is max(inset - 13px, 8px) above the viewport bottom, 21px at inset 34
-      # and 8px at inset 0, declared once in the top-level :root.
+      # is max(inset - 13px, floor) above the viewport bottom, 21px at inset
+      # 34, declared once in the top-level :root. The floor is prototype
+      # 01a178d2 v4's `.tabbar` bottom: 12px (task 01a18d9f fix round; was 8px).
       assert declarations(body, "bottom") == ["var(--bottom-nav-offset)"]
 
       [offset] =
@@ -468,7 +481,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
             v <- declarations(r.body, "--bottom-nav-offset"),
             do: normalise(v)
 
-      assert offset == "max(env(safe-area-inset-bottom, 0px) - 13px, 8px)"
+      assert offset == "max(env(safe-area-inset-bottom, 0px) - 13px, 12px)"
 
       tab = top_level_body!(rules, ".bottom-nav-tab")
       assert declaration(tab, "min-width") == "44px"

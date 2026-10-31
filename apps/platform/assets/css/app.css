@@ -1323,6 +1323,9 @@ body, .font-suite {
   --shadow-card-hover: 0 2px 4px rgb(9 12 16 / 0.06), 0 6px 16px rgb(9 12 16 / 0.08);
   --shadow-dropdown: 0 4px 6px -2px rgb(9 12 16 / 0.08), 0 10px 24px -4px rgb(9 12 16 / 0.12);
   --shadow-modal: 0 8px 12px -4px rgb(9 12 16 / 0.10), 0 24px 48px -12px rgb(9 12 16 / 0.22);
+  /* The phone tab bar's glass shadow: prototype 01a178d2 v4 theme.js
+     `--glass-shadow` (light 0 10px 30px rgba(40,30,20,.18); dark below). */
+  --shadow-tab-bar: 0 10px 30px rgb(40 30 20 / 0.18);
   --sheet-form-max-width: 36rem; /* 576px — form-modal standard (max-w-xl, 8px grid); desktop width of the New Task / form sheets */
   --duration-fast: 100ms;      /* micro-interactions: hover, press */
   --duration-base: 200ms;      /* standard transitions: reveals, tint fades */
@@ -1369,6 +1372,7 @@ body, .font-suite {
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+  --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
   --color-interactive: #ff9b55;
   --native-tab-selected: var(--color-primary);
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -1381,6 +1385,7 @@ body, .font-suite {
     --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+    --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
     --color-interactive: #ff9b55;
     --native-tab-selected: var(--color-primary);
     --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -4962,7 +4967,7 @@ body, .font-suite {
 :root {
   --bottom-nav-height: 0px;
   --bottom-nav-gap: 0px;
-  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 8px);
+  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 12px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
   /* Persistent meeting bar height. Set inline on the shell root to 3rem
@@ -5023,6 +5028,9 @@ body, .font-suite {
    paint within 0.88 of a byte of the exact composite on Chrome 147 and within
    0.80 on Chrome 151, pixel-identical to each other. color-mix is kept
    because the build pipeline already emits it with an opaque fallback. */
+/* Prototype 01a178d2 v4 `.tabbar` (task 01a18d9f fix round): radius --r-xl
+   22px, the v4 glass shadow (--shadow-tab-bar) and a 12px floor on
+   --bottom-nav-offset, all measured from the v4 render. */
 .bottom-nav {
   /* Tab ink. A bar-scoped variable so High contrast can raise it without
      touching its own --subtle; see the override below. */
@@ -5042,7 +5050,8 @@ body, .font-suite {
   right: 12px;
   bottom: var(--bottom-nav-offset);
   height: 64px;
-  border-radius: round(calc(var(--radius-box) * 1.57), 1px);
+  border-radius: 22px;
+  box-shadow: var(--shadow-tab-bar);
   overflow: hidden;
   z-index: 30;
   display: flex;
@@ -5438,6 +5447,7 @@ body, .font-suite {
    lg:hover:text-base-content`; current `bg-base-300 text-base-content`), so
    this rule sets neither: an unlayered colour here would beat the layered
    hover utilities. */
+/* font-size 13px: prototype 01a178d2 v4 `.nav` (task 01a18d9f fix round). */
 .sidebar-row {
   position: relative;
   display: flex;
@@ -5448,7 +5458,7 @@ body, .font-suite {
   flex-shrink: 0;
   padding: 0 0.5rem;
   border-radius: var(--radius-field);
-  font-size: 0.875rem;
+  font-size: 13px;
   text-align: left;
   text-decoration: none;
 }
@@ -5474,14 +5484,16 @@ body, .font-suite {
 
 /* Tab label (Saru's type note): 11px, regular at rest, medium when active,
    no letter-spacing. */
+/* Prototype 01a178d2 v4 `.tab`: 550 at rest and selected alike (task
+   01a18d9f fix round). */
 .bottom-nav-label {
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 550;
   line-height: 1;
 }
 
 .bottom-nav-tab--active .bottom-nav-label {
-  font-weight: 500;
+  font-weight: 550;
 }
 
 /* ── More sheet paint (task 01a1557a-807f stage 3) ─────────────────────
@@ -5639,7 +5651,7 @@ body, .font-suite {
 }
 
 .bottom-nav-tab[data-nav-pending] .bottom-nav-label {
-  font-weight: 500;
+  font-weight: 550;
 }
 
 .bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
@@ -5652,7 +5664,7 @@ body, .font-suite {
 }
 
 .bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label {
-  font-weight: 400;
+  font-weight: 550;
 }
 
 /* Desktop sidebar: the raised fill and the leading bar move to the tapped
@@ -9646,9 +9658,10 @@ body.screen-share-fullscreen-active {
   border-bottom: 1px solid var(--edge);
   flex: 0 0 auto;
 }
+/* v4 `.dhead b` inherits the 14px body (measured, task 01a18d9f fix round). */
 .cal-dhead b {
   flex: 1;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 .cal-dbody {
@@ -9920,7 +9933,7 @@ textarea.cal-input {
   }
   .cal-mainhead h1 {
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 650;
   }
 }
 .cal-page {
@@ -10092,6 +10105,7 @@ textarea.cal-input {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 }
+/* v4 `.linkcard b`: 14px (measured, task 01a18d9f fix round). */
 .cal-linkcard {
   display: flex;
   flex-direction: column;
@@ -10102,7 +10116,7 @@ textarea.cal-input {
   background: var(--color-base-100);
   text-align: left;
   width: 100%;
-  font-size: 15px;
+  font-size: 14px;
 }
 .cal-linkcard[aria-current="true"] {
   border-color: var(--color-primary);
@@ -10119,12 +10133,13 @@ textarea.cal-input {
   gap: 12px;
 }
 @media (min-width: 1024px) {
+  /* Equal columns (minmax(0, 1fr)): v4's bare 1fr 1fr sizes the Public link
+     column to its content, and a real /book/<43-char token> URL would push
+     the editor past the panel. The 200px code minimum still wraps Copy under
+     the URL, as v4 does (task 01a18d9f fix round). */
   .cal-formgrid2 {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
-}
-.cal-formgrid2 .cal-feed code {
-  min-width: 0;
 }
 .cal-winrow {
   display: grid;
@@ -10169,12 +10184,13 @@ textarea.cal-input {
   justify-content: center;
   color: var(--color-subtle);
 }
+/* v4 `.meetopt b`: 14px (measured, task 01a18d9f fix round). */
 .cal-meetopt {
   border: 1px solid var(--color-primary);
   background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
   border-radius: var(--radius-box);
   padding: 12px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cal-slots {
   display: flex;
@@ -10619,7 +10635,8 @@ textarea.cal-input {
 }
 .mt-kind .cal-pill {
   letter-spacing: 0.08em;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 700;
 }
 @media (hover: hover) and (min-width: 1024px) {
   .mt-row:not([aria-current="true"]):hover {

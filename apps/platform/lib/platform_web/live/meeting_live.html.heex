@@ -3478,7 +3478,68 @@
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3">
+      <%!-- v4 list view header (task 01a18d9f fix round): at lg the list pane's
+         own head (h2 `Meetings` 17px/650 in the 270px pane, prototype
+         01a178d2 v4 `.lhead`) beside the main pane's head (h1 `Meetings`
+         15px/650 + `+ New meeting`). The Meetings/Archive switch (main's
+         Archive view, #54; v4 has none) rides glyph-only in the list head.
+         Below lg one row: title, switch, `+ New meeting`. --%>
+      <header
+        :if={@meetings_view == :list}
+        class="flex h-12 flex-shrink-0 items-stretch border-b border-edge bg-base-100 lg:h-[52px]"
+        data-role="meetings-list-header"
+      >
+        <div class="flex min-w-0 flex-1 items-center gap-2 px-3 lg:w-[270px] lg:flex-none lg:border-r lg:border-edge">
+          <h2 class="m-0 min-w-0 truncate text-[17px] font-[650]">Meetings</h2>
+          <div
+            class="ml-auto flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-200 p-0.5"
+            data-role="meetings-view-toggle"
+            role="group"
+            aria-label="Meetings view"
+          >
+            <.link
+              :for={entry <- meetings_view_shelf()}
+              patch={meetings_view_path(assigns, entry.id)}
+              data-view={entry.id}
+              aria-current={@meetings_view == entry.id && "page"}
+              aria-label={entry.label}
+              title={entry.label}
+              class={[
+                "flex min-h-11 items-center rounded-md px-3 text-xs font-medium transition lg:min-h-9",
+                @meetings_view == entry.id && "bg-base-100 text-base-content shadow-sm",
+                @meetings_view != entry.id && "text-subtle lg:hover:text-base-content"
+              ]}
+            >
+              <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
+            </.link>
+          </div>
+          <button
+            type="button"
+            phx-click="open_new_room"
+            data-role="list-new-meeting"
+            class={[PlatformWeb.CalendarLive.Components.primary_btn(), "lg:hidden"]}
+          >
+            + New meeting
+          </button>
+        </div>
+        <div class="hidden min-w-0 flex-1 items-center gap-2 px-4 lg:flex">
+          <h1 class="m-0 truncate text-[15px] font-[650]" data-role="meetings-main-title">
+            Meetings
+          </h1>
+          <button
+            type="button"
+            phx-click="open_new_room"
+            data-role="list-new-meeting-main"
+            class={[PlatformWeb.CalendarLive.Components.primary_btn(), "ml-auto"]}
+          >
+            + New meeting
+          </button>
+        </div>
+      </header>
+      <header
+        :if={@meetings_view != :list}
+        class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3"
+      >
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
@@ -3592,25 +3653,12 @@
            `lg:hidden`: below `lg` this is not drawn and the FAB is the
            only create path; at `lg` and above they swap. --%>
         <button
-          :if={@meetings_view != :list}
           type="button"
           phx-click="open_start_meeting_sheet"
           data-role="new-meeting-button"
           class="btn btn-primary btn-sm hidden lg:inline-flex gap-1.5"
         >
           <span class="hero-plus size-4"></span> New meeting
-        </button>
-        <%!-- v4 list view (task 01a18d9f stage 4): one `+ New meeting` at every
-           width, opening the v4 modal; the calendar and archive halves keep
-           the button + FAB pair above. --%>
-        <button
-          :if={@meetings_view == :list}
-          type="button"
-          phx-click="open_new_room"
-          data-role="list-new-meeting"
-          class={PlatformWeb.CalendarLive.Components.primary_btn()}
-        >
-          + New meeting
         </button>
       </header>
 

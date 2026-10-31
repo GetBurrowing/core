@@ -23,6 +23,12 @@ defmodule PlatformWeb.BookingSettingsLive do
   @lengths [15, 30, 45, 60, 90]
   @buffers [0, 5, 10, 15, 30]
   @notices [{120, "2 hours"}, {240, "4 hours"}, {1440, "1 day"}, {2880, "2 days"}]
+  @seg_choices %{
+    "duration_minutes" => @lengths,
+    "buffer_before_minutes" => @buffers,
+    "buffer_after_minutes" => @buffers,
+    "minimum_notice_minutes" => Enum.map(@notices, &elem(&1, 0))
+  }
   @weekdays [{1, "Mon", "Monday"}, {2, "Tue", "Tuesday"}, {3, "Wed", "Wednesday"}] ++
               [{4, "Thu", "Thursday"}, {5, "Fri", "Friday"}, {6, "Sat", "Saturday"}] ++
               [{7, "Sun", "Sunday"}]
@@ -135,11 +141,21 @@ defmodule PlatformWeb.BookingSettingsLive do
     save(socket, %{"title" => if(title == "", do: "Untitled link", else: title)})
   end
 
-  def handle_event("set", %{"field" => field, "value" => value}, socket)
-      when field in ~w(duration_minutes buffer_before_minutes buffer_after_minutes minimum_notice_minutes) do
-    case Integer.parse(value) do
-      {minutes, ""} -> save(socket, %{field => minutes})
-      _ -> {:noreply, socket}
+  # The seg buttons carry `phx-value-minutes`, never `phx-value-value`: the
+  # browser's click payload sets `value` to the button's own `.value` ("" on
+  # a <button> without the attribute), which overwrote `phx-value-value` and
+  # made every Length / Buffer / Minimum notice click a silent no-op. A
+  # missing, empty or unoffered value is reported, never ignored.
+  def handle_event("set", %{"field" => field} = params, socket)
+      when is_map_key(@seg_choices, field) do
+    with value when is_binary(value) <- params["minutes"],
+         {minutes, ""} <- Integer.parse(value),
+         true <- minutes in Map.fetch!(@seg_choices, field) do
+      save(socket, %{field => minutes})
+    else
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, "#{seg_label(field)}: that choice is not one of the options.")}
     end
   end
 
@@ -277,6 +293,11 @@ defmodule PlatformWeb.BookingSettingsLive do
          |> put_flash(:error, "Could not save this link. Check Meetings is on for its project.")}
     end
   end
+
+  defp seg_label("duration_minutes"), do: "Length"
+  defp seg_label("buffer_before_minutes"), do: "Buffer before"
+  defp seg_label("buffer_after_minutes"), do: "Buffer after"
+  defp seg_label("minimum_notice_minutes"), do: "Minimum notice"
 
   defp humanize(field),
     do: field |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
@@ -454,7 +475,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                         data-clipboard-text={public_url(@link)}
                         phx-click="copied"
                       >
-                        Copy
+                        <.icon name="hero-document-duplicate" class="size-3.5" />Copy
                       </button>
                     </div>
                   </div>
@@ -479,7 +500,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                       class="cal-seg"
                       phx-click="set"
                       phx-value-field="duration_minutes"
-                      phx-value-value={m}
+                      phx-value-minutes={m}
                       aria-pressed={to_string(@link.duration_minutes == m)}
                     >
                       {m} min
@@ -573,7 +594,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                         class="cal-seg"
                         phx-click="set"
                         phx-value-field={field}
-                        phx-value-value={m}
+                        phx-value-minutes={m}
                         aria-pressed={to_string(Map.get(@link, String.to_existing_atom(field)) == m)}
                       >
                         {if m == 0, do: "None", else: "#{m} min"}
@@ -590,7 +611,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                       class="cal-seg"
                       phx-click="set"
                       phx-value-field="minimum_notice_minutes"
-                      phx-value-value={m}
+                      phx-value-minutes={m}
                       aria-pressed={to_string(@link.minimum_notice_minutes == m)}
                     >
                       {label}
