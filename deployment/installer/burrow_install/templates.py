@@ -356,22 +356,25 @@ exit 1
 
 
 def model_unit(plan):
-    return "\n".join(
-        [
-            f"# {HEADER.format(name=plan.name)}",
-            "[Unit]",
-            "Description=Burrow: fetch the local embeddings model (pinned, sha256-checked)",
-            "Wants=network-online.target",
-            "After=network-online.target",
-            f"Before={STACK_UNIT_NAME}",
-            "",
-            "[Service]",
-            "Type=oneshot",
-            "RemainAfterExit=yes",
-            f"ExecStart={INSTALL_ROOT}/{FETCH_MODEL_SCRIPT}",
-            "TimeoutStartSec=1800",
-        ]
-    ) + "\n"
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                "Description=Burrow: fetch the local embeddings model (pinned, sha256-checked)",
+                "Wants=network-online.target",
+                "After=network-online.target",
+                f"Before={STACK_UNIT_NAME}",
+                "",
+                "[Service]",
+                "Type=oneshot",
+                "RemainAfterExit=yes",
+                f"ExecStart={INSTALL_ROOT}/{FETCH_MODEL_SCRIPT}",
+                "TimeoutStartSec=1800",
+            ]
+        )
+        + "\n"
+    )
 
 
 VAPID_SCRIPT = "bin/burrow-vapid"

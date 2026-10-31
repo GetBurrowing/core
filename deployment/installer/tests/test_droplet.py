@@ -742,8 +742,8 @@ class FetchModelScriptTest(unittest.TestCase):
             handle.write(
                 "#!/bin/sh\n"
                 'out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\n'
-                f'n=$(cat {self.tmp}/bad 2>/dev/null || echo 0)\n'
-                f'echo call >> {self.log}\n'
+                f"n=$(cat {self.tmp}/bad 2>/dev/null || echo 0)\n"
+                f"echo call >> {self.log}\n"
                 f'if [ "$n" -gt 0 ]; then echo $((n-1)) > {self.tmp}/bad; printf corrupt > "$out"; exit 0; fi\n'
                 f'cp {self.tmp}/good "$out"\n'
             )
@@ -766,9 +766,7 @@ class FetchModelScriptTest(unittest.TestCase):
         with open(os.path.join(self.tmp, "bad"), "w", encoding="utf-8") as handle:
             handle.write(str(bad))
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""))
-        return subprocess.run(
-            [self.script], check=False, env=env, capture_output=True, text=True
-        )
+        return subprocess.run([self.script], check=False, env=env, capture_output=True, text=True)
 
     def calls(self):
         if not os.path.exists(self.log):
