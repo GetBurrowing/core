@@ -87,6 +87,13 @@ defmodule Platform.Installs do
   @email ~r/^[^@\s]+@[^@\s]+\.[^@\s]+$/
   @label ~r/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
   @default_sizes ["s-2vcpu-4gb", "s-4vcpu-8gb"]
+  # DigitalOcean size slug -> the install manifest's `[install] size_tier`
+  # (task 01a18f76). The tier picks the local embeddings profile the
+  # installer renders (deployment/installer registry.EMBEDDINGS_PROFILES), so
+  # a 4 GB droplet gets the 4 GB row. Data only: the flags live in that table.
+  # `config :platform, Platform.Installs, size_tiers:` overrides it; a size
+  # with no tier is refused by `create/2`.
+  @size_tiers %{"s-2vcpu-4gb" => "small", "s-4vcpu-8gb" => "medium"}
 
   # Every write may carry `handover_sealed`, and Ecto's :debug query log
   # prints CAST params, i.e. the PLAINTEXT (the reason `Platform.Vault`
@@ -191,12 +198,19 @@ defmodule Platform.Installs do
     end
   end
 
+  @doc """
+  The install manifest `size_tier` for a DigitalOcean size slug, or nil when
+  the slug has none (`@size_tiers`, overridable with `config :platform,
+  Platform.Installs, size_tiers:`).
+  """
+  @spec size_tier(String.t() | nil) :: String.t() | nil
+  def size_tier(size), do: Map.get(config(:size_tiers, @size_tiers), size)
+
   defp validate_create(attrs) do
     attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
-    defaults = defaults()
     name = attrs["business_name"]
     email = attrs["owner_email"]
-    size = attrs["size"] || defaults.default_size
+    size = attrs["size"] || config(:default_size, "s-2vcpu-4gb")
     mode = attrs["domain_mode"] || "ours"
 
     cond do
@@ -209,11 +223,17 @@ defmodule Platform.Installs do
       attrs["region"] not in allowed_regions() ->
         {:error, {:invalid, :region}}
 
-      size not in defaults.sizes ->
+      size not in config(:sizes, @default_sizes) ->
         {:error, {:invalid, :size}}
 
+      # Task 01a18f76: `sizes` is configurable, so an operator can list a slug
+      # with no tier, whose embeddings profile nobody has measured. Refused
+      # here, before any provider call (the availability read below included).
+      is_nil(size_tier(size)) ->
+        {:error, {:invalid, :size_unsupported}}
+
       # Stage 6: refused here, before any droplet POST (the provider's 422).
-      attrs["region"] not in Map.fetch!(defaults.available, size) ->
+      attrs["region"] not in Map.fetch!(defaults().available, size) ->
         {:error, {:invalid, :size_unavailable}}
 
       mode not in ["ours", "customer"] ->
@@ -763,8 +783,9 @@ defmodule Platform.Installs do
         steps =
           Enum.map(install.steps, fn
             %{"state" => "failed"} = step ->
+              # A retried final step earns its consecutive memory polls anew.
               %{
-                step
+                Map.drop(step, ["memory_oks", "memory_checked_at"])
                 | "state" => "pending",
                   "started_at" => nil,
                   "finished_at" => nil,
@@ -1269,6 +1290,11 @@ defmodule Platform.Installs do
     do: "Your server didn't finish installing in time. Retry restarts it and tries again."
 
   def describe_error(_step, :timeout), do: "This step took longer than expected."
+
+  def describe_error(_step, :memory_unavailable),
+    do:
+      "Memory and search didn't start on this server; the embeddings service kept restarting. " <>
+        "Nothing was charged beyond the server; you can retry or tear it down."
 
   # Stage 6: DigitalOcean answers 422 when the size is not offered in the region.
   def describe_error("reserve", {:http, 422}),

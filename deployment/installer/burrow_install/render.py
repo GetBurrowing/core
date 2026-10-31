@@ -61,6 +61,7 @@ class ResolvedService:
         self.image = None
         self.pull_never = False
         self.command = None
+        self.mem_limit = None
         self.env = {}
         self.volumes = {}
         self.host_mounts = []
@@ -118,6 +119,9 @@ class Plan:
         self.ssh_authorized_key = manifest["host"].get("ssh_authorized_key")
         # Stage 6: the host downloads the local embeddings model at first boot.
         self.model_download = manifest["embeddings"].get("model_source") == "download"
+        # The local embeddings model this install's size tier runs
+        # (registry.EMBEDDINGS_PROFILES, task 01a18f76).
+        self.embeddings_model = registry.embeddings_model(manifest)
 
     def routes(self):
         out = {}
@@ -181,7 +185,8 @@ def plan(manifest):
         svc = ResolvedService(container)
         svc.image = overrides.get(container) or entry.default_image(ctx)
         svc.pull_never = result.images_preloaded
-        svc.command = entry.command
+        svc.command = entry.command_for(ctx)
+        svc.mem_limit = entry.mem_limit_for(ctx)
         svc.env = dict(entry.env(ctx))
         svc.volumes = dict(entry.volumes)
         svc.host_mounts = list(entry.host_mounts(ctx))

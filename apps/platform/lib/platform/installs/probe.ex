@@ -21,6 +21,14 @@ defmodule Platform.Installs.Probe do
   @doc "`https://<primary>/health` answers 200 with a verified certificate."
   @callback https_health(Install.t()) :: :ok | {:wait, term()} | {:error, term()}
 
+  @doc """
+  `https://<primary>/health?deep=memory`, authenticated with the install's
+  STATIC_API_KEY, answers `memory: "ok"`: one real search went through core,
+  memory-service and embeddings (task 01a18f76). The key travels only in the
+  request header; it is never put in a return value, a log line or an error.
+  """
+  @callback memory_ready(Install.t(), String.t()) :: :ok | {:wait, term()} | {:error, term()}
+
   @doc "The configured implementation."
   def impl,
     do:
@@ -73,6 +81,27 @@ defmodule Platform.Installs.Probe.Live do
            connect_options: [timeout: 10_000]
          ) do
       {:ok, %Req.Response{status: 200}} -> :ok
+      {:ok, %Req.Response{status: status}} -> {:wait, {:http, status}}
+      {:error, _} -> {:wait, :unreachable}
+    end
+  end
+
+  @impl true
+  def memory_ready(install, static_api_key) do
+    # The server bounds its search by PlatformWeb.HealthController's deep
+    # timeout (20 s); this waits a little longer so a slow "unavailable" is
+    # still read as an answer, not as an unreachable server.
+    case Req.get("https://#{install.primary_host}/health",
+           params: [deep: "memory"],
+           headers: [{"authorization", "Bearer " <> static_api_key}],
+           retry: false,
+           redirect: false,
+           receive_timeout: 30_000,
+           connect_options: [timeout: 10_000]
+         ) do
+      {:ok, %Req.Response{status: 200, body: %{"memory" => "ok"}}} -> :ok
+      {:ok, %Req.Response{status: 200, body: %{"memory" => other}}} -> {:wait, {:memory, other}}
+      {:ok, %Req.Response{status: 200}} -> {:wait, {:memory, "absent"}}
       {:ok, %Req.Response{status: status}} -> {:wait, {:http, status}}
       {:error, _} -> {:wait, :unreachable}
     end

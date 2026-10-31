@@ -326,27 +326,203 @@ def enabled_containers(manifest):
 # when the file is gone; ADR 0053 follow-up 10 retires this mount.
 CASTORE_PATH = "/app/lib/castore-1.0.17/priv/cacerts.pem"
 
-# The embeddings model. Must stay Qwen3-Embedding-0.6B f16: a different model
-# silently invalidates every stored vector (the reference install's embeddings.container header).
-EMBEDDINGS_MODEL_FILE = "Qwen3-Embedding-0.6B-f16.gguf"
-
-# Where `[embeddings] model_source = "download"` fetches it (core task
-# 01a10315 stage 6): the official Qwen file on Hugging Face at a FIXED
-# revision commit, never a branch. Measured 2026-10-30: the Hugging Face API
-# tree at this revision lists the file with size 1197629632 and LFS sha256
+# The embeddings models, by key. Both are the official Qwen files on Hugging
+# Face at a FIXED revision commit, never a branch, each checked against its
+# sha256 at download (bin/burrow-fetch-model). A model change re-embeds:
+# vectors from one model are not interchangeable with another's, so an install
+# keeps the model it was first rendered with (its size tier).
+#
+# "f16": the reference install's model. Measured 2026-10-30: the Hugging Face
+# API tree at this revision lists it with size 1197629632 and the LFS sha256
 # below, and `sha256sum` of the reference install's own copy
 # (embeddings.container's /models/Qwen3-Embedding-0.6B-f16.gguf) prints the
-# same sha256, so this is byte-for-byte the model the reference install's
-# stored vectors were made with.
-EMBEDDINGS_MODEL_SOURCE = {
-    "url": (
-        "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/"
-        "370f27d7550e0def9b39c1f16d3fbaa13aa67728/" + EMBEDDINGS_MODEL_FILE
-    ),
-    "revision": "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
-    "sha256": "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
-    "size": 1197629632,
+# same sha256.
+# "q8_0" (core task 01a18f76, a declared model change for the 4 GB tier):
+# same repo and revision; the Hugging Face tree lists size 639150592 and the
+# LFS sha256 below, and `sha256sum` of the file downloaded on the test host and on two
+# s-2vcpu-4gb droplets printed it (2026-10-31). Its vectors against f16 on 23
+# real inputs (20 chunks of the largest org page and a day's journal, 2
+# queries, 1 CJK chunk): cosine min 0.99747, mean 0.99914; both queries'
+# top-5 over the 20 chunks were the same set.
+_HF_REVISION = "370f27d7550e0def9b39c1f16d3fbaa13aa67728"
+_HF_BASE = "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/" + _HF_REVISION + "/"
+EMBEDDINGS_MODELS = {
+    "f16": {
+        "file": "Qwen3-Embedding-0.6B-f16.gguf",
+        "url": _HF_BASE + "Qwen3-Embedding-0.6B-f16.gguf",
+        "revision": _HF_REVISION,
+        "sha256": "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
+        "size": 1197629632,
+    },
+    "q8_0": {
+        "file": "Qwen3-Embedding-0.6B-Q8_0.gguf",
+        "url": _HF_BASE + "Qwen3-Embedding-0.6B-Q8_0.gguf",
+        "revision": _HF_REVISION,
+        "sha256": "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+        "size": 639150592,
+    },
 }
+# The reference install's model file (f16). Kept for callers that name it.
+EMBEDDINGS_MODEL_FILE = EMBEDDINGS_MODELS["f16"]["file"]
+EMBEDDINGS_MODEL_SOURCE = {k: v for k, v in EMBEDDINGS_MODELS["f16"].items() if k != "file"}
+
+# The llama.cpp server image, pinned BY DIGEST (core task 01a18f76): the
+# profiles below run -ub smaller than the largest input, which needs a build
+# whose server splits one pooled embedding across ubatches. Measured on this
+# digest (build 12004, commit 3c809f443) on the test host 2026-10-31: a 5569-token
+# input at -ub 1024 embedded with 200; a floating tag could move to a build
+# that answers "input is too large to process" instead.
+EMBEDDINGS_IMAGE = (
+    "ghcr.io/ggml-org/llama.cpp:server"
+    "@sha256:b32890309c1a33a534a01b0b461e953dc2c5a6bac20213abcf48e22847a19c85"
+)
+
+# memory-service's largest SINGLE input to POST /v1/embeddings on the local
+# profiles, in llama.cpp tokens. llama.cpp runs each element of `input` as its
+# own task on its own slot, so a slot (-c / -np, --no-kv-unified) must hold the
+# largest single input, never the request total.
+#
+# Before this table (memory-service defaults, measured 2026-10-31 on the test host
+# behind a logging proxy counting with llama.cpp's own POST /tokenize): the
+# largest input was a search query at the wire clamp, embedding_max_input_tokens
+# x embedding_chars_per_token = 6000 x 3 = 18000 chars (memory-service
+# config.py:38-39, embedder.py:104): 5569 tokens of the largest org page, 26630
+# of CJK + emoji. Chunks were at most 2400 chars (config.py:56 x :39): 823
+# tokens of English, 3571 of a CJK + emoji mix.
+#
+# The local profiles now set the clamp and the chunk size through
+# memory_env, so every input (chunk or query, the 58-char query prefix
+# included) is at most MEMORY_EMBEDDING_MAX_INPUT_TOKENS x 3 chars. A char is
+# at most 4 UTF-8 bytes and llama.cpp's byte-level BPE emits at most one token
+# per byte, so `max_input_tokens` below is that byte bound plus the special
+# token, not a sample: 600 chars -> 2401. Measured on the same 600 chars: 179
+# tokens (English), 905 (CJK + emoji mix).
+#
+# Local embeddings profiles, keyed by the manifest's `[install] size_tier`
+# (core task 01a18f76). Only MEASURED rows are here; a tier without one
+# (EMBEDDINGS_FALLBACK_TIER) gets the "small" row, never unmeasured flags.
+#
+# Row fields: model (EMBEDDINGS_MODELS key), ctx (-c), parallel (-np), batch
+# (-b), ubatch (-ub), threads (-t), mem_limit (compose mem_limit, MiB: 1.2 x
+# embeddings_peak_mb, so a misfit kills llama.cpp and not Postgres),
+# host_ram_mb (MemTotal), siblings_peak_mb, embeddings_peak_mb (llama-server
+# VmHWM, model pages included), max_input_tokens (above), worst_request_secs
+# (the slowest single request memory-service can send on this tier),
+# memory_env (memory-service env) and core_ingest_timeout_ms (core-platform's
+# MEMORY_SERVICE_INGEST_TIMEOUT_MS, config/runtime.exs). Rules, pinned by
+# tests/test_embeddings_profiles.py:
+#   ctx / parallel >= 1.25 x max_input_tokens
+#   ubatch < max_input_tokens only with EMBEDDINGS_IMAGE pinned by digest
+#   embeddings_peak_mb + siblings_peak_mb <= 0.85 x host_ram_mb
+#   1.5 x worst_request_secs <= 30, memory-service's embedder HTTP timeout,
+#     which is hard-coded (memory-service embedder.py:77; make_embedder never
+#     passes one), so the request is sized to it, not the other way round
+#
+# "small" (s-2vcpu-4gb; measured 2026-10-31 on the test host and on s-2vcpu-4gb
+# droplets 614434112, 614442358 and 614446111 in nyc1, image above):
+# - model q8_0 (a declared change from f16, see EMBEDDINGS_MODELS): f16 does
+#   not fit. At these flags f16 peaks at 2185 MiB (test host) / 2157 (droplet);
+#   q8_0 at 1645 (test host, worst-case inputs at concurrency 4) / 1639 (droplet).
+# - host_ram_mb: droplet MemTotal 4009860 kB = 3915 MiB; 85% = 3327.
+# - siblings_peak_mb 1412: docker stats after 10 idle minutes with embeddings
+#   and memory-service stopped (core-platform 485, core-postgres 102,
+#   files-service 93, pocket-id 64, caddy 35), plus memory-service 209 (test host,
+#   image sha256:24b68f10eda1) and an agent-host allowance of 425 (the
+#   reference agent-host container's cgroup memory.peak; the droplet's
+#   native agent host idled at 28). DECLARED MARGIN: with the siblings' cgroup
+#   memory.peak instead (core 566, core-postgres 147, files 120, pocket-id 82,
+#   caddy 59, memory-service 293, agent-host 425 = 1692), the total is 3337
+#   MiB, 9 MiB over the 85% line, which is a safety line, not the OOM point
+#   (the proof run checks the kernel log under full ingest).
+# - speed, -t 2 on the droplet: one request runs about 41-55 tokens/s. A
+#   2400-char chunk took 12.3 s (English, 631 tokens) and 100.2 s (CJK,
+#   3571); 600 chars took 2.96 s (English) and 17.4 s (CJK, 905). So chunks
+#   and the clamp are 600 chars (200 x 3) and one chunk per request
+#   (MEMORY_EMBEDDING_MAX_BATCH_TOKENS = MEMORY_CHUNK_MAX_TOKENS): the worst
+#   measured request is the 17.4 s CJK chunk. Text of rarer scripts (CJK
+#   Ext-B tokenizes at 3.03 tokens/char) can still exceed 30 s per chunk.
+# - MEMORY_EMBEDDING_MAX_CONCURRENCY 1: one slot, so a second request would
+#   wait inside llama.cpp, on memory-service's 30 s clock; at 1 it waits in
+#   memory-service's own semaphore, off the clock. Searches queue behind an
+#   ingest in progress.
+# - core_ingest_timeout_ms 2_700_000 (45 min): proof droplet 614448430,
+#   rendered from this table: the 120 KB org page and a 132 KB day's journal
+#   ingested CONCURRENTLY through memory-service took 1626.9 s and 1701.9 s
+#   (770 embed requests, 0 timeouts or retries, 0 restarts, no oom-kill in
+#   journalctl -k, MemAvailable >= 1390 MiB, llama-server VmHWM 1591 MiB);
+#   1.5 x 1701.9 s = 2553 s. A larger page can outlast it: memory-service
+#   keeps embedding after core gives up, and its single-flight and content
+#   hash keep a resend from embedding the entry twice.
+EMBEDDINGS_FALLBACK_TIER = "small"
+EMBEDDINGS_PROFILES = {
+    "small": {
+        "model": "q8_0",
+        "ctx": 8192,
+        "parallel": 1,
+        "batch": 1024,
+        "ubatch": 1024,
+        "threads": 2,
+        "mem_limit": 1974,
+        "host_ram_mb": 3915,
+        "siblings_peak_mb": 1412,
+        "embeddings_peak_mb": 1645,
+        "max_input_tokens": 2401,
+        "worst_request_secs": 17.4,
+        "memory_env": {
+            "MEMORY_CHUNK_MAX_TOKENS": "200",
+            "MEMORY_CHUNK_OVERLAP_TOKENS": "25",
+            "MEMORY_EMBEDDING_MAX_BATCH_TOKENS": "200",
+            "MEMORY_EMBEDDING_MAX_INPUT_TOKENS": "200",
+            "MEMORY_EMBEDDING_MAX_CONCURRENCY": "1",
+        },
+        "core_ingest_timeout_ms": 2_700_000,
+    },
+}
+
+
+def embeddings_profile(manifest):
+    """The EMBEDDINGS_PROFILES row for this manifest's size tier.
+
+    A tier with no measured row gets the "small" row, never unmeasured flags.
+    """
+    tier = manifest["install"]["size_tier"]
+    return EMBEDDINGS_PROFILES.get(tier, EMBEDDINGS_PROFILES[EMBEDDINGS_FALLBACK_TIER])
+
+
+def embeddings_model(manifest):
+    """The EMBEDDINGS_MODELS entry this manifest's profile runs."""
+    return EMBEDDINGS_MODELS[embeddings_profile(manifest)["model"]]
+
+
+def _embeddings_command(ctx):
+    p = embeddings_profile(ctx.m)
+    return [
+        "-m",
+        f"/models/{embeddings_model(ctx.m)['file']}",
+        "--embedding",
+        "--pooling",
+        "last",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8188",
+        "-c",
+        str(p["ctx"]),
+        "-np",
+        str(p["parallel"]),
+        "--no-kv-unified",
+        "-b",
+        str(p["batch"]),
+        "-ub",
+        str(p["ubatch"]),
+        "-t",
+        str(p["threads"]),
+    ]
+
+
+def _embeddings_mem_limit(ctx):
+    return f"{embeddings_profile(ctx.m)['mem_limit']}m"
+
 
 POSTGRES_USER = "core_platform"
 POSTGRES_DB = "core_platform"
@@ -526,6 +702,7 @@ class Service:
         *,
         private_image=False,
         command=None,
+        mem_limit=None,
         env=_nothing,
         injects=_nothing,
         injects_depends_on=_nothing,
@@ -548,7 +725,10 @@ class Service:
         self.container = container
         self._image = image
         self.private_image = private_image
+        # A list, or a callable taking a Ctx (the embeddings flags by size tier).
         self.command = command
+        # Compose mem_limit: None, a string ("2600m") or a callable taking a Ctx.
+        self.mem_limit = mem_limit
         self.env = env
         self.injects = injects
         self.injects_depends_on = injects_depends_on
@@ -590,6 +770,12 @@ class Service:
 
     def ports_for(self, ctx):
         return tuple(self._ports(ctx) if callable(self._ports) else self._ports)
+
+    def command_for(self, ctx):
+        return self.command(ctx) if callable(self.command) else self.command
+
+    def mem_limit_for(self, ctx):
+        return self.mem_limit(ctx) if callable(self.mem_limit) else self.mem_limit
 
 
 def _core_env(ctx):
@@ -721,7 +907,28 @@ def _memory_env(ctx):
         env["MEMORY_EMBEDDING_API_KEY_FILE"] = _secret_path(ref)
     if emb["mode"] == "endpoint" and emb["query_prefix"] is not None:
         env["MEMORY_EMBEDDING_QUERY_PREFIX"] = emb["query_prefix"]
+    if emb["mode"] == "local":
+        # Chunking, batching and the wire clamp sized for the local llama.cpp
+        # this tier runs (EMBEDDINGS_PROFILES, task 01a18f76).
+        env.update(embeddings_profile(ctx.m)["memory_env"])
     return env
+
+
+def _memory_injects(ctx):
+    core = {
+        "MEMORY_SERVICE_URL": "http://memory-service:8100",
+        "MEMORY_SERVICE_API_KEY": "{secret:MEMORY_SERVICE_API_KEY}",
+    }
+    if ctx.m["embeddings"]["mode"] == "local":
+        # core's bound on one POST /ingest (config/runtime.exs), sized for the
+        # largest page this tier's local embeddings can take (task 01a18f76).
+        core["MEMORY_SERVICE_INGEST_TIMEOUT_MS"] = str(
+            embeddings_profile(ctx.m)["core_ingest_timeout_ms"]
+        )
+    return {
+        "core-platform": core,
+        "core-postgres": {"MEMORY_DB_PASSWORD": "{secret:MEMORY_DB_PASSWORD}"},
+    }
 
 
 def _memory_secret_files(ctx):
@@ -1080,19 +1287,16 @@ SERVICES = {
             lambda ctx: default_image(ctx.m, "memory-service"),
             private_image=True,
             env=_memory_env,
-            injects=lambda ctx: {
-                "core-platform": {
-                    "MEMORY_SERVICE_URL": "http://memory-service:8100",
-                    "MEMORY_SERVICE_API_KEY": "{secret:MEMORY_SERVICE_API_KEY}",
-                },
-                "core-postgres": {"MEMORY_DB_PASSWORD": "{secret:MEMORY_DB_PASSWORD}"},
-            },
+            injects=_memory_injects,
             injects_depends_on=lambda ctx: {"core-platform": {"memory-service": "service_started"}},
             secrets=[SECRETS["MEMORY_SERVICE_API_KEY"], SECRETS["MEMORY_DB_PASSWORD"]],
             init_sql=lambda ctx: {"10-memory.sql": _MEMORY_INIT_SQL},
             secret_files=_memory_secret_files,
             host_mounts=_memory_mounts,
-            depends_on={"core-postgres": "service_healthy", "embeddings": "service_started"},
+            # service_healthy (task 01a18f76): memory-service probes the embedder
+            # at startup (HttpEmbedder.__init__) and exits if llama.cpp is still
+            # loading; embeddings' healthcheck answers once the model is loaded.
+            depends_on={"core-postgres": "service_healthy", "embeddings": "service_healthy"},
         ),
         Service(
             "speaches",
@@ -1103,33 +1307,13 @@ SERVICES = {
         ),
         Service(
             "embeddings",
-            "ghcr.io/ggml-org/llama.cpp:server",
-            # Flags copied from the reference install's production quadlets'
-            # embeddings.container Exec= (measured 2026-09-24, task 01a0d403).
-            command=[
-                "-m",
-                f"/models/{EMBEDDINGS_MODEL_FILE}",
-                "--embedding",
-                "--pooling",
-                "last",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                "8188",
-                "-c",
-                "32768",
-                "-np",
-                "4",
-                "--no-kv-unified",
-                "-b",
-                "8192",
-                "-ub",
-                "8192",
-                "-t",
-                "6",
-            ],
+            EMBEDDINGS_IMAGE,
+            # Model, flags and memory limit by size tier: EMBEDDINGS_PROFILES
+            # (task 01a18f76).
+            command=_embeddings_command,
+            mem_limit=_embeddings_mem_limit,
             host_mounts=lambda ctx: [("models", "/models", True)],
-            host_files=lambda ctx: [f"models/{EMBEDDINGS_MODEL_FILE}"],
+            host_files=lambda ctx: [f"models/{embeddings_model(ctx.m)['file']}"],
             # The image's own HEALTHCHECK probes llama.cpp's default port 8080;
             # this server listens on --port 8188, so the stock check reported a
             # healthy server unhealthy (throwaway-VM proof, task 01a0d69d stage 3).

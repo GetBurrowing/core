@@ -649,6 +649,8 @@ config :platform, :start_installs, false
 config :platform, Platform.Installs,
   start_runs: false,
   poll_interval_ms: 5,
+  # The final step's three consecutive memory polls, without the minute apart.
+  memory_poll_interval_ms: 0,
   teardown_confirm_interval_ms: 1,
   dns_zone: "installs.example.test",
   fake_delay_ms: 0

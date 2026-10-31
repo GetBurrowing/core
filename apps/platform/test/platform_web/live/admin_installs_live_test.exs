@@ -91,6 +91,28 @@ defmodule PlatformWeb.AdminInstallsLiveTest do
     refute html =~ "install-new-link"
   end
 
+  test "a configured size with no tier is refused in words, and nothing is created",
+       %{conn: conn} do
+    put_installs_env(sizes: ["s-2vcpu-4gb", "s-8vcpu-16gb"])
+    {:ok, view, _html} = live(conn, ~p"/admin/installs")
+
+    html =
+      view
+      |> form("#install-form",
+        install: %{
+          business_name: "Acme Bakery",
+          owner_email: "owner@acme.test",
+          region: "nyc1",
+          size: "s-8vcpu-16gb",
+          domain_mode: "ours"
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "This server size isn&#39;t supported yet."
+    assert {:ok, []} = Installs.list(admin!())
+  end
+
   test "a customer domain is created with its host; a bad one is refused in words",
        %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/installs")

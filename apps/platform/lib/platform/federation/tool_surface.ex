@@ -9678,6 +9678,19 @@ defmodule Platform.Federation.ToolSurface do
   # scoring tests in `tool_surface_test.exs` and nothing else.
   @similarity_threshold 0.35
 
+  # The most characters of title + description `similar_tasks_for/1` sends to
+  # `Search.search/2` (task 01a18f76). The semantic channel embeds the whole
+  # query: on a 4 GB install (llama.cpp, 2 vCPU, about 55 tokens/s) an
+  # uncapped 11,337-char description (prod's largest, 30 days to 2026-10-31)
+  # costs minutes of embedding the 2 s search budget then discards, and holds
+  # the box's only embeddings slot meanwhile. 540 chars plus memory-service's
+  # 58-char query prefix stays inside the 4 GB profile's 600-char wire clamp
+  # (registry.EMBEDDINGS_PROFILES), so the cap, not the clamp, decides what is
+  # searched. Measured on an s-2vcpu-4gb droplet (2026-10-31, Q8_0, -t 2): a
+  # 600-char English query (189 tokens) embeds in 2.95 s; 300 CJK chars took
+  # 6.99 s, so a CJK-heavy task can still exceed 5 s.
+  @similarity_query_max_chars 540
+
   # Deliberately small and hand-listed, not a linguistics dependency.
   # These are the tokens that appear in almost every ticket body and
   # would otherwise inflate `|Q ∩ C|` for any two unrelated tasks. The
@@ -9768,6 +9781,26 @@ defmodule Platform.Federation.ToolSurface do
   # branch was dead rather than the spec being too narrow. The failure paths
   # that DO fire here are the `rescue`/`catch` below, which stay: a provider
   # crash surfaces as a raise or an EXIT, never as an error tuple.
+  @doc false
+  # The text `similar_tasks_for/1` searches with: at most
+  # `@similarity_query_max_chars` characters, cut at a word boundary.
+  @spec similarity_search_query(String.t()) :: String.t()
+  def similarity_search_query(text) when is_binary(text) do
+    if String.length(text) <= @similarity_query_max_chars do
+      text
+    else
+      head = String.slice(text, 0, @similarity_query_max_chars)
+
+      case String.split(head, ~r/\s+(?=\S*$)/u, parts: 2) do
+        [words, _partial] when words != "" -> words
+        _ -> head
+      end
+    end
+  end
+
+  @doc false
+  def similarity_query_max_chars, do: @similarity_query_max_chars
+
   defp similar_tasks_for(task) do
     try do
       query_text =
@@ -9778,7 +9811,7 @@ defmodule Platform.Federation.ToolSurface do
 
       query_tokens = similarity_tokens(query_text)
 
-      case Search.search(query_text,
+      case Search.search(similarity_search_query(query_text),
              source: "task",
              project_id: task.project_id,
              # Pull one extra so we still return up to 5 after dropping

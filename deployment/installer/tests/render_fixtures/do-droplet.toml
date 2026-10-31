@@ -3,13 +3,15 @@
 # tls = "acme" + acme_email, images.source = "registry", install.org_name,
 # host.ssh_authorized_key, [push] vapid = "generate-on-host" and voice off.
 # Stage 6: [embeddings] model_source = "download" (the host fetches the model).
+# Task 01a18f76: size_tier = "small", what Platform.Installs.size_tier/1 gives
+# the default s-2vcpu-4gb droplet (do-droplet-8gb.toml is the s-4vcpu-8gb one).
 # The key below is a fixture (32 counting bytes), not anyone's key.
 
 schema_version = 1
 
 [install]
 name = "burrow-01a0d69d"
-size_tier = "medium"
+size_tier = "small"
 org_name = "Acme Bakery"
 
 [domain]
