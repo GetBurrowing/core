@@ -22,6 +22,7 @@ import CodeBlock from "./code_block"
 import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
+import DateEntryGuard from "./date_entry_guard"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
 import SearchFocus from "./search_focus"
@@ -34,6 +35,7 @@ import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
 import LargeUpload, { LargeUploadTimeline } from "./large_upload"
 import InlineFocus from "./inline_focus"
+import InviteSearchEnter from "./invite_search_enter"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
@@ -109,6 +111,7 @@ export default {
   CommandPalette,
   ComposeInput,
   CopyToClipboard,
+  DateEntryGuard,
   DoneColumnState,
   DragDropUpload,
   SearchFocus,
@@ -123,6 +126,7 @@ export default {
   LargeUpload,
   LargeUploadTimeline,
   InlineFocus,
+  InviteSearchEnter,
   InlineThread,
   KanbanDragDrop,
   TasksMyListRows,

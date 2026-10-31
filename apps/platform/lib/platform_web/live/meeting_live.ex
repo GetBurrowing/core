@@ -393,6 +393,7 @@ defmodule PlatformWeb.MeetingLive do
   @schedule_pair_error "Date and start time are required together."
   @no_time_zone_error "Time zone unavailable — reload to pick a time."
   @invalid_time_error "Date and start time are invalid."
+  @incomplete_date_error "Date is incomplete — pick the month, day and year."
   @nonexistent_time_error "That time does not exist on that date."
   @invalid_duration_error "Duration is invalid."
 
@@ -3631,6 +3632,33 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign_live_invite_candidates(socket, to_string(query))}
   end
 
+  # Enter in the search box (the `InviteSearchEnter` hook, task 01a192d6).
+  # The hook sends the RAW typed value, because the dropdown only exists
+  # after the debounced search round trip and a fast type-then-Enter would
+  # find no option to click. So this re-resolves the query and then takes
+  # exactly the option the dropdown highlights: the default guest row for
+  # an address that matched nobody, or the one candidate when exactly one
+  # matched. Several candidates is a choice the user has to make, so
+  # nothing happens and the dropdown stays open. It goes through the stage
+  # handler, so every guard on a click applies to Enter too.
+  def handle_event("meeting_invite_commit", %{"value" => value}, socket) do
+    value = to_string(value)
+
+    if String.trim(value) == "" do
+      {:noreply, socket}
+    else
+      socket = assign_live_invite_candidates(socket, value)
+
+      case invite_commit_params(
+             socket.assigns.meeting_invite_candidates,
+             socket.assigns.meeting_invite_email
+           ) do
+        nil -> {:noreply, socket}
+        params -> socket |> stage_via("meeting_invite_stage", params) |> reply_staged()
+      end
+    end
+  end
+
   def handle_event("meeting_invite_stage", %{"kind" => kind} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
@@ -3765,6 +3793,27 @@ defmodule PlatformWeb.MeetingLive do
      |> clear_create_invite_search()}
   end
 
+  # Enter in the create sheet's search box. Same rule as
+  # `meeting_invite_commit` above: re-resolve the raw value, then stage the
+  # option the dropdown highlights, through the stage handler.
+  def handle_event("meeting_create_invite_commit", %{"value" => value}, socket) do
+    value = to_string(value)
+
+    if String.trim(value) == "" do
+      {:noreply, socket}
+    else
+      socket = assign_create_invite_candidates(socket, value)
+
+      case invite_commit_params(
+             socket.assigns.meeting_create_invite_candidates,
+             socket.assigns.meeting_create_invite_email
+           ) do
+        nil -> {:noreply, socket}
+        params -> socket |> stage_via("meeting_create_invite_stage", params) |> reply_staged()
+      end
+    end
+  end
+
   def handle_event("meeting_create_invite_unstage", %{"id" => id}, socket) do
     staged = Enum.reject(socket.assigns.meeting_create_invites, &(&1.id == id))
 
@@ -3774,6 +3823,7 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
     name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
     project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
+    invite_query = invite_query(attrs)
 
     cond do
       name == "" ->
@@ -3784,6 +3834,14 @@ defmodule PlatformWeb.MeetingLive do
       # gate. This clause is the gate.
       project_id == "" ->
         refuse_create(socket, attrs, "Project is required.")
+
+      # A typed but unadded address BLOCKS rather than auto-adding: guest
+      # vs external costs an org grant, and that choice belongs to the user
+      # (task 01a192d6). The staged list and the typed text both survive.
+      invite_query != "" ->
+        socket
+        |> assign_create_invite_candidates(invite_query)
+        |> refuse_create(attrs, "Add #{invite_query} or clear it.")
 
       true ->
         case scheduled_window(attrs, socket.assigns.calendar_time_zone) do
@@ -8117,18 +8175,52 @@ defmodule PlatformWeb.MeetingLive do
   # `scheduled_end_at` as a pair, so this returns both or neither. It never
   # synthesises one endpoint from the other beyond the duration the user
   # picked.
+  #
+  # Start is a TEXT field parsed by `PlatformWeb.TimeEntry` (task 01a192d6),
+  # not `<input type="time">`: a half-entered native time control (AM/PM
+  # left as "--") submits "" and blocks submit with a browser bubble, so the
+  # server could never say what was wrong. A non-blank Start is parsed
+  # FIRST, before the pair check, so "01:00" with no date is answered with
+  # "pick AM or PM" rather than the pair error.
 
   defp scheduled_window(attrs, time_zone) do
     date = attrs |> Map.get("date", "") |> to_string() |> String.trim()
     start_time = attrs |> Map.get("start_time", "") |> to_string() |> String.trim()
 
-    case {date, start_time} do
-      {"", ""} -> {:ok, nil, nil}
-      {"", _} -> {:error, @schedule_pair_error}
-      {_, ""} -> {:error, @schedule_pair_error}
-      {date, start_time} -> resolve_window(date, start_time, attrs, time_zone)
+    with :ok <- check_date_complete(attrs),
+         {:ok, time} <- parse_start_time(start_time) do
+      case {date, time} do
+        {"", nil} -> {:ok, nil, nil}
+        {"", _} -> {:error, @schedule_pair_error}
+        {_, nil} -> {:error, @schedule_pair_error}
+        {date, time} -> resolve_window(date, time, attrs, time_zone)
+      end
     end
   end
+
+  # `date_incomplete` is set by the DateEntryGuard hook when the native date
+  # control holds a half-typed value, which the browser posts as "". Without
+  # it a missing year reads as "no date" and, with Start blank, would
+  # create an unscheduled meeting.
+  defp check_date_complete(%{"date_incomplete" => "true"}), do: {:error, @incomplete_date_error}
+  defp check_date_complete(_attrs), do: :ok
+
+  defp parse_start_time(text) do
+    case PlatformWeb.TimeEntry.parse(text) do
+      {:ok, time} -> {:ok, time}
+      {:error, :blank} -> {:ok, nil}
+      {:error, reason} -> {:error, PlatformWeb.TimeEntry.message(:start, reason)}
+    end
+  end
+
+  # True when the sheet's inline error is about the Start field, so the
+  # input can carry `aria-invalid`.
+  defp start_time_error?(message) when is_binary(message),
+    do: message in [start_time_message(:needs_meridiem), start_time_message(:invalid)]
+
+  defp start_time_error?(_message), do: false
+
+  defp start_time_message(reason), do: PlatformWeb.TimeEntry.message(:start, reason)
 
   # A nil zone is the DEAD RENDER's answer: `resolve_time_zone/1` returns
   # nil when the browser sent no usable IANA name, which on the index means
@@ -8139,11 +8231,10 @@ defmodule PlatformWeb.MeetingLive do
   # a meeting silently placed hours off is worse than one not created.
   # Unscheduled creates are unaffected, because they never reach this
   # clause.
-  defp resolve_window(_date, _start_time, _attrs, nil), do: {:error, @no_time_zone_error}
+  defp resolve_window(_date, _time, _attrs, nil), do: {:error, @no_time_zone_error}
 
-  defp resolve_window(date, start_time, attrs, time_zone) do
+  defp resolve_window(date, %Time{} = time, attrs, time_zone) do
     with {:ok, date} <- Date.from_iso8601(date),
-         {:ok, time} <- Time.from_iso8601(with_seconds(start_time)),
          {:ok, minutes} <- duration_minutes(attrs),
          {:ok, starts_at} <- local_datetime(date, time, time_zone) do
       {:ok, starts_at, DateTime.add(starts_at, minutes * 60, :second)}
@@ -8152,11 +8243,6 @@ defmodule PlatformWeb.MeetingLive do
       {:error, _reason} -> {:error, @invalid_time_error}
     end
   end
-
-  # `<input type="time">` submits `HH:MM` when the step is a minute and
-  # `HH:MM:SS` when it is finer. `Time.from_iso8601/1` requires seconds.
-  defp with_seconds(<<_h::binary-2, ?:, _m::binary-2>> = value), do: value <> ":00"
-  defp with_seconds(value), do: value
 
   # An allowlist, not a range check. The select offers exactly these, so a
   # value outside them did not come from this form.
@@ -8213,6 +8299,31 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:meeting_create_invite_candidates, [])
     |> assign(:meeting_create_invite_email, nil)
   end
+
+  # The search input still has focus after Enter, and LiveView does not
+  # overwrite a focused input's value, so the server clearing its query
+  # assign does not clear the box. The reply tells the hook to clear it;
+  # otherwise the next address is typed into the old one.
+  defp stage_via(socket, event, params) do
+    {:noreply, socket} = handle_event(event, params, socket)
+    socket
+  end
+
+  defp reply_staged(socket), do: {:reply, %{staged: true}, socket}
+
+  defp invite_query(attrs),
+    do: attrs |> Map.get("invite_query", "") |> to_string() |> String.trim()
+
+  # The option the invite dropdown highlights, as stage-event params, or nil
+  # when it highlights none. Mirrors `InviteControl`'s dropdown dispatch:
+  # one candidate is the only row; no candidates plus an address is the
+  # `data-default` guest row.
+  defp invite_commit_params([%{id: id}], _email), do: %{"kind" => "user", "id" => id}
+
+  defp invite_commit_params([], email) when is_binary(email),
+    do: %{"kind" => "guest", "email" => email}
+
+  defp invite_commit_params(_candidates, _email), do: nil
 
   defp assign_create_invite_candidates(socket, query) do
     staged = socket.assigns.meeting_create_invites

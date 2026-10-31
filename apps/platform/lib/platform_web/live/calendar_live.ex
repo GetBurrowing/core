@@ -6,6 +6,7 @@ defmodule PlatformWeb.CalendarLive do
   alias Platform.Calendar, as: Events
   alias Platform.Calendar.Event
   alias PlatformWeb.MeetingLive.CalendarWindow
+  alias PlatformWeb.TimeEntry
 
   @impl true
   def mount(_params, _session, socket) do
@@ -341,10 +342,22 @@ defmodule PlatformWeb.CalendarLive do
   # truth; anything else it rejects is shown as its own message.
   def handle_event("save", %{"event" => params}, %{assigns: %{editing: %Event{}}} = socket) do
     params = Map.merge(socket.assigns.form.params, params)
-    attrs = parse_event(params)
+    {attrs, time_errors} = parse_event(params)
     editing = socket.assigns.editing
 
-    case editor_errors(Events.change_event(%Event{owner_id: editing.owner_id}, attrs)) do
+    # A typed Start/End that does not parse is answered FIRST, in its own
+    # words. Read as nil it would become "Pick a date, start and end.",
+    # which tells someone who typed "01:00" nothing (task 01a192d6).
+    errors =
+      case time_errors do
+        [{field, reason} | _] ->
+          {TimeEntry.message(field, reason), Keyword.keys(time_errors)}
+
+        [] ->
+          editor_errors(Events.change_event(%Event{owner_id: editing.owner_id}, attrs))
+      end
+
+    case errors do
       {message, fields} ->
         {:noreply,
          assign(socket,
@@ -797,8 +810,10 @@ defmodule PlatformWeb.CalendarLive do
           starts -> starts |> DateTime.to_date() |> Date.to_iso8601()
           true -> ""
         end,
-      "start" => if(starts, do: Calendar.strftime(starts, "%H:%M"), else: ""),
-      "end" => if(ends, do: Calendar.strftime(ends, "%H:%M"), else: ""),
+      # 12-hour text, so a re-saved event round-trips through
+      # `TimeEntry.parse/1` unambiguously ("10:07 AM", never "10:07").
+      "start" => if(starts, do: TimeEntry.format(DateTime.to_time(starts)), else: ""),
+      "end" => if(ends, do: TimeEntry.format(DateTime.to_time(ends)), else: ""),
       "end_date" =>
         if(event.all_day && event.end_date,
           do: event.end_date |> Date.add(-1) |> Date.to_iso8601(),
@@ -832,7 +847,9 @@ defmodule PlatformWeb.CalendarLive do
 
   # The v4 editor submits a Date plus Start/End times in the event's zone;
   # an all-day event submits its first and last day (PR #51 stores an
-  # exclusive end date).
+  # exclusive end date). Returns `{attrs, time_errors}`, where time_errors
+  # lists each typed Start/End that `TimeEntry.parse/1` refused, in field
+  # order, as `{:start | :end, reason}`.
   defp parse_event(params) do
     zone = params["time_zone"] || "Etc/UTC"
     all_day? = params["all_day"] in [true, "true"]
@@ -863,22 +880,54 @@ defmodule PlatformWeb.CalendarLive do
             end
         })
       else
+        # A blank field stays nil, so the changeset's "Pick a date, start and
+        # end." still answers it; a typed one that does not parse is an
+        # error of its own.
         at = fn time ->
-          if date && blank_nil(time), do: parse_local(date <> "T" <> time, zone)
+          case TimeEntry.parse(time) do
+            {:ok, %Time{} = parsed} -> {:ok, date && local_instant(date, parsed, zone)}
+            {:error, :blank} -> {:ok, nil}
+            {:error, reason} -> {:error, reason}
+          end
         end
 
-        Map.merge(attrs, %{
-          "starts_at" => at.(params["start"]),
-          "ends_at" => at.(params["end"]),
+        {starts_at, start_error} = time_result(at.(params["start"]), :start)
+        {ends_at, end_error} = time_result(at.(params["end"]), :end)
+
+        attrs
+        |> Map.merge(%{
+          "starts_at" => starts_at,
+          "ends_at" => ends_at,
           "start_date" => nil,
           "end_date" => nil
         })
+        |> Map.put(:time_errors, Enum.reject([start_error, end_error], &is_nil/1))
       end
 
-    case String.split(params["where"] || "private", ":", parts: 2) do
-      ["space", id] -> Map.put(attrs, "space_id", id)
-      ["project", id] -> Map.put(attrs, "project_id", id)
-      _ -> attrs
+    {time_errors, attrs} = Map.pop(attrs, :time_errors, [])
+
+    attrs =
+      case String.split(params["where"] || "private", ":", parts: 2) do
+        ["space", id] -> Map.put(attrs, "space_id", id)
+        ["project", id] -> Map.put(attrs, "project_id", id)
+        _ -> attrs
+      end
+
+    {attrs, time_errors}
+  end
+
+  defp time_result({:ok, at}, _field), do: {at, nil}
+  defp time_result({:error, reason}, field), do: {nil, {field, reason}}
+
+  # Date + wall-clock time in `zone`, as UTC. A time inside a DST change
+  # has no single instant, so it is nil (the changeset then refuses it),
+  # exactly as the previous ISO-string path did.
+  defp local_instant(date, %Time{} = time, zone) do
+    with {:ok, day} <- Date.from_iso8601(date),
+         {:ok, at} <- DateTime.new(day, time, zone) do
+      DateTime.shift_zone!(at, "Etc/UTC")
+    else
+      _ -> nil
     end
   end
 
@@ -928,16 +977,6 @@ defmodule PlatformWeb.CalendarLive do
     if params["custom_until"] not in [nil, ""],
       do: base <> ";UNTIL=" <> String.replace(params["custom_until"], "-", ""),
       else: base
-  end
-
-  defp parse_local(value, zone) when is_binary(value) do
-    with {:ok, naive} <-
-           NaiveDateTime.from_iso8601(value <> if(byte_size(value) == 16, do: ":00", else: "")),
-         {:ok, at} <- DateTime.from_naive(naive, zone) do
-      DateTime.shift_zone!(at, "Etc/UTC")
-    else
-      _ -> nil
-    end
   end
 
   def where_options(spaces, projects),

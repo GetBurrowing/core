@@ -5042,10 +5042,16 @@
           </div>
 
           <%!-- Form --%>
+          <%!-- `novalidate` (task 01a192d6): the server is the gate for every
+               field (Name, Project, the Start parse), and its refusal lands
+               in the inline error below. A browser bubble blocks submit
+               without telling the server anything. `required` stays on the
+               inputs for assistive tech. --%>
           <form
             id="start-meeting-form"
             phx-submit="start_meeting"
             phx-change="start_meeting_form_change"
+            novalidate
             class="flex flex-1 flex-col min-h-0"
           >
             <%!-- Scrolling body. `min-h-0` is load-bearing: a flex child
@@ -5100,13 +5106,26 @@
                   >
                     Date
                   </label>
+                  <%!-- A half-typed native date posts "" under novalidate;
+                       DateEntryGuard mirrors `validity.badInput` into the
+                       hidden flag so the server can refuse it instead of
+                       reading "no date" (task 01a192d6). --%>
                   <input
                     id="meeting-create-date"
                     type="date"
                     name="start_meeting[date]"
                     value={@start_meeting_form["date"]}
+                    phx-hook="DateEntryGuard"
+                    data-incomplete-flag="meeting-create-date-incomplete"
                     class="input input-bordered w-full text-sm min-h-11"
                     data-role="meeting-create-date"
+                  />
+                  <input
+                    id="meeting-create-date-incomplete"
+                    type="hidden"
+                    name="start_meeting[date_incomplete]"
+                    value=""
+                    phx-update="ignore"
                   />
                 </div>
 
@@ -5117,11 +5136,18 @@
                   >
                     Start
                   </label>
+                  <%!-- Text, not type="time": parsed by PlatformWeb.TimeEntry
+                       so a time with no AM/PM gets a message instead of an
+                       empty submit (task 01a192d6). --%>
                   <input
                     id="meeting-create-start-time"
-                    type="time"
+                    type="text"
+                    inputmode="text"
+                    autocomplete="off"
+                    placeholder="1:00 PM"
                     name="start_meeting[start_time]"
                     value={@start_meeting_form["start_time"]}
+                    aria-invalid={start_time_error?(@start_meeting_error) && "true"}
                     class="input input-bordered w-full text-sm min-h-11"
                     data-role="meeting-create-start-time"
                   />
@@ -5192,6 +5218,7 @@
                 <.invite_control
                   mode={:draft}
                   id="meeting-create-invite"
+                  name="start_meeting[invite_query]"
                   query={@meeting_create_invite_query}
                   candidates={@meeting_create_invite_candidates}
                   email_option={@meeting_create_invite_email}
