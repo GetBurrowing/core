@@ -8053,18 +8053,44 @@ defmodule PlatformWeb.MeetingLive do
   # `scheduled_end_at` as a pair, so this returns both or neither. It never
   # synthesises one endpoint from the other beyond the duration the user
   # picked.
+  #
+  # Start is a TEXT field parsed by `PlatformWeb.TimeEntry` (task 01a192d6),
+  # not `<input type="time">`: a half-entered native time control (AM/PM
+  # left as "--") submits "" and blocks submit with a browser bubble, so the
+  # server could never say what was wrong. A non-blank Start is parsed
+  # FIRST, before the pair check, so "01:00" with no date is answered with
+  # "pick AM or PM" rather than the pair error.
 
   defp scheduled_window(attrs, time_zone) do
     date = attrs |> Map.get("date", "") |> to_string() |> String.trim()
     start_time = attrs |> Map.get("start_time", "") |> to_string() |> String.trim()
 
-    case {date, start_time} do
-      {"", ""} -> {:ok, nil, nil}
-      {"", _} -> {:error, @schedule_pair_error}
-      {_, ""} -> {:error, @schedule_pair_error}
-      {date, start_time} -> resolve_window(date, start_time, attrs, time_zone)
+    with {:ok, time} <- parse_start_time(start_time) do
+      case {date, time} do
+        {"", nil} -> {:ok, nil, nil}
+        {"", _} -> {:error, @schedule_pair_error}
+        {_, nil} -> {:error, @schedule_pair_error}
+        {date, time} -> resolve_window(date, time, attrs, time_zone)
+      end
     end
   end
+
+  defp parse_start_time(text) do
+    case PlatformWeb.TimeEntry.parse(text) do
+      {:ok, time} -> {:ok, time}
+      {:error, :blank} -> {:ok, nil}
+      {:error, reason} -> {:error, PlatformWeb.TimeEntry.message(:start, reason)}
+    end
+  end
+
+  # True when the sheet's inline error is about the Start field, so the
+  # input can carry `aria-invalid`.
+  defp start_time_error?(message) when is_binary(message),
+    do: message in [start_time_message(:needs_meridiem), start_time_message(:invalid)]
+
+  defp start_time_error?(_message), do: false
+
+  defp start_time_message(reason), do: PlatformWeb.TimeEntry.message(:start, reason)
 
   # A nil zone is the DEAD RENDER's answer: `resolve_time_zone/1` returns
   # nil when the browser sent no usable IANA name, which on the index means
@@ -8075,11 +8101,10 @@ defmodule PlatformWeb.MeetingLive do
   # a meeting silently placed hours off is worse than one not created.
   # Unscheduled creates are unaffected, because they never reach this
   # clause.
-  defp resolve_window(_date, _start_time, _attrs, nil), do: {:error, @no_time_zone_error}
+  defp resolve_window(_date, _time, _attrs, nil), do: {:error, @no_time_zone_error}
 
-  defp resolve_window(date, start_time, attrs, time_zone) do
+  defp resolve_window(date, %Time{} = time, attrs, time_zone) do
     with {:ok, date} <- Date.from_iso8601(date),
-         {:ok, time} <- Time.from_iso8601(with_seconds(start_time)),
          {:ok, minutes} <- duration_minutes(attrs),
          {:ok, starts_at} <- local_datetime(date, time, time_zone) do
       {:ok, starts_at, DateTime.add(starts_at, minutes * 60, :second)}
@@ -8088,11 +8113,6 @@ defmodule PlatformWeb.MeetingLive do
       {:error, _reason} -> {:error, @invalid_time_error}
     end
   end
-
-  # `<input type="time">` submits `HH:MM` when the step is a minute and
-  # `HH:MM:SS` when it is finer. `Time.from_iso8601/1` requires seconds.
-  defp with_seconds(<<_h::binary-2, ?:, _m::binary-2>> = value), do: value <> ":00"
-  defp with_seconds(value), do: value
 
   # An allowlist, not a range check. The select offers exactly these, so a
   # value outside them did not come from this form.

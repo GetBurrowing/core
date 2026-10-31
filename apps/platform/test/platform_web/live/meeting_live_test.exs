@@ -6367,7 +6367,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         "name" => "Design review",
         "project_id" => project.id,
         "date" => "2026-09-16",
-        "start_time" => "09:30",
+        "start_time" => "9:30 AM",
         "duration_minutes" => "45"
       })
 
@@ -6418,7 +6418,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       submit_create(view, %{
         "project_id" => project.id,
         "date" => "2026-09-16",
-        "start_time" => "09:30"
+        "start_time" => "9:30 AM"
       })
 
       assert Repo.exists?(Meeting)
@@ -6436,7 +6436,7 @@ defmodule PlatformWeb.MeetingLiveTest do
             create_params(%{
               "project_id" => project.id,
               "date" => "2026-09-16",
-              "start_time" => "09:30",
+              "start_time" => "9:30 AM",
               "duration_minutes" => "37"
             })
         })
@@ -6450,7 +6450,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       view = open_create_sheet(conn)
 
-      base = %{"project_id" => project.id, "date" => "2026-09-16", "start_time" => "09:30"}
+      base = %{"project_id" => project.id, "date" => "2026-09-16", "start_time" => "9:30 AM"}
 
       render_submit(view, "start_meeting", %{
         "start_meeting" => create_params(Map.put(base, "duration_minutes", "37"))
@@ -6473,7 +6473,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       submit_create(view, %{
         "project_id" => project.id,
         "date" => "2026-11-01",
-        "start_time" => "01:30"
+        "start_time" => "1:30 AM"
       })
 
       assert [%Meeting{} = created] = Repo.all(Meeting)
@@ -6494,7 +6494,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         submit_create(view, %{
           "project_id" => project.id,
           "date" => "2026-03-08",
-          "start_time" => "02:30"
+          "start_time" => "2:30 AM"
         })
 
       assert html =~ "That time does not exist on that date."
@@ -6507,10 +6507,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       view = open_create_sheet(conn)
       base = %{"project_id" => project.id, "date" => "2026-03-08"}
 
-      submit_create(view, Map.put(base, "start_time", "02:30"))
+      submit_create(view, Map.put(base, "start_time", "2:30 AM"))
       refute Repo.exists?(Meeting)
 
-      submit_create(view, Map.put(base, "start_time", "03:30"))
+      submit_create(view, Map.put(base, "start_time", "3:30 AM"))
       assert Repo.exists?(Meeting)
     end
 
@@ -6530,7 +6530,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         submit_create(view, %{
           "project_id" => project.id,
           "date" => "2026-09-16",
-          "start_time" => "09:30"
+          "start_time" => "9:30 AM"
         })
 
       assert html =~ "Time zone unavailable"
@@ -7237,7 +7237,7 @@ defmodule PlatformWeb.MeetingLiveTest do
             "name" => "Design review",
             "project_id" => project.id,
             "date" => "2026-09-16",
-            "start_time" => "09:30",
+            "start_time" => "9:30 AM",
             "duration_minutes" => "45"
           }
         )
