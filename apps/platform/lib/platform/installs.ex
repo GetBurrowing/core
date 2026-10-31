@@ -22,6 +22,16 @@ defmodule Platform.Installs do
     * `defaults/0`: the experiment surface,
       `config :platform, Platform.Installs, default_size:, sizes:, regions:`.
 
+  ## Install-request environment (task 01a18f0c)
+
+    * `BURROW_INSTALL_INTAKE_TOKEN` (`intake_token`): the bearer token the
+      getburrow.ing Pages Function sends to `POST /api/install-requests`
+      (`PlatformWeb.Plugs.VerifyInstallIntakeToken`). Unset: the route 404s.
+    * `BURROW_INSTALLS_MAIL_ORG_ID`, `BURROW_INSTALLS_MAIL_ACCOUNT_ID`,
+      `BURROW_INSTALLS_MAIL_SENDER_KEY` (`mail_sender: %{org_id, account_id,
+      sender_key}`): the mail account and sender the requester's hand-over
+      email goes out through. Any unset: no email is sent.
+
   ## Teardown is one command
 
       bin/platform eval 'Platform.Installs.teardown("<slug>")'

@@ -123,6 +123,8 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
         {"POST", "/api/meetings/segments"},
         {"POST", "/api/webhooks/github"},
         {"POST", "/api/webhooks/livekit"},
+        # the getburrow.ing request form's Pages Function (task 01a18f0c)
+        {"POST", "/api/install-requests"},
         {"POST", "/mcp"},
         {"GET", "/mcp"},
         # peer-install descriptor and inbox, called by other installs (task 01a0d90f)
@@ -149,6 +151,7 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
             {"GET", "/health"},
             {"GET", "/auth/oidc/callback"},
             {"POST", "/api/webhooks/livekit"},
+            {"POST", "/api/install-requests"},
             {"GET", "/.well-known/suite-federation"},
             {"GET", "/.well-known/burrow-federation"},
             {"POST", "/federation/v1/inbox"}
