@@ -113,6 +113,9 @@ defmodule Platform.RepoLookupBoundaryTest do
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
+    # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
+    {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
+     "handle_consent/3 reads Consent.briefing_id, a non-null UUID foreign key written by AgentAccess.propose/6, from the Consent row it just loaded; no client value reaches it"},
     {"platform/calendar/agent_access.ex", :get, "AgentRuntime", 1, :safe_internal,
      "authority/3 reads Scope.actor.id from the authenticated AgentRuntime row; CalendarTools resolves the runtime string to that persisted UUIDv7 primary key before building Scope"},
     {"platform/calendar/agent_access.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
@@ -1101,6 +1104,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
     "platform/calendar/agent_access.ex" => 3,
+    # handle_consent/3 pins Consent.hold_id to the selected entry's Event.id (a
+    # UUIDv7 primary key from list_entries; select_entry/4 only keeps ids it
+    # found in the loaded entries) and owner_id to current_user_record.id.
+    "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;
