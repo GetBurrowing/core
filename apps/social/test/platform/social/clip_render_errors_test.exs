@@ -46,4 +46,14 @@ defmodule Platform.Social.ClipRenderErrorsTest do
            }) ==
              "Render could not use the selected music. Choose an available song or ask the render operator to check the audio, then try Render preview again. Your previous video is unchanged."
   end
+
+  test "verified reframe backend check uses setup guidance without guessing source or exposing details" do
+    assert ClipRenderErrors.message("CLIP_DOCTOR_FIX: doctor failed (reframe-backend)") ==
+             "Render could not start because the runner needs setup. Ask the render operator to check readiness, then try Render preview again. Your previous video is unchanged."
+
+    assert ClipRenderErrors.message(
+             "CLIP_DOCTOR_FIX: doctor failed (reframe-backend:/private/token)"
+           ) ==
+             "Render failed. Try Render preview again. If it fails again, ask the render operator to check the job. Your previous video is unchanged."
+  end
 end

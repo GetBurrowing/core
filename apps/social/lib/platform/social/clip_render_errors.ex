@@ -11,7 +11,7 @@ defmodule Platform.Social.ClipRenderErrors do
   @music_codes ~w(MUSIC_ASSET_INVALID MUSIC_URL_INVALID MUSIC_DOWNLOAD_SIZE MUSIC_DOWNLOAD_FAILED MUSIC_GAIN_INVALID)
   @setup_codes ~w(CLIP_DOCTOR CLIP_DOCTOR_FIX CLIP_NOT_INSTALLED CLIP_VERSION_UNKNOWN CLIP_TOO_OLD SOURCE_NEEDS_YTDLP CAPTION_CLI_UNSUPPORTED CAPTION_CONTRACT_UNSUPPORTED MUSIC_CLI_UNSUPPORTED CLOSING_CLI_UNSUPPORTED HEADLINE_CLI_UNSUPPORTED HEADLINE_PRIVACY_EXPORT_REFUSED HEADLINE_CAPTION_STYLE_UNSUPPORTED)
   @model_checks ~w(model:tiny model:tiny.en model:base model:base.en model:small model:small.en model:medium model:medium.en model:large-v1 model:large-v2 model:large-v3 model:large-v3-turbo model:ggml-silero-v5.1.2.bin)
-  @setup_checks ~w(profile binary:ffmpeg binary:ffprobe binary:whisper-cli hdr brain brain-model brain-local memory proxy plaintext-keys inbox disk show-placeholder)
+  @setup_checks ~w(profile binary:ffmpeg binary:ffprobe binary:whisper-cli hdr brain brain-model brain-local reframe-backend memory proxy plaintext-keys inbox disk show-placeholder)
 
   @doc "Return safe guidance from a persisted job or a stable code; never interpolate diagnostics."
   def message(%{error: error}), do: message(error)
