@@ -45,6 +45,21 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   The picker offers `Chat.list_addable_agents/1`, the same eligibility set the
   mention path matches against. There is no people-add control.
 
+  ## Channel admins (task 01a19355 stage 3)
+
+  Each person row shows an "admin" word when that person is a channel admin.
+  A viewer for whom `Chat.can_manage_roles?/2` holds (a channel admin, an org
+  admin of the space's org, or a root admin; channels only) also gets a
+  "Make admin" / "Remove admin" button per person row. Rows are people only,
+  so agents never get it. When a row is the only admin among the people,
+  "Remove admin" renders disabled with a "Last admin" hint. All of that is
+  affordance: `Chat.set_member_role/4` re-authorizes inside a row lock and
+  refuses removing the last human admin, so a forged `members_set_role` from
+  any socket is refused by the context.
+
+  `can_manage?` and `can_manage_roles?` are computed on open AND on every
+  `refresh: true`, because a role change alters both for the viewer.
+
   ## Activation
 
   The parent owns `:show_members` (`PlatformWeb.ChatLive.MembersSheetHooks`)
@@ -56,6 +71,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     * `"members_close"`
     * `"members_add_agent"` — `%{"agent_id" => id}`
     * `"members_remove_agent"` — `%{"participant_id" => id}`
+    * `"members_set_role"` — `%{"participant_id" => id, "role" => "admin" | "member"}`
 
   ## Messages sent to parent
 
@@ -64,7 +80,8 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
   The parent `send_update`s `refresh: true` to both instances when a
   `{:participant_joined}` / `{:participant_left}` broadcast or a presence diff
-  arrives, so the lists stay live while the sheet is open.
+  arrives, so the lists stay live while the sheet is open, and on a
+  `{:participant_role_changed}` broadcast (`PresenceHooks`).
   """
 
   use PlatformWeb, :live_component
@@ -107,7 +124,8 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
   @impl true
   def update(%{refresh: true}, socket) do
-    {:ok, if(socket.assigns[:open], do: load_members(socket), else: socket)}
+    {:ok,
+     if(socket.assigns[:open], do: socket |> assign_permissions() |> load_members(), else: socket)}
   end
 
   def update(%{open: open, space: space} = assigns, socket) do
@@ -119,11 +137,12 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     socket =
       if open && space && (freshly_opened? || space_changed?) do
         socket
-        |> assign(:can_manage?, Chat.can_summon_agents?(space, assigns[:current_user_id]))
+        |> assign_permissions()
         |> load_members()
       else
         socket
         |> assign_new(:can_manage?, fn -> false end)
+        |> assign_new(:can_manage_roles?, fn -> false end)
         |> assign_new(:people, fn -> [] end)
         |> assign_new(:presence, fn -> {:ok, %{online: [], away: []}} end)
         |> assign_new(:attention, fn -> nil end)
@@ -131,6 +150,22 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
       end
 
     {:ok, socket}
+  end
+
+  # Both affordances, from a fresh read of the space: a role change made since
+  # the panel opened can grant or revoke either one.
+  defp assign_permissions(socket) do
+    user_id = socket.assigns[:current_user_id]
+
+    case current_space(socket) do
+      nil ->
+        socket |> assign(:can_manage?, false) |> assign(:can_manage_roles?, false)
+
+      space ->
+        socket
+        |> assign(:can_manage?, Chat.can_summon_agents?(space, user_id))
+        |> assign(:can_manage_roles?, Chat.can_manage_roles?(space, user_id))
+    end
   end
 
   defp space_id(%{id: id}), do: id
@@ -226,6 +261,43 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     end
   end
 
+  def handle_event("members_set_role", params, socket) do
+    participant_id = params["participant_id"]
+    role = params["role"]
+
+    case current_space(socket) do
+      nil ->
+        send(self(), {:members_flash, :error, "This channel no longer exists."})
+        {:noreply, socket}
+
+      space ->
+        case Chat.set_member_role(space, socket.assigns[:current_user_id], participant_id, role) do
+          {:ok, participant} ->
+            send(self(), {:members_flash, :info, role_flash(participant)})
+            {:noreply, socket |> assign_permissions() |> load_members()}
+
+          {:error, :unauthorized} ->
+            send(
+              self(),
+              {:members_flash, :error, "Only a channel admin or org admin can change admins."}
+            )
+
+            {:noreply, socket}
+
+          {:error, :last_admin} ->
+            send(self(), {:members_flash, :error, "A channel needs at least one admin."})
+            {:noreply, socket}
+
+          {:error, _} ->
+            send(self(), {:members_flash, :error, "Could not change admins."})
+            {:noreply, socket}
+        end
+    end
+  end
+
+  defp role_flash(%{role: "admin"} = p), do: "#{p.display_name || "They"} is now an admin."
+  defp role_flash(p), do: "#{p.display_name || "They"} is no longer an admin."
+
   # Re-read the space so an authorization decision never rests on a copy the
   # panel was handed before an archive or a kind change.
   defp current_space(socket) do
@@ -262,6 +334,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
             presence={@presence}
             attention={@attention}
             can_manage?={@can_manage?}
+            can_manage_roles?={@can_manage_roles?}
             available_agents={@available_agents}
           />
         </div>
@@ -295,6 +368,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           presence={@presence}
           attention={@attention}
           can_manage?={@can_manage?}
+          can_manage_roles?={@can_manage_roles?}
           available_agents={@available_agents}
         />
       </div>
@@ -309,10 +383,14 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   attr(:presence, :any, required: true)
   attr(:attention, :any, required: true)
   attr(:can_manage?, :boolean, required: true)
+  attr(:can_manage_roles?, :boolean, required: true)
   attr(:available_agents, :list, required: true)
 
   defp body(assigns) do
-    assigns = assign(assigns, :rows, person_rows(assigns.presence, assigns.people))
+    assigns =
+      assigns
+      |> assign(:rows, person_rows(assigns.presence, assigns.people))
+      |> assign(:admin_count, Enum.count(assigns.people, & &1.admin?))
 
     ~H"""
     <section data-role="members-people">
@@ -341,11 +419,27 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           </span>
           <span class="flex min-w-0 flex-1 flex-col">
             <span class="truncate text-[15px] text-base-content">{person.name}</span>
-            <span :if={state != "unknown"} class="text-[13px] text-subtle">{state}</span>
+            <%!-- The words ride the meta line, not the row's trailing edge: in the
+                 narrow desktop popover a trailing "you · admin · Last admin" plus
+                 the toggle squeezed the name to nothing (task 01a19355 stage 3). --%>
+            <span class="flex flex-wrap gap-x-2 text-[13px] text-subtle">
+              <span :if={state != "unknown"}>{state}</span>
+              <span :if={person.you?} data-role="members-you">you</span>
+              <span :if={person.admin?} data-role="members-admin-badge">admin</span>
+              <span
+                :if={@can_manage_roles? and person.admin? and @admin_count <= 1}
+                data-role="members-last-admin"
+              >
+                Last admin
+              </span>
+            </span>
           </span>
-          <span :if={person.you?} data-role="members-you" class="text-[13px] text-subtle">
-            you
-          </span>
+          <.role_toggle
+            :if={@can_manage_roles?}
+            person={person}
+            last_admin?={person.admin? and @admin_count <= 1}
+            myself={@myself}
+          />
         </li>
       </ul>
       <p :if={@people == []} class="px-4 py-2 text-[13px] text-subtle">No people yet.</p>
@@ -400,6 +494,35 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         </button>
       </form>
     </section>
+    """
+  end
+
+  attr(:person, :map, required: true)
+  attr(:last_admin?, :boolean, required: true)
+  attr(:myself, :any, required: true)
+
+  # The server refuses a last-admin demote regardless (`Chat.set_member_role/4`);
+  # the disabled state (and the row's "Last admin" word) only say why the
+  # button does nothing.
+  defp role_toggle(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="members_set_role"
+      phx-value-participant_id={@person.participant_id}
+      phx-value-role={if @person.admin?, do: "member", else: "admin"}
+      phx-target={@myself}
+      data-role="members-role-toggle"
+      disabled={@last_admin?}
+      aria-label={
+        if @person.admin?,
+          do: "Remove #{@person.name} as admin",
+          else: "Make #{@person.name} an admin"
+      }
+      class="btn btn-ghost btn-xs min-h-11 min-w-11 shrink-0 text-base-content disabled:text-subtle lg:min-h-0 lg:min-w-0"
+    >
+      {if @person.admin?, do: "Remove admin", else: "Make admin"}
+    </button>
     """
   end
 

@@ -914,7 +914,13 @@ defmodule Platform.ExtensionsTest do
     # `attachment_ids` property (attach already-uploaded files) and the prose
     # that describes it. Names and bundles are unchanged. Measured by CI on the
     # task branch (31dffde47), PR #1320.
-    @main_tool_digest_off "443265c57c1616d5b40c9aafaefc9ab9ca80cf37b0f95575e1a0363b5aa3efba"
+    #
+    # Re-pinned by task 01a19355 stage 2: `space_create` gains the optional
+    # `admin_user_ids` property and the description / returns / limitations /
+    # when_to_use prose that documents it ("Human users are not added" is
+    # gone). Names and bundles are unchanged. Measured on the test rig at
+    # the stage's branch (5145a65ee).
+    @main_tool_digest_off "b683efb28235696216d333a479132deeda7feb8519dfe85a746e1b76e083f90f"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

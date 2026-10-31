@@ -1445,7 +1445,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "space_create",
         description:
-          "Create a channel in a Burrow org. This is the supported way for an agent to create a channel — the alternative (a raw `Platform.Chat.create_channel/1` RPC) has repeatedly written participant rows with a NULL `display_name`, which silently drops every `@[Name]` mention of the affected agent. This tool resolves a display name for every participant it adds, so it cannot reproduce that. The calling agent is added as a participant (attention_mode `mention`) so it can hear the channel it just made; the role-pinned Historian auto-joins as it does for any channel.",
+          "Create a channel in a Burrow org. This is the supported way for an agent to create a channel — the alternative (a raw `Platform.Chat.create_channel/1` RPC) has repeatedly written participant rows with a NULL `display_name`, which silently drops every `@[Name]` mention of the affected agent. This tool resolves a display name for every participant it adds, so it cannot reproduce that. The calling agent is added as a participant (attention_mode `mention`) so it can hear the channel it just made; the role-pinned Historian auto-joins as it does for any channel. To create a channel FOR a person, pass their user ids in `admin_user_ids`: each is seated as a channel admin, so they can bring agents in with an @-mention and promote or demote other admins. Without it the channel has no human admin and nobody in it can summon agents.",
         parameters: %{
           name: %{
             type: "string",
@@ -1474,14 +1474,20 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Optional UUIDs or slugs of additional agents to add as participants. Each gets its display_name resolved from the `agents` row. Unresolvable entries are reported in `skipped` rather than failing the call."
+          },
+          admin_user_ids: %{
+            type: "array",
+            required: false,
+            description:
+              "Optional user UUIDs of the PEOPLE this channel is for. Each is seated as a channel admin (can @-mention agents into the channel and manage admins). Every id must be an existing, non-archived, non-external member of the channel's org, and the channel must have an org (pass `org_id` if you have no home tenant org). One bad id refuses the whole call and nothing is created. Agents are never seated as admins; put them in `agent_ids`."
           }
         },
         returns:
-          "`{id, name, slug, org_id, description, kind: \"channel\", participants: [{participant_id, agent_id, display_name}], skipped: [...]}`. `participants` lists every agent row written, each with a non-null display_name.",
+          "`{id, name, slug, org_id, description, kind: \"channel\", participants: [{participant_id, agent_id, display_name}], skipped: [...]}`. `participants` lists every agent row written, each with a non-null display_name. When `admin_user_ids` is passed (even `[]`) the result also carries `admins: [{participant_id, user_id, display_name}]`, one per seated person; when it is omitted there is no `admins` key. A refused `admin_user_ids` returns a recoverable error with `invalid_admin_user_ids: [{id, reason}]`, reason one of `malformed`, `unknown`, `archived`, `not_in_org`.",
         limitations:
-          "Creates channels only (never DMs or groups). Slug must be unique within the org — a collision returns a recoverable error rather than reusing the existing channel. Human users are not added; invite them in-app or via `add_participant`. A tenant-pinned agent cannot create channels in another org.",
+          "Creates channels only (never DMs or groups). Slug must be unique within the org — a collision returns a recoverable error rather than reusing the existing channel. Humans are added only through `admin_user_ids`, and only as admins: each id must be a valid UUID of an existing user who is not archived and holds a NON-external membership of the channel's org (external members are refused as `not_in_org`, because channel admin confers agent summoning and admin management). Any invalid id refuses the WHOLE call before anything is created; ids are never silently dropped or partially applied. Non-empty `admin_user_ids` needs a channel org: a call with no `org_id` from an agent with no tenant home org is refused. Agents are never seated as admins; `agent_ids` (and the caller) join as members with attention_mode `mention`. A tenant-pinned agent cannot create channels in another org.",
         when_to_use:
-          "Whenever you need a new channel. Prefer this over any RPC or console path: it is the only channel-creation route that guarantees resolved participant display names."
+          "Whenever you need a new channel. Prefer this over any RPC or console path: it is the only channel-creation route that guarantees resolved participant display names. When a person asked for the channel, pass their user id in `admin_user_ids` so they own it and can bring agents in."
       },
       %{
         name: "space_list",
@@ -4425,7 +4431,9 @@ defmodule Platform.Federation.ToolSurface do
   def execute("space_create", args, context) do
     with {:ok, name} <- require_string(args, "name", "space_create"),
          {:ok, slug} <- space_create_slug(args, name),
-         {:ok, org_id} <- space_create_org(args, context) do
+         {:ok, org_id} <- space_create_org(args, context),
+         # Validated BEFORE the create, so a refused id creates nothing.
+         {:ok, admin_user_ids} <- space_create_admin_users(args, org_id) do
       attrs =
         %{
           name: name,
@@ -4479,17 +4487,18 @@ defmodule Platform.Federation.ToolSurface do
               end
             end)
 
-          {:ok,
-           %{
-             id: space.id,
-             name: space.name,
-             slug: space.slug,
-             org_id: space.org_id,
-             description: space.description,
-             kind: space.kind,
-             participants: added,
-             skipped: skipped
-           }}
+          result = %{
+            id: space.id,
+            name: space.name,
+            slug: space.slug,
+            org_id: space.org_id,
+            description: space.description,
+            kind: space.kind,
+            participants: added,
+            skipped: skipped
+          }
+
+          space_create_seat_admins(space, admin_user_ids, result)
 
         {:error, %Ecto.Changeset{} = changeset} ->
           {:error,
@@ -17134,6 +17143,101 @@ defmodule Platform.Federation.ToolSurface do
        }}
     else
       {:ok, slug}
+    end
+  end
+
+  # `admin_user_ids` of `space_create` (task 01a19355 stage 2). Absent -> the
+  # pre-change behaviour exactly (no `admins` key, no user rows). Validation is
+  # `Chat.validate_channel_admin_user_ids/2`; any failure refuses the whole call.
+  defp space_create_admin_users(args, org_id) do
+    case Map.get(args, "admin_user_ids") do
+      nil ->
+        {:ok, :absent}
+
+      [] ->
+        {:ok, []}
+
+      ids when is_list(ids) ->
+        cond do
+          not Enum.all?(ids, &(is_binary(&1) and &1 != "")) ->
+            {:error,
+             space_create_admins_error(
+               "admin_user_ids must be a list of non-empty user id strings",
+               [],
+               "Pass user UUIDs as strings, e.g. [\"<uuid>\"]."
+             )}
+
+          is_nil(org_id) ->
+            {:error,
+             space_create_admins_error(
+               "admin_user_ids needs a channel org; pass org_id",
+               [],
+               "Pass the org_id of the org these people belong to."
+             )}
+
+          true ->
+            case Chat.validate_channel_admin_user_ids(ids, org_id) do
+              {:ok, unique_ids} ->
+                {:ok, unique_ids}
+
+              {:error, invalid} ->
+                {:error,
+                 space_create_admins_error(
+                   "space_create: invalid admin_user_ids; nothing was created",
+                   invalid,
+                   "Fix or remove each id in invalid_admin_user_ids and call again. Admins must be existing, non-archived, non-external members of the channel's org."
+                 )}
+            end
+        end
+
+      _other ->
+        {:error,
+         space_create_admins_error(
+           "admin_user_ids must be a list of user id strings",
+           [],
+           "Pass a JSON array of user UUIDs."
+         )}
+    end
+  end
+
+  defp space_create_admins_error(message, invalid, suggestion) do
+    %{
+      error: message,
+      recoverable: true,
+      invalid_admin_user_ids: invalid,
+      suggestion: suggestion
+    }
+  end
+
+  defp space_create_seat_admins(_space, :absent, result), do: {:ok, result}
+
+  defp space_create_seat_admins(space, user_ids, result) do
+    {admins, failed} =
+      Enum.reduce(user_ids, {[], []}, fn user_id, {ok, bad} ->
+        case Chat.seat_user_admin(space, user_id) do
+          {:ok, p} ->
+            {ok ++
+               [%{participant_id: p.id, user_id: p.participant_id, display_name: p.display_name}],
+             bad}
+
+          {:error, reason} ->
+            {ok, bad ++ [%{id: user_id, reason: inspect(reason)}]}
+        end
+      end)
+
+    if failed == [] do
+      {:ok, Map.put(result, :admins, admins)}
+    else
+      {:error,
+       %{
+         error: "space_create: channel #{space.id} was created but seating admin_user_ids failed",
+         recoverable: true,
+         space_id: space.id,
+         failed_admin_user_ids: failed,
+         admins: admins,
+         suggestion:
+           "The channel exists. Retry seating the failed ids, or have a channel admin promote them."
+       }}
     end
   end
 

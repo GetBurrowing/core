@@ -11,10 +11,15 @@ defmodule Platform.Federation.SpaceCreateToolTest do
   """
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Federation.ToolSurface
+  alias Platform.Chat.{Participant, Space}
+  alias Platform.Federation.{ToolDoc, ToolSurface}
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
   defp create_agent(attrs \\ %{}) do
     n = System.unique_integer([:positive])
@@ -156,6 +161,286 @@ defmodule Platform.Federation.SpaceCreateToolTest do
         |> Enum.find(&(&1.name == "space_create"))
 
       assert definition.bundle == "space"
+    end
+  end
+
+  describe "space_create admin_user_ids (task 01a19355 stage 2)" do
+    setup do
+      %{
+        org_id: Tenancy.get_org_by_slug!("initech").id,
+        other_org_id: Tenancy.get_org_by_slug!("globex").id,
+        caller: create_agent(%{name: "Dalton"})
+      }
+    end
+
+    defp user!(attrs \\ %{}) do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(
+        struct(
+          %Platform.Accounts.User{
+            name: "Owner #{n}",
+            email: "owner-#{n}@example.com",
+            oidc_sub: "sub-owner-#{n}"
+          },
+          attrs
+        )
+      )
+    end
+
+    defp member!(user, org_id, external \\ false) do
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: org_id,
+        role: "member",
+        external: external
+      })
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp slug!, do: "requested-channel-#{System.unique_integer([:positive])}"
+
+    defp create(args, caller),
+      do: ToolSurface.execute("space_create", args, %{agent_id: caller.id})
+
+    defp user_rows(space_id) do
+      Repo.all(
+        from(p in Participant, where: p.space_id == ^space_id and p.participant_type == "user")
+      )
+    end
+
+    defp user_rows_for(user_id) do
+      Repo.aggregate(
+        from(p in Participant,
+          where: p.participant_type == "user" and p.participant_id == ^user_id
+        ),
+        :count
+      )
+    end
+
+    test "an internal member is seated as admin, can summon, and their mention adds an agent",
+         ctx do
+      owner = member!(user!(), ctx.org_id)
+      slug = slug!()
+
+      assert {:ok, result} =
+               create(
+                 %{
+                   "name" => "Requested Channel",
+                   "slug" => slug,
+                   "org_id" => ctx.org_id,
+                   "admin_user_ids" => [owner.id]
+                 },
+                 ctx.caller
+               )
+
+      assert [%{user_id: user_id, participant_id: pid, display_name: name}] = result.admins
+      assert user_id == owner.id
+      assert name == owner.name
+
+      space = Repo.get_by!(Space, slug: slug)
+      assert [%Participant{id: ^pid, role: "admin"} = row] = user_rows(space.id)
+      assert row.participant_id == owner.id
+      assert Chat.can_summon_agents?(space, owner.id)
+
+      # The same mention path mention_summon_authorization_test.exs drives.
+      agent =
+        Repo.insert!(%Agent{
+          name: "Summoned #{pid}",
+          slug: "summoned-#{System.unique_integer([:positive])}",
+          status: "active"
+        })
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: row.id,
+          content_type: "text",
+          content: "hey @[" <> agent.slug <> "] please look"
+        })
+
+      assert [_] =
+               Repo.all(
+                 from(p in Participant,
+                   where:
+                     p.space_id == ^space.id and p.participant_type == "agent" and
+                       p.participant_id == ^agent.id
+                 )
+               )
+    end
+
+    test "each bad id is refused with its reason and no channel is created", ctx do
+      foreign = member!(user!(), ctx.other_org_id)
+      external = member!(user!(), ctx.org_id, true)
+      archived = member!(user!(%{archived_at: DateTime.utc_now()}), ctx.org_id)
+      unknown = Ecto.UUID.generate()
+
+      for {id, reason} <- [
+            {unknown, "unknown"},
+            {"not-a-uuid", "malformed"},
+            {foreign.id, "not_in_org"},
+            {external.id, "not_in_org"},
+            {archived.id, "archived"}
+          ] do
+        slug = slug!()
+
+        assert {:error, envelope} =
+                 create(
+                   %{
+                     "name" => "Bad",
+                     "slug" => slug,
+                     "org_id" => ctx.org_id,
+                     "admin_user_ids" => [id]
+                   },
+                   ctx.caller
+                 )
+
+        assert envelope.recoverable
+        assert envelope.invalid_admin_user_ids == [%{id: id, reason: reason}], inspect(id)
+        assert Repo.get_by(Space, slug: slug) == nil
+      end
+
+      for u <- [foreign, external, archived], do: assert(user_rows_for(u.id) == 0)
+    end
+
+    test "one good and one bad id refuses the whole call: no space, no rows", ctx do
+      good = member!(user!(), ctx.org_id)
+      bad = member!(user!(), ctx.other_org_id)
+      slug = slug!()
+
+      assert {:error, envelope} =
+               create(
+                 %{
+                   "name" => "Mixed",
+                   "slug" => slug,
+                   "org_id" => ctx.org_id,
+                   "admin_user_ids" => [good.id, bad.id]
+                 },
+                 ctx.caller
+               )
+
+      assert envelope.invalid_admin_user_ids == [%{id: bad.id, reason: "not_in_org"}]
+      assert Repo.get_by(Space, slug: slug) == nil
+      assert user_rows_for(good.id) == 0
+      assert user_rows_for(bad.id) == 0
+    end
+
+    test "non-empty ids with no resolvable org are refused and nothing is created", ctx do
+      owner = member!(user!(), ctx.org_id)
+      slug = slug!()
+
+      assert {:error, envelope} =
+               create(
+                 %{"name" => "No org", "slug" => slug, "admin_user_ids" => [owner.id]},
+                 ctx.caller
+               )
+
+      assert envelope.recoverable
+      assert envelope.error =~ "admin_user_ids needs a channel org; pass org_id"
+      assert Repo.get_by(Space, slug: slug) == nil
+      assert user_rows_for(owner.id) == 0
+    end
+
+    test "non-string entries are refused and nothing is created", ctx do
+      slug = slug!()
+
+      for ids <- [[123], [""], "not-a-list"] do
+        assert {:error, %{recoverable: true}} =
+                 create(
+                   %{
+                     "name" => "Typed",
+                     "slug" => slug,
+                     "org_id" => ctx.org_id,
+                     "admin_user_ids" => ids
+                   },
+                   ctx.caller
+                 )
+
+        assert Repo.get_by(Space, slug: slug) == nil
+      end
+    end
+
+    test "a duplicate id yields one admin row", ctx do
+      owner = member!(user!(), ctx.org_id)
+      slug = slug!()
+
+      assert {:ok, result} =
+               create(
+                 %{
+                   "name" => "Dup",
+                   "slug" => slug,
+                   "org_id" => ctx.org_id,
+                   "admin_user_ids" => [owner.id, owner.id]
+                 },
+                 ctx.caller
+               )
+
+      assert [_] = result.admins
+      space = Repo.get_by!(Space, slug: slug)
+      assert [%Participant{role: "admin"}] = user_rows(space.id)
+    end
+
+    test "an empty list adds an empty admins key and no user rows", ctx do
+      slug = slug!()
+
+      assert {:ok, result} =
+               create(
+                 %{
+                   "name" => "Empty",
+                   "slug" => slug,
+                   "org_id" => ctx.org_id,
+                   "admin_user_ids" => []
+                 },
+                 ctx.caller
+               )
+
+      assert result.admins == []
+      assert user_rows(Repo.get_by!(Space, slug: slug).id) == []
+    end
+
+    test "REGRESSION: without admin_user_ids the result keys and rows are unchanged", ctx do
+      slug = slug!()
+
+      assert {:ok, result} =
+               create(%{"name" => "Plain", "slug" => slug, "org_id" => ctx.org_id}, ctx.caller)
+
+      assert Enum.sort(Map.keys(result)) ==
+               Enum.sort([
+                 :id,
+                 :name,
+                 :slug,
+                 :org_id,
+                 :description,
+                 :kind,
+                 :participants,
+                 :skipped
+               ])
+
+      space = Repo.get_by!(Space, slug: slug)
+      assert user_rows(space.id) == []
+
+      assert [%Participant{attention_mode: "mention", role: "member"}] =
+               Repo.all(
+                 from(p in Participant,
+                   where:
+                     p.space_id == ^space.id and p.participant_type == "agent" and
+                       p.participant_id == ^ctx.caller.id
+                 )
+               )
+    end
+
+    test "the rendered tool description documents admin_user_ids" do
+      definition =
+        ToolSurface.tool_definitions()
+        |> Enum.find(&(&1.name == "space_create"))
+
+      rendered = ToolDoc.render_description(definition)
+      assert rendered =~ "admin_user_ids"
+      refute rendered =~ "Human users are not added"
+      assert Map.has_key?(definition.parameters, :admin_user_ids)
     end
   end
 end
