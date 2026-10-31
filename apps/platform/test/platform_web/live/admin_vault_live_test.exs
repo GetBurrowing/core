@@ -248,9 +248,7 @@ defmodule PlatformWeb.AdminVaultLiveTest do
       refute html =~ @value
 
       view
-      |> element(
-        ~s([data-role="vault-system-grant-chip"][data-name="test-reader"] button)
-      )
+      |> element(~s([data-role="vault-system-grant-chip"][data-name="test-reader"] button))
       |> render_click()
 
       assert grants_for(cred.id) == []

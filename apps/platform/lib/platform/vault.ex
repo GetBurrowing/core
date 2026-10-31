@@ -115,11 +115,13 @@ defmodule Platform.Vault do
 
   # Named system readers -> their fixed grantee uuid (moduledoc "Named system
   # readers"). Never reuse or change a uuid: grant and log rows hold it.
-  @system_principals Application.compile_env(:platform, [__MODULE__, :system_principals], %{})
-
   @doc "Named system readers and their fixed grantee uuids (see the moduledoc)."
   @spec system_principals() :: %{String.t() => String.t()}
-  def system_principals, do: @system_principals
+  def system_principals do
+    :platform
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:system_principals, %{})
+  end
 
   # Accessor types allowed to mutate platform-scoped credentials without a grant.
   @privileged_accessor_types ~w(system platform)
@@ -942,12 +944,15 @@ defmodule Platform.Vault do
   defp check_access(_credential, _accessor, _permission), do: {:error, :access_denied}
 
   # A named system reader matches grant rows by its fixed uuid.
-  defp check_explicit_grant(cred, "system", name, permission)
-       when is_binary(name) and is_map_key(@system_principals, name) do
-    check_explicit_grant(cred, "system", Map.fetch!(@system_principals, name), permission)
+  defp check_explicit_grant(cred, "system", name, permission) when is_binary(name) do
+    grantee_id = Map.get(system_principals(), name, name)
+    match_explicit_grant(cred, "system", grantee_id, permission)
   end
 
-  defp check_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id, permission) do
+  defp check_explicit_grant(cred, grantee_type, grantee_id, permission),
+    do: match_explicit_grant(cred, grantee_type, grantee_id, permission)
+
+  defp match_explicit_grant(%Credential{id: credential_id}, grantee_type, grantee_id, permission) do
     # A grantee_id that is not a UUID can never match a grant row, and handing it
     # to the query would raise rather than deny. Fail closed instead.
     #
@@ -1042,16 +1047,25 @@ defmodule Platform.Vault do
 
   # Converts accessor tuple to {type_string, id_string}.
   # Falls back to a sentinel UUID for system/nil access (accessor_id NOT NULL in DB).
-  defp parse_accessor({type, name})
-       when type in [:system, "system"] and is_binary(name) and
-              is_map_key(@system_principals, name),
-       do: {"system", Map.fetch!(@system_principals, name)}
+  defp parse_accessor({type, name} = accessor)
+       when type in [:system, "system"] and is_binary(name) do
+    case Map.fetch(system_principals(), name) do
+      {:ok, grantee_id} -> {"system", grantee_id}
+      :error -> parse_plain_accessor(accessor)
+    end
+  end
 
-  defp parse_accessor({type, nil}) when is_atom(type), do: {to_string(type), @system_accessor_id}
-  defp parse_accessor({type, id}) when is_atom(type), do: {to_string(type), normalize_uuid(id)}
-  defp parse_accessor({type, nil}), do: {to_string(type), @system_accessor_id}
-  defp parse_accessor({type, id}), do: {to_string(type), normalize_uuid(id)}
-  defp parse_accessor(nil), do: {"system", @system_accessor_id}
+  defp parse_accessor(accessor), do: parse_plain_accessor(accessor)
+
+  defp parse_plain_accessor({type, nil}) when is_atom(type),
+    do: {to_string(type), @system_accessor_id}
+
+  defp parse_plain_accessor({type, id}) when is_atom(type),
+    do: {to_string(type), normalize_uuid(id)}
+
+  defp parse_plain_accessor({type, nil}), do: {to_string(type), @system_accessor_id}
+  defp parse_plain_accessor({type, id}), do: {to_string(type), normalize_uuid(id)}
+  defp parse_plain_accessor(nil), do: {"system", @system_accessor_id}
 
   # Ensures accessor_id is a valid UUID. Non-UUID strings (test stubs, opaque IDs)
   # fall back to the system sentinel so the NOT NULL constraint is satisfied.

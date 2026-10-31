@@ -134,7 +134,6 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.VerifyGithubSignature)
   end
 
-
   # Extension HTTP routes (ADR 0055 Follow-up 2): `/api/ext/<prefix>/...` is
   # dispatched at runtime to the extension claiming `<prefix>`
   # (`PlatformWeb.Plugs.ExtensionRoutes`). JSON only and NOTHING else on
