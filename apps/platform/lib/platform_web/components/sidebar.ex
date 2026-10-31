@@ -11,7 +11,7 @@ defmodule PlatformWeb.Components.Sidebar do
   (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar,
   Meetings), then a "More" label, then `IconRail.desktop_more_rows/2`:
   Inbox with its count badge, the extension rows, then the rest of the More
-  sheet's order. The phone bar keeps its own four tabs (Ryan's rule, task
+  sheet's order. The phone bar keeps its own four tabs (the product lead's rule, task
   01a18d9f stage 5), so the two lists are split, but they go through the
   same Scope filter and cover the same destinations: a module the actor may
   not open leaves no gap, and an extension's row arrives through

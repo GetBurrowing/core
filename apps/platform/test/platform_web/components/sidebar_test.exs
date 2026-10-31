@@ -93,7 +93,7 @@ defmodule PlatformWeb.Components.SidebarTest do
   describe "rows" do
     # Task 01a18d9f stage 5: the desktop rail follows v4 (Chat, Voice, Tasks,
     # Calendar, Meetings | More: Inbox first), while the phone bar keeps
-    # Ryan's four tabs. The two splits differ; their destination SETS agree.
+    # the product lead's four tabs. The two splits differ; their destination SETS agree.
     test "equal desktop_rail_keys then desktop_more_rows, for the legacy path" do
       for root_user <- [true, false] do
         expected =

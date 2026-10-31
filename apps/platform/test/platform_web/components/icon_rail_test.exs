@@ -219,7 +219,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ ~s(aria-label="Main navigation")
     end
 
-    # Task 01a18d9f stage 5 (Ryan, 2026-10-30): at most four link tabs on the
+    # Task 01a18d9f stage 5 (the product lead, 2026-10-30): at most four link tabs on the
     # phone, Chat, Calendar, Meetings and Inbox; Tasks and Voice move to More.
     test "mobile_tab_keys/0 is exactly Chat, Calendar, Meetings, Inbox" do
       assert mobile_tab_keys() == [:chat, :calendar, :meetings, :inbox]

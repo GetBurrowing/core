@@ -10,7 +10,7 @@ defmodule PlatformWeb.Components.IconRail do
                        `phx-click="open_more_sheet"` (`close_more_sheet`
                        while the sheet is open). Voice and Tasks are the
                        More sheet's first rows (task 01a18d9f stage 5,
-                       Ryan's four-tab rule), and Inbox's unread signal is
+                       the product lead's four-tab rule), and Inbox's unread signal is
                        a dot on the Inbox tab.
     * `tab_destinations/1` and `more_sheet_rows/2` — the bar's link tabs and
       the More sheet's rows.
@@ -185,7 +185,7 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   @doc """
-  The bar's link-tab keys, in order. At most four (Ryan, 2026-10-30: "we can
+  The bar's link-tab keys, in order. At most four (the product lead, 2026-10-30: "we can
   have at most 4 items on the lower rail on mobile ... chat, calendar,
   meetings, and inbox. We can move tasks and voice into the more menu";
   task 01a18d9f stage 5). More is not a key here; it is the button after
