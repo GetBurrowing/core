@@ -65,7 +65,7 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
   end
 
   defp open_sheet(conn) do
-    {:ok, view, _html} = live(conn, ~p"/meetings")
+    {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
     _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
     view
   end
