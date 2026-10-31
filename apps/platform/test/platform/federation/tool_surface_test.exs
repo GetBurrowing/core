@@ -9037,6 +9037,96 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
   end
 
+  # ── similar_tasks query cap (task 01a18f76 stage 1) ───────────────────
+  #
+  # `similar_tasks_for/1` searched with the whole title + description, and the
+  # semantic channel embeds all of it. On a 4 GB install that is minutes of
+  # llama.cpp work per long task_create. The query is now capped at
+  # `similarity_query_max_chars/0`, cut at a word boundary.
+  describe "task_create similar_tasks query cap (task 01a18f76)" do
+    defmodule CaptureQueryProvider do
+      @behaviour Platform.Memory.Provider
+
+      @impl true
+      def ingest(_entries, _config), do: {:ok, 0}
+
+      @impl true
+      def search(query, _opts, config) do
+        send(Keyword.fetch!(config, :test_pid), {:memory_search_query, query})
+        {:ok, []}
+      end
+
+      @impl true
+      def delete(_ids, _config), do: {:ok, 0}
+
+      @impl true
+      def health(_c), do: :ok
+    end
+
+    setup do
+      prev = Application.get_env(:platform, :memory_service, [])
+
+      Application.put_env(:platform, :memory_service,
+        provider: CaptureQueryProvider,
+        test_pid: self()
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
+      :ok
+    end
+
+    test "a long description reaches the semantic search capped, at a word boundary" do
+      cap = ToolSurface.similarity_query_max_chars()
+      project = create_project()
+      words = Stream.cycle(~w(alpha bravo charlie delta echo)) |> Enum.take(div(cap, 2))
+      description = Enum.join(words, " ")
+      assert String.length(description) > 2 * cap
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Cap probe", "description" => description},
+          %{}
+        )
+
+      assert result.similar_tasks == []
+      assert_receive {:memory_search_query, query}, 5_000
+      assert String.length(query) <= cap
+      # Most of the budget is used, and no word is cut in half.
+      assert String.length(query) > cap - 10
+      assert String.starts_with?(query, "Cap probe alpha bravo")
+      assert query |> String.split(" ") |> List.last() in ~w(alpha bravo charlie delta echo)
+    end
+
+    test "a short title + description reaches the search whole" do
+      project = create_project()
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Short probe", "description" => "tiny body"},
+          %{}
+        )
+
+      assert_receive {:memory_search_query, "Short probe tiny body"}, 5_000
+    end
+
+    test "similarity_search_query/1 cuts at the last whitespace, or hard when there is none" do
+      cap = ToolSurface.similarity_query_max_chars()
+      unbroken = String.duplicate("x", cap + 50)
+      assert ToolSurface.similarity_search_query(unbroken) == String.duplicate("x", cap)
+
+      exact = String.duplicate("y", cap)
+      assert ToolSurface.similarity_search_query(exact) == exact
+
+      spaced = String.duplicate("ab ", cap)
+      capped = ToolSurface.similarity_search_query(spaced)
+      assert String.length(capped) <= cap
+      refute String.ends_with?(capped, " ")
+      assert capped |> String.split(" ") |> Enum.all?(&(&1 == "ab"))
+    end
+  end
+
   # ── similar_tasks scoring (task 01a08a27, stage 1) ────────────────────
   #
   # `hit_similarity_score/1` is `1.0 / min(semantic_rank, lexical_rank)`,

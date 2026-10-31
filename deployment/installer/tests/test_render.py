@@ -99,6 +99,13 @@ MEMORY_EXPECTED_IDENTIFIERS = {
     "MEMORY_HOST",
     "MEMORY_PORT",
     "10-memory.sql",
+    # The 4 GB local-embeddings profile (task 01a18f76, registry.EMBEDDINGS_PROFILES).
+    "MEMORY_CHUNK_MAX_TOKENS",
+    "MEMORY_CHUNK_OVERLAP_TOKENS",
+    "MEMORY_EMBEDDING_MAX_BATCH_TOKENS",
+    "MEMORY_EMBEDDING_MAX_INPUT_TOKENS",
+    "MEMORY_EMBEDDING_MAX_CONCURRENCY",
+    "MEMORY_SERVICE_INGEST_TIMEOUT_MS",
 }
 
 
@@ -835,7 +842,8 @@ class HealthcheckPortTest(unittest.TestCase):
 
     def test_embeddings_healthcheck_probes_its_listen_port(self):
         svc = registry.SERVICES["embeddings"]
-        port = svc.command[svc.command.index("--port") + 1]
+        command = svc.command_for(registry.Ctx(manifest_from(EXAMPLE)))
+        port = command[command.index("--port") + 1]
         self.assertEqual(svc.healthcheck, ["CMD", "curl", "-f", f"http://localhost:{port}/health"])
 
 

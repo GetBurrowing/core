@@ -82,12 +82,12 @@ services:
       retries: 5
   embeddings:
     container_name: "embeddings"
-    image: "ghcr.io/ggml-org/llama.cpp:server"
+    image: "ghcr.io/ggml-org/llama.cpp:server@sha256:b32890309c1a33a534a01b0b461e953dc2c5a6bac20213abcf48e22847a19c85"
     pull_policy: "never"
     restart: "unless-stopped"
     command:
       - "-m"
-      - "/models/Qwen3-Embedding-0.6B-f16.gguf"
+      - "/models/Qwen3-Embedding-0.6B-Q8_0.gguf"
       - "--embedding"
       - "--pooling"
       - "last"
@@ -96,16 +96,17 @@ services:
       - "--port"
       - "8188"
       - "-c"
-      - "32768"
+      - "8192"
       - "-np"
-      - "4"
+      - "1"
       - "--no-kv-unified"
       - "-b"
-      - "8192"
+      - "1024"
       - "-ub"
-      - "8192"
+      - "1024"
       - "-t"
-      - "6"
+      - "2"
+    mem_limit: "1974m"
     volumes:
       - "./models:/models:ro"
     healthcheck:

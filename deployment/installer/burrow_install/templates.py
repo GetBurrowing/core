@@ -141,6 +141,8 @@ def _compose_service(plan, svc):
     out["restart"] = "unless-stopped"
     if svc.command:
         out["command"] = list(svc.command)
+    if svc.mem_limit:
+        out["mem_limit"] = svc.mem_limit
     if svc.secret_env():
         # Secret-bearing env lines live only in secrets.env (mode 0600), or,
         # for a service that must not see the rest of it, in its own file.
@@ -308,7 +310,7 @@ MODEL_UNIT_NAME = "burrow-model.service"
 
 def fetches_model(plan):
     """True when the host downloads the local embeddings model (stage 6)."""
-    return plan.model_download and f"models/{registry.EMBEDDINGS_MODEL_FILE}" in plan.host_files
+    return plan.model_download and f"models/{plan.embeddings_model['file']}" in plan.host_files
 
 
 def fetch_model_script(plan):
@@ -320,8 +322,8 @@ def fetch_model_script(plan):
     attempts with a growing pause; then exit 1, which fails the stack unit
     (it Requires this one), loudly.
     """
-    src = registry.EMBEDDINGS_MODEL_SOURCE
-    dest = f"{INSTALL_ROOT}/models/{registry.EMBEDDINGS_MODEL_FILE}"
+    src = plan.embeddings_model
+    dest = f"{INSTALL_ROOT}/models/{src['file']}"
     return f"""#!/bin/sh
 # {HEADER.format(name=plan.name)}
 # The local embeddings model, from a pinned source (Hugging Face revision
@@ -342,7 +344,7 @@ while [ "$attempt" -le 5 ]; do
     && echo "$sha  $part" | sha256sum -c --status; then
     chmod 0644 "$part"
     mv -f "$part" "$dest"
-    echo "burrow-fetch-model: {registry.EMBEDDINGS_MODEL_FILE} downloaded and verified"
+    echo "burrow-fetch-model: {src["file"]} downloaded and verified"
     exit 0
   fi
   echo "burrow-fetch-model: attempt $attempt failed (download or sha256 mismatch)" >&2

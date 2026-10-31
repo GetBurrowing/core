@@ -664,6 +664,15 @@ MODEL_URL = (
     "370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-f16.gguf"
 )
 MODEL_SHA = "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340"
+# The droplet's 4 GB profile runs the Q8_0 file of the same revision (core task
+# 01a18f76, registry.EMBEDDINGS_PROFILES "small"; the fixture's tier has no
+# measured row of its own and falls back to it).
+DROPLET_MODEL_FILE = "Qwen3-Embedding-0.6B-Q8_0.gguf"
+DROPLET_MODEL_URL = (
+    "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/"
+    "370f27d7550e0def9b39c1f16d3fbaa13aa67728/" + DROPLET_MODEL_FILE
+)
+DROPLET_MODEL_SHA = "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439"
 
 
 def _write_files(user_data):
@@ -704,9 +713,9 @@ class ModelDownloadTest(unittest.TestCase):
 
     def test_the_fetch_script_carries_the_pinned_url_and_sha(self):
         script = self.files["/opt/burrow/bin/burrow-fetch-model"]
-        self.assertIn(f"url={MODEL_URL}\n", script)
-        self.assertIn(f"sha={MODEL_SHA}\n", script)
-        self.assertIn("dest=/opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf\n", script)
+        self.assertIn(f"url={DROPLET_MODEL_URL}\n", script)
+        self.assertIn(f"sha={DROPLET_MODEL_SHA}\n", script)
+        self.assertIn(f"dest=/opt/burrow/models/{DROPLET_MODEL_FILE}\n", script)
         entry = self.user_data.split('path: "/opt/burrow/bin/burrow-fetch-model"', 1)[1]
         self.assertTrue(entry.lstrip().startswith('owner: "root:root"\n    permissions: "0755"'))
 
@@ -721,7 +730,7 @@ class ModelDownloadTest(unittest.TestCase):
         self.assertIn("After=burrow-model.service\n", stack)
         # The gate stays: a missing or empty model still fails the stack loudly.
         self.assertIn(
-            "ExecStartPre=/usr/bin/test -s /opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf\n",
+            f"ExecStartPre=/usr/bin/test -s /opt/burrow/models/{DROPLET_MODEL_FILE}\n",
             stack,
         )
         self.assertIn('  - "curl"\n', self.user_data)
@@ -783,8 +792,8 @@ class FetchModelScriptTest(unittest.TestCase):
             handle.write(self.good)
         script = templates.fetch_model_script(plan(valid(load(DO_DROPLET))))
         script = script.replace(
-            "dest=/opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf", f"dest={self.dest}"
-        ).replace(f"sha={MODEL_SHA}", f"sha={self.sha}")
+            f"dest=/opt/burrow/models/{DROPLET_MODEL_FILE}", f"dest={self.dest}"
+        ).replace(f"sha={DROPLET_MODEL_SHA}", f"sha={self.sha}")
         self.script = os.path.join(self.tmp, "fetch")
         with open(self.script, "w", encoding="utf-8") as handle:
             handle.write(script)

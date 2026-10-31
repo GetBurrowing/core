@@ -180,7 +180,7 @@ write_files:
       Type=oneshot
       RemainAfterExit=yes
       WorkingDirectory=/opt/burrow
-      ExecStartPre=/usr/bin/test -s /opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf
+      ExecStartPre=/usr/bin/test -s /opt/burrow/models/Qwen3-Embedding-0.6B-Q8_0.gguf
       ExecStartPre=/opt/burrow/bin/burrow-vapid
       ExecStart=/usr/bin/docker compose up -d --remove-orphans
       ExecStop=/usr/bin/docker compose down
@@ -239,9 +239,9 @@ write_files:
       # The local embeddings model, from a pinned source (Hugging Face revision
       # 370f27d7550e0def9b39c1f16d3fbaa13aa67728), checked against its sha256 before it is used.
       set -eu
-      dest=/opt/burrow/models/Qwen3-Embedding-0.6B-f16.gguf
-      url=https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-f16.gguf
-      sha=421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340
+      dest=/opt/burrow/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+      url=https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf
+      sha=06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439
       if [ -s "$dest" ] && echo "$sha  $dest" | sha256sum -c --status; then
         exit 0
       fi
@@ -254,7 +254,7 @@ write_files:
           && echo "$sha  $part" | sha256sum -c --status; then
           chmod 0644 "$part"
           mv -f "$part" "$dest"
-          echo "burrow-fetch-model: Qwen3-Embedding-0.6B-f16.gguf downloaded and verified"
+          echo "burrow-fetch-model: Qwen3-Embedding-0.6B-Q8_0.gguf downloaded and verified"
           exit 0
         fi
         echo "burrow-fetch-model: attempt $attempt failed (download or sha256 mismatch)" >&2
@@ -766,6 +766,7 @@ write_files:
           environment:
             APP_URL: "https://burrow-01a0d69d.test"
             FILES_SERVICE_URL: "http://files-service:8200"
+            MEMORY_SERVICE_INGEST_TIMEOUT_MS: "1800000"
             MEMORY_SERVICE_URL: "http://memory-service:8100"
             NATIVE_AGENT_LOGIN: "api_key"
             OIDC_CLIENT_ID: "suite-core"
@@ -821,11 +822,11 @@ write_files:
             retries: 5
         embeddings:
           container_name: "embeddings"
-          image: "ghcr.io/ggml-org/llama.cpp:server"
+          image: "ghcr.io/ggml-org/llama.cpp:server@sha256:b32890309c1a33a534a01b0b461e953dc2c5a6bac20213abcf48e22847a19c85"
           restart: "unless-stopped"
           command:
             - "-m"
-            - "/models/Qwen3-Embedding-0.6B-f16.gguf"
+            - "/models/Qwen3-Embedding-0.6B-Q8_0.gguf"
             - "--embedding"
             - "--pooling"
             - "last"
@@ -834,16 +835,17 @@ write_files:
             - "--port"
             - "8188"
             - "-c"
-            - "32768"
+            - "8192"
             - "-np"
-            - "4"
+            - "1"
             - "--no-kv-unified"
             - "-b"
-            - "8192"
+            - "1024"
             - "-ub"
-            - "8192"
+            - "1024"
             - "-t"
-            - "6"
+            - "2"
+          mem_limit: "1974m"
           volumes:
             - "./models:/models:ro"
           healthcheck:
@@ -871,7 +873,12 @@ write_files:
           env_file:
             - "secrets.env"
           environment:
+            MEMORY_CHUNK_MAX_TOKENS: "200"
+            MEMORY_CHUNK_OVERLAP_TOKENS: "25"
             MEMORY_EMBEDDING_BACKEND: "http"
+            MEMORY_EMBEDDING_MAX_BATCH_TOKENS: "200"
+            MEMORY_EMBEDDING_MAX_CONCURRENCY: "1"
+            MEMORY_EMBEDDING_MAX_INPUT_TOKENS: "200"
             MEMORY_EMBEDDING_MODEL: "embeddings"
             MEMORY_EMBEDDING_URL: "http://embeddings:8188"
             MEMORY_HOST: "0.0.0.0"
