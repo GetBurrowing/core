@@ -9593,3 +9593,304 @@ body.screen-share-fullscreen-active {
     background: var(--color-base-100);
   }
 }
+/* calendar v4, stage 2: event details and the New/Edit editor. Prototype
+   01a178d2 v4 index.html `.details`/`.dhead`/`.dbody`/`.dl`/`.dfoot`,
+   `.modal`/`.visopt`/`.formgrid` and cal.css `.field`/`.input`/`.pill`/
+   `.err`/`.hint`/`.danger-btn`. Desktop at lg (1024px, the shell's
+   breakpoint): details are a 320px column, the editor a 520px modal. Below
+   lg both are bottom sheets over --scrim, above the tab bar (z 30). The
+   prototype's r-lg 18px modal and r-xl 22px sheet corners use --radius-box. */
+.cal-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--color-base-100);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 78dvh;
+  z-index: 60;
+  border-top: 1px solid var(--edge);
+  border-radius: var(--radius-box) var(--radius-box) 0 0;
+  box-shadow: var(--shadow-modal);
+}
+.cal-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  z-index: 59;
+}
+@media (min-width: 1024px) {
+  .cal-details {
+    position: static;
+    width: 320px;
+    flex: 0 0 320px;
+    max-height: none;
+    border-top: 0;
+    border-left: 1px solid var(--edge);
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .cal-sheet-scrim {
+    display: none;
+  }
+}
+.cal-dhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 52px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--edge);
+  flex: 0 0 auto;
+}
+.cal-dhead b {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 700;
+}
+.cal-dbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.cal-dbody h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.cal-dl {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--color-base-content);
+}
+.cal-dl > [class*="hero-"] {
+  color: var(--color-subtle);
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+.cal-dl small {
+  display: block;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-dfoot {
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--edge);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (min-width: 1024px) {
+  .cal-dfoot {
+    padding-bottom: 12px;
+  }
+}
+.cal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--edge);
+  color: var(--color-subtle);
+  white-space: nowrap;
+  background: var(--color-base-100);
+}
+.cal-pill-ok {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+.cal-pill-acc {
+  color: var(--color-interactive);
+  border-color: var(--color-interactive);
+}
+.cal-pill-info {
+  color: var(--color-info);
+  border-color: var(--color-info);
+}
+.cal-danger-btn {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  background: var(--color-base-200);
+}
+/* Editor: modal at lg, bottom sheet below. */
+.cal-modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 70;
+}
+.cal-modal {
+  width: 100vw;
+  max-width: 100vw;
+  max-height: 92dvh;
+  overflow-y: auto;
+  background: var(--color-base-100);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box) var(--radius-box) 0 0;
+  box-shadow: var(--shadow-modal);
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (min-width: 1024px) {
+  .cal-modal-scrim {
+    align-items: center;
+  }
+  .cal-modal {
+    width: 520px;
+    max-width: 94vw;
+    max-height: 90vh;
+    border-radius: var(--radius-box);
+    padding: 20px;
+  }
+}
+.cal-modal h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.cal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+  font-weight: 550;
+}
+.cal-input {
+  height: 38px;
+  border-radius: var(--radius-field);
+  border: 1px solid var(--color-subtle);
+  background: var(--color-base-200);
+  padding: 0 10px;
+  color: var(--color-base-content);
+  font-size: 13px;
+  font-weight: 450;
+  outline: none;
+  width: 100%;
+}
+textarea.cal-input {
+  height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.cal-input::placeholder {
+  color: var(--color-subtle);
+}
+.cal-input:focus {
+  border-color: var(--color-interactive);
+  box-shadow: 0 0 0 1px var(--color-interactive);
+}
+.cal-input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+.cal-formgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.cal-formgrid .cal-field-date,
+.cal-formgrid .cal-field-full {
+  grid-column: 1 / -1;
+}
+@media (min-width: 1024px) {
+  .cal-formgrid {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+  .cal-formgrid .cal-field-date {
+    grid-column: auto;
+  }
+  .cal-formgrid .cal-field-span {
+    grid-column: span 2;
+  }
+}
+.cal-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-base-content);
+}
+.cal-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+}
+.cal-err {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.cal-err:empty {
+  display: none;
+}
+.cal-hint {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+  font-weight: 450;
+}
+.cal-visopt {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+@media (min-width: 1024px) {
+  .cal-visopt {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.cal-visopt label {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-base-content);
+  background: var(--color-base-200);
+  cursor: pointer;
+}
+.cal-visopt label small {
+  font-weight: 450;
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-visopt label:has(input:checked) {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.cal-visopt label:has(input:focus-visible) {
+  outline: 2px solid var(--color-interactive);
+  outline-offset: 2px;
+}
+.cal-ft {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .cal-visopt label:hover {
+    border-color: var(--color-subtle);
+  }
+}

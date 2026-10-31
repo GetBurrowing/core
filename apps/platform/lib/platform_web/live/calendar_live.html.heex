@@ -1,4 +1,9 @@
-<div class="flex h-full min-h-0 bg-base-200 text-base-content" data-page="calendar">
+<div
+  class="flex h-full min-h-0 bg-base-200 text-base-content"
+  data-page="calendar"
+  phx-window-keydown="escape"
+  phx-key="Escape"
+>
   <.list_pane
     mini_month={@mini_month}
     cursor={@cursor}
@@ -97,6 +102,17 @@
     </div>
   </section>
 
+  <.details_panel :if={@selected && @live_action != :settings} detail={@selected} />
+
+  <.event_editor
+    :if={@editing}
+    form={@form}
+    editing={@editing}
+    error={@editor_error}
+    invalid={@editor_fields}
+    where_options={where_options(@spaces, @projects)}
+  />
+
   <.sheet
     id="calendar-sheet"
     open={@sheet != nil}
@@ -171,143 +187,6 @@
             </button>
           </div>
           <p :if={@error} role="alert" class="mt-3 text-sm text-error">{@error}</p>
-        <% :edit -> %>
-          <h2 class="text-lg font-semibold">
-            {if @selected.id, do: "Edit event", else: "New event"}
-          </h2>
-          <.form
-            for={@form}
-            id="calendar-event-form"
-            phx-submit="save"
-            phx-change="event_change"
-            class="space-y-3 [&_.label]:text-[15px]"
-          >
-            <.input field={@form[:title]} label="Title" required maxlength="300" />
-            <.input field={@form[:all_day]} type="checkbox" label="All day" />
-            <div
-              :if={@form[:all_day].value not in [true, "true"]}
-              class="grid grid-cols-1 gap-3 sm:grid-cols-2"
-            >
-              <.input field={@form[:starts_at]} type="datetime-local" label="Start" /><.input
-                field={@form[:ends_at]}
-                type="datetime-local"
-                label="End"
-              />
-            </div>
-            <div
-              :if={@form[:all_day].value in [true, "true"]}
-              class="grid grid-cols-1 gap-3 sm:grid-cols-2"
-            >
-              <.input field={@form[:start_date]} type="date" label="All-day start" /><.input
-                field={@form[:end_date]}
-                type="date"
-                label="All-day end"
-              />
-            </div>
-            <.input field={@form[:time_zone]} label="Time zone" required />
-            <.input
-              field={@form[:repeat]}
-              type="select"
-              label="Repeat"
-              options={[
-                {"Doesn't repeat", ""},
-                {"Daily", "FREQ=DAILY"},
-                {"Weekly", "FREQ=WEEKLY"},
-                {"Monthly", "FREQ=MONTHLY"},
-                {"Custom", "custom"}
-              ]}
-            />
-            <div
-              :if={@form[:repeat].value == "custom"}
-              class="space-y-3 rounded-lg border border-edge p-3"
-            >
-              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <.input
-                  field={@form[:custom_interval]}
-                  type="number"
-                  label="Every"
-                  min="1"
-                  max="365"
-                /><.input
-                  field={@form[:custom_frequency]}
-                  type="select"
-                  label="Period"
-                  options={[{"Days", "DAILY"}, {"Weeks", "WEEKLY"}, {"Months", "MONTHLY"}]}
-                />
-              </div>
-              <.input field={@form[:custom_until]} type="date" label="Last date (optional)" />
-              <.input
-                field={@form[:custom_count]}
-                type="number"
-                min="1"
-                max="10000"
-                label="Number of events (optional)"
-              />
-            </div>
-            <.input
-              field={@form[:where]}
-              type="select"
-              label="Where"
-              options={where_options(@spaces, @projects)}
-            />
-            <p class="text-xs text-subtle">
-              {visibility_label(@form[:where].value, @spaces, @projects)}
-            </p>
-            <.input
-              field={@form[:visibility]}
-              type="select"
-              label="Shared visibility"
-              options={[{"Event details", "details"}, {"Busy only", "busy"}]}
-            />
-            <.input field={@form[:description]} type="textarea" label="Description" />
-            <button type="submit" class="btn btn-primary w-full min-h-11">Save event</button>
-          </.form>
-        <% :detail -> %>
-          <h2 class="text-lg font-semibold">{@selected.title}</h2>
-          <p :if={!@selected.all_day} class="font-mono text-sm">
-            {time_label(@selected.starts_at, @zone)}–{time_label(@selected.ends_at, @zone)}
-          </p>
-          <p :if={@selected.all_day} class="text-sm">
-            All day · {@selected.start_date}–{Date.add(@selected.end_date, -1)}
-          </p>
-          <p class="text-xs text-subtle">Created in {@selected.time_zone}</p>
-          <p class="whitespace-pre-wrap text-sm">{@selected.description}</p>
-          <p :if={@selected.tentative} class="text-sm text-subtle">
-            Tentative · Review this change in Inbox.
-          </p>
-          <.link
-            :if={@selected.tentative and @selected.owner_id == @current_user_record.id}
-            navigate={~p"/inbox"}
-            class="btn min-h-11"
-          >
-            Open Inbox
-          </.link>
-          <div
-            :if={@selected.owner_id == @current_user_record.id and not @selected.tentative}
-            class="flex gap-2"
-          >
-            <button phx-click="edit" class="btn min-h-11">Edit event</button><button
-              phx-click="delete"
-              data-confirm="Delete this event?"
-              class="btn btn-ghost min-h-11 text-error"
-            >Delete event</button>
-          </div>
-        <% :meeting -> %>
-          <h2 class="text-lg font-semibold">{@selected.title}</h2>
-          <p class="text-sm">Meetings edit where they live.</p>
-          <.link
-            navigate={~p"/meetings/#{@selected.meeting.slug}"}
-            class="btn btn-primary min-h-11"
-          >
-            Open in Meetings
-          </.link>
-        <% :external -> %>
-          <h2 class="text-lg font-semibold">{@selected.title}</h2>
-          <p class="text-sm">{@selected.subscription} · Read-only external calendar</p>
-          <p :if={@selected.stale} class="text-sm text-error">
-            Refresh required; availability unknown.
-          </p>
-          <p class="text-sm">Edit this event in its source calendar.</p>
         <% :subscribe -> %>
           <section class="space-y-3 border-b border-edge pb-4">
             <h2 class="text-lg font-semibold">External calendars</h2>

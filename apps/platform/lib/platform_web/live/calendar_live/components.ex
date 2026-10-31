@@ -449,6 +449,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       phx-click="select"
       phx-value-kind={entry.kind}
       phx-value-id={entry.id}
+      phx-value-start={DateTime.to_unix(entry.starts_at)}
       data-kind={Cal.chip_kind(entry)}
       class={"cal-mchip mt-1 cal-k-#{Cal.chip_kind(entry)}"}
     >
@@ -555,6 +556,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       phx-click="select"
       phx-value-kind={@entry.kind}
       phx-value-id={@entry.id}
+      phx-value-start={DateTime.to_unix(@entry.starts_at)}
       aria-label={@label}
       aria-current={to_string(@selected)}
       data-kind={@kind}
@@ -731,6 +733,7 @@ defmodule PlatformWeb.CalendarLive.Components do
             phx-click="select"
             phx-value-kind={entry.kind}
             phx-value-id={entry.id}
+            phx-value-start={DateTime.to_unix(entry.starts_at)}
             data-kind={Cal.chip_kind(entry)}
             aria-label={month_chip_label(entry, day, @zone)}
             class={[
@@ -759,5 +762,449 @@ defmodule PlatformWeb.CalendarLive.Components do
   defp month_chip_label(entry, day, zone) do
     {first, last} = Cal.day_minutes(entry, day, zone)
     Cal.chip_label(entry, day, first, min(last, 1439))
+  end
+
+  # ── details (app.js `renderDetails`, index.html `.details`) ────────────
+
+  attr(:detail, :map, required: true)
+
+  @doc """
+  The details: a 320px right column at `lg`, a bottom sheet over a scrim
+  below it (index.html `.details` / `@media (max-width:899px) .details`).
+  """
+  def details_panel(assigns) do
+    assigns =
+      assign(assigns,
+        head:
+          case assigns.detail.kind do
+            "meeting" -> "Meeting"
+            "external" -> "External event"
+            "tentative" -> "Agent hold"
+            _ -> "Event"
+          end
+      )
+
+    ~H"""
+    <div class="cal-sheet-scrim" phx-click="close_details" data-role="calendar-details-scrim"></div>
+    <aside
+      class="cal-details"
+      aria-label="Event details"
+      data-role="calendar-details"
+      data-kind={@detail.kind}
+    >
+      <div class="cal-dhead">
+        <b>{@head}</b>
+        <button type="button" class={icon_btn()} phx-click="close_details" aria-label="Close details">
+          <.icon name="hero-x-mark" class="size-[18px]" />
+        </button>
+      </div>
+      <div class="cal-dbody">
+        <div class="flex flex-wrap gap-1.5"><.detail_pill detail={@detail} /></div>
+        <h3>{@detail.title}</h3>
+        <.detail_row icon="hero-clock" text={@detail.when} sub={@detail[:recurrence]} />
+        <.detail_body detail={@detail} />
+      </div>
+      <div :if={footer?(@detail)} class="cal-dfoot">
+        <.detail_footer detail={@detail} />
+      </div>
+    </aside>
+    """
+  end
+
+  defp footer?(%{kind: "native", owner?: owner?}), do: owner? == true
+  defp footer?(_), do: true
+
+  attr(:detail, :map, required: true)
+
+  defp detail_pill(%{detail: %{kind: "meeting", live?: true}} = assigns) do
+    ~H"""
+    <span class="cal-pill cal-pill-ok"><i class="cal-pulse"></i>Live</span>
+    """
+  end
+
+  defp detail_pill(%{detail: %{kind: "meeting"}} = assigns) do
+    ~H"""
+    <span class="cal-pill cal-pill-acc">Meeting</span>
+    """
+  end
+
+  defp detail_pill(%{detail: %{kind: "external"}} = assigns) do
+    ~H"""
+    <span class="cal-pill"><.icon name="hero-lock-closed" class="size-3" />Read-only</span>
+    """
+  end
+
+  defp detail_pill(%{detail: %{kind: "tentative"}} = assigns) do
+    ~H"""
+    <span class="cal-pill cal-pill-acc">Tentative · needs your OK</span>
+    """
+  end
+
+  defp detail_pill(%{detail: %{owner?: true}} = assigns) do
+    ~H"""
+    <span class="cal-pill cal-pill-info">Your event</span>
+    """
+  end
+
+  # An event shared into a space or project by someone else: PR #51 lists
+  # it (Calendar.list_events visible_query), v4 has no such state.
+  defp detail_pill(assigns) do
+    ~H"""
+    <span class="cal-pill cal-pill-info">Shared event</span>
+    """
+  end
+
+  attr(:detail, :map, required: true)
+
+  defp detail_body(%{detail: %{kind: kind}} = assigns) when kind in ["native", "tentative"] do
+    ~H"""
+    <.detail_row
+      icon="hero-eye-slash"
+      text={if @detail.busy?, do: "Busy only", else: "Full details"}
+      sub={
+        if @detail.busy?,
+          do: "Others, agents and your feed see “Busy”",
+          else: "Others with access see the title and notes"
+      }
+    />
+    <.detail_row
+      :if={@detail.notes not in [nil, ""]}
+      icon="hero-document-text"
+      text={@detail.notes}
+    />
+    <.detail_row
+      :if={@detail.calendar}
+      icon="hero-calendar"
+      text={@detail.calendar}
+      sub={if @detail.kind == "tentative", do: "held by #{@detail.agent}"}
+    />
+    """
+  end
+
+  defp detail_body(%{detail: %{kind: "meeting"}} = assigns) do
+    ~H"""
+    <.detail_row
+      icon="hero-video-camera"
+      text={"Burrow meeting in #{@detail.space || "Meetings"}"}
+      sub={@detail.host && "hosted by #{@detail.host}"}
+    />
+    <.detail_row
+      icon="hero-user-group"
+      text={"#{length(@detail.invited)} invited"}
+      sub={if @detail.invited != [], do: Enum.join(@detail.invited, ", ")}
+    />
+    """
+  end
+
+  defp detail_body(%{detail: %{kind: "external"}} = assigns) do
+    ~H"""
+    <.detail_row
+      icon="hero-lock-closed"
+      text={"From #{@detail.calendar}"}
+      sub="Read-only. Edit it in the source calendar."
+    />
+    <.detail_row
+      icon="hero-calendar"
+      text="Blocks your availability"
+      sub="Booking-link guests can’t pick this time"
+    />
+    <p :if={@detail.stale} class="m-0 text-xs font-[550] text-error" role="status">
+      Refresh required; availability unknown.
+    </p>
+    """
+  end
+
+  attr(:icon, :string, required: true)
+  attr(:text, :string, required: true)
+  attr(:sub, :string, default: nil)
+  attr(:class, :string, default: nil)
+
+  defp detail_row(assigns) do
+    ~H"""
+    <div class="cal-dl">
+      <.icon name={@icon} class="size-3.5" />
+      <span class={["min-w-0", @class]}>
+        {@text}<small :if={@sub}>{@sub}</small>
+      </span>
+    </div>
+    """
+  end
+
+  attr(:detail, :map, required: true)
+
+  defp detail_footer(%{detail: %{kind: "native"}} = assigns) do
+    ~H"""
+    <button type="button" class={primary_btn()} phx-click="edit">Edit</button>
+    <button type="button" class={[ghost_btn(), "cal-danger-btn"]} phx-click="delete">Delete</button>
+    """
+  end
+
+  defp detail_footer(%{detail: %{kind: "tentative"}} = assigns) do
+    ~H"""
+    <button type="button" class={primary_btn()} phx-click="consent" phx-value-verb="approve">
+      Approve
+    </button>
+    <button type="button" class={ghost_btn()} phx-click="consent" phx-value-verb="revert">
+      Revert
+    </button>
+    """
+  end
+
+  defp detail_footer(%{detail: %{kind: "meeting"}} = assigns) do
+    ~H"""
+    <.link navigate={~p"/meetings/#{@detail.slug}"} class={primary_btn()}>
+      {if @detail.live?, do: "Join now", else: "Open meeting"}
+    </.link>
+    <.link navigate={~p"/meetings?#{%{meeting: @detail.meeting_id}}"} class={ghost_btn()}>
+      View in Meetings
+    </.link>
+    """
+  end
+
+  defp detail_footer(%{detail: %{kind: "external"}} = assigns) do
+    ~H"""
+    <.link patch={~p"/calendar/settings"} class={ghost_btn()}>Manage external calendars</.link>
+    """
+  end
+
+  # ── editor (app.js `openEditor`, index.html `.modal`) ──────────────────
+
+  attr(:form, :any, required: true)
+  attr(:editing, :any, required: true)
+  attr(:error, :string, default: nil)
+  attr(:invalid, :list, default: [])
+  attr(:where_options, :list, default: [])
+
+  @doc """
+  New / Edit event: a 520px modal at `lg`, a bottom sheet below it. PR #51's
+  all-day flag and custom recurrence stay (declared deviations): all-day is
+  one checkbox row under the Date row, and a custom rule shows as its own
+  selected Repeat option.
+  """
+  def event_editor(assigns) do
+    form = assigns.form
+    editing = assigns.editing
+    all_day? = form[:all_day].value in [true, "true"]
+
+    assigns =
+      assign(assigns,
+        new?: is_nil(editing.id),
+        all_day?: all_day?,
+        repeat: form[:repeat].value || "",
+        visibility: form[:visibility].value || "details",
+        recurring?: not is_nil(editing.id) and editing.recurrence not in [nil, ""],
+        custom_label:
+          if(editing.recurrence not in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
+            do: Cal.recurrence_label(editing)
+          )
+      )
+
+    ~H"""
+    <div class="cal-modal-scrim" data-role="calendar-editor-scrim">
+      <.focus_wrap
+        id="calendar-editor"
+        class="cal-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-editor-title"
+        phx-click-away="close_editor"
+      >
+        <h2 id="calendar-editor-title">{if @new?, do: "New event", else: "Edit event"}</h2>
+        <.form
+          for={@form}
+          id="calendar-event-form"
+          phx-submit="save"
+          phx-change="event_change"
+          class="flex flex-col gap-3"
+          novalidate
+        >
+          <input type="hidden" name={@form[:time_zone].name} value={@form[:time_zone].value} />
+          <label class="cal-field">
+            Title<input
+              type="text"
+              name={@form[:title].name}
+              value={@form[:title].value}
+              placeholder="What is it?"
+              maxlength="300"
+              class="cal-input"
+              aria-describedby="calendar-event-error"
+              aria-invalid={to_string(:title in @invalid)}
+              phx-mounted={Phoenix.LiveView.JS.focus()}
+            />
+          </label>
+          <div class="cal-formgrid">
+            <label class="cal-field cal-field-date">
+              Date<input
+                type="date"
+                name={@form[:date].name}
+                value={@form[:date].value}
+                class="cal-input"
+                aria-invalid={to_string(:date in @invalid)}
+              />
+            </label>
+            <%= if @all_day? do %>
+              <label class="cal-field cal-field-span">
+                Last day<input
+                  type="date"
+                  name={@form[:end_date].name}
+                  value={@form[:end_date].value}
+                  class="cal-input"
+                  aria-invalid={to_string(:end in @invalid)}
+                />
+              </label>
+            <% else %>
+              <label class="cal-field">
+                Start<input
+                  type="time"
+                  step="900"
+                  name={@form[:start].name}
+                  value={@form[:start].value}
+                  class="cal-input"
+                  aria-invalid={to_string(:start in @invalid)}
+                />
+              </label>
+              <label class="cal-field">
+                End<input
+                  type="time"
+                  step="900"
+                  name={@form[:end].name}
+                  value={@form[:end].value}
+                  class="cal-input"
+                  aria-invalid={to_string(:end in @invalid)}
+                />
+              </label>
+            <% end %>
+          </div>
+          <label class="cal-check">
+            <input type="hidden" name={@form[:all_day].name} value="false" />
+            <input
+              type="checkbox"
+              name={@form[:all_day].name}
+              value="true"
+              checked={@all_day?}
+              class="cal-checkbox"
+            /> All day
+          </label>
+          <label class="cal-field">
+            Repeat (optional)<select name={@form[:repeat].name} class="cal-input">
+            <option
+                :for={
+                  {label, value} <- [
+                    {"Does not repeat", ""},
+                    {"Every day", "FREQ=DAILY"},
+                    {"Weekly", "FREQ=WEEKLY"},
+                    {"Monthly", "FREQ=MONTHLY"},
+                    {@custom_label || "Custom…", "custom"}
+                  ]
+                }
+                value={value}
+                selected={@repeat == value}
+              >
+              {label}
+            </option>
+          </select>
+            <span :if={@recurring?} class="cal-hint">Changes apply to every occurrence.</span>
+          </label>
+          <div :if={@repeat == "custom"} class="cal-formgrid" data-role="calendar-custom-repeat">
+            <label class="cal-field">
+              Every<input
+                type="number"
+                min="1"
+                max="365"
+                name={@form[:custom_interval].name}
+                value={@form[:custom_interval].value}
+                class="cal-input"
+              />
+            </label>
+            <label class="cal-field">
+              Period<select name={@form[:custom_frequency].name} class="cal-input">
+              <option
+                  :for={
+                    {label, value} <- [{"Days", "DAILY"}, {"Weeks", "WEEKLY"}, {"Months", "MONTHLY"}]
+                  }
+                  value={value}
+                  selected={@form[:custom_frequency].value == value}
+                >
+                {label}
+              </option>
+            </select>
+            </label>
+            <label class="cal-field">
+              Times (optional)<input
+                type="number"
+                min="1"
+                max="10000"
+                name={@form[:custom_count].name}
+                value={@form[:custom_count].value}
+                class="cal-input"
+              />
+            </label>
+            <label class="cal-field cal-field-full">
+              Last date (optional)<input
+                type="date"
+                name={@form[:custom_until].name}
+                value={@form[:custom_until].value}
+                class="cal-input"
+              />
+            </label>
+          </div>
+          <div class="cal-field">
+            Visibility
+            <div class="cal-visopt" role="radiogroup" aria-label="Visibility">
+              <label :for={
+                {value, label, note} <- [
+                  {"busy", "Busy only", "Others, agents and your iCal feed just see “Busy”."},
+                  {"details", "Full details", "People with access see the title and notes."}
+                ]
+              }>
+                <input
+                  type="radio"
+                  name={@form[:visibility].name}
+                  value={value}
+                  checked={@visibility == value}
+                  class="sr-only"
+                />
+                {label}<small>{note}</small>
+              </label>
+            </div>
+          </div>
+          <label :if={length(@where_options) > 1} class="cal-field">
+            Where<select name={@form[:where].name} class="cal-input">
+            <option
+                :for={{label, value} <- @where_options}
+                value={value}
+                selected={@form[:where].value == value}
+              >
+              {label}
+            </option>
+          </select>
+          </label>
+          <label class="cal-field">
+            Notes<textarea
+              name={@form[:description].name}
+              placeholder="Optional"
+              maxlength="10000"
+              class="cal-input"
+            >{@form[:description].value}</textarea>
+          </label>
+          <p id="calendar-event-error" class="cal-err" role="alert">{@error}</p>
+          <div class="cal-ft">
+            <button
+              :if={!@new?}
+              type="button"
+              class={[ghost_btn(), "cal-danger-btn mr-auto"]}
+              phx-click="delete"
+            >
+              Delete
+            </button>
+            <button type="button" class={ghost_btn()} phx-click="close_editor">Cancel</button>
+            <button type="submit" class={primary_btn()}>
+              {if @new?, do: "Create event", else: "Save"}
+            </button>
+          </div>
+        </.form>
+      </.focus_wrap>
+    </div>
+    """
   end
 end

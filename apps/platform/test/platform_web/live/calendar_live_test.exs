@@ -69,17 +69,17 @@ defmodule PlatformWeb.CalendarLiveTest do
     conn: conn,
     scope: scope
   } do
-    {:ok, view, _} = live(conn, "/calendar")
+    {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
     view |> element("#calendar-new") |> render_click()
+    assert has_element?(view, "#calendar-editor h2", "New event")
 
     view
     |> form("#calendar-event-form",
       event: %{
         title: "Board preparation",
-        starts_at: "2026-10-29T14:00",
-        ends_at: "2026-10-29T15:00",
-        time_zone: "America/Chicago",
-        where: "private",
+        date: "2026-10-29",
+        start: "14:00",
+        end: "15:00",
         repeat: "",
         visibility: "details"
       }
@@ -88,18 +88,27 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     [event] = Calendar.list_events(scope, ~U[2026-10-01 00:00:00Z], ~U[2026-11-01 00:00:00Z])
     assert event.starts_at == ~U[2026-10-29 19:00:00.000000Z]
+    assert event.time_zone == "America/Chicago"
     assert event.title == "Board preparation"
-    render_click(view, "select", %{"id" => event.id, "kind" => "event"})
-    view |> element("button", "Edit event") |> render_click()
+    refute has_element?(view, "#calendar-editor")
+    assert render(view) =~ "Event created"
+    # v4 opens the saved event's details (app.js `#f-save` sets S.sel).
+    assert has_element?(view, "[data-role=calendar-details] h3", "Board preparation")
+
+    view |> element("[data-role=calendar-details] button", "Edit") |> render_click()
+    assert has_element?(view, "#calendar-editor h2", "Edit event")
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='14:00']")
 
     view
     |> form("#calendar-event-form", event: %{title: "Board preparation revised"})
     |> render_submit()
 
     assert {:ok, %{title: "Board preparation revised"}} = Calendar.get_event(scope, event.id)
-    render_click(view, "select", %{"id" => event.id, "kind" => "event"})
-    view |> element("button", "Delete event") |> render_click()
+    assert render(view) =~ "Event saved"
+    view |> element("[data-role=calendar-details] button", "Delete") |> render_click()
     assert [] == Calendar.list_events(scope, ~U[2026-10-01 00:00:00Z], ~U[2026-11-01 00:00:00Z])
+    refute has_element?(view, "[data-role=calendar-details]")
+    assert render(view) =~ "Event deleted"
   end
 
   test "forged private event selection and deletion cannot affect another owner", %{conn: conn} do
@@ -130,27 +139,28 @@ defmodule PlatformWeb.CalendarLiveTest do
     conn: conn,
     scope: scope
   } do
-    {:ok, view, _} = live(conn, "/calendar")
+    {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
     render_click(view, "new_event")
 
     view
     |> form("#calendar-event-form", event: %{all_day: "true", repeat: "custom"})
     |> render_change()
 
+    assert has_element?(view, "#calendar-event-form input[name='event[end_date]']")
+    refute has_element?(view, "#calendar-event-form input[name='event[start]']")
+
     view
     |> form("#calendar-event-form",
       event: %{
         title: "Away",
         all_day: "true",
-        start_date: "2026-11-01",
+        date: "2026-11-01",
         end_date: "2026-11-01",
-        time_zone: "America/Chicago",
         custom_frequency: "WEEKLY",
         custom_interval: "2",
         custom_count: "3",
         custom_until: "",
         repeat: "custom",
-        where: "private",
         visibility: "details"
       }
     )
@@ -488,13 +498,12 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     assert has_element?(
              view,
-             "#calendar-event-form input[value='#{Date.to_iso8601(today)}T09:30']"
+             "#calendar-event-form input[name='event[date]'][value='#{Date.to_iso8601(today)}']"
            )
 
-    assert has_element?(
-             view,
-             "#calendar-event-form input[value='#{Date.to_iso8601(today)}T10:30']"
-           )
+    # app.js `openEditor`: the end defaults to start + 30 minutes.
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='09:30']")
+    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='10:00']")
   end
 
   test "Week/Month, Today and prev/next move the grid", %{conn: conn} do
@@ -702,5 +711,254 @@ defmodule PlatformWeb.CalendarLiveTest do
              view,
              "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{Date.add(other, 1)}']"
            )
+  end
+
+  # ── Calendar v4 details + editor (task 01a18d9f stage 2) ────────────────
+
+  defp details_text(view),
+    do: view |> element("[data-role=calendar-details]") |> render() |> text()
+
+  defp open_chip(view, kind),
+    do: view |> element("[data-role=calendar-week] .cal-ev[data-kind=#{kind}]") |> render_click()
+
+  test "native details show the v4 copy, and Escape and the close button dismiss them", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Lunch with Alex",
+        description: "Usual spot.",
+        starts_at: at(zone, today, 12, 30),
+        ends_at: at(zone, today, 13, 15),
+        time_zone: zone,
+        recurrence: "FREQ=WEEKLY"
+      })
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    refute has_element?(view, "[data-role=calendar-details]")
+    open_chip(view, "native")
+
+    assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "Event")
+    assert has_element?(view, "[data-role=calendar-details] .cal-pill-info", "Your event")
+    assert has_element?(view, "[data-role=calendar-details] h3", "Lunch with Alex")
+    assert has_element?(view, ".cal-ev[data-kind=native][aria-current=true]")
+    copy = details_text(view)
+    assert copy =~ "#{Elixir.Calendar.strftime(today, "%a %-d %b")} · 12:30–13:15"
+    assert copy =~ "Weekly on #{Elixir.Calendar.strftime(today, "%A")}"
+    assert copy =~ "Full detailsOthers with access see the title and notes"
+    assert copy =~ "Usual spot."
+    assert copy =~ user.name
+    assert has_element?(view, ".cal-dfoot button", "Edit")
+    assert has_element?(view, ".cal-dfoot button.cal-danger-btn", "Delete")
+
+    view |> element("[data-page=calendar]") |> render_keydown(%{"key" => "Escape"})
+    refute has_element?(view, "[data-role=calendar-details]")
+
+    open_chip(view, "native")
+    view |> element("button[aria-label='Close details']") |> render_click()
+    refute has_element?(view, "[data-role=calendar-details]")
+
+    # `?select=<id>` (the Inbox card's "See it on the calendar") opens it too.
+    [%{id: id} | _] =
+      Calendar.list_events(scope, at(zone, today, 0, 0), at(zone, Date.add(today, 1), 0, 0))
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar?date=#{today}&select=#{id}")
+    assert has_element?(view, "[data-role=calendar-details] h3", "Lunch with Alex")
+  end
+
+  test "busy details read Busy only, and a meeting, external and hold each get their v4 copy",
+       %{conn: conn, scope: scope, user: user} do
+    zone = midday_zone()
+    today = local_today(zone)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Focus",
+        starts_at: at(zone, today, 8, 0),
+        ends_at: at(zone, today, 9, 0),
+        time_zone: zone,
+        visibility: "busy"
+      })
+
+    meeting = seed_meeting!(zone, today, "live")
+
+    {:ok, _} =
+      Platform.Chat.add_participant(meeting.chat_space_id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: "Calendar user",
+        joined_at: DateTime.utc_now()
+      })
+
+    seed_external!(user, zone, today)
+    seed_hold!(user, scope, zone, today)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    open_chip(view, "native")
+    assert details_text(view) =~ "Busy onlyOthers, agents and your feed see “Busy”"
+
+    open_chip(view, "meeting")
+    assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "Meeting")
+    assert has_element?(view, "[data-role=calendar-details] .cal-pill-ok", "Live")
+    copy = details_text(view)
+    assert copy =~ "Burrow meeting in #design-"
+    assert copy =~ "1 invitedCalendar user"
+
+    assert has_element?(
+             view,
+             ".cal-dfoot a[href='/meetings/#{meeting.slug}']",
+             "Join now"
+           )
+
+    assert has_element?(view, ".cal-dfoot a", "View in Meetings")
+
+    open_chip(view, "external")
+    assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "External event")
+    copy = details_text(view)
+    assert copy =~ "Read-only"
+    assert copy =~ "From Recruiting (Greenhouse)Read-only. Edit it in the source calendar."
+    assert copy =~ "Blocks your availabilityBooking-link guests can’t pick this time"
+
+    assert has_element?(
+             view,
+             ".cal-dfoot a[href='/calendar/settings']",
+             "Manage external calendars"
+           )
+
+    refute has_element?(view, ".cal-dfoot button", "Edit")
+
+    open_chip(view, "tentative")
+    assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "Agent hold")
+    assert has_element?(view, ".cal-pill-acc", "Tentative · needs your OK")
+    assert details_text(view) =~ "held by Higgins"
+    assert has_element?(view, ".cal-dfoot button", "Approve")
+    assert has_element?(view, ".cal-dfoot button", "Revert")
+  end
+
+  test "Approve in the hold's details commits it through AgentAccess", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+    seed_hold!(user, scope, zone, today)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    open_chip(view, "tentative")
+    view |> element(".cal-dfoot button", "Approve") |> render_click()
+
+    assert [%{state: "approved"}] = Repo.all(Calendar.Consent)
+    refute has_element?(view, ".cal-ev[data-kind=tentative]")
+    assert has_element?(view, ".cal-ev[data-kind=native]", "Interview · Sam Rivera")
+    # The open details follow the hold into a native event.
+    assert has_element?(view, "[data-role=calendar-details] .cal-pill-info", "Your event")
+  end
+
+  test "Revert in the hold's details removes the hold", %{conn: conn, scope: scope, user: user} do
+    zone = midday_zone()
+    today = local_today(zone)
+    seed_hold!(user, scope, zone, today)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+    open_chip(view, "tentative")
+    view |> element(".cal-dfoot button", "Revert") |> render_click()
+
+    assert [%{state: "reverted"}] = Repo.all(Calendar.Consent)
+    refute has_element?(view, ".cal-ev[data-kind=tentative]")
+    refute has_element?(view, "[data-role=calendar-details]")
+    assert render(view) =~ "Reverted · hold removed"
+  end
+
+  test "the editor shows the three v4 validation messages", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+
+    view
+    |> form("#calendar-event-form", event: %{title: ""})
+    |> render_submit()
+
+    assert has_element?(view, "#calendar-event-error[role=alert]", "Give the event a title.")
+    assert has_element?(view, "input[name='event[title]'][aria-invalid=true]")
+
+    view
+    |> form("#calendar-event-form", event: %{title: "Standup", date: ""})
+    |> render_submit()
+
+    assert has_element?(view, "#calendar-event-error", "Pick a date, start and end.")
+    assert has_element?(view, "input[name='event[date]'][aria-invalid=true]")
+
+    view
+    |> form("#calendar-event-form",
+      event: %{title: "Standup", date: "2026-10-29", start: "10:00", end: "09:30"}
+    )
+    |> render_submit()
+
+    assert has_element?(view, "#calendar-event-error", "End has to be after the start.")
+    assert has_element?(view, "input[name='event[end]'][aria-invalid=true]")
+    assert has_element?(view, "#calendar-editor")
+
+    view |> element("#calendar-editor button", "Cancel") |> render_click()
+    refute has_element?(view, "#calendar-editor")
+  end
+
+  test "Busy only persists as visibility busy", %{conn: conn, scope: scope} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+    assert has_element?(view, ".cal-visopt input[value=details][checked]")
+
+    view
+    |> form("#calendar-event-form",
+      event: %{
+        title: "Dentist",
+        date: "2026-10-28",
+        start: "16:00",
+        end: "16:45",
+        visibility: "busy"
+      }
+    )
+    |> render_submit()
+
+    assert [%{visibility: "busy", title: "Dentist"}] =
+             Calendar.list_events(scope, ~U[2026-10-28 00:00:00Z], ~U[2026-10-29 00:00:00Z])
+  end
+
+  test "editing a recurring event warns that changes apply to every occurrence", %{
+    conn: conn,
+    scope: scope
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+
+    {:ok, _} =
+      Calendar.create_event(scope, %{
+        title: "Review",
+        starts_at: at(zone, today, 9, 0),
+        ends_at: at(zone, today, 9, 30),
+        time_zone: zone,
+        recurrence: "FREQ=WEEKLY;INTERVAL=2;COUNT=3"
+      })
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "native")
+    assert details_text(view) =~ "Every 2 weeks, 3 times"
+    view |> element(".cal-dfoot button", "Edit") |> render_click()
+
+    assert has_element?(view, "#calendar-editor .cal-hint", "Changes apply to every occurrence.")
+    # The custom rule shows as its own selected Repeat option.
+    assert has_element?(
+             view,
+             "select[name='event[repeat]'] option[value=custom][selected]",
+             "Every 2 weeks, 3 times"
+           )
+
+    view |> element("#calendar-editor button", "Delete") |> render_click()
+    refute has_element?(view, "#calendar-editor")
+    refute has_element?(view, ".cal-ev[data-kind=native]")
   end
 end

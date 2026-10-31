@@ -101,6 +101,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # `@template_sites`.
   @placeholder_exclusions %{
     "platform_web/live/calendar_live.html.heex" => :global_default,
+    # The v4 event editor's Title/Notes fields (task 01a18d9f stage 2):
+    # `.cal-input::placeholder` paints --color-subtle in app.css.
+    "platform_web/live/calendar_live/components.ex" => :global_default,
     "platform_web/components/action_patterns.ex" => :global_default,
     "platform_web/live/agent_config/agent_config_live.ex" => :global_default,
     "platform_web/components/chat_message.ex" => :rule_painted,
