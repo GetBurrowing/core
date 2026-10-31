@@ -425,6 +425,13 @@ defmodule Platform.Role do
     },
     %{
       kind: :http,
+      file: "lib/platform/oidc.ex",
+      class: :request,
+      note:
+        "begin_interaction/1: one GET of the issuer's /authorize from the install hand-over request (task 01a10315 stage 6)"
+    },
+    %{
+      kind: :http,
       file: "lib/platform/installs/probe.ex",
       class: :follows_caller,
       note: "an install run's HTTP/HTTPS probes of its droplet (task 01a10315)"
