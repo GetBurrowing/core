@@ -227,6 +227,43 @@ defmodule PlatformWeb.AdminVaultLiveTest do
              end)
     end
 
+    # Task 01a18f0c stage 1: a named system reader is granted and revoked
+    # here like an agent, and both show in the access log.
+    test "a system reader is granted and removed from System readers", ctx do
+      slug = unique_slug()
+      {:ok, cred} = Shared.create(ctx.admin, %{slug: slug, value: @value}, [])
+
+      {:ok, view, _} = live(ctx.conn, ~p"/admin/vault/#{slug}")
+
+      view
+      |> element(~s([data-role="vault-system-grant-open"][data-name="installs-provisioner"]))
+      |> render_click()
+
+      assert [%{grantee_type: "system"}] = grants_for(cred.id)
+      assert {:ok, @value} = Vault.get(slug, accessor: {:system, "installs-provisioner"})
+
+      html = render(view)
+      assert html =~ ~s(data-role="vault-system-grant-chip")
+      assert html =~ "granted system reader installs-provisioner"
+      refute html =~ @value
+
+      view
+      |> element(
+        ~s([data-role="vault-system-grant-chip"][data-name="installs-provisioner"] button)
+      )
+      |> render_click()
+
+      assert grants_for(cred.id) == []
+      assert render(view) =~ "ungranted system reader installs-provisioner"
+
+      assert {:error, :access_denied} =
+               Vault.get(slug, accessor: {:system, "installs-provisioner"})
+
+      demote!(ctx.admin)
+      render_click(view, "grant_system", %{"name" => "installs-provisioner"})
+      assert grants_for(cred.id) == []
+    end
+
     test "+ Grant agent adds a grant from the picker", ctx do
       slug = unique_slug()
       {:ok, cred} = Shared.create(ctx.admin, %{slug: slug, value: @value}, [])

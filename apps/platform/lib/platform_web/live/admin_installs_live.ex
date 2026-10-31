@@ -6,9 +6,20 @@ defmodule PlatformWeb.AdminInstallsLive do
   a list below shows every install with its status and a Destroy button that
   needs the slug typed before it calls `Platform.Installs.teardown/1`.
 
-  The marketing-site front door is owned elsewhere and out of scope here; it will
-  call `Platform.Installs.create/2` too, and the customer lands on the same
-  `/install-status/:token` page (`PlatformWeb.InstallStatusLive`).
+  ## Install requests (task 01a18f0c stage 3)
+
+  Requests from the getburrow.ing form (`Platform.Installs.request/1`) wait
+  in a Requests section above the form, oldest first. Each shows exactly
+  what Provision will buy ("Will use": the first offered region, the default
+  size and price, `<slug>.<zone>`), and one click calls
+  `Platform.Installs.provision_request/2`; Dismiss deletes the row. The
+  requester's note is untrusted text and renders escaped. A request-made
+  install shows no progress link: the requester's token is minted when the
+  install is ready and emailed to them (stage 4). Its row in the list says
+  who requested it and the hand-over email's state, one word.
+
+  The spend-gate toggle is `Platform.Installs.RequestSettings`; turning it
+  on asks first. With it on, a new request provisions without a click.
 
   ## The progress link is shown once
 
@@ -29,14 +40,22 @@ defmodule PlatformWeb.AdminInstallsLive do
 
   alias Platform.Access
   alias Platform.Installs
+  alias Platform.Installs.RequestSettings
 
   @impl true
   def mount(_params, _session, socket) do
     defaults = Installs.defaults()
+    if connected?(socket), do: Installs.subscribe_requests()
 
     {:ok,
      socket
      |> assign(:page_title, "Installs")
+     |> assign(:subscribed, MapSet.new())
+     |> assign(:defaults, defaults)
+     |> assign(:prices, Installs.monthly_prices())
+     |> assign(:zone, Installs.cname_zone())
+     |> assign(:auto_provision, RequestSettings.get().auto_provision_requests)
+     |> load_requests()
      |> assign(:regions, defaults.regions)
      |> assign(:available, defaults.available)
      |> assign(:size_options, size_options(defaults.sizes))
@@ -92,10 +111,34 @@ defmodule PlatformWeb.AdminInstallsLive do
     case Installs.list(socket.assigns[:current_user_record]) do
       # `handover_sealed` decrypts on load; it never enters an assign.
       {:ok, installs} ->
-        assign(socket, :installs, Enum.map(installs, &%{&1 | handover_sealed: nil}))
+        installs = Enum.map(installs, &%{&1 | handover_sealed: nil})
+
+        socket
+        |> assign(:installs, installs)
+        |> assign(:email_states, Installs.handover_email_states(installs))
+        |> subscribe_installs(installs)
 
       {:error, _} ->
-        assign(socket, :installs, [])
+        socket |> assign(:installs, []) |> assign(:email_states, %{})
+    end
+  end
+
+  defp load_requests(socket) do
+    case Installs.list_requests(socket.assigns[:current_user_record]) do
+      {:ok, requests} -> assign(socket, :requests, requests)
+      {:error, _} -> assign(socket, :requests, [])
+    end
+  end
+
+  # Live status for every listed install, subscribed once each.
+  defp subscribe_installs(socket, installs) do
+    if connected?(socket) do
+      subscribed = socket.assigns[:subscribed] || MapSet.new()
+      new = installs |> Enum.map(& &1.id) |> Enum.reject(&MapSet.member?(subscribed, &1))
+      Enum.each(new, &Installs.subscribe/1)
+      assign(socket, :subscribed, MapSet.union(subscribed, MapSet.new(new)))
+    else
+      socket
     end
   end
 
@@ -137,6 +180,52 @@ defmodule PlatformWeb.AdminInstallsLive do
          socket
          |> assign(:form, to_form(params, as: :install))
          |> assign(:form_error, create_error(reason))}
+    end
+  end
+
+  def handle_event("provision_request", %{"id" => id}, socket) do
+    case Installs.provision_request(socket.assigns[:current_user_record], id) do
+      {:ok, install} ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Provisioning. #{install.owner_email} gets an email when it's ready."
+         )
+         |> load_requests()
+         |> load_installs()}
+
+      {:error, reason} ->
+        {:noreply, socket |> put_flash(:error, provision_error(reason)) |> load_requests()}
+    end
+  end
+
+  def handle_event("dismiss_request", %{"id" => id}, socket) do
+    case Installs.dismiss_request(socket.assigns[:current_user_record], id) do
+      :ok ->
+        {:noreply, socket |> put_flash(:info, "Request dismissed.") |> load_requests()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You are not allowed to dismiss requests.")}
+
+      {:error, _} ->
+        {:noreply,
+         socket |> put_flash(:error, "That request is already gone.") |> load_requests()}
+    end
+  end
+
+  def handle_event("set_auto_provision", %{"enabled" => enabled}, socket) do
+    case RequestSettings.update(socket.assigns[:current_user_record], %{
+           auto_provision_requests: enabled == "true"
+         }) do
+      {:ok, settings} ->
+        {:noreply, assign(socket, :auto_provision, settings.auto_provision_requests)}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(:auto_provision, RequestSettings.get().auto_provision_requests)
+         |> put_flash(:error, "You are not allowed to change this setting.")}
     end
   end
 
@@ -191,6 +280,51 @@ defmodule PlatformWeb.AdminInstallsLive do
 
       {:exit, _reason} ->
         {:noreply, put_flash(socket, :error, "Destroying #{slug} stopped unexpectedly.")}
+    end
+  end
+
+  @impl true
+  def handle_info({:install_updated, _id}, socket), do: {:noreply, load_installs(socket)}
+
+  def handle_info(:install_requests_changed, socket),
+    do: {:noreply, socket |> load_requests() |> load_installs()}
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  defp provision_error(:unauthorized), do: "You are not allowed to provision installs."
+  defp provision_error(:not_requested), do: "That request was already provisioned or dismissed."
+  defp provision_error(:not_found), do: "That request is already gone."
+  defp provision_error(:dns_zone_missing), do: create_error(:dns_zone_missing)
+  defp provision_error({:invalid, _} = reason), do: create_error(reason)
+  defp provision_error(_), do: "The install could not be provisioned."
+
+  # "Will use: <region> · <size> · <price> · <slug>.<zone>": exactly what
+  # Provision buys, from the same defaults provision_request/2 uses.
+  defp will_use(request, defaults, prices, zone) do
+    [
+      Installs.region_label(List.first(defaults.regions)),
+      Installs.size_label(defaults.default_size),
+      Installs.price_label(prices[defaults.default_size]),
+      if(zone, do: "#{request.slug}.#{zone}", else: "no zone configured")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+  end
+
+  defp email_tone(state) when state in ["queued", "accepted"], do: "text-info"
+  defp email_tone("not sent yet"), do: "text-subtle"
+  defp email_tone(_), do: "text-error"
+
+  defp relative(nil), do: ""
+
+  defp relative(%DateTime{} = at) do
+    seconds = max(DateTime.diff(DateTime.utc_now(), at), 0)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3600 -> "#{div(seconds, 60)} min ago"
+      seconds < 86_400 -> "#{div(seconds, 3600)} h ago"
+      true -> "#{div(seconds, 86_400)} d ago"
     end
   end
 
@@ -269,6 +403,110 @@ defmodule PlatformWeb.AdminInstallsLive do
               Done
             </button>
           </div>
+
+          <section
+            id="install-requests"
+            data-role="install-requests"
+            class="overflow-hidden rounded-box border border-edge"
+          >
+            <div class="space-y-2 bg-base-300 p-3">
+              <div class="flex items-center gap-3">
+                <h2 class="flex-1 text-sm font-semibold text-base-content">Requests</h2>
+                <span :if={@requests != []} class="badge badge-sm badge-ghost">
+                  {length(@requests)}
+                </span>
+              </div>
+              <label class="flex min-h-11 cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="auto-provision-toggle"
+                  data-role="auto-provision-toggle"
+                  class="toggle toggle-primary mt-1"
+                  checked={@auto_provision}
+                  phx-click="set_auto_provision"
+                  phx-value-enabled={to_string(!@auto_provision)}
+                  data-confirm={
+                    if !@auto_provision,
+                      do:
+                        "Provision every new request automatically? Each one creates a server that costs money."
+                  }
+                />
+                <span class="min-w-0 flex-1">
+                  <span class="block text-sm text-base-content">
+                    Provision new requests automatically
+                  </span>
+                  <span class="block text-xs text-subtle">
+                    Off: each request waits for Provision. Every server costs money.
+                  </span>
+                </span>
+              </label>
+            </div>
+            <p :if={@requests == []} class="bg-base-100 p-3 text-sm text-subtle">
+              No install requests.
+            </p>
+            <ul :if={@requests != []} class="divide-y divide-edge bg-base-100">
+              <li
+                :for={request <- @requests}
+                id={"install-request-#{request.id}"}
+                data-role="install-request"
+                class="space-y-2 p-3"
+              >
+                <div class="flex items-start gap-3">
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm font-medium text-base-content">
+                      {request.business_name}
+                    </p>
+                    <p class="truncate text-xs text-subtle">
+                      {request.requester_name} · {request.owner_email}
+                    </p>
+                  </div>
+                  <span class="shrink-0 text-xs text-subtle">{relative(request.requested_at)}</span>
+                </div>
+                <div :if={request.request_note} class="space-y-1">
+                  <%!-- Inline on purpose: whitespace-pre-line would render indentation. --%>
+                  <p
+                    id={"install-request-note-#{request.id}"}
+                    data-role="install-request-note"
+                    class="line-clamp-3 whitespace-pre-line break-words text-sm text-subtle"
+                    phx-no-format
+                  >{request.request_note}</p>
+                  <button
+                    :if={String.length(request.request_note) > 160}
+                    type="button"
+                    class="btn btn-ghost btn-xs"
+                    phx-click={
+                      JS.toggle_class("line-clamp-3", to: "#install-request-note-#{request.id}")
+                    }
+                  >
+                    Show more
+                  </button>
+                </div>
+                <p class="font-mono text-xs text-subtle" data-role="install-request-will-use">
+                  Will use: {will_use(request, @defaults, @prices, @zone)}
+                </p>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    phx-click="provision_request"
+                    phx-value-id={request.id}
+                    phx-disable-with="Provisioning…"
+                    class="btn btn-primary btn-sm min-h-11"
+                  >
+                    Provision
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="dismiss_request"
+                    phx-value-id={request.id}
+                    data-confirm={"Dismiss the request from #{request.owner_email}? Their details are deleted."}
+                    class="btn btn-ghost btn-sm min-h-11"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </section>
 
           <.form
             for={@form}
@@ -349,6 +587,19 @@ defmodule PlatformWeb.AdminInstallsLive do
                       {install.business_name}
                     </p>
                     <p class="truncate font-mono text-xs text-subtle">{install.primary_host}</p>
+                    <p
+                      :if={install.requested_at}
+                      class="break-all text-xs text-subtle"
+                      data-role="install-requested-by"
+                    >
+                      Requested by {install.owner_email} · email
+                      <span
+                        class={email_tone(@email_states[install.id])}
+                        data-role="install-email-state"
+                      >
+                        {@email_states[install.id]}
+                      </span>
+                    </p>
                   </div>
                   <span class={["badge badge-sm", status_tone(install.status)]}>
                     {if MapSet.member?(@destroying, install.slug),

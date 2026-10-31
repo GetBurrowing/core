@@ -47,16 +47,17 @@ defmodule Platform.Installs.HandoverTest do
     assert handover.burrow_url == "https://#{install.primary_host}"
     assert handover.admin_email == install.owner_email
 
-    assert handover.sign_in_link ==
-             "https://#{install.primary_host}/auth/handover?code=FAKECODE"
+    assert handover.sign_in_link =~
+             ~r|^https://#{Regex.escape(install.primary_host)}/auth/handover\?code=FAKE-[0-9a-f]{16}$|
 
     assert handover.ssh.host == install.droplet_ip
     assert handover.ssh.user == "root"
     assert handover.ssh.private_key =~ "-----BEGIN OPENSSH PRIVATE KEY-----"
 
     # Each reveal mints again; nothing from it is stored.
-    assert {:ok, _} = Installs.reveal_handover(install)
-    refute raw_sealed(install) =~ "FAKECODE"
+    assert {:ok, again} = Installs.reveal_handover(install)
+    refute again.sign_in_link == handover.sign_in_link
+    refute raw_sealed(install) =~ "FAKE-"
 
     assert {:ok, acked} = Installs.acknowledge_handover(install)
     assert acked.handover_acknowledged_at
@@ -110,7 +111,7 @@ defmodule Platform.Installs.HandoverTest do
     refute log =~ "OPENSSH"
     refute log =~ Handover.fetch(sealed, "static_api_key")
     refute log =~ Handover.fetch(sealed, "oidc_client_secret")
-    refute log =~ "FAKECODE"
+    refute log =~ ~r/FAKE-[0-9a-f]{16}/
   end
 
   describe "expiry" do

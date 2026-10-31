@@ -134,6 +134,9 @@ defmodule Platform.Mail.Dispatch do
   Returns `{:ok, delivery}` (status `queued`), `{:error, {:refused, reason,
   delivery}}` (the refused row is written in the caller's transaction and
   commits with it), or `{:error, reason}` with nothing written.
+
+  `opts[:log]`: `false` keeps the delivery insert (which snapshots the body)
+  out of the query log. Default unchanged.
   """
   @spec enqueue(binary(), actor(), keyword()) ::
           {:ok, Delivery.t()}
@@ -352,7 +355,9 @@ defmodule Platform.Mail.Dispatch do
           {:error, audit_changeset}
 
         true ->
-          with {:ok, delivery} <- Repo.insert(delivery_changeset),
+          insert_opts = if Keyword.get(opts, :log, true) == false, do: [log: false], else: []
+
+          with {:ok, delivery} <- Repo.insert(delivery_changeset, insert_opts),
                {:ok, _event} <- Audit.record(audit_attrs(delivery, actor, refusal)) do
             {:ok, delivery}
           end

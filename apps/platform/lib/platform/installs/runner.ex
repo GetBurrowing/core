@@ -141,11 +141,22 @@ defmodule Platform.Installs.Runner do
     case Enum.find(install.steps, &(&1["state"] != "done")) do
       nil ->
         Installs.update!(install, %{status: "ready", ready_at: now()})
+        send_handover_mail(install.id)
         :ready
 
       step ->
         run_step(install, step)
     end
+  end
+
+  # Task 01a18f0c stage 4: the requester's one hand-over email. Its CAS
+  # column is the only gate (non-request installs claim nothing), and a mail
+  # failure never fails the install; the hourly sweeper retries.
+  defp send_handover_mail(id) do
+    Platform.Installs.HandoverMail.deliver_ready(id)
+  rescue
+    exception ->
+      Logger.error("[installs] hand-over email for #{id} raised #{inspect(exception.__struct__)}")
   end
 
   defp run_step(install, step) do
