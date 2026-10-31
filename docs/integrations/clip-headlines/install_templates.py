@@ -53,10 +53,24 @@ def main():
             + ":docs/integrations/clip-captions/htc-caption-treatments-v1.patch",
         ),
         (here / "htc-headline-templates-v1.patch").read_bytes(),
+        (here / "htc-headline-linux-prerequisites-v1.patch").read_bytes(),
     ]
-    for patch in patches:
-        run("git", "-C", target, "apply", "--check", "-", input=patch)
-        run("git", "-C", target, "apply", "-", input=patch)
+    for index, patch in enumerate(patches):
+        # Zero-context prerequisite is bound to the exact pinned base/preceding patches.
+        flags = ["--unidiff-zero"] if index == 3 else []
+        run("git", "-C", target, "apply", *flags, "--check", "-", input=patch)
+        run("git", "-C", target, "apply", *flags, "-", input=patch)
+    model = here / "models/face_detection_yunet_2023mar.onnx"
+    model_sha256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+    assert hashlib.sha256(model.read_bytes()).hexdigest() == model_sha256
+    installed_model = (
+        target / "clip-agent/src/clip_agent/models/face_detection_yunet_2023mar.onnx"
+    )
+    installed_model.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(model, installed_model)
+    shutil.copy2(
+        here / "models/YuNet-LICENSE", installed_model.parent / "YuNet-LICENSE"
+    )
     weight = target / "clip-agent/src/clip_agent/fonts/weights/Inter-ExtraBold.ttf"
     weight.parent.mkdir(parents=True)
     weight.write_bytes(
@@ -117,12 +131,37 @@ def main():
         path.is_relative_to(target)
         and hashlib.sha256(path.read_bytes()).hexdigest() == renderer["sha256"]
     )
+    imported = json.loads(
+        run(
+            python,
+            "-c",
+            "import importlib,json,hashlib; names=['captions','cli','headline_templates','reframe','shots','pipeline','opencv_faces']; print(json.dumps({n:{'path':(m:=importlib.import_module('clip_agent.'+n)).__file__,'sha256':hashlib.sha256(open(m.__file__,'rb').read()).hexdigest()} for n in names}))",
+        )
+    )
+    assert all(
+        Path(item["path"]).resolve().is_relative_to(target)
+        for item in imported.values()
+    )
     receipt = {
         "upstream": UPSTREAM,
+        "imported_modules": imported,
         "caption_core": CAPTION_CORE,
         "asset_directory": str(packaged_assets),
         "patch_sha256": [hashlib.sha256(x).hexdigest() for x in patches],
         "install": info,
+        "face_model_sha256": model_sha256,
+        "runtime_modules": {
+            name: hashlib.sha256(
+                (target / "clip-agent/src/clip_agent" / name).read_bytes()
+            ).hexdigest()
+            for name in (
+                "opencv_faces.py",
+                "reframe.py",
+                "shots.py",
+                "pipeline.py",
+                "cli.py",
+            )
+        },
     }
     (target / "headline-install-receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\n"

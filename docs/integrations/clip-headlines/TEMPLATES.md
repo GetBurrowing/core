@@ -29,7 +29,9 @@ creates a separate checkout pinned to upstream
 `82ef5132b926fed33a80a304364fdda14335c2d5`, applies the existing headline patch,
 the qualified caption patch from immutable Core commit
 `d17048339c6cbbe95794ad748393c4724dffb410`, then this directory's
-`htc-headline-templates-v1.patch`. Fetch that Core commit into your Core clone if
+`htc-headline-templates-v1.patch` and the pinned Linux face/headroom prerequisite
+`htc-headline-linux-prerequisites-v1.patch`. The latter includes an MIT YuNet model
+and conservative padded face-union framing; see [QUALIFICATION.md](QUALIFICATION.md). Fetch that Core commit into your Core clone if
 `git cat-file -e` cannot resolve it. The installer does not reset or modify an
 operator's existing installation or running helper. It installs the pinned
 Linux/Python 3.14 dependency receipt, including the sample's OpenCV dependency,

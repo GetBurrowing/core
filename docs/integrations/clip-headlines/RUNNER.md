@@ -1,7 +1,12 @@
 # Canonical runner template contract
 
+Current helper is 0.10.2: see [QUALIFICATION.md](QUALIFICATION.md) for the real
+CLI refresh/apply fix and final installation/decoded evidence. The 0.10.2 delta patch uses zero context (`git apply --unidiff-zero`); the full
+archive/materializer remain the installation source. Historical 0.10.0
+and 0.10.1 archives remain unchanged as prior receipts.
+
 Stage 2 extends `burrow-clip-runner`; it adds no rendering pipeline or generator.
-The immutable `canonical-runner-0.10.1.md` archive contains the current shared
+The immutable `canonical-runner-0.10.2.md` archive contains the current shared
 skill helper and tests. The 0.10.0 archive remains the stage 2 receipt; its accompanying patch is against the canonical 0.9.2
 skill read at 2026-10-30T21:34:47Z. Operator processes and installed renderers are
 not updated by publishing the skill. Do not replace a serving process mid-job.

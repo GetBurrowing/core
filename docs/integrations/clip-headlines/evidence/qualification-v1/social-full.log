@@ -1,0 +1,10 @@
+Host: isolated-linux-runtime; private PLATFORM_TEST_DATABASE=platform_test_htc_templates_s4_full
+Command: mix test (apps/social)
+Full original log: /home/jordan/openai/rig/htc-template-s4/social-full.log
+Full log SHA256: 235e03ac4feb981cdd20992b84fbac6d1243f2501d8de91f7723040d412ff1f1
+[test_helper] platform module preload done: 3258 modules loaded in 3991ms
+Running ExUnit with seed: 705944, max_cases: 8
+Excluding tags: [:files_service, :cascade_repro, :pending_fix, :slow, :isolated_beam]
+Finished in 188.2 seconds (16.4s async, 171.8s sync)
+Result: 1570 passed
+Warning/error log lines are retained in the private full log; no failed ExUnit case.

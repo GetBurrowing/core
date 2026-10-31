@@ -1,5 +1,10 @@
 # Shared clip headline contract v1
 
+Final isolated CLI, installation, face safety and mutation qualification is in
+[QUALIFICATION.md](QUALIFICATION.md). It uses canonical helper 0.10.2 and retains
+the earlier source comparisons and immutable receipts. No production rollout or
+publication is implied.
+
 The reusable Chrome Hook, Neon Broadcast and Arcade Punch extension, isolated
 installer and actual-source sample checks are documented in [TEMPLATES.md](TEMPLATES.md).
 The existing headline-review/1 text policy below remains the generation boundary.

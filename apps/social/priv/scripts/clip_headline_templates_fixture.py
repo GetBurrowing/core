@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--logo", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--face-model", required=True)
+    parser.add_argument("--layout-matrix", action="store_true")
     args = parser.parse_args()
     ffmpeg = shutil.which("ffmpeg")
     assert ffmpeg, "FFmpeg is required"
@@ -327,6 +328,10 @@ def main():
         name: digest(Path(args.project) / name) for name in original_state
     } == original_state
     receipt["original_project_unchanged"] = True
+    if args.layout_matrix:
+        from clip_headline_templates_qualify import layout_matrix
+
+        receipt["layout_matrix"] = layout_matrix(out, Path(args.logo), [union])
     (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
 
