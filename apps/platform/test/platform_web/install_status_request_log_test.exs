@@ -18,6 +18,10 @@ defmodule PlatformWeb.InstallStatusRequestLogTest do
   end
 
   test "a GET of a real status token never puts the token in the log" do
+    previous = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous) end)
+
     use_fake_backend()
     {_install, token} = create_install!()
 
