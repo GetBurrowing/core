@@ -24,3 +24,12 @@ Inter-SemiBold.ttf
             file extras/ttf/Inter-SemiBold.ttf, unmodified
   Licence:  OFL-1.1, text in Inter-OFL.txt (LICENSE.txt from the same zip)
   SHA-256:  78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3
+
+Inter-Regular.ttf
+  Use:      independent subtle captions, 24px at 960px output height
+  Version:  4.001 (release v4.1)
+  Source:   https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+            archive SHA-256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+            extras/ttf/Inter-Regular.ttf, unmodified
+  Licence:  OFL-1.1, Inter-OFL.txt retained
+  SHA-256:  40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82

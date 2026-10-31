@@ -2,19 +2,6 @@
 +++ b/clip-agent/pyproject.toml
 @@ -45,0 +46 @@
 +    { file = "src/clip_agent/models/*" },
---- a/clip-agent/src/clip_agent/cli.py
-+++ b/clip-agent/src/clip_agent/cli.py
-@@ -147,0 +148,10 @@
-+            # Finite content-free codes let the canonical runner surface actionable
-+            # layout failures without capturing potentially content-bearing stderr.
-+            headline_codes = {
-+                "HEADLINE_GLYPH_UNSUPPORTED", "HEADLINE_LAYOUT_SHORTEN_TEXT",
-+                "HEADLINE_EMPHASIS_STALE", "HEADLINE_FACE_GEOMETRY_MISSING",
-+                "HEADLINE_FACE_GEOMETRY_INVALID", "HEADLINE_FACE_REGION_UNSAFE",
-+                "HEADLINE_ASSET_MISMATCH", "HEADLINE_TEMPLATE_UNSUPPORTED",
-+            }
-+            if _content_free() and str(exc) in headline_codes:
-+                click.echo(json.dumps({"ok": False, "error": {"code": str(exc)}}))
 --- /dev/null
 +++ b/clip-agent/src/clip_agent/opencv_faces.py
 @@ -0,0 +1,65 @@

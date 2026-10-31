@@ -5,15 +5,15 @@ import hashlib
 import re
 from pathlib import Path
 
-SKILL_SHA256 = "b3ff5a5018792177aa11f1d3b122af3868b55a77b51d0d2519c14ac4134d4f55"
-HELPER_SHA256 = "b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c"
+SKILL_SHA256 = "f6c2e03a75d2e642d29cf0ba0571b2235ff7e9e5fa70a8f7a7c1b881a939b03f"
+HELPER_SHA256 = "0bf1d3ee8522cb208ba48d7536d37a9d5cd25d22d339925a5f062c6cba271249"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    skill = Path(__file__).with_name("canonical-runner-0.10.2.md").read_bytes()
+    skill = Path(__file__).with_name("canonical-runner-0.10.3.md").read_bytes()
     if hashlib.sha256(skill).hexdigest() != SKILL_SHA256:
         raise SystemExit("Canonical skill digest mismatch")
     if args.output.exists():

@@ -51,7 +51,7 @@ defmodule Platform.Social.ClipLook do
   """
 
   @presets ~w(bold-pop podcast-clean speaker-color)
-  @styles ~w(plain phrase-pop karaoke)
+  @styles ~w(plain phrase-pop karaoke subtle)
   @templates ~w(legacy chrome-hook neon-broadcast arcade-punch)
   @fonts ["Anton", "Inter Black", "Inter SemiBold", "Georgia Bold"]
   @reframes ~w(shots splits fit)
@@ -98,6 +98,21 @@ defmodule Platform.Social.ClipLook do
   def styles, do: @styles
 
   def headline_templates, do: @templates
+
+  @doc "Explicit opt-in show defaults. Existing and queued clip looks are never rewritten."
+  def chrome_hook_defaults(look \\ %{}) do
+    look =
+      Map.put(
+        look || %{},
+        "title",
+        Map.drop((look || %{})["title"] || %{}, ~w(emphasis emphasis_text))
+      )
+
+    merge(look, %{
+      "title" => %{"template" => "chrome-hook", "enabled" => true, "secs" => 3.5},
+      "cap" => %{"style" => "subtle"}
+    })
+  end
 
   def caption_style(look), do: get_in(look || %{}, ["cap", "style"]) || "phrase-pop"
 

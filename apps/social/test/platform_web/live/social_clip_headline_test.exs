@@ -46,6 +46,37 @@ defmodule PlatformWeb.SocialClipHeadlineTest do
   defp attempt(w),
     do: Repo.one!(from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"))
 
+  test "chosen Chrome Hook defaults are explicit for future clips and reset without touching old versions",
+       %{conn: conn, w: w} do
+    child = open(conn, w)
+    assert has_element?(child, "[data-role=caption-style][data-style=subtle]")
+    child |> element("[data-role=headline-default-chrome]") |> render_click()
+    profile = Platform.Social.get_profile(w.org_id, w.profile.id)
+    assert profile.show_look["title"]["template"] == "chrome-hook"
+    assert profile.show_look["cap"]["style"] == "subtle"
+    assert profile.show_look["title"]["secs"] == 3.5
+    assert has_element?(child, "[data-role=headline-notice]", "Existing videos are unchanged")
+    assert Repo.reload!(w.clip).rev == 1
+    assert Repo.reload!(w.base).look == w.base.look
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+
+    {:ok, %{job: queued}} =
+      ClipJobs.enqueue_new_clip(w.org_id, w.profile.id, w.approver.id, %{
+        source_url: "https://example.com/new.mp4",
+        in_s: 0,
+        out_s: 5
+      })
+
+    assert queued.payload["look"]["cap"]["style"] == "subtle"
+    assert queued.payload["headline_template"]["template"] == "chrome-hook"
+    child |> element("[data-role=headline-default-reset]") |> render_click()
+    reset = Platform.Social.get_profile(w.org_id, w.profile.id)
+    refute get_in(reset.show_look, ["title", "template"])
+    refute get_in(reset.show_look, ["cap", "style"])
+    assert Repo.reload!(queued).payload == queued.payload
+    assert Repo.reload!(w.base).look == w.base.look
+  end
+
   test "one field binds exact human text and base; completion selects n+1 without deleting history",
        %{conn: conn, w: w} do
     child = open(conn, w)

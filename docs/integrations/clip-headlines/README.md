@@ -1,5 +1,59 @@
 # Shared clip headline contract v1
 
+## Chrome Hook refinement (plan v2)
+
+The current package adds independent `subtle` captions and bounded reusable
+assets. Use canonical helper **0.10.3**, materialized with
+`materialize_runner.py`, with the current `install_templates.py` package.
+The helper checks the exact caption/headline source, dependency and font hashes.
+An older CLI fails before finalize/upload; a palette or UI selection is not
+evidence of renderer support. Previous snapshots retain their original hashes
+and need their compatible installed renderer; none are rewritten.
+
+In the existing Social headline controls, **Save Chrome Hook + subtle defaults**
+uses `ClipJobs.save_show_default` for future clips. Existing clips keep their
+immutable look and playable version. Choose **Subtle** in the separate caption
+controls and request a new render to change an existing clip. Reset uses the
+existing show-default action. The generic defaults and packaged
+`how-to-computer` profile remain unchanged. Production default activation must
+follow deployment and qualification of the serving operator's renderer; this
+package does not silently update a running host or historical reviews.
+
+Subtle captions use unmodified OFL Inter Regular4.001, pinned in
+`assets-manifest.json`:24px at540×960 (25% below the32px sample baseline),
+sentence case preserved from the transcript, white with a restrained35% soft
+shadow. They have no outline, pill or word highlight. Measured phrase breaks
+keep one short line; unfit words or unsupported glyphs fail explicitly instead
+of shrinking or omitting text. Placement stays inside the configured safe area.
+The fixture's current subtle comparisons use the production0.645 bottom limit.
+All previous caption styles remain available in the CLI/helper.
+
+`packaging_assets.py` keeps one process-local LRU budget of64MiB accounted
+payload/key memory and256 entries. It caches verified bytes/cmap, font sizes,
+decoded/resized logo, layouts and final effect rasters. Every file lookup stats
+device/inode/size/mtime/ctime; replacements invalidate byte identity, and pinned
+digests are checked even before completed-raster hits. Derived keys also bind
+text/emphasis, template revision, dimensions and relevant config. Callers receive
+copies of cached images. Entries evict under the budget; no cache survives the
+CLI process. `packaging_assets.info()` exposes accounting and `clear()` resets
+it for tests. Native renderer allocations are separate from this accounted
+cache budget.
+
+Reproduce the three Chrome Hook lengths with the installed tool's Python:
+
+```bash
+python apps/social/priv/scripts/clip_headline_templates_fixture.py \
+  --source "$ORIGINAL_SOURCE" --project "$ORIGINAL_PROJECT" \
+  --logo docs/integrations/clip-headlines/assets/htc-official-logo-crop.png \
+  --face-model docs/integrations/clip-headlines/models/face_detection_yunet_2023mar.onnx \
+  --chrome-only --output "$PRIVATE_EVIDENCE"
+```
+
+This uses extractive fixture proposals through the existing evidence policy.
+It does not prove accepted live new-clip/regenerate generation. That missing
+qualification and the muted-closing measurement remain in the following plan
+stages. No production installation, approval or publication is claimed here.
+
 Final isolated CLI, installation, face safety and mutation qualification is in
 [QUALIFICATION.md](QUALIFICATION.md). It uses canonical helper 0.10.2 and retains
 the earlier source comparisons and immutable receipts. No production rollout or

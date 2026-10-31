@@ -82,6 +82,7 @@ def main():
             CAPTION_CORE + ":docs/integrations/clip-captions/fonts/Inter-ExtraBold.ttf",
         )
     )
+    shutil.copy2(here / "fonts/Inter-Regular.ttf", target / "clip-agent/src/clip_agent/fonts/Inter-Regular.ttf")
     run("uv", "venv", "--python", "3.14", target / ".venv")
     packaged_assets = target / "headline-assets"
     packaged_assets.mkdir()
@@ -124,6 +125,7 @@ def main():
         info["headline_templates"] == 1
         and info["headline_review"] == 1
         and info["caption_treatments"] == 1
+        and "subtle" in info["caption_styles"]
     )
     renderer = info["headline_template_renderer"]
     path = Path(renderer["path"])
@@ -135,7 +137,7 @@ def main():
         run(
             python,
             "-c",
-            "import importlib,json,hashlib; names=['captions','cli','headline_templates','reframe','shots','pipeline','opencv_faces']; print(json.dumps({n:{'path':(m:=importlib.import_module('clip_agent.'+n)).__file__,'sha256':hashlib.sha256(open(m.__file__,'rb').read()).hexdigest()} for n in names}))",
+            "import importlib,json,hashlib; names=['captions','cli','headline_templates','reframe','shots','pipeline','opencv_faces','packaging_assets','subtle_captions']; print(json.dumps({n:{'path':(m:=importlib.import_module('clip_agent.'+n)).__file__,'sha256':hashlib.sha256(open(m.__file__,'rb').read()).hexdigest()} for n in names}))",
         )
     )
     assert all(

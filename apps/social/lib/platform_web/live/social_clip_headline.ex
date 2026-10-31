@@ -136,6 +136,28 @@ defmodule PlatformWeb.SocialClipHeadline do
     end
   end
 
+  def handle_event("default", %{"action" => "chrome"}, socket) do
+    with :ok <- authorize(socket) do
+      p = Social.get_profile(socket.assigns.profile.org_id, socket.assigns.profile.id)
+      look = ClipLook.chrome_hook_defaults(p.show_look || %{})
+
+      case ClipJobs.save_show_default(p.org_id, p.id, socket.assigns.user_id, look) do
+        {:ok, _} ->
+          {:noreply,
+           assign(socket,
+             error: nil,
+             notice:
+               "Chrome Hook and subtle captions saved for new clips. Existing videos are unchanged."
+           )}
+
+        {:error, reason} ->
+          {:noreply, assign(socket, error: message(reason))}
+      end
+    else
+      {:error, reason} -> {:noreply, assign(socket, error: message(reason))}
+    end
+  end
+
   def handle_event("default", %{"action" => action}, socket) when action in ~w(save reset) do
     with :ok <- authorize(socket),
          true <- action == "reset" or socket.assigns.draft["template"] != "disabled",
@@ -146,6 +168,12 @@ defmodule PlatformWeb.SocialClipHeadline do
            ) do
       p = Social.get_profile(socket.assigns.profile.org_id, socket.assigns.profile.id)
       look = p.show_look || %{}
+
+      look =
+        if action == "reset" and get_in(look, ["cap", "style"]) == "subtle",
+          do: Map.put(look, "cap", Map.delete(look["cap"], "style")),
+          else: look
+
       current = Map.drop(look["title"] || %{}, ~w(template enabled secs emphasis emphasis_text))
 
       title =
@@ -392,6 +420,7 @@ defmodule PlatformWeb.SocialClipHeadline do
         <button
           :for={
             {label, action} <- [
+              {"Save Chrome Hook + subtle defaults", "chrome"},
               {"Use show default", "use"},
               {"Save as show default", "save"},
               {"Reset show default", "reset"}

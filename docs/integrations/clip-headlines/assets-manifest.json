@@ -26,6 +26,12 @@
       "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
       "origin": "Pinned htc-clip-tool 82ef5132b926fed33a80a304364fdda14335c2d5 bundled fonts; fonts/SOURCES.txt",
       "license": "OFL-1.1; accompanying family OFL and UPSTREAM-NOTICE.txt retained"
+    },
+    {
+      "path": "fonts/Inter-Regular.ttf",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "origin": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip; archive SHA256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e; extras/ttf/Inter-Regular.ttf, unmodified",
+      "license": "OFL-1.1; Inter-OFL.txt and UPSTREAM-NOTICE.txt retained"
     }
   ]
 }

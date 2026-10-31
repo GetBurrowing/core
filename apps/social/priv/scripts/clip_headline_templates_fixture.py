@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--face-model", required=True)
     parser.add_argument("--layout-matrix", action="store_true")
+    parser.add_argument("--caption-style", choices=["subtle", "phrase-pop"], default="subtle")
+    parser.add_argument("--chrome-only", action="store_true")
     args = parser.parse_args()
     ffmpeg = shutil.which("ffmpeg")
     assert ffmpeg, "FFmpeg is required"
@@ -92,13 +94,13 @@ def main():
     )
     cfg = Config()
     cfg.audio.normalize = False
-    cfg.captions.style = "phrase-pop"
+    cfg.captions.style = args.caption_style
     cfg.captions.uppercase = False
     cfg.captions.max_words = 3
-    cfg.captions.font = "Inter-SemiBold.ttf"
-    cfg.captions.font_size = 32
+    cfg.captions.font = "Inter-Regular.ttf" if args.caption_style == "subtle" else "Inter-SemiBold.ttf"
+    cfg.captions.font_size = 24 if args.caption_style == "subtle" else 32
     cfg.captions.vpos = 0.72
-    cfg.captions.safe_bottom = 0.85
+    cfg.captions.safe_bottom = 0.645 if args.caption_style == "subtle" else 0.85
     cfg.captions.safe_top = 0.08
     cfg.captions.hook_title = True
     cfg.captions.hook_title_seconds = 3.5
@@ -110,6 +112,8 @@ def main():
         ("neon-broadcast", "I'll save that for next week."),
         ("arcade-punch", "I'll save that for next week. You'll have to come back."),
     ]
+    if args.chrome_only:
+        samples = [("chrome-hook", text) for _, text in samples]
     # Deterministic, extractive selection proposals are fixture setup, never a live-model claim.
     proposal = Candidate(
         id="opening-layout-fixture",
@@ -147,6 +151,9 @@ def main():
             "voice_revision": "8-provisional",
         },
         "logo_sha256": digest(args.logo),
+        "caption_style": args.caption_style,
+        "caption_font_size": 24 if args.caption_style == "subtle" else 32,
+        "caption_font_sha256": digest(FONTS_DIR / ("Inter-Regular.ttf" if args.caption_style == "subtle" else "Inter-SemiBold.ttf")),
         "font_sha256": digest(FONTS_DIR / "Anton-Regular.ttf"),
         "timing": {"title_exit_s": 3.5, "entrance_s": 0.2, "exit_s": 0.25},
         "python": sys.executable,
@@ -194,7 +201,8 @@ def main():
         return raw
 
     clean_raw = decoded(clean)
-    for style, text in samples:
+    for sample_index, (style, text) in enumerate(samples):
+        name = f"{style}-{sample_index}" if args.chrome_only else style
         assert not hooks.check_variant(
             text, "", "selection", evidence, names=[], original=evidence
         ).problem
@@ -208,20 +216,20 @@ def main():
             look=cfg.captions,
             font_path=FONTS_DIR / "Anton-Regular.ttf",
         )
-        track = out / (style + ".mov")
+        track = out / (name + ".mov")
         captions.render_caption_track(
             words,
             track,
             width=w,
             height=h,
-            style="phrase-pop",
+            style=args.caption_style,
             config=cfg,
             fonts_dir=FONTS_DIR,
             clip_start=start,
             clip_dur=duration,
             hook_title=text,
         )
-        video = out / (style + ".mp4")
+        video = out / (name + ".mp4")
         render.render_clip(
             args.source,
             video,
@@ -302,7 +310,7 @@ def main():
                     "-frames:v",
                     "1",
                     "-y",
-                    str(out / f"{style}-{index}.png"),
+                    str(out / f"{name}-{index}.png"),
                 ],
                 check=True,
             )
@@ -315,6 +323,7 @@ def main():
         receipt["samples"].append(
             {
                 "template": style,
+                "name": name,
                 "text": text,
                 "font_size": spec["size"],
                 "lines": [[word for _, word in line] for line in spec["lines"]],

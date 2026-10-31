@@ -4,7 +4,7 @@ defmodule Platform.Social.ClipHeadlines do
   Wording remains in a private, content-addressed runner artifact, never a mutable review pointer.
   Historical snapshots without provenance.headline remain unknown.
   """
-  @renderer "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+  @renderer "f431778cf240645868f620ebc1624264549431dca18834bde424b0343180ed79"
   @logo "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f"
   @font "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab"
 
@@ -41,6 +41,12 @@ defmodule Platform.Social.ClipHeadlines do
            "assets" => %{
              "logo_sha256" => @logo,
              "font_sha256" => @font,
+             "caption_font_sha256" =>
+               "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+             "packaging_assets_sha256" =>
+               "47cb88ddee9a8c1d25884cca3e6362b3cbc61e78d9a914728de6c22028524122",
+             "subtle_renderer_sha256" =>
+               "f0ad451b76f12b79b1b4aaa644b98f0bedbafd8e2281c4c914d9b0cd67bd1b51",
              "provenance" =>
                "official HowToComputer_JR channel; assets-manifest.json v1; HTC use only; Anton OFL-1.1"
            },
