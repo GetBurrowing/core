@@ -4,6 +4,18 @@ Stage 3 distinguishes three measurements: selected-profile readiness, lossless
 source-project availability, and accepted production completion. The first does
 not establish either of the latter two.
 
+The first real local finalize also exposed a missing Linux shots face backend
+despite a 15/0/0 doctor. See `reframe-backend/README.md` and the failed-local-render
+receipt. Restoring the original detector and its actual readiness check must
+precede retry. The original producer's supported profile export/config get also
+proves renderer preferences omitted by the initial bare USER-profile handoff:
+fallback center within **shots** mode, caption safe-top 0.04, and speech target
+-16 LUFS. Restore these through supported USER-profile import only after verifying
+the unchanged bare-profile precondition; preserve publishing disabled, runtime
+model/backend/privacy settings and built-in profiles. The separate
+`original-profile-receipt.json` records that measured restoration. This is not a
+switch to center framing mode or permission to choose a different layout.
+
 The serving host initially had no mapping for clip
 `01a18600-7076-7000-9194-80a4cc5daefd`. The original producer's ClipMap, read under
 its lock, binds that clip to candidate `c8bedfe6da`. Its original upload receipt

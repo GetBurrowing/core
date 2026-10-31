@@ -1,0 +1,17 @@
+{
+  "task_id": "01a18eb4-1d04-7000-a0eb-60dd5c747a59",
+  "stage": 3,
+  "operator_message_id": "01a18f5e-f547-7000-bd18-a9bd07d1ff9f",
+  "purpose": "Restore the original producer's renderer preferences through the selected USER profile; preserve shots mode and current runtime model/backend/privacy settings.",
+  "original_producer_evidence": "Supported profile export and config get for htc-episode-ges6, independently compared with how-to-computer through the original executable.",
+  "selected_profile": "burrow-01a147e8-6687-7000-9fd3-3d8544f6839c",
+  "precondition": {"bytes": 28, "sha256": "252a19ad5a86e5e3fa546a777ce80f9f7f5a4825d8e43e5c5517f1f314fea1fb", "bare_extends_how_to_computer": true, "no_concurrent_change": true},
+  "procedure": {"idle": true, "runner_lock_held": true, "private_backup_export_exit": 0, "supported_profile_import_exit": 0, "profile_validate_exit": 0, "generated_by": "qualified helper.profile_toml", "builtin_modified": false, "temporary_file_removed": true},
+  "installed_profile_sha256": "d5076bd2dba61e123ae450e7317e95a5cf19ce82f788bef913aee5120138029b",
+  "restored_original_renderer_keys": {"reframe.fallback": {"before": "fit", "after": "center"}, "captions.safe_top": {"before": 0.14, "after": 0.04}, "audio.target_lufs": {"before": -14.0, "after": -16.0}, "publish.enabled": {"after": false}},
+  "unchanged": {"reframe.mode": "shots", "transcription.model": "large-v3", "brain.backend": "ollama", "brain.ollama_model": "gemma3:12b", "privacy.mode": "local"},
+  "selected_deep_doctor": {"exit": 0, "pass": 16, "warn": 0, "fix": 0},
+  "not_a_switch_to_center_mode": true,
+  "actual_render_verified": false,
+  "production_completion": false
+}
