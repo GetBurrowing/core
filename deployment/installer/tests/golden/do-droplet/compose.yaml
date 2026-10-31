@@ -26,6 +26,7 @@ services:
     environment:
       APP_URL: "https://burrow-01a0d69d.test"
       FILES_SERVICE_URL: "http://files-service:8200"
+      MEMORY_SERVICE_INGEST_TIMEOUT_MS: "2700000"
       MEMORY_SERVICE_URL: "http://memory-service:8100"
       NATIVE_AGENT_LOGIN: "api_key"
       OIDC_CLIENT_ID: "suite-core"
@@ -81,11 +82,11 @@ services:
       retries: 5
   embeddings:
     container_name: "embeddings"
-    image: "ghcr.io/ggml-org/llama.cpp:server"
+    image: "ghcr.io/ggml-org/llama.cpp:server@sha256:b32890309c1a33a534a01b0b461e953dc2c5a6bac20213abcf48e22847a19c85"
     restart: "unless-stopped"
     command:
       - "-m"
-      - "/models/Qwen3-Embedding-0.6B-f16.gguf"
+      - "/models/Qwen3-Embedding-0.6B-Q8_0.gguf"
       - "--embedding"
       - "--pooling"
       - "last"
@@ -94,16 +95,17 @@ services:
       - "--port"
       - "8188"
       - "-c"
-      - "32768"
+      - "8192"
       - "-np"
-      - "4"
+      - "1"
       - "--no-kv-unified"
       - "-b"
-      - "8192"
+      - "1024"
       - "-ub"
-      - "8192"
+      - "1024"
       - "-t"
-      - "6"
+      - "2"
+    mem_limit: "1974m"
     volumes:
       - "./models:/models:ro"
     healthcheck:
@@ -131,7 +133,12 @@ services:
     env_file:
       - "secrets.env"
     environment:
+      MEMORY_CHUNK_MAX_TOKENS: "200"
+      MEMORY_CHUNK_OVERLAP_TOKENS: "25"
       MEMORY_EMBEDDING_BACKEND: "http"
+      MEMORY_EMBEDDING_MAX_BATCH_TOKENS: "200"
+      MEMORY_EMBEDDING_MAX_CONCURRENCY: "1"
+      MEMORY_EMBEDDING_MAX_INPUT_TOKENS: "200"
       MEMORY_EMBEDDING_MODEL: "embeddings"
       MEMORY_EMBEDDING_URL: "http://embeddings:8188"
       MEMORY_HOST: "0.0.0.0"
@@ -140,7 +147,7 @@ services:
       core-postgres:
         condition: "service_healthy"
       embeddings:
-        condition: "service_started"
+        condition: "service_healthy"
   pocket-id:
     container_name: "pocket-id"
     image: "ghcr.io/pocket-id/pocket-id:v2.18.0"

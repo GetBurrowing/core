@@ -339,6 +339,7 @@ defmodule PlatformWeb.AdminInstallsLive do
   defp create_error({:invalid, :owner_email}), do: "Owner email doesn't look like an address."
   defp create_error({:invalid, :region}), do: "Pick one of the listed regions."
   defp create_error({:invalid, :size}), do: "Pick one of the listed sizes."
+  defp create_error({:invalid, :size_unsupported}), do: "This server size isn't supported yet."
 
   defp create_error({:invalid, :size_unavailable}),
     do: "That server size isn't available in this region right now. Pick another region."

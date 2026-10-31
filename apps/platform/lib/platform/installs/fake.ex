@@ -162,6 +162,35 @@ defmodule Platform.Installs.Fake do
     if elapsed?({install.id, running}), do: :ok, else: {:wait, :fake_delay}
   end
 
+  @doc """
+  Script the next `memory_ready/2` answers for every install: a list of
+  `:ok | :wait`, consumed one per probe and repeated from the start when it
+  runs out (so `[:ok, :wait]` flaps forever, as an embeddings crash loop
+  does). With no script, memory is ready once the final step's fake delay
+  has passed, like `https_health/1`.
+  """
+  def script_memory(answers) when is_list(answers) do
+    put(:memory_script, {answers, 0})
+    :ok
+  end
+
+  @impl Platform.Installs.Probe
+  def memory_ready(install, _static_api_key) do
+    case :ets.lookup(@table, :memory_script) do
+      [{_, {[_ | _] = answers, n}}] ->
+        put(:memory_script, {answers, n + 1})
+        count("memory_ready")
+
+        case Enum.at(answers, rem(n, length(answers))) do
+          :ok -> :ok
+          _ -> {:wait, {:memory, "unavailable"}}
+        end
+
+      _ ->
+        if elapsed?({install.id, "final"}), do: :ok, else: {:wait, :fake_delay}
+    end
+  end
+
   @impl Platform.Installs.Bootstrap
   def admin_link(install, _auth_host, _secrets) do
     if take_failure("final"),

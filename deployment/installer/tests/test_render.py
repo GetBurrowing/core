@@ -73,10 +73,13 @@ GOLDEN_CASES = {
     ),
     # One-click DigitalOcean droplet (task 01a10315 stage 1); test_droplet.py covers the rest.
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
+    # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
+    "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
 }
 # images.source = "registry" cases need a (fake) pull credential to render.
 GOLDEN_REGISTRY_AUTH = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
+    "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -99,6 +102,13 @@ MEMORY_EXPECTED_IDENTIFIERS = {
     "MEMORY_HOST",
     "MEMORY_PORT",
     "10-memory.sql",
+    # The 4 GB local-embeddings profile (task 01a18f76, registry.EMBEDDINGS_PROFILES).
+    "MEMORY_CHUNK_MAX_TOKENS",
+    "MEMORY_CHUNK_OVERLAP_TOKENS",
+    "MEMORY_EMBEDDING_MAX_BATCH_TOKENS",
+    "MEMORY_EMBEDDING_MAX_INPUT_TOKENS",
+    "MEMORY_EMBEDDING_MAX_CONCURRENCY",
+    "MEMORY_SERVICE_INGEST_TIMEOUT_MS",
 }
 
 
@@ -204,6 +214,17 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_do_droplet(self):
         self.check_golden("do-droplet")
+
+    def test_golden_do_droplet_8gb(self):
+        self.check_golden("do-droplet-8gb")
+
+    def test_do_droplet_8gb_fixture_differs_only_in_size_tier(self):
+        small, medium = load(GOLDEN_CASES["do-droplet"]), load(GOLDEN_CASES["do-droplet-8gb"])
+        self.assertEqual(
+            (small["install"]["size_tier"], medium["install"]["size_tier"]), ("small", "medium")
+        )
+        medium["install"]["size_tier"] = "small"
+        self.assertEqual(small, medium)
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES
@@ -835,7 +856,8 @@ class HealthcheckPortTest(unittest.TestCase):
 
     def test_embeddings_healthcheck_probes_its_listen_port(self):
         svc = registry.SERVICES["embeddings"]
-        port = svc.command[svc.command.index("--port") + 1]
+        command = svc.command_for(registry.Ctx(manifest_from(EXAMPLE)))
+        port = command[command.index("--port") + 1]
         self.assertEqual(svc.healthcheck, ["CMD", "curl", "-f", f"http://localhost:{port}/health"])
 
 
