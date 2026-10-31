@@ -419,13 +419,20 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           </span>
           <span class="flex min-w-0 flex-1 flex-col">
             <span class="truncate text-[15px] text-base-content">{person.name}</span>
-            <span :if={state != "unknown"} class="text-[13px] text-subtle">{state}</span>
-          </span>
-          <span :if={person.you?} data-role="members-you" class="text-[13px] text-subtle">
-            you
-          </span>
-          <span :if={person.admin?} data-role="members-admin-badge" class="text-[13px] text-subtle">
-            admin
+            <%!-- The words ride the meta line, not the row's trailing edge: in the
+                 narrow desktop popover a trailing "you · admin · Last admin" plus
+                 the toggle squeezed the name to nothing (task 01a19355 stage 3). --%>
+            <span class="flex flex-wrap gap-x-2 text-[13px] text-subtle">
+              <span :if={state != "unknown"}>{state}</span>
+              <span :if={person.you?} data-role="members-you">you</span>
+              <span :if={person.admin?} data-role="members-admin-badge">admin</span>
+              <span
+                :if={@can_manage_roles? and person.admin? and @admin_count <= 1}
+                data-role="members-last-admin"
+              >
+                Last admin
+              </span>
+            </span>
           </span>
           <.role_toggle
             :if={@can_manage_roles?}
@@ -495,31 +502,27 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   attr(:myself, :any, required: true)
 
   # The server refuses a last-admin demote regardless (`Chat.set_member_role/4`);
-  # the disabled state and hint only say why the button does nothing.
+  # the disabled state (and the row's "Last admin" word) only say why the
+  # button does nothing.
   defp role_toggle(assigns) do
     ~H"""
-    <span class="flex shrink-0 items-center gap-2">
-      <span :if={@last_admin?} data-role="members-last-admin" class="text-[13px] text-subtle">
-        Last admin
-      </span>
-      <button
-        type="button"
-        phx-click="members_set_role"
-        phx-value-participant_id={@person.participant_id}
-        phx-value-role={if @person.admin?, do: "member", else: "admin"}
-        phx-target={@myself}
-        data-role="members-role-toggle"
-        disabled={@last_admin?}
-        aria-label={
-          if @person.admin?,
-            do: "Remove #{@person.name} as admin",
-            else: "Make #{@person.name} an admin"
-        }
-        class="btn btn-ghost btn-xs min-h-11 min-w-11 text-base-content lg:min-h-0 lg:min-w-0"
-      >
-        {if @person.admin?, do: "Remove admin", else: "Make admin"}
-      </button>
-    </span>
+    <button
+      type="button"
+      phx-click="members_set_role"
+      phx-value-participant_id={@person.participant_id}
+      phx-value-role={if @person.admin?, do: "member", else: "admin"}
+      phx-target={@myself}
+      data-role="members-role-toggle"
+      disabled={@last_admin?}
+      aria-label={
+        if @person.admin?,
+          do: "Remove #{@person.name} as admin",
+          else: "Make #{@person.name} an admin"
+      }
+      class="btn btn-ghost btn-xs min-h-11 min-w-11 shrink-0 text-base-content lg:min-h-0 lg:min-w-0"
+    >
+      {if @person.admin?, do: "Remove admin", else: "Make admin"}
+    </button>
     """
   end
 
