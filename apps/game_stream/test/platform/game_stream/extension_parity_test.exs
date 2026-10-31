@@ -407,8 +407,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a18b35 adds only meeting_triage_file.action_items.schema.
     # Measured on the test rig at 539c5084d. Removing that schema must recover the
     # preceding literal pins, guarding against accepting unrelated drift.
-    @previous_tool_digest_off "7aca2e98981962a2c77f4967f5fa429fa995c4baceb0d30ded53e9ce335645fe"
-    @previous_tool_digest_on "c5fa92a1117a86778d813e4da43fc88e836ed61381c9f73bea5755a4ab732850"
+    # Re-pinned by task 01a19355 stage 2: `space_create` gains the optional
+    # `admin_user_ids` property and the prose documenting it ("Human users are
+    # not added" is gone), so both tool-definition digests move. Names and
+    # bundles are unchanged. Measured by CI on the task branch (0794dc52e),
+    # PR #65.
+    @previous_tool_digest_off "b958dd013e97043d9c4842e0ed764821cb4eb08eb36beb2cee64d31cbf0d819d"
+    @previous_tool_digest_on "724743df0c8e05175b004b7c9dcd8c1fe54f9fb9deeff3cb1ca9671ecfbc7536"
     @main_tool_digest_off "f351660cb459f8db49c009dfec2f41eecd086ec100e22acaeea5ea0731e51f3a"
     @main_tool_digest_on "f2edd70600750225f13f1935ca1569e87bde18a1765aa69174b01a242e9fe34e"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
