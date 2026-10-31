@@ -51,7 +51,8 @@ defmodule Platform.Social.ClipLook do
   """
 
   @presets ~w(bold-pop podcast-clean speaker-color)
-  @styles ~w(plain phrase-pop karaoke)
+  @styles ~w(plain phrase-pop karaoke subtle)
+  @templates ~w(legacy chrome-hook neon-broadcast arcade-punch)
   @fonts ["Anton", "Inter Black", "Inter SemiBold", "Georgia Bold"]
   @reframes ~w(shots splits fit)
 
@@ -95,6 +96,23 @@ defmodule Platform.Social.ClipLook do
 
   @doc "Renderer-supported caption styles; independent of legacy visual presets."
   def styles, do: @styles
+
+  def headline_templates, do: @templates
+
+  @doc "Explicit opt-in show defaults. Existing and queued clip looks are never rewritten."
+  def chrome_hook_defaults(look \\ %{}) do
+    look =
+      Map.put(
+        look || %{},
+        "title",
+        Map.drop((look || %{})["title"] || %{}, ~w(emphasis emphasis_text))
+      )
+
+    merge(look, %{
+      "title" => %{"template" => "chrome-hook", "enabled" => true, "secs" => 3.5},
+      "cap" => %{"style" => "subtle"}
+    })
+  end
 
   def caption_style(look), do: get_in(look || %{}, ["cap", "style"]) || "phrase-pop"
 
@@ -156,6 +174,25 @@ defmodule Platform.Social.ClipLook do
     do: unless(num?(v) and v > 0 and v < 1, do: "vpos must be between 0 and 1")
 
   defp cap_error(k, _), do: "#{k} is not a look key"
+
+  defp title_error("template", v),
+    do: unless(v in @templates, do: "template is unsupported")
+
+  defp title_error("enabled", v), do: bool_error("enabled", v)
+
+  defp title_error("emphasis", v),
+    do:
+      unless(
+        is_list(v) and length(v) <= 100 and Enum.all?(v, &(is_integer(&1) and &1 >= 0)) and
+          length(Enum.uniq(v)) == length(v),
+        do: "emphasis must be unique nonnegative word positions"
+      )
+
+  defp title_error("emphasis_text", v),
+    do:
+      unless(is_binary(v) and String.length(v) <= 500,
+        do: "emphasis_text must be at most 500 characters"
+      )
 
   defp title_error("font", v), do: font_error(v)
 
@@ -256,6 +293,12 @@ defmodule Platform.Social.ClipLook do
         end
       end)
 
+    mapped =
+      case get_in(delta || %{}, ["title", "enabled"]) do
+        enabled when is_boolean(enabled) -> Map.put(mapped, "captions.hook_title", enabled)
+        _ -> mapped
+      end
+
     %{"mapped" => mapped, "unmapped" => Enum.sort(unmapped)}
   end
 
@@ -291,6 +334,11 @@ defmodule Platform.Social.ClipLook do
   defp translate("cap.hl", "none"), do: :unmapped
   defp translate("cap.hl", v), do: {:mapped, [{"captions.highlight_color", v}]}
   defp translate("cap.vpos", v), do: {:mapped, [{"captions.vpos", v}]}
+
+  defp translate("title.template", _), do: {:mapped, []}
+  defp translate("title.enabled", v), do: {:mapped, [{"captions.hook_title", v}]}
+  defp translate("title.emphasis", _), do: {:mapped, []}
+  defp translate("title.emphasis_text", _), do: {:mapped, []}
 
   defp translate("title.secs", v),
     do: {:mapped, [{"captions.hook_title_seconds", v}, {"captions.hook_title", true}]}

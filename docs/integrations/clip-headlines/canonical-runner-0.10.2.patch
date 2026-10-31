@@ -1,0 +1,61 @@
+--- a/burrow-clip-runner.md
++++ b/burrow-clip-runner.md
+@@ -5 +5 @@
+-**Helper version: 0.10.1 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
++**Helper version: 0.10.2 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+@@ -37 +37,17 @@
+-## Branded headline templates (helper 0.10.1)
++## Real CLI review application (helper 0.10.2)
++
++A refreshed review export is not proof its exact bytes have been applied.
++Before headline preparation the canonical helper explicitly applies that export
++through `clip review --apply` with the same disposable combined profile. It never
++forges a digest or bypasses approval. The stricter fixture changes refreshed
++bytes and refuses preparation until those exact bytes are applied. Both doctor
++checks, private content receipts and caption/music/closing cleanup remain.
++Install the pinned Linux prerequisite patch/model from the Core installer for
++Linux shots rendering; no fallback to blurred fit. Template framing reserves
++headroom for the whole camera shot using measured face bounds and the existing
++zoom cap. Impossible headroom fails explicitly, and legacy framing is unchanged.
++Content-free CLI failures expose only finite HEADLINE layout/face/asset codes,
++so the helper need not capture private stderr to show actionable failures.
++These changes do not restart a production worker or publish any clips.
++
++## Branded headline templates (helper 0.10.2)
+@@ -154 +170 @@
+-Canonical helper SHA256 `f15a7976f12c4e2d369693d5eae15a354806003affc899ad85284d585b18f5ec`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++Canonical helper SHA256 `b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
+@@ -240 +256 @@
+-Pinned sha256 of `clip_runner.py` 0.10.1: `f15a7976f12c4e2d369693d5eae15a354806003affc899ad85284d585b18f5ec`
++Pinned sha256 of `clip_runner.py` 0.10.2: `b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c`
+@@ -395 +411 @@
+-VERSION = "0.10.1"
++VERSION = "0.10.2"
+@@ -2009,0 +2026,4 @@
++            # A refreshed export may differ from the exact bytes last applied.
++            # Apply it through the normal review gate before prepare-review;
++            # never forge its digest or treat an exported approval as applied.
++            runner.clip("headline_review_apply", ["review", str(project), "--apply", *profile_args], fraction=0.745)
+@@ -2419,0 +2440,4 @@
++            if os.environ.get("FAKE_REVIEW_REFRESH"):
++                applied = d / "applied.toml"
++                if not applied.exists() or applied.read_bytes() != path.read_bytes():
++                    die("HEADLINE_REVIEW_NOT_APPLIED")
+@@ -2494,0 +2519,4 @@
++        if os.environ.get("FAKE_REVIEW_REFRESH"):
++            import re
++            text = re.sub(r"(?m)^# refreshed export .*\n", "", text)
++            text += "\n# refreshed export " + str(time.time_ns()) + "\n"
+@@ -2859,0 +2888 @@
++        ["review", proj, "--apply", "--profile", f"{P}-job-job-01"],
+@@ -4118,0 +4148,10 @@
++
++
++def test_refreshed_export_is_applied_before_prepare(shim, state_dir, monkeypatch):
++    monkeypatch.setenv("FAKE_REVIEW_REFRESH", "1")
++    client = first_new_clip(shim, state_dir)
++    calls = shim.calls()
++    prepare = next(i for i, call in enumerate(calls) if call["argv"][:2] == ["hooks", "prepare-review"])
++    assert calls[prepare-1]["argv"][0] == "review"
++    assert "--apply" in calls[prepare-1]["argv"]
++    assert client.named("complete") and not client.named("fail")

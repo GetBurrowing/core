@@ -1,0 +1,302 @@
+{
+  "task_id": "01a18ef6-f0aa-7000-84b2-0dbea407507a",
+  "plan": 2,
+  "stage": 1,
+  "implementation_commit": "40e08619b02f080f0195331b94c6ee2e5b2582e7",
+  "created_at": "2026-10-31T03:31:10.106031+00:00",
+  "runtime": "isolated-linux-runtime",
+  "versions": {
+    "python": "3.14.4",
+    "elixir": "1.20.4",
+    "otp": "28.1",
+    "ffmpeg": "8.0.1-3ubuntu2"
+  },
+  "source_base": "5b60f5e43a0316d0ae385f3fc2f2a9025f697fe4",
+  "helper_version": "0.10.3",
+  "helper_sha256": "0bf1d3ee8522cb208ba48d7536d37a9d5cd25d22d339925a5f062c6cba271249",
+  "skill_sha256": "f6c2e03a75d2e642d29cf0ba0571b2235ff7e9e5fa70a8f7a7c1b881a939b03f",
+  "published_skill": {
+    "id": "01a1679e-a21f-7000-a752-99ae62a783da",
+    "updated_at": "2026-10-31T03:10:46.492654Z",
+    "action": "updated"
+  },
+  "published_skill_byte_equals_archive": true,
+  "shared_skill_concurrent_change_checked": true,
+  "upstream": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "caption_core": "d17048339c6cbbe95794ad748393c4724dffb410",
+  "patches": {
+    "htc-headline-review-v1.patch": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
+    "htc-headline-templates-v1.patch": "596f16ff58090f3ac308146e8f1ac5f9b5ff16c5ca924744f97055d310ba7a8d",
+    "htc-headline-linux-prerequisites-v1.patch": "c4b33484a78d70d9ba1ff6f7a711c7e79faafe6151ea126ccc14cebfef9918b7"
+  },
+  "caption_prerequisite_patch_sha256": "37596cefadf68872e36ce12b7ccec6c5ec6d158b882bf1924164b460c5e59e9f",
+  "assets_manifest_sha256": "14d8ffe90af8a6011673b0490a7cf00ef481f684c53f5b4691e93a0714573e3e",
+  "official_logo_sha256": "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f",
+  "inter_regular_sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+  "font_license": "OFL-1.1; unmodified Inter4.1 release bytes; source/archive hash in fonts/SOURCES.txt",
+  "imported_modules": {
+    "captions": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/captions.py",
+      "sha256": "d6af491e8be18616a4304d2ef55d2177986891aa73941233a107b42925440622"
+    },
+    "cli": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/cli.py",
+      "sha256": "ed129d25838c721222fff2aaeab7d7fb308eeacb15064dc36f94a41f5e528482"
+    },
+    "headline_templates": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "f431778cf240645868f620ebc1624264549431dca18834bde424b0343180ed79"
+    },
+    "reframe": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/reframe.py",
+      "sha256": "7db058c1312dad20afc67d2291bad39d37ef4636eabb6cc99fee216a2186c169"
+    },
+    "shots": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/shots.py",
+      "sha256": "df26a73d56c7cfe7c295b711a6e2781bb514f5a1aadb5a82a024a1ab17e2dd49"
+    },
+    "pipeline": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/pipeline.py",
+      "sha256": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88"
+    },
+    "opencv_faces": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/opencv_faces.py",
+      "sha256": "907189949e0c387df4eae75b4e64f01e8b04d4056ac7b575bdb58500360cf523"
+    },
+    "packaging_assets": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/packaging_assets.py",
+      "sha256": "47cb88ddee9a8c1d25884cca3e6362b3cbc61e78d9a914728de6c22028524122"
+    },
+    "subtle_captions": {
+      "path_relative_to_install": "clip-agent/src/clip_agent/subtle_captions.py",
+      "sha256": "f0ad451b76f12b79b1b4aaa644b98f0bedbafd8e2281c4c914d9b0cd67bd1b51"
+    }
+  },
+  "actual_private_import_paths_verified_inside_install": true,
+  "release_sources_byte_equal_to_rendered_sources": true,
+  "private_install_receipt_sha256": "fe7334cd9dc010f05ecd2cdfdb9763a74b2a3c9b9ef82f9d6ae9c8744632b9b0",
+  "cache": {
+    "lifetime": "one CLI process; no persistent cache",
+    "accounted_budget_bytes": 67108864,
+    "max_entries": 256,
+    "file_identity": [
+      "device",
+      "inode",
+      "size",
+      "mtime_ns",
+      "ctime_ns"
+    ],
+    "derived_keys": [
+      "asset/font content digest",
+      "dimensions",
+      "template revision",
+      "text",
+      "validated emphasis",
+      "config"
+    ],
+    "copy_on_return_images": true,
+    "warm_pinned_hash_check": true,
+    "same_path_replacement_with_restored_mtime_rejected": true
+  },
+  "captions": {
+    "style": "subtle",
+    "font": "Inter Regular",
+    "size_at_960px": 24,
+    "baseline_size_at_960px": 32,
+    "reduction_percent": 25,
+    "white": true,
+    "shadow_opacity": 0.35,
+    "outline": false,
+    "pill": false,
+    "word_highlight": false,
+    "single_line": true,
+    "unfit_or_unsupported_text": "explicit failure; no omission or tiny fallback"
+  },
+  "samples": [
+    {
+      "name": "chrome-hook-0",
+      "template": "chrome-hook",
+      "wording_sha256": "7fec909b661b79213df2ee49f9f3034e3441019120ec5c9438852e427fecd03a",
+      "wording_characters": 10,
+      "line_word_counts": [
+        2
+      ],
+      "title_font_size": 53,
+      "video_sha256": "2cf2fac3f5901bdcfe66f18b3e76935af0264b82298de87db53b010b20cd3a51",
+      "decoded_30hz_samples": 300,
+      "hold_diff": 13.88999914266118,
+      "post_exit_max_diff": 1.8628922325102881
+    },
+    {
+      "name": "chrome-hook-1",
+      "template": "chrome-hook",
+      "wording_sha256": "725b6ab58611c1e16455b4075636500f592cc33c8b6d2bba4604cf79d01f0e15",
+      "wording_characters": 29,
+      "line_word_counts": [
+        5,
+        1
+      ],
+      "title_font_size": 36,
+      "video_sha256": "1360779692eafaf5cff60a880f0540dc51f5a1ce3a2c3d9cd3aefdc6cdfc0aed",
+      "decoded_30hz_samples": 300,
+      "hold_diff": 15.639497599451303,
+      "post_exit_max_diff": 1.8743527091906722
+    },
+    {
+      "name": "chrome-hook-2",
+      "template": "chrome-hook",
+      "wording_sha256": "36083f057ce6c25976dc360495ddef64d126525c5636f486b4c576cec382090a",
+      "wording_characters": 55,
+      "line_word_counts": [
+        6,
+        5
+      ],
+      "title_font_size": 32,
+      "video_sha256": "cee4e1c4d8d7cc264f24975e0f32b8eaef624acaed6691b219ad89feddd2217f",
+      "decoded_30hz_samples": 300,
+      "hold_diff": 20.61741469478738,
+      "post_exit_max_diff": 1.8889810528120714
+    }
+  ],
+  "sample_source_sha256": "a56d9f934de436211d92c2e9a5688cd9b6c8f0c52527d25c6c3d3b7f5fd66d91",
+  "original_project_unchanged": true,
+  "sample_timing": {
+    "title_exit_s": 3.5,
+    "entrance_s": 0.2,
+    "exit_s": 0.25
+  },
+  "encoded_video": {
+    "width": 540,
+    "height": 960,
+    "fps": "24000/1001",
+    "frames": 240,
+    "duration_s": 10.01
+  },
+  "timing_measurement": "300 explicit30Hz resampled delivered-frame samples plus300 alpha frames per output; not300 encoded MP4 frames",
+  "fixture_policy": {
+    "boundary": "hooks.generate_variants",
+    "fixture_selection_proposals": true,
+    "live_model_generation": false,
+    "voice_revision": "8-provisional"
+  },
+  "evidence_canvas": {
+    "title": "HTC v2: subtle captions, Chrome Hook defaults and actual samples",
+    "kind": "stack",
+    "revision": 1,
+    "canvas_id": "01a18fef-0482-7000-a94a-16aa1ebf4827",
+    "view_url": "https://burrow.kobo-ai.com/canvases/01a18fef-0482-7000-a94a-16aa1ebf4827"
+  },
+  "pre_change_canvas_captures": {
+    "title": "HTC v2 pre-change reference canvas captures",
+    "kind": "stack",
+    "revision": 1,
+    "canvas_id": "01a18fdf-8573-7000-9c3f-15ea6f285dde",
+    "view_url": "https://burrow.kobo-ai.com/canvases/01a18fdf-8573-7000-9c3f-15ea6f285dde"
+  },
+  "sample_attachments": [
+    {
+      "name": "chrome-hook-0.mp4",
+      "id": "01a18fee-b191-7000-a3dd-f91ba46c45da",
+      "url": "/chat/attachments/01a18fee-b191-7000-a3dd-f91ba46c45da"
+    },
+    {
+      "name": "chrome-hook-1.mp4",
+      "id": "01a18fee-b31a-7000-83c9-7621fc654757",
+      "url": "/chat/attachments/01a18fee-b31a-7000-83c9-7621fc654757"
+    },
+    {
+      "name": "chrome-hook-2.mp4",
+      "id": "01a18fee-b4a4-7000-a9e6-295dccfb6528",
+      "url": "/chat/attachments/01a18fee-b4a4-7000-a9e6-295dccfb6528"
+    }
+  ],
+  "browser": {
+    "final_url": "http://127.0.0.1:4491/m/social?tab=clips&view=review",
+    "page_title": "Social",
+    "viewports": [
+      1440,
+      375
+    ],
+    "subtleSelected": true,
+    "chromeDefaultSaved": true,
+    "defaultReset": true,
+    "playerRetained": true,
+    "actionableFitFailure": true,
+    "errors": []
+  },
+  "tests": {
+    "social_serial_full": {
+      "passed": 1571,
+      "failed": 0,
+      "max_cases": 1,
+      "log_sha256": "fc418665b5ebda48bffc30e6b1005c5f96493d630449718ec4389b8fa0f4e1ea"
+    },
+    "social_final_focused": {
+      "passed": 30,
+      "failed": 0,
+      "log_sha256": "e6cefdacb8ef509ca32d8041ce44d5d44de8e2b382f845ff742295cb4a068351"
+    },
+    "renderer_release_focused": {
+      "passed": 106,
+      "failed": 0,
+      "log_sha256": "4fc29daa5e6437046d79eec7238556a8020345b53741c9bc134ba4eaf4f5f862"
+    },
+    "helper_final_full": {
+      "passed": 180,
+      "failed": 0,
+      "log_sha256": "99aec0a96336c5fdb94418773c248e3dcc3dc39a9f1c0d8fe5e4e0736c783031"
+    },
+    "helper_byte_materialized_focused": {
+      "passed": 34,
+      "failed": 0,
+      "log_sha256": "46872ccea4e483987f4ecbdb08e2cda50ae22959ccc867f27f8f73333f8d683b"
+    },
+    "upstream_full_before_registration_expectation_corrections": {
+      "passed": 3531,
+      "failed": 6,
+      "skipped": 20,
+      "log_sha256": "04825e54a3557efca1cc81ac6c0d3fdf7afa0219881d75eaba771d0a04bcf647",
+      "introduced_expectations_fixed": [
+        "tests/test_models.py::test_caption_style_values",
+        "tests/test_prefs_schema.py::test_choices_are_values_the_config_accepts"
+      ],
+      "remaining_preexisting_failures": [
+        "tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+        "tests/test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[edited]",
+        "tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[unnormalised]"
+      ],
+      "note": "Legacy geometry/EOF/audio failures were reproduced and documented in plan v1. Full upstream is not green. The two new registration expectations are corrected, and final focused tests include them."
+    }
+  },
+  "nonpasses": [
+    "First Social run reused visual fixture DB and hit count contamination; excluded from passing evidence.",
+    "Full parallel Social run1570/1571 failed a music-picker test at DB checkout after108ms under concurrent load. It remains recorded as a flake; serial1571 success does not erase it.",
+    "First full upstream invocation from repository root could not import namespace tests; reran from exact installed clip-agent cwd with explicit source identity assertion.",
+    "Initial full renderer target caught strict old caption-style enumeration; corrected expectation includes subtle while retaining all previous styles."
+  ],
+  "mutation": {
+    "change": "Isolated copy: replace headline render's assets.cached(key, paint, ...).copy() with paint().copy(); source unchanged test test_identical_key_loads_font_logo_effects_once",
+    "expected": "second call must not repaint effects",
+    "observed": "effects.call_count became2; unchanged test required1",
+    "exit": 1,
+    "restored_pass": true,
+    "mutant_log_sha256": "40b5e1e9c6a67ca377fffc6bd692513906e53b334dc0d488a0ee75844bf544a6",
+    "restored_log_sha256": "423b1d0e014eb1eab96f4420f7b344c2615be505dd574b756ac884826ca74f2d"
+  },
+  "lint": {
+    "ruff": "all renderer source, touched renderer tests, fixture, installer and materializer pass",
+    "format": "five new/rewritten Python modules/tests plus modified Elixir files checked",
+    "elixir_compile_warnings_as_errors": "passed",
+    "git_diff_check": "passed"
+  },
+  "default_scope": "Explicit supported show-default action for future clips; current/published/queued versions unchanged. Production activation awaits code deployment and serving renderer qualification.",
+  "no_production_installation": true,
+  "no_publication_or_approval_mutation": true,
+  "draft_pr_retained_unmerged": "https://github.com/GetBurrowing/core/pull/57",
+  "design_deviations": [],
+  "remaining_scope": [
+    "Accepted real new-clip/regenerate generation under unchanged evidence policy remains mandatory in next stage",
+    "Muted-closing measurement correction and final clean-install/identity qualification remain in subsequent stages"
+  ]
+}

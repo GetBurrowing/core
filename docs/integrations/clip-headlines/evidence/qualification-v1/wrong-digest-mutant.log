@@ -1,0 +1,103 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_________ test_real_contract_profile_and_private_content[chrome-hook] __________
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc43efb60>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and0/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x711cc422dba0>
+name = 'chrome-hook'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+>       client = first_new_clip(shim, state_dir, headline_template=contract(name))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py:38:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc43efb60>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and0/state')
+payload = {'headline_template': {'version': 1, 'revision': 1, 'template': 'chrome-hook', 'renderer_sha256': 'b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84', ...}, 'in_s': 305.0, 'out_s': 340.0}
+
+    def first_new_clip(shim, state_dir, **payload):
+        """A done new_clip for clip-job-01 (leaves the clip mapping in state.json)."""
+        payload.setdefault("in_s", 305.0)
+        payload.setdefault("out_s", 340.0)
+        client = FakeJobClient(jobs=[make_job("job-01", "new_clip", **payload)])
+>       assert run(client, state_dir)["status"] == "done"
+E       AssertionError: assert 'failed' == 'done'
+E
+E         - done
+E         + failed
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_stage2.py:36: AssertionError
+________ test_real_contract_profile_and_private_content[neon-broadcast] ________
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc4a89010>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and1/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x711cc44235c0>
+name = 'neon-broadcast'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+>       client = first_new_clip(shim, state_dir, headline_template=contract(name))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py:38:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc4a89010>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and1/state')
+payload = {'headline_template': {'version': 1, 'revision': 1, 'template': 'neon-broadcast', 'renderer_sha256': 'b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84', ...}, 'in_s': 305.0, 'out_s': 340.0}
+
+    def first_new_clip(shim, state_dir, **payload):
+        """A done new_clip for clip-job-01 (leaves the clip mapping in state.json)."""
+        payload.setdefault("in_s", 305.0)
+        payload.setdefault("out_s", 340.0)
+        client = FakeJobClient(jobs=[make_job("job-01", "new_clip", **payload)])
+>       assert run(client, state_dir)["status"] == "done"
+E       AssertionError: assert 'failed' == 'done'
+E
+E         - done
+E         + failed
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_stage2.py:36: AssertionError
+_________ test_real_contract_profile_and_private_content[arcade-punch] _________
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc4229400>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and2/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x711cc535b1d0>
+name = 'arcade-punch'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+>       client = first_new_clip(shim, state_dir, headline_template=contract(name))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py:38:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+shim = <conftest.shim.<locals>.Shim object at 0x711cc4229400>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-123/test_real_contract_profile_and2/state')
+payload = {'headline_template': {'version': 1, 'revision': 1, 'template': 'arcade-punch', 'renderer_sha256': 'b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84', ...}, 'in_s': 305.0, 'out_s': 340.0}
+
+    def first_new_clip(shim, state_dir, **payload):
+        """A done new_clip for clip-job-01 (leaves the clip mapping in state.json)."""
+        payload.setdefault("in_s", 305.0)
+        payload.setdefault("out_s", 340.0)
+        client = FakeJobClient(jobs=[make_job("job-01", "new_clip", **payload)])
+>       assert run(client, state_dir)["status"] == "done"
+E       AssertionError: assert 'failed' == 'done'
+E
+E         - done
+E         + failed
+
+rig/htc-template-s4/runner-digest-mutant/tests/test_stage2.py:36: AssertionError
+=========================== short test summary info ============================
+FAILED rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[chrome-hook]
+FAILED rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[neon-broadcast]
+FAILED rig/htc-template-s4/runner-digest-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[arcade-punch]
+3 failed, 11 deselected in 1.23s

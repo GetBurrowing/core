@@ -204,6 +204,27 @@ defmodule PlatformWeb.SocialClipAppearance do
   defp message(:job_in_flight), do: "A render is already running. Wait for it to finish."
   defp message(_), do: "This version cannot be changed. Reload and try again."
 
+  defp render_failure(error) do
+    code = if is_binary(error), do: error |> String.split(":", parts: 2) |> hd(), else: nil
+
+    case code do
+      "CAPTION_LAYOUT_SHORTEN_TEXT" ->
+        "A caption word cannot fit readably. Shorten it with the caption correction controls and render again. Your previous video is unchanged."
+
+      "CAPTION_GLYPH_UNSUPPORTED" ->
+        "A caption character is unsupported by this font. Correct that caption and render again. Your previous video is unchanged."
+
+      "CAPTION_LAYOUT_UNSAFE" ->
+        "The caption cannot fit inside the safe area. Adjust the caption or choose another style. Your previous video is unchanged."
+
+      "CAPTION_CLI_UNSUPPORTED" ->
+        "The runner does not support this caption style. Install the qualified renderer and retry. Your previous video is unchanged."
+
+      _ ->
+        "Render failed. Your previous video is unchanged. Check that the runner has the original project or source and selected audio, then try Render preview again."
+    end
+  end
+
   @impl true
   def render(assigns) do
     assigns =
@@ -225,6 +246,7 @@ defmodule PlatformWeb.SocialClipAppearance do
         <button
           :for={
             {style, label, sample} <- [
+              {"subtle", "Subtle", "A smaller, quiet caption"},
               {"plain", "Plain", "A clean lower caption"},
               {"phrase-pop", "Phrase pop", "SHORT PHRASES"},
               {"karaoke", "Word highlight", "Follow each word"}
@@ -290,7 +312,7 @@ defmodule PlatformWeb.SocialClipAppearance do
         class="text-xs text-error"
         data-role="caption-failure"
       >
-        Render failed. Your previous video is unchanged. Check that the runner has the original project or source and selected audio, then try Render preview again.
+        {render_failure(@attempt.error)}
       </p>
     </section>
     """

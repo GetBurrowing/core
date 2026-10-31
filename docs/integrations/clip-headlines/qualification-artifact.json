@@ -1,0 +1,430 @@
+{
+  "task_id": "01a18ef6-f0aa-7000-84b2-0dbea407507a",
+  "stage": 4,
+  "runtime": "isolated-linux-runtime",
+  "core_base": "213dfea083bd8027d0427707475378e6e46692ba",
+  "upstream": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "helper_version": "0.10.2",
+  "helper_sha256": "b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c",
+  "skill_sha256": "b3ff5a5018792177aa11f1d3b122af3868b55a77b51d0d2519c14ac4134d4f55",
+  "skill_updated_at": "2026-10-31T00:17:32.248017Z",
+  "skill_concurrent_changes_checked": true,
+  "patch_sha256": {
+    "htc-headline-review-v1.patch": "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
+    "htc-headline-templates-v1.patch": "55dbb8927f37b0f969ea38e0bb8abb9b7167a7cd2acb3d068ee2b3ff18b0c493",
+    "htc-headline-linux-prerequisites-v1.patch": "f6cf1043f9e454d290d74741a970d9ed62f650237a5eea6f13fe7c19f50b3f68"
+  },
+  "installer_sha256": "e77611cd4be1c17d222e8fb658105158525da4ef15c1d049766f2553652b2c0a",
+  "fixture_sha256": "c800d7afc7f71133984f7a6e1a0fbd1db0a9eb6be65dd96e22194e4be6509d92",
+  "tests": {
+    "helper_full": 175,
+    "materialized_focused": 34,
+    "social_full": 1570,
+    "social_focused": 60,
+    "renderer_installer": {
+      "passed": 147,
+      "skipped": 2,
+      "deselected_known_eof": 1
+    },
+    "layout_audio_guards": 4,
+    "layout_cases": 15,
+    "actual_cli_renders": 12
+  },
+  "full_upstream": {
+    "passed": 3516,
+    "skipped": 20,
+    "failed": 7,
+    "collected": 3543,
+    "status": "non_green_before_final_padding_cache_key_correction",
+    "new_model_cache_key_failure": "fixed; unchanged installer test passes in final147",
+    "remaining": "legacy one-pixel hook geometry, EOF timeout, variable four audio-metric cases; audio bytes unchanged"
+  },
+  "lint": {
+    "changed": "configured Ruff and formatting pass; Elixir formatter/compiler pass",
+    "full_helper": "14 inherited findings (3 helper,11 fixture) exactly match0.10.1 baseline code/message/file; zero introduced",
+    "full_renderer": "known inherited caption prerequisite test_dynamic_captions I001 remains; touched renderer modules/tests pass"
+  },
+  "source": {
+    "source_sha256": "a56d9f934de436211d92c2e9a5688cd9b6c8f0c52527d25c6c3d3b7f5fd66d91",
+    "source_span": [
+      1502,
+      1504
+    ],
+    "original_candidate_id": "facb5784c2",
+    "original_candidate_span": [
+      1488.6,
+      1541.28
+    ],
+    "original_project_unchanged": true
+  },
+  "decoded": [
+    {
+      "name": "chrome-edit",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "neon-broadcast",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "arcade-punch",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "queued-chrome-replay",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "mutable-edit",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-plain",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-karaoke",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-type-on",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-focus-word",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "caption-editorial-punch",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "disabled",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "speech_codec_match": null,
+      "face_checks": 0,
+      "title_face_checks": 0
+    },
+    {
+      "name": "music-closing",
+      "frames": 90,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "3.003000",
+        "nb_read_frames": "72"
+      },
+      "speech_correlation": 0.1786939058241149,
+      "speech_codec_match": {
+        "correlation": 0.9983583300818193,
+        "delay_ms": 1.0,
+        "gain": 0.9976143836975098,
+        "closing_bed_share": 0.9617941975593567
+      },
+      "face_checks": 60,
+      "title_face_checks": 30
+    }
+  ],
+  "matrix": [
+    {
+      "template": "chrome-hook",
+      "case": "short",
+      "error": null,
+      "sha256": "f28227432e79c88013678604ba8744c086f1fb29142a72be8cb798d8d1b40dbf"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "long",
+      "error": null,
+      "sha256": "b53bd27937b6e61de72a36e4e4ff6c08b5078b59cdf2993bad39d4e120710c1f"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unicode",
+      "error": null,
+      "sha256": "eae1cd5bf40da252e8b5ba5b02bab8f9a73ce203e6e49bd327f1641c4664632e"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "short",
+      "error": null,
+      "sha256": "55772c879368c9f6955d3b80b7e3ae7cee0662d35b4c2e1aeb71b03b8ee4ea7d"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "long",
+      "error": null,
+      "sha256": "c3b6dd42dcde0dc5899cf8273c2209020019d527731efe7eb1eb9ce33f9a84ac"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unicode",
+      "error": null,
+      "sha256": "ac28141b1a928ab2fc816c526a56d179219aa73ba4a60af4aa425d1d7072d587"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    },
+    {
+      "template": "arcade-punch",
+      "case": "short",
+      "error": null,
+      "sha256": "1b47a56599ff277ce8240fc03c2cf5b2ea4596dc4c778b327f3925a4d49a8768"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "long",
+      "error": null,
+      "sha256": "95062ecd3ac63f28360a4977d9cd32492457575281b540db9607ce719ef893ea"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unicode",
+      "error": null,
+      "sha256": "730195577d1b255cc8c9f2e47657f2205d687ebadab47479bb3a689d1e316cff"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    }
+  ],
+  "snapshot_replay": {
+    "receipt": "real-cli-receipt.json",
+    "old_choice": "chrome-hook",
+    "wording_and_default_changed": true,
+    "old_video_bytes_identical": true
+  },
+  "fresh_clean_install_smoke": {
+    "verified_existing_outputs": false,
+    "negative_probes": [
+      {
+        "name": "unsafe-fit",
+        "code": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+        "upload": false
+      },
+      {
+        "name": "wrong-asset",
+        "code": "HEADLINE_ASSET_MISMATCH",
+        "upload": false
+      }
+    ],
+    "renders": 2
+  },
+  "full_cli_evidence": {
+    "actual_renders_completed": 12,
+    "decoded_outputs_rechecked_after_harness_corrections": true,
+    "receipt_marks_reuse": true
+  },
+  "mutations": [
+    {
+      "mutation": "omit template profile application",
+      "unchanged_test": "test_real_contract_profile_and_private_content[each of3 styles]",
+      "outcome": "killed by literal profile assertions after protocol completion; not counted as before-upload proof"
+    },
+    {
+      "mutation": "force wrong expected logo digest in asset check",
+      "unchanged_test": "same3 happy cases",
+      "outcome": "killed before finalize/upload; restored full175 and materialized34 pass"
+    }
+  ],
+  "earlier_nonpasses": [
+    "Fresh install lacked packaged Linux faces: existing local adapter/model now pinned.",
+    "Native source is24000/1001; harness now distinguishes encoded48 frames from60 resampled timing samples.",
+    "Delivered-frame face top0.286 failed unchanged0.29 opening exclusion: guard tightened with2% source-height padding, final verified span1502\u20131504.",
+    "AAC mixed pass has1ms phase shift; independent2ms-bounded/notched speech guard also rejects12.5ms wrong-source shift.",
+    "Closing mute is independent of background music: final tail is checked for the selected220Hz bed without continuing speech."
+  ],
+  "live_generation": {
+    "successful_generation_claimed": false,
+    "optional_prior_attempt": "new-clip headline_prepare failed on thin4s context; direct policy diagnostic HEADLINE_OUTPUT_UNSUPPORTED; no claim upload or prompt/evidence bypass",
+    "protocol_consumer_successes": "covered by helper/Social tests"
+  },
+  "evidence_canvas": "01a18f6a-a5b4-7000-96df-08e80d81608c",
+  "attachments": {
+    "contact_sheet": "01a18f69-e733-7000-9b65-457d3c485df8",
+    "chrome": "01a18f69-e762-7000-8aab-1c12731cde20",
+    "neon": "01a18f69-e78c-7000-a685-3ed0b3f7b4c8",
+    "arcade": "01a18f69-e7b2-7000-87a1-54c53dee6604",
+    "disabled": "01a18f69-e7d9-7000-b216-16d20eaf88fb",
+    "music_closing": "01a18f69-e803-7000-9bfe-3af937351940"
+  },
+  "no_production_install": true,
+  "no_publication": true,
+  "no_original_source_mapping_overwrite": true,
+  "no_approval_mutation": true,
+  "design_deviations": "none in application UI; source qualification span/face guard documented, canvases are evidence only",
+  "clean_install_equivalence": "Whitespace-clean zero-context packaging reinstalled into operator-release; all seven actual imported module hashes exactly equal the real-video-qualified release-renderer installation.",
+  "original_log_sha256": {
+    "upstream-full.log": "670373a3c1c52c5272894a075dffe4306438a9d1c6b38657649774175c2f8cec",
+    "helper-final.log": "3fe40166dfb1b4a793702ca8d154fc3d7cc73b24173a71e1ecf5909783e3b5ad",
+    "social-full.log": "235e03ac4feb981cdd20992b84fbac6d1243f2501d8de91f7723040d412ff1f1",
+    "digest-mutant.log": "d9f3371d21f02321c8ed773322929e188c5a8e99905e17ab6f3d31ef6e19557c",
+    "template-mutant.log": "980e827bf02caeb7856e5f15b4596e8190e85f8114047ef17ef053b55c83e8a5"
+  },
+  "log_format": "Committed evidence log trailing whitespace trimmed; originals retain above SHA256 values.",
+  "python": "3.14.4",
+  "ffmpeg": "ffmpeg version 8.0.1-3ubuntu2 Copyright (c) 2000-2025 the FFmpeg developers",
+  "uv": "uv 0.13.6 (x86_64-unknown-linux-gnu)",
+  "requirements_sha256": "de778cea24a669ffdf8f5e061985f136035cdb736c4aacf0dc5222aca721dbf0",
+  "asset_manifest_sha256": "2b731e27773a653b935a68d801d1411b91caa5058d35bc5b62d9def419574ba1"
+}

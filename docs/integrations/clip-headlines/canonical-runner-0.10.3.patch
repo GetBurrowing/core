@@ -1,0 +1,244 @@
+--- canonical-runner-0.10.2.md
++++ canonical-runner-0.10.3.md
+@@ -2,9 +2,13 @@
+ 
+ Runs Burrow Clip Studio jobs on a machine that has the `clip` CLI (htc-clip-tool 0.9.0+) installed. Burrow never runs `clip` itself. A human enqueues manual jobs; automatic episode discovery enqueues episode jobs. This runner claims each job, drives `clip`, uploads the render to Burrow Files, and completes or fails the job through the five job tools.
+ 
+-**Helper version: 0.10.2 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+-
+-
++**Helper version: 0.10.3 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
++
++
++
++## Subtle captions and content caches (helper 0.10.3)
++
++Explicit `cap.style=subtle` is independent of the title. It requires the exact new caption source, packaging cache and subtle renderer hashes, and pinned Inter Regular bytes. Missing support fails before finalize/upload. New template snapshots bind these dependencies and the caption font; prior snapshots remain immutable and require their compatible installed renderer. Process-local render caches are bounded at64MiB/256 entries and verify file identity/pinned hashes before completed-raster reuse.
+ 
+ ## Headline integration (helper 0.4.0)
+ 
+@@ -34,7 +38,7 @@
+ 
+ The three-pick fake-CLI case independently pins exact review.toml headlines, one process, three finalizes, prepare/apply/check-applied ordering, content-free completion and no approval/schedule/publisher calls. Removing the actual helper `_apply_headline` invocation makes the unchanged literal review.toml assertion fail (all three headline fields become absent), exit 1; restoring it returns exit 0. This is helper protocol evidence, not live CLI/model provisioning or production upload evidence. The helper source remains 0.5.0; this update adds fixture coverage and corrects its installation digest.
+ 
+-## Real CLI review application (helper 0.10.2)
++## Real CLI review application (helper 0.10.3)
+ 
+ A refreshed review export is not proof its exact bytes have been applied.
+ Before headline preparation the canonical helper explicitly applies that export
+@@ -50,7 +54,7 @@
+ so the helper need not capture private stderr to show actionable failures.
+ These changes do not restart a production worker or publish any clips.
+ 
+-## Branded headline templates (helper 0.10.2)
++## Branded headline templates (helper 0.10.3)
+ 
+ Social supports an explicit per-clip `look.title.enabled=false` appearance rerender.
+ It forces `captions.hook_title=false` in the same disposable profile, preserves
+@@ -167,7 +171,7 @@
+ 
+ The single helper requests `social_clip_job_source(job_id, asset="music")`; forward it through MCP like every other request. Core takes the asset ONLY from the persisted job, checks claimer/open status plus current project/org/finalized audio, and returns a 15-minute Files URL. Never supply another file id, save the URL, or echo it. The bridge deletes its private reply file. The helper validates returned identity/project/type/size, downloads to a 0700 job directory with 0600 audio bytes, bounds streamed bytes to declared size and 25 MB, and gives only the disposable local path to a temporary user profile's `music.path`. `music.enabled` and `music.level_db` use upstream MusicConfig; speech loudness, ducking, speech margin and fades stay renderer-owned. No FFmpeg mixer in Burrow or this helper. Track, partial download and derived profile are removed on success/failure; downloads receive no agent token and signed URLs never enter CLI argv/env, journal/state or complete/fail. The runner also strips BURROW_TOKEN/BURROW_API_TOKEN and CF access credentials from child environments. Muting retains the asset/gain in Core and downloads nothing.
+ 
+-Canonical helper SHA256 `b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++Canonical helper SHA256 `0bf1d3ee8522cb208ba48d7536d37a9d5cd25d22d339925a5f062c6cba271249`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
+ 
+ ## Closing video (helper 0.8.0)
+ 
+@@ -253,7 +257,7 @@
+ 5. The upload token is the `token` key of your agent credentials file. Export it only into the `run` process's environment, as `CLIP_RUNNER_TOKEN`, together with `CLIP_RUNNER_BASE_URL`, your Burrow base URL (https). Never echo the token.
+ 6. Optional: install yt-dlp, or set `CLIP_RUNNER_YTDLP`, to fetch episodes by `source_url`.
+ 
+-Pinned sha256 of `clip_runner.py` 0.10.2: `b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c`
++Pinned sha256 of `clip_runner.py` 0.10.3: `0bf1d3ee8522cb208ba48d7536d37a9d5cd25d22d339925a5f062c6cba271249`
+ 
+ ## The loop (you are the only MCP caller)
+ 
+@@ -408,7 +412,7 @@
+ from pathlib import Path
+ from typing import Any, Protocol
+ 
+-VERSION = "0.10.2"
++VERSION = "0.10.3"
+ 
+ KINDS = ("new_clip", "rerender", "save_default", "episode")
+ RESULT_KEYS = (
+@@ -434,7 +438,7 @@
+ BASE_PROFILE = "how-to-computer"
+ LEGACY_CAPTION_STYLES = ("plain", "phrase-pop", "karaoke")
+ DYNAMIC_CAPTION_STYLES = ("type-on", "focus-word", "editorial-punch")
+-CAPTION_STYLES = LEGACY_CAPTION_STYLES + DYNAMIC_CAPTION_STYLES
++CAPTION_STYLES = LEGACY_CAPTION_STYLES + DYNAMIC_CAPTION_STYLES + ("subtle",)
+ # Pinned actual imported renderer sources, not the CLI's distribution label.
+ CAPTION_RENDERER_SHA256 = "9074e59c4c38ddcfafd804f66cd72958cb3e28e3a992426c10e0446de53dbdd4"
+ CAPTION_TEMPORAL_SHA256 = "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+@@ -443,7 +447,7 @@
+ def _qualify_caption_style(runner, style):
+     if style not in CAPTION_STYLES:
+         raise ClipError("CAPTION_STYLE_UNSUPPORTED", "captions")
+-    if style in DYNAMIC_CAPTION_STYLES:
++    if style in DYNAMIC_CAPTION_STYLES or style == "subtle":
+         info = runner.clip("caption_capability", ["version", "--json"])
+         renderer = info.get("caption_renderer") or {}
+         styles = info.get("caption_styles")
+@@ -451,11 +455,18 @@
+                 info["caption_treatments"] != 1 or
+                 not isinstance(styles, list) or
+                 not all(isinstance(s, str) for s in styles) or
+-                not set(CAPTION_STYLES).issubset(styles) or
++                not set(LEGACY_CAPTION_STYLES + DYNAMIC_CAPTION_STYLES).issubset(styles) or
+                 not isinstance(renderer, dict) or
+-                renderer.get("sha256") not in (CAPTION_RENDERER_SHA256, "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603") or
++                renderer.get("sha256") not in (CAPTION_RENDERER_SHA256, "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603", "d6af491e8be18616a4304d2ef55d2177986891aa73941233a107b42925440622") or
+                 renderer.get("temporal_sha256") != CAPTION_TEMPORAL_SHA256):
+             raise ClipError("CAPTION_CLI_UNSUPPORTED", "captions")
++        if style == "subtle":
++            if "subtle" not in styles or renderer.get("sha256") != SUBTLE_CAPTION_SOURCE_SHA256:
++                raise ClipError("CAPTION_CLI_UNSUPPORTED", "captions")
++            _verify_packaging_dependencies(info)
++            font = Path(renderer.get("path", "")).parent / "fonts/Inter-Regular.ttf"
++            if not font.is_file() or hashlib.sha256(font.read_bytes()).hexdigest() != SUBTLE_FONT_SHA256:
++                raise ClipError("CAPTION_CLI_UNSUPPORTED", "captions")
+ 
+ 
+ MIN_CLIP_VERSION = (0, 9, 0)
+@@ -1819,9 +1830,27 @@
+             raise ClipError("CLOSING_CLEANUP_FAILED", "closing_cleanup") from None
+ 
+ HEADLINE_NAMES = ("chrome-hook", "neon-broadcast", "arcade-punch")
+-HEADLINE_RENDERER_SHA256 = "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
++HEADLINE_RENDERER_SHA256 = "f431778cf240645868f620ebc1624264549431dca18834bde424b0343180ed79"
++HEADLINE_PREVIOUS_RENDERER_SHA256 = "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
++PACKAGING_ASSETS_SHA256 = "47cb88ddee9a8c1d25884cca3e6362b3cbc61e78d9a914728de6c22028524122"
++SUBTLE_RENDERER_SHA256 = "f0ad451b76f12b79b1b4aaa644b98f0bedbafd8e2281c4c914d9b0cd67bd1b51"
++SUBTLE_CAPTION_SOURCE_SHA256 = "d6af491e8be18616a4304d2ef55d2177986891aa73941233a107b42925440622"
++SUBTLE_FONT_SHA256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
+ HEADLINE_LOGO_SHA256 = "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f"
+ HEADLINE_FONT_SHA256 = "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab"
++
++
++def _verify_packaging_dependencies(info):
++    dependencies = info.get("packaging_dependencies")
++    if not isinstance(dependencies, dict):
++        raise ClipError("HEADLINE_TEMPLATE_CLI_UNSUPPORTED", "headline")
++    for name, digest in (("packaging_assets", PACKAGING_ASSETS_SHA256), ("subtle_captions", SUBTLE_RENDERER_SHA256)):
++        record = dependencies.get(name)
++        if not isinstance(record, dict) or record.get("sha256") != digest or not isinstance(record.get("path"), str):
++            raise ClipError("HEADLINE_TEMPLATE_CLI_UNSUPPORTED", "headline")
++        path = Path(record["path"])
++        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
++            raise ClipError("HEADLINE_ASSET_MISMATCH", "headline")
+ 
+ 
+ def _headline_artifact_dir(runner):
+@@ -1874,7 +1903,7 @@
+             raise ValueError()
+         if (type(contract["version"]) is not int or contract["version"] != 1
+                 or contract["revision"] != 1 or contract["template"] not in ("legacy", *HEADLINE_NAMES)
+-                or contract["renderer_sha256"] != HEADLINE_RENDERER_SHA256
++                or contract["renderer_sha256"] not in (HEADLINE_RENDERER_SHA256, HEADLINE_PREVIOUS_RENDERER_SHA256)
+                 or assets["logo_sha256"] != HEADLINE_LOGO_SHA256
+                 or assets["font_sha256"] != HEADLINE_FONT_SHA256
+                 or type(seconds) not in (int, float) or not 0.5 < seconds <= 6
+@@ -1886,10 +1915,14 @@
+     renderer = info.get("headline_template_renderer")
+     if (type(info.get("headline_templates")) is not int or info["headline_templates"] != 1
+             or type(info.get("headline_review")) is not int or info["headline_review"] != 1 or not isinstance(renderer, dict)
+-            or renderer.get("sha256") != HEADLINE_RENDERER_SHA256
++            or renderer.get("sha256") != contract["renderer_sha256"]
+             or not isinstance(info.get("headline_template_names"), list)
+             or not all(n in info["headline_template_names"] for n in HEADLINE_NAMES)):
+         raise ClipError("HEADLINE_TEMPLATE_CLI_UNSUPPORTED", "headline")
++    if contract["renderer_sha256"] == HEADLINE_RENDERER_SHA256:
++        if (assets.get("packaging_assets_sha256") != PACKAGING_ASSETS_SHA256 or assets.get("subtle_renderer_sha256") != SUBTLE_RENDERER_SHA256 or assets.get("caption_font_sha256") != SUBTLE_FONT_SHA256):
++            raise ClipError("HEADLINE_TEMPLATE_CONTRACT_INVALID", "headline")
++        _verify_packaging_dependencies(info)
+     module_path = renderer.get("path")
+     if not isinstance(module_path, str):
+         raise ClipError("HEADLINE_ASSET_MISMATCH", "headline")
+@@ -5129,6 +5162,9 @@
+             'renderer_sha256': c.HEADLINE_RENDERER_SHA256,
+             'assets': {'logo_sha256': c.HEADLINE_LOGO_SHA256,
+                        'font_sha256': c.HEADLINE_FONT_SHA256,
++                       'caption_font_sha256': c.SUBTLE_FONT_SHA256,
++                       'packaging_assets_sha256': c.PACKAGING_ASSETS_SHA256,
++                       'subtle_renderer_sha256': c.SUBTLE_RENDERER_SHA256,
+                        'provenance': 'fixture authorized HTC'},
+             'timing': {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5},
+             'emphasis': emphasis or [], 'emphasis_text': text}
+@@ -5137,6 +5173,7 @@
+ def capability():
+     return {'version': '0.9.3', 'headline_review': 1, 'content_free': 2,
+             'headline_templates': 1, 'headline_template_names': list(c.HEADLINE_NAMES),
++            'packaging_dependencies': {name: {'sha256': digest, 'path': str(Path(os.environ['CLIP_TEMPLATE_TEST_MODULES']) / (name + '.py'))} for name, digest in [('packaging_assets', c.PACKAGING_ASSETS_SHA256), ('subtle_captions', c.SUBTLE_RENDERER_SHA256)]},
+             'headline_template_renderer': {'sha256': c.HEADLINE_RENDERER_SHA256, 'path': str(BUNDLE / 'headline_templates.py')}}
+ 
+ 
+@@ -5262,3 +5299,68 @@
+     assert run(client, state_dir, uploader=lambda *a: uploads.append(1))['code'] == 'APPEARANCE_RENDER_MISSING'
+     assert not uploads and not client.named('complete')
+ ````
++
++
++### `tests/test_subtle.py`
++
++````python
++"""Subtle style must forward, qualify exact modules and fail before upload."""
++import copy
++import os
++from pathlib import Path
++
++import pytest
++
++import clip_runner as c
++from conftest import FakeJobClient
++from test_dynamic_styles import CAPABILITY, caption_job
++from test_stage2 import first_new_clip, run
++
++
++def capability():
++    root = Path(os.environ["CLIP_TEMPLATE_TEST_MODULES"])
++    info = copy.deepcopy(CAPABILITY)
++    info["caption_styles"].append("subtle")
++    info["caption_renderer"].update(path=str(root / "captions.py"), sha256=c.SUBTLE_CAPTION_SOURCE_SHA256)
++    info["packaging_dependencies"] = {
++        name: {"path": str(root / (name + ".py")), "sha256": digest}
++        for name, digest in [("packaging_assets", c.PACKAGING_ASSETS_SHA256), ("subtle_captions", c.SUBTLE_RENDERER_SHA256)]
++    }
++    return info
++
++
++def test_subtle_independent_profile_and_finalize(shim, state_dir):
++    first_new_clip(shim, state_dir)
++    shim.script(version={"stdout": capability()})
++    start = len(shim.calls())
++    client = FakeJobClient(jobs=[caption_job("subtle")])
++    assert run(client, state_dir)["status"] == "done"
++    calls = shim.calls()[start:]
++    argv = next(call["argv"] for call in calls if call["argv"][0] == "finalize")
++    assert argv[argv.index("--captions") + 1] == "subtle"
++    assert any('style = "subtle"' in call.get("imported", "") for call in calls)
++    assert not any(call["argv"][0] == "process" for call in calls)
++    assert not list((shim.home / "profiles").glob("*-job-*"))
++
++
++@pytest.mark.parametrize("bad", ["old-style", "wrong-caption", "missing-dependency", "wrong-dependency"])
++def test_subtle_unsupported_never_finalize_upload_complete(shim, state_dir, bad):
++    first_new_clip(shim, state_dir)
++    info = capability()
++    if bad == "old-style":
++        info["caption_styles"].remove("subtle")
++    elif bad == "wrong-caption":
++        info["caption_renderer"]["sha256"] = "0" * 64
++    elif bad == "missing-dependency":
++        del info["packaging_dependencies"]
++    else:
++        info["packaging_dependencies"]["packaging_assets"]["sha256"] = "0" * 64
++    shim.script(version={"stdout": info})
++    start = len(shim.calls())
++    client = FakeJobClient(jobs=[caption_job("subtle")])
++    result = run(client, state_dir)
++    assert result["code"] in ("CAPTION_CLI_UNSUPPORTED", "HEADLINE_TEMPLATE_CLI_UNSUPPORTED")
++    assert not any(call["argv"][0] == "finalize" for call in shim.calls()[start:])
++    assert not client.named("complete")
++    assert not any(call[0] == "request" and call[1] == "file_add" for call in client.calls)
++````

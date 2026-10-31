@@ -1,0 +1,471 @@
+--- a/burrow-clip-runner.md
++++ b/burrow-clip-runner.md
+@@ -2,7 +2,7 @@
+ 
+ Runs Burrow Clip Studio jobs on a machine that has the `clip` CLI (htc-clip-tool 0.9.0+) installed. Burrow never runs `clip` itself. A human enqueues manual jobs; automatic episode discovery enqueues episode jobs. This runner claims each job, drives `clip`, uploads the render to Burrow Files, and completes or fails the job through the five job tools.
+ 
+-**Helper version: 0.9.2 (selected-profile readiness; preserves qualified dynamic captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
++**Helper version: 0.10.0 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+ 
+ 
+ 
+@@ -33,6 +33,65 @@
+ ## Episode mutation evidence (2026-10-28)
+ 
+ The three-pick fake-CLI case independently pins exact review.toml headlines, one process, three finalizes, prepare/apply/check-applied ordering, content-free completion and no approval/schedule/publisher calls. Removing the actual helper `_apply_headline` invocation makes the unchanged literal review.toml assertion fail (all three headline fields become absent), exit 1; restoring it returns exit 0. This is helper protocol evidence, not live CLI/model provisioning or production upload evidence. The helper source remains 0.5.0; this update adds fixture coverage and corrects its installation digest.
++
++## Branded headline templates (helper 0.10.0)
++
++This is an extension of this helper, not another runner. Stage1 actual-source
++samples precede the integration. No production install, publication or live
++model availability is implied. Keep the existing headline-review/1 voice and
++evidence policy, source/project/candidate identity and immutable base locking.
++
++- Core resolves `payload.headline_template` at enqueue. It pins template/revision,
++  template module and asset hashes/provenance, emphasis and entrance/hold/exit
++  timing. No template key keeps existing historical behavior. Explicit `legacy`
++  reverses the treatment and pins zero entrance/exit. All three branded approaches
++  remain available; no automatic winner is chosen. Profile paths are never Core
++  source data.
++- Install Core `docs/integrations/clip-headlines/install_templates.py` as documented
++  in TEMPLATES.md into a stable operator-owned location. Export
++  `CLIP_RUNNER_HEADLINE_ASSETS=/stable/renderer/headline-assets` to this helper.
++  This contains the exact authorized HTC logo and OFL fonts. Never redraw brand
++  assets, use AI title images or change the built-in how-to-computer profile.
++  The invoked CLI must report headline_templates:1, headline_review:1, all three
++  template names and the pinned imported template source digest. The helper
++  checks both bundle and actual imported renderer font bytes. An old, malformed
++  or incompatible CLI fails HEADLINE_TEMPLATE_CLI_UNSUPPORTED; missing/wrong
++  assets fail HEADLINE_ASSETS_MISSING or HEADLINE_ASSET_MISMATCH before upload.
++- The SAME disposable profile combines template/logo/timing/emphasis with caption,
++  music and closing settings. The full doctor still runs against both selected
++  and combined profiles. The caption qualifier accepts either the original
++  qualified captions module or the pinned integrated stage1 module, retaining
++  the exact temporal-module check. No running helper or operator install is
++  overwritten by this skill update.
++- Exact generated wording stays tool-local under CLIP_NO_CONTENT. After applied
++  headline verification and a fresh finalized file, write immutable private
++  `STATE/headline-content/<SHA256>.json` (directory0700/file0600). The canonical
++  JSON records wording/emphasis/source/voice revision. Core receives only
++  `headline_render.content={artifact:"sha256:<digest>",sha256:"<digest>"}` along
++  with matching template/assets/timing and final output SHA256, and
++  headline_applied:true. Core pins that receipt in render provenance.headline,
++  verifies the uploaded Files content hash and refuses the playing file as a
++  fresh output. Never put generated wording or private paths in completion.
++- These private content artifacts are permanent reproduction inputs, unlike
++  disposable profiles/requests/music/closing downloads. Back them up privately
++  with the runner state; never put them in Core memory or tickets. They contain
++  content and are deliberately excluded from startup temp cleanup. A replacement
++  worker needs the selected artifact plus original source/project mapping;
++  no latest-review or regenerated-title fallback is permitted.
++- Appearance/caption/music/closing rerenders restore the exact selected base's
++  `payload.headline_base` artifact through the existing edit/review boundary.
++  Missing/corrupt artifacts fail HEADLINE_CONTENT_MISSING/MISMATCH. Text edits
++  and regeneration retain the original policy. Explicit emphasis binds to exact
++  current wording; stale/noninteger/duplicate/out-of-range positions fail.
++  If a title's pinned timing exceeds actually applied clip bounds, fail
++  HEADLINE_TIMING_EXCEEDS_CLIP rather than silently change the snapshot.
++- A prepared receipt or picker is never render success. A stale MP4 fails the
++  existing fresh-output guard before upload. Unsafe face/layout/font/glyph or
++  too-long text remains a visible renderer failure. No blur fallback, silent
++  word omission, flashing/strobing, approval, scheduling or publication.
++- Materialize all code/test blocks byte-for-byte. Set CLIP_TEMPLATE_TEST_ASSETS
++  to Core's docs/integrations/clip-headlines directory when running test_templates.py.
++  Existing readiness, privacy, music and closing tests remain mandatory.
+ 
+ ## When to run
+ 
+@@ -84,7 +143,7 @@
+ 
+ The single helper requests `social_clip_job_source(job_id, asset="music")`; forward it through MCP like every other request. Core takes the asset ONLY from the persisted job, checks claimer/open status plus current project/org/finalized audio, and returns a 15-minute Files URL. Never supply another file id, save the URL, or echo it. The bridge deletes its private reply file. The helper validates returned identity/project/type/size, downloads to a 0700 job directory with 0600 audio bytes, bounds streamed bytes to declared size and 25 MB, and gives only the disposable local path to a temporary user profile's `music.path`. `music.enabled` and `music.level_db` use upstream MusicConfig; speech loudness, ducking, speech margin and fades stay renderer-owned. No FFmpeg mixer in Burrow or this helper. Track, partial download and derived profile are removed on success/failure; downloads receive no agent token and signed URLs never enter CLI argv/env, journal/state or complete/fail. The runner also strips BURROW_TOKEN/BURROW_API_TOKEN and CF access credentials from child environments. Muting retains the asset/gain in Core and downloads nothing.
+ 
+-Canonical helper SHA256 `0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++Canonical helper SHA256 `2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
+ 
+ ## Closing video (helper 0.8.0)
+ 
+@@ -170,7 +229,7 @@
+ 5. The upload token is the `token` key of your agent credentials file. Export it only into the `run` process's environment, as `CLIP_RUNNER_TOKEN`, together with `CLIP_RUNNER_BASE_URL`, your Burrow base URL (https). Never echo the token.
+ 6. Optional: install yt-dlp, or set `CLIP_RUNNER_YTDLP`, to fetch episodes by `source_url`.
+ 
+-Pinned sha256 of `clip_runner.py` 0.9.2: `0a5c4e0bb84c208c492682fda5b6ccb6d79d9bf306602d411362502a15e175c4`
++Pinned sha256 of `clip_runner.py` 0.10.0: `2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1`
+ 
+ ## The loop (you are the only MCP caller)
+ 
+@@ -325,7 +384,7 @@
+ from pathlib import Path
+ from typing import Any, Protocol
+ 
+-VERSION = "0.9.2"
++VERSION = "0.10.0"
+ 
+ KINDS = ("new_clip", "rerender", "save_default", "episode")
+ RESULT_KEYS = (
+@@ -344,6 +403,7 @@
+     "candidate_id",
+     "alternate_id",
+     "headline_applied",
++    "headline_render",
+ )
+ META_KEYS = ("title", "caption", "speaker", "episode_code")
+ SOURCE_LABEL = "htc-clip-tool"
+@@ -369,7 +429,7 @@
+                 not all(isinstance(s, str) for s in styles) or
+                 not set(CAPTION_STYLES).issubset(styles) or
+                 not isinstance(renderer, dict) or
+-                renderer.get("sha256") != CAPTION_RENDERER_SHA256 or
++                renderer.get("sha256") not in (CAPTION_RENDERER_SHA256, "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603") or
+                 renderer.get("temporal_sha256") != CAPTION_TEMPORAL_SHA256):
+             raise ClipError("CAPTION_CLI_UNSUPPORTED", "captions")
+ 
+@@ -1296,6 +1356,8 @@
+         return "true" if v else "false"
+     if isinstance(v, (int, float)):
+         return repr(v)
++    if isinstance(v, list) and all(type(x) is int for x in v):
++        return "[" + ", ".join(str(x) for x in v) + "]"
+     if isinstance(v, str):
+         return json.dumps(v)
+     raise ValueError("unsupported look value")
+@@ -1732,7 +1794,144 @@
+         except OSError:
+             raise ClipError("CLOSING_CLEANUP_FAILED", "closing_cleanup") from None
+ 
++HEADLINE_NAMES = ("chrome-hook", "neon-broadcast", "arcade-punch")
++HEADLINE_RENDERER_SHA256 = "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
++HEADLINE_LOGO_SHA256 = "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f"
++HEADLINE_FONT_SHA256 = "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab"
++
++
++def _headline_artifact_dir(runner):
++    path = runner.state_dir / "headline-content"
++    path.mkdir(mode=0o700, parents=True, exist_ok=True)
++    path.chmod(0o700)
++    return path
++
++
++def _restore_headline(runner, job):
++    """Restore the immutable private wording for appearance/caption/music rerenders.
++    No mutable review field may stand in for the selected base render.
++    """
++    payload = job.get("payload") or {}
++    base = payload.get("headline_base")
++    digest = base.get("sha256") if isinstance(base, dict) else None
++    if (not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
++            or base != {"sha256": digest, "artifact": "sha256:" + digest}):
++        raise ClipError("HEADLINE_CONTENT_MISSING", "headline")
++    path = _headline_artifact_dir(runner) / (digest + ".json")
++    if path.is_symlink() or not path.is_file():
++        raise ClipError("HEADLINE_CONTENT_MISSING", "headline")
++    raw = path.read_bytes()
++    if hashlib.sha256(raw).hexdigest() != digest:
++        raise ClipError("HEADLINE_CONTENT_MISMATCH", "headline")
++    try:
++        document = json.loads(raw)
++        text = document["wording"]
++        if not isinstance(text, str) or not text.strip():
++            raise ValueError()
++    except (ValueError, KeyError, TypeError):
++        raise ClipError("HEADLINE_CONTENT_MISMATCH", "headline") from None
++    # Only an in-memory copy receives private text. It never goes to MCP/state.
++    payload["headline"] = {"consumer": "edit", "requested_headline": text}
++
++
++def _headline_template_profile(runner, job, mapped):
++    contract = (job.get("payload") or {}).get("headline_template")
++    if contract is None:
++        return mapped
++    try:
++        if set(contract) != {"version", "revision", "template", "renderer_sha256", "assets", "timing", "emphasis", "emphasis_text"}:
++            raise ValueError()
++        seconds = contract["timing"]["total_s"]
++        legacy = contract["template"] == "legacy"
++        timing = {"entrance_s": 0.0 if legacy else 0.2, "hold_s": seconds if legacy else seconds - 0.45, "exit_s": 0.0 if legacy else 0.25, "total_s": seconds}
++        assets = contract["assets"]
++        indices = contract["emphasis"]
++        if not isinstance(indices, list) or any(type(i) is not int or i < 0 for i in indices) or len(set(indices)) != len(indices):
++            raise ValueError()
++        if (type(contract["version"]) is not int or contract["version"] != 1
++                or contract["revision"] != 1 or contract["template"] not in ("legacy", *HEADLINE_NAMES)
++                or contract["renderer_sha256"] != HEADLINE_RENDERER_SHA256
++                or assets["logo_sha256"] != HEADLINE_LOGO_SHA256
++                or assets["font_sha256"] != HEADLINE_FONT_SHA256
++                or type(seconds) not in (int, float) or not 0.5 < seconds <= 6
++                or contract["timing"] != timing):
++            raise ValueError()
++    except (KeyError, TypeError, ValueError, AttributeError):
++        raise ClipError("HEADLINE_TEMPLATE_CONTRACT_INVALID", "headline") from None
++    info = runner.clip("headline_template_capability", ["version", "--json"])
++    renderer = info.get("headline_template_renderer")
++    if (type(info.get("headline_templates")) is not int or info["headline_templates"] != 1
++            or type(info.get("headline_review")) is not int or info["headline_review"] != 1 or not isinstance(renderer, dict)
++            or renderer.get("sha256") != HEADLINE_RENDERER_SHA256
++            or not isinstance(info.get("headline_template_names"), list)
++            or not all(n in info["headline_template_names"] for n in HEADLINE_NAMES)):
++        raise ClipError("HEADLINE_TEMPLATE_CLI_UNSUPPORTED", "headline")
++    module_path = renderer.get("path")
++    if not isinstance(module_path, str):
++        raise ClipError("HEADLINE_ASSET_MISMATCH", "headline")
++    installed_font = Path(module_path).parent / "fonts/Anton-Regular.ttf"
++    if not installed_font.is_file() or hashlib.sha256(installed_font.read_bytes()).hexdigest() != HEADLINE_FONT_SHA256:
++        raise ClipError("HEADLINE_ASSET_MISMATCH", "headline")
++    # Exact authorized asset bundle is installed with install_templates.py.
++    # An explicit local directory is runtime configuration, never a caller URL/path.
++    bundle = Path(os.environ.get("CLIP_RUNNER_HEADLINE_ASSETS", ""))
++    if not str(os.environ.get("CLIP_RUNNER_HEADLINE_ASSETS", "")).strip():
++        raise ClipError("HEADLINE_ASSETS_MISSING", "headline")
++    for relative, digest in (("assets/htc-official-logo-crop.png", HEADLINE_LOGO_SHA256),
++                             ("fonts/Anton-Regular.ttf", HEADLINE_FONT_SHA256)):
++        path = bundle / relative
++        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
++            raise ClipError("HEADLINE_ASSET_MISMATCH", "headline")
++    if _headline_intent(job) is None:
++        _restore_headline(runner, job)
++    return {**mapped, "captions.hook_title_template": contract["template"],
++            "captions.hook_title_logo_path": str((bundle / "assets/htc-official-logo-crop.png").resolve()),
++            "captions.hook_title_logo_sha256": HEADLINE_LOGO_SHA256,
++            "captions.hook_title_seconds": seconds,
++            "captions.hook_title_emphasis": contract["emphasis"],
++            "captions.hook_title_emphasis_text": contract.get("emphasis_text") or ""}
++
++
++def _template_receipt(runner, job, project, receipt):
++    contract = (job.get("payload") or {}).get("headline_template")
++    if contract is None:
++        return None
++    if not receipt or receipt.get("status") != "applied":
++        raise ClipError("HEADLINE_TEMPLATE_NOT_APPLIED", "headline")
++    entry = ReviewFile((project / "review.toml").read_text()).by_id(runner.review_entry["id"])
++    text = entry.fields.get("headline") if entry else None
++    if not isinstance(text, str) or not text.strip():
++        raise ClipError("HEADLINE_CONTENT_MISSING", "headline")
++    indices = contract.get("emphasis")
++    if (not isinstance(indices, list)
++            or any(type(i) is not int or not 0 <= i < len(text.split()) for i in indices)
++            or len(set(indices)) != len(indices)
++            or indices and contract.get("emphasis_text") != text):
++        raise ClipError("HEADLINE_EMPHASIS_STALE", "headline")
++    document = {"version": 1, "wording": text, "emphasis": indices,
++                "voice_revision": receipt["voice_revision"], "source_id": receipt["source_id"]}
++    raw = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
++    digest = hashlib.sha256(raw).hexdigest()
++    path = _headline_artifact_dir(runner) / (digest + ".json")
++    try:
++        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
++    except FileExistsError:
++        if path.is_symlink() or path.read_bytes() != raw:
++            raise ClipError("HEADLINE_CONTENT_MISMATCH", "headline") from None
++    else:
++        with os.fdopen(fd, "wb") as stream:
++            stream.write(raw)
++            stream.flush()
++            os.fsync(stream.fileno())
++    with runner.output.open("rb") as stream:
++        output_digest = hashlib.file_digest(stream, "sha256").hexdigest()
++    return {**{k: v for k, v in contract.items() if k != "emphasis_text"},
++            "content": {"artifact": "sha256:" + digest, "sha256": digest},
++            "output_sha256": output_digest}
++
++
+ def _render(runner: Runner, job: dict, project: Path, tool_id: str | None, regenerate: bool) -> dict:
++    job = {**job, "payload": dict(job.get("payload") or {})}
+     payload = job.get("payload") or {}
+     base = _check_profile_name(payload.get("clip_user_profile"))
+     runner.clip("review", ["review", str(project), "--overwrite"], fraction=0.55)
+@@ -1747,9 +1946,10 @@
+             "profile_id": job.get("profile_id"),
+         },
+     )
++    template_mapped = _headline_template_profile(runner, job, _overrides(payload))
+     consumer = _headline_intent(job)
+     appearance = payload.get("appearance") is True
+-    mapped = dict(_overrides(payload))
++    mapped = dict(template_mapped)
+     explicit_style = ((payload.get("look") or {}).get("cap") or {}).get("style")
+     if explicit_style is not None:
+         mapped["captions.style"] = explicit_style
+@@ -1790,6 +1990,9 @@
+                 raise ClipError("REVIEW_NOT_APPLIED", "review_apply")
+             runner.review_entry.update(start=applied.start, end=applied.end,
+                                       file_stem=applied.file_stem, title=applied.fields.get("title"))
++        template = payload.get("headline_template")
++        if template and template["timing"]["total_s"] > runner.review_entry["end"] - runner.review_entry["start"]:
++            raise ClipError("HEADLINE_TIMING_EXCEEDS_CLIP", "headline")
+         if consumer:
+             receipt = _apply_headline(runner, job, project, look_profile or base, consumer)
+         render_started = time.time_ns()
+@@ -1807,9 +2010,12 @@
+         if runner.output != expected_output or runner.output.stat().st_mtime_ns < render_started:
+             raise ClipError("APPEARANCE_RENDER_MISSING" if appearance else
+                             "HEADLINE_RENDER_MISSING" if consumer else "CAPTION_RENDER_MISSING", "finalize")
++    template_receipt = _template_receipt(runner, job, project, receipt)
+     file_id = runner.uploader(runner, job)
+     result: dict[str, Any] = {"file_id": file_id, "candidate_id": tool_id}
+-    if receipt and payload.get("episode_job_id"):
++    if template_receipt:
++        result["headline_render"] = template_receipt
++    if receipt and (payload.get("episode_job_id") or template_receipt):
+         result["headline_applied"] = True
+     if receipt:
+         # Content-free receipt remains local; existing completion schema stays compatible.
+@@ -4827,3 +5033,159 @@
+     assert not client.named("request")
+ ````
+ 
++
++
++### `tests/test_templates.py`
++
++````python
++import hashlib
++import json
++import os
++from pathlib import Path
++
++import clip_runner as c
++import pytest
++from conftest import FakeJobClient, make_job
++from test_stage2 import first_new_clip, proj, rerender_job, run
++
++BUNDLE = Path(os.environ.get('CLIP_TEMPLATE_TEST_ASSETS', str(Path(__file__).resolve().parents[2] / 'docs/integrations/clip-headlines')))
++
++
++def contract(template='chrome-hook', emphasis=None, text=None):
++    return {'version': 1, 'revision': 1, 'template': template,
++            'renderer_sha256': c.HEADLINE_RENDERER_SHA256,
++            'assets': {'logo_sha256': c.HEADLINE_LOGO_SHA256,
++                       'font_sha256': c.HEADLINE_FONT_SHA256,
++                       'provenance': 'fixture authorized HTC'},
++            'timing': {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5},
++            'emphasis': emphasis or [], 'emphasis_text': text}
++
++
++def capability():
++    return {'version': '0.9.3', 'headline_review': 1, 'content_free': 2,
++            'headline_templates': 1, 'headline_template_names': list(c.HEADLINE_NAMES),
++            'headline_template_renderer': {'sha256': c.HEADLINE_RENDERER_SHA256, 'path': str(BUNDLE / 'headline_templates.py')}}
++
++
++def configure(shim, monkeypatch, **spec):
++    monkeypatch.setenv('CLIP_RUNNER_HEADLINE_ASSETS', str(BUNDLE))
++    shim.script(version={'stdout': capability()}, **spec)
++
++
++@pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
++def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
++    configure(shim, monkeypatch)
++    client = first_new_clip(shim, state_dir, headline_template=contract(name))
++    result = client.named('complete')[0][2]
++    receipt = result['headline_render']
++    assert result['headline_applied'] is True
++    assert receipt['template'] == name
++    assert receipt['timing'] == {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5}
++    artifact = state_dir / 'headline-content' / (receipt['content']['sha256'] + '.json')
++    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == receipt['content']['sha256']
++    assert json.loads(artifact.read_text())['wording'] == 'secret transcript words two'
++    assert artifact.stat().st_mode & 0o777 == 0o600
++    assert artifact.parent.stat().st_mode & 0o777 == 0o700
++    assert 'secret transcript words two' not in json.dumps(result)
++    assert 'emphasis_text' not in receipt
++    imported = [x['imported'] for x in shim.calls() if 'imported' in x]
++    assert any('hook_title_template = "' + name + '"' in x for x in imported)
++    assert not list((shim.home / 'profiles').glob('*-job-*'))
++    assert receipt['output_sha256'] == hashlib.sha256((proj(shim) / 'final/02_secret-title-two.mp4').read_bytes()).hexdigest()
++
++
++@pytest.mark.parametrize('mutation', ['missing', 'old', 'malformed', 'wrong-renderer'])
++def test_capability_refusal_never_uploads(shim, state_dir, monkeypatch, mutation):
++    configure(shim, monkeypatch)
++    info = capability()
++    if mutation == 'missing': info.pop('headline_templates')
++    if mutation == 'old': info['headline_templates'] = 0
++    if mutation == 'malformed': info['headline_template_renderer'] = []
++    if mutation == 'wrong-renderer': info['headline_template_renderer']['sha256'] = '0' * 64
++    shim.script(version={'stdout': info})
++    client = FakeJobClient(jobs=[make_job('job-01', 'new_clip', headline_template=contract())])
++    uploads = []
++    result = run(client, state_dir, uploader=lambda *args: uploads.append(1))
++    assert result['code'] == 'HEADLINE_TEMPLATE_CLI_UNSUPPORTED'
++    assert not uploads and not client.named('complete')
++
++
++def test_asset_and_emphasis_mismatch_fail_closed(shim, state_dir, monkeypatch, tmp_path):
++    configure(shim, monkeypatch)
++    monkeypatch.setenv('CLIP_RUNNER_HEADLINE_ASSETS', str(tmp_path))
++    client = FakeJobClient(jobs=[make_job('job-01', 'new_clip', headline_template=contract())])
++    assert run(client, state_dir)['code'] == 'HEADLINE_ASSET_MISMATCH'
++    assert not client.named('complete')
++
++
++def test_stale_emphasis_no_upload(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    client = FakeJobClient(jobs=[make_job('job-01', 'new_clip', headline_template=contract(emphasis=[99], text='wrong'))])
++    uploads = []
++    assert run(client, state_dir, uploader=lambda *a: uploads.append(1))['code'] == 'HEADLINE_EMPHASIS_STALE'
++    assert not uploads and not client.named('complete')
++
++
++def test_rerender_uses_immutable_content_not_mutable_review(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    first = first_new_clip(shim, state_dir, headline_template=contract())
++    receipt = first.named('complete')[0][2]['headline_render']
++    review = proj(shim) / 'review.toml'
++    review.write_text(review.read_text().replace('secret transcript words two', 'unrelated changed words'))
++    before = len(shim.calls())
++    client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
++         headline_template=contract(), headline_base=receipt['content'])])
++    assert run(client, state_dir)['status'] == 'done'
++    requests = [x['headline_request'] for x in shim.calls()[before:] if 'headline_request' in x]
++    assert requests[0]['consumer'] == 'edit'
++    assert requests[0]['requested_headline'] == 'secret transcript words two'
++    assert 'headline' not in client.jobs['job-02']['payload']
++    assert client.named('complete')[0][2]['headline_render']['content'] == receipt['content']
++
++
++def test_missing_private_content_never_substitutes_current_text(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    first_new_clip(shim, state_dir)
++    client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
++             headline_template=contract(), headline_base={'sha256': '0'*64, 'artifact': 'sha256:'+'0'*64})])
++    assert run(client, state_dir)['code'] == 'HEADLINE_CONTENT_MISSING'
++    assert not client.named('complete')
++
++
++def test_corrupted_content_is_not_replayed(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    first = first_new_clip(shim, state_dir, headline_template=contract())
++    base = first.named('complete')[0][2]['headline_render']['content']
++    (state_dir / 'headline-content' / (base['sha256'] + '.json')).write_text('{}')
++    client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
++             headline_template=contract(), headline_base=base)])
++    assert run(client, state_dir)['code'] == 'HEADLINE_CONTENT_MISMATCH'
++    assert not client.named('complete')
++
++
++def test_explicit_legacy_is_reversible_and_receipts_no_branded_motion(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    initial = first_new_clip(shim, state_dir, headline_template=contract())
++    base = initial.named('complete')[0][2]['headline_render']['content']
++    legacy = contract('legacy')
++    legacy['timing'] = {'entrance_s': 0.0, 'hold_s': 3.5, 'exit_s': 0.0, 'total_s': 3.5}
++    client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
++             headline_template=legacy, headline_base=base)])
++    assert run(client, state_dir)['status'] == 'done'
++    receipt = client.named('complete')[0][2]['headline_render']
++    assert receipt['template'] == 'legacy'
++    assert receipt['content'] == base
++    assert receipt['timing']['entrance_s'] == 0
++
++
++def test_template_receipt_never_promotes_stale_mp4(shim, state_dir, monkeypatch):
++    configure(shim, monkeypatch)
++    initial = first_new_clip(shim, state_dir, headline_template=contract())
++    base = initial.named('complete')[0][2]['headline_render']['content']
++    monkeypatch.setenv('FAKE_SKIP_RENDER', '1')
++    client = FakeJobClient(jobs=[rerender_job(base_render_id='render-fixture-1', appearance=True,
++             headline_template=contract(), headline_base=base)])
++    uploads = []
++    assert run(client, state_dir, uploader=lambda *a: uploads.append(1))['code'] == 'APPEARANCE_RENDER_MISSING'
++    assert not uploads and not client.named('complete')
++````

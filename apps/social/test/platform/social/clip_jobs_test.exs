@@ -57,6 +57,91 @@ defmodule Platform.Social.ClipJobsTest do
   defp renders(clip_id),
     do: Repo.all(from(r in ClipRender, where: r.clip_id == ^clip_id, order_by: r.rev))
 
+  test "headline contract pins defaults and requires a fresh matching content-free render receipt",
+       w do
+    {:ok, _} =
+      ClipJobs.save_show_default(w.org_id, w.profile.id, w.approver.id, %{
+        "title" => %{"template" => "chrome-hook", "secs" => 3.5}
+      })
+
+    {clip, job} = new_clip!(w)
+    contract = job.payload["headline_template"]
+    assert contract["template"] == "chrome-hook"
+
+    {:ok, _} =
+      ClipJobs.save_show_default(w.org_id, w.profile.id, w.approver.id, %{
+        "title" => %{"template" => "neon-broadcast", "secs" => 2.0}
+      })
+
+    claimed!(w, job)
+
+    assert {:error, :headline_receipt_required} =
+             ClipJobs.complete(w.scope, job.id, w.agent.id, %{file_id: w.f1.id})
+
+    digest = String.duplicate("a", 64)
+
+    receipt =
+      contract
+      |> Map.delete("emphasis_text")
+      |> Map.merge(%{
+        "content" => %{"artifact" => "sha256:" <> digest, "sha256" => digest},
+        "output_sha256" => w.f1.content_hash
+      })
+
+    assert {:error, :headline_not_applied} =
+             ClipJobs.complete(w.scope, job.id, w.agent.id, %{
+               file_id: w.f1.id,
+               headline_render: receipt
+             })
+
+    assert {:error, :headline_receipt_invalid} =
+             ClipJobs.complete(w.scope, job.id, w.agent.id, %{
+               file_id: w.f1.id,
+               headline_applied: true,
+               headline_render: Map.put(receipt, "template", "neon-broadcast")
+             })
+
+    assert {:ok, _} =
+             ClipJobs.complete(w.scope, job.id, w.agent.id, %{
+               file_id: w.f1.id,
+               headline_applied: true,
+               headline_render: receipt,
+               candidate_id: "original-candidate"
+             })
+
+    [base] = renders(clip.id)
+    assert base.provenance["headline"] == receipt
+    assert base.headline == nil
+    assert base.look["title"]["template"] == "chrome-hook"
+    assert base.source == job.payload["episode"]
+
+    {:ok, rerender} =
+      ClipJobs.enqueue_appearance(w.org_id, clip.id, w.approver.id, %{
+        base_render_id: base.id,
+        look: %{"title" => %{"template" => "arcade-punch"}}
+      })
+
+    assert rerender.payload["headline_base"] == receipt["content"]
+    assert rerender.payload["headline_template"]["template"] == "arcade-punch"
+    assert rerender.payload["candidate_id"] == "original-candidate"
+    assert renders(clip.id) == [base]
+    claimed!(w, rerender)
+
+    new_receipt =
+      rerender.payload["headline_template"]
+      |> Map.delete("emphasis_text")
+      |> Map.merge(%{"content" => receipt["content"], "output_sha256" => w.f1.content_hash})
+
+    assert {:error, :headline_render_not_fresh} =
+             ClipJobs.complete(w.scope, rerender.id, w.agent.id, %{
+               file_id: w.f1.id,
+               headline_applied: true,
+               headline_render: new_receipt
+             })
+
+    assert renders(clip.id) == [base]
+  end
+
   test "caption fix snapshots accumulate user corrections without rewriting earlier versions",
        w do
     clip = rendered_clip!(w)
