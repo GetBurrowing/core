@@ -1446,7 +1446,7 @@ defmodule PlatformWeb.SocialClipsReview do
         class="text-xs text-error"
         data-role="closing-render-failure"
       >
-        Render failed. Your previous video is unchanged.
+        {Platform.Social.ClipRenderErrors.message(@attempt)}
       </p>
     </section>
     """
@@ -1691,8 +1691,7 @@ defmodule PlatformWeb.SocialClipsReview do
             class="text-xs text-error"
             data-role="clip-headline-failure"
           >
-            Headline render failed ({@headline_attempt.code}). Your previous video is unchanged.
-            Check the clip runner, then enter a headline and try again.
+            {@headline_attempt.failure_message}
           </p>
         </section>
 

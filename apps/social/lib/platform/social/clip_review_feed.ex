@@ -176,8 +176,16 @@ defmodule Platform.Social.ClipReviewFeed do
           get_in(j.payload, ["fix", "operation"]) == "regenerate_headline"
       end)
       |> case do
-        nil -> nil
-        job -> %{id: job.id, status: job.status, code: headline_error(job.error)}
+        nil ->
+          nil
+
+        job ->
+          %{
+            id: job.id,
+            status: job.status,
+            code: headline_error(job.error),
+            failure_message: Platform.Social.ClipRenderErrors.message(job)
+          }
       end
     else
       _ -> nil

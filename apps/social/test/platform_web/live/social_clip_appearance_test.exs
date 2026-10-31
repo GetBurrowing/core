@@ -134,8 +134,8 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
         w.scope,
         j.id,
         w.agent.id,
-        "APPEARANCE_PROJECT_MISSING",
-        "private transcript secret"
+        "private transcript secret",
+        "APPEARANCE_PROJECT_MISSING"
       )
 
     render(child)
@@ -149,6 +149,108 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
              from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"),
              :count
            ) == 2
+  end
+
+  test "model failure preserves video and karaoke music draft; human retry appends a fresh job",
+       %{conn: conn, w: w} do
+    song = stored_file!(w.project, "RIFF0000WAVE #{unique()}", "Song.wav", "audio/wav")
+    child = open(conn, w)
+    choose(child, "karaoke")
+
+    child
+    |> element("[data-role='music-settings']")
+    |> render_change(%{"file_id" => song.id, "gain_db" => "-12", "muted" => "false"})
+
+    preview(child, w.base.id)
+    j = job(w)
+    {:ok, _} = ClipJobs.claim(w.scope, j.id, w.agent.id)
+
+    {:ok, closed} =
+      ClipJobs.fail(w.scope, j.id, w.agent.id, "doctor failed (model:base.en)", "CLIP_DOCTOR_FIX")
+
+    render(child)
+
+    assert has_element?(
+             child,
+             "[data-role='caption-failure']",
+             "Render could not start because the runner's transcription model is not ready. Ask the render operator to finish setup, then try Render preview again. Your previous video is unchanged."
+           )
+
+    refute has_element?(child, "[data-role='caption-failure']", "original project")
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+    assert has_element?(child, "[data-style='karaoke'][aria-pressed='true']")
+    assert has_element?(child, "#clip-music-song option[value='#{song.id}'][selected]")
+    assert has_element?(child, "#clip-music-gain[value='-12.0']")
+    refute has_element?(child, "[data-role='caption-render'][disabled]")
+    assert Repo.reload!(w.clip).render_file_id == w.file.id
+    assert Repo.reload!(w.clip).rev == 1
+    preview(child, w.base.id)
+    jobs = Repo.all(from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.kind == "rerender"))
+    assert length(jobs) == 2
+    fresh = Enum.find(jobs, &(&1.id != closed.id))
+    assert fresh.status == "queued"
+    assert fresh.payload["base_render_id"] == w.base.id
+
+    assert fresh.payload["music"] == %{
+             "file_id" => song.id,
+             "enabled" => true,
+             "level_db" => -12.0
+           }
+
+    assert fresh.payload["clip_overrides"]["mapped"]["captions.style"] == "karaoke"
+    assert Repo.reload!(closed) == closed
+  end
+
+  test "selected music errors and malicious unknown errors display safe copy", %{conn: conn, w: w} do
+    child = open(conn, w)
+    choose(child, "plain")
+    preview(child, w.base.id)
+    j = job(w)
+    {:ok, _} = ClipJobs.claim(w.scope, j.id, w.agent.id)
+
+    {:ok, _} =
+      ClipJobs.fail(
+        w.scope,
+        j.id,
+        w.agent.id,
+        "/private/song.wav?token=sk-secret\nTraceback",
+        "MUSIC_DOWNLOAD_FAILED"
+      )
+
+    render(child)
+
+    assert has_element?(
+             child,
+             "[data-role='caption-failure']",
+             "Render could not use the selected music. Choose an available song or ask the render operator to check the audio, then try Render preview again. Your previous video is unchanged."
+           )
+
+    preview(child, w.base.id)
+    fresh = Repo.one!(from(j in ClipJob, where: j.clip_id == ^w.clip.id and j.status == "queued"))
+    {:ok, _} = ClipJobs.claim(w.scope, fresh.id, w.agent.id)
+
+    {:ok, _} =
+      ClipJobs.fail(
+        w.scope,
+        fresh.id,
+        w.agent.id,
+        "/private/movie.mp4?token=sk-secret\nTraceback SOURCE_MISSING",
+        "UNRECOGNIZED"
+      )
+
+    render(child)
+    html = render(child)
+
+    assert has_element?(
+             child,
+             "[data-role='caption-failure']",
+             "Render failed. Try Render preview again. If it fails again, ask the render operator to check the job. Your previous video is unchanged."
+           )
+
+    for secret <- ["/private", "sk-secret", "Traceback", "SOURCE_MISSING"],
+        do: refute(html =~ secret)
+
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
   end
 
   test "music picker, mute/gain draft, preview and completion keep exact immutable settings", %{

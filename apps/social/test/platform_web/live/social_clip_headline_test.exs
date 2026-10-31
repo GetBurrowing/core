@@ -110,7 +110,13 @@ defmodule PlatformWeb.SocialClipHeadlineTest do
       )
 
     child = open(conn, w)
-    assert has_element?(child, "[data-role='clip-headline-failure']", "HEADLINE_UNBACKED")
+
+    assert has_element?(
+             child,
+             "[data-role='clip-headline-failure']",
+             "Render failed. Try Render preview again. If it fails again, ask the render operator to check the job. Your previous video is unchanged."
+           )
+
     refute render(child) =~ "SECRET transcript"
     assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
     submit(child, w, "Second attempt")
@@ -122,6 +128,36 @@ defmodule PlatformWeb.SocialClipHeadlineTest do
 
     assert Repo.reload!(w.clip).rev == 1
     assert Repo.aggregate(Post, :count) == 0
+  end
+
+  test "headline model preflight shares safe guidance without exposing raw diagnostics", %{
+    conn: conn,
+    w: w
+  } do
+    child = open(conn, w)
+    submit(child, w, "First attempt")
+    job = attempt(w)
+    {:ok, _} = ClipJobs.claim(w.scope, job.id, w.agent.id)
+
+    {:ok, _} =
+      ClipJobs.fail(
+        w.scope,
+        job.id,
+        w.agent.id,
+        "doctor failed (model:base.en)",
+        "CLIP_DOCTOR_FIX"
+      )
+
+    child = open(conn, w)
+
+    assert has_element?(
+             child,
+             "[data-role='clip-headline-failure']",
+             "Render could not start because the runner's transcription model is not ready. Ask the render operator to finish setup, then try Render preview again. Your previous video is unchanged."
+           )
+
+    refute render(child) =~ "CLIP_DOCTOR_FIX"
+    assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
   end
 
   test "blank, stale, foreign bases and removed approver cannot enqueue", %{conn: conn, w: w} do

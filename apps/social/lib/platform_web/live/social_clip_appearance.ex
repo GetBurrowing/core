@@ -2,7 +2,7 @@ defmodule PlatformWeb.SocialClipAppearance do
   @moduledoc "Caption appearance drafts and exact-version rerenders; never mutates a playing render."
   use PlatformWeb, :live_component
   alias Platform.Social
-  alias Platform.Social.{ClipJobs, ClipLook, ClipVersions, ClipMusic}
+  alias Platform.Social.{ClipJobs, ClipLook, ClipVersions, ClipMusic, ClipRenderErrors}
 
   @impl true
   def mount(socket) do
@@ -290,7 +290,7 @@ defmodule PlatformWeb.SocialClipAppearance do
         class="text-xs text-error"
         data-role="caption-failure"
       >
-        Render failed. Your previous video is unchanged. Check that the runner has the original project or source and selected audio, then try Render preview again.
+        {ClipRenderErrors.message(@attempt)}
       </p>
     </section>
     """

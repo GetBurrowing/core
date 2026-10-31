@@ -644,9 +644,24 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert Enum.count(jobs, &(&1.status == "queued")) == 1
     job = Enum.find(jobs, &(&1.status == "queued"))
     {:ok, _} = ClipJobs.claim(w.scope, job.id, w.agent.id)
-    {:ok, _} = ClipJobs.fail(w.scope, job.id, w.agent.id, "CLOSING_DOWNLOAD_FAILED", "safe")
+
+    {:ok, _} =
+      ClipJobs.fail(
+        w.scope,
+        job.id,
+        w.agent.id,
+        "doctor failed (model:base.en)",
+        "CLIP_DOCTOR_FIX"
+      )
+
     render(child)
-    assert has_element?(child, "[data-role=closing-render-failure]")
+
+    assert has_element?(
+             child,
+             "[data-role=closing-render-failure]",
+             "Render could not start because the runner's transcription model is not ready. Ask the render operator to finish setup, then try Render preview again. Your previous video is unchanged."
+           )
+
     assert has_element?(child, "#clip-player-#{clip.id}-r#{old.rev}")
     w.profile |> Ecto.Changeset.change(approver_user_ids: []) |> Repo.update!()
     bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
