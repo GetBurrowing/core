@@ -339,7 +339,7 @@ CASTORE_PATH = "/app/lib/castore-1.0.17/priv/cacerts.pem"
 # same sha256.
 # "q8_0" (core task 01a18f76, a declared model change for the 4 GB tier):
 # same repo and revision; the Hugging Face tree lists size 639150592 and the
-# LFS sha256 below, and `sha256sum` of the file downloaded on moon and on two
+# LFS sha256 below, and `sha256sum` of the file downloaded on the test host and on two
 # s-2vcpu-4gb droplets printed it (2026-10-31). Its vectors against f16 on 23
 # real inputs (20 chunks of the largest org page and a day's journal, 2
 # queries, 1 CJK chunk): cosine min 0.99747, mean 0.99914; both queries'
@@ -369,7 +369,7 @@ EMBEDDINGS_MODEL_SOURCE = {k: v for k, v in EMBEDDINGS_MODELS["f16"].items() if 
 # The llama.cpp server image, pinned BY DIGEST (core task 01a18f76): the
 # profiles below run -ub smaller than the largest input, which needs a build
 # whose server splits one pooled embedding across ubatches. Measured on this
-# digest (build 12004, commit 3c809f443) on moon 2026-10-31: a 5569-token
+# digest (build 12004, commit 3c809f443) on the test host 2026-10-31: a 5569-token
 # input at -ub 1024 embedded with 200; a floating tag could move to a build
 # that answers "input is too large to process" instead.
 EMBEDDINGS_IMAGE = (
@@ -382,7 +382,7 @@ EMBEDDINGS_IMAGE = (
 # own task on its own slot, so a slot (-c / -np, --no-kv-unified) must hold the
 # largest single input, never the request total.
 #
-# Before this table (memory-service defaults, measured 2026-10-31 on moon
+# Before this table (memory-service defaults, measured 2026-10-31 on the test host
 # behind a logging proxy counting with llama.cpp's own POST /tokenize): the
 # largest input was a search query at the wire clamp, embedding_max_input_tokens
 # x embedding_chars_per_token = 6000 x 3 = 18000 chars (memory-service
@@ -418,15 +418,15 @@ EMBEDDINGS_IMAGE = (
 #     which is hard-coded (memory-service embedder.py:77; make_embedder never
 #     passes one), so the request is sized to it, not the other way round
 #
-# "small" (s-2vcpu-4gb; measured 2026-10-31 on moon and on s-2vcpu-4gb
+# "small" (s-2vcpu-4gb; measured 2026-10-31 on the test host and on s-2vcpu-4gb
 # droplets 614434112, 614442358 and 614446111 in nyc1, image above):
 # - model q8_0 (a declared change from f16, see EMBEDDINGS_MODELS): f16 does
-#   not fit. At these flags f16 peaks at 2185 MiB (moon) / 2157 (droplet);
-#   q8_0 at 1645 (moon, worst-case inputs at concurrency 4) / 1639 (droplet).
+#   not fit. At these flags f16 peaks at 2185 MiB (test host) / 2157 (droplet);
+#   q8_0 at 1645 (test host, worst-case inputs at concurrency 4) / 1639 (droplet).
 # - host_ram_mb: droplet MemTotal 4009860 kB = 3915 MiB; 85% = 3327.
 # - siblings_peak_mb 1412: docker stats after 10 idle minutes with embeddings
 #   and memory-service stopped (core-platform 485, core-postgres 102,
-#   files-service 93, pocket-id 64, caddy 35), plus memory-service 209 (moon,
+#   files-service 93, pocket-id 64, caddy 35), plus memory-service 209 (test host,
 #   image sha256:24b68f10eda1) and an agent-host allowance of 425 (the
 #   reference agent-host container's cgroup memory.peak; the droplet's
 #   native agent host idled at 28). DECLARED MARGIN: with the siblings' cgroup

@@ -30,10 +30,10 @@ DO_AUTH = os.path.join(HERE, "render_fixtures", "do-droplet-registry-auth.json")
 
 sys.path.insert(0, INSTALLER)
 
-from burrow_install import registry  # noqa: E402 (after the sys.path insert)
-from burrow_install.manifest import SIZE_TIERS, load  # noqa: E402 (after the sys.path insert)
-from burrow_install.render import build  # noqa: E402 (after the sys.path insert)
-from burrow_install.validate import validate  # noqa: E402 (after the sys.path insert)
+from burrow_install import registry
+from burrow_install.manifest import SIZE_TIERS, load
+from burrow_install.render import build
+from burrow_install.validate import validate
 
 PROFILES = registry.EMBEDDINGS_PROFILES
 ROW_KEYS = {
