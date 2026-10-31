@@ -127,7 +127,7 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     view |> element("[data-role=calendar-details] button", "Edit") |> render_click()
     assert has_element?(view, "#calendar-editor h2", "Edit event")
-    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='14:00']")
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='2:00 PM']")
 
     view
     |> form("#calendar-event-form", event: %{title: "Board preparation revised"})
@@ -576,8 +576,8 @@ defmodule PlatformWeb.CalendarLiveTest do
            )
 
     # app.js `openEditor`: the end defaults to start + 30 minutes.
-    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='09:30']")
-    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='10:00']")
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='9:30 AM']")
+    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='10:00 AM']")
   end
 
   test "Week/Month, Today and prev/next move the grid", %{conn: conn} do
@@ -969,7 +969,7 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     view
     |> form("#calendar-event-form",
-      event: %{title: "Standup", date: "2026-10-29", start: "10:00", end: "09:30"}
+      event: %{title: "Standup", date: "2026-10-29", start: "10:00 AM", end: "9:30 AM"}
     )
     |> render_submit()
 
@@ -1034,5 +1034,151 @@ defmodule PlatformWeb.CalendarLiveTest do
     view |> element("#calendar-editor button", "Delete") |> render_click()
     refute has_element?(view, "#calendar-editor")
     refute has_element?(view, ".cal-ev[data-kind=native]")
+  end
+
+  # ── Typed Start/End (task 01a192d6 stage 4) ──────────────────────────────
+  #
+  # Start and End are text fields parsed by `PlatformWeb.TimeEntry`. A time
+  # with no AM/PM ("01:00") used to post "" from `type=time` and come back
+  # as "Pick a date, start and end."; it now names the field and asks for
+  # AM or PM, and writes no row.
+
+  @chicago "America/Chicago"
+  @typed_day ~D[2026-11-18]
+
+  defp chicago_utc(time),
+    do: @typed_day |> DateTime.new!(time, @chicago) |> DateTime.shift_zone!("Etc/UTC")
+
+  defp open_new_editor(conn) do
+    {:ok, view, _} = live(zoned(conn, @chicago), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+    view
+  end
+
+  defp save_typed(view, start, finish) do
+    view
+    |> form("#calendar-event-form",
+      event: %{
+        title: "Typed times",
+        date: Date.to_iso8601(@typed_day),
+        start: start,
+        end: finish,
+        repeat: "",
+        visibility: "details"
+      }
+    )
+    |> render_submit()
+  end
+
+  defp typed_day_events(scope),
+    do: Calendar.list_events(scope, ~U[2026-11-17 00:00:00Z], ~U[2026-11-20 00:00:00Z])
+
+  test "the editor keeps novalidate and renders Start/End as text", %{conn: conn} do
+    view = open_new_editor(conn)
+
+    assert has_element?(view, "#calendar-event-form[novalidate]")
+
+    for field <- ~w(start end) do
+      assert has_element?(
+               view,
+               ~s(#calendar-event-form input[name="event[#{field}]"][type="text"][placeholder="1:00 PM"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(#calendar-event-form input[name="event[#{field}]"][type="time"])
+             )
+    end
+  end
+
+  test "a Start with no AM/PM asks for it and saves nothing", %{conn: conn, scope: scope} do
+    view = open_new_editor(conn)
+
+    save_typed(view, "01:00", "2:00 PM")
+
+    assert has_element?(
+             view,
+             "#calendar-event-error",
+             "Start time is incomplete — pick AM or PM."
+           )
+
+    assert has_element?(view, "input[name='event[start]'][aria-invalid=true]")
+    assert typed_day_events(scope) == []
+
+    # Positive control on the same editor: completing the time saves.
+    save_typed(view, "1:00 PM", "2:00 PM")
+    assert [_] = typed_day_events(scope)
+  end
+
+  test "an End with no AM/PM asks for it", %{conn: conn, scope: scope} do
+    view = open_new_editor(conn)
+
+    save_typed(view, "1:00 PM", "2:00")
+
+    assert has_element?(view, "#calendar-event-error", "End time is incomplete — pick AM or PM.")
+    assert has_element?(view, "input[name='event[end]'][aria-invalid=true]")
+    assert typed_day_events(scope) == []
+  end
+
+  for {start, finish} <- [{"1pm", "2pm"}, {"1:00 PM", "2:00 PM"}, {"13:00", "14:00"}] do
+    test "#{start} to #{finish} saves 13:00-14:00 in the event's zone", %{
+      conn: conn,
+      scope: scope
+    } do
+      view = open_new_editor(conn)
+
+      save_typed(view, unquote(start), unquote(finish))
+
+      assert [event] = typed_day_events(scope)
+      assert DateTime.compare(event.starts_at, chicago_utc(~T[13:00:00])) == :eq
+      assert DateTime.compare(event.ends_at, chicago_utc(~T[14:00:00])) == :eq
+    end
+  end
+
+  test "an existing 10:07 event prefills 12-hour text and re-saves unchanged", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, event} =
+      Calendar.create_event(scope, %{
+        title: "Odd minute",
+        time_zone: @chicago,
+        starts_at: chicago_utc(~T[10:07:00]),
+        ends_at: chicago_utc(~T[11:22:00])
+      })
+
+    {:ok, view, _} = live(zoned(conn, @chicago), "/calendar")
+    render_click(view, "select", %{"id" => event.id, "kind" => "event"})
+    view |> element("[data-role=calendar-details] button", "Edit") |> render_click()
+
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='10:07 AM']")
+    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='11:22 AM']")
+
+    view |> form("#calendar-event-form") |> render_submit()
+
+    assert {:ok, saved} = Calendar.get_event(scope, event.id)
+    assert DateTime.compare(saved.starts_at, event.starts_at) == :eq
+    assert DateTime.compare(saved.ends_at, event.ends_at) == :eq
+  end
+
+  test "an all-day event ignores Start/End entirely", %{conn: conn, scope: scope} do
+    view = open_new_editor(conn)
+
+    # Raw event: the all-day form renders no Start/End inputs, so this also
+    # proves a stray unparseable time cannot block an all-day save.
+    render_submit(view, "save", %{
+      "event" => %{
+        "title" => "Away day",
+        "all_day" => "true",
+        "date" => Date.to_iso8601(@typed_day),
+        "end_date" => Date.to_iso8601(@typed_day),
+        "start" => "01:00",
+        "end" => "nonsense",
+        "repeat" => "",
+        "visibility" => "details"
+      }
+    })
+
+    assert [%{all_day: true, start_date: @typed_day}] = typed_day_events(scope)
   end
 end
