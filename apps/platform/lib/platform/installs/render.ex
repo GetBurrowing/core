@@ -68,7 +68,7 @@ defmodule Platform.Installs.Render do
 
     [install]
     name = #{q.(install.slug)}
-    size_tier = "medium"
+    size_tier = #{q.(Platform.Installs.size_tier(install.size) || "small")}
     hosted = true
     org_name = #{q.(install.business_name)}
 

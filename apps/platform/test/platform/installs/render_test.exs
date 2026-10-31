@@ -57,6 +57,37 @@ defmodule Platform.Installs.RenderTest do
     end
   end
 
+  describe "size_tier follows the droplet size (task 01a18f76)" do
+    test "s-2vcpu-4gb renders small and s-4vcpu-8gb renders medium" do
+      for {size, tier} <- [{"s-2vcpu-4gb", "small"}, {"s-4vcpu-8gb", "medium"}] do
+        toml = Render.manifest(%{install() | size: size}, "ssh-ed25519 AAAA x")
+        assert toml =~ ~s(\n[install]\nname = "baeckerei-x2k4"\nsize_tier = "#{tier}"\n)
+        assert Toml.decode!(toml)["install"]["size_tier"] == tier
+      end
+    end
+
+    test "the 4 GB default no longer renders the medium tier" do
+      toml = Render.manifest(install(), "ssh-ed25519 AAAA x")
+      refute toml =~ ~s(size_tier = "medium")
+    end
+
+    test "the parsed manifest round-trips: every table, the tier included" do
+      toml = Render.manifest(%{install() | size: "s-4vcpu-8gb"}, "ssh-ed25519 AAAA x")
+      parsed = Toml.decode!(toml)
+
+      assert parsed["install"]["size_tier"] == "medium"
+      assert parsed["install"]["name"] == "baeckerei-x2k4"
+      assert parsed["install"]["hosted"] == true
+      assert parsed["embeddings"] == %{"mode" => "local", "model_source" => "download"}
+      assert parsed["services"]["memory"] == true
+    end
+
+    test "an install whose size lost its tier renders small, the safe default" do
+      toml = Render.manifest(%{install() | size: "s-8vcpu-16gb"}, "ssh-ed25519 AAAA x")
+      assert Toml.decode!(toml)["install"]["size_tier"] == "small"
+    end
+  end
+
   defp with_auth_slug(slug) do
     previous = Application.get_env(:platform, Platform.Installs, [])
     configured = Keyword.put(previous, :registry_auth_slug, slug)
@@ -226,6 +257,9 @@ defmodule Platform.Installs.RenderTest do
     assert user_data =~ "#cloud-config"
     assert user_data =~ ~s(ROOT_ORG_NAME: "Bäckerei & Söhne")
     assert user_data =~ "ExecStartPre=/opt/burrow/bin/burrow-vapid"
+    # Task 01a18f76: the 4 GB droplet renders the "small" embeddings row.
+    assert user_data =~ ~s(- "/models/Qwen3-Embedding-0.6B-Q8_0.gguf")
+    refute user_data =~ ~s(- "32768")
     assert user_data =~ "ssh_authorized_keys:\n  - #{Jason.encode!(key)}"
     assert byte_size(user_data) < 65_536
     # Public images: no pull credential reaches the droplet.

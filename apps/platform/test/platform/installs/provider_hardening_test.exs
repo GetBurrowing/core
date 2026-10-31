@@ -112,6 +112,57 @@ defmodule Platform.Installs.ProviderHardeningTest do
     end
   end
 
+  describe "a size with no tier (task 01a18f76)" do
+    setup do
+      use_fake_backend(sizes: ["s-2vcpu-4gb", "s-8vcpu-16gb"])
+      :ok
+    end
+
+    test "is refused in plain words before any provider call; a tiered size is created" do
+      calls_before = Fake.calls()
+      rows_before = Repo.aggregate(Install, :count)
+
+      assert {:error, {:invalid, :size_unsupported}} =
+               Installs.create(admin!(), %{
+                 "business_name" => "Acme Bakery",
+                 "owner_email" => "owner@acme-bakery.example.test",
+                 "region" => "nyc1",
+                 "size" => "s-8vcpu-16gb"
+               })
+
+      # No provider call at all: not the sizes read, not a droplet POST.
+      assert Fake.calls() == calls_before
+      assert count("POST /v2/droplets") == 0
+      assert Fake.all(:droplet) == []
+      assert Repo.aggregate(Install, :count) == rows_before
+
+      # Positive control: the same request at a size with a tier is created.
+      {install, _} = create_install!(%{"size" => "s-2vcpu-4gb"})
+      assert install.size == "s-2vcpu-4gb"
+    end
+
+    test "size_tier/1 maps the two default sizes, and config can override it" do
+      assert Installs.size_tier("s-2vcpu-4gb") == "small"
+      assert Installs.size_tier("s-4vcpu-8gb") == "medium"
+      assert Installs.size_tier("s-8vcpu-16gb") == nil
+      assert Installs.size_tier(nil) == nil
+
+      put_installs_env(size_tiers: %{"s-8vcpu-16gb" => "large"})
+      assert Installs.size_tier("s-8vcpu-16gb") == "large"
+      assert Installs.size_tier("s-2vcpu-4gb") == nil
+    end
+
+    test "the default size is still the 4 GB droplet" do
+      # The shipped defaults: no test override of the sizes or the default.
+      configured = Application.get_env(:platform, Installs, [])
+      put_installs_env([])
+      Application.put_env(:platform, Installs, Keyword.drop(configured, [:sizes, :default_size]))
+      assert Installs.defaults().default_size == "s-2vcpu-4gb"
+      assert Installs.defaults().sizes == ["s-2vcpu-4gb", "s-4vcpu-8gb"]
+      assert Enum.all?(Installs.defaults().sizes, &Installs.size_tier/1)
+    end
+  end
+
   describe "a size the region does not offer" do
     setup do
       use_fake_backend()

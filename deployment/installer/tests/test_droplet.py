@@ -151,6 +151,11 @@ class DropletRenderTest(unittest.TestCase):
         drop["images"]["source"] = base["images"]["source"]
         self.assertFalse(drop["services"]["voice"])
         self.assertEqual(drop["embeddings"].pop("model_source"), "download")
+        # Task 01a18f76: the default s-2vcpu-4gb droplet is the "small" tier.
+        self.assertEqual(
+            (base["install"]["size_tier"], drop["install"]["size_tier"]), ("medium", "small")
+        )
+        drop["install"]["size_tier"] = base["install"]["size_tier"]
         self.assertEqual(base, drop)
 
 

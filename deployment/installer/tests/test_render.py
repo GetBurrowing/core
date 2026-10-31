@@ -73,10 +73,13 @@ GOLDEN_CASES = {
     ),
     # One-click DigitalOcean droplet (task 01a10315 stage 1); test_droplet.py covers the rest.
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
+    # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
+    "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
 }
 # images.source = "registry" cases need a (fake) pull credential to render.
 GOLDEN_REGISTRY_AUTH = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
+    "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -211,6 +214,17 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_do_droplet(self):
         self.check_golden("do-droplet")
+
+    def test_golden_do_droplet_8gb(self):
+        self.check_golden("do-droplet-8gb")
+
+    def test_do_droplet_8gb_fixture_differs_only_in_size_tier(self):
+        small, medium = load(GOLDEN_CASES["do-droplet"]), load(GOLDEN_CASES["do-droplet-8gb"])
+        self.assertEqual(
+            (small["install"]["size_tier"], medium["install"]["size_tier"]), ("small", "medium")
+        )
+        medium["install"]["size_tier"] = "small"
+        self.assertEqual(small, medium)
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES
