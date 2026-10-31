@@ -260,7 +260,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
     >
       <div :if={!@row} class="cal-page">
         <h2>Your meeting spaces</h2>
-        <p class="m-0 text-[13px] text-subtle">Select a live, upcoming, or past meeting.</p>
+        <%!-- v4 `<p class="muted">`: 14px with the browser's 1em block margin. --%>
+        <p class="my-[1em] text-sm text-subtle">Select a live, upcoming, or past meeting.</p>
       </div>
       <div :if={@row} class="cal-page" data-meeting-id={@row.meeting.id}>
         <.link
@@ -411,7 +412,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
               </option>
             </select>
           </label>
-          <p class="m-0 text-[13px] text-subtle">
+          <p class="m-0 text-sm text-subtle">
             Start a room now. Use Calendar to schedule a future meeting.
           </p>
           <p :if={@error} class="cal-err" role="alert">{@error}</p>

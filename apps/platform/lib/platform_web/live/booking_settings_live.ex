@@ -444,7 +444,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                 >
                   <b>{link.title}</b>
                   <small>{summary(link, @meetings_on)}</small>
-                  <small class="font-mono">/book/{link.token}</small>
+                  <small class="cal-mono">/book/{link.token}</small>
                 </button>
                 <button type="button" class={[ghost_btn(), "self-start"]} phx-click="new_link">
                   <.icon name="hero-plus" class="size-[18px]" />New link

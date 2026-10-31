@@ -420,7 +420,16 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
                "blur(var(--glass-blur)) saturate(1.4)"
 
       # A full hairline since the bar floats (stage 3); stage 1 drew border-top.
-      assert normalise(declaration(body, "border")) == "1px solid var(--color-base-300)"
+      # Its colour is prototype 01a178d2 v4's translucent `--glass-edge`
+      # (task 01a18d9f fix round 2): `--tab-bar-edge`, base-content at 8%
+      # light and 9% dark, replacing the opaque base-300 hairline.
+      assert normalise(declaration(body, "border")) == "1px solid var(--tab-bar-edge)"
+
+      edges =
+        for r <- rules, v <- declarations(r.body, "--tab-bar-edge"), do: normalise(v)
+
+      assert "color-mix(in srgb, var(--color-base-content) 8%, transparent)" in edges
+      assert "color-mix(in srgb, var(--color-base-content) 9%, transparent)" in edges
 
       # Prototype 01a178d2 v4 (task 01a18d9f fix round) supersedes task
       # 01a15f2e's no-shadow rule: the bar carries v4's glass shadow, through

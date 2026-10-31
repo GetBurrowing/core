@@ -1319,6 +1319,10 @@ body, .font-suite {
      theme_presets.css, outside any plugin block. */
   --font-sans: "Public Sans", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Prototype 01a178d2 v4 `--font-mono` (theme.js): the system mono stack the
+     calendar surfaces use for times, URLs and slot chips (task 01a18d9f fix
+     round 2). */
+  --font-mono-system: ui-monospace, SFMono-Regular, Menlo, monospace;
   --shadow-card: 0 1px 2px rgb(9 12 16 / 0.05), 0 1px 3px rgb(9 12 16 / 0.06);
   --shadow-card-hover: 0 2px 4px rgb(9 12 16 / 0.06), 0 6px 16px rgb(9 12 16 / 0.08);
   --shadow-dropdown: 0 4px 6px -2px rgb(9 12 16 / 0.08), 0 10px 24px -4px rgb(9 12 16 / 0.12);
@@ -1326,6 +1330,8 @@ body, .font-suite {
   /* The phone tab bar's glass shadow: prototype 01a178d2 v4 theme.js
      `--glass-shadow` (light 0 10px 30px rgba(40,30,20,.18); dark below). */
   --shadow-tab-bar: 0 10px 30px rgb(40 30 20 / 0.18);
+  /* v4 `--glass-edge` (theme.js): ink at 8% light, 9% dark. */
+  --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 8%, transparent);
   --sheet-form-max-width: 36rem; /* 576px — form-modal standard (max-w-xl, 8px grid); desktop width of the New Task / form sheets */
   --duration-fast: 100ms;      /* micro-interactions: hover, press */
   --duration-base: 200ms;      /* standard transitions: reveals, tint fades */
@@ -1373,6 +1379,7 @@ body, .font-suite {
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
   --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
+  --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 9%, transparent);
   --color-interactive: #ff9b55;
   --native-tab-selected: var(--color-primary);
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -1386,6 +1393,7 @@ body, .font-suite {
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
     --shadow-tab-bar: 0 10px 30px rgb(0 0 0 / 0.45);
+    --tab-bar-edge: color-mix(in srgb, var(--color-base-content) 9%, transparent);
     --color-interactive: #ff9b55;
     --native-tab-selected: var(--color-primary);
     --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
@@ -3491,7 +3499,7 @@ body, .font-suite {
   }
 
   .compose-input-area .compose-pill-bar:not(:focus-within) {
-    border: 1px solid var(--color-base-300);
+    border: 1px solid var(--tab-bar-edge);
   }
 
   .compose-input-area .compose-pill-attach,
@@ -3689,7 +3697,7 @@ body, .font-suite {
     );
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
     backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-    border: 1px solid var(--color-base-300);
+    border: 1px solid var(--tab-bar-edge);
   }
 
   @media (prefers-reduced-transparency: reduce) {
@@ -5041,7 +5049,7 @@ body, .font-suite {
      the viewport bottom (21px at inset 34, 8px at inset 0), 64px tall
      (--tab-h 64 x density 1), radius the masters' --r-xl
      (round(radius x 1.57)) from --radius-box. No shadow: the glass and its
-     1px base-300 border are the only separation. Content scrolls UNDER the
+     1px edge (now v4 --glass-edge, --tab-bar-edge) separate it. Content scrolls UNDER the
      glass; scrollers pad their end with --phone-chrome-bottom. z-index 30
      keeps every modal and sheet above it; the More sheet alone goes UNDER it
      (rule below). */
@@ -5061,7 +5069,7 @@ body, .font-suite {
     var(--color-base-200) calc(var(--glass-alpha) * 100%),
     transparent
   );
-  border: 1px solid var(--color-base-300);
+  border: 1px solid var(--tab-bar-edge);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
   /* Hide and return: a 150ms slide plus fade. Visibility flips at the END of
@@ -9846,7 +9854,13 @@ textarea.cal-input {
   height: 16px;
   accent-color: var(--color-primary);
 }
-.cal-err {
+/* v4 `.err` is 11px/550 (fs-xs); it renders at 12px under the declared
+   12px small-text floor every calendar error already uses.
+   `.cal-panel .cal-err` beats the panel's 13px subtle paragraph rule, which
+   had painted the settings URL error 13px and subtle (task 01a18d9f fix
+   round 2). */
+.cal-err,
+.cal-panel .cal-err {
   margin: 0;
   color: var(--color-error);
   font-size: 0.75rem;
@@ -10005,7 +10019,7 @@ textarea.cal-input {
 .cal-feed code {
   flex: 1;
   min-width: 200px;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-system);
   font-size: 0.75rem;
   background: var(--color-base-200);
   border: 1px solid var(--edge);
@@ -10156,7 +10170,10 @@ textarea.cal-input {
   flex-wrap: wrap;
   align-items: center;
 }
+/* v4 `.win`: `font: var(--fs-sm) var(--font-mono)` resets the weight to 400
+   inside the 550 `.field` label (task 01a18d9f fix round 2). */
 .cal-win {
+  font-weight: 400;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -10164,7 +10181,7 @@ textarea.cal-input {
   border-radius: var(--radius-field);
   padding: 0 2px 0 8px;
   height: 30px;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-system);
   font-size: 0.75rem;
   color: var(--color-base-content);
 }
@@ -10198,7 +10215,7 @@ textarea.cal-input {
   flex-wrap: wrap;
 }
 .cal-slots span {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-system);
   font-size: 0.75rem;
   border: 1px solid var(--edge);
   border-radius: var(--radius-field);
@@ -10352,7 +10369,7 @@ textarea.cal-input {
   color: var(--color-interactive);
   border-radius: var(--radius-field);
   font-weight: 600;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono-system);
   width: 100%;
 }
 .cal-guest-slot[aria-pressed="true"] {
@@ -10625,12 +10642,11 @@ textarea.cal-input {
   align-items: center;
   gap: 8px;
 }
-/* Phone record tabs: 44px tap targets (v4 `.seg` at 375). */
+/* Phone record tabs: 44px tap targets; v4 `.seg` type stays 12px. */
 @media (max-width: 1023.98px) {
   .mt-tab {
     height: 44px;
     padding: 0 14px;
-    font-size: 0.8125rem;
   }
 }
 .mt-kind .cal-pill {
@@ -10642,4 +10658,9 @@ textarea.cal-input {
   .mt-row:not([aria-current="true"]):hover {
     border-color: var(--color-subtle);
   }
+}
+
+/* Calendar mono text: v4's system mono stack (task 01a18d9f fix round 2). */
+.cal-mono {
+  font-family: var(--font-mono-system);
 }

@@ -238,7 +238,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       <span class="whitespace-nowrap text-[13px] font-semibold" data-role="calendar-range">
         {Cal.range_label(@view, @cursor, @sel_day)}
       </span>
-      <span class="rounded-[calc(var(--radius-field)-3px)] border border-edge px-1.5 py-px font-mono text-xs text-subtle">
+      <span class="rounded-[calc(var(--radius-field)-3px)] border border-edge px-1.5 py-px cal-mono text-xs text-subtle">
         {@zone}
       </span>
       <span class="flex-1"></span>
@@ -470,7 +470,7 @@ defmodule PlatformWeb.CalendarLive.Components do
     <div class="relative" aria-hidden="true">
       <div
         :for={hour <- @hours}
-        class={["h-12 -translate-y-[7px] text-right font-mono text-xs text-subtle", @class]}
+        class={["h-12 -translate-y-[7px] text-right cal-mono text-xs text-subtle", @class]}
       >
         {if hour == @first, do: "", else: Cal.hm(hour * 60)}
       </div>
@@ -744,7 +744,7 @@ defmodule PlatformWeb.CalendarLive.Components do
               Cal.live?(entry) && "cal-live"
             ]}
           >
-            <span :if={!@phone} class="font-mono">{month_time(entry, day, @zone)}</span>
+            <span :if={!@phone} class="cal-mono">{month_time(entry, day, @zone)}</span>
             <span :if={!@phone}>{Cal.chip_title(entry)}</span>
           </button>
         </div>
@@ -1283,7 +1283,7 @@ defmodule PlatformWeb.CalendarLive.Components do
           <span class="min-w-0 flex-1">
             {sub.name}
             <span class="cal-pill"><.icon name="hero-lock-closed" class="size-3" />Read-only</span>
-            <small class="truncate font-mono">{masked_url(sub)}</small>
+            <small class="truncate cal-mono">{masked_url(sub)}</small>
             <small :if={is_nil(sub.error)}>
               Synced {synced(sub.refreshed_at)} · blocks availability
             </small>

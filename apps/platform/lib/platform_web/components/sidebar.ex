@@ -156,7 +156,7 @@ defmodule PlatformWeb.Components.Sidebar do
 
         <div
           :if={@more != []}
-          class="px-2 pt-3 pb-1 text-xs font-semibold uppercase tracking-[.08em] text-subtle"
+          class="px-2 pt-3 pb-1 text-xs font-[650] uppercase tracking-[.08em] text-subtle"
           data-role="sidebar-more-label"
         >
           More
