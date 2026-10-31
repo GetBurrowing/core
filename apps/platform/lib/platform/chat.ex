@@ -171,6 +171,8 @@ defmodule Platform.Chat do
   # Mirrors `Platform.Federation.Peers.SharedSpaces.seat_admin/2`. If a row for
   # the creator already exists (a race with `ChatLive.ensure_participant/2`),
   # ONLY that row's role is promoted; nothing else on it is rewritten.
+  # It only ever ADDS an admin, so it cannot breach the last-human-admin floor
+  # and takes no space-row lock (that lock is `set_member_role/4`'s).
   defp seat_creator_admin(space, user_id) do
     attrs = %{
       participant_type: "user",
@@ -6373,6 +6375,149 @@ defmodule Platform.Chat do
       {:ok, removed}
     end
   end
+
+  @doc """
+  Whether `user_id` may promote or demote channel admins in `space` (task
+  01a19355 stage 1).
+
+  True iff `space` is a channel AND the user is any of: a `user` participant of
+  the space with role `"admin"` (`admin_user_participant?/2`, the same ground
+  `can_summon_agents?/2` uses), a non-external admin of the space's org
+  (`Platform.Tenancy.org_admin?/2`; a nil `org_id` makes this ground false), or
+  a root admin (`Platform.Tenancy.root_admin?/1`, OR'd explicitly because
+  `org_admin?/2` has no root bypass by design).
+
+  The execution-space sponsor ground of `can_summon_agents?/2` is deliberately
+  NOT a ground here: role management is channels-only, and sponsoring a task
+  confers no say over who administers a channel. A non-binary `user_id` is
+  false.
+  """
+  @spec can_manage_roles?(Space.t(), term()) :: boolean()
+  def can_manage_roles?(%Space{kind: "channel"} = space, user_id) when is_binary(user_id) do
+    admin_user_participant?(space.id, user_id) or
+      Tenancy.org_admin?(%{id: user_id}, space.org_id) or
+      Tenancy.root_admin?(%{id: user_id})
+  end
+
+  def can_manage_roles?(_space, _user_id), do: false
+
+  @member_roles ~w(admin member)
+
+  @doc """
+  Promote or demote a human channel participant on behalf of `actor_user_id`
+  (task 01a19355 stage 1). The single writer of a channel participant's admin
+  role; the members panel and any other caller go through here, never through
+  the bare `update_participant/2`.
+
+  `participant_id` is the `chat_participants` row id (never a space id) and
+  must belong to `space`. `role` is `"admin"` or `"member"`.
+
+  Everything happens inside ONE transaction that first takes `FOR UPDATE` on
+  the space row. That row is the mutex for every role change in the channel:
+  a single parent-row lock is a plain mutex anyone can read, whereas locking
+  the `role = 'admin'` rows themselves would lean on Postgres re-evaluating the
+  predicate the race is changing. Inside the lock:
+
+    * the actor is re-authorized with `can_manage_roles?/2`, so after admin A
+      demotes admin B and commits, B's blocked call wakes, sees B is no longer
+      an admin and is refused `:unauthorized`;
+    * agent rows are refused `:not_a_user` (an agent's DB `role` is inert:
+      `admin_user_participant?/2` ignores it, so it is never managed here);
+    * a demotion of an admin is refused `:last_admin` when no OTHER `user`
+      row in the space holds `"admin"`. Agent rows never count toward that
+      floor.
+
+  Requesting the role the row already has returns `{:ok, row}` unchanged and
+  broadcasts nothing. On a real change, AFTER commit only,
+  `{:participant_role_changed, participant}` is broadcast on the space topic
+  and `[:platform, :chat, :participant_role_changed]` telemetry is emitted.
+
+  Write paths that only ADD admins (`seat_creator_admin/2`,
+  `Platform.Calendar.BookingLinks`, `Platform.Federation.Peers.SharedSpaces`)
+  cannot reduce the admin count, so they take no lock.
+  """
+  @spec set_member_role(Space.t(), term(), term(), String.t()) ::
+          {:ok, Participant.t()}
+          | {:error,
+             :not_a_channel
+             | :unauthorized
+             | :not_found
+             | :not_a_user
+             | :invalid_role
+             | :last_admin
+             | term()}
+  def set_member_role(%Space{} = space, actor_user_id, participant_id, role)
+      when role in @member_roles do
+    space.id
+    |> do_set_member_role(actor_user_id, participant_id, role)
+    |> case do
+      {:ok, {:changed, updated}} ->
+        ChatPubSub.broadcast(space.id, {:participant_role_changed, updated})
+
+        :telemetry.execute(
+          [:platform, :chat, :participant_role_changed],
+          %{system_time: System.system_time()},
+          %{
+            space_id: space.id,
+            participant_id: updated.id,
+            actor_user_id: actor_user_id,
+            role: updated.role
+          }
+        )
+
+        {:ok, updated}
+
+      {:ok, {:unchanged, participant}} ->
+        {:ok, participant}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def set_member_role(%Space{}, _actor_user_id, _participant_id, _role),
+    do: {:error, :invalid_role}
+
+  defp do_set_member_role(space_id, actor_user_id, participant_id, role) do
+    Repo.transaction(fn ->
+      locked =
+        from(s in Space, where: s.id == ^space_id, lock: "FOR UPDATE")
+        |> Repo.one()
+
+      with %Space{} = locked <- locked || {:error, :not_found},
+           true <- locked.kind == "channel" || {:error, :not_a_channel},
+           # Re-checked INSIDE the lock: load-bearing for mutual demotion.
+           true <- can_manage_roles?(locked, actor_user_id) || {:error, :unauthorized},
+           %Participant{} = target <-
+             get_space_participant(locked.id, participant_id) || {:error, :not_found},
+           true <- target.participant_type == "user" || {:error, :not_a_user},
+           :change <- if(target.role == role, do: {:unchanged, target}, else: :change),
+           :ok <- check_admin_floor(locked.id, target, role),
+           {:ok, updated} <- update_participant(target, %{role: role}) do
+        {:changed, updated}
+      else
+        {:unchanged, target} -> {:unchanged, target}
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Only a demotion of an admin can lower the human-admin count. Counted under
+  # the space-row lock taken by `do_set_member_role/4`.
+  defp check_admin_floor(space_id, %Participant{role: "admin"} = target, role)
+       when role != "admin" do
+    others =
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and p.role == "admin" and
+            p.id != ^target.id
+      )
+      |> Repo.aggregate(:count)
+
+    if others == 0, do: {:error, :last_admin}, else: :ok
+  end
+
+  defp check_admin_floor(_space_id, _target, _role), do: :ok
 
   defp admin_user_participant?(space_id, user_id) do
     Repo.exists?(

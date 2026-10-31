@@ -41,6 +41,7 @@ defmodule Platform.Chat.PubSub do
   | `{:pin_removed, data}`         | `%{space_id: id, message_id: id}`              |
   | `{:participant_joined, p}`     | `%Platform.Chat.Participant{}`                  |
   | `{:participant_left, p}`       | `%Platform.Chat.Participant{}`                  |
+  | `{:participant_role_changed, p}` | `%Platform.Chat.Participant{}` (after commit, `Chat.set_member_role/4`) |
   """
 
   @pubsub Platform.PubSub
