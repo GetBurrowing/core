@@ -6086,6 +6086,10 @@ defmodule PlatformWeb.MeetingLiveTest do
   end
 
   # ── Start-meeting FAB + bottom-sheet (stage 2 of task 019e2ca8) ──────────
+  #
+  # Task 01a18d9f stage 4: the v4 list view carries its own `+ New meeting`
+  # (a start-a-room modal), so the FAB and the header button that open this
+  # scheduling sheet render on the calendar view; these tests mount it there.
 
   describe ":index action — Start-meeting FAB" do
     setup %{conn: conn} do
@@ -6098,7 +6102,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "FAB renders on /meetings (index action) with hero-video-camera icon", %{
       conn: conn
     } do
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+      {:ok, _view, html} = live(conn, ~p"/meetings?view=calendar")
 
       assert html =~ ~s(data-role="start-meeting-fab")
       assert html =~ ~s(phx-click="open_start_meeting_sheet")
@@ -6129,7 +6133,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "clicking the FAB opens the start-meeting sheet", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      {:ok, view, html} = live(conn, ~p"/meetings?view=calendar")
 
       # Sheet is closed by default.
       refute html =~ ~s(data-role="start-meeting-sheet")
@@ -6155,7 +6159,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "the desktop New meeting button renders and opens the SAME sheet", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      {:ok, view, html} = live(conn, ~p"/meetings?view=calendar")
 
       doc = LazyHTML.from_fragment(html)
       button = LazyHTML.query(doc, ~s([data-role="new-meeting-button"]))
@@ -6192,7 +6196,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "close button + backdrop dismiss the sheet", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       # Open via FAB.
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
@@ -6222,7 +6226,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       project: project
     } do
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
@@ -6242,7 +6246,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       project: project
     } do
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
 
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
@@ -6300,7 +6304,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     defp open_create_sheet(conn) do
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
       view
     end
@@ -6523,7 +6527,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       # No `put_connect_params`, so `resolve_time_zone/1` answers nil — the
       # same answer the dead render gives. There is no honest conversion of
       # "09:30" without a zone, so it is refused rather than read as UTC.
-      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
+      {:ok, view, _html} =
+        live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings?view=calendar")
+
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
       html =
@@ -6544,7 +6550,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The refusal above is scoped to a SCHEDULED create. Without this
       # control it would be indistinguishable from a zone-less mount that
       # cannot create anything at all.
-      {:ok, view, _html} = live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings")
+      {:ok, view, _html} =
+        live(build_conn() |> authenticated_conn() |> elem(0), ~p"/meetings?view=calendar")
+
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
 
       submit_create(view, %{"project_id" => project.id})
@@ -7034,7 +7042,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     defp open_sheet(conn) do
-      {:ok, view, _html} = live(conn, ~p"/meetings")
+      {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
       view
     end

@@ -270,7 +270,7 @@ defmodule PlatformWeb.NativeDonationTest do
         })
         |> Repo.insert()
 
-      {:ok, view, _html} = live(login(conn, me), ~p"/meetings")
+      {:ok, view, _html} = live(login(conn, me), ~p"/meetings?view=calendar")
       _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
       _ = render_click(view, "meet_now", %{})
 

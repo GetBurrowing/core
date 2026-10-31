@@ -250,10 +250,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     {:ok, view, _} = live(conn, "/meetings")
     assert has_element?(view, "[data-region=meetings-workspace]")
     refute has_element?(view, "[data-role=calendar-week-grid]")
-    assert has_element?(view, "a[href='/calendar']", "View on calendar")
-    assert has_element?(view, "h2", "Live")
-    assert has_element?(view, "h2", "Upcoming")
-    assert has_element?(view, "h2", "Past")
+    # v4 list pane section labels (task 01a18d9f stage 4).
+    assert has_element?(view, ".mt-section-label", "Live now")
+    assert has_element?(view, ".mt-section-label", "Upcoming")
+    assert has_element?(view, ".mt-section-label", "Past")
   end
 
   test "overlapping recurrence occurrences have distinct DOM identities", %{

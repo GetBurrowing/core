@@ -3589,12 +3589,25 @@
            `lg:hidden`: below `lg` this is not drawn and the FAB is the
            only create path; at `lg` and above they swap. --%>
         <button
+          :if={@meetings_view != :list}
           type="button"
           phx-click="open_start_meeting_sheet"
           data-role="new-meeting-button"
           class="btn btn-primary btn-sm hidden lg:inline-flex gap-1.5"
         >
           <span class="hero-plus size-4"></span> New meeting
+        </button>
+        <%!-- v4 list view (task 01a18d9f stage 4): one `+ New meeting` at every
+           width, opening the v4 modal; the calendar and archive halves keep
+           the button + FAB pair above. --%>
+        <button
+          :if={@meetings_view == :list}
+          type="button"
+          phx-click="open_new_room"
+          data-role="list-new-meeting"
+          class={PlatformWeb.CalendarLive.Components.primary_btn()}
+        >
+          + New meeting
         </button>
       </header>
 
@@ -3614,75 +3627,43 @@
          archive — every ended or cancelled meeting the viewer can see. A
          bounded range would be an additive control in the same bar and
          would not change this heading. --%>
+      <%!-- ── v4 list view (task 01a18d9f stage 4) ─────────────────────────
+         Prototype 01a178d2 v4 `meetingsList` / `renderMeetings`: a 270px
+         list pane of meeting cards (Live now / Upcoming / Past) beside the
+         detail; on the phone the list is the page and a row pushes its
+         detail via `?meeting=<id>`. --%>
+      <% list_zone = assigns[:calendar_time_zone] || "Etc/UTC" %>
+      <% list_rows =
+        if @meetings_view == :list,
+          do: PlatformWeb.MeetingLive.ListComponents.rows(@grouped_meetings, list_zone),
+          else: %{} %>
       <div
         :if={@meetings_view == :list}
-        class="clears-tab-bar min-h-0 flex-1 overflow-y-auto bg-base-200 p-3 lg:bg-base-100 lg:p-5"
+        class="flex min-h-0 flex-1 overflow-hidden bg-base-200"
         data-region="meetings-workspace"
       >
-        <.link
-          :if={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
-          navigate={~p"/calendar"}
-          class="btn btn-ghost mb-4 min-h-11"
-        >
-          View on calendar
-        </.link>
-        <div :if={@index_empty?} data-empty-state="meetings-index" class="mb-4 text-left">
-          <h2 class="text-base font-semibold" data-role="meetings-index-empty-heading">
-            No meetings yet.
-          </h2>
-          <p
-            :if={@viewer_external?}
-            data-viewer="external"
-            data-role="meetings-index-empty-note"
-            class="text-sm text-subtle"
-          >
-            You'll see a meeting here once you've been invited.
-          </p>
-          <p
-            :if={!@viewer_external?}
-            data-viewer="internal"
-            data-role="meetings-index-empty-note"
-            class="text-sm text-subtle"
-          >
-            Meetings for your organisation will appear here.
-          </p>
-        </div>
-        <section
-          :for={{key, label} <- [{:live, "Live"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]}
-          class="mb-6"
-        >
-          <h2 class="mb-2 text-sm font-semibold">{label}</h2>
-          <p :if={@grouped_meetings[key] == []} class="py-3 text-sm text-subtle">
-            No {String.downcase(label)} meetings.
-          </p>
-          <div
-            :for={meeting <- @grouped_meetings[key]}
-            id={"workspace-meeting-#{meeting.id}"}
-            data-role="workspace-meeting"
-            data-meeting-id={meeting.id}
-            data-meeting-status={meeting.status}
-            class="mb-2 flex min-w-0 items-center gap-3 rounded-xl border border-edge bg-base-100 p-3 lg:bg-base-200"
-          >
-            <.icon name="hero-video-camera" class="size-5 shrink-0" />
-            <div class="min-w-0 flex-1">
-              <h3 class="truncate text-[15px] font-medium">{meeting.name}</h3>
-              <p :if={meeting.scheduled_start_at} class="font-mono text-xs text-subtle">
-                {Calendar.strftime(meeting.scheduled_start_at, "%b %-d · %H:%M UTC")}
-              </p>
-            </div>
-            <.link
-              navigate={~p"/meetings/#{meeting.slug}"}
-              class={[
-                "btn btn-sm min-h-11 shrink-0",
-                key == :live && "btn-primary",
-                key != :live && "btn-ghost"
-              ]}
-            >
-              {if key == :live, do: "Join", else: "Open"}
-            </.link>
-          </div>
-        </section>
+        <PlatformWeb.MeetingLive.ListComponents.list_pane
+          rows={list_rows}
+          selected_id={@list_meeting_id}
+          empty?={@index_empty?}
+          external?={@viewer_external?}
+        />
+        <PlatformWeb.MeetingLive.ListComponents.detail
+          row={
+            @list_meeting_id &&
+              PlatformWeb.MeetingLive.ListComponents.find_row(list_rows, @list_meeting_id)
+          }
+          zone={list_zone}
+          tab={@list_tab}
+          calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
+        />
       </div>
+      <PlatformWeb.MeetingLive.ListComponents.new_room_modal
+        :if={@meetings_view == :list and @show_new_room}
+        projects={@projects}
+        project_id={@meet_now_project_id}
+        error={@new_room_error}
+      />
 
       <div
         :if={@meetings_view == :archive}
@@ -4862,6 +4843,7 @@
          the nav — the offset is measured from the button's own bottom
          edge, so a taller button grows upward into empty space. --%>
       <button
+        :if={@meetings_view != :list}
         type="button"
         phx-click="open_start_meeting_sheet"
         aria-label="New meeting"

@@ -10478,3 +10478,151 @@ textarea.cal-input {
     background: color-mix(in srgb, var(--color-primary) 14%, var(--color-base-100));
   }
 }
+/* calendar v4, stage 4: the Inbox consent card and the Meetings list.
+   Prototype 01a178d2 v4 index.html `.consent`, cal.css `.brief-row`/
+   `.brief-kind`/`.section-label`/`.meeting-row`. Radius 14px and r-lg 18px
+   use --radius-box. */
+.cal-consent {
+  border: 1.5px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-base-100));
+  border-radius: var(--radius-box);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-consent.cal-consent-done {
+  border-color: var(--edge);
+  background: var(--color-base-100);
+}
+.cal-consent-avatar {
+  display: none;
+}
+.cal-consent-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-consent-q {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.cal-consent-meta {
+  color: var(--color-subtle);
+  font-size: 0.75rem;
+}
+.cal-consent-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.cal-consent-acts > * {
+  min-height: 44px;
+}
+.cal-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+@media (min-width: 1024px) {
+  .cal-consent {
+    flex-direction: row;
+    padding: 16px;
+    gap: 12px;
+  }
+  .cal-consent-avatar {
+    display: inline-flex;
+  }
+  .cal-consent-acts > * {
+    min-height: 0;
+  }
+}
+.mt-list-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  background: var(--color-base-200);
+}
+.mt-detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-base-200);
+}
+@media (min-width: 1024px) {
+  .mt-list-pane {
+    flex: 0 0 270px;
+    width: 270px;
+    padding: 0 8px 8px;
+    border-right: 1px solid var(--edge);
+    background: var(--color-base-100);
+  }
+}
+.mt-section-label {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-subtle);
+  font-weight: 650;
+  padding: 12px 8px 4px;
+}
+.mt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  margin-top: 8px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+  font-size: 0.75rem;
+  color: var(--color-subtle);
+}
+.mt-row[aria-current="true"] {
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-base-300);
+}
+.mt-row strong {
+  font-size: 13px;
+  color: var(--color-base-content);
+  overflow-wrap: anywhere;
+}
+.mt-row small {
+  overflow-wrap: anywhere;
+}
+.mt-kind {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-subtle);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Phone record tabs: 44px tap targets (v4 `.seg` at 375). */
+@media (max-width: 1023.98px) {
+  .mt-tab {
+    height: 44px;
+    padding: 0 14px;
+    font-size: 0.8125rem;
+  }
+}
+.mt-kind .cal-pill {
+  letter-spacing: 0.08em;
+  font-weight: 650;
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .mt-row:not([aria-current="true"]):hover {
+    border-color: var(--color-subtle);
+  }
+}

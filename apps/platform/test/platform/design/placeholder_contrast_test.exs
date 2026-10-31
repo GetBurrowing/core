@@ -104,6 +104,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
     # and Label fields (task 01a18d9f stages 2-3): `.cal-input::placeholder`
     # paints --color-subtle in app.css.
     "platform_web/live/calendar_live/components.ex" => :global_default,
+    # The v4 Meetings "New meeting" modal's Name field (task 01a18d9f stage
+    # 4): `.cal-input::placeholder` paints --color-subtle in app.css.
+    "platform_web/live/meeting_live/list_components.ex" => :global_default,
     "platform_web/components/action_patterns.ex" => :global_default,
     "platform_web/live/agent_config/agent_config_live.ex" => :global_default,
     "platform_web/components/chat_message.ex" => :rule_painted,

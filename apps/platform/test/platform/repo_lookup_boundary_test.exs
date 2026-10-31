@@ -163,6 +163,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10315 stage 5: getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/setup_agent.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5: system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    {"platform_web/live/meeting_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a18d9f stage 4: assign_list_selection/2 guards the ?meeting= URL param with Platform.UUID.valid?/1; a malformed id selects nothing, and the id is only compared against already-loaded meeting rows, never passed to Repo"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "batch/2 filters displayed item IDs through Platform.UUID.valid?/1 before the typed id IN query; malformed items produce no document query or projection (task 01a1557a rung 17 stage 3)"},
     # Task 01a1557a rung 17: raw browser IDs are guarded before context queries.

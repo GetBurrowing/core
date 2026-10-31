@@ -523,4 +523,36 @@ defmodule Platform.Calendar.AgentAccessTest do
 
     assert Repo.aggregate(Consent, :count) == 0
   end
+
+  # Task 01a18d9f stage 4: the additive fields the v4 consent card reads.
+  test "view/2 carries the hold's range, zone, reason and the agent's role", ctx do
+    agent =
+      ctx.agent |> Ecto.Changeset.change(metadata: %{"role" => "scheduling"}) |> Repo.update!()
+
+    grant(ctx)
+
+    {:ok, c} =
+      AgentAccess.propose(
+        ctx.scope,
+        ctx.owner.actor.id,
+        "create",
+        attrs(%{description: "Round 2", time_zone: "Pacific/Auckland"}),
+        "view-fields"
+      )
+
+    assert [item] = AgentAccess.view(row(c), ctx.owner)
+    assert item.ends_at == ~U[2026-11-05 11:00:00.000000Z]
+    assert item.time_zone == "Pacific/Auckland"
+    assert item.description == "Round 2"
+    assert item.agent_role == "scheduling"
+    assert item.hold_id == c.hold_id
+    assert item.event_id == c.hold_id
+
+    # nil-safe: an agent without a role and a hold without a reason.
+    agent |> Ecto.Changeset.change(metadata: %{}) |> Repo.update!()
+    {:ok, c2} = AgentAccess.propose(ctx.scope, ctx.owner.actor.id, "create", attrs(), "view-nil")
+    item = Enum.find(AgentAccess.view(row(c2), ctx.owner), &(&1.hold_id == c2.hold_id))
+    assert item.agent_role == nil
+    assert item.description == nil
+  end
 end
