@@ -1055,10 +1055,15 @@ defmodule PlatformWeb.CalendarLive.Components do
                 />
               </label>
             <% else %>
+              <%!-- Text, not type="time" (task 01a192d6): PlatformWeb.TimeEntry
+                   parses them, so a time with no AM/PM gets "pick AM or PM"
+                   instead of posting "" and reading as a missing start. --%>
               <label class="cal-field">
                 Start<input
-                  type="time"
-                  step="900"
+                  type="text"
+                  inputmode="text"
+                  autocomplete="off"
+                  placeholder="1:00 PM"
                   name={@form[:start].name}
                   value={@form[:start].value}
                   class="cal-input"
@@ -1067,8 +1072,10 @@ defmodule PlatformWeb.CalendarLive.Components do
               </label>
               <label class="cal-field">
                 End<input
-                  type="time"
-                  step="900"
+                  type="text"
+                  inputmode="text"
+                  autocomplete="off"
+                  placeholder="1:00 PM"
                   name={@form[:end].name}
                   value={@form[:end].value}
                   class="cal-input"
