@@ -246,8 +246,6 @@ defmodule PlatformWeb.AuthController do
   # holding user, lands exactly as before.
   @app_callback_url "burrow://auth/callback"
 
-  defp land_callback(conn, result, full_path \\ ~p"/")
-
   defp land_callback(
          conn,
          %ExternalAdmission.Result{state: :full, user: user} = result,
