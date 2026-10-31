@@ -1293,7 +1293,10 @@ SERVICES = {
             init_sql=lambda ctx: {"10-memory.sql": _MEMORY_INIT_SQL},
             secret_files=_memory_secret_files,
             host_mounts=_memory_mounts,
-            depends_on={"core-postgres": "service_healthy", "embeddings": "service_started"},
+            # service_healthy (task 01a18f76): memory-service probes the embedder
+            # at startup (HttpEmbedder.__init__) and exits if llama.cpp is still
+            # loading; embeddings' healthcheck answers once the model is loaded.
+            depends_on={"core-postgres": "service_healthy", "embeddings": "service_healthy"},
         ),
         Service(
             "speaches",

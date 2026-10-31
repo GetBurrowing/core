@@ -154,7 +154,7 @@ services:
       core-postgres:
         condition: "service_healthy"
       embeddings:
-        condition: "service_started"
+        condition: "service_healthy"
   pocket-id:
     container_name: "pocket-id"
     image: "ghcr.io/pocket-id/pocket-id:v2.18.0"

@@ -395,8 +395,9 @@ defmodule Platform.Installs do
         steps =
           Enum.map(install.steps, fn
             %{"state" => "failed"} = step ->
+              # A retried final step earns its consecutive memory polls anew.
               %{
-                step
+                Map.drop(step, ["memory_oks", "memory_checked_at"])
                 | "state" => "pending",
                   "started_at" => nil,
                   "finished_at" => nil,
@@ -822,6 +823,11 @@ defmodule Platform.Installs do
     do: "Your server didn't finish installing in time. Retry restarts it and tries again."
 
   def describe_error(_step, :timeout), do: "This step took longer than expected."
+
+  def describe_error(_step, :memory_unavailable),
+    do:
+      "Memory and search didn't start on this server; the embeddings service kept restarting. " <>
+        "Nothing was charged beyond the server; you can retry or tear it down."
 
   # Stage 6: DigitalOcean answers 422 when the size is not offered in the region.
   def describe_error("reserve", {:http, 422}),

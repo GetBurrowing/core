@@ -10,7 +10,8 @@ defmodule Platform.Installs.Runner do
     * `connect`: the primary and auth hosts resolve to the IP, then
       `https://<primary>/health` is 200 with a verified certificate;
     * `final`: `bootstrap-admin` (first admin plus core's OIDC client), then
-      the health check again.
+      the health check again, then (task 01a18f76) memory and search must
+      answer on three consecutive deep health polls at least a minute apart.
 
   Every step is safe to re-run. **A retry never creates a second droplet**:
   `reserve` lists droplets by the install's tag BEFORE any POST, and the tag
@@ -24,8 +25,9 @@ defmodule Platform.Installs.Runner do
   `{:install_updated, id}` on `"install:<id>"`. No secret is ever put in a
   step, an error, a log line or a broadcast.
 
-  Knobs (`config :platform, Platform.Installs`): `poll_interval_ms` (10 s) and
-  `step_timeouts_ms` (a map by step key).
+  Knobs (`config :platform, Platform.Installs`): `poll_interval_ms` (10 s),
+  `step_timeouts_ms` (a map by step key), `memory_poll_interval_ms` (60 s)
+  and `memory_ok_required` (3).
   """
 
   require Logger
@@ -189,9 +191,9 @@ defmodule Platform.Installs.Runner do
 
         loop(install.id)
 
-      {:wait, _reason} ->
+      {:wait, reason} ->
         if past_deadline?(key, started_at) do
-          fail(install.id, key, :timeout)
+          fail(install.id, key, deadline_reason(reason))
         else
           Process.sleep(poll_interval())
           loop(install.id)
@@ -256,13 +258,8 @@ defmodule Platform.Installs.Runner do
 
   defp perform("final", install) do
     with {:ok, sealed} <- Installs.unseal(install),
-         {:ok, _link} <-
-           Bootstrap.impl().admin_link(install, Installs.auth_host(install), %{
-             "STATIC_API_KEY" => Handover.fetch(sealed, "static_api_key"),
-             "OIDC_CLIENT_SECRET" => Handover.fetch(sealed, "oidc_client_secret")
-           }),
-         :ok <- Probe.impl().https_health(install) do
-      {:ok, %{}}
+         :ok <- admin_ready(install, sealed) do
+      memory_ready(install, Handover.fetch(sealed, "static_api_key"))
     end
   end
 
@@ -335,9 +332,70 @@ defmodule Platform.Installs.Runner do
     end
   end
 
+  # `bootstrap-admin` then the health check, once: recorded on the step as
+  # `"admin_ready"`, so the memory polls below do not re-run the bootstrap.
+  defp admin_ready(install, sealed) do
+    if final_step(install)["admin_ready"] do
+      :ok
+    else
+      with {:ok, _link} <-
+             Bootstrap.impl().admin_link(install, Installs.auth_host(install), %{
+               "STATIC_API_KEY" => Handover.fetch(sealed, "static_api_key"),
+               "OIDC_CLIENT_SECRET" => Handover.fetch(sealed, "oidc_client_secret")
+             }),
+           :ok <- Probe.impl().https_health(install) do
+        save_final(install, %{"admin_ready" => true})
+        :ok
+      end
+    end
+  end
+
+  # Memory and search work (task 01a18f76): `Probe.memory_ready/2` must answer
+  # :ok on `memory_ok_required` (3) CONSECUTIVE polls at least
+  # `memory_poll_interval_ms` (60 s) apart, so a crash-looping embeddings that
+  # is up for a moment does not pass. Any other answer resets the count. The
+  # progress (`memory_oks`, `memory_checked_at`) lives on the step, so a resumed
+  # run continues it; the key is never stored there.
+  defp memory_ready(install, static_api_key) do
+    step = final_step(install)
+
+    if checked_recently?(step) do
+      {:wait, {:memory, :settling}}
+    else
+      result = Probe.impl().memory_ready(install, static_api_key)
+      oks = if result == :ok, do: (step["memory_oks"] || 0) + 1, else: 0
+      save_final(install, %{"memory_oks" => oks, "memory_checked_at" => iso(now())})
+
+      cond do
+        match?({:error, _}, result) -> result
+        oks >= config(:memory_ok_required, 3) -> {:ok, %{}}
+        result == :ok -> {:wait, {:memory, :settling}}
+        true -> {:wait, {:memory, :unavailable}}
+      end
+    end
+  end
+
+  defp checked_recently?(%{"memory_checked_at" => at}) when is_binary(at) do
+    {:ok, checked, _} = DateTime.from_iso8601(at)
+    DateTime.diff(now(), checked, :millisecond) < config(:memory_poll_interval_ms, 60_000)
+  end
+
+  defp checked_recently?(_step), do: false
+
+  defp final_step(install), do: Enum.find(install.steps, &(&1["key"] == "final")) || %{}
+
+  defp save_final(install, changes) do
+    install = Installs.get(install.id)
+    Installs.update!(install, %{steps: put_step(install.steps, "final", changes)})
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
+
+  # The final step's memory wait names its own failure (describe_error/2).
+  defp deadline_reason({:memory, _}), do: :memory_unavailable
+  defp deadline_reason(_reason), do: :timeout
 
   defp normalize(:ok), do: {:ok, %{}}
   defp normalize(other), do: other

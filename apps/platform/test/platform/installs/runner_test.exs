@@ -153,6 +153,84 @@ defmodule Platform.Installs.RunnerTest do
     end
   end
 
+  describe "memory and search must answer before ready (task 01a18f76)" do
+    setup do
+      use_fake_backend()
+      :ok
+    end
+
+    defp memory_polls, do: Map.get(Fake.calls(), "memory_ready", 0)
+
+    test "a flapping memory path (ok, wait, ok, ...) never passes; the deadline fails in words" do
+      Fake.script_memory([:ok, :wait])
+      put_installs_env(step_timeouts_ms: %{"final" => 300})
+      {install, _} = create_install!()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Runner.run(install.id) == :failed
+        end)
+
+      # It was polled often enough to have passed under a non-consecutive rule.
+      assert memory_polls() >= 6
+      install = Installs.get(install.id)
+      final = step(install, "final")
+      assert final["state"] == "failed"
+
+      assert final["error"] ==
+               "Memory and search didn't start on this server; the embeddings service kept " <>
+                 "restarting. Nothing was charged beyond the server; you can retry or tear it down."
+
+      assert log =~ "step final failed: memory_unavailable"
+      # The install's key is the fake render's STATIC_API_KEY: in no step, log or error.
+      key = "fake-static-api-key-dev-only"
+      refute log =~ key
+      refute inspect(install.steps) =~ key
+    end
+
+    test "three consecutive oks pass, and no more polls than that are made" do
+      Fake.script_memory([:ok])
+      {install, _} = create_install!()
+
+      assert Runner.run(install.id) == :ready
+      assert memory_polls() == 3
+      assert step(Installs.get(install.id), "final")["memory_oks"] == 3
+    end
+
+    test "a wait in the middle resets the count: ok, ok, wait, then three more oks" do
+      Fake.script_memory([:ok, :ok, :wait, :ok, :ok, :ok, :ok])
+      {install, _} = create_install!()
+
+      assert Runner.run(install.id) == :ready
+      assert memory_polls() == 6
+    end
+
+    test "polls are at least memory_poll_interval_ms apart" do
+      Fake.script_memory([:ok])
+      put_installs_env(memory_poll_interval_ms: 60_000, step_timeouts_ms: %{"final" => 200})
+      {install, _} = create_install!()
+
+      assert Runner.run(install.id) == :failed
+      # One ok, then the step only waited for the minute to pass.
+      assert memory_polls() == 1
+      assert step(Installs.get(install.id), "final")["memory_oks"] == 1
+    end
+
+    test "a retried final step earns its three oks again" do
+      Fake.script_memory([:wait])
+      put_installs_env(step_timeouts_ms: %{"final" => 100})
+      {install, token} = create_install!()
+      assert Runner.run(install.id) == :failed
+
+      Fake.script_memory([:ok])
+      put_installs_env(step_timeouts_ms: %{})
+      assert {:ok, _} = Installs.retry(Installs.get(install.id), token)
+      before = memory_polls()
+      assert Runner.run(install.id) == :ready
+      assert memory_polls() - before == 3
+    end
+  end
+
   describe "a refused create" do
     test "a refused droplet create fails reserve and names no infrastructure" do
       wrap = fn conn, fake ->

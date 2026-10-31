@@ -45,6 +45,9 @@ defmodule Platform.Installs.ProviderHardeningTest do
 
     @impl true
     def https_health(install), do: Fake.https_health(install)
+
+    @impl true
+    def memory_ready(install, key), do: Fake.memory_ready(install, key)
   end
 
   defp count(key), do: Map.get(Fake.calls(), key, 0)

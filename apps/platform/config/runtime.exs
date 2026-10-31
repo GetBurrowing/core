@@ -1004,7 +1004,9 @@ if config_env() == :dev and System.get_env("BURROW_INSTALLS_FAKE") == "1" do
     probe: Platform.Installs.Fake,
     bootstrap: Platform.Installs.Fake,
     dns_zone: "fake.invalid",
-    poll_interval_ms: 1_000
+    poll_interval_ms: 1_000,
+    # Three consecutive fake memory polls a second apart, not a minute.
+    memory_poll_interval_ms: 1_000
 
   config :platform, Platform.Installs.DigitalOcean,
     base_url: "http://fake-digitalocean.invalid",

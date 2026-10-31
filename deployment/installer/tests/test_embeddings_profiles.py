@@ -296,6 +296,18 @@ class EmbeddingsRenderTest(unittest.TestCase):
         for key in PROFILES["small"]["memory_env"]:
             self.assertNotIn(key, compose)
 
+    def test_memory_service_waits_for_a_healthy_embeddings(self):
+        # Task 01a18f76 stage 3: memory-service's startup probe (HttpEmbedder.__init__)
+        # exits while llama.cpp loads, so it starts only once embeddings is healthy.
+        files = render(EXAMPLE, "small")
+        for text, indent in ((files["compose.yaml"][0], "  "), (files["user-data"][0], "        ")):
+            mem = service_block(text, "memory-service", indent)
+            deps = [line.strip() for line in mem]
+            start = deps.index("embeddings:")
+            self.assertEqual(deps[start + 1], 'condition: "service_healthy"')
+            emb = service_block(text, "embeddings", indent)
+            self.assertIn("http://localhost:8188/health", list_under(emb, "test"))
+
     def test_only_the_embeddings_service_gets_a_mem_limit(self):
         compose = render(EXAMPLE, "small")["compose.yaml"][0]
         self.assertEqual(compose.count("mem_limit:"), 1)
