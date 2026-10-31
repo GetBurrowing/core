@@ -64,6 +64,10 @@ In the isolated candidate run the complete helper suite and:
 /tmp/clip-reframe-sampling/test_sampling.py`. Locally this is 43 passed, two
 macOS-only tests skipped. Literal tests pin aligned and legacy source sampling
 arguments, default aligned, invalid-value refusal and installed capability.
+Removing the compatibility branch (forcing phase zero) makes the unchanged literal
+legacy test fail (2403.01/53.87 observed instead of 2403.26/53.62, exit 1), while
+the aligned test still passes; restored code passes both. No surviving mutant was
+counted as a pass.
 `verify_original_plan.py --source <private original> --profile <selected>` performs
 read-only native analysis with an explicit validated legacy override and asserts
 all four independently recorded original crop boxes. It reads no project manifest
