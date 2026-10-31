@@ -135,7 +135,7 @@ defmodule PlatformWeb.InstallStatusLiveTest do
       {:ok, view, html} = live(conn, path(token))
 
       assert has_element?(view, "#step-install[data-state=failed] .text-error")
-      assert has_element?(view, "#install-failed", "This step took longer than expected.")
+      assert has_element?(view, "#install-failed", "finish installing in time. Retry restarts it")
       assert has_element?(view, "#install-failed", "Retrying won't create a second server.")
       assert has_element?(view, "#install-failed .text-error", "Installing Burrow didn't finish.")
       # Retry is the screen's one primary button.
