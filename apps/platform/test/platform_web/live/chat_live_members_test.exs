@@ -431,4 +431,191 @@ defmodule PlatformWeb.ChatLiveMembersTest do
     # Positive control: the check can say yes for a module that exists.
     assert Code.ensure_loaded?(PlatformWeb.ChatLive.MembersComponent)
   end
+
+  describe "channel admins: Make admin / Remove admin (task 01a19355 stage 3)" do
+    defp person_row(user, scope \\ @popover),
+      do: "#{scope} [data-role=members-person-row][data-user-id='#{user.id}']"
+
+    defp toggle(user, scope \\ @popover),
+      do: "#{person_row(user, scope)} [data-role=members-role-toggle]"
+
+    defp role_in_db(space, user) do
+      Repo.one!(
+        from(p in Participant,
+          where:
+            p.space_id == ^space.id and p.participant_type == "user" and
+              p.participant_id == ^user.id,
+          select: p.role
+        )
+      )
+    end
+
+    defp make_admin!(space, user) do
+      row = Repo.get_by!(Participant, space_id: space.id, participant_id: user.id)
+      {:ok, _} = Chat.update_participant(row, %{role: "admin"})
+    end
+
+    defp participant_id(space, user),
+      do: Repo.get_by!(Participant, space_id: space.id, participant_id: user.id).id
+
+    test "a channel admin sees Make admin on a member, Remove admin on a co-admin, none on agents",
+         %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      co = user!("co")
+      member = user!("member")
+      join!(space, co)
+      join!(space, member)
+      make_admin!(space, co)
+      agent = agent!("Bot")
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, agent.id)
+
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, toggle(member), "Make admin")
+      assert has_element?(view, toggle(co), "Remove admin")
+      assert has_element?(view, "#{person_row(co)} [data-role=members-admin-badge]", "admin")
+      refute has_element?(view, "#{person_row(member)} [data-role=members-admin-badge]")
+      # Two admins: neither is the last, so nothing is disabled.
+      refute has_element?(view, "#{toggle(co)}[disabled]")
+      refute has_element?(view, "#{@popover} [data-role=members-last-admin]")
+
+      # Agents never get the control; the agent row itself is there.
+      assert has_element?(view, agent_row_selector(agent))
+      refute has_element?(view, "#{agent_row_selector(agent)} [data-role=members-role-toggle]")
+
+      # The phone sheet carries the same control.
+      assert has_element?(view, toggle(member, @sheet), "Make admin")
+
+      view |> element(toggle(member)) |> render_click()
+
+      assert role_in_db(space, member) == "admin"
+      assert render(view) =~ "#{member.name} is now an admin."
+      assert has_element?(view, toggle(member), "Remove admin")
+
+      view |> element(toggle(co)) |> render_click()
+
+      assert role_in_db(space, co) == "member"
+      assert render(view) =~ "#{co.name} is no longer an admin."
+    end
+
+    test "a plain member sees no toggle, and a forged members_set_role is refused",
+         %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      other = user!("other")
+      join!(space, other)
+      member = user!("member")
+
+      view = conn |> live_as(member, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, person_row(other))
+      assert has_element?(view, "#{person_row(admin)} [data-role=members-admin-badge]")
+      refute has_element?(view, "#{@popover} [data-role=members-role-toggle]")
+      refute has_element?(view, "#{@sheet} [data-role=members-role-toggle]")
+
+      for target <- [other, member] do
+        view
+        |> with_target("#chat-members")
+        |> render_hook("members_set_role", %{
+          "participant_id" => participant_id(space, target),
+          "role" => "admin"
+        })
+
+        assert render(view) =~ "Only a channel admin or org admin can change admins."
+        assert role_in_db(space, target) == "member"
+      end
+    end
+
+    test "an org admin of the space's org sees and uses the toggle", %{conn: conn} do
+      org = Tenancy.get_org_by_slug!("globex")
+      admin = user!("admin")
+      member = user!("member")
+      org_admin = user!("orgadmin")
+      for u <- [admin, member], do: org_member!(u, org)
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: org_admin.id,
+        org_id: org.id,
+        role: "admin",
+        external: false
+      })
+      |> Repo.insert!()
+
+      space = owned_channel!(admin, %{org_id: org.id})
+      join!(space, member)
+
+      view = conn |> live_as(org_admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      # Opening the channel seated the org admin as a plain member.
+      assert role_in_db(space, org_admin) == "member"
+      assert has_element?(view, toggle(member), "Make admin")
+
+      view |> element(toggle(member)) |> render_click()
+
+      assert role_in_db(space, member) == "admin"
+      assert render(view) =~ "#{member.name} is now an admin."
+    end
+
+    test "the sole admin's Remove admin is disabled, and a forged demote is refused",
+         %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      member = user!("member")
+      join!(space, member)
+
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, "#{toggle(admin)}[disabled]", "Remove admin")
+
+      assert has_element?(
+               view,
+               "#{person_row(admin)} [data-role=members-last-admin]",
+               "Last admin"
+             )
+
+      # The member's toggle is live.
+      refute has_element?(view, "#{toggle(member)}[disabled]")
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_set_role", %{
+        "participant_id" => participant_id(space, admin),
+        "role" => "member"
+      })
+
+      assert render(view) =~ "A channel needs at least one admin."
+      assert role_in_db(space, admin) == "admin"
+    end
+
+    test "a promotion in one session updates another open panel, and the promoted viewer gains the controls",
+         %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      member = user!("member")
+      join!(space, member)
+
+      admin_view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      member_view =
+        Phoenix.ConnTest.build_conn()
+        |> live_as(member, ~p"/chat/#{space.slug}")
+        |> open_members()
+
+      assert has_element?(member_view, person_row(member))
+      refute has_element?(member_view, "#{person_row(member)} [data-role=members-admin-badge]")
+      refute has_element?(member_view, "#{@popover} [data-role=members-role-toggle]")
+      refute has_element?(member_view, "[data-role=members-add-agent]")
+
+      admin_view |> element(toggle(member)) |> render_click()
+      assert role_in_db(space, member) == "admin"
+
+      settle(member_view)
+
+      assert has_element?(member_view, "#{person_row(member)} [data-role=members-admin-badge]")
+      assert has_element?(member_view, toggle(admin), "Remove admin")
+      assert has_element?(member_view, @add_form)
+    end
+  end
 end

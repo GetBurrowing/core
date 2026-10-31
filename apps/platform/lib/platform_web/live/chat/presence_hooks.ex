@@ -34,6 +34,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
     * `{:participant_joined, participant}`
     * `{:participant_left, participant}`
+    * `{:participant_role_changed, participant}` — refreshes the members panel
+      (task 01a19355 stage 3), so an open panel shows a promote or demote
+      made elsewhere and a viewer whose own role changed gains or loses the
+      admin controls without reopening it
     * `%Phoenix.Socket.Broadcast{event: "presence_diff"}`
     * `:refresh_agent_presence`
     * `{:agent_typing, %{space_id: id, typing: bool, participant_id: id}}`
@@ -277,6 +281,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   end
 
   defp handle_info({:participant_left, _participant}, socket),
+    do: {:halt, refresh_members_panel(socket)}
+
+  # Broadcast after commit by `Chat.set_member_role/4`. Nothing in this hook's
+  # roster render depends on the role; only the members panel does.
+  defp handle_info({:participant_role_changed, _participant}, socket),
     do: {:halt, refresh_members_panel(socket)}
 
   defp handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do

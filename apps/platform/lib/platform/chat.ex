@@ -7359,14 +7359,20 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "A user participant as a Members sheet row: `%{participant_id, user_id, name, you?}`."
+  @doc """
+  A user participant as a Members sheet row:
+  `%{participant_id, user_id, name, you?, admin?}`. `admin?` is the row's
+  channel-admin role (task 01a19355 stage 3), which the sheet shows as an
+  "admin" word and keys its Make admin / Remove admin control on.
+  """
   @spec member_row(%Participant{}, binary() | nil) :: map()
   def member_row(%Participant{} = participant, viewer_id) do
     %{
       participant_id: participant.id,
       user_id: participant.participant_id,
       name: participant.display_name || "Unknown",
-      you?: participant.participant_id == viewer_id
+      you?: participant.participant_id == viewer_id,
+      admin?: participant.role == "admin"
     }
   end
 
