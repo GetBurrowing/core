@@ -179,9 +179,9 @@ defmodule Platform.Federation.SpaceCreateToolTest do
       Repo.insert!(
         struct(
           %Platform.Accounts.User{
-            name: "Paige #{n}",
-            email: "paige-#{n}@example.com",
-            oidc_sub: "sub-paige-#{n}"
+            name: "Owner #{n}",
+            email: "owner-#{n}@example.com",
+            oidc_sub: "sub-owner-#{n}"
           },
           attrs
         )
@@ -201,7 +201,7 @@ defmodule Platform.Federation.SpaceCreateToolTest do
       user
     end
 
-    defp slug!, do: "paige-builds-#{System.unique_integer([:positive])}"
+    defp slug!, do: "requested-channel-#{System.unique_integer([:positive])}"
 
     defp create(args, caller),
       do: ToolSurface.execute("space_create", args, %{agent_id: caller.id})
@@ -223,28 +223,28 @@ defmodule Platform.Federation.SpaceCreateToolTest do
 
     test "an internal member is seated as admin, can summon, and their mention adds an agent",
          ctx do
-      paige = member!(user!(), ctx.org_id)
+      owner = member!(user!(), ctx.org_id)
       slug = slug!()
 
       assert {:ok, result} =
                create(
                  %{
-                   "name" => "Paige Builds",
+                   "name" => "Requested Channel",
                    "slug" => slug,
                    "org_id" => ctx.org_id,
-                   "admin_user_ids" => [paige.id]
+                   "admin_user_ids" => [owner.id]
                  },
                  ctx.caller
                )
 
       assert [%{user_id: user_id, participant_id: pid, display_name: name}] = result.admins
-      assert user_id == paige.id
-      assert name == paige.name
+      assert user_id == owner.id
+      assert name == owner.name
 
       space = Repo.get_by!(Space, slug: slug)
       assert [%Participant{id: ^pid, role: "admin"} = row] = user_rows(space.id)
-      assert row.participant_id == paige.id
-      assert Chat.can_summon_agents?(space, paige.id)
+      assert row.participant_id == owner.id
+      assert Chat.can_summon_agents?(space, owner.id)
 
       # The same mention path mention_summon_authorization_test.exs drives.
       agent =
@@ -329,19 +329,19 @@ defmodule Platform.Federation.SpaceCreateToolTest do
     end
 
     test "non-empty ids with no resolvable org are refused and nothing is created", ctx do
-      paige = member!(user!(), ctx.org_id)
+      owner = member!(user!(), ctx.org_id)
       slug = slug!()
 
       assert {:error, envelope} =
                create(
-                 %{"name" => "No org", "slug" => slug, "admin_user_ids" => [paige.id]},
+                 %{"name" => "No org", "slug" => slug, "admin_user_ids" => [owner.id]},
                  ctx.caller
                )
 
       assert envelope.recoverable
       assert envelope.error =~ "admin_user_ids needs a channel org; pass org_id"
       assert Repo.get_by(Space, slug: slug) == nil
-      assert user_rows_for(paige.id) == 0
+      assert user_rows_for(owner.id) == 0
     end
 
     test "non-string entries are refused and nothing is created", ctx do
@@ -364,7 +364,7 @@ defmodule Platform.Federation.SpaceCreateToolTest do
     end
 
     test "a duplicate id yields one admin row", ctx do
-      paige = member!(user!(), ctx.org_id)
+      owner = member!(user!(), ctx.org_id)
       slug = slug!()
 
       assert {:ok, result} =
@@ -373,7 +373,7 @@ defmodule Platform.Federation.SpaceCreateToolTest do
                    "name" => "Dup",
                    "slug" => slug,
                    "org_id" => ctx.org_id,
-                   "admin_user_ids" => [paige.id, paige.id]
+                   "admin_user_ids" => [owner.id, owner.id]
                  },
                  ctx.caller
                )

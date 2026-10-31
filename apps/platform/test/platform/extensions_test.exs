@@ -918,7 +918,7 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a19355 stage 2: `space_create` gains the optional
     # `admin_user_ids` property and the description / returns / limitations /
     # when_to_use prose that documents it ("Human users are not added" is
-    # gone). Names and bundles are unchanged. Measured on the moon test rig at
+    # gone). Names and bundles are unchanged. Measured on the test rig at
     # the stage's branch (5145a65ee).
     @main_tool_digest_off "b683efb28235696216d333a479132deeda7feb8519dfe85a746e1b76e083f90f"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
