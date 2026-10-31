@@ -5073,13 +5073,26 @@
                   >
                     Date
                   </label>
+                  <%!-- A half-typed native date posts "" under novalidate;
+                       DateEntryGuard mirrors `validity.badInput` into the
+                       hidden flag so the server can refuse it instead of
+                       reading "no date" (task 01a192d6). --%>
                   <input
                     id="meeting-create-date"
                     type="date"
                     name="start_meeting[date]"
                     value={@start_meeting_form["date"]}
+                    phx-hook="DateEntryGuard"
+                    data-incomplete-flag="meeting-create-date-incomplete"
                     class="input input-bordered w-full text-sm min-h-11"
                     data-role="meeting-create-date"
+                  />
+                  <input
+                    id="meeting-create-date-incomplete"
+                    type="hidden"
+                    name="start_meeting[date_incomplete]"
+                    value=""
+                    phx-update="ignore"
                   />
                 </div>
 

@@ -393,6 +393,7 @@ defmodule PlatformWeb.MeetingLive do
   @schedule_pair_error "Date and start time are required together."
   @no_time_zone_error "Time zone unavailable — reload to pick a time."
   @invalid_time_error "Date and start time are invalid."
+  @incomplete_date_error "Date is incomplete — pick the month, day and year."
   @nonexistent_time_error "That time does not exist on that date."
   @invalid_duration_error "Duration is invalid."
 
@@ -8065,7 +8066,8 @@ defmodule PlatformWeb.MeetingLive do
     date = attrs |> Map.get("date", "") |> to_string() |> String.trim()
     start_time = attrs |> Map.get("start_time", "") |> to_string() |> String.trim()
 
-    with {:ok, time} <- parse_start_time(start_time) do
+    with :ok <- check_date_complete(attrs),
+         {:ok, time} <- parse_start_time(start_time) do
       case {date, time} do
         {"", nil} -> {:ok, nil, nil}
         {"", _} -> {:error, @schedule_pair_error}
@@ -8074,6 +8076,13 @@ defmodule PlatformWeb.MeetingLive do
       end
     end
   end
+
+  # `date_incomplete` is set by the DateEntryGuard hook when the native date
+  # control holds a half-typed value, which the browser posts as "". Without
+  # it a missing year reads as "no date" and, with Start blank, would
+  # create an unscheduled meeting.
+  defp check_date_complete(%{"date_incomplete" => "true"}), do: {:error, @incomplete_date_error}
+  defp check_date_complete(_attrs), do: :ok
 
   defp parse_start_time(text) do
     case PlatformWeb.TimeEntry.parse(text) do

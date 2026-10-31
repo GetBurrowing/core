@@ -163,6 +163,40 @@ defmodule PlatformWeb.MeetingLiveCreateSheetTimeTest do
     end
   end
 
+  describe "a half-typed date" do
+    # A native date with no year posts "" under novalidate. The
+    # DateEntryGuard hook sets `date_incomplete`; without the refusal below,
+    # a blank Start would make this an unscheduled meeting.
+    test "the date input carries the guard hook and its hidden flag", %{conn: conn} do
+      view = open_sheet(conn)
+
+      assert has_element?(
+               view,
+               ~s(#meeting-create-date[phx-hook="DateEntryGuard"][data-incomplete-flag="meeting-create-date-incomplete"])
+             )
+
+      assert has_element?(
+               view,
+               ~s(#meeting-create-date-incomplete[type="hidden"][name="start_meeting[date_incomplete]"])
+             )
+    end
+
+    test "is refused, not read as an ad-hoc meeting", %{conn: conn, project: project} do
+      view = open_sheet(conn)
+      before = meeting_count()
+
+      html = submit(view, project, %{"date" => "", "date_incomplete" => "true"})
+
+      assert html =~ "Date is incomplete — pick the month, day and year."
+      assert meeting_count() == before
+
+      # Positive control: the same blank fields without the flag ARE the
+      # supported ad-hoc create.
+      submit(view, project, %{"date" => "", "date_incomplete" => ""})
+      assert meeting_count() == before + 1
+    end
+  end
+
   describe "unchanged behaviour" do
     test "blank date and blank Start still create an ad-hoc meeting",
          %{conn: conn, project: project} do

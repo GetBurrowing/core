@@ -22,6 +22,7 @@ import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import HandoverDownload from "./handover_download"
+import DateEntryGuard from "./date_entry_guard"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
 import SearchFocus from "./search_focus"
@@ -109,6 +110,7 @@ export default {
   ComposeInput,
   CopyToClipboard,
   HandoverDownload,
+  DateEntryGuard,
   DoneColumnState,
   DragDropUpload,
   SearchFocus,
