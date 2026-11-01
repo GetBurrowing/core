@@ -9,6 +9,7 @@ defmodule PlatformWeb.AccessLiveTest do
 
   defp user!(name) do
     n = System.unique_integer([:positive])
+
     Repo.insert!(%User{
       name: name,
       email: "panel-#{n}@example.com",
