@@ -5,7 +5,8 @@ defmodule PlatformWeb.ConnectAiLive do
   design canvas 01a13c97-98c6-7000-91f3-96b8ccfe8af4, screen 3).
 
   The owner picks the subscription their agent uses, and the screen connects
-  ONE native agent named "Setup" (`Platform.Agents.SetupAgent`) with it:
+  ONE native agent named Burrow (`Platform.Agents.Burrow`) with it, on the
+  provider chosen here (task 01a19505):
 
     * **ChatGPT (Codex)**: Codex's own device login. Step 1 opens OpenAI's
       sign-in page in a new tab; step 2 shows the one-time code the agent host
@@ -27,7 +28,8 @@ defmodule PlatformWeb.ConnectAiLive do
   The option order is `config :platform, PlatformWeb.ConnectAiLive,
   provider_order:` (the experiment surface; default ChatGPT first).
 
-  When the agent is first seen running, `SetupAgent.ensure_getting_started/2`
+  When the agent is first seen running,
+  `Burrow.GettingStarted.ensure_getting_started/2`
   opens the "Getting started" space (once per agent) and the screen offers
   "Go to Getting started" as its next step.
 
@@ -41,7 +43,8 @@ defmodule PlatformWeb.ConnectAiLive do
   use PlatformWeb, :live_view
 
   alias Platform.AgentHost
-  alias Platform.Agents.{NativeLogin, SetupAgent}
+  alias Platform.Agents.{Burrow, NativeLogin}
+  alias Platform.Agents.Burrow.GettingStarted
   alias Platform.Tenancy
 
   @default_order [:codex, :api_key, :claude_subscription]
@@ -75,7 +78,7 @@ defmodule PlatformWeb.ConnectAiLive do
 
     if Tenancy.root_admin?(user) do
       order = provider_order()
-      agent = SetupAgent.get()
+      agent = Burrow.get()
       if connected?(socket), do: AgentHost.subscribe()
 
       socket =
@@ -115,12 +118,12 @@ defmodule PlatformWeb.ConnectAiLive do
 
   def passkey_url(_session), do: nil
 
-  # An existing Setup agent decides the option shown first; otherwise the
+  # An existing Burrow agent decides the option shown first; otherwise the
   # first configured option.
   defp initial_selection(nil, order), do: hd(order)
 
   defp initial_selection(agent, order) do
-    case SetupAgent.harness(agent) do
+    case Burrow.harness(agent) do
       "codex" -> :codex
       "claude_code" -> if :api_key in order, do: :api_key, else: hd(order)
       _ -> hd(order)
@@ -138,7 +141,7 @@ defmodule PlatformWeb.ConnectAiLive do
   defp ensure_agent(socket, option) do
     user = socket.assigns.current_user_record
 
-    case SetupAgent.ensure(user.id, SetupAgent.harness_for(option)) do
+    case Burrow.ensure(user.id, Burrow.harness_for(option)) do
       {:ok, agent} -> socket |> assign(:agent, agent) |> refresh()
       {:error, _reason} -> assign(socket, :failure, :not_created)
     end
@@ -169,7 +172,7 @@ defmodule PlatformWeb.ConnectAiLive do
 
     # Refuse a non-key before creating anything.
     with :ok <- NativeLogin.api_key_shape(trim(value)),
-         {:ok, agent} <- SetupAgent.ensure(user.id, "claude_code"),
+         {:ok, agent} <- Burrow.ensure(user.id, "claude_code"),
          :ok <- NativeLogin.put_api_key(user.id, agent, value) do
       _ = AgentHost.restart_agent(agent)
 
@@ -209,7 +212,7 @@ defmodule PlatformWeb.ConnectAiLive do
 
   @impl true
   def handle_info({:agent_host_status, _event}, socket) do
-    {:noreply, socket |> assign(:agent, socket.assigns.agent || SetupAgent.get()) |> refresh()}
+    {:noreply, socket |> assign(:agent, socket.assigns.agent || Burrow.get()) |> refresh()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -229,7 +232,7 @@ defmodule PlatformWeb.ConnectAiLive do
     |> assign(:host_connected?, AgentHost.connected?())
     |> assign(:running?, running?)
     |> assign(:login, agent && NativeLogin.login_view(agent))
-    |> assign(:os_user, agent && SetupAgent.os_user(agent))
+    |> assign(:os_user, agent && Burrow.os_user(agent))
     |> assign(:failure, failure(agent, observed))
     |> maybe_getting_started(agent, running?)
   end
@@ -247,7 +250,7 @@ defmodule PlatformWeb.ConnectAiLive do
   defp maybe_getting_started(socket, agent, true) do
     case socket.assigns[:space] do
       nil ->
-        case SetupAgent.ensure_getting_started(agent, socket.assigns.current_user_record) do
+        case GettingStarted.ensure_getting_started(agent, socket.assigns.current_user_record) do
           {:ok, space} -> assign(socket, :space, space)
           {:error, _} -> socket
         end
@@ -267,7 +270,7 @@ defmodule PlatformWeb.ConnectAiLive do
   def render(assigns) do
     assigns =
       assigns
-      |> assign(:agent_name, (assigns.agent && assigns.agent.name) || SetupAgent.name())
+      |> assign(:agent_name, (assigns.agent && assigns.agent.name) || Burrow.name())
       |> assign(:ssh_host, ssh_host())
       |> assign(:done?, assigns.running? and not is_nil(assigns.space))
 
@@ -466,8 +469,8 @@ defmodule PlatformWeb.ConnectAiLive do
     """
   end
 
-  attr :running?, :boolean, required: true
-  attr :agent_name, :string, required: true
+  attr(:running?, :boolean, required: true)
+  attr(:agent_name, :string, required: true)
 
   defp status_line(assigns) do
     ~H"""
@@ -490,8 +493,8 @@ defmodule PlatformWeb.ConnectAiLive do
     """
   end
 
-  attr :failure, :any, required: true
-  attr :agent_name, :string, required: true
+  attr(:failure, :any, required: true)
+  attr(:agent_name, :string, required: true)
 
   defp failure_block(assigns) do
     ~H"""

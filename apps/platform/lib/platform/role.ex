@@ -285,8 +285,7 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     :canvas_search_backfill,
     :burrow_docs_seed,
-    :default_space_seed,
-    :burrow_seed
+    :default_space_seed
   ]
 
   # Web children that `Platform.Application.children/2` adds only under :web,

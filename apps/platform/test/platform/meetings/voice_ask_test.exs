@@ -44,7 +44,7 @@ defmodule Platform.Meetings.VoiceAskTest do
     Sandbox.allow(Repo, self(), store)
 
     owner = root_admin!()
-    {:ok, :created, burrow} = Burrow.ensure()
+    {:ok, burrow} = Burrow.ensure(owner.id, "claude_code")
     {:ok, %{agent: voice, runtime: voice_runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
     {:ok, space} =

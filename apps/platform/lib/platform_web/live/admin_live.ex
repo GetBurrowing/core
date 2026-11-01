@@ -22,12 +22,12 @@ defmodule PlatformWeb.AdminLive do
      socket
      |> assign(:page_title, "Admin")
      |> assign(:sign_in_admin?, Platform.SignInAdmin.Config.enabled?())
-     # Task 01a10315 stage 5: "Connect your AI" until the Setup agent is
-     # connected, for root admins (the only ones who can open it).
+     # Task 01a10315 stage 5 / 01a19505: "Connect your AI" until the Burrow
+     # agent is connected, for root admins (the only ones who can open it).
      |> assign(
        :connect_ai?,
        Platform.Tenancy.root_admin?(socket.assigns[:current_user_record]) and
-         not Platform.Agents.SetupAgent.connected?()
+         not Platform.Agents.Burrow.connected?()
      )}
   end
 

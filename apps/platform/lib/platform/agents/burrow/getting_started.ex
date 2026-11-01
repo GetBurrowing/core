@@ -1,24 +1,8 @@
-defmodule Platform.Agents.SetupAgent do
+defmodule Platform.Agents.Burrow.GettingStarted do
   @moduledoc """
-  The "Setup" native agent a new install's owner connects on
-  `/setup/connect-ai` (`PlatformWeb.ConnectAiLive`, task 01a10315 stage 5),
-  and the "Getting started" space it opens once it is connected.
-
-  ## One agent, the harness the person picks
-
-  `ensure/2` creates, or reuses, ONE native agent named "Setup" (slug
-  `setup`) through `NativeAgents.create/2`, and starts it. The harness follows
-  the option chosen: ChatGPT (Codex) runs `codex`, which logs in with Codex's
-  own device login (`Platform.Agents.NativeLogin.login_view/1`); an API key and
-  a Claude Pro or Max subscription run `claude_code`. Choosing a different
-  option before the agent is connected switches the harness
-  (`NativeAgents.set_harness/2`); once it is connected the agent is left alone.
-
-  Burrow never relays a Claude login (task 01a17b10): nothing here takes a
-  login code, and the Claude subscription path is a terminal step on the
-  server (`os_user/1` names the account to log in as).
-
-  ## After connect: "Getting started"
+  The "Getting started" space the Burrow agent (`Platform.Agents.Burrow`)
+  opens with the owner once it is connected on `/setup/connect-ai` (task
+  01a10315 stage 5; owned by Burrow since task 01a19505).
 
   `ensure_getting_started/2` runs on the first observation of the agent
   `running`, and is idempotent, keyed on the agent id:
@@ -30,125 +14,26 @@ defmodule Platform.Agents.SetupAgent do
     * the kickoff message is posted once: the call that flips the space's
       `metadata["setup_kickoff"]` from absent to set, in one UPDATE, is the
       only one that posts.
+
+  The metadata keys `"setup_agent_id"` and `"setup_kickoff"` and the slug are
+  stored data on installs that already have a Getting started space; they keep
+  their names so such an install is not sent a second kickoff.
   """
 
   import Ecto.Query
 
   require Logger
 
-  alias Platform.AgentHost
-  alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
   alias Platform.Repo
   alias Platform.Tenancy
 
-  @name "Setup"
-  @slug "setup"
   @space_name "Getting started"
-
-  @doc "The agent's display name."
-  def name, do: @name
 
   @doc "The Getting started space's display name."
   def space_name, do: @space_name
-
-  @doc "The harness each connect option runs."
-  @spec harness_for(atom()) :: String.t()
-  def harness_for(:codex), do: "codex"
-  def harness_for(:api_key), do: "claude_code"
-  def harness_for(:claude_subscription), do: "claude_code"
-
-  @doc "The Setup agent (a native agent with slug `setup`), or nil."
-  @spec get() :: Agent.t() | nil
-  def get do
-    Enum.find_value(NativeAgents.list(), fn %{agent: a} -> a.slug == @slug && a end)
-  end
-
-  @doc "The Setup agent's runtime harness, or nil."
-  @spec harness(Agent.t() | nil) :: String.t() | nil
-  def harness(nil), do: nil
-
-  def harness(%Agent{} = agent) do
-    case NativeAgents.get_managed_runtime(agent) do
-      %AgentRuntime{harness: harness} -> harness
-      nil -> nil
-    end
-  end
-
-  @doc "True when the Setup agent exists and the agent host reports it running."
-  @spec connected?() :: boolean()
-  def connected?, do: running?(get())
-
-  @doc "True when `agent` is observed running."
-  @spec running?(Agent.t() | nil) :: boolean()
-  def running?(nil), do: false
-  def running?(%Agent{} = agent), do: match?(%{state: :running}, AgentHost.status(agent))
-
-  @doc """
-  Create or reuse the Setup agent owned by `owner_id`, running `harness`, and
-  start it. A Setup agent that is already running keeps its harness.
-  Returns `{:ok, agent}` or `{:error, reason}`.
-  """
-  @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
-  def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
-    case get() do
-      nil ->
-        create(owner_id, harness)
-
-      %Agent{} = agent ->
-        cond do
-          running?(agent) ->
-            {:ok, agent}
-
-          harness(agent) == harness ->
-            start(agent)
-
-          true ->
-            switch(agent, harness)
-        end
-    end
-  end
-
-  defp create(owner_id, harness) do
-    case NativeAgents.create(owner_id, %{name: @name, harness: harness}) do
-      {:ok, agent, _runtime} ->
-        start(agent)
-
-      {:error, reason} ->
-        # Lost a race with another tab: the agent the winner made is ours too.
-        case get() do
-          %Agent{} = agent -> ensure(owner_id, harness_or(agent, harness))
-          nil -> {:error, reason}
-        end
-    end
-  end
-
-  defp harness_or(agent, fallback), do: harness(agent) || fallback
-
-  defp switch(agent, harness) do
-    _ = AgentHost.stop_agent(agent)
-
-    case NativeAgents.set_harness(agent, harness) do
-      {:ok, _runtime} -> start(agent)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp start(agent) do
-    # Not connected to a host is not an error here: the screen says so, and
-    # the reconciler starts the agent when the host joins.
-    _ = AgentHost.start_agent(agent)
-    {:ok, agent}
-  end
-
-  @doc """
-  The OS account the agent host runs `agent` as: `agent-<last 12 hex of its
-  id>` (services/agent-host/src/ids.ts `userName`; the tail, because the head
-  of a UUIDv7 is a clock).
-  """
-  @spec os_user(Agent.t()) :: String.t()
-  def os_user(%Agent{id: id}), do: "agent-" <> String.slice(id, -12, 12)
 
   @doc "The Getting started space's slug for `agent`."
   @spec space_slug(Agent.t()) :: String.t()
@@ -269,7 +154,10 @@ defmodule Platform.Agents.SetupAgent do
       :ok
     else
       {:error, reason} ->
-        Logger.warning("[SetupAgent] kickoff not posted in space=#{space.id}: #{inspect(reason)}")
+        Logger.warning(
+          "[Burrow.GettingStarted] kickoff not posted in space=#{space.id}: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end

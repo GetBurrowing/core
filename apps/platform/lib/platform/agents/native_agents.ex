@@ -178,7 +178,7 @@ defmodule Platform.Agents.NativeAgents do
   Switch a native agent's harness (`"claude_code"` or `"codex"`), seeding the
   new harness's instructions and settings files. A no-op when it already runs
   `harness`. The caller stops the agent first and starts it after (task
-  01a10315 stage 5, `Platform.Agents.SetupAgent`).
+  01a10315 stage 5; `Platform.Agents.Burrow.ensure/2`).
   """
   @spec set_harness(Agent.t(), String.t()) ::
           {:ok, AgentRuntime.t()} | {:error, :not_managed | term()}
@@ -298,33 +298,7 @@ defmodule Platform.Agents.NativeAgents do
 
     This file is managed from Agents in Burrow and is rewritten every time you
     start. Ask your owner to change it there; edits made here do not last.
-    """ <> setup_guide(name)
-  end
-
-  # The Setup agent (`Platform.Agents.SetupAgent`, task 01a10315 stage 5) is the
-  # one a new install's owner connects first; it also guides them through the
-  # rest of setup. Written for an owner who is not technical.
-  defp setup_guide(name) do
-    if name == Platform.Agents.SetupAgent.name() do
-      """
-
-      ## Helping your owner finish setup
-
-      You are the first agent on a new install, and your owner may not be technical.
-      In the "Getting started" space, help them finish setting up, one step at a time:
-
-      1. Ask what their business does and which tools they already use (email,
-         calendar, files, chat). Suggest connecting the ones that matter most first.
-      2. Help them create a first space for real work, and say what it is for.
-      3. Offer to add more agents later, once the first space is in use.
-
-      Use plain words, not technical ones. Never ask them to open a terminal. When a
-      step needs their consent or a sign-in, give them the link or button in Burrow
-      and wait for them to finish it; never do it for them.
-      """
-    else
-      ""
-    end
+    """
   end
 
   @doc """
@@ -434,14 +408,23 @@ defmodule Platform.Agents.NativeAgents do
   def start_files(%Agent{} = agent) do
     burrow? = Platform.Agents.Burrow.burrow?(agent)
     section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
+    # The instructions file of the harness Burrow actually runs (task 01a19505).
+    key = if burrow?, do: burrow_instructions_key(agent)
 
     for %WorkspaceFile{} = f <- list_files(agent), valid_file_key?(f.file_key) do
       content =
-        if burrow? and f.file_key == instructions_key("claude_code"),
+        if burrow? and f.file_key == key,
           do: f.content <> section,
           else: f.content
 
       %{"key" => f.file_key, "content" => content, "version" => f.version}
+    end
+  end
+
+  defp burrow_instructions_key(agent) do
+    case get_managed_runtime(agent) do
+      %AgentRuntime{harness: harness} -> instructions_key(harness)
+      nil -> nil
     end
   end
 
@@ -506,8 +489,9 @@ defmodule Platform.Agents.NativeAgents do
   def live?(%{state: state}) when state in @live_states, do: true
   def live?(_), do: false
 
-  defp seed_instructions(name, "claude_code") when name == "Burrow",
-    do: Platform.Agents.Burrow.identity_template(name)
+  defp seed_instructions(name, harness)
+       when name == "Burrow" and harness in ~w(claude_code codex),
+       do: Platform.Agents.Burrow.identity_template(name, harness)
 
   defp seed_instructions(name, harness), do: identity_template(name, harness)
 

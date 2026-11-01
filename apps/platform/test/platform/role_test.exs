@@ -207,8 +207,7 @@ defmodule Platform.RoleTest do
                Platform.Meetings.CompletionSweeper,
                :canvas_search_backfill,
                :burrow_docs_seed,
-               :default_space_seed,
-               :burrow_seed
+               :default_space_seed
              ]
     end
 
