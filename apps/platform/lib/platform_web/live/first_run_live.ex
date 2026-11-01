@@ -37,6 +37,12 @@ defmodule PlatformWeb.FirstRunLive do
       them up (see `FirstRunGoal`).
     * The "Handed off" typing indicator is Burrow's own; this view does not
       fake one.
+    * The canvas's "neutral" slot for the placeholder, the helper line and
+      "Skip for now" is painted with `text-subtle`, this codebase's AA-tuned
+      secondary-text token. `--color-neutral` is daisyUI's dark fill colour,
+      and as text on base-100 in the dark theme it reads at roughly 3:1. Placeholders
+      are pinned to `placeholder:text-subtle` by
+      `Platform.Design.PlaceholderContrastTest`.
   """
   use PlatformWeb, :live_view
 
@@ -124,7 +130,7 @@ defmodule PlatformWeb.FirstRunLive do
         >
           What do you want to do?
         </label>
-        <p id="first-run-helper" data-role="first-run-helper" class="text-sm text-neutral">
+        <p id="first-run-helper" data-role="first-run-helper" class="text-sm text-subtle">
           Describe a goal in your own words. Burrow will take it from there.
         </p>
 
@@ -138,7 +144,7 @@ defmodule PlatformWeb.FirstRunLive do
             aria-describedby="first-run-helper"
             placeholder="e.g. Plan our team's work for this week"
             style="field-sizing: content"
-            class="block max-h-[50vh] min-h-[7.5rem] w-full resize-none rounded-[var(--radius-box)] bg-transparent px-4 pb-14 pt-4 text-lg text-base-content placeholder:text-neutral focus:outline-none"
+            class="block max-h-[50vh] min-h-[7.5rem] w-full resize-none rounded-[var(--radius-box)] bg-transparent px-4 pb-14 pt-4 text-lg text-base-content placeholder:text-subtle focus:outline-none"
           >{@goal}</textarea>
           <button
             type="submit"
@@ -191,7 +197,7 @@ defmodule PlatformWeb.FirstRunLive do
             type="button"
             phx-click="skip"
             data-role="first-run-skip"
-            class="text-sm text-neutral hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="text-sm text-subtle hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Skip for now
           </button>

@@ -83,7 +83,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/components/voice/voice_components.ex",
     "platform_web/live/meeting_live.html.heex",
     # The desktop command palette's input (Burrow redesign 23 stage 2).
-    "platform_web/live/command_palette_live.ex"
+    "platform_web/live/command_palette_live.ex",
+    # The first-run goal field at /start (task 01a19554-fd07 stage 2).
+    "platform_web/live/first_run_live.ex"
   ]
 
   # Every OTHER file under lib/platform_web that renders a `placeholder=`
