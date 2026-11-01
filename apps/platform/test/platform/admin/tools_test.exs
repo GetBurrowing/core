@@ -31,7 +31,7 @@ defmodule Platform.Admin.ToolsTest do
 
     owner = user!("owner")
     make_admin!(owner)
-    {:ok, :created, agent} = Burrow.ensure()
+    {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
     runtime = Repo.get!(AgentRuntime, agent.runtime_id)
     %{owner: owner, agent: agent, runtime: runtime, ctx: %{runtime_id: runtime.runtime_id}}
   end

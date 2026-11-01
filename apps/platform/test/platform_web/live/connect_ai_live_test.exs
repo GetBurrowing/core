@@ -23,7 +23,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
   import Platform.AsyncAssertions
 
   alias Platform.AgentHost.{FakeHost, Reconciler}
-  alias Platform.Agents.{NativeLogin, SetupAgent}
+  alias Platform.Agents.{AgentRuntime, Burrow, NativeAgents, NativeLogin}
+  alias Platform.Agents.Burrow.GettingStarted
   alias Platform.Chat.{Message, Participant, Space}
   alias Platform.Repo
   alias Platform.VaultFixtures
@@ -94,8 +95,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
 
     assert_eventually(fn -> has_element?(view, "#connect-ai-code", "FAKE-1234") end, 3_000)
-    agent = SetupAgent.get()
-    assert SetupAgent.harness(agent) == "codex"
+    agent = Burrow.get()
+    assert Burrow.harness(agent) == "codex"
 
     assert has_element?(
              view,
@@ -114,8 +115,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     :ok = FakeHost.complete(agent.id)
 
     assert_eventually(fn -> has_element?(view, "#connect-ai-getting-started") end, 3_000)
-    assert has_element?(view, "#connect-ai-status", "Setup is connected.")
-    space = SetupAgent.getting_started_space(agent)
+    assert has_element?(view, "#connect-ai-status", "Burrow is connected.")
+    space = GettingStarted.getting_started_space(agent)
 
     assert has_element?(
              view,
@@ -142,8 +143,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     assert html =~ "We recommend ChatGPT (Codex) or an API key"
     assert has_element?(view, "details#connect-ai-claude-technical:not([open])")
 
-    agent = assert_eventually(fn -> SetupAgent.get() end)
-    assert SetupAgent.harness(agent) == "claude_code"
+    agent = assert_eventually(fn -> Burrow.get() end)
+    assert Burrow.harness(agent) == "claude_code"
     os_user = "agent-" <> String.slice(agent.id, -12, 12)
 
     steps =
@@ -177,8 +178,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       |> form("#connect-ai-api-key-form", api_key: %{value: @key})
       |> render_submit()
 
-    agent = SetupAgent.get()
-    assert SetupAgent.harness(agent) == "claude_code"
+    agent = Burrow.get()
+    assert Burrow.harness(agent) == "claude_code"
     assert NativeLogin.api_key_set?(agent)
     refute html =~ @key
     refute html =~ "CONNECTAI05tail"
@@ -192,7 +193,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
        %{conn: conn, admin: admin} do
     {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
     assert_eventually(fn -> has_element?(view, "#connect-ai-code") end, 3_000)
-    agent = SetupAgent.get()
+    agent = Burrow.get()
 
     :ok = FakeHost.complete(agent.id)
     assert_eventually(fn -> has_element?(view, "#connect-ai-getting-started") end, 3_000)
@@ -200,12 +201,12 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     # Second transition: a restart goes starting -> running again, seen by a
     # second screen and by a direct call.
     :ok = Platform.AgentHost.restart_agent(agent)
-    assert_eventually(fn -> SetupAgent.running?(agent) end, 3_000)
+    assert_eventually(fn -> Burrow.running?(agent) end, 3_000)
     {:ok, view2, _html} = live(conn, ~p"/setup/connect-ai")
     assert has_element?(view2, "#connect-ai-getting-started")
-    assert {:ok, _} = SetupAgent.ensure_getting_started(agent, admin)
+    assert {:ok, _} = GettingStarted.ensure_getting_started(agent, admin)
 
-    spaces = Repo.all(from(s in Space, where: s.slug == ^SetupAgent.space_slug(agent)))
+    spaces = Repo.all(from(s in Space, where: s.slug == ^GettingStarted.space_slug(agent)))
     assert [%Space{name: "Getting started"} = space] = spaces
 
     kickoffs =
@@ -247,11 +248,11 @@ defmodule PlatformWeb.ConnectAiLiveTest do
     assert has_element?(view, "#connect-ai-failed.bg-error\\/10")
   end
 
-  test "the Setup agent's instructions carry the setup guide", %{conn: conn} do
+  test "Burrow's instructions carry the setup guide", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
     assert_eventually(fn -> has_element?(view, "#connect-ai-code") end, 3_000)
 
-    agents_md = Platform.Agents.MemoryContext.get_workspace_file(SetupAgent.get().id, "AGENTS.md")
+    agents_md = Platform.Agents.MemoryContext.get_workspace_file(Burrow.get().id, "AGENTS.md")
     assert agents_md
     assert agents_md.content =~ "Helping your owner finish setup"
     assert agents_md.content =~ "Never ask them to open a terminal"
@@ -260,8 +261,115 @@ defmodule PlatformWeb.ConnectAiLiveTest do
              "Helping your owner finish setup"
   end
 
+  defp with_agent_host_token(_context) do
+    previous = Application.get_env(:platform, :agent_host_token)
+    Application.put_env(:platform, :agent_host_token, "test-host-token")
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:platform, :agent_host_token, previous),
+        else: Application.delete_env(:platform, :agent_host_token)
+    end)
+
+    :ok
+  end
+
+  defp agents_md(agent) do
+    Platform.Agents.MemoryContext.get_workspace_file(agent.id, "AGENTS.md")
+  end
+
+  describe "one first agent, named Burrow, on the provider chosen (task 01a19505)" do
+    setup :with_agent_host_token
+
+    test "ChatGPT first: exactly one native agent, named Burrow, running codex, holding the first-agent grant",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      assert_eventually(fn -> has_element?(view, "#connect-ai-code", "FAKE-1234") end, 3_000)
+
+      assert [%{agent: agent, runtime: runtime}] = NativeAgents.list()
+      assert agent.name == "Burrow"
+      assert agent.slug == "burrow"
+      assert runtime.harness == "codex"
+      assert Repo.get!(AgentRuntime, runtime.id).metadata["first_agent_grant"] == true
+    end
+
+    test "API key first: exactly one native agent, named Burrow, running claude_code, holding the first-agent grant",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      choose(view, "api_key")
+
+      view
+      |> form("#connect-ai-api-key-form", api_key: %{value: @key})
+      |> render_submit()
+
+      assert [%{agent: agent, runtime: runtime}] = NativeAgents.list()
+      assert agent.name == "Burrow"
+      assert agent.slug == "burrow"
+      assert runtime.harness == "claude_code"
+      assert Repo.get!(AgentRuntime, runtime.id).metadata["first_agent_grant"] == true
+    end
+
+    test "first login then connect-ai with Codex leaves exactly one agent", %{conn: conn} do
+      n = System.unique_integer([:positive])
+
+      {:ok, owner} =
+        Platform.Accounts.find_or_create_from_oidc(%{
+          sub: "oidc-connect-ai-first-login-#{n}",
+          email: "connect-ai-first-login-#{n}@example.com",
+          name: "Connect AI Owner #{n}"
+        })
+
+      {:ok, _} = Platform.Tenancy.promote_to_admin(owner)
+
+      # The login started nothing that creates an agent: whatever it put under
+      # the task supervisor has finished, and there is still no agent.
+      assert :ok = Platform.SandboxHelpers.await_supervised_writes()
+      assert NativeAgents.list() == []
+
+      conn = Plug.Test.init_test_session(conn, %{"current_user_id" => owner.id})
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      choose(view, "codex")
+      assert_eventually(fn -> has_element?(view, "#connect-ai-code", "FAKE-1234") end, 3_000)
+
+      assert [%{agent: %{name: "Burrow"}, runtime: %{harness: "codex"}}] = NativeAgents.list()
+    end
+
+    test "a second agent the owner creates is not Burrow and gets no setup guide", %{
+      conn: conn,
+      admin: admin
+    } do
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      assert_eventually(fn -> has_element?(view, "#connect-ai-code") end, 3_000)
+      burrow = Burrow.get()
+
+      {:ok, helper, helper_runtime} =
+        NativeAgents.create(admin.id, %{name: "Helper", harness: "codex"})
+
+      refute Burrow.burrow?(helper)
+      refute agents_md(helper).content =~ "## Helping your owner finish setup"
+      assert agents_md(burrow).content =~ "## Helping your owner finish setup"
+      refute Map.has_key?(helper_runtime.metadata || %{}, "first_agent_grant")
+      assert Burrow.get().id == burrow.id
+    end
+
+    test "an install that already has an unconnected Claude Burrow reuses it when the owner picks ChatGPT",
+         %{conn: conn, admin: admin} do
+      {:ok, legacy, _runtime} =
+        NativeAgents.create(admin.id, %{name: "Burrow", harness: "claude_code"})
+
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      choose(view, "codex")
+      assert_eventually(fn -> has_element?(view, "#connect-ai-code", "FAKE-1234") end, 3_000)
+
+      assert [%{agent: agent, runtime: runtime}] = NativeAgents.list()
+      assert agent.id == legacy.id
+      assert runtime.harness == "codex"
+      assert agents_md(agent).content =~ "## Helping your owner finish setup"
+    end
+  end
+
   describe "the /admin card" do
-    test "shows while the Setup agent is not connected and links here", %{conn: conn} do
+    test "shows while Burrow is not connected and links here", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/admin")
 
       assert has_element?(
@@ -271,11 +379,11 @@ defmodule PlatformWeb.ConnectAiLiveTest do
              )
     end
 
-    test "is gone once the Setup agent is connected", %{conn: conn} do
+    test "is gone once Burrow is connected", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
       assert_eventually(fn -> has_element?(view, "#connect-ai-code") end, 3_000)
-      :ok = FakeHost.complete(SetupAgent.get().id)
-      assert_eventually(fn -> SetupAgent.connected?() end, 3_000)
+      :ok = FakeHost.complete(Burrow.get().id)
+      assert_eventually(fn -> Burrow.connected?() end, 3_000)
 
       {:ok, admin_view, _html} = live(conn, ~p"/admin")
       refute has_element?(admin_view, "#admin-connect-ai-card")

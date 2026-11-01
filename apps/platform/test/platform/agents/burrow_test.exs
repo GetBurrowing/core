@@ -2,7 +2,7 @@ defmodule Platform.Agents.BurrowTest do
   @moduledoc "The install's Burrow native agent, task 01a17b10 stage 2."
   use Platform.DataCase, async: false
 
-  import ExUnit.CaptureLog
+  import Ecto.Query
 
   alias Platform.Accounts.User
   alias Platform.Agents.{AgentRuntime, Burrow, NativeAgents, NativeLogin}
@@ -50,81 +50,6 @@ defmodule Platform.Agents.BurrowTest do
 
   defp profile(agent) do
     Platform.Access.RuntimeProfiles.tool_profile(Repo.get!(AgentRuntime, agent.runtime_id))
-  end
-
-  describe "ensure/1" do
-    test "is a logged no-op without AGENT_HOST_TOKEN" do
-      admin!()
-      Application.delete_env(:platform, :agent_host_token)
-
-      log =
-        capture_log(fn -> assert {:ok, :skipped, :no_agent_host_token} = Burrow.ensure() end)
-
-      assert log =~ "no AGENT_HOST_TOKEN"
-      assert burrow_count() == 0
-    end
-
-    test "is a no-op without an owner" do
-      assert {:ok, :skipped, :no_owner} = Burrow.ensure()
-      assert burrow_count() == 0
-    end
-
-    test "is idempotent" do
-      admin!()
-      assert {:ok, :created, a} = Burrow.ensure()
-      assert {:ok, :exists, b} = Burrow.ensure()
-      assert a.id == b.id
-      assert burrow_count() == 1
-    end
-
-    test "on an empty install Burrow takes the first-agent grant" do
-      admin!()
-      {:ok, :created, agent} = Burrow.ensure()
-      rt = Repo.get!(AgentRuntime, agent.runtime_id)
-
-      assert rt.metadata["first_agent_grant"] == true
-      assert Enum.sort(profile(agent)) == Enum.sort(Platform.Federation.first_agent_bundles())
-    end
-
-    test "with a federated agent already present Burrow gets the defaults" do
-      owner = admin!()
-
-      {:ok, _fed, _rt, _tok} =
-        Platform.Federation.provision_agent_runtime(
-          owner.id,
-          %{slug: "fed-#{System.unique_integer([:positive])}", name: "Fed", status: "active"},
-          %{runtime_id: "fed-rt-#{System.unique_integer([:positive])}"}
-        )
-
-      {:ok, :created, agent} = Burrow.ensure()
-      rt = Repo.get!(AgentRuntime, agent.runtime_id)
-
-      refute Map.has_key?(rt.metadata, "first_agent_grant")
-      assert Enum.sort(profile(agent)) == Enum.sort(AgentRuntime.default_tool_profile())
-    end
-
-    test "does not change the login mode: a fresh Burrow gets the API-key path" do
-      admin!()
-      {:ok, :created, _agent} = Burrow.ensure()
-
-      assert NativeLogin.login_mode() == :api_key
-      refute NativeLogin.step(%{state: :needs_login}, false) == :needs_operator
-
-      assert NativeLogin.step(%{state: :needs_login}, false) ==
-               NativeLogin.step(%{state: :needs_login}, false, :api_key)
-    end
-
-    test "seeds a Burrow CLAUDE.md naming the role and bundles" do
-      admin!()
-      {:ok, :created, agent} = Burrow.ensure()
-      claude = Enum.find(NativeAgents.start_files(agent), &(&1["key"] == "CLAUDE.md"))
-
-      assert claude["content"] =~ "orchestrator and infra desk"
-
-      for b <- ~w(task plan messaging space memory context_read admin) do
-        assert claude["content"] =~ "`#{b}`"
-      end
-    end
   end
 
   defp native_entries, do: NativeAgents.list()
@@ -198,6 +123,46 @@ defmodule Platform.Agents.BurrowTest do
       assert content =~ "## Helping your owner finish setup"
     end
 
+    test "with a federated agent already present Burrow gets the defaults" do
+      owner = admin!()
+
+      {:ok, _fed, _rt, _tok} =
+        Platform.Federation.provision_agent_runtime(
+          owner.id,
+          %{slug: "fed-#{System.unique_integer([:positive])}", name: "Fed", status: "active"},
+          %{runtime_id: "fed-rt-#{System.unique_integer([:positive])}"}
+        )
+
+      {:ok, agent} = Burrow.ensure(owner.id, "codex")
+      rt = Repo.get!(AgentRuntime, agent.runtime_id)
+
+      refute Map.has_key?(rt.metadata, "first_agent_grant")
+      assert Enum.sort(profile(agent)) == Enum.sort(AgentRuntime.default_tool_profile())
+    end
+
+    test "does not change the login mode: a fresh Burrow gets the API-key path" do
+      owner = admin!()
+      {:ok, _agent} = Burrow.ensure(owner.id, "claude_code")
+
+      assert NativeLogin.login_mode() == :api_key
+      refute NativeLogin.step(%{state: :needs_login}, false) == :needs_operator
+
+      assert NativeLogin.step(%{state: :needs_login}, false) ==
+               NativeLogin.step(%{state: :needs_login}, false, :api_key)
+    end
+
+    test "seeds a Burrow CLAUDE.md naming the role and bundles" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      claude = file_content(agent, "CLAUDE.md")
+
+      assert claude =~ "orchestrator and infra desk"
+
+      for b <- ~w(task plan messaging space memory context_read admin) do
+        assert claude =~ "`#{b}`"
+      end
+    end
+
     test "start_files appends the admins section to a Codex Burrow's AGENTS.md" do
       owner = admin!()
       {:ok, agent} = Burrow.ensure(owner.id, "codex")
@@ -208,33 +173,48 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
-  describe "boot hook" do
-    test "an install that already has users plus the token gets Burrow at boot, once" do
-      admin!()
-      _later_admin = admin!()
-      assert burrow_count() == 0
+  describe "no agent before the owner configures one" do
+    test "a first OIDC login with AGENT_HOST_TOKEN set creates no agent" do
+      assert Platform.AgentHost.configured?()
+      n = System.unique_integer([:positive])
 
-      assert :ok = Burrow.run_at_boot()
-      assert burrow_count() == 1
-      assert :ok = Burrow.run_at_boot()
-      assert burrow_count() == 1
+      {:ok, user} =
+        Platform.Accounts.find_or_create_from_oidc(%{
+          sub: "oidc-burrow-first-login-#{n}",
+          email: "first-login-#{n}@example.com",
+          name: "First Login #{n}"
+        })
+
+      # Positive control: this login made the install's owner, the condition
+      # under which the old login hook created a Burrow.
+      assert Platform.Tenancy.root_admin?(user)
+      assert Platform.Accounts.install_owner().id == user.id
+
+      # Anything the login started under the task supervisor has finished.
+      assert :ok = Platform.SandboxHelpers.await_supervised_writes()
+
+      assert NativeAgents.list() == []
+
+      external =
+        Repo.aggregate(
+          from(a in Platform.Agents.Agent,
+            where: a.runtime_type == "external" and a.status != "archived"
+          ),
+          :count
+        )
+
+      assert external == 0
     end
 
-    test "boot without the token or without an admin creates nothing" do
-      assert :ok = Burrow.run_at_boot()
-      assert burrow_count() == 0
+    test "the application starts no Burrow boot child" do
+      ids = for {id, _pid, _type, _mods} <- Supervisor.which_children(Platform.Supervisor), do: id
+      refute :burrow_seed in ids
 
-      admin!()
-      Application.delete_env(:platform, :agent_host_token)
-      capture_log(fn -> assert :ok = Burrow.run_at_boot() end)
-      assert burrow_count() == 0
-    end
-
-    test "the boot child is wired and off in test config" do
+      # The boot child is off in test config whatever the code says, so also
+      # pin that the application no longer wires one.
       src = File.read!("lib/platform/application.ex")
-      assert src =~ "|> maybe_add_burrow_seed(flag)"
-      assert src =~ "id: :burrow_seed"
-      assert Application.get_env(:platform, :start_burrow_seed) == false
+      refute src =~ "burrow_seed"
+      refute src =~ ~r/Agents\.Burrow\.run_at/
     end
   end
 
@@ -255,7 +235,7 @@ defmodule Platform.Agents.BurrowTest do
       owner = admin!()
       a1 = admin!()
       a2 = admin!()
-      {:ok, :created, agent} = Burrow.ensure()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
 
       content = fn ->
         NativeAgents.start_files(agent)
@@ -280,7 +260,6 @@ defmodule Platform.Agents.BurrowTest do
   end
 
   defp from_membership(user_id) do
-    import Ecto.Query
     from(m in OrgMembership, where: m.user_id == ^user_id)
   end
 end

@@ -17,7 +17,7 @@ defmodule PlatformWeb.AdminLiveTest do
 
   # {data-admin-card, href} for every card visible to a root admin with the
   # sign-in switch off, in page order. "Connect your AI" (task 01a10315 stage
-  # 5) leads while no Setup agent is connected, which is the case here; its
+  # 5) leads while no Burrow agent is connected, which is the case here; its
   # own gate is pinned in connect_ai_live_test.exs.
   @always [
     {"connect-ai", "/setup/connect-ai"},

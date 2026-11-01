@@ -1,8 +1,8 @@
 defmodule Platform.Agents.Burrow.GettingStarted do
   @moduledoc """
   The "Getting started" space the Burrow agent (`Platform.Agents.Burrow`)
-  opens with the owner once it is connected on `/setup/connect-ai` (moved from
-  `Platform.Agents.SetupAgent`, task 01a19505).
+  opens with the owner once it is connected on `/setup/connect-ai` (task
+  01a10315 stage 5; owned by Burrow since task 01a19505).
 
   `ensure_getting_started/2` runs on the first observation of the agent
   `running`, and is idempotent, keyed on the agent id:

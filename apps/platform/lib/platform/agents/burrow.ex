@@ -1,42 +1,32 @@
 defmodule Platform.Agents.Burrow do
   @moduledoc """
-  The install's own native agent, "Burrow" (task 01a17b10, stage 2): a Claude
-  Code agent every install with an owner and an `AGENT_HOST_TOKEN` gets, acting
-  as the orchestrator / infra desk.
+  The install's own native agent, "Burrow" (task 01a17b10; task 01a19505): the
+  first agent a new install's owner connects, whatever its provider, and the
+  one that walks them through finishing setup.
 
-  ## The install's first agent: `ensure/2` (task 01a19505)
+  ## Creation: `ensure/2`, from `/setup/connect-ai` only
+
+  Burrow is created when the owner connects their first AI on
+  `/setup/connect-ai` (`PlatformWeb.ConnectAiLive`), on the provider they
+  choose. Nothing creates it at boot or at login.
 
   `ensure/2` creates, or reuses, the ONE native agent named "Burrow" (slug
-  `burrow`) with the harness the owner chose on `/setup/connect-ai`, and starts
-  it. The harness follows the connect option (`harness_for/1`): ChatGPT
-  (Codex) runs `codex`; an API key and a Claude Pro or Max subscription run
-  `claude_code`. A Burrow that is already running keeps its harness; one that
-  is not running and runs a different harness is stopped, switched
-  (`NativeAgents.set_harness/2`) and started. Whatever the harness, its
-  instructions file carries the role and the setup guide
-  (`identity_template/2`). On an empty install it is the first external agent,
-  so it takes the first-agent grant (`Platform.Federation.provision_agent_runtime/3`).
+  `burrow`) and starts it. The harness follows the connect option
+  (`harness_for/1`): ChatGPT (Codex) runs `codex`; an API key and a Claude Pro
+  or Max subscription run `claude_code`. A Burrow that is already running keeps
+  its harness; one that is not running and runs a different harness is
+  stopped, switched (`NativeAgents.set_harness/2`) and started, which also
+  covers an unconnected Burrow left by older code that created it at boot.
+  Whatever the harness, its instructions file carries the role and the setup
+  guide (`identity_template/2`).
+
+  Creation goes through `Platform.Agents.NativeAgents.create/2` and so through
+  `Platform.Federation.provision_agent_runtime/3`: on an empty install Burrow
+  is the first external agent and takes `metadata.first_agent_grant`. There is
+  no second grant path.
 
   The "Getting started" space it opens once connected lives in
   `Platform.Agents.Burrow.GettingStarted`.
-
-  ## Creation at boot / user insert: `ensure/1` (removed in stage 2 of 01a19505)
-
-  `ensure/1` is idempotent. It is a logged no-op when the install has no
-  `AGENT_HOST_TOKEN` or no owner, and a no-op when a Burrow already exists.
-  Otherwise it calls `Platform.Agents.NativeAgents.create/2`, which goes through
-  `Platform.Federation.provision_agent_runtime/3`. There is NO second grant
-  path: the first-agent grant is that function's existing rule.
-
-    * On an empty install Burrow is the first external agent, so it gets
-      `metadata.first_agent_grant = true` and a tool profile equal to
-      `Platform.Federation.first_agent_bundles/0`.
-    * If a federated agent already exists, Burrow is still created but does NOT
-      take the first-agent grant; it gets
-      `Platform.Agents.AgentRuntime.default_tool_profile/0`.
-
-  Burrow does not touch the login mode: it runs under the install's
-  `Platform.Agents.NativeLogin.login_mode/0` (shipped default `api_key`).
 
   ## Owner and admins
 
@@ -46,25 +36,13 @@ defmodule Platform.Agents.Burrow do
   in `NativeAgents` appends that section to Burrow's instructions file, so
   every `agent.start` carries the current list and a removed admin is gone at
   the next start. The section is generated, never stored.
-
-  ## Hooks
-
-  `run_at_boot/0` runs once at boot from a supervised one-shot, so installs that
-  already have users get Burrow too.
-
-  `ensure_async/0` is called after a user is inserted
-  (`Platform.Accounts.find_or_create_from_oidc/1`), from a supervised
-  one-shot task, so a failure there never breaks login.
   """
-
-  require Logger
 
   alias Platform.AgentHost
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
 
   @name "Burrow"
   @slug "burrow"
-  @harness "claude_code"
 
   @doc "The agent's display name."
   def name, do: @name
@@ -160,77 +138,6 @@ defmodule Platform.Agents.Burrow do
   """
   @spec os_user(Agent.t()) :: String.t()
   def os_user(%Agent{id: id}), do: "agent-" <> String.slice(id, -12, 12)
-
-  @doc """
-  Create Burrow if this install needs one. Returns `{:ok, :created, agent}`,
-  `{:ok, :exists, agent}`, `{:ok, :skipped, reason}` or `{:error, reason}`.
-  """
-  @spec ensure(keyword()) ::
-          {:ok, :created | :exists, Agent.t()} | {:ok, :skipped, atom()} | {:error, term()}
-  def ensure(_opts \\ []) do
-    cond do
-      not Platform.AgentHost.configured?() ->
-        Logger.warning("[Burrow] no AGENT_HOST_TOKEN, not creating the Burrow agent")
-        {:ok, :skipped, :no_agent_host_token}
-
-      is_nil(owner()) ->
-        Logger.info("[Burrow] install has no owner yet, not creating the Burrow agent")
-        {:ok, :skipped, :no_owner}
-
-      agent = get() ->
-        {:ok, :exists, agent}
-
-      true ->
-        create_for(owner())
-    end
-  end
-
-  defp create_for(owner) do
-    case NativeAgents.create(owner.id, %{name: @name, harness: @harness}) do
-      {:ok, agent, _runtime} -> {:ok, :created, agent}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Boot-time entry point (supervised one-shot, `:transient`): create Burrow on
-  an install that already has users. Never raises. Guarded by
-  `AGENT_HOST_TOKEN` and at least one root admin, both checked in `ensure/1`.
-  """
-  @spec run_at_boot() :: :ok
-  def run_at_boot do
-    case ensure() do
-      {:error, reason} -> Logger.warning("[Burrow] boot ensure failed: #{inspect(reason)}")
-      _ -> :ok
-    end
-
-    :ok
-  rescue
-    e ->
-      Logger.warning("[Burrow] boot ensure crashed: #{Exception.message(e)}")
-      :ok
-  end
-
-  @doc "Run `ensure/1` in a supervised one-shot task; failures are logged, never raised."
-  @spec ensure_async() :: :ok
-  def ensure_async do
-    if Platform.AgentHost.configured?() do
-      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-        try do
-          case ensure() do
-            {:error, reason} -> Logger.warning("[Burrow] ensure failed: #{inspect(reason)}")
-            _ -> :ok
-          end
-        rescue
-          # A test's sandbox owner can be gone by the time this runs.
-          DBConnection.OwnershipError -> :ok
-          e -> Logger.warning("[Burrow] ensure crashed: #{Exception.message(e)}")
-        end
-      end)
-    end
-
-    :ok
-  end
 
   @doc "The Burrow agent (a native agent with slug `burrow`), or nil."
   @spec get() :: Agent.t() | nil

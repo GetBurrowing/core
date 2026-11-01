@@ -402,9 +402,6 @@ defmodule Platform.Accounts do
     |> Repo.transaction()
     |> case do
       {:ok, %{user: user}} ->
-        # Install-time Burrow agent (task 01a17b10): a supervised one-shot, so
-        # a failure there never breaks login. No-op without AGENT_HOST_TOKEN.
-        Platform.Agents.Burrow.ensure_async()
         {:ok, user}
 
       {:error, :user, changeset, _changes} ->
