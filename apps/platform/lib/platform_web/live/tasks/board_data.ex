@@ -12,8 +12,9 @@ defmodule PlatformWeb.Tasks.BoardData do
   Every rendered board list is ordered by `sort_items/3` — the mobile
   section list (`group_board_items/3`), the search-narrowed desktop buckets
   (`bucket_tasks_by_desktop_column/2`) and the desktop kanban column merge
-  (`BoardComponent.desktop_column_items/5`). The default mode, `:priority`,
-  is priority rank (`Platform.Tasks.Task.priority_rank/1`), then newest
+  (`BoardComponent.desktop_column_items/5`). The default mode is
+  `default_sort/0` — `:updated`, "Recently updated" (task 01a197a0).
+  `:priority` is priority rank (`Platform.Tasks.Task.priority_rank/1`), then newest
   `inserted_at`, then id descending. `:updated` is `updated_at` descending,
   then id descending — the board's pre-task-01a0cef1 recency order.
   `:newest` and `:oldest` (task 01a161fd stage 1) are `inserted_at`
@@ -98,6 +99,10 @@ defmodule PlatformWeb.Tasks.BoardData do
   }
 
   @sort_modes [:priority, :updated, :newest, :oldest]
+  # The ONE default board sort (task 01a197a0). Every default site — the
+  # `?sort=` decode, the URL builder's omission, the component attr
+  # defaults and fallbacks — reads `default_sort/0`, never a literal mode.
+  @default_sort :updated
   @task_kinds Task.kinds()
   @task_statuses Task.statuses()
 
@@ -107,15 +112,26 @@ defmodule PlatformWeb.Tasks.BoardData do
   def sort_modes, do: @sort_modes
 
   @doc """
-  Decode a `?sort=` value. `"updated"`, `"newest"` and `"oldest"` select
-  their mode; anything else — `nil`, `"priority"`, `"bogus"` — is the
-  default `:priority`.
+  The board's default sort mode: `:updated` ("Recently updated"). A bare
+  `/tasks` (no `?sort=`) renders in this order, and `tasks_path/1` omits
+  `sort=` for exactly this mode.
+
+      iex> PlatformWeb.Tasks.BoardData.default_sort()
+      :updated
+  """
+  @spec default_sort() :: sort_mode()
+  def default_sort, do: @default_sort
+
+  @doc """
+  Decode a `?sort=` value. `"priority"`, `"newest"` and `"oldest"` select
+  their mode; anything else — `nil`, `"updated"`, `"bogus"` — is
+  `default_sort/0`. Case-sensitive: `"Priority"` is the default too.
   """
   @spec decode_sort(term()) :: sort_mode()
-  def decode_sort("updated"), do: :updated
+  def decode_sort("priority"), do: :priority
   def decode_sort("newest"), do: :newest
   def decode_sort("oldest"), do: :oldest
-  def decode_sort(_other), do: :priority
+  def decode_sort(_other), do: @default_sort
 
   # A pasted/forged URL is untrusted input (task 01a08df0 stage 1
   # architecture note): a `?q=` with no practical bound could otherwise be
@@ -249,14 +265,16 @@ defmodule PlatformWeb.Tasks.BoardData do
   01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
   a param another control set.
 
-  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`, `[]`),
+  Defaults emit nothing (`:all`, `default_sort/0`, `""`, `:all`, `[]`),
   exactly as `?sponsor=all` is never emitted, so the canonical URL stays
-  `/tasks`. Keys come out in a fixed order — sponsor, sort, q, scope, kind:
+  `/tasks`. Every non-default sort mode IS emitted, so a chosen sort
+  survives a reload. Keys come out in a fixed order — sponsor, sort, q,
+  scope, kind:
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, [])
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :updated, "", :all, [])
       "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme", ["chore"])
-      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme&kind=chore"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :priority, "zephyr", "acme", ["chore"])
+      "/tasks?sponsor=mine&sort=priority&q=zephyr&scope=acme&kind=chore"
   """
   @spec tasks_path(
           :all | :mine | nil,
@@ -273,7 +291,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   `tasks_path/5` plus the External Feedback lane, emitted last as
   `origin=external_feedback` (task 01a11ec3 stage 4).
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, ["bug"], "external_feedback")
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :updated, "", :all, ["bug"], "external_feedback")
       "/tasks?kind=bug&origin=external_feedback"
   """
   def tasks_path(
@@ -324,10 +342,10 @@ defmodule PlatformWeb.Tasks.BoardData do
   has a live search or scope to preserve must use `tasks_path/4` (or the
   `tasks_path/1` map form) instead.
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority)
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :updated)
       "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated)
-      "/tasks?sponsor=mine&sort=updated"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :priority)
+      "/tasks?sponsor=mine&sort=priority"
   """
   @spec tasks_path(:all | :mine | nil, sort_mode() | nil) :: String.t()
   def tasks_path(sponsor_filter, board_sort),
@@ -358,9 +376,7 @@ defmodule PlatformWeb.Tasks.BoardData do
 
     [
       sponsor: assigns[:sponsor_filter] == :mine && "mine",
-      sort:
-        assigns[:board_sort] in [:updated, :newest, :oldest] &&
-          Atom.to_string(assigns[:board_sort]),
+      sort: emit_sort?(assigns[:board_sort]) && Atom.to_string(assigns[:board_sort]),
       q: search_active?(assigns[:task_search_query]) && assigns[:task_search_query],
       scope: assigns[:scope_filter] not in [:all, nil] && assigns[:scope_filter],
       kind: kind_filters != [] && kind_filters,
@@ -373,6 +389,10 @@ defmodule PlatformWeb.Tasks.BoardData do
     |> Enum.reject(fn {_key, value} -> value in [false, nil] end)
     |> build_tasks_path()
   end
+
+  # Every known mode except the default is emitted; the default (and an
+  # absent/unknown assign) is omitted so a bare board stays `/tasks`.
+  defp emit_sort?(mode), do: mode in @sort_modes and mode != @default_sort
 
   defp list_assign(values) when is_list(values), do: values
   defp list_assign(_values), do: []
@@ -485,7 +505,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   @doc """
   Bucket `%Task{}` and `%Stack{}` into MOBILE kanban columns (5-bucket
   shape — backlog absorbs planning + blocked + forming). Each column is
-  ordered by `sort_items/3` in `mode` (default `:priority`), with stacks
+  ordered by `sort_items/3` in `mode` (default `default_sort/0`), with stacks
   interleaved among standalone tasks per ADR 0041 acceptance criterion 1.
 
   `stack_entries` is the `[{%Stack{}, board_data}, ...]` shape returned
@@ -500,7 +520,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   Discriminate-by-`__struct__`: a column entry is either `%Task{}` or
   `%Stack{}`. The template pattern-matches `case item.__struct__`.
   """
-  def group_board_items(tasks, stack_entries, mode \\ :priority) do
+  def group_board_items(tasks, stack_entries, mode \\ @default_sort) do
     standalone_tasks = Enum.filter(tasks, &is_nil(&1.stack_id))
 
     stack_board_data =
@@ -556,9 +576,9 @@ defmodule PlatformWeb.Tasks.BoardData do
   @doc """
   In-memory equivalent of `Platform.Tasks.list_by_status/1`'s bucket shape
   (atom keys) for a search-filtered `:columns` map, each bucket ordered by
-  `sort_items/3` in `mode` (default `:priority`).
+  `sort_items/3` in `mode` (default `default_sort/0`).
   """
-  def bucket_tasks_by_desktop_column(tasks, mode \\ :priority) do
+  def bucket_tasks_by_desktop_column(tasks, mode \\ @default_sort) do
     Map.new(@desktop_column_statuses, fn {col_key, statuses} ->
       bucket =
         tasks
@@ -655,7 +675,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   defp matches_id?(value, id), do: value == id
 
   defp narrow_sort(mode) when mode in @sort_modes, do: mode
-  defp narrow_sort(_mode), do: :priority
+  defp narrow_sort(_mode), do: @default_sort
 
   # `BoardComponent.board_scope/1`: the root org's chip is the unfiltered
   # board; `desktop_column_items_for_scope/6`: any other binary scope is

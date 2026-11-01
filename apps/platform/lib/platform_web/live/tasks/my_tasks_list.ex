@@ -100,7 +100,7 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   # The URL state, read by `FilterBar.url_state/1` for every patch link.
   attr :selected_project_id, :any, default: nil
   attr :selected_epic_id, :any, default: nil
-  attr :board_sort, :atom, default: :priority
+  attr :board_sort, :atom, default: PlatformWeb.Tasks.BoardData.default_sort()
   attr :status_filters, :list, default: []
   attr :kind_filters, :list, default: []
   attr :mine_filter, :boolean, default: false
