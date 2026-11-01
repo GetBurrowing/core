@@ -851,7 +851,7 @@ write_files:
             - "--port"
             - "8188"
             - "-c"
-            - "8192"
+            - "3072"
             - "-np"
             - "1"
             - "--no-kv-unified"
@@ -861,7 +861,7 @@ write_files:
             - "1024"
             - "-t"
             - "2"
-          mem_limit: "1974m"
+          mem_limit: "1251m"
           volumes:
             - "./models:/models:ro"
           healthcheck:
@@ -889,6 +889,7 @@ write_files:
           command:
             - "--config"
             - "/etc/livekit.yaml"
+          mem_limit: "99m"
           env_file:
             - "secrets.env"
           volumes:
@@ -898,8 +899,9 @@ write_files:
             - "7882:7882/udp"
         meeting-transcriber:
           container_name: "meeting-transcriber"
-          image: "ghcr.io/example/meeting-transcriber:v1.0.0"
+          image: "ghcr.io/example/meeting-transcriber:0.1.1"
           restart: "unless-stopped"
+          mem_limit: "717m"
           env_file:
             - "secrets.env"
           environment:
@@ -908,6 +910,7 @@ write_files:
             LIVEKIT_API_KEY: "suite"
             LIVEKIT_URL: "ws://livekit:7880"
             LOG_LEVEL: "INFO"
+            NUM_IDLE_PROCESSES: "0"
             PERSIST_URL: "http://caddy:4080/api/meetings/segments"
             ROOM_PATTERN: "space-*"
             STT_BASE_URL: "https://api.openai.com/v1"

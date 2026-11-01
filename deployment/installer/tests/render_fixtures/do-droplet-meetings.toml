@@ -67,7 +67,7 @@ registry = "ghcr.io/example"
 source = "registry"
 
 [images.refs]
-meeting-transcriber = "ghcr.io/example/meeting-transcriber:v1.0.0"
+meeting-transcriber = "ghcr.io/example/meeting-transcriber:0.1.1"
 
 [day2]
 upgrade_channel = "stable"
