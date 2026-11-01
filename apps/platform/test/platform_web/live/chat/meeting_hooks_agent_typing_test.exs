@@ -388,7 +388,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       # CLOCK is what this test is about, and `:delayed` keeps the age of
       # the state it qualifies, so the ceiling below still fires unchanged.
       assert rail_activity_word(html, presence.id) =~ "Delayed"
-      refute html =~ "Couldn&#39;t"
+      # Scoped to the rail row, like the assertion after the tick: the
+      # page also carries the theme picker's hidden save-error copy
+      # ("Couldn't save your theme", task 01a19555), which is not this row.
+      refute rail_activity_word(html, presence.id) =~ "Couldn't"
 
       # Backdate the stamp past `AgentActivity.ceiling_seconds/0` (120s)
       # DIRECTLY on the live process's own struct — no clock is mocked, no

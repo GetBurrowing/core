@@ -957,7 +957,7 @@ defmodule Platform.Accounts do
   def clear_theme_preference(%User{id: user_id}), do: clear_theme_preference(user_id)
 
   def clear_theme_preference(user_id) when is_binary(user_id) do
-    case Ecto.UUID.cast(user_id) do
+    case Platform.UUID.cast(user_id) do
       {:ok, id} -> delete_theme_key(id)
       :error -> {:error, :not_found}
     end

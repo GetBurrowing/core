@@ -1007,8 +1007,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # failures, each naming the file, derived from source rather than from
     # anyone remembering to write a behavioural test.
 
-    {"platform/accounts.ex", :platform_uuid_guard, "-", 3, :safe_internal,
-     "Accounts.get_user/1's guard, added by stage 2 of task 019fa129. Tracked as its own key so re-simplifying it back to a bare cast trips BOTH the unclassified-site test and the count-drift test. Count 1 -> 3 at task 01a1557a-e538 stage 1: `notification_level/1` (by id) guards before `where: u.id == ^user_id`, and `notification_levels/1` drops non-UUID ids before `where: u.id in ^ids`; both are public and take ids that are not read off a loaded row (Platform.Push and the AttentionRouter pass recipient ids)"},
+    {"platform/accounts.ex", :platform_uuid_guard, "-", 4, :safe_internal,
+     "Accounts.get_user/1's guard, added by stage 2 of task 019fa129. Tracked as its own key so re-simplifying it back to a bare cast trips BOTH the unclassified-site test and the count-drift test. Count 1 -> 3 at task 01a1557a-e538 stage 1: `notification_level/1` (by id) guards before `where: u.id == ^user_id`, and `notification_levels/1` drops non-UUID ids before `where: u.id in ^ids`; both are public and take ids that are not read off a loaded row (Platform.Push and the AttentionRouter pass recipient ids). Count 3 -> 4 at task 01a19555: `clear_theme_preference/1` casts a binary user id with Platform.UUID.cast/1 before its `where: u.id == ^user_id` delete, so a malformed id returns `{:error, :not_found}` instead of raising"},
     {"platform/changelog.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Changelog.get_entry/1's guard on an entry id with no in-repo caller pinning its provenance"},
     {"platform/chat.ex", :platform_uuid_guard, "-", 25, :safe_internal,

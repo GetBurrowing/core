@@ -4,7 +4,7 @@
 #
 #   run.sh <out dir> <variant>... | all        (extra paint.mjs flags via PAINT_FLAGS)
 #
-# PODMAN_HOST  ssh destination with podman (default rocks@moon.local)
+# PODMAN_HOST  ssh destination with podman (required, e.g. user@host)
 # PORT151/147  ports used on both ends (default 19551 / 19547)
 #
 # The pins and the raster flag are the instrument; README.md says why each
@@ -19,7 +19,7 @@ out=${1:?usage: run.sh <out dir> <variant>... | all}
 shift
 [ $# -gt 0 ] || { echo "name variants or all" >&2; exit 2; }
 
-host=${PODMAN_HOST:-rocks@moon.local}
+host=${PODMAN_HOST:?set PODMAN_HOST to an ssh destination with podman}
 p151=${PORT151:-19551}
 p147=${PORT147:-19547}
 tag="paint-$$"

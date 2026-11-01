@@ -68,8 +68,8 @@ with `--disable-gpu` on the 315 Burrow dark under-glass rows compared).
 cd apps/platform/priv/measurements/01a19555-preset-paint
 # Tailwind: the binary mix tailwind.install puts in _build, or TAILWIND=<path>.
 # Heroicons: BURROW_HEROICONS_DIR=<deps>/heroicons/optimized if this checkout has no deps/
-PODMAN_HOST=rocks@moon.local ./run.sh <out dir> all          # the ten committed variants
-PODMAN_HOST=rocks@moon.local ./run.sh <out dir> sage:light sage:dark
+PODMAN_HOST=<user>@<podman host> ./run.sh <out dir> all          # the ten committed variants
+PODMAN_HOST=<user>@<podman host> ./run.sh <out dir> sage:light sage:dark
 ./control.sh <out dir>                                       # the positive control
 GLASS_MIX=oklab PAINT_FLAGS="--only glass" ./run.sh <out dir> all   # the named mutation
 ```
@@ -87,12 +87,12 @@ the local object store compiles to the glass sweep's `4c6b27c3...`.
 This section records the run against the fixtures as committed before this
 stage. The decision that followed is under "Regenerated fixtures" below.
 
-Commands (moon, both pins above; two full runs, byte-identical to each other):
+Commands (the podman host, both pins above; two full runs, byte-identical to each other):
 
 ```bash
-PODMAN_HOST=rocks@moon.local ./run.sh <out> all     # compiled app.css sha256 cf19c320...dc473
+PODMAN_HOST=<user>@<podman host> ./run.sh <out> all     # compiled app.css sha256 cf19c320...dc473
 ./control.sh <out>                                  # exit 1
-PODMAN_HOST=rocks@moon.local PAINT_FLAGS="--css <app.css compiled at 9db54b47> --only underlay" ./run.sh <out9db5> all
+PODMAN_HOST=<user>@<podman host> PAINT_FLAGS="--css <app.css compiled at 9db54b47> --only underlay" ./run.sh <out9db5> all
 ./control.sh <out9db5>
 ```
 
