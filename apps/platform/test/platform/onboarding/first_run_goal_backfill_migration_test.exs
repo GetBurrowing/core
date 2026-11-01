@@ -52,6 +52,29 @@ defmodule Platform.Onboarding.FirstRunGoalBackfillMigrationTest do
     assert prefs(skipped) == %{"first_run_goal" => "skipped", "theme" => %{"preset" => "default"}}
   end
 
+  test "down removes only the backfilled existing value and keeps member choices" do
+    :ok = Ecto.Migrator.down(Repo, @version, @migration, @opts)
+
+    backfilled = user!(%{"theme" => %{"preset" => "sage"}})
+    skipped = user!(%{"first_run_goal" => "skipped"})
+    submitted = user!(%{"first_run_goal" => "submitted", "theme" => %{"preset" => "default"}})
+
+    :ok = Ecto.Migrator.up(Repo, @version, @migration, @opts)
+    assert prefs(backfilled)["first_run_goal"] == "existing"
+
+    :ok = Ecto.Migrator.down(Repo, @version, @migration, @opts)
+
+    assert prefs(backfilled) == %{"theme" => %{"preset" => "sage"}}
+    assert prefs(skipped) == %{"first_run_goal" => "skipped"}
+
+    assert prefs(submitted) == %{
+             "first_run_goal" => "submitted",
+             "theme" => %{"preset" => "default"}
+           }
+
+    :ok = Ecto.Migrator.up(Repo, @version, @migration, @opts)
+  end
+
   test "a user created after the backfill is still pending" do
     :ok = Ecto.Migrator.down(Repo, @version, @migration, @opts)
     :ok = Ecto.Migrator.up(Repo, @version, @migration, @opts)

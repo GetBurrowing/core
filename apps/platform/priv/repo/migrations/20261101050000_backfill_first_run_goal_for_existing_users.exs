@@ -10,8 +10,10 @@ defmodule Platform.Repo.Migrations.BackfillFirstRunGoalForExistingUsers do
 
     * Only rows WITHOUT the key are touched; a stored value (e.g. `"skipped"`)
       is kept. The write is `||` of one key, so other preference keys survive.
-    * `down/0` is a no-op: the backfill is not reversible (an `"existing"`
-      written here cannot be told apart from one written later).
+    * `down/0` removes the key only where its value is `"existing"`. Nothing
+      but this backfill writes that value: `FirstRunGoal` writes only
+      `"submitting"`, `"submitted"` and `"skipped"`. So a member's own choice
+      is never touched by a rollback.
   """
   use Ecto.Migration
 
@@ -24,7 +26,10 @@ defmodule Platform.Repo.Migrations.BackfillFirstRunGoalForExistingUsers do
   end
 
   def down do
-    # Not reversible; see the moduledoc.
-    execute("SELECT 1")
+    execute("""
+    UPDATE users
+    SET preferences = preferences - 'first_run_goal'
+    WHERE preferences->>'first_run_goal' = 'existing'
+    """)
   end
 end
