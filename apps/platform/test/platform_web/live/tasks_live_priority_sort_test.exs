@@ -1,6 +1,8 @@
 defmodule PlatformWeb.TasksLivePrioritySortTest do
   @moduledoc """
-  The rendered board order is priority-first (task 01a0cef1 stage 1).
+  The rendered board order per sort mode (task 01a0cef1 stage 1). Since
+  task 01a197a0 the DEFAULT (bare `/tasks`) is Recently updated
+  (`BoardData.default_sort/0`); priority-first is `?sort=priority`.
 
   Asserted on BOTH rendered surfaces, separately, because they read
   different assigns: the desktop kanban column is `@columns` +
@@ -20,8 +22,8 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
   mobile pill (`TasksLive.mount/3`), and a lone `stack_pending` member rolls
   its stack up to `in_progress`, so the stack lands in the same column.
 
-  Stage 2 adds the control and the URL: `?sort=updated` selects the
-  recency order, the default emits no param, and every patch back to the
+  Stage 2 adds the control and the URL: `?sort=priority` selects the
+  priority order, the default (updated) emits no param, and every patch back to the
   board (the sort options, the sponsor toggle, closing a task) goes through
   `BoardData.tasks_path/2` so none of them drops the other's param.
   """
@@ -245,20 +247,19 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
 
   defp board_sort(view), do: :sys.get_state(view.pid).socket.assigns.board_sort
 
-  describe "default /tasks order is priority-first" do
-    test "desktop kanban column renders critical, high, medium, low, then nil/unknown", %{
-      conn: conn
-    } do
+  describe "default /tasks order is Recently updated (task 01a197a0)" do
+    test "desktop kanban column renders updated_at desc", %{conn: conn} do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
       # Premise: the two orders differ, so this assertion distinguishes them.
       refute expected_priority_order(t) == recency_order(t)
 
-      assert desktop_order(view) == expected_priority_order(t)
+      assert board_sort(view) == :updated
+      assert desktop_order(view) == recency_order(t)
     end
 
-    test "mobile section list renders the same priority order", %{conn: conn} do
+    test "mobile section list renders the same updated order", %{conn: conn} do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
@@ -269,25 +270,47 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       # section.
       assert view |> element("#tasks-mobile-list h2") |> render() =~ "In Progress · 9"
 
-      assert mobile_order(view) == expected_priority_order(t)
+      assert mobile_order(view) == recency_order(t)
+    end
+
+    test "?sort=priority still renders priority-first on desktop AND mobile", %{conn: conn} do
+      t = seed()
+      {:ok, view, html} = live(authenticated_conn(conn), ~p"/tasks?sort=priority")
+
+      assert board_sort(view) == :priority
+      assert control_sorts(view) == ["priority", "priority"]
+      assert html =~ "Sort: Priority"
+      assert desktop_order(view) == expected_priority_order(t)
+      assert mobile_in_progress_order(view) == expected_priority_order(t)
     end
   end
 
   describe "the sort control and ?sort= (stage 2)" do
-    test "default /tasks: both controls read Sort: Priority and the order is priority-first", %{
-      conn: conn
-    } do
+    test "default /tasks: every sort control reads Recently updated and the order is updated-first",
+         %{conn: conn} do
       t = seed()
       {:ok, view, html} = live(authenticated_conn(conn), ~p"/tasks")
 
-      assert control_sorts(view) == ["priority", "priority"]
-      assert html =~ "Sort: Priority"
-      assert board_sort(view) == :priority
-      assert desktop_order(view) == expected_priority_order(t)
-      assert mobile_in_progress_order(view) == expected_priority_order(t)
+      # Desktop board control and mobile board control.
+      assert control_sorts(view) == ["updated", "updated"]
+
+      for role <- @controls do
+        trigger = ~s([data-role="#{role}"] button[aria-label="Change sort order"])
+        assert view |> element(trigger) |> render() =~ "Sort: Recently updated"
+      end
+
+      # The phone list's sort chip (`FilterBar.chips/1`).
+      assert view |> element(~s([data-role="tasks-sort-chip"])) |> render() =~
+               "Recently updated"
+
+      assert html =~ ~s(aria-label="Sort: Recently updated. Change sort")
+      refute html =~ "Sort: Priority."
+      assert board_sort(view) == :updated
+      assert desktop_order(view) == recency_order(t)
+      assert mobile_in_progress_order(view) == recency_order(t)
     end
 
-    test "?sort=updated renders the updated_at-desc order on the desktop column AND the mobile list",
+    test "?sort=updated in an incoming link still decodes to the updated order",
          %{conn: conn} do
       t = seed()
       {:ok, view, html} = live(authenticated_conn(conn), ~p"/tasks?sort=updated")
@@ -298,29 +321,29 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       refute recency_order(t) == expected_priority_order(t)
 
       assert control_sorts(view) == ["updated", "updated"]
-      assert html =~ "Sort: Updated"
+      assert html =~ "Sort: Recently updated"
       assert desktop_order(view) == recency_order(t)
       assert mobile_in_progress_order(view) == recency_order(t)
     end
 
-    test "?sort=bogus decodes to the priority order", %{conn: conn} do
+    test "?sort=bogus decodes to the default (updated) order", %{conn: conn} do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks?sort=bogus")
 
-      assert board_sort(view) == :priority
-      assert control_sorts(view) == ["priority", "priority"]
-      assert desktop_order(view) == expected_priority_order(t)
+      assert board_sort(view) == :updated
+      assert control_sorts(view) == ["updated", "updated"]
+      assert desktop_order(view) == recency_order(t)
     end
 
     test "each option is a patch link to its own shareable URL, on both controls", %{conn: conn} do
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
       for role <- @controls do
-        assert view |> element(option(role, "updated")) |> render() =~
-                 ~s(href="/tasks?sort=updated")
+        assert view |> element(option(role, "priority")) |> render() =~
+                 ~s(href="/tasks?sort=priority")
 
-        assert view |> element(option(role, "priority")) |> render() =~ ~s(href="/tasks")
-        assert view |> element(option(role, "updated")) |> render() =~ ~s(data-phx-link="patch")
+        assert view |> element(option(role, "updated")) |> render() =~ ~s(href="/tasks")
+        assert view |> element(option(role, "priority")) |> render() =~ ~s(data-phx-link="patch")
       end
 
       assert view
@@ -329,26 +352,29 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
              )
     end
 
-    test "round trip: Sort: Updated patches to ?sort=updated, Sort: Priority restores the exact order",
+    test "round trip: Sort: Priority patches to ?sort=priority, Recently updated restores the order",
          %{conn: conn} do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
       before = desktop_order(view)
-      assert before == expected_priority_order(t)
-
-      view |> element(option("board-sort-control", "updated"), "Sort: Updated") |> render_click()
-      assert_patched(view, "/tasks?sort=updated")
-      assert board_sort(view) == :updated
-      assert desktop_order(view) == recency_order(t)
-      assert control_sorts(view) == ["updated", "updated"]
+      assert before == recency_order(t)
 
       view
       |> element(option("board-sort-control", "priority"), "Sort: Priority")
       |> render_click()
 
-      assert_patched(view, "/tasks")
+      assert_patched(view, "/tasks?sort=priority")
       assert board_sort(view) == :priority
+      assert desktop_order(view) == expected_priority_order(t)
+      assert control_sorts(view) == ["priority", "priority"]
+
+      view
+      |> element(option("board-sort-control", "updated"), "Sort: Recently updated")
+      |> render_click()
+
+      assert_patched(view, "/tasks")
+      assert board_sort(view) == :updated
       assert desktop_order(view) == before
     end
 
@@ -356,12 +382,12 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
 
-      view |> element(option("mobile-board-sort-control", "updated")) |> render_click()
-      assert_patched(view, "/tasks?sort=updated")
-      assert mobile_in_progress_order(view) == recency_order(t)
+      view |> element(option("mobile-board-sort-control", "priority")) |> render_click()
+      assert_patched(view, "/tasks?sort=priority")
+      assert mobile_in_progress_order(view) == expected_priority_order(t)
     end
 
-    test "the sponsor toggle preserves ?sort=updated in both directions", %{conn: conn} do
+    test "the sponsor toggle preserves ?sort=priority in both directions", %{conn: conn} do
       t = seed()
       {conn, user} = authenticated_conn_with_user(conn)
 
@@ -373,24 +399,24 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
 
       Repo.update_all(where(Stack, [x], x.id == ^t.stack), set: [sponsor_user_id: user.id])
 
-      {:ok, view, _html} = live(conn, ~p"/tasks?sort=updated")
+      {:ok, view, _html} = live(conn, ~p"/tasks?sort=priority")
 
       _ = render_click(filters(view), "filter_toggle_sponsor", %{})
-      assert_patched(view, "/tasks?sponsor=mine&sort=updated")
+      assert_patched(view, "/tasks?sponsor=mine&sort=priority")
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
-      assert board_sort(view) == :updated
-      assert desktop_order(view) == recency_order(t)
+      assert board_sort(view) == :priority
+      assert desktop_order(view) == expected_priority_order(t)
 
       _ = render_click(filters(view), "filter_toggle_sponsor", %{})
-      assert_patched(view, "/tasks?sort=updated")
+      assert_patched(view, "/tasks?sort=priority")
       assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
-      assert board_sort(view) == :updated
-      assert desktop_order(view) == recency_order(t)
+      assert board_sort(view) == :priority
+      assert desktop_order(view) == expected_priority_order(t)
     end
 
-    test "opening then closing a task keeps ?sort=updated", %{conn: conn} do
+    test "opening then closing a task keeps ?sort=priority", %{conn: conn} do
       t = seed()
-      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks?sort=updated")
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks?sort=priority")
 
       _ = render_click(view, "select_task", %{"id" => t.c1})
       assert_patched(view, "/tasks/#{t.c1}")
@@ -399,9 +425,9 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       # so the patch lands AFTER this event's reply: wait for it
       # (`assert_patch/2`) rather than asserting it already happened.
       _ = render_click(with_target(view, "#tasks-detail"), "detail_close", %{})
-      assert_patch(view, "/tasks?sort=updated")
-      assert board_sort(view) == :updated
-      assert desktop_order(view) == recency_order(t)
+      assert_patch(view, "/tasks?sort=priority")
+      assert board_sort(view) == :priority
+      assert desktop_order(view) == expected_priority_order(t)
     end
   end
 end

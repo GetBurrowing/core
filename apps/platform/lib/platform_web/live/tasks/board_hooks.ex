@@ -38,10 +38,10 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   ## List order
 
-  `:board_sort` (`:priority` | `:updated`, see `BoardData.sort_items/3`) is
-  read by both writers of the board shapes and defaults to `:priority` when
-  absent, so `refresh_board/1` assigns it on the first mount and the shell
-  needs no mount line of its own. `:columns` is still loaded with
+  `:board_sort` (`BoardData.sort_modes/0`, see `BoardData.sort_items/3`) is
+  read by both writers of the board shapes and defaults to
+  `BoardData.default_sort/0` when absent, so `refresh_board/1` assigns it
+  on the first mount and the shell needs no mount line of its own. `:columns` is still loaded with
   `Tasks.list_by_status/1`'s `updated_at desc` query order, but that is NOT
   the rendered order: `BoardComponent.desktop_column_items/5` re-sorts every
   desktop column through `BoardData.sort_items/3`.
@@ -675,9 +675,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign_filtered()
   end
 
-  # The active list order; `:priority` until something (the stage-2 `?sort=`
-  # decode) assigns otherwise.
-  defp board_sort(socket), do: socket.assigns[:board_sort] || :priority
+  # The active list order; `BoardData.default_sort/0` until something (the
+  # `?sort=` decode) assigns otherwise.
+  defp board_sort(socket), do: socket.assigns[:board_sort] || BoardData.default_sort()
 
   defp origin_filter_value(socket) do
     case socket.assigns[:origin_filter] do

@@ -224,7 +224,7 @@ defmodule PlatformWeb.TasksFilterBarTest do
   test "the badge equals the chip count and excludes sort and project; Clear all keeps them",
        ctx do
     url =
-      "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}&sort=updated&status=in_progress,blocked&kind=bug&mine=1&sponsor=mine&q=widget"
+      "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}&sort=priority&status=in_progress,blocked&kind=bug&mine=1&sponsor=mine&q=widget"
 
     view = mount(ctx.conn, ctx.me, url)
     d = list_doc(view)
@@ -245,7 +245,7 @@ defmodule PlatformWeb.TasksFilterBarTest do
     assert d |> q("[data-role=tasks-filter-button]") |> hd() |> attr("aria-label") ==
              "Filter, 6 on"
 
-    keep = "/tasks?sort=updated&project=#{ctx.p.id}&epic=#{ctx.epic.id}"
+    keep = "/tasks?sort=priority&project=#{ctx.p.id}&epic=#{ctx.epic.id}"
     assert hrefs(d, "[data-role=tasks-clear-all]") == [keep]
 
     open(view, "filter")
@@ -253,11 +253,11 @@ defmodule PlatformWeb.TasksFilterBarTest do
 
     # Removing one chip drops exactly that value.
     assert hrefs(d, ~s([data-chip="kind-bug"])) == [
-             "/tasks?sponsor=mine&sort=updated&q=widget&project=#{ctx.p.id}&epic=#{ctx.epic.id}&status=in_progress,blocked&mine=1"
+             "/tasks?sponsor=mine&sort=priority&q=widget&project=#{ctx.p.id}&epic=#{ctx.epic.id}&status=in_progress,blocked&mine=1"
            ]
 
     # Sort and project alone: no chip, no badge, no Clear all.
-    view = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&sort=updated")
+    view = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&sort=priority")
     d = list_doc(view)
     assert [_] = q(d, "[data-role=tasks-sort-chip]"), "positive control"
     assert q(d, "[data-role=tasks-filter-chip]") == []

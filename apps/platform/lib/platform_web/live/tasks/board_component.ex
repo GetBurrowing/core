@@ -2023,7 +2023,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # Merge tasks (from `@columns`, atom-keyed) and stacks (from
   # `@desktop_stacks_by_column`, string-keyed) into one list for one desktop
   # kanban column, ordered by `BoardData.sort_items/3` in `board_sort`
-  # (`:priority` by default; task 01a0cef1). Mirrors
+  # (`BoardData.default_sort/0` by default; task 01a197a0). Mirrors
   # `BoardData.group_board_items/3`'s per-column sort so stacks and standalone
   # tasks interleave (ADR 0041 acceptance criterion 1). `stack_board_data` is
   # how a `%Stack{}` gets a priority: it ranks as its best member. This
@@ -2043,7 +2043,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
     stacks = Map.get(stacks_by_column || %{}, col_key, [])
 
-    BoardData.sort_items(tasks ++ stacks, board_sort || :priority, stack_board_data)
+    BoardData.sort_items(
+      tasks ++ stacks,
+      board_sort || BoardData.default_sort(),
+      stack_board_data
+    )
   end
 
   # Stage-3 wrapper: filters `desktop_column_items/5` through the active

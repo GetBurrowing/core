@@ -67,7 +67,8 @@ defmodule PlatformWeb.Tasks.FilterBar do
   end
 
   @doc "The sort chip's and the Sort section's label for a mode."
-  def sort_label(mode), do: Map.get(@sort_labels, mode, "Priority")
+  def sort_label(mode),
+    do: Map.get(@sort_labels, mode, Map.fetch!(@sort_labels, BoardData.default_sort()))
 
   @doc "Sort modes in the Sort section's order (the board's `sort_modes/0`)."
   def sort_modes, do: BoardData.sort_modes()
@@ -289,7 +290,7 @@ defmodule PlatformWeb.Tasks.FilterBar do
     """
   end
 
-  attr :board_sort, :atom, default: :priority
+  attr :board_sort, :atom, default: BoardData.default_sort()
   attr :filters, :list, required: true, doc: "active_filters/2"
   attr :clear_href, :string, required: true
 

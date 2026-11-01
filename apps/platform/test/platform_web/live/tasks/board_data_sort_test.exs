@@ -351,18 +351,25 @@ defmodule PlatformWeb.Tasks.BoardDataSortTest do
     end
   end
 
+  describe "default_sort/0 (task 01a197a0)" do
+    test "the board default is :updated (Recently updated)" do
+      assert BoardData.default_sort() == :updated
+    end
+  end
+
   describe "decode_sort/1" do
-    test "\"newest\" and \"oldest\" select their modes" do
+    test "\"newest\" and \"oldest\" select their modes, case-sensitively" do
       assert BoardData.decode_sort("newest") == :newest
       assert BoardData.decode_sort("oldest") == :oldest
-      assert BoardData.decode_sort("Newest") == :priority
+      assert BoardData.decode_sort("Newest") == :updated
     end
 
-    test "only \"updated\" selects :updated" do
-      assert BoardData.decode_sort("updated") == :updated
+    test "only \"priority\" selects :priority; nil, \"updated\", bogus are :updated" do
       assert BoardData.decode_sort("priority") == :priority
-      assert BoardData.decode_sort(nil) == :priority
-      assert BoardData.decode_sort("bogus") == :priority
+      assert BoardData.decode_sort("Priority") == :updated
+      assert BoardData.decode_sort("updated") == :updated
+      assert BoardData.decode_sort(nil) == :updated
+      assert BoardData.decode_sort("bogus") == :updated
     end
   end
 
@@ -371,10 +378,16 @@ defmodule PlatformWeb.Tasks.BoardDataSortTest do
 
   describe "tasks_path/2" do
     test "emits no param for either default, and a fixed sponsor-then-sort key order" do
-      assert BoardData.tasks_path(:all, :priority) == "/tasks"
-      assert BoardData.tasks_path(:mine, :priority) == "/tasks?sponsor=mine"
-      assert BoardData.tasks_path(:all, :updated) == "/tasks?sort=updated"
-      assert BoardData.tasks_path(:mine, :updated) == "/tasks?sponsor=mine&sort=updated"
+      assert BoardData.tasks_path(:all, :updated) == "/tasks"
+      assert BoardData.tasks_path(:mine, :updated) == "/tasks?sponsor=mine"
+      assert BoardData.tasks_path(:all, :priority) == "/tasks?sort=priority"
+      assert BoardData.tasks_path(:mine, :priority) == "/tasks?sponsor=mine&sort=priority"
+    end
+
+    test "every non-default mode is emitted, so a chosen sort survives a reload" do
+      for mode <- BoardData.sort_modes() -- [BoardData.default_sort()] do
+        assert BoardData.tasks_path(:all, mode) == "/tasks?sort=#{mode}"
+      end
     end
 
     test "an unset assign reads as the default, never as a param" do
@@ -383,8 +396,11 @@ defmodule PlatformWeb.Tasks.BoardDataSortTest do
     end
 
     test "tasks_path/1 reads the same two assigns" do
+      assert BoardData.tasks_path(%{sponsor_filter: :mine, board_sort: :priority}) ==
+               "/tasks?sponsor=mine&sort=priority"
+
       assert BoardData.tasks_path(%{sponsor_filter: :mine, board_sort: :updated}) ==
-               "/tasks?sponsor=mine&sort=updated"
+               "/tasks?sponsor=mine"
 
       assert BoardData.tasks_path(%{}) == "/tasks"
     end

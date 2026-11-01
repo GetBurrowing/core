@@ -11,10 +11,11 @@ defmodule PlatformWeb.Tasks.SortControl do
 
   ## Why it looks the way it does
 
-    * **The label states the CURRENT order** — "Sort: Priority" or
-      "Sort: Updated" — so nobody has to open it to learn what they are
-      looking at. There is no asc/desc arrow: these are two named orders,
-      not one axis with two directions.
+    * **The label states the CURRENT order** — "Sort: Recently updated"
+      (the default, `BoardData.default_sort/0`), "Sort: Priority", ... — so
+      nobody has to open it to learn what they are looking at. There is no
+      asc/desc arrow: these are named orders, not one axis with two
+      directions.
     * **A button with a caret at `rounded-field`, not a pill.** Pills on this
       surface are filters, and a sort does not narrow the set.
     * **No `--color-primary`.** The board spends it on the active row and
@@ -22,7 +23,7 @@ defmodule PlatformWeb.Tasks.SortControl do
 
   ## Why there is no event
 
-  The URL is the source of truth (`?sort=updated`, decoded by
+  The URL is the source of truth (`?sort=priority`, decoded by
   `TasksLive.handle_params/3`, mirroring `?sponsor=mine`). Each option is a
   `<.link patch>` whose href is `BoardData.tasks_path/1` (the map form —
   task 01a08df0 stage 1 added `?q=`/`?scope=` to the same builder, and a
@@ -48,7 +49,7 @@ defmodule PlatformWeb.Tasks.SortControl do
   # `Map.fetch!`, so a mode without a label crashes the control.
   @labels %{
     priority: "Sort: Priority",
-    updated: "Sort: Updated",
+    updated: "Sort: Recently updated",
     newest: "Sort: Newest",
     oldest: "Sort: Oldest"
   }
@@ -59,7 +60,7 @@ defmodule PlatformWeb.Tasks.SortControl do
 
   attr :id, :string, required: true
   attr :role, :string, required: true, doc: "the control's data-role"
-  attr :board_sort, :atom, default: :priority
+  attr :board_sort, :atom, default: BoardData.default_sort()
   attr :sponsor_filter, :atom, default: :all
   # Task 01a08df0 stage 1: threaded through so a sort-mode click's patch
   # preserves the board's current search/scope instead of silently
@@ -79,7 +80,9 @@ defmodule PlatformWeb.Tasks.SortControl do
 
   def sort_control(assigns) do
     board_sort =
-      if assigns.board_sort in BoardData.sort_modes(), do: assigns.board_sort, else: :priority
+      if assigns.board_sort in BoardData.sort_modes(),
+        do: assigns.board_sort,
+        else: BoardData.default_sort()
 
     inner_id = "#{assigns.id}-#{board_sort}"
 

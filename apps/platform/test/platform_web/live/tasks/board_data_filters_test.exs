@@ -51,7 +51,7 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
   defp filters(attrs) do
     Map.merge(
       %{
-        board_sort: :priority,
+        board_sort: BoardData.default_sort(),
         selected_project_id: nil,
         selected_epic_id: nil,
         status_filters: [],
@@ -186,18 +186,18 @@ defmodule PlatformWeb.Tasks.BoardDataFiltersTest do
     end
 
     test "the positional arities take the kind set as a list" do
-      assert BoardData.tasks_path(:all, :priority, "", :all, []) == "/tasks"
+      assert BoardData.tasks_path(:all, :updated, "", :all, []) == "/tasks"
 
-      assert BoardData.tasks_path(:mine, :updated, "zephyr", "acme", ["chore"]) ==
-               "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme&kind=chore"
+      assert BoardData.tasks_path(:mine, :priority, "zephyr", "acme", ["chore"]) ==
+               "/tasks?sponsor=mine&sort=priority&q=zephyr&scope=acme&kind=chore"
 
-      assert BoardData.tasks_path(:all, :priority, "", :all, ["bug"], "external_feedback") ==
+      assert BoardData.tasks_path(:all, :updated, "", :all, ["bug"], "external_feedback") ==
                "/tasks?kind=bug&origin=external_feedback"
 
-      assert BoardData.tasks_path(:all, :priority, "", :all, ["bug", "chore"]) ==
+      assert BoardData.tasks_path(:all, :updated, "", :all, ["bug", "chore"]) ==
                "/tasks?kind=bug,chore"
 
-      assert BoardData.tasks_path(:mine, :updated) == "/tasks?sponsor=mine&sort=updated"
+      assert BoardData.tasks_path(:mine, :priority) == "/tasks?sponsor=mine&sort=priority"
     end
   end
 
