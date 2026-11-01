@@ -210,6 +210,25 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert view.pid == pid
     end
 
+    # Task 01a19555 stage 3: after "Use install default" the row names the
+    # install default the person now follows.
+    test "after clear_theme the value names the install default without a remount" do
+      member = member!()
+
+      {:ok, _} =
+        Accounts.put_theme_preference(member.id, %{"preset" => "sage", "mode" => "light"})
+
+      {:ok, view, html} = live(authed(member), "/settings")
+
+      assert query(html, "[data-role=settings-theme-value]") |> LazyHTML.text() == "Sage · Light"
+
+      render_hook(view, "clear_theme", %{})
+      default = Accounts.ThemePreference.default()
+
+      assert view |> element("[data-role=settings-theme-value]") |> render() =~
+               SettingsLive.theme_value(default)
+    end
+
     test "theme_value/1 names the preset and capitalises the mode" do
       assert SettingsLive.theme_value(%{"preset" => "burrow", "mode" => "system"}) ==
                "Burrow · System"

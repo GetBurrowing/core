@@ -51,6 +51,9 @@ class FakeEl {
   setAttribute(name, value) {
     this.attrs[name] = String(value)
   }
+  removeAttribute(name) {
+    delete this.attrs[name]
+  }
 
   matches(selector) {
     // Supports [attr] and [attr="value"], one or more in sequence.
@@ -332,5 +335,94 @@ describe("ThemePicker: teardown", () => {
     state = { preset: "burrow-sand", mode: "dark" }
     fireTheme()
     expect(visibleChecks(rows).map(value)).toEqual(["burrow"])
+  })
+})
+
+// ── Saving (task 01a19555 stage 3) ─────────────────────────────────────────
+
+// The picker body with stage 3's extras: "Use install default" (shown only
+// when a choice is stored) and the save error (hidden until a refusal).
+const mountSaving = ({ stored }) => {
+  const dom = build({ ...snapshot() })
+  const useDefault = new FakeEl({ "data-role": "theme-use-install-default", ...(stored ? {} : { hidden: "" }) })
+  const error = new FakeEl({ "data-role": "theme-save-error", hidden: "" })
+  dom.root.children.push(useDefault, error)
+  useDefault.parent = dom.root
+  error.parent = dom.root
+
+  const replies = []
+  const hook = Object.create(ThemePicker)
+  hook.el = dom.root
+  hook.pushEvent = (event, payload, onReply) => {
+    calls.push(["push", event, { ...payload }])
+    replies.push(onReply)
+  }
+  hook.mounted()
+  return { ...dom, hook, useDefault, error, replies }
+}
+
+const bootScript = (preset, mode) => {
+  const boot = new FakeEl({ "data-role": "theme-boot", "data-default-preset": preset, "data-default-mode": mode })
+  globalThis.document.querySelector = (sel) => (sel === '[data-role="theme-boot"]' ? boot : null)
+}
+
+describe("ThemePicker: saving", () => {
+  it("reverts to the previous theme and shows the save error when set_theme replies ok:false", () => {
+    const { rows, error, replies } = mountSaving({ stored: false })
+    rows[2].dispatch("click")
+    expect(state.preset).toBe("burrow-sand")
+
+    replies.at(-1)({ ok: false })
+
+    expect(calls).toEqual([
+      ["apply", { preset: "burrow-sand", mode: "dark" }],
+      ["push", "set_theme", { preset: "burrow-sand", mode: "dark" }],
+      ["apply", { preset: "burrow", mode: "dark" }],
+    ])
+    expect(state).toEqual({ preset: "burrow", mode: "dark" })
+    expect(checked(rows).map(value)).toEqual(["burrow"])
+    expect(error.getAttribute("hidden")).toBeNull()
+  })
+
+  it("a stored choice clears the error and shows Use install default", () => {
+    const { rows, error, useDefault, replies } = mountSaving({ stored: false })
+    error.removeAttribute("hidden")
+    rows[5].dispatch("click")
+    replies.at(-1)({ ok: true })
+
+    expect(state.preset).toBe("sage")
+    expect(error.getAttribute("hidden")).toBe("")
+    expect(useDefault.getAttribute("hidden")).toBeNull()
+  })
+
+  it("Use install default applies the boot script's default and pushes clear_theme", () => {
+    state = { preset: "sage", mode: "light" }
+    bootScript("burrow", "dark")
+    const { rows, useDefault, replies } = mountSaving({ stored: true })
+
+    useDefault.dispatch("click")
+
+    expect(calls).toEqual([
+      ["apply", { preset: "burrow", mode: "dark" }],
+      ["push", "clear_theme", {}],
+    ])
+    expect(checked(rows).map(value)).toEqual(["burrow"])
+
+    replies.at(-1)({ ok: true, preset: "burrow", mode: "dark" })
+    expect(useDefault.getAttribute("hidden")).toBe("")
+  })
+
+  it("a refused clear puts the chosen theme back and shows the save error", () => {
+    state = { preset: "sage", mode: "light" }
+    bootScript("burrow", "dark")
+    const { rows, useDefault, error, replies } = mountSaving({ stored: true })
+
+    useDefault.dispatch("click")
+    replies.at(-1)({ ok: false, preset: "burrow", mode: "dark" })
+
+    expect(calls.at(-1)).toEqual(["apply", { preset: "sage", mode: "light" }])
+    expect(checked(rows).map(value)).toEqual(["sage"])
+    expect(error.getAttribute("hidden")).toBeNull()
+    expect(useDefault.getAttribute("hidden")).toBeNull()
   })
 })

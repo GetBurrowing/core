@@ -108,7 +108,16 @@ defmodule PlatformWeb.Components.ThemePickerTest do
       doc = doc(html)
 
       for scope <- ["#theme-picker", "#theme-picker-sheet"] do
-        text = doc |> q(scope) |> LazyHTML.text()
+        # The save-error line (task 01a19555 stage 3) is the one place the
+        # word may appear: it reports a refused save, it is not a Save control.
+        text =
+          doc
+          |> q(scope)
+          |> LazyHTML.to_html()
+          |> String.replace(~r/<div[^>]*data-role="theme-save-error".*?<\/div>/s, "")
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.text()
+
         refute text =~ ~r/save/i
         refute text =~ ~r/settings/i
         assert doc |> q("#{scope} a") |> Enum.count() == 0
@@ -280,6 +289,134 @@ defmodule PlatformWeb.Components.ThemePickerTest do
                "preset" => "burrow-forest",
                "mode" => "dark"
              }
+    end
+  end
+
+  # Task 01a19555 stage 3: the install-default badge, "Use install default",
+  # the helper and the save error, and the replies the hook reads.
+  describe "install default and save replies (task 01a19555 stage 3)" do
+    defp remount(user), do: open_chat(build_conn(), user)
+
+    test "the install default row carries the Install default badge whatever is selected", %{
+      html: html,
+      user: user
+    } do
+      default = ThemePreference.default()["preset"]
+
+      for page <- [html, elem(store_and_remount(user, "sage"), 1)], body <- @bodies do
+        doc = doc(page)
+        badges = q(doc, ~s(#{body} [data-role="theme-install-default"]))
+        assert Enum.count(badges) == 1
+
+        assert doc
+               |> q(
+                 ~s(#{body} [data-theme-option="preset"][data-value="#{default}"] [data-role="theme-install-default"])
+               )
+               |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) == ["Install default"]
+      end
+
+      # The second page really had Sage selected.
+      {_view, page} = store_and_remount(user, "sage")
+
+      assert doc(page)
+             |> q(~s(#theme-picker-popover-body [data-value="sage"]))
+             |> LazyHTML.attribute("aria-checked") == ["true"]
+    end
+
+    test "Use install default renders only when a choice is stored", %{html: html, user: user} do
+      shown = fn page, body ->
+        doc(page)
+        |> q(~s{#{body} [data-role="theme-use-install-default"]:not([hidden])})
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+      end
+
+      for body <- @bodies, do: assert(shown.(html, body) == [])
+
+      {_view, stored} = store_and_remount(user, "burrow-forest")
+      for body <- @bodies, do: assert(shown.(stored, body) == ["Use install default"])
+
+      {:ok, _} = Accounts.clear_theme_preference(user.id)
+      {:ok, _view, cleared} = remount(user)
+      for body <- @bodies, do: assert(shown.(cleared, body) == [])
+    end
+
+    test "the Sage row renders with data-preset=sage", %{html: html} do
+      for body <- @bodies do
+        row = q(doc(html), ~s(#{body} [data-theme-option="preset"][data-value="sage"]))
+        assert row |> LazyHTML.attribute("role") == ["radio"]
+        assert row |> q("[data-theme-chip]") |> LazyHTML.attribute("data-preset") == ["sage"]
+
+        assert row |> q("span.flex-1") |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) == [
+                 "Sage"
+               ]
+      end
+    end
+
+    test "the helper line shows and the save error is hidden until the hook unhides it", %{
+      html: html
+    } do
+      for body <- @bodies do
+        doc = doc(html)
+
+        assert doc
+               |> q(~s(#{body} [data-role="theme-helper"]))
+               |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) ==
+                 ["Your theme follows you to every device you sign in on."]
+
+        error = q(doc, ~s(#{body} [data-role="theme-save-error"]))
+
+        assert error |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) ==
+                 ["Couldn't save your theme. Try again."]
+
+        assert LazyHTML.attribute(error, "hidden") == [""]
+        assert error |> LazyHTML.attribute("class") |> hd() =~ "text-error"
+        refute doc(html) |> LazyHTML.to_html() =~ "Admins choose the default"
+      end
+    end
+
+    test "set_theme replies ok:true when it stores the choice", %{view: view, user: user} do
+      render_hook(view, "set_theme", %{"preset" => "sage", "mode" => "light"})
+      assert_reply(view, %{ok: true})
+      assert Accounts.theme_preference(user.id) == %{"preset" => "sage", "mode" => "light"}
+    end
+
+    test "set_theme replies ok:false and writes nothing for an unregistered preset", %{
+      view: view,
+      user: user
+    } do
+      render_hook(view, "set_theme", %{"preset" => "not-a-preset", "mode" => "dark"})
+      assert_reply(view, %{ok: false})
+      assert Repo.get!(User, user.id).preferences["theme"] == nil
+      refute Accounts.theme_preference_stored?(user.id)
+    end
+
+    test "clear_theme deletes the stored theme and replies the default", %{user: user} do
+      {view, _html} = store_and_remount(user, "sage")
+      assert Accounts.theme_preference_stored?(user.id)
+
+      render_hook(view, "clear_theme", %{})
+      default = ThemePreference.default()
+      assert_reply(view, %{ok: true, preset: preset, mode: mode})
+      assert %{"preset" => ^preset, "mode" => ^mode} = default
+
+      refute Map.has_key?(Repo.get!(User, user.id).preferences, "theme")
+      assert Accounts.theme_preference(user.id) == default
+    end
+
+    test "an anonymous shell's clear_theme writes nothing and replies ok:false" do
+      socket = %Phoenix.LiveView.Socket{assigns: %{__changed__: %{}, current_user_record: nil}}
+      default = ThemePreference.default()
+
+      assert {%{ok: false, preset: preset, mode: mode}, ^socket} =
+               PlatformWeb.ShellLive.clear_theme_reply(socket)
+
+      assert %{"preset" => ^preset, "mode" => ^mode} = default
+    end
+
+    defp store_and_remount(user, preset) do
+      {:ok, _} = Accounts.put_theme_preference(user.id, %{"preset" => preset, "mode" => "light"})
+      {:ok, view, html} = remount(user)
+      {view, html}
     end
   end
 

@@ -82,7 +82,8 @@ defmodule PlatformWeb.RootLayoutOrgThemesTest do
       presets = boot_presets(member_html)
       assert OrgTheme.preset_id(ctx.visible) in presets
       refute OrgTheme.preset_id(ctx.hidden) in presets
-      assert Enum.take(presets, 5) == Platform.Accounts.ThemePreference.preset_ids()
+      registry = Platform.Accounts.ThemePreference.preset_ids()
+      assert Enum.take(presets, length(registry)) == registry
     end
 
     test "the block sits after #install-theme and carries the theme's declarations", ctx do

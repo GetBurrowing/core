@@ -19,6 +19,16 @@
  *   - repaints on `burrow:theme`, which also fires for another tab and for an
  *     OS scheme change under "system".
  *
+ * Saving (task 01a19555 stage 3). `set_theme` and `clear_theme` reply
+ * `{ok}`. On `ok: false` (the write was refused) the hook re-applies the
+ * PREVIOUS {preset, mode} through `window.burrowTheme.apply`, repaints the
+ * checked row and unhides `[data-role="theme-save-error"]`. "Use install
+ * default" (`[data-role="theme-use-install-default"]`) applies the install
+ * default the boot script carries (`data-default-preset` /
+ * `data-default-mode`) and pushes `clear_theme`. Whether a choice is stored
+ * is shared by every instance through `burrow:theme-stored`, so the popover
+ * and the sheet show the button alike.
+ *
  * Keyboard (both groups are role="radiogroup"): ArrowDown / ArrowRight move
  * focus to the next option, ArrowUp / ArrowLeft to the previous one (both
  * wrap), Home / End to the ends; Enter or Space applies the focused option.
@@ -39,6 +49,27 @@ const optionsIn = (root, group) =>
 
 const optionOf = (target) =>
   target && typeof target.closest === "function" ? target.closest("[data-theme-option]") : null
+
+const USE_DEFAULT = '[data-role="theme-use-install-default"]'
+const SAVE_ERROR = '[data-role="theme-save-error"]'
+
+const useDefaultOf = (target) =>
+  target && typeof target.closest === "function" ? target.closest(USE_DEFAULT) : null
+
+// The install default, as the root layout's theme-boot script carries it.
+export const installDefault = (doc = document) => {
+  const boot = doc && typeof doc.querySelector === "function"
+    ? doc.querySelector('[data-role="theme-boot"]')
+    : null
+  const get = (name) => (boot ? boot.getAttribute(name) : null)
+  return {preset: get("data-default-preset") || "burrow", mode: get("data-default-mode") || "dark"}
+}
+
+const setHidden = (el, hidden) => {
+  if (!el) return
+  if (hidden) el.setAttribute("hidden", "")
+  else el.removeAttribute("hidden")
+}
 
 // The theme the boot script resolved, or the <html> attributes when the API
 // is missing (it never is in the app; this keeps the hook inert, not broken).
@@ -97,7 +128,16 @@ const ThemePicker = {
     this.handleTheme = (event) => this.paint((event && event.detail) || currentTheme())
     window.addEventListener("burrow:theme", this.handleTheme)
 
+    this.handleStored = (event) => this.showStored(Boolean(event && event.detail && event.detail.stored))
+    window.addEventListener("burrow:theme-stored", this.handleStored)
+
     this.handleClick = (event) => {
+      const useDefault = useDefaultOf(event.target)
+      if (useDefault && this.el.contains(useDefault)) {
+        this.useInstallDefault()
+        return
+      }
+
       const option = optionOf(event.target)
       if (option && this.el.contains(option)) this.select(option)
     }
@@ -128,6 +168,7 @@ const ThemePicker = {
 
   destroyed() {
     window.removeEventListener("burrow:theme", this.handleTheme)
+    window.removeEventListener("burrow:theme-stored", this.handleStored)
   },
 
   // Applies first, so the page repaints with no server round trip, then
@@ -145,7 +186,9 @@ const ThemePicker = {
     // stores it and sends its CSS back as `burrow:org-theme`.
     if (group === "preset" && api && typeof api.has === "function" && !api.has(value)) {
       this.focus(option)
-      this.pushEvent("set_theme", {preset: value, mode: current.mode})
+      this.pushEvent("set_theme", {preset: value, mode: current.mode}, (reply) =>
+        this.settled(reply, current, true)
+      )
       return
     }
 
@@ -154,7 +197,50 @@ const ThemePicker = {
 
     this.paint(theme)
     this.focus(option)
-    this.pushEvent("set_theme", {preset: theme.preset, mode: theme.mode})
+    this.pushEvent("set_theme", {preset: theme.preset, mode: theme.mode}, (reply) =>
+      this.settled(reply, current, true)
+    )
+  },
+
+  // "Use install default": apply the boot script's default at once, then
+  // ask the server to forget the stored choice.
+  useInstallDefault() {
+    const previous = currentTheme()
+    const target = installDefault()
+    const api = window.burrowTheme
+    const applied = api && typeof api.apply === "function" ? api.apply(target) : null
+    this.paint(applied || {...target, resolved: target.mode === "system" ? previous.resolved : target.mode})
+    this.pushEvent("clear_theme", {}, (reply) => this.settled(reply, previous, false))
+  },
+
+  // The server's answer to a save. `ok: false` means nothing was written:
+  // put the previous theme back and say so. Otherwise the error clears and
+  // every instance learns whether a choice is now stored.
+  settled(reply, previous, storedOnSuccess) {
+    if (reply && reply.ok === false) {
+      const api = window.burrowTheme
+      const pref = {preset: previous.preset, mode: previous.mode}
+      const applied = api && typeof api.apply === "function" ? api.apply(pref) : null
+      this.paint(applied || previous)
+      this.showError(true)
+      return
+    }
+
+    this.showError(false)
+    const detail = {stored: storedOnSuccess}
+    if (typeof window.dispatchEvent === "function" && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent("burrow:theme-stored", {detail}))
+    } else {
+      this.showStored(storedOnSuccess)
+    }
+  },
+
+  showError(on) {
+    setHidden(this.el.querySelector(SAVE_ERROR), !on)
+  },
+
+  showStored(stored) {
+    setHidden(this.el.querySelector(USE_DEFAULT), !stored)
   },
 
   move(option, step) {
