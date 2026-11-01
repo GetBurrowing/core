@@ -677,6 +677,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:projects, [])
     |> assign(:meeting_subscribed_project_ids, [])
     |> assign(:show_start_meeting_sheet, false)
+    |> assign(:schedule_origin, nil)
     |> assign(:meet_now_pending?, false)
     |> assign(:meet_now_project_id, nil)
     |> assign(:meet_now_project_name, nil)
@@ -1423,6 +1424,9 @@ defmodule PlatformWeb.MeetingLive do
      |> assign(:meeting_subscribed_project_ids, project_ids)
      |> assign_new(:projects, fn -> projects end)
      |> assign_new(:show_start_meeting_sheet, fn -> false end)
+     # Where the open sheet came from: `:calendar` returns the viewer to
+     # /calendar after Create or Close (task 01a1986e), nil stays here.
+     |> assign_new(:schedule_origin, fn -> nil end)
      |> assign_new(:meet_now_pending?, fn -> false end)
      |> assign_meet_now_project()
      |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
@@ -1457,10 +1461,50 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:list_tab, tab || "summary")
   end
 
-  defp maybe_open_scheduler(socket, %{"schedule" => "true"}),
-    do: assign(socket, :show_start_meeting_sheet, true)
+  # `?schedule=true` opens the create sheet (task 01a1986e). Calendar's
+  # New -> Meeting is the entry point: it NAVIGATES here with `from=calendar`
+  # plus the day and start time the viewer was looking at, so the meeting
+  # commits through the one `create_from_sheet/7` path rather than a second
+  # constructor in CalendarLive.
+  #
+  # The reset comes first so a prefill lands on a blank sheet, never on a
+  # previous draft. `date` and `start_time` are prefilled only when they
+  # parse — an unparseable value is dropped rather than echoed into the
+  # field, where it would be refused at submit with a message about input
+  # the viewer never typed. A link without `from` keeps the plain open.
+  defp maybe_open_scheduler(socket, %{"schedule" => "true"} = params) do
+    socket = reset_create_sheet(socket)
+
+    form =
+      socket.assigns.start_meeting_form
+      |> put_schedule_date(params["date"])
+      |> put_schedule_start_time(params["start_time"])
+
+    socket
+    |> assign(:start_meeting_form, form)
+    |> assign(:schedule_origin, if(params["from"] == "calendar", do: :calendar))
+    |> assign(:show_start_meeting_sheet, true)
+  end
 
   defp maybe_open_scheduler(socket, _), do: socket
+
+  defp put_schedule_date(form, date) when is_binary(date) do
+    case Date.from_iso8601(date) do
+      {:ok, date} -> Map.put(form, "date", Date.to_iso8601(date))
+      {:error, _reason} -> form
+    end
+  end
+
+  defp put_schedule_date(form, _date), do: form
+
+  defp put_schedule_start_time(form, start_time) when is_binary(start_time) do
+    case PlatformWeb.TimeEntry.parse(start_time) do
+      {:ok, time} -> Map.put(form, "start_time", PlatformWeb.TimeEntry.format(time))
+      {:error, _reason} -> form
+    end
+  end
+
+  defp put_schedule_start_time(form, _start_time), do: form
 
   # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
 
@@ -3748,11 +3792,46 @@ defmodule PlatformWeb.MeetingLive do
   # observable through a rendered sheet and rendering one requires an open,
   # which resets. Belt-and-braces no test can constrain is a claim nobody
   # is checking.
+  #
+  # A sheet opened from Calendar (`@schedule_origin == :calendar`) closes
+  # back to the calendar day it came from, since the viewer never chose to
+  # be on /meetings at all.
   def handle_event("close_start_meeting_sheet", _params, socket) do
+    origin = socket.assigns[:schedule_origin]
+
+    socket =
+      socket
+      |> assign(:show_start_meeting_sheet, false)
+      |> assign(:start_meeting_error, nil)
+      |> assign(:schedule_origin, nil)
+
+    case origin do
+      :calendar ->
+        date = schedule_form_date(socket.assigns.start_meeting_form) || calendar_today(socket)
+        {:noreply, push_navigate(socket, to: ~p"/calendar?#{%{date: Date.to_iso8601(date)}}")}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # The calendar-origin toggle's Event side (task 01a1986e stage 3): back to
+  # Calendar's New editor with the sheet's date and start. Carried in the URL
+  # because /calendar is a different live_session, so nothing on this socket
+  # survives the navigation.
+  def handle_event("switch_to_event", _params, socket) do
+    form = socket.assigns[:start_meeting_form] || %{}
+
+    query = %{
+      new: "1",
+      date: form |> Map.get("date", "") |> to_string(),
+      start: form |> Map.get("start_time", "") |> to_string()
+    }
+
     {:noreply,
      socket
-     |> assign(:show_start_meeting_sheet, false)
-     |> assign(:start_meeting_error, nil)}
+     |> assign(:schedule_origin, nil)
+     |> push_navigate(to: ~p"/calendar?#{query}")}
   end
 
   # Live-update form state on input change so re-render keeps the user's
@@ -3849,7 +3928,8 @@ defmodule PlatformWeb.MeetingLive do
             refuse_create(socket, attrs, message)
 
           {:ok, starts_at, ends_at} ->
-            create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, :stay)
+            mode = if socket.assigns[:schedule_origin] == :calendar, do: :calendar, else: :stay
+            create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode)
         end
     end
   end
@@ -8027,7 +8107,8 @@ defmodule PlatformWeb.MeetingLive do
      |> assign(:start_meeting_error, message)}
   end
 
-  # `mode` is `:stay` for the scheduling form and `:enter` for Meet now.
+  # `mode` is `:stay` for the scheduling form, `:calendar` for the same form
+  # opened from Calendar, and `:enter` for Meet now.
   #
   # The COMMIT is identical in both — same `Meetings.create_meeting/1`, same
   # staged-invite replay, same undelivered-invite flash — and only what
@@ -8043,6 +8124,12 @@ defmodule PlatformWeb.MeetingLive do
   # looking at the room, so the confirmation is redundant with the evidence
   # in front of them. It keeps the undelivered-invite flash, which is a
   # report of something that did NOT happen and survives the navigation.
+  #
+  # `:calendar` is `:stay` for a sheet opened from Calendar's New -> Meeting
+  # (task 01a1986e): same commit, same flash, then back to /calendar on the
+  # meeting's own day in the viewer's zone with the meeting selected. An
+  # unscheduled meeting has no day of its own, so it lands on the day the
+  # sheet was submitted with, or today.
   defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode) do
     case Meetings.create_meeting(%{
            project_id: project_id,
@@ -8062,6 +8149,19 @@ defmodule PlatformWeb.MeetingLive do
         case mode do
           :stay ->
             {:noreply, put_flash(socket, :info, "Meeting created.")}
+
+          :calendar ->
+            date =
+              calendar_return_date(meeting, socket.assigns[:calendar_time_zone]) ||
+                schedule_form_date(attrs) || calendar_today(socket)
+
+            {:noreply,
+             socket
+             |> assign(:schedule_origin, nil)
+             |> put_flash(:info, "Meeting created.")
+             |> push_navigate(
+               to: ~p"/calendar?#{%{date: Date.to_iso8601(date), select: meeting.id}}"
+             )}
 
           :enter ->
             # Re-asserted AFTER `reset_create_sheet/1`, which clears it.
@@ -8090,6 +8190,25 @@ defmodule PlatformWeb.MeetingLive do
         |> refuse_create(attrs, "Could not create meeting.")
     end
   end
+
+  # The calendar day a scheduled meeting sits on, in the viewer's zone.
+  defp calendar_return_date(%{scheduled_start_at: %DateTime{} = at}, time_zone) do
+    case DateTime.shift_zone(at, time_zone || "Etc/UTC") do
+      {:ok, shifted} -> DateTime.to_date(shifted)
+      {:error, _reason} -> DateTime.to_date(at)
+    end
+  end
+
+  defp calendar_return_date(_meeting, _time_zone), do: nil
+
+  defp schedule_form_date(form) when is_map(form) do
+    case Date.from_iso8601(form |> Map.get("date", "") |> to_string() |> String.trim()) do
+      {:ok, date} -> date
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp schedule_form_date(_form), do: nil
 
   # The default name. `"Meeting · 25 Sep 2026, 7:14 PM"` in the viewer's
   # zone — the same shift-then-fall-back shape `archive_strftime/3` uses.

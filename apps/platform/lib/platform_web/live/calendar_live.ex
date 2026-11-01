@@ -80,8 +80,10 @@ defmodule PlatformWeb.CalendarLive do
     socket =
       cond do
         socket.assigns.live_action == :settings -> load_settings(socket, nil)
-        # `?new=1`: the list pane's "+ New" on /calendar/booking.
-        params["new"] == "1" -> new_event_at(socket, socket.assigns.today, 14 * 60)
+        # `?new=1`: the list pane's "+ New" on /calendar/booking. With
+        # `date` and `start` (task 01a1986e) it opens on that day and time;
+        # either one that does not parse falls back to today / 14:00.
+        params["new"] == "1" -> new_event_at(socket, new_day(params, socket), new_minute(params))
         true -> socket
       end
 
@@ -237,6 +239,30 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_event("new_event", _, socket),
     do: {:noreply, new_event_at(socket, socket.assigns.today, 14 * 60)}
+
+  # The New editor's Meeting side (task 01a1986e). Calendar does not build
+  # meetings: it hands the form's date and start to the MeetingLive
+  # scheduling sheet, which owns the one create path and returns here after
+  # Create. Only a NEW editor with Meetings on offers it.
+  def handle_event(
+        "new_meeting",
+        _,
+        %{assigns: %{meetings_on: true, editing: %Event{id: nil}}} = socket
+      ) do
+    params = socket.assigns.form.params
+
+    query =
+      %{
+        schedule: "true",
+        from: "calendar",
+        date: params["date"] || "",
+        start_time: params["start"] || ""
+      }
+
+    {:noreply, push_navigate(socket, to: ~p"/meetings?#{query}")}
+  end
+
+  def handle_event("new_meeting", _, socket), do: {:noreply, socket}
 
   # Details (app.js `renderDetails`): a chip opens its entry; `start` picks
   # the occurrence of a recurring event.
@@ -714,6 +740,20 @@ defmodule PlatformWeb.CalendarLive do
   defp put_day(socket, date), do: socket |> assign(:sel_day, date) |> put_cursor(date)
 
   defp today(zone), do: DateTime.utc_now() |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  defp new_day(params, socket) do
+    case Date.from_iso8601(params["date"] || "") do
+      {:ok, date} -> date
+      _ -> socket.assigns.today
+    end
+  end
+
+  defp new_minute(params) do
+    case TimeEntry.parse(params["start"]) do
+      {:ok, %Time{hour: hour, minute: minute}} -> hour * 60 + minute
+      _ -> 14 * 60
+    end
+  end
 
   defp new_event_at(socket, date, minute) do
     zone = socket.assigns.zone
