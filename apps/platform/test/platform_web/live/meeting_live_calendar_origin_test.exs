@@ -1,0 +1,199 @@
+defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
+  @moduledoc """
+  Calendar's New -> Meeting opens the existing create sheet (task 01a1986e
+  stage 1).
+
+  Calendar navigates to `/meetings?schedule=true&from=calendar&date=…&start_time=…`.
+  The sheet opens prefilled, commits through the one `create_from_sheet/7`
+  path (so staged invites are replayed exactly as from the index), and
+  returns the viewer to `/calendar` on the meeting's day with it selected.
+  """
+  use PlatformWeb.ConnCase, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Phoenix.LiveViewTest
+
+  alias Platform.Accounts.User
+  alias Platform.Meetings
+  alias Platform.Meetings.Invite
+  alias Platform.Meetings.Meeting
+  alias Platform.Repo
+  alias Platform.Tasks.Project
+  alias Platform.Tenancy.OrgMembership
+
+  @search "#meeting-create-invite-search"
+  @calendar_path "/meetings?schedule=true&from=calendar&date=2026-11-04&start_time=2:00 PM"
+
+  setup %{conn: conn} do
+    user = member!("Calendar Host", "cal_host_#{System.unique_integer([:positive])}@example.com")
+
+    {:ok, project} =
+      %Project{}
+      |> Project.changeset(%{
+        name: "Calendar Origin Project #{System.unique_integer([:positive])}",
+        slug: "calendar-origin-project-#{System.unique_integer([:positive])}",
+        org_id: Platform.TenancyFixtures.acme_org_id()
+      })
+      |> Repo.insert()
+
+    Repo.delete_all(Meeting)
+
+    conn =
+      conn
+      |> init_test_session(current_user_id: user.id)
+      |> put_connect_params(%{"timezone" => "America/Chicago"})
+
+    {:ok, conn: conn, project: project}
+  end
+
+  defp member!(name, email) do
+    user =
+      Repo.insert!(%User{
+        email: email,
+        name: name,
+        oidc_sub: "oidc-calendar-origin-#{System.unique_integer([:positive])}"
+      })
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: Platform.TenancyFixtures.acme_org_id(),
+      role: "member"
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
+  defp commit(view, value) do
+    view |> element(@search) |> render_hook("meeting_create_invite_commit", %{"value" => value})
+  end
+
+  defp staged_ids(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#start-meeting-form [data-role="meeting-invite-row"]))
+    |> LazyHTML.attribute("data-entry-id")
+  end
+
+  defp input_value(html, id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("##{id}")
+    |> LazyHTML.attribute("value")
+  end
+
+  defp submit(view, project, overrides) do
+    params =
+      Map.merge(
+        %{
+          "name" => "Calendar review",
+          "project_id" => project.id,
+          "date" => "2026-11-04",
+          "start_time" => "2:00 PM",
+          "duration_minutes" => "30",
+          "invite_query" => ""
+        },
+        overrides
+      )
+
+    view |> form("#start-meeting-form", start_meeting: params) |> render_submit()
+  end
+
+  describe "prefill" do
+    test "a calendar link opens the sheet with date and start prefilled and nothing staged",
+         %{conn: conn} do
+      {:ok, view, html} = live(conn, @calendar_path)
+
+      assert has_element?(view, ~s([data-role="start-meeting-sheet"]))
+      assert input_value(html, "meeting-create-date") == ["2026-11-04"]
+      assert input_value(html, "meeting-create-start-time") == ["2:00 PM"]
+      assert staged_ids(html) == []
+    end
+
+    test "start_time is re-emitted in the sheet's own format", %{conn: conn} do
+      {:ok, _view, html} =
+        live(conn, "/meetings?schedule=true&from=calendar&date=2026-11-04&start_time=14:30")
+
+      assert input_value(html, "meeting-create-start-time") == ["2:30 PM"]
+    end
+
+    test "an unparseable date and start_time are dropped, not echoed", %{conn: conn} do
+      {:ok, view, html} =
+        live(conn, "/meetings?schedule=true&from=calendar&date=2026-13-45&start_time=lunchish")
+
+      assert has_element?(view, ~s([data-role="start-meeting-sheet"]))
+      assert input_value(html, "meeting-create-date") == [""]
+      assert input_value(html, "meeting-create-start-time") == [""]
+      refute html =~ "2026-13-45"
+      refute html =~ "lunchish"
+    end
+  end
+
+  describe "create from a calendar-origin sheet" do
+    test "calendar-origin create records the member and the guest invite",
+         %{conn: conn, project: project} do
+      quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
+      {:ok, view, _html} = live(conn, @calendar_path)
+
+      commit(view, "Quillon Zebedee")
+      html = commit(view, "guest@example.com")
+      assert staged_ids(html) == ["user:" <> quill.id, "guest:guest@example.com"]
+
+      result = submit(view, project, %{})
+
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert %DateTime{} = meeting.scheduled_start_at
+
+      invites = Repo.all(from(i in Invite, where: i.meeting_id == ^meeting.id))
+      assert length(invites) == 2
+      assert Enum.count(invites, &(&1.user_id == quill.id)) == 1
+      assert Enum.count(invites, &(&1.email == "guest@example.com" and is_nil(&1.user_id))) == 1
+      assert length(Meetings.list_invites(meeting.id)) == 2
+
+      assert {:error, {:live_redirect, %{to: to}}} = result
+      assert to == "/calendar?date=2026-11-04&select=#{meeting.id}"
+    end
+
+    test "a typed but unadded address is refused with no row and no redirect",
+         %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, @calendar_path)
+      commit(view, "guest@example.com")
+
+      html = submit(view, project, %{"invite_query" => "elias@example.com"})
+
+      assert is_binary(html)
+      assert html =~ "Add elias@example.com or clear it."
+      refute Repo.exists?(Meeting)
+    end
+
+    test "a sheet opened without from=calendar still stays on the index",
+         %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, "/meetings?schedule=true")
+
+      html = submit(view, project, %{})
+
+      assert is_binary(html)
+      assert html =~ "Meeting created."
+      assert [%Meeting{}] = Repo.all(Meeting)
+    end
+  end
+
+  describe "close" do
+    test "closing a calendar-origin sheet navigates back to the calendar day", %{conn: conn} do
+      {:ok, view, _html} = live(conn, @calendar_path)
+
+      assert {:error, {:live_redirect, %{to: "/calendar?date=2026-11-04"}}} =
+               view |> element(~s([data-role="start-meeting-sheet-close"])) |> render_click()
+    end
+
+    test "closing a sheet with no origin only hides it", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/meetings?schedule=true")
+
+      html = view |> element(~s([data-role="start-meeting-sheet-close"])) |> render_click()
+
+      assert is_binary(html)
+      refute has_element?(view, ~s([data-role="start-meeting-sheet"]))
+    end
+  end
+end
