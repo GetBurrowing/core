@@ -123,12 +123,17 @@ defmodule PlatformWeb.Tasks.BoardData do
   def default_sort, do: @default_sort
 
   @doc """
-  Decode a `?sort=` value. `"priority"`, `"newest"` and `"oldest"` select
-  their mode; anything else — `nil`, `"updated"`, `"bogus"` — is
+  Decode a `?sort=` value. `"priority"`, `"updated"`, `"newest"` and
+  `"oldest"` select their mode; anything else — `nil`, `"bogus"` — is
   `default_sort/0`. Case-sensitive: `"Priority"` is the default too.
+
+  `"updated"` has its own clause rather than falling through to the
+  default, so an incoming `?sort=updated` link keeps meaning Recently
+  updated whatever `@default_sort` is.
   """
   @spec decode_sort(term()) :: sort_mode()
   def decode_sort("priority"), do: :priority
+  def decode_sort("updated"), do: :updated
   def decode_sort("newest"), do: :newest
   def decode_sort("oldest"), do: :oldest
   def decode_sort(_other), do: @default_sort
