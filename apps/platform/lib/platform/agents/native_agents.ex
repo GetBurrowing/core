@@ -434,14 +434,23 @@ defmodule Platform.Agents.NativeAgents do
   def start_files(%Agent{} = agent) do
     burrow? = Platform.Agents.Burrow.burrow?(agent)
     section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
+    # The instructions file of the harness Burrow actually runs (task 01a19505).
+    key = if burrow?, do: burrow_instructions_key(agent)
 
     for %WorkspaceFile{} = f <- list_files(agent), valid_file_key?(f.file_key) do
       content =
-        if burrow? and f.file_key == instructions_key("claude_code"),
+        if burrow? and f.file_key == key,
           do: f.content <> section,
           else: f.content
 
       %{"key" => f.file_key, "content" => content, "version" => f.version}
+    end
+  end
+
+  defp burrow_instructions_key(agent) do
+    case get_managed_runtime(agent) do
+      %AgentRuntime{harness: harness} -> instructions_key(harness)
+      nil -> nil
     end
   end
 
@@ -506,8 +515,9 @@ defmodule Platform.Agents.NativeAgents do
   def live?(%{state: state}) when state in @live_states, do: true
   def live?(_), do: false
 
-  defp seed_instructions(name, "claude_code") when name == "Burrow",
-    do: Platform.Agents.Burrow.identity_template(name)
+  defp seed_instructions(name, harness)
+       when name == "Burrow" and harness in ~w(claude_code codex),
+       do: Platform.Agents.Burrow.identity_template(name, harness)
 
   defp seed_instructions(name, harness), do: identity_template(name, harness)
 

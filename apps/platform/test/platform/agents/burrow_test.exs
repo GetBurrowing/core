@@ -127,6 +127,87 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  defp native_entries, do: NativeAgents.list()
+
+  defp file_content(agent, key) do
+    NativeAgents.start_files(agent)
+    |> Enum.find(&(&1["key"] == key))
+    |> Map.fetch!("content")
+  end
+
+  describe "ensure/2" do
+    test "ensure/2 with codex creates one agent named Burrow running codex" do
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+
+      assert [%{agent: a, runtime: rt}] = native_entries()
+      assert a.id == agent.id
+      assert a.name == "Burrow"
+      assert a.slug == "burrow"
+      assert rt.harness == "codex"
+    end
+
+    test "ensure/2 with claude_code creates one agent named Burrow running claude_code" do
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+
+      assert [%{agent: a, runtime: rt}] = native_entries()
+      assert a.id == agent.id
+      assert a.name == "Burrow"
+      assert a.slug == "burrow"
+      assert rt.harness == "claude_code"
+    end
+
+    test "ensure/2 on an empty install gives Burrow the first-agent grant whatever the harness" do
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+      rt = Repo.get!(AgentRuntime, agent.runtime_id)
+
+      assert rt.metadata["first_agent_grant"] == true
+      assert Enum.sort(profile(agent)) == Enum.sort(Platform.Federation.first_agent_bundles())
+    end
+
+    test "ensure/2 is idempotent and switches the harness of a not-running Burrow" do
+      owner = admin!()
+      assert {:ok, first} = Burrow.ensure(owner.id, "claude_code")
+      refute Burrow.running?(first)
+      assert {:ok, second} = Burrow.ensure(owner.id, "codex")
+
+      assert first.id == second.id
+      assert [%{agent: a, runtime: rt}] = native_entries()
+      assert a.id == first.id
+      assert rt.harness == "codex"
+      assert Burrow.harness(second) == "codex"
+    end
+
+    test "a Codex Burrow's AGENTS.md carries the role and the setup guide" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "codex")
+      content = file_content(agent, "AGENTS.md")
+
+      assert content =~ "## Your role"
+      assert content =~ "## Helping your owner finish setup"
+    end
+
+    test "a Claude Burrow's CLAUDE.md carries the role and the setup guide" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      content = file_content(agent, "CLAUDE.md")
+
+      assert content =~ "## Your role"
+      assert content =~ "## Helping your owner finish setup"
+    end
+
+    test "start_files appends the admins section to a Codex Burrow's AGENTS.md" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "codex")
+      content = file_content(agent, "AGENTS.md")
+
+      assert content =~ "## Owner and admins (generated at start)"
+      assert content =~ owner.id
+    end
+  end
+
   describe "boot hook" do
     test "an install that already has users plus the token gets Burrow at boot, once" do
       admin!()

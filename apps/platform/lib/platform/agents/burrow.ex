@@ -4,7 +4,23 @@ defmodule Platform.Agents.Burrow do
   Code agent every install with an owner and an `AGENT_HOST_TOKEN` gets, acting
   as the orchestrator / infra desk.
 
-  ## Creation: `ensure/1`
+  ## The install's first agent: `ensure/2` (task 01a19505)
+
+  `ensure/2` creates, or reuses, the ONE native agent named "Burrow" (slug
+  `burrow`) with the harness the owner chose on `/setup/connect-ai`, and starts
+  it. The harness follows the connect option (`harness_for/1`): ChatGPT
+  (Codex) runs `codex`; an API key and a Claude Pro or Max subscription run
+  `claude_code`. A Burrow that is already running keeps its harness; one that
+  is not running and runs a different harness is stopped, switched
+  (`NativeAgents.set_harness/2`) and started. Whatever the harness, its
+  instructions file carries the role and the setup guide
+  (`identity_template/2`). On an empty install it is the first external agent,
+  so it takes the first-agent grant (`Platform.Federation.provision_agent_runtime/3`).
+
+  The "Getting started" space it opens once connected lives in
+  `Platform.Agents.Burrow.GettingStarted`.
+
+  ## Creation at boot / user insert: `ensure/1` (removed in stage 2 of 01a19505)
 
   `ensure/1` is idempotent. It is a logged no-op when the install has no
   `AGENT_HOST_TOKEN` or no owner, and a no-op when a Burrow already exists.
@@ -43,7 +59,8 @@ defmodule Platform.Agents.Burrow do
 
   require Logger
 
-  alias Platform.Agents.{Agent, NativeAgents}
+  alias Platform.AgentHost
+  alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
 
   @name "Burrow"
   @slug "burrow"
@@ -51,6 +68,98 @@ defmodule Platform.Agents.Burrow do
 
   @doc "The agent's display name."
   def name, do: @name
+
+  @doc "The harness each connect option runs."
+  @spec harness_for(atom()) :: String.t()
+  def harness_for(:codex), do: "codex"
+  def harness_for(:api_key), do: "claude_code"
+  def harness_for(:claude_subscription), do: "claude_code"
+
+  @doc "The Burrow agent's runtime harness, or nil."
+  @spec harness(Agent.t() | nil) :: String.t() | nil
+  def harness(nil), do: nil
+
+  def harness(%Agent{} = agent) do
+    case NativeAgents.get_managed_runtime(agent) do
+      %AgentRuntime{harness: harness} -> harness
+      nil -> nil
+    end
+  end
+
+  @doc "True when the Burrow agent exists and the agent host reports it running."
+  @spec connected?() :: boolean()
+  def connected?, do: running?(get())
+
+  @doc "True when `agent` is observed running."
+  @spec running?(Agent.t() | nil) :: boolean()
+  def running?(nil), do: false
+  def running?(%Agent{} = agent), do: match?(%{state: :running}, AgentHost.status(agent))
+
+  @doc """
+  Create or reuse the Burrow agent owned by `owner_id`, running `harness`, and
+  start it. A Burrow that is already running keeps its harness; one that is
+  not running and runs a different harness is switched. Returns `{:ok, agent}`
+  or `{:error, reason}`.
+  """
+  @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
+  def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
+    case get() do
+      nil ->
+        create(owner_id, harness)
+
+      %Agent{} = agent ->
+        cond do
+          running?(agent) ->
+            {:ok, agent}
+
+          harness(agent) == harness ->
+            start(agent)
+
+          true ->
+            switch(agent, harness)
+        end
+    end
+  end
+
+  defp create(owner_id, harness) do
+    case NativeAgents.create(owner_id, %{name: @name, harness: harness}) do
+      {:ok, agent, _runtime} ->
+        start(agent)
+
+      {:error, reason} ->
+        # Lost a race with another tab: the agent the winner made is ours too.
+        case get() do
+          %Agent{} = agent -> ensure(owner_id, harness_or(agent, harness))
+          nil -> {:error, reason}
+        end
+    end
+  end
+
+  defp harness_or(agent, fallback), do: harness(agent) || fallback
+
+  defp switch(agent, harness) do
+    _ = AgentHost.stop_agent(agent)
+
+    case NativeAgents.set_harness(agent, harness) do
+      {:ok, _runtime} -> start(agent)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp start(agent) do
+    # Not connected to a host is not an error here: the screen says so, and
+    # the reconciler starts the agent when the host joins.
+    _ = AgentHost.start_agent(agent)
+    {:ok, agent}
+  end
+
+  @doc """
+  The OS account the agent host runs `agent` as: `agent-<last 12 hex of its
+  id>` (services/agent-host/src/ids.ts `userName`; the tail, because the head
+  of a UUIDv7 is a clock).
+  """
+  @spec os_user(Agent.t()) :: String.t()
+  def os_user(%Agent{id: id}), do: "agent-" <> String.slice(id, -12, 12)
 
   @doc """
   Create Burrow if this install needs one. Returns `{:ok, :created, agent}`,
@@ -168,10 +277,13 @@ defmodule Platform.Agents.Burrow do
     """
   end
 
-  @doc "Burrow's CLAUDE.md template: role and the bundles it uses."
-  @spec identity_template(String.t()) :: String.t()
-  def identity_template(name \\ @name) do
-    NativeAgents.identity_template(name, @harness) <>
+  @doc """
+  Burrow's instructions file (`CLAUDE.md` or `AGENTS.md`) for `harness`: the
+  shared native-agent identity, its role and bundles, and the setup guide.
+  """
+  @spec identity_template(String.t(), String.t()) :: String.t()
+  def identity_template(name, harness) do
+    NativeAgents.identity_template(name, harness) <>
       """
 
       ## Your role
@@ -189,6 +301,20 @@ defmodule Platform.Agents.Burrow do
       - `admin`: install administration, when your tool profile includes it.
 
       Use only what your profile gives you.
+
+      ## Helping your owner finish setup
+
+      You are the first agent on a new install, and your owner may not be technical.
+      In the "Getting started" space, help them finish setting up, one step at a time:
+
+      1. Ask what their business does and which tools they already use (email,
+         calendar, files, chat). Suggest connecting the ones that matter most first.
+      2. Help them create a first space for real work, and say what it is for.
+      3. Offer to add more agents later, once the first space is in use.
+
+      Use plain words, not technical ones. Never ask them to open a terminal. When a
+      step needs their consent or a sign-in, give them the link or button in Burrow
+      and wait for them to finish it; never do it for them.
       """
   end
 end
