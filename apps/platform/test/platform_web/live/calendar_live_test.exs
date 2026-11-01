@@ -1287,7 +1287,12 @@ defmodule PlatformWeb.CalendarLiveTest do
       live(zoned(conn, "America/Chicago"), "/calendar?new=1&date=2026-11-04&start=3:00 PM")
 
     assert has_element?(view, "#calendar-editor h2", "New event")
-    assert has_element?(view, "#calendar-event-form input[name='event[date]'][value='2026-11-04']")
+
+    assert has_element?(
+             view,
+             "#calendar-event-form input[name='event[date]'][value='2026-11-04']"
+           )
+
     assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='3:00 PM']")
   end
 

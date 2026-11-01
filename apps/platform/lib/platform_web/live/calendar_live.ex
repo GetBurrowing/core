@@ -83,8 +83,7 @@ defmodule PlatformWeb.CalendarLive do
         # `?new=1`: the list pane's "+ New" on /calendar/booking. With
         # `date` and `start` (task 01a1986e) it opens on that day and time;
         # either one that does not parse falls back to today / 14:00.
-        params["new"] == "1" ->
-          new_event_at(socket, new_day(params, socket), new_minute(params))
+        params["new"] == "1" -> new_event_at(socket, new_day(params, socket), new_minute(params))
         true -> socket
       end
 
