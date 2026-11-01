@@ -356,6 +356,10 @@ defmodule Platform.Agents.DmAccessTest do
     })
   end
 
+  defp errors_on(changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {message, _opts} -> message end)
+  end
+
   defp set!(agent, admin, policy, user_ids \\ nil) do
     {:ok, agent} = DmAccess.set_policy(Scope.for_user(admin), agent, policy, user_ids)
     agent
