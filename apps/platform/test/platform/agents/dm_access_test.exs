@@ -19,6 +19,7 @@ defmodule Platform.Agents.DmAccessTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access.Agents, as: AgentAccess
+  alias Platform.Access.Grants
   alias Platform.Access.Scope
   alias Platform.Agents.{Agent, AgentDmAllowedUser, AgentRuntime, DmAccess}
   alias Platform.ExternalUserFixtures, as: World
@@ -120,13 +121,21 @@ defmodule Platform.Agents.DmAccessTest do
       assert DmAccess.permitted?(root_admin.id, agent)
     end
 
-    test "an owner is always allowed, even without agents-module access" do
-      # An owner with no org membership holds no agents-module permission, so
-      # manage?/2 refuses them: only the owner clause can admit them.
+    test "an owner is always allowed, even without agents-module access", %{tenant: tenant} do
+      # The agents module denied to the owner, as module_gating_acceptance_test
+      # does: manage?/2 then refuses them, so only the owner clause admits them.
       owner = World.create_user!()
+      World.plain_member!(owner, tenant)
       agent = agent!()
       runtime!(agent, owner)
       agent = set!(agent, root_admin!(), "admins")
+
+      {:ok, _} =
+        Grants.deny(%{
+          principal: {:user, owner.id},
+          permission: "agents",
+          resource: {:module, tenant}
+        })
 
       refute AgentAccess.manage?(Scope.for_user(owner), agent)
       assert DmAccess.permitted?(owner.id, agent)
