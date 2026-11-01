@@ -95,7 +95,7 @@ services:
       - "--port"
       - "8188"
       - "-c"
-      - "8192"
+      - "3072"
       - "-np"
       - "1"
       - "--no-kv-unified"
@@ -105,7 +105,7 @@ services:
       - "1024"
       - "-t"
       - "2"
-    mem_limit: "1974m"
+    mem_limit: "1251m"
     volumes:
       - "./models:/models:ro"
     healthcheck:

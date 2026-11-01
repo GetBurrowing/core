@@ -40,6 +40,7 @@ the reference-install quadlets read on 2026-09-25 (task 01a0d69d stage 2).
 """
 
 import base64
+import math
 import os
 import secrets as _random
 import shutil
@@ -454,9 +455,47 @@ EMBEDDINGS_IMAGE = (
 #   1.5 x 1701.9 s = 2553 s. A larger page can outlast it: memory-service
 #   keeps embedding after core gives up, and its single-flight and content
 #   hash keep a resend from embedding the entry twice.
+#
+# "small", ctx 3072 (task 01a19505 stage 3, option B: meetings on this tier):
+# every input is at most max_input_tokens (2401), so a 3072-token slot holds
+# it with the 25% margin (3002) and the vectors do not change. Measured
+# 2026-11-01 on the test host (image above, --cpus 2, -t 2): llama-server
+# VmHWM 1041.7 MiB at ctx 3072 vs 1605.1 at ctx 8192 (same inputs: a 600-char
+# CJK + emoji input, a 600-char English one, 197 x 600-char chunks of ADR 0058
+# and 16 queries); cosine to ctx 8192's vectors 1.000000 on every input; hit@1/3/5
+# over 16 section queries 5/12/15 on both; worst-input latency 1.9-2.1 s vs
+# 1.4-2.8 s (noise on a shared host). So worst_request_secs keeps the droplet
+# measurement above. Smaller chunks lose recall (300 chars: 3/7/9) and an
+# 8-bit KV cache is slower (1.2-1.7x), so neither is used.
+#
+# "medium" (s-4vcpu-8gb) keeps the row the small tier ran before ctx 3072,
+# byte for byte, so its render does not change. It was measured on the 4 GB
+# droplet; host_ram_mb is that droplet's (a lower bound for 8 GB).
 EMBEDDINGS_FALLBACK_TIER = "small"
 EMBEDDINGS_PROFILES = {
     "small": {
+        "model": "q8_0",
+        "ctx": 3072,
+        "parallel": 1,
+        "batch": 1024,
+        "ubatch": 1024,
+        "threads": 2,
+        "mem_limit": 1251,
+        "host_ram_mb": 3915,
+        "siblings_peak_mb": 1412,
+        "embeddings_peak_mb": 1042,
+        "max_input_tokens": 2401,
+        "worst_request_secs": 17.4,
+        "memory_env": {
+            "MEMORY_CHUNK_MAX_TOKENS": "200",
+            "MEMORY_CHUNK_OVERLAP_TOKENS": "25",
+            "MEMORY_EMBEDDING_MAX_BATCH_TOKENS": "200",
+            "MEMORY_EMBEDDING_MAX_INPUT_TOKENS": "200",
+            "MEMORY_EMBEDDING_MAX_CONCURRENCY": "1",
+        },
+        "core_ingest_timeout_ms": 2_700_000,
+    },
+    "medium": {
         "model": "q8_0",
         "ctx": 8192,
         "parallel": 1,
@@ -523,6 +562,82 @@ def _embeddings_command(ctx):
 
 def _embeddings_mem_limit(ctx):
     return f"{embeddings_profile(ctx.m)['mem_limit']}m"
+
+
+# Meetings on single-host, keyed by `[install] size_tier` like
+# EMBEDDINGS_PROFILES (task 01a19505 stage 3). Rows hold MEASURED peaks only;
+# each compose mem_limit is derived as ceil(1.2 x peak), the rule the
+# embeddings table uses, so a misfit kills the meeting container and not
+# Postgres. A tier without a row gets "small". target mac renders no limit
+# (its goldens stay byte-identical).
+#
+# "small", measured 2026-11-01 on the test host (rootless podman, cgroup v2
+# memory.peak): 10-minute rooms with 2 headless Chrome participants, fake
+# camera + a paced speech WAV, the transcriber dispatched by Twirp
+# CreateDispatch as core does, 72-74 STT calls answered by a local
+# OpenAI-shaped stub; rtc on 17881/17882 + node_ip (no memory effect).
+# - livekit docker.io/livekit/livekit-server:v1.13 (sha256:25cd902de7ca...):
+#   idle 15-22 MiB, meeting peak 71.6-81.8 MiB over 4 runs, CPU 1.9-2.6% mean.
+# - meeting-transcriber ghcr.io/getburrowing/meeting-transcriber:0.1.1
+#   (sha256:a06e0a98c7b2..., main 604ca2f8): NUM_IDLE_PROCESSES below is the
+#   warm job processes it keeps (meeting-transcriber PR #3, option A). With
+#   livekit-agents' default (min(cpu_count, 4); 4 on the test host, 2 on a
+#   2-vCPU droplet) it idled at 712 MiB and peaked at 789 MiB.
+#   TRANSCRIBER_MEASURED_PEAKS records each setting. Small runs 0 (option
+#   E1, Dalton 2026-11-01): idle drops from 491 to 180 MiB and the meeting
+#   peak does not move (596 vs 592: the job process is the peak either way).
+#   The cost is a cold job process per meeting: dispatch to first audio frame
+#   1.9 s vs 0.5 s with one warm process; dispatch to the first transcript
+#   segment 12.2 s vs 12.3 s (the fake speaker's first sentence is 13.8 s).
+#
+# The small-tier budget (tests/test_meetings_profiles.py), against MemTotal
+# 3915 MiB, both checked:
+#   LIMITS: siblings_peak_mb + embeddings mem_limit + livekit + transcriber
+#     limits <= MEETINGS_LIMITS_LINE x 3915. That line is 0.90 (3524), not
+#     0.85, by Dalton's call of 2026-11-01: the last step (E3, the hosted
+#     siblings without the 425 MiB contained agent-host allowance in
+#     siblings_peak_mb; hosted droplets run full_machine) can only be measured
+#     on a droplet. The meetings review droplet re-measures the siblings; if
+#     the limit sum then fits 3327 the line goes back to 0.85.
+#   PEAKS: siblings_peak_mb + embeddings_peak_mb + livekit + transcriber
+#     peaks < 0.85 x 3915 (3327).
+MEETINGS_LIMITS_LINE = 0.90
+MEETINGS_PEAKS_LINE = 0.85
+MEETINGS_FALLBACK_TIER = "small"
+TRANSCRIBER_MEASURED_PEAKS = {
+    # NUM_IDLE_PROCESSES -> (idle MiB, 2-person meeting peak MiB), worst run.
+    0: (180, 597),
+    1: (491, 592),
+}
+MEETINGS_PROFILES = {
+    "small": {
+        "livekit_peak_mb": 82,
+        # meeting-transcriber NUM_IDLE_PROCESSES (v0.1.1+): warm job processes.
+        "transcriber_idle_processes": 0,
+        "transcriber_peak_mb": 597,
+    },
+}
+
+
+def meetings_profile(manifest):
+    """The MEETINGS_PROFILES row for this manifest's size tier (small when unmeasured)."""
+    tier = manifest["install"]["size_tier"]
+    return MEETINGS_PROFILES.get(tier, MEETINGS_PROFILES[MEETINGS_FALLBACK_TIER])
+
+
+def meetings_mem_limits(row):
+    """`{"livekit": MiB, "meeting-transcriber": MiB}`: ceil(1.2 x each measured peak)."""
+    return {
+        "livekit": math.ceil(1.2 * row["livekit_peak_mb"]),
+        TRANSCRIBER: math.ceil(1.2 * row["transcriber_peak_mb"]),
+    }
+
+
+def _meetings_mem_limit(container):
+    def limit(ctx):
+        return None if ctx.mac else f"{meetings_mem_limits(meetings_profile(ctx.m))[container]}m"
+
+    return limit
 
 
 POSTGRES_USER = "core_platform"
@@ -1179,6 +1294,9 @@ def _transcriber_env(ctx):
     }
     if endpoint["api_key_ref"]:
         env["STT_API_KEY"] = f"{{customer:{endpoint['api_key_ref']}}}"
+    if not ctx.mac:
+        # meeting-transcriber v0.1.1: warm job processes, sized per tier.
+        env["NUM_IDLE_PROCESSES"] = str(meetings_profile(ctx.m)["transcriber_idle_processes"])
     return env
 
 
@@ -1350,6 +1468,7 @@ SERVICES = {
             secrets=[SECRETS["LIVEKIT_API_SECRET"]],
             config_files=lambda ctx: {"livekit.yaml": livekit_yaml(ctx)},
             host_mounts=lambda ctx: [("livekit.yaml", "/etc/livekit.yaml", True)],
+            mem_limit=_meetings_mem_limit("livekit"),
             routes=lambda ctx: {ctx.livekit_host: LIVEKIT_SIGNAL_PORT},
             ports=(
                 f"{LIVEKIT_TCP_PORT}:{LIVEKIT_TCP_PORT}/tcp",
@@ -1361,6 +1480,7 @@ SERVICES = {
             lambda ctx: default_image(ctx.m, "meeting-transcriber"),
             private_image=True,
             env=_transcriber_env,
+            mem_limit=_meetings_mem_limit(TRANSCRIBER),
             injects=lambda ctx: {
                 "core-platform": {"MEETING_AGENT_TOKEN": "{secret:MEETING_AGENT_TOKEN}"}
             },

@@ -243,7 +243,7 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         )
         self.assertEqual(
             meet["images"].pop("refs"),
-            {"meeting-transcriber": "ghcr.io/example/meeting-transcriber:v1.0.0"},
+            {"meeting-transcriber": "ghcr.io/example/meeting-transcriber:0.1.1"},
         )
         self.assertEqual(base, meet)
 
@@ -260,7 +260,7 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         self.assertIn("use_external_ip: true", self.files["livekit.yaml"])
         self.assertNotIn("node_ip", self.files["livekit.yaml"])
         transcriber = blocks["meeting-transcriber"]
-        self.assertIn('image: "ghcr.io/example/meeting-transcriber:v1.0.0"', transcriber)
+        self.assertIn('image: "ghcr.io/example/meeting-transcriber:0.1.1"', transcriber)
         self.assertIn('LIVEKIT_URL: "ws://livekit:7880"', transcriber)
         self.assertIn('STT_BASE_URL: "https://api.openai.com/v1"', transcriber)
         self.assertIn('STT_MODEL: "whisper-1"', transcriber)
