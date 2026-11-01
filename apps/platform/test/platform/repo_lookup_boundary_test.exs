@@ -1121,6 +1121,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/calendar/subscriptions.ex" => 1,
     "platform/calendar/refresh_worker.ex" => 1,
     "platform/orchestration/blocker_reassessment.ex" => 1,
+    # task 01a19554-fd07 stage 1: own_participant/2 pins the space id of the DM
+    # find_or_create_dm/3 just returned and the member's user id, which submit/3
+    # checks with Platform.UUID.valid?/1 before any query.
+    "platform/onboarding/first_run_goal.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.
     "platform/chat/canvas/broadcasts.ex" => 1,

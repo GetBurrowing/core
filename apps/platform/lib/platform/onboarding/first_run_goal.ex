@@ -71,7 +71,7 @@ defmodule Platform.Onboarding.FirstRunGoal do
   """
   @spec pending?(User.t() | map() | nil) :: boolean()
   def pending?(%{id: user_id} = user) when is_binary(user_id) do
-    not Tenancy.external_user?(user) and
+    Platform.UUID.valid?(user_id) and not Tenancy.external_user?(user) and
       not Map.has_key?(Accounts.get_user_preferences(user_id), @pref_key)
   end
 
@@ -115,6 +115,12 @@ defmodule Platform.Onboarding.FirstRunGoal do
       trimmed == "" ->
         {:error, :blank}
 
+      # Every id this function pins in a `where:` (the DM lookup, the member's
+      # own participant row, the preference UPDATEs) is this one or a row id
+      # read back from the database, so one guard here covers them all.
+      not Platform.UUID.valid?(user_id) ->
+        {:error, :not_pending}
+
       Tenancy.external_user?(user) ->
         {:error, :not_pending}
 
@@ -136,7 +142,9 @@ defmodule Platform.Onboarding.FirstRunGoal do
 
   @doc "Record that the member dismissed the box. Idempotent."
   @spec skip(User.t() | map()) :: :ok | {:error, :not_found}
-  def skip(%{id: user_id}) when is_binary(user_id), do: put_pref(user_id, "skipped")
+  def skip(%{id: user_id}) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id), do: put_pref(user_id, "skipped"), else: {:error, :not_found}
+  end
 
   # A raise must not strand the "submitting" claim: release it, then re-raise.
   defp safe_post_goal(user_id, agent, content, post) do

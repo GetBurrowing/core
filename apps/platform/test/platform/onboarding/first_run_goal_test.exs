@@ -92,6 +92,12 @@ defmodule Platform.Onboarding.FirstRunGoalTest do
     test "nil is never pending" do
       refute FirstRunGoal.pending?(nil)
     end
+
+    test "a malformed user id is not pending and cannot submit or skip, without raising" do
+      refute FirstRunGoal.pending?(%{id: "not-a-uuid"})
+      assert {:error, :not_pending} = FirstRunGoal.submit(%{id: "not-a-uuid"}, "Plan")
+      assert {:error, :not_found} = FirstRunGoal.skip(%{id: "not-a-uuid"})
+    end
   end
 
   describe "burrow/0" do
