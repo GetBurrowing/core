@@ -13,9 +13,13 @@ defmodule PlatformWeb.PageController do
   host fence (`PlatformWeb.Plugs.HostSurface`) closes to the `chat.` host,
   so the chat host's root keeps sending everyone to `/chat`.
 
-  The bound, stated rather than hidden: a pending member who opens `/chat`
-  directly (the PWA `start_url`, a bookmark) gets the normal chat, and
-  gets the box at their next `/`. ChatLive is deliberately not gated.
+  A pending member who opens bare `/chat` directly (the installed PWA's
+  `start_url`, a bookmark) is sent to `/start` too, by
+  `PlatformWeb.Plugs.FirstRunGate` in the router pipeline (task
+  01a19943-c0b4). Deep links `/chat/<slug>` are not gated, and ChatLive
+  itself has no check. There is no loop: `/start` sends a non-pending member
+  to `/chat`, and the plug is HTTP-only, so it never runs on a live
+  navigation or reconnect.
   """
   def home(conn, _params) do
     if PlatformWeb.ExternalSurface.router_surface(conn) == :app and

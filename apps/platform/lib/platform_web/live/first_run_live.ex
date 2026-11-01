@@ -15,6 +15,13 @@ defmodule PlatformWeb.FirstRunLive do
   (submitted, skipped, backfilled `"existing"`, external) who opens `/start`
   is sent to `/chat`.
 
+  How a pending member gets here: `/` (`PageController.home/2`) and bare
+  `/chat` (`PlatformWeb.Plugs.FirstRunGate`, which catches the installed
+  PWA's `start_url`) both redirect to `/start` on the app host. Deep links
+  `/chat/<slug>` are not gated. There is no loop: this view sends anyone not
+  pending to `/chat`, and the gate is an HTTP plug that never runs on a live
+  navigation or reconnect.
+
   ## Events
 
     * `"change"` keeps `@goal` in step with the field.

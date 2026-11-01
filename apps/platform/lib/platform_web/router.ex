@@ -214,6 +214,15 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.HostSurface)
   end
 
+  # First-run gate (task 01a19943-c0b4 stage 1). Sends a pending member's
+  # bare `GET /chat` (the installed PWA's `start_url`) to `/start`. HTTP-only,
+  # so it never fires on a live navigation or reconnect; deep links
+  # `/chat/<slug>` pass. Appended LAST to the default app scope only, after
+  # `:require_auth` assigns `:current_user`. NOT on the `chat.` host scope.
+  pipeline :first_run_gate do
+    plug(PlatformWeb.Plugs.FirstRunGate)
+  end
+
   # JSON-API auth: same session check as :require_auth but returns 401 JSON
   # on failure instead of redirecting. Mounted on /api/* routes that need
   # an authenticated browser session (e.g. PATCH /api/messages/:id).
@@ -876,7 +885,13 @@ defmodule PlatformWeb.Router do
   end
 
   scope "/", PlatformWeb do
-    pipe_through([:browser, :require_auth, :enforce_external_scope, :require_app_surface])
+    pipe_through([
+      :browser,
+      :require_auth,
+      :enforce_external_scope,
+      :require_app_surface,
+      :first_run_gate
+    ])
 
     # Root redirects to /chat
     get("/", PageController, :home)
