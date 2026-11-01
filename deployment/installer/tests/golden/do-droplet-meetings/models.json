@@ -1,0 +1,10 @@
+{
+  "endpoints": [
+    {
+      "api_key_ref": "OPENAI_STT_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "kind": "hosted",
+      "name": "openai-stt"
+    }
+  ]
+}

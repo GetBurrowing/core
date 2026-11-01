@@ -18,9 +18,11 @@ No test prints a key, a link or a code.
 
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -34,6 +36,8 @@ INSTALLER = os.path.dirname(HERE)
 RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
 DO_DROPLET = os.path.join(RENDER_FIXTURES, "do-droplet.toml")
 DO_AUTH = os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json")
+DO_MEETINGS = os.path.join(RENDER_FIXTURES, "do-droplet-meetings.toml")
+DO_MEETINGS_CUSTOMER = os.path.join(RENDER_FIXTURES, "do-droplet-meetings-customer.env")
 AGENTS_FULL = os.path.join(RENDER_FIXTURES, "single-host-agents-full.toml")
 GOOD = os.path.join(HERE, "fixtures", "good.toml")
 REPO = os.path.dirname(os.path.dirname(INSTALLER))
@@ -48,7 +52,7 @@ from setup_fakes import FakePocketId, write_secret_file
 from burrow_install import registry, templates
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
-from burrow_install.render import build, plan
+from burrow_install.render import build, plan, render
 from burrow_install.setup import pocketid
 from burrow_install.validate import validate
 
@@ -157,6 +161,225 @@ class DropletRenderTest(unittest.TestCase):
         )
         drop["install"]["size_tier"] = base["install"]["size_tier"]
         self.assertEqual(base, drop)
+
+
+# ---------------------------------------------------------------------------
+# Meetings on the droplet (task 01a19505 stage 1)
+# ---------------------------------------------------------------------------
+
+
+def meetings_droplet():
+    return build(
+        valid(load(DO_MEETINGS)), registry_auth=DO_AUTH, customer_secrets=DO_MEETINGS_CUSTOMER
+    )
+
+
+def compose_blocks(compose):
+    """{service name: its block of compose.yaml}, split on the 2-space service keys."""
+    body = compose.split("\nservices:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    parts = re.split(r"^  ([a-z][a-z0-9-]*):$", body, flags=re.MULTILINE)
+    return dict(zip(parts[1::2], parts[2::2], strict=True))
+
+
+def block_list(block, key):
+    """The quoted items of the list under ``key`` in one compose service block."""
+    match = re.search(rf"^    {key}:\n((?:      - .*\n)+)", block, re.MULTILINE)
+    return [] if match is None else re.findall(r'^      - "(.*)"$', match.group(1), re.MULTILINE)
+
+
+def all_ports(compose):
+    return sorted(p for b in compose_blocks(compose).values() for p in block_list(b, "ports"))
+
+
+def env_names(text):
+    return sorted(
+        line.split("=", 1)[0] for line in text.splitlines() if line and not line.startswith("#")
+    )
+
+
+def digest(value):
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+class DropletMeetingsRenderTest(unittest.TestCase):
+    """services.meetings on single-host: rooms, media and transcription, no voice."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rendered = meetings_droplet()
+        cls.files = {rel: text for rel, (text, _mode) in cls.rendered.files.items()}
+        cls.base = {rel: text for rel, (text, _mode) in droplet().files.items()}
+        cls.primary = load(DO_MEETINGS)["domain"]["primary"]
+
+    def test_00_positive_control_the_pre_meetings_droplet_has_none_of_it(self):
+        for absent in ("livekit", "LIVEKIT_", "meeting-transcriber", ":4080", "7881", "7882"):
+            with self.subTest(absent=absent):
+                self.assertFalse([r for r, t in self.base.items() if absent in t])
+
+    def test_fixture_is_do_droplet_plus_meetings_only(self):
+        base, meet = load(DO_DROPLET), load(DO_MEETINGS)
+        self.assertIs(meet["services"].pop("meetings"), True)
+        self.assertEqual(
+            meet.pop("meetings"),
+            {
+                "media_reach": "public",
+                "transcription": True,
+                "stt_endpoint": "openai-stt",
+                "stt_model": "whisper-1",
+            },
+        )
+        self.assertEqual(
+            meet.pop("models"),
+            {
+                "endpoints": [
+                    {
+                        "name": "openai-stt",
+                        "kind": "hosted",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key_ref": "OPENAI_STT_API_KEY",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(
+            meet["images"].pop("refs"),
+            {"meeting-transcriber": "ghcr.io/example/meeting-transcriber:v1.0.0"},
+        )
+        self.assertEqual(base, meet)
+
+    def test_livekit_and_transcriber_are_rendered(self):
+        services = self.files["services.txt"].split()
+        self.assertEqual(
+            sorted(set(services) - set(self.base["services.txt"].split())),
+            ["livekit", "meeting-transcriber"],
+        )
+        blocks = compose_blocks(self.files["compose.yaml"])
+        self.assertEqual(sorted(blocks), services)
+        self.assertIn('image: "docker.io/livekit/livekit-server:v1.13"', blocks["livekit"])
+        self.assertIn("./livekit.yaml:/etc/livekit.yaml:ro", blocks["livekit"])
+        self.assertIn("use_external_ip: true", self.files["livekit.yaml"])
+        self.assertNotIn("node_ip", self.files["livekit.yaml"])
+        transcriber = blocks["meeting-transcriber"]
+        self.assertIn('image: "ghcr.io/example/meeting-transcriber:v1.0.0"', transcriber)
+        self.assertIn('LIVEKIT_URL: "ws://livekit:7880"', transcriber)
+        self.assertIn('STT_BASE_URL: "https://api.openai.com/v1"', transcriber)
+        self.assertIn('STT_MODEL: "whisper-1"', transcriber)
+        # PERSIST_URL and LiveKit's webhook reach core without leaving the
+        # host: Caddy's internal listener, published on no host port.
+        self.assertEqual(registry.CORE_INTERNAL_URL, "http://caddy:4080")
+        self.assertIn('PERSIST_URL: "http://caddy:4080/api/meetings/segments"', transcriber)
+        self.assertIn('"http://caddy:4080/api/webhooks/livekit"', self.files["livekit.yaml"])
+        self.assertIn(
+            "\nhttp://:4080 {\n\treverse_proxy core-platform:4000 {\n"
+            "\t\theader_up X-Forwarded-Proto https\n\t}\n}\n",
+            self.files["Caddyfile"],
+        )
+        self.assertEqual(block_list(blocks["caddy"], "ports"), ["80:80", "443:443"])
+        self.assertEqual(
+            env_names(self.files["secrets.env"]).count("STT_API_KEY"), 1
+        )  # {customer:OPENAI_STT_API_KEY}, never in compose
+        self.assertNotIn("STT_API_KEY", self.files["compose.yaml"])
+
+    def test_media_ports_published_7881_tcp_7882_udp_and_nothing_else_new(self):
+        before, after = all_ports(self.base["compose.yaml"]), all_ports(self.files["compose.yaml"])
+        self.assertGreater(len(before), 0)  # positive control: the parser finds caddy's
+        added = list(after)
+        for port in before:
+            added.remove(port)
+        self.assertEqual(sorted(added), ["7881:7881/tcp", "7882:7882/udp"])
+        livekit = compose_blocks(self.files["compose.yaml"])["livekit"]
+        self.assertEqual(block_list(livekit, "ports"), ["7881:7881/tcp", "7882:7882/udp"])
+        # Signalling (7880) stays behind Caddy; no host publishes it.
+        self.assertFalse([p for p in after if "7880" in p])
+
+    def test_caddy_routes_livekit_host_to_7880(self):
+        host = f"livekit.{self.primary}"
+        self.assertIn(f"\n{host} {{\n\treverse_proxy livekit:7880\n}}\n", self.files["Caddyfile"])
+        caddy = compose_blocks(self.files["compose.yaml"])["caddy"]
+        self.assertIn(f'          - "{host}"\n', caddy)  # the in-stack alias
+        self.assertNotIn(host, self.base["Caddyfile"])
+
+    def test_core_env_has_livekit_url_key_and_secret_only_via_secrets_env(self):
+        core = compose_blocks(self.files["compose.yaml"])["core-platform"]
+        self.assertIn(f'LIVEKIT_URL: "wss://livekit.{self.primary}"', core)
+        self.assertIn('LIVEKIT_API_KEY: "suite"', core)
+        self.assertEqual(block_list(core, "env_file"), ["secrets.env"])
+        for text in (self.files["compose.yaml"], self.files["Caddyfile"]):
+            self.assertNotIn("LIVEKIT_API_SECRET", text)
+        names = env_names(self.files["secrets.env"])
+        for name in ("LIVEKIT_API_SECRET", "LIVEKIT_KEYS", "MEETING_AGENT_TOKEN"):
+            self.assertEqual(names.count(name), 1, name)
+        value = self.rendered.generated["LIVEKIT_API_SECRET"]
+        self.assertGreaterEqual(len(value), 32)
+        hits = sorted(r for r, t in self.files.items() if value in t)
+        self.assertEqual(hits, ["secrets.env", "user-data"])  # user-data carries secrets.env
+
+    def test_livekit_secret_differs_between_two_renders(self):
+        first, second = meetings_droplet(), meetings_droplet()
+        for name in ("LIVEKIT_API_SECRET", "MEETING_AGENT_TOKEN"):
+            with self.subTest(secret=name):
+                self.assertNotEqual(digest(first.generated[name]), digest(second.generated[name]))
+
+        def keys_line(rendered):
+            env = rendered.files["secrets.env"][0]
+            return next(line for line in env.splitlines() if line.startswith("LIVEKIT_KEYS="))
+
+        self.assertNotEqual(digest(keys_line(first)), digest(keys_line(second)))
+
+    def test_reuse_secrets_from_a_pre_meetings_install_keeps_every_old_value_and_adds_livekit(
+        self,
+    ):
+        tmp = tempfile.mkdtemp(prefix="burrow-install-01a19505-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        from burrow_install.render import inside_git_worktree
+
+        if inside_git_worktree(tmp):
+            self.skipTest(f"the temp dir {tmp} is inside a git work tree")
+        out = os.path.join(tmp, "pre-meetings")
+        old = render(valid(load(DO_DROPLET)), out, registry_auth=DO_AUTH).generated
+        new = build(
+            valid(load(DO_MEETINGS)),
+            registry_auth=DO_AUTH,
+            customer_secrets=DO_MEETINGS_CUSTOMER,
+            reuse_secrets=os.path.join(out, "secrets.env"),
+        ).generated
+        self.assertGreaterEqual(len(old), 11)  # positive control: a real install's set
+        self.assertEqual(sorted(set(old) - set(new)), [])
+        self.assertEqual(sorted(set(new) - set(old)), ["LIVEKIT_API_SECRET", "MEETING_AGENT_TOKEN"])
+        changed = sorted(n for n in old if digest(old[n]) != digest(new[n]))
+        self.assertEqual(changed, [])
+
+    def test_turn_stays_off_with_reason(self):
+        text = self.files["livekit.yaml"]
+        self.assertIn("\nturn:\n  enabled: false\nwebhook:\n", text)
+        reason = "\n".join(f"# {line}" for line in registry.TURN_OFF_REASON)
+        self.assertIn(reason + "\nturn:\n", text)
+        joined = " ".join(registry.TURN_OFF_REASON)
+        for needle in ("UDP 7882", "ICE-TCP on 7881", "443", "SNI", "follow-up"):
+            self.assertIn(needle, joined)
+
+    def test_no_voice_worker_or_speaches_rendered(self):
+        raw = load(DO_MEETINGS)
+        raw["services"]["voice"] = True
+        raw["voice"]["accelerator"] = "cpu"
+        voiced = build(valid(raw), registry_auth=DO_AUTH, customer_secrets=DO_MEETINGS_CUSTOMER)
+        self.assertIn("speaches", voiced.files["compose.yaml"][0])  # positive control
+        for rel, text in self.files.items():
+            for absent in ("speaches", "voice-worker", "burrow-voice", "TTS_"):
+                with self.subTest(file=rel, absent=absent):
+                    self.assertNotIn(absent, text)
+
+    def test_user_data_fits_digitaloceans_64_kib_cap(self):
+        size = len(self.files["user-data"].encode("utf-8"))
+        self.assertGreater(size, len(self.base["user-data"].encode("utf-8")))
+        self.assertLess(size, DO_USER_DATA_MAX)
+
+    def test_fixture_and_render_carry_no_install_identity(self):
+        with open(DO_MEETINGS, encoding="utf-8") as handle:
+            self.assertEqual(identity_hits(handle.read()), [])
+        for rel, text in self.rendered.redacted().items():
+            with self.subTest(file=rel):
+                self.assertEqual(identity_hits(text), [])
 
 
 class PublicImagesTest(unittest.TestCase):

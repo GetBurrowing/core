@@ -64,10 +64,11 @@ OPTIONAL_SERVICES = {
 }
 
 # The `[services]` knobs each target can run. A knob outside its target's set
-# is a validator error (single-host: field_not_applicable for meetings; mac:
-# mac_voice_unsupported / mac_local_embeddings_unsupported), never ignored.
+# is a validator error (mac: mac_voice_unsupported /
+# mac_local_embeddings_unsupported), never ignored. single-host runs meetings
+# since task 01a19505 (media_reach = "public" only: a droplet has a public IPv4).
 TARGET_KNOBS = {
-    "single-host": ("files", "memory", "voice", "embeddings"),
+    "single-host": ("files", "memory", "voice", "embeddings", "meetings"),
     "mac": ("files", "memory", "meetings"),
 }
 
@@ -1091,6 +1092,22 @@ def media_node_ip(ctx):
     return ip
 
 
+# Why `turn: enabled: false` on single-host (task 01a19505). A droplet's own
+# public IPv4 already takes media directly on UDP 7882, with ICE-TCP on 7881 as
+# the fallback for networks that block UDP. LiveKit's embedded TURN on UDP adds
+# no reach over that. The one network it would rescue, 443-only egress, needs
+# TURN/TLS on 443, which Caddy already holds: sharing 443 by SNI is a named
+# follow-up, not built here. Rendered into single-host livekit.yaml and pinned
+# by test_droplet.DropletMeetingsRenderTest.test_turn_stays_off_with_reason, so
+# turning TURN on is a deliberate test edit.
+TURN_OFF_REASON = (
+    "TURN is off on purpose: this host's public IP takes media directly on",
+    f"UDP {LIVEKIT_UDP_PORT}, with ICE-TCP on {LIVEKIT_TCP_PORT} as the fallback. TURN on UDP adds",
+    "no reach. Only 443-only networks need TURN, as TURN/TLS on 443 shared",
+    "with Caddy by SNI: a named follow-up, not built here.",
+)
+
+
 def livekit_yaml(ctx):
     node_ip = media_node_ip(ctx)
     rtc = [
@@ -1113,6 +1130,8 @@ def livekit_yaml(ctx):
         f"port: {LIVEKIT_SIGNAL_PORT}",
         "rtc:",
         *rtc,
+        # mac goldens predate the reason and stay byte-identical without it.
+        *([] if ctx.mac else [f"# {line}" for line in TURN_OFF_REASON]),
         "turn:",
         "  enabled: false",
         "webhook:",

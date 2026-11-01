@@ -345,12 +345,8 @@ def _rules(m, bad, errors, present=frozenset()):
                 "host.ssh_authorized_key",
                 'only used with target = "single-host" (cloud-config ssh_authorized_keys)',
             )
-    elif services["meetings"] and not _is_bad("services.meetings", bad):
-        add(
-            "field_not_applicable",
-            "services.meetings",
-            'meetings are rendered by target = "mac" only in v1',
-        )
+    elif services["meetings"]:
+        _single_host_meetings(m, bad, add)
     if not mac:
         for key in ("mode", "tunnel_token_ref", "tailscale_authkey_ref"):
             if f"access.{key}" in present:
@@ -666,6 +662,43 @@ def _mac_access_and_meetings(m, bad, present, add, check_ref):
         )
     if meetings["node_ip"] is not None and not _IPV4_RE.match(meetings["node_ip"]):
         add("invalid_value", "meetings.node_ip", "must be an IPv4 address")
+    _stt_endpoint_rule(m, bad, add)
+
+
+def _single_host_meetings(m, bad, add):
+    """``services.meetings`` on target single-host (task 01a19505).
+
+    A droplet has a public IPv4 and LiveKit learns it by STUN
+    (``use_external_ip: true``), so ``media_reach = "public"`` is the only
+    reach; lan/tailnet and a pinned node_ip are mac's.
+    """
+    meetings = m["meetings"]
+    reach = meetings["media_reach"]
+    if reach is None:
+        if not _is_bad("meetings.media_reach", bad):
+            add(
+                "meetings_media_reach_required",
+                "meetings.media_reach",
+                'meetings on target = "single-host" need media_reach = "public" '
+                "(LiveKit's 7881/tcp + 7882/udp on the host's public IP)",
+            )
+    elif reach != "public":
+        add(
+            "field_not_applicable",
+            "meetings.media_reach",
+            f'media_reach = "{reach}" is target = "mac" only; single-host is "public"',
+        )
+    if meetings["node_ip"] is not None:
+        add(
+            "field_not_applicable",
+            "meetings.node_ip",
+            'target = "single-host" discovers its public IP by STUN',
+        )
+    _stt_endpoint_rule(m, bad, add)
+
+
+def _stt_endpoint_rule(m, bad, add):
+    meetings = m["meetings"]
     if meetings["transcription"]:
         names = {e["name"] for e in m["models"]["endpoints"]}
         if meetings["stt_endpoint"] not in names and not _is_bad("meetings.stt_endpoint", bad):

@@ -235,7 +235,26 @@ def caddyfile(plan):
         if plan.tls == "internal":
             lines.append("\ttls internal")
         lines += [f"\treverse_proxy {container}:{port}", "}"]
+    if "livekit" in plan.services:
+        # Task 01a19505: the same internal listener as target mac, so LiveKit's
+        # webhook and the transcriber reach core at registry.CORE_INTERNAL_URL
+        # without leaving the host. caddy publishes only 80 and 443.
+        lines += [""] + core_internal_listener()
     return "\n".join(lines) + "\n"
+
+
+def core_internal_listener():
+    """Caddy's INTERNAL plain-http listener to core (no host port), any target with meetings."""
+    return [
+        "# INTERNAL only (no host port): LiveKit's webhook and the transcriber's",
+        "# segment sink reach core here. core forces https (prod.exs force_ssl,",
+        "# rewrite_on x_forwarded_proto), so a plain internal POST would be redirected.",
+        f"http://:{registry.CORE_INTERNAL_PORT} {{",
+        "\treverse_proxy core-platform:4000 {",
+        "\t\theader_up X-Forwarded-Proto https",
+        "\t}",
+        "}",
+    ]
 
 
 # ---------------------------------------------------------------------------

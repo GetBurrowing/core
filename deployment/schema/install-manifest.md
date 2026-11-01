@@ -72,7 +72,7 @@ below are the whole vocabulary. Any other key gives `unknown_service`. Each targ
 | `memory` | bool | `false` | `memory-service` | Needs `embeddings = true` (`memory_requires_embeddings`). |
 | `voice` | bool | `false` | `speaches` | Speech-to-text and text-to-speech. See `[voice]`. |
 | `embeddings` | bool | `false` | `embeddings` (only in `mode = "local"`) | The embeddings capability. See `[embeddings]`. On `mac`: `mac_local_embeddings_unsupported`. |
-| `meetings` | bool | `false` | `livekit` (+ `meeting-transcriber` with `[meetings] transcription`) | `mac` only in v1 (`field_not_applicable` on `single-host`). See `[meetings]`. |
+| `meetings` | bool | `false` | `livekit` (+ `meeting-transcriber` with `[meetings] transcription`) | `mac` and `single-host` (single-host since task 01a19505: `media_reach = "public"` only). See `[meetings]`. |
 
 On `mac`, `voice = true` is `mac_voice_unsupported` (no local speech model), and memory needs a
 hosted embeddings endpoint (`hosted_embeddings_required`) instead of `services.embeddings`.
@@ -166,15 +166,18 @@ Ignored while `services.meetings` is off, so flipping meetings back off is a one
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `media_reach` | `lan` \| `tailnet` \| `public` | none | Required (`meetings_media_reach_required`). Where LiveKit's single-port media listeners (7881/tcp, 7882/udp, the only host ports the `mac` target publishes) are reachable from. `lan`: `rtc.node_ip` is the machine's LAN address. `tailnet`: the host's Tailscale address. `public`: `use_external_ip` (STUN at boot; needs a router forward of both ports). |
-| `node_ip` | string | detected | IPv4. Pins `rtc.node_ip` for `lan`/`tailnet`; detected at render time when unset (a failed detection is `media_ip_undetected`, never a silent fall-back to public). `field_not_applicable` with `public`. |
+| `media_reach` | `lan` \| `tailnet` \| `public` | none | Required (`meetings_media_reach_required`). Where LiveKit's single-port media listeners (7881/tcp, 7882/udp, the only host ports the `mac` target publishes) are reachable from. `lan`: `rtc.node_ip` is the machine's LAN address. `tailnet`: the host's Tailscale address. `public`: `use_external_ip` (STUN at boot; needs a router forward of both ports on a Mac). On `single-host` only `public` is accepted (`lan`/`tailnet` are `field_not_applicable`): the server's own public IPv4 takes both ports, published next to Caddy's 80/443, and signalling stays behind Caddy on `livekit_host`. |
+| `node_ip` | string | detected | IPv4. Pins `rtc.node_ip` for `lan`/`tailnet`; detected at render time when unset (a failed detection is `media_ip_undetected`, never a silent fall-back to public). `field_not_applicable` with `public`, and on `single-host`. |
 | `media_host` | string | none | `public` only, optional. A DNS-only (grey-cloud) A record, e.g. `media.example.com`, that the setup CLI's `ddns` job (task 01a0d6ab stage 4) keeps pointed at this machine's public IP. LiveKit itself needs no hostname for media (ICE uses the STUN-learned IP). |
 | `transcription` | bool | `false` | Adds `meeting-transcriber`. |
 | `stt_endpoint` | string | none | With `transcription`: the `name` of a `[[models.endpoints]]` entry speaking OpenAI-compatible `/audio/transcriptions` (`stt_endpoint_unknown` otherwise). Its `base_url` ends at `/v1`. |
 | `stt_model` | string | `whisper-1` | The transcriber's `STT_MODEL`. |
 
 TURN/TLS on 443 is not rendered (it needs its own hostname, certificate and a direct inbound 443).
-Agent voice in meetings (burrow-voice-worker) is not part of the `mac` target in v1.
+On `single-host`, `livekit.yaml` says why TURN is off: direct UDP 7882 with ICE-TCP 7881 as the
+fallback already reaches every network embedded TURN on UDP would; only 443-only egress needs
+TURN/TLS on 443 shared with Caddy by SNI, a named follow-up.
+Agent voice in meetings (burrow-voice-worker) is not part of either target in v1.
 
 ## `[day2]` (reserved)
 
