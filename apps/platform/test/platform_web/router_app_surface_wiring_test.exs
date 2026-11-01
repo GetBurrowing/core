@@ -89,14 +89,17 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
       end
     end
 
-    test ":require_app_surface is LAST so an unauthenticated request still redirects to login" do
+    test ":require_app_surface follows auth so an unauthenticated request still redirects to login" do
       info = Phoenix.Router.route_info(Router, "GET", "/tasks", @app_host)
 
+      # `:first_run_gate` (task 01a19943-c0b4) runs after the fence: it
+      # reads the `:current_user` that `:require_auth` assigns.
       assert info.pipe_through == [
                :browser,
                :require_auth,
                :enforce_external_scope,
-               :require_app_surface
+               :require_app_surface,
+               :first_run_gate
              ]
     end
 
