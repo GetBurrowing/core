@@ -264,7 +264,13 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
 
       %URI{path: path, query: query} = URI.parse(to)
       assert path == "/calendar"
-      assert URI.decode_query(query) == %{"new" => "1", "date" => "2026-11-04", "start" => "3:00 PM"}
+
+      assert URI.decode_query(query) == %{
+               "new" => "1",
+               "date" => "2026-11-04",
+               "start" => "3:00 PM"
+             }
+
       refute Repo.exists?(Meeting)
     end
 
