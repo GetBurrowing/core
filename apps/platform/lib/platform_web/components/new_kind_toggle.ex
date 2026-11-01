@@ -19,6 +19,7 @@ defmodule PlatformWeb.Components.NewKindToggle do
   attr(:event_click, :string, default: nil, doc: "phx-click for the Event side")
   attr(:meeting_click, :string, default: nil, doc: "phx-click for the Meeting side")
   attr(:class, :string, default: nil)
+  attr(:helper_role, :string, default: nil, doc: "data-role for the helper line")
 
   def new_kind_toggle(assigns) do
     ~H"""
@@ -36,7 +37,9 @@ defmodule PlatformWeb.Components.NewKindToggle do
           <i class="cal-sw cal-k-meeting" aria-hidden="true"></i> Meeting
         </.segment>
       </div>
-      <p class="text-[13px] text-subtle">Meetings get a room link and send invites.</p>
+      <p class="text-[13px] text-subtle" data-role={@helper_role}>
+        Meetings get a room link and send invites.
+      </p>
     </div>
     """
   end

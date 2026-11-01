@@ -4956,11 +4956,12 @@
             <div class="flex items-center gap-2 min-w-0">
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
-                New meeting
+                {if @schedule_origin == :calendar, do: "New", else: "New meeting"}
               </h2>
             </div>
             <div class="flex items-center gap-1">
               <button
+                :if={@schedule_origin != :calendar}
                 type="submit"
                 form="start-meeting-form"
                 class="btn btn-ghost btn-sm px-3 font-semibold text-base-content min-h-11 sm:hidden"
@@ -4978,6 +4979,25 @@
                 <span class="hero-x-mark size-4"></span>
               </button>
             </div>
+          </div>
+
+          <%!-- ── Calendar origin (task 01a1986e stage 3) ───────────────
+               Opened from Calendar → New → Meeting. The shared Event |
+               Meeting toggle sits under the header with Meeting active; its
+               Event side returns to Calendar's New editor carrying the date
+               and start in the URL (the two routes are in different
+               live_sessions, so no assign survives the hop). Meet now and
+               its divider do not render here: the viewer came to schedule. --%>
+          <div
+            :if={@schedule_origin == :calendar}
+            class="flex-none border-b border-edge px-4 py-3"
+            data-role="meeting-create-kind"
+          >
+            <PlatformWeb.Components.NewKindToggle.new_kind_toggle
+              active={:meeting}
+              event_click="switch_to_event"
+              helper_role="meeting-create-helper"
+            />
           </div>
 
           <%!-- ── Meet now (task 01a0d4d5) ──────────────────────────────
@@ -5000,7 +5020,10 @@
 
                `min-h-11` is the 44px tap floor: `btn` alone renders 35px
                in this theme (see the FAB comment above). --%>
-          <div :if={@projects != []} class="flex-none border-b border-edge px-4 py-4">
+          <div
+            :if={@projects != [] and @schedule_origin != :calendar}
+            class="flex-none border-b border-edge px-4 py-4"
+          >
             <%!-- A TILE, not a second filled primary. `start-meeting-submit`
                  in the footer is already `btn-primary`; a second one here
                  makes the sheet read as two equal commits and neither wins.
@@ -5035,7 +5058,10 @@
 
           <%!-- Divider into the scheduling path the sheet used to be
                entirely about. --%>
-          <div class="flex-none flex items-center gap-3 px-4 pt-4">
+          <div
+            :if={@schedule_origin != :calendar}
+            class="flex-none flex items-center gap-3 px-4 pt-4"
+          >
             <div class="h-px flex-1 bg-edge"></div>
             <span class="text-xs uppercase tracking-wide text-muted">Or schedule for later</span>
             <div class="h-px flex-1 bg-edge"></div>
@@ -5236,6 +5262,7 @@
                  body and `flex-none`, so a long staged-invite list scrolls
                  under it instead of pushing it off the panel. --%>
             <div
+              :if={@schedule_origin != :calendar}
               class="hidden flex-none items-center justify-end gap-2 border-t border-edge px-4 py-3 min-h-11 sm:flex"
               data-role="meeting-create-footer"
             >
@@ -5254,6 +5281,25 @@
               >
                 <span class="hero-paper-airplane size-4"></span>
                 <span>Create &amp; send invites</span>
+              </button>
+            </div>
+
+            <%!-- Calendar origin: ONE full-width commit at every width, in
+                 place of the header's mobile Create and the Cancel / Create
+                 & send invites pair. Same pinned-footer rule as above:
+                 OUTSIDE the scrolling body and `flex-none`. --%>
+            <div
+              :if={@schedule_origin == :calendar}
+              class="flex flex-none border-t border-edge px-4 py-3"
+              data-role="meeting-create-footer-calendar"
+            >
+              <button
+                type="submit"
+                form="start-meeting-form"
+                class="btn btn-primary w-full min-h-11"
+                data-role="meeting-create-submit-calendar"
+              >
+                Create meeting
               </button>
             </div>
           </form>

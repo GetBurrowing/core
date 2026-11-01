@@ -196,4 +196,93 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
       refute has_element?(view, ~s([data-role="start-meeting-sheet"]))
     end
   end
+
+  describe "calendar-origin chrome (stage 3)" do
+    test "calendar origin renders the toggle with Meeting checked, the helper and one Create meeting",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, @calendar_path)
+
+      assert has_element?(view, "#start-meeting-sheet-title", "New")
+      refute has_element?(view, "#start-meeting-sheet-title", "New meeting")
+
+      assert has_element?(
+               view,
+               ~s([data-role="new-kind-toggle"] [role="radio"][data-kind="meeting"][aria-checked="true"])
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="new-kind-toggle"] [role="radio"][data-kind="event"][aria-checked="false"])
+             )
+
+      assert view |> element(~s([data-role="meeting-create-helper"])) |> render() =~
+               "Meetings get a room link and send invites."
+
+      assert view
+             |> element(~s(button[data-role="meeting-create-submit-calendar"][type="submit"]))
+             |> render() =~ "Create meeting"
+
+      refute has_element?(view, ~s([data-role="meeting-meet-now"]))
+      refute has_element?(view, ~s([data-role="meeting-create-submit-mobile"]))
+      refute has_element?(view, ~s([data-role="start-meeting-submit"]))
+      refute has_element?(view, ~s([data-role="start-meeting-cancel"]))
+    end
+
+    test "without an origin the sheet renders as before", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/meetings?schedule=true")
+
+      assert has_element?(view, "#start-meeting-sheet-title", "New meeting")
+      assert has_element?(view, ~s([data-role="meeting-meet-now"]))
+      assert has_element?(view, ~s([data-role="start-meeting-submit"]))
+      refute has_element?(view, ~s([data-role="new-kind-toggle"]))
+      refute has_element?(view, ~s([data-role="meeting-create-helper"]))
+      refute has_element?(view, ~s([data-role="meeting-create-submit-calendar"]))
+    end
+
+    test "Event carries the date and start back to Calendar's New editor", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, "/meetings?schedule=true&from=calendar")
+
+      view
+      |> form("#start-meeting-form",
+        start_meeting: %{
+          "name" => "",
+          "project_id" => project.id,
+          "date" => "2026-11-04",
+          "start_time" => "3:00 PM",
+          "duration_minutes" => "30"
+        }
+      )
+      |> render_change()
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               view
+               |> element(~s([data-role="new-kind-toggle"] [data-kind="event"]))
+               |> render_click()
+
+      %URI{path: path, query: query} = URI.parse(to)
+      assert path == "/calendar"
+      assert URI.decode_query(query) == %{"new" => "1", "date" => "2026-11-04", "start" => "3:00 PM"}
+      refute Repo.exists?(Meeting)
+    end
+
+    test "a staged guest row's tag says guest in text", %{conn: conn} do
+      {:ok, view, _html} = live(conn, @calendar_path)
+
+      html = commit(view, "guest@example.com")
+
+      assert [tag] =
+               html
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(
+                 ~s(#start-meeting-form [data-role="meeting-invite-row"][data-entry-id="guest:guest@example.com"] [data-role="meeting-invite-tag"])
+               )
+               |> LazyHTML.text()
+               |> List.wrap()
+
+      assert tag =~ "guest"
+    end
+  end
 end

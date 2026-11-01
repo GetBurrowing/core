@@ -677,6 +677,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:projects, [])
     |> assign(:meeting_subscribed_project_ids, [])
     |> assign(:show_start_meeting_sheet, false)
+    |> assign(:schedule_origin, nil)
     |> assign(:meet_now_pending?, false)
     |> assign(:meet_now_project_id, nil)
     |> assign(:meet_now_project_name, nil)
@@ -3812,6 +3813,25 @@ defmodule PlatformWeb.MeetingLive do
       _ ->
         {:noreply, socket}
     end
+  end
+
+  # The calendar-origin toggle's Event side (task 01a1986e stage 3): back to
+  # Calendar's New editor with the sheet's date and start. Carried in the URL
+  # because /calendar is a different live_session, so nothing on this socket
+  # survives the navigation.
+  def handle_event("switch_to_event", _params, socket) do
+    form = socket.assigns[:start_meeting_form] || %{}
+
+    query = %{
+      new: "1",
+      date: form |> Map.get("date", "") |> to_string(),
+      start: form |> Map.get("start_time", "") |> to_string()
+    }
+
+    {:noreply,
+     socket
+     |> assign(:schedule_origin, nil)
+     |> push_navigate(to: ~p"/calendar?#{query}")}
   end
 
   # Live-update form state on input change so re-render keeps the user's
