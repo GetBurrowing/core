@@ -661,6 +661,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_file_by_id/1 checks Platform.UUID.valid?/1 before Repo.get, so a caller-supplied page id from the memory MCP tools returns nil"},
     {"platform/org/preamble_builder.ex", :get, "Org", 3, :safe_internal,
      "one call reads `project.org_id` off a preloaded task, one walks `parent_org_id` off a loaded `%Org{}`, and the third takes `opts[:org_id]` which callers set from a resolved `%Org{}`"},
+    {"platform/onboarding/first_run_goal.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "task 01a19554-fd07 stage 1: `pending?/1`, `submit/3` and `skip/1` take a `%{id: user_id}` from the LiveView's current user and check it with Platform.UUID.valid?/1 before `Tenancy.external_user?/1`, `Chat.find_or_create_dm/3`, the `own_participant/2` Repo.one (this file's `@repo_one_counts` entry) and the single-key preference UPDATEs. A malformed id is not pending, submit answers {:error, :not_pending} and skip {:error, :not_found}; pinned by first_run_goal_test.exs \"a malformed user id is not pending and cannot submit or skip, without raising\""},
     {"platform/org/wiki/nodes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1386d-e528 stage 1: `org_of/2` checks the `project/<id>/` or `space/<id>/` path segment with Platform.UUID.valid?/1 before `where: r.id == ^id` (this file's `@repo_one_counts` entry), so a non-UUID segment answers nil and `ensure/2` falls back to the root org instead of raising Ecto.Query.CastError on a path an agent supplied"},
     {"platform/access/grants.ex", :get, "Grant", 4, :must_cast,
