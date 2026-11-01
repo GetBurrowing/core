@@ -1,0 +1,80 @@
+# Meetings on a one-click DigitalOcean droplet (core task 01a19505 stage 1):
+# do-droplet.toml plus services.meetings, a [meetings] table with
+# media_reach = "public" and transcription through one hosted STT endpoint,
+# and a pinned images.refs.meeting-transcriber (no GHCR build of it yet:
+# registry.UNPUBLISHED_IN_REGISTRY). Its customer secret is the FAKE value in
+# do-droplet-meetings-customer.env.
+#
+# One-click DigitalOcean droplet (core task 01a10315 stage 1): what
+# a hosted install renders for a customer. single-host-agents-full.toml with:
+# tls = "acme" + acme_email, images.source = "registry", install.org_name,
+# host.ssh_authorized_key, [push] vapid = "generate-on-host" and voice off.
+# Stage 6: [embeddings] model_source = "download" (the host fetches the model).
+# Task 01a18f76: size_tier = "small", the tier for the default s-2vcpu-4gb
+# droplet (do-droplet-8gb.toml is the s-4vcpu-8gb one).
+# The key below is a fixture (32 counting bytes), not anyone's key.
+
+schema_version = 1
+
+[install]
+name = "burrow-01a0d69d"
+size_tier = "small"
+org_name = "Acme Bakery"
+
+[domain]
+primary = "burrow-01a0d69d.test"
+tls = "acme"
+acme_email = "owner@acme-bakery.test"
+
+[host]
+gpu = false
+ssh_authorized_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f do-droplet-fixture"
+
+[services]
+files = true
+memory = true
+voice = false
+embeddings = true
+meetings = true
+
+[voice]
+accelerator = "cuda"
+
+[embeddings]
+mode = "local"
+model_source = "download"
+
+[[models.endpoints]]
+name = "openai-stt"
+kind = "hosted"
+base_url = "https://api.openai.com/v1"
+api_key_ref = "OPENAI_STT_API_KEY"
+
+[meetings]
+media_reach = "public"
+transcription = true
+stt_endpoint = "openai-stt"
+stt_model = "whisper-1"
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+registry = "ghcr.io/example"
+source = "registry"
+
+[images.refs]
+meeting-transcriber = "ghcr.io/example/meeting-transcriber:v1.0.0"
+
+[day2]
+upgrade_channel = "stable"
+phone_home = false
+
+[agents]
+profile = "full_machine"
+
+[push]
+vapid = "generate-on-host"

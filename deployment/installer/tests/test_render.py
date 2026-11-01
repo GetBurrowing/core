@@ -57,8 +57,9 @@ PLAY = os.path.join(RENDER_FIXTURES, "single-host-play.toml")
 MAC_MEETINGS = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
-# The knobs the single-host target runs. `meetings` is a mac-only knob in v1
-# (task 01a0d6ab); its on/off semantics are tested in test_mac_render.py.
+# The knobs the single-host target runs. `meetings` joined in task 01a19505
+# (media_reach = "public" only); test_droplet.DropletMeetingsRenderTest covers
+# its single-host render and test_mac_render.py the mac one.
 SINGLE_HOST_SERVICES = {
     knob: registry.OPTIONAL_SERVICES[knob] for knob in registry.TARGET_KNOBS["single-host"]
 }
@@ -75,11 +76,18 @@ GOLDEN_CASES = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
     # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
+    # Meetings on the droplet (task 01a19505); test_droplet.py covers the rest.
+    "do-droplet-meetings": os.path.join(RENDER_FIXTURES, "do-droplet-meetings.toml"),
 }
 # images.source = "registry" cases need a (fake) pull credential to render.
 GOLDEN_REGISTRY_AUTH = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
+    "do-droplet-meetings": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
+}
+# Cases whose manifest names a customer secret ref (FAKE values).
+GOLDEN_CUSTOMER_SECRETS = {
+    "do-droplet-meetings": os.path.join(RENDER_FIXTURES, "do-droplet-meetings-customer.env"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -171,7 +179,9 @@ class PositiveControlMixin:
 class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
         redacted = build(
-            manifest_from(GOLDEN_CASES[case]), registry_auth=GOLDEN_REGISTRY_AUTH.get(case)
+            manifest_from(GOLDEN_CASES[case]),
+            registry_auth=GOLDEN_REGISTRY_AUTH.get(case),
+            customer_secrets=GOLDEN_CUSTOMER_SECRETS.get(case),
         ).redacted()
         golden_dir = os.path.join(GOLDEN, case)
         if os.environ.get("BURROW_INSTALL_UPDATE_GOLDEN") == "1":
@@ -218,6 +228,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def test_golden_do_droplet_8gb(self):
         self.check_golden("do-droplet-8gb")
 
+    def test_golden_do_droplet_meetings(self):
+        self.check_golden("do-droplet-meetings")
+
     def test_do_droplet_8gb_fixture_differs_only_in_size_tier(self):
         small, medium = load(GOLDEN_CASES["do-droplet"]), load(GOLDEN_CASES["do-droplet-8gb"])
         self.assertEqual(
@@ -253,6 +266,8 @@ def all_on_raw():
     raw["host"]["gpu"] = True
     for knob in SINGLE_HOST_SERVICES:
         raw["services"][knob] = True
+    # single-host meetings need media_reach = "public" (task 01a19505).
+    raw["meetings"] = {"media_reach": "public"}
     return raw
 
 
