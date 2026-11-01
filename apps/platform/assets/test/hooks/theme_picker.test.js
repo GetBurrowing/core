@@ -7,7 +7,7 @@ import ThemePicker from "../../js/hooks/theme_picker.js"
  * The markup mirrors `PlatformWeb.Components.ThemePicker.picker_body/1`.
  */
 
-const PRESETS = ["burrow", "burrow-midnight", "burrow-sand", "burrow-forest", "high-contrast"]
+const PRESETS = ["burrow", "burrow-midnight", "burrow-sand", "burrow-forest", "high-contrast", "sage"]
 const MODES = ["light", "dark", "system"]
 
 class FakeClassList {
@@ -218,8 +218,9 @@ describe("ThemePicker: keyboard", () => {
     rows[0].dispatch("keydown", { key: "ArrowDown" })
     expect(document.activeElement).toBe(rows[1])
 
-    rows[4].focus()
-    rows[4].dispatch("keydown", { key: "ArrowDown" })
+    const last = rows[rows.length - 1]
+    last.focus()
+    last.dispatch("keydown", { key: "ArrowDown" })
     expect(document.activeElement).toBe(rows[0])
 
     expect(calls).toEqual([])
@@ -231,7 +232,7 @@ describe("ThemePicker: keyboard", () => {
     expect(document.activeElement).toBe(rows[1])
 
     rows[0].dispatch("keydown", { key: "ArrowUp" })
-    expect(document.activeElement).toBe(rows[4])
+    expect(document.activeElement).toBe(rows[rows.length - 1])
     expect(calls).toEqual([])
   })
 
@@ -267,7 +268,7 @@ describe("ThemePicker: checked state", () => {
     expect(checked(rows).map(value)).toEqual(["burrow-sand"])
     expect(checked(modeButtons).map(value)).toEqual(["light"])
     expect(visibleChecks(rows).map(value)).toEqual(["burrow-sand"])
-    expect(rows.map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "-1", "0", "-1", "-1"])
+    expect(rows.map((r) => r.getAttribute("tabindex"))).toEqual(["-1", "-1", "0", "-1", "-1", "-1"])
   })
 
   it("the check follows the active row", () => {

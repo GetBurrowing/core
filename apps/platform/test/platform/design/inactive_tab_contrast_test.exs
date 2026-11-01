@@ -49,7 +49,7 @@ defmodule Platform.Design.InactiveTabContrastTest do
 
   @aa_text 4.5
   @grounds ["--color-base-100", "--color-base-200", "--color-base-300"]
-  @variants 10
+  @variants 12
 
   # daisyUI's resting-tab exclusions; the override must carry every one.
   @resting_exclusions [

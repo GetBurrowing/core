@@ -95,7 +95,9 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     "burrow-forest light",
     "burrow-forest dark",
     "high-contrast light",
-    "high-contrast dark"
+    "high-contrast dark",
+    "sage light",
+    "sage dark"
   ]
 
   # {label, layer, floor for an ordinary block, floor for High contrast}
@@ -188,7 +190,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
             into: MapSet.new(),
             do: {v, bd, a}
 
-      assert MapSet.size(expected) == 10 * 2 * 51
+      assert MapSet.size(expected) == 12 * 2 * 51
 
       for build <- G.builds() do
         got = MapSet.new(G.keys(build))
@@ -263,7 +265,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       blocks: blocks
     } do
       missing = for b <- blocks, declaration(b.decls, "--color-base-200") == nil, do: b.variant
-      assert length(blocks) == 10
+      assert length(blocks) == 12
       assert missing == [], "blocks with no --color-base-200: #{inspect(missing)}"
     end
 
@@ -306,7 +308,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
             problem != nil,
             do: problem
 
-      assert length(Enum.reject(blocks, &hc?/1)) == 8
+      assert length(Enum.reject(blocks, &hc?/1)) == 10
       assert Enum.all?(Map.keys(@above_floor), &(&1 in @variants))
       assert not_floor == [], Enum.join(not_floor, "\n")
     end
@@ -327,7 +329,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
             " | #{if hc?(b), do: "7 / 3", else: "4.5 / 3"} | pass |"
         end
 
-      assert length(lines) == 10
+      assert length(lines) == 12
 
       IO.puts(
         "\nGlass tab bar, painted (min over Chrome 151 + 147, over #000 and #fff, at the " <>
@@ -674,7 +676,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     test "the focus ring clears 3:1 on the painted glass, all ten variants, both backdrops and builds",
          %{blocks: blocks} do
       rows = G.ring_rows()
-      assert length(rows) == 10 * 2 * 2
+      assert length(rows) == 12 * 2 * 2
 
       for r <- rows,
           do: assert({r.ctl_white, r.ctl_black} == {"#ffffff", "#000000"}, inspect(r))
@@ -694,7 +696,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
         end
         |> Enum.reject(&is_nil/1)
 
-      assert length(blocks) == 10
+      assert length(blocks) == 12
       assert failures == [], Enum.join(failures, "\n")
     end
   end

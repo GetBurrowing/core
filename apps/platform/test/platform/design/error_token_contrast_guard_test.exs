@@ -92,7 +92,9 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   # {label, foreground token, ground token}
@@ -175,7 +177,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
   end
 
   test "exactly ten variant blocks are read", %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     assert Enum.map(blocks, &{&1.id, &1.mode}) == @variants
   end
 
@@ -317,7 +319,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
         end)
     )
 
-    assert length(rows) == 10
+    assert length(rows) == 12
 
     failures =
       for r <- rows,

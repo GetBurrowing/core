@@ -56,7 +56,7 @@ defmodule Platform.Theming.ContrastPairsParityTest do
   test "the ledger's ContrastPairs rows equal the guards' ratios in all ten variants", %{
     variants: variants
   } do
-    assert length(variants) == 10
+    assert length(variants) == 12
     assert Enum.all?(variants, fn {_, _, b} -> b end)
 
     mismatches =

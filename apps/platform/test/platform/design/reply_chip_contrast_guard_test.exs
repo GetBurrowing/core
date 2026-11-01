@@ -46,7 +46,9 @@ defmodule Platform.Design.ReplyChipContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -165,7 +167,7 @@ defmodule Platform.Design.ReplyChipContrastGuardTest do
   defp f2(r), do: :erlang.float_to_binary(r / 1, decimals: 2)
 
   test "the chip's text and x clear their floors in all ten variants; the table prints", ctx do
-    assert length(ctx.blocks) == 10
+    assert length(ctx.blocks) == 12
     s = slots(ctx.html)
 
     # The decision the stage holds: author base-content, excerpt subtle, on base-200.

@@ -209,3 +209,13 @@ fixtures, `control.sh` reports 64 differing lines in `chrome151.csv` and 12 in
 `chrome147.csv` (exit 1). A mix with
 `transparent` differs between the two spaces only in rounding, so the
 mutation moves few rows. Revert is the default: the variable unset.
+
+## Stage 2: Sage appended (task 01a19555 stage 2)
+
+`run.sh <out> all sage:light sage:dark` repainted all twelve variants from
+the CSS with Sage's blocks (sha256 `06bbed03…0a9d`). Two runs were
+byte-identical. Every earlier row was unchanged (`control.sh` against the
+fixtures, Sage rows excepted: 0 differing lines in all seven), so the Sage
+rows were appended verbatim. `git diff -U0` on the fixtures shows no removed
+line. One Chrome 147 software capture timed out under load during the first
+run, so `read()` now retakes a timed-out capture, at most twice.

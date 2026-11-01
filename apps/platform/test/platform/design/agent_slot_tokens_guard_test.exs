@@ -50,6 +50,14 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
       drop the teal pointer; (c) `.msg-agent-name` to `var(--ag)`; (d) put
       the inline legacy accent variable back (also red in chat_message_test.exs).
 
+  NO MASTER: SAGE (task 01a19555 stage 2). `sage` has no theme.js master
+  (direction canvas 01a19556 is provisional and its values are measured), so
+  `@no_master` names it: the deviations test has no master value to cite for
+  it, and a Sage light value's hue is held against Sage's OWN dark block, as
+  every preset's is. Every floor here (name on tint, rail, metadata, hue,
+  separation, painted strengths) measures Sage exactly as it measures the
+  others.
+
   SCOPE. The blocks as app.css and theme_presets.css declare them. An install
   colour (`Platform.Branding.ThemeCss`) that overrides Burrow's base-100 moves
   the tint, and no such ground is painted here.
@@ -90,6 +98,9 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
   @dark_moved %{{"burrow-forest", "orange"} => "#f47721"}
 
   @master_rest 8
+
+  # Presets with no theme.js master (see NO MASTER in the moduledoc).
+  @no_master ["sage"]
 
   # theme.js (prototype 01a137f2 v3): BURROW_DARK / BURROW_LIGHT give all ten,
   # midnight overrides four, sand and forest override orange, high contrast
@@ -186,8 +197,10 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # ── declared ─────────────────────────────────────────────────────────────
 
-  test "ten blocks, and the slot ids are exactly ColorPalette's", %{blocks: blocks} do
-    assert Enum.map(blocks, &{&1.id, &1.mode}) |> Enum.sort() == Map.keys(@masters) |> Enum.sort()
+  test "twelve blocks, and the slot ids are exactly ColorPalette's", %{blocks: blocks} do
+    expected = Map.keys(@masters) ++ for(id <- @no_master, mode <- @modes, do: {id, mode})
+    assert length(expected) == 12
+    assert Enum.map(blocks, &{&1.id, &1.mode}) |> Enum.sort() == Enum.sort(expected)
     assert Enum.sort(ColorPalette.ids()) == Enum.sort(Map.keys(@burrow_dark))
   end
 
@@ -530,19 +543,19 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # ── the table ────────────────────────────────────────────────────────────
 
-  test "the 12-row x 10-slot table: every master variant passes", %{blocks: blocks} do
+  test "the 14-row x 10-slot table: every master variant, and Sage, passes", %{blocks: blocks} do
     rows =
       for(
         master <- ["burrow-dark", "burrow-light"],
         mode <- @modes,
         do: {"#{master} #{mode}", find(blocks, "burrow", mode)}
       ) ++
-        for id <- ["burrow-midnight", "burrow-sand", "high-contrast", "burrow-forest"],
+        for id <- ["burrow-midnight", "burrow-sand", "high-contrast", "burrow-forest", "sage"],
             mode <- @modes do
           {"#{id} #{mode}", find(blocks, id, mode)}
         end
 
-    assert length(rows) == 12
+    assert length(rows) == 14
 
     lines =
       for {label, b} <- rows, id <- ColorPalette.ids() do
@@ -558,7 +571,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
           "#{fixed2(target(b))} | pass |"
       end
 
-    assert length(lines) == 120
+    assert length(lines) == 140
 
     drift =
       for id <- ColorPalette.ids() do
@@ -893,15 +906,29 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # The slot's value in this preset's own dark block: theme.js's, unless the
   # dark block moved it (`@dark_moved`).
+  defp reference(%{id: preset}, id) when preset in @no_master, do: own_dark_rail(preset, id)
+
   defp reference(b, id),
     do:
       Map.get(@dark_moved, {b.id, id}) || @masters |> Map.fetch!({b.id, "dark"}) |> Map.fetch!(id)
+
+  # A no-master preset's slot as its own dark block declares it.
+  defp own_dark_rail(preset, id) do
+    blocks = @css_dir |> Path.join("theme_presets.css") |> File.read!() |> T.preset_blocks()
+
+    case Enum.find(blocks, &(&1.id == preset and &1.mode == "dark")) do
+      nil -> flunk("#{preset} has no dark block")
+      dark -> dark.decls |> T.declaration("--ag-#{id}") |> String.downcase()
+    end
+  end
 
   defp hue(c) do
     {_l, a, bb} = W.to_oklab(c)
     deg = :math.atan2(bb, a) * 180 / :math.pi()
     if deg < 0, do: deg + 360, else: deg
   end
+
+  defp deviation_problems(%{id: preset}, _id) when preset in @no_master, do: []
 
   defp deviation_problems(b, id) do
     master = @masters |> Map.fetch!({b.id, b.mode}) |> Map.fetch!(id)

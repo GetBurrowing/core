@@ -79,7 +79,7 @@ defmodule Platform.Design.ThemeEditorContrastGuardTest do
 
   test "every editor pair clears its floor in all ten variants; the table prints" do
     rows = for {name, v} <- variants(), do: {name, v, pairs(v)}
-    assert length(rows) == 10
+    assert length(rows) == 12
 
     labels = rows |> hd() |> elem(2) |> Enum.map(&elem(&1, 0))
 

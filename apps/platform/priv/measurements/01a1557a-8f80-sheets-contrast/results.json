@@ -1,8 +1,8 @@
 {
   "task": "01a1557a-8f80-7000-9ee4-40b29760da18 stage 4",
-  "browser": "Chrome/155.0.8059.86",
+  "browser": "Chrome/156.0.8078.80",
   "flags": "--headless=new --force-color-profile=srgb, deviceScaleFactor 1",
-  "css_bytes": 598775,
+  "css_bytes": 634704,
   "classes": {
     "switch_off": "<input type=\"checkbox\" role=\"switch\" class=\"toggle toggle-primary\">",
     "switch_on": "<input type=\"checkbox\" role=\"switch\" checked class=\"toggle toggle-primary\">",
@@ -508,6 +508,106 @@
         "painted": "#ffffff",
         "ratio": 21,
         "modal": "#0a0a0a"
+      }
+    },
+    {
+      "variant": "sage light",
+      "ground": "base-100",
+      "ground_painted": "#f7f9f5",
+      "switch_off": {
+        "painted": "#7b7c7a",
+        "ratio": 3.9598,
+        "modal": "#7b7c7a"
+      },
+      "switch_on": {
+        "painted": "#4a6b4f",
+        "ratio": 5.6523,
+        "modal": "#4a6b4f"
+      },
+      "radio_off": {
+        "painted": "#6f706e",
+        "ratio": 4.699,
+        "modal": "#767775"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 19.8236,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "sage light",
+      "ground": "base-200",
+      "ground_painted": "#eff3ec",
+      "switch_off": {
+        "painted": "#777976",
+        "ratio": 3.9117,
+        "modal": "#777976"
+      },
+      "switch_on": {
+        "painted": "#4a6b4f",
+        "ratio": 5.3324,
+        "modal": "#f7f9f5"
+      },
+      "radio_off": {
+        "painted": "#6c6d6a",
+        "ratio": 4.6369,
+        "modal": "#727471"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 18.7016,
+        "modal": "#f7f9f5"
+      }
+    },
+    {
+      "variant": "sage dark",
+      "ground": "base-100",
+      "ground_painted": "#1b201c",
+      "switch_off": {
+        "painted": "#828783",
+        "ratio": 4.5217,
+        "modal": "#818783"
+      },
+      "switch_on": {
+        "painted": "#93b897",
+        "ratio": 7.5149,
+        "modal": "#93b897"
+      },
+      "radio_off": {
+        "painted": "#8c918d",
+        "ratio": 5.1575,
+        "modal": "#222723"
+      },
+      "radio_on": {
+        "painted": "#e9eee9",
+        "ratio": 14.0721,
+        "modal": "#e9eee9"
+      }
+    },
+    {
+      "variant": "sage dark",
+      "ground": "base-200",
+      "ground_painted": "#141814",
+      "switch_off": {
+        "painted": "#7e837f",
+        "ratio": 4.6477,
+        "modal": "#7e837f"
+      },
+      "switch_on": {
+        "painted": "#93b897",
+        "ratio": 8.1535,
+        "modal": "#1b201c"
+      },
+      "radio_off": {
+        "painted": "#898e89",
+        "ratio": 5.3773,
+        "modal": "#838883"
+      },
+      "radio_on": {
+        "painted": "#e9eee9",
+        "ratio": 15.268,
+        "modal": "#1b201c"
       }
     }
   ]

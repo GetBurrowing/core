@@ -100,7 +100,9 @@ defmodule Platform.Design.InboxListContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -235,7 +237,7 @@ defmodule Platform.Design.InboxListContrastGuardTest do
 
   test "every pair clears its floor in all ten variants; the table prints",
        %{blocks: blocks, source: source} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     s = slots(source)
 
     rows = for b <- blocks, do: {b, pairs(b, s)}

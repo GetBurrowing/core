@@ -71,7 +71,9 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
     "burrow-forest light",
     "burrow-forest dark",
     "high-contrast light",
-    "high-contrast dark"
+    "high-contrast dark",
+    "sage light",
+    "sage dark"
   ]
 
   @underlays ~w(black white base_content base_100 primary ag_teal ag_blue ag_purple ag_rose ag_amber ag_green ag_orange ag_indigo ag_brick ag_lime)
@@ -113,7 +115,7 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
           into: MapSet.new(),
           do: {v, u, a}
 
-    assert MapSet.size(expected) == 10 * 15 * 21
+    assert MapSet.size(expected) == 12 * 15 * 21
 
     for build <- G.under_builds() do
       got = MapSet.new(G.under_keys(build))

@@ -18,6 +18,11 @@ defmodule Platform.Accounts.ThemePreference do
   in their default mode. Direction canvas `01a1585a` (rule 1) collapses them
   into one `burrow` row plus the Mode control, so mode is a separate field.
 
+  `sage` (task 01a19555 stage 2, canvas `01a19556`) is the one preset with no
+  design-master counterpart; its blocks in `theme_presets.css` are measured
+  values. It is appended last, and `@default` is unchanged: whether Sage
+  becomes the install default is a product decision, not this registry's.
+
   ## Org themes (task 01a1557a-fe9b stage 3)
 
   Besides a registry id, a preset may be `"org-<uuid>"`: a published
@@ -39,7 +44,8 @@ defmodule Platform.Accounts.ThemePreference do
     %{id: "burrow-midnight", name: "Burrow midnight"},
     %{id: "burrow-sand", name: "Burrow sand"},
     %{id: "burrow-forest", name: "Burrow forest"},
-    %{id: "high-contrast", name: "High contrast"}
+    %{id: "high-contrast", name: "High contrast"},
+    %{id: "sage", name: "Sage"}
   ]
 
   @preset_ids Enum.map(@presets, & &1.id)

@@ -164,10 +164,20 @@ async function read(page, W, H) {
   const out = {};
   for (const c of clips) {
     if (c.x < 0 || c.y < 0 || c.x + c.w > W || c.y + c.h > H) die(`cell ${JSON.stringify(c)} is outside the ${W}x${H} viewport`);
-    const shot = await page.S("Page.captureScreenshot", {
-      format: "png",
-      clip: { x: c.x, y: c.y, width: c.w, height: c.h, scale: 1 },
-    });
+    // A capture is deterministic, so a capture that timed out (a loaded host,
+    // seen once on the software path) is simply taken again, at most twice.
+    let shot;
+    for (let attempt = 1; !shot; attempt++) {
+      try {
+        shot = await page.S("Page.captureScreenshot", {
+          format: "png",
+          clip: { x: c.x, y: c.y, width: c.w, height: c.h, scale: 1 },
+        });
+      } catch (e) {
+        if (attempt >= 3 || !String(e.message).startsWith("timeout")) throw e;
+        console.error(`  capture timed out (attempt ${attempt}); retrying`);
+      }
+    }
     const img = decodePng(Buffer.from(shot.data, "base64"));
     for (const p of points) {
       if (p.x < c.x || p.x >= c.x + c.w || p.y < c.y || p.y >= c.y + c.h) continue;

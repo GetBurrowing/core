@@ -86,7 +86,9 @@ defmodule Platform.Design.MyTasksContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -199,7 +201,7 @@ defmodule Platform.Design.MyTasksContrastGuardTest do
 
   test "every text pair clears 4.5 in all ten variants; the table prints",
        %{blocks: blocks, source: source} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     pill = pill_slots(source)
 
     rows = for b <- blocks, do: {b, pairs(b, pill)}

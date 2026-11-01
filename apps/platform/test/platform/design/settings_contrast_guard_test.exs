@@ -108,7 +108,9 @@ defmodule Platform.Design.SettingsContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -289,7 +291,7 @@ defmodule Platform.Design.SettingsContrastGuardTest do
 
   test "every Settings pair clears its floor in all ten variants; the table prints",
        %{blocks: blocks, source: source} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     s = slots(source)
     rows = for b <- blocks, do: {b, pairs(b, s)}
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))
@@ -486,7 +488,7 @@ defmodule Platform.Design.SettingsContrastGuardTest do
 
   test "the picker's 'Your themes' pairs clear their floors in all ten variants; the table prints",
        %{blocks: blocks, picker_source: picker, app_css: app_css} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     p = picker_slots(picker, app_css)
 
     # The slots the inventory names, read back from source.

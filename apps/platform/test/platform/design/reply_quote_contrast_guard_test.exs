@@ -53,7 +53,9 @@ defmodule Platform.Design.ReplyQuoteContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -191,7 +193,7 @@ defmodule Platform.Design.ReplyQuoteContrastGuardTest do
   defp f2(r), do: :erlang.float_to_binary(r / 1, decimals: 2)
 
   test "the quote's text clears 4.5:1 on base-200 in all ten variants; the table prints", ctx do
-    assert length(ctx.blocks) == 10
+    assert length(ctx.blocks) == 12
     s = slots(ctx.html)
 
     # The decisions the stage holds (canvas 01a174f6 palette).
@@ -262,7 +264,7 @@ defmodule Platform.Design.ReplyQuoteContrastGuardTest do
     s = slots(ctx.html)
 
     rows = for b <- ctx.blocks, do: {b, ratio(b, s.person_bar, s.fill)}
-    assert length(rows) == 10
+    assert length(rows) == 12
 
     under = for {b, r} <- rows, r < @aa_non_text, do: "#{b.id} #{b.mode} #{f2(r)}"
 

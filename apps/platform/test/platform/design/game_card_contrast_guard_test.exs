@@ -65,7 +65,9 @@ defmodule Platform.Design.GameCardContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @expected_selectors MapSet.new([{[], ".browser-thumb-game"}, {[], ".browser-icon-game"}])
@@ -187,7 +189,7 @@ defmodule Platform.Design.GameCardContrastGuardTest do
   # ── contrast ───────────────────────────────────────────────────────────
 
   test "every pair clears its floor in all ten variants; the table prints", %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b)}
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))

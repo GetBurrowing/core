@@ -75,7 +75,9 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -423,7 +425,7 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
 
   test "every pair clears its floor in all ten variants; the table prints", ctx do
     %{blocks: blocks, strengths: s} = ctx
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     # The fill scan is not vacuous: the pills the plan names are found.
     for f <- [{"success", 15}, {"primary", 12}, {"error", 10}, {"info", 10}] do
       assert f in ctx.fills,

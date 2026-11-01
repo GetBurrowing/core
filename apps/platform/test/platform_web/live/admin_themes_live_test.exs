@@ -57,10 +57,11 @@ defmodule PlatformWeb.AdminThemesLiveTest do
       assert has?(view, "h1", "Theme admin")
       # Chrome-less: no shell sidebar on the page.
       refute has?(view, "[data-role=desktop-sidebar]")
-      # The five presets, first, in order.
+      # Every registry preset (six since Sage, task 01a19555), first, in order.
       chips = view |> render() |> query("[data-role=theme-chip]") |> Enum.map(&LazyHTML.text/1)
       names = Enum.map(Presets.all(), & &1.name)
-      assert chips |> Enum.take(5) |> Enum.map(&String.trim/1) == names
+      assert length(names) == 6
+      assert chips |> Enum.take(length(names)) |> Enum.map(&String.trim/1) == names
     end
 
     test "a member is redirected to /access-denied?module=admin", ctx do

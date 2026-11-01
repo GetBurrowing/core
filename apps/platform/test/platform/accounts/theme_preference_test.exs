@@ -26,13 +26,14 @@ defmodule Platform.Accounts.ThemePreferenceTest do
   defp stored_prefs(user_id), do: Repo.get!(User, user_id).preferences
 
   describe "registry" do
-    test "presets are the five direction-canvas rows, in order" do
+    test "presets are the five direction-canvas rows, then Sage (task 01a19555), in order" do
       assert ThemePreference.presets() == [
                %{id: "burrow", name: "Burrow"},
                %{id: "burrow-midnight", name: "Burrow midnight"},
                %{id: "burrow-sand", name: "Burrow sand"},
                %{id: "burrow-forest", name: "Burrow forest"},
-               %{id: "high-contrast", name: "High contrast"}
+               %{id: "high-contrast", name: "High contrast"},
+               %{id: "sage", name: "Sage"}
              ]
     end
 
