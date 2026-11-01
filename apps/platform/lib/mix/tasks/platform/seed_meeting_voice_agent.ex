@@ -73,7 +73,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   one read tool inside it (e.g. `space_list`) grants everything else in
   that bundle too. Concretely, dropping them refuses:
 
-    * `space` — `space_create`, `space_leave`, `dm_create` (all writes a
+    * `space` — `space_create`, `space_leave`, `space_rename`, `dm_create` (all writes a
       voice-only persona that never manages spaces or opens DMs has no
       business holding), plus `space_list`/`space_list_agents` (reads this
       persona doesn't need either — it always knows its own space_id from

@@ -4555,4 +4555,38 @@ defmodule PlatformWeb.ChatLiveTest do
       assert alice_sheet == @quick_react_row
     end
   end
+
+  describe "live channel rename (task 01a19948 stage 2)" do
+    test "an open view shows the new name after Chat.rename_space/3, without a reload", %{
+      conn: conn
+    } do
+      n = System.unique_integer([:positive])
+
+      creator =
+        insert_chat_user(%{email: "renamer-#{n}@example.com", oidc_sub: "oidc-renamer-#{n}"})
+
+      {:ok, space} =
+        Chat.create_channel(%{
+          name: "Placeholder Goal Name",
+          slug: "placeholder-goal-#{n}",
+          created_by: creator.id
+        })
+
+      conn =
+        authenticated_conn(conn, %{
+          email: "rename-viewer-#{n}@example.com",
+          oidc_sub: "oidc-rename-viewer-#{n}"
+        })
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}")
+      assert html =~ "Placeholder Goal Name"
+
+      assert {:ok, _} = Chat.rename_space({:user, creator.id}, space.id, "Spring Launch Plan")
+
+      html = render(view)
+      assert html =~ "Spring Launch Plan"
+      refute html =~ "Placeholder Goal Name"
+      assert page_title(view) =~ "Spring Launch Plan"
+    end
+  end
 end

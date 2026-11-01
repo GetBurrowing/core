@@ -1540,6 +1540,29 @@ defmodule Platform.Federation.ToolSurface do
           "When you were invited to a space you shouldn't be in (e.g. a private DM you're stuck listening to), or when asked to remove another agent who shouldn't be present."
       },
       %{
+        name: "space_rename",
+        description:
+          "Rename a channel you are a participant of. The channel's slug is re-derived from the new name; the header and sidebar of everyone viewing it update without a reload.",
+        parameters: %{
+          space_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the channel to rename"
+          },
+          name: %{
+            type: "string",
+            required: true,
+            description:
+              "The new channel name, 1 to 80 characters after trimming, e.g. \"Spring launch plan\""
+          }
+        },
+        returns: "`{id, name, slug, kind}` of the renamed channel.",
+        limitations:
+          "Channels only: a DM, group, execution, meeting or system space is refused as not applicable. You must hold a participant row in the channel; otherwise the call is refused. Archived channels cannot be renamed. A blank or over-80-character name is refused.",
+        when_to_use:
+          "After the people in a channel agree a name for it, e.g. a member accepting the name you proposed for a channel started from their first goal (`space_get_context` shows `origin: \"first_run_goal\"`). Never rename a channel nobody agreed to rename."
+      },
+      %{
         name: "dm_create",
         description:
           "Open a direct message with a HUMAN and say the thing, in one call. Creates the 1:1 DM between you and that person if it does not exist yet, then posts `message` into it. Re-calling it reuses the same thread rather than opening a second one. USE THIS SPARINGLY AND ON PURPOSE: a DM is a tap on the shoulder. It is for a decision only that person can make, a genuine blocker you cannot get around, or something time-sensitive that will rot if it waits. It is NOT for status, progress updates, \"just so you know\", or anything a channel post would serve — a DM channel that fills with those gets muted, and then the one message that genuinely needed them arrives somewhere nobody is reading. Ask yourself whether you ACTUALLY NEED something from this person; if the honest answer is no, post in a channel instead.",
@@ -1577,7 +1600,7 @@ defmodule Platform.Federation.ToolSurface do
           space_id: %{type: "string", required: true, description: "UUID of the Burrow space"}
         },
         returns:
-          "Context bundle with space metadata, active_canvases, other_agents, and recent_activity_summary",
+          "Context bundle with space metadata (`space: {id, name, kind, description, origin}`; `origin` is e.g. \"first_run_goal\" for a channel a member's first goal opened, else nil), active_canvases, other_agents, and recent_activity_summary",
         limitations:
           "Only works for spaces the agent is an active participant in. Activity data is in-memory and may be incomplete after restarts.",
         when_to_use:
@@ -4521,6 +4544,57 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("space_rename", args, context) do
+    with {:ok, space_id} <- require_string(args, "space_id", "space_rename"),
+         {:ok, name} <- require_string(args, "name", "space_rename") do
+      case Chat.rename_space({:agent, Map.get(context, :agent_id)}, space_id, name) do
+        {:ok, space} ->
+          {:ok, %{id: space.id, name: space.name, slug: space.slug, kind: space.kind}}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:error,
+           %{
+             error: "space_rename: #{inspect_errors(changeset)}",
+             recoverable: true,
+             suggestion: "Pass a name of 1 to 80 characters."
+           }}
+
+        {:error, :forbidden} ->
+          {:error,
+           %{
+             error: "space_rename: you are not a participant of this space",
+             recoverable: true,
+             suggestion:
+               "Only a participant can rename a channel. Call `space_list` for the spaces you are in."
+           }}
+
+        {:error, :not_applicable} ->
+          {:error,
+           %{
+             error: "space_rename: only channels can be renamed",
+             recoverable: true,
+             suggestion: "DMs, groups, execution, meeting and system spaces keep their names."
+           }}
+
+        {:error, :space_archived} ->
+          {:error,
+           %{
+             error: "space_rename: the channel is archived",
+             recoverable: true,
+             suggestion: "An archived channel cannot be renamed."
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "space_rename failed: #{inspect(reason)}",
+             recoverable: true,
+             suggestion: "Check `space_id` with `space_list` and retry."
+           }}
+      end
+    end
+  end
+
   def execute("space_list", args, context) do
     agent_id = Map.get(context, :agent_id)
     kind = Map.get(args, "kind")
@@ -4772,8 +4846,19 @@ defmodule Platform.Federation.ToolSurface do
       # Enrich with space metadata from DB
       space_meta =
         case Chat.get_space(space_id) do
-          nil -> %{}
-          s -> %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+          nil ->
+            %{}
+
+          s ->
+            %{
+              id: s.id,
+              name: s.name,
+              kind: s.kind,
+              description: s.description,
+              # Where the space came from, e.g. "first_run_goal" for a channel a
+              # member's first goal opened (task 01a19948 stage 2); nil otherwise.
+              origin: (s.metadata || %{})["origin"]
+            }
         end
 
       {:ok, Map.put(bundle, :space, space_meta)}

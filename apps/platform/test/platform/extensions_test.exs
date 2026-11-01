@@ -739,6 +739,7 @@ defmodule Platform.ExtensionsTest do
       {"space_list", "space"},
       {"space_list_agents", "space"},
       {"space_leave", "space"},
+      {"space_rename", "space"},
       {"dm_create", "space"},
       {"space_get_context", "context_read"},
       {"space_search_messages", "context_read"},

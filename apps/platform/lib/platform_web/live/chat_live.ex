@@ -3032,39 +3032,35 @@ defmodule PlatformWeb.ChatLive do
         socket
       end
 
-    # rbac-external-users M5: scope the reload so a channel created elsewhere in
-    # the workspace never pops into an external user's rail (the external
-    # session is subscribed to the space-lifecycle topic for its own allowlisted
-    # channels). Pass-through for internal sessions.
-    channels = rail_channels(socket)
-    dm_conversations = socket.assigns.dm_conversations
-
-    {:noreply,
-     socket
-     |> assign(:channels, channels)
-     |> assign(:spaces, channels ++ dm_conversations)
-     |> assign(
-       :channel_sections,
-       channel_sections(
-         channels,
-         dm_conversations,
-         socket.assigns.pinned_space_ids,
-         socket.assigns.hidden_channel_ids,
-         socket.assigns.closed_dm_at
-       )
-     )
-     |> assign(
-       :sidebar_sections,
-       resolve_sidebar_sections(
-         socket.assigns.user_id,
-         channels,
-         socket.assigns.hidden_channel_ids,
-         socket.assigns.agents_block
-       )
-     )}
+    {:noreply, reload_rail_channels(socket)}
   end
 
   def handle_info({:space_created, _space}, socket), do: {:noreply, socket}
+
+  # Task 01a19948 stage 2: `Chat.rename_space/3` broadcasts this on the space
+  # topic AND the space-lifecycle topic, so a view may hear it twice; both
+  # branches are idempotent. The open space's header (and tab title) take the
+  # new name; the rail re-reads only when the channel is listed in it.
+  def handle_info({:space_renamed, %{id: space_id} = space}, socket) do
+    socket =
+      case socket.assigns[:active_space] do
+        %{id: ^space_id} = active ->
+          renamed = %{active | name: space.name, slug: space.slug}
+
+          socket
+          |> assign(:active_space, renamed)
+          |> maybe_retitle_channel(renamed)
+
+        _ ->
+          socket
+      end
+
+    if Enum.any?(socket.assigns[:channels] || [], &(&1.id == space_id)),
+      do: {:noreply, reload_rail_channels(socket)},
+      else: {:noreply, socket}
+  end
+
+  def handle_info({:space_renamed, _space}, socket), do: {:noreply, socket}
 
   # Pin-to-Chat stage 4 (task 019f62a1). Broadcasts arrive on the global
   # `chat:spaces` topic via `ChatPubSub.broadcast_space_event/1`. We match
@@ -3662,6 +3658,46 @@ defmodule PlatformWeb.ChatLive do
   # `mask` is the `{context, sections}` pair from `space_mask/1`. Only the
   # CHANNEL clause masks: a DM or group title is a person's name, which this
   # feature does not claim to cover.
+  # Re-read the rail's channel list and the sections derived from it.
+  #
+  # rbac-external-users M5: scope the reload so a channel created elsewhere in
+  # the workspace never pops into an external user's rail (the external
+  # session is subscribed to the space-lifecycle topic for its own allowlisted
+  # channels). Pass-through for internal sessions.
+  defp reload_rail_channels(socket) do
+    channels = rail_channels(socket)
+    dm_conversations = socket.assigns.dm_conversations
+
+    socket
+    |> assign(:channels, channels)
+    |> assign(:spaces, channels ++ dm_conversations)
+    |> assign(
+      :channel_sections,
+      channel_sections(
+        channels,
+        dm_conversations,
+        socket.assigns.pinned_space_ids,
+        socket.assigns.hidden_channel_ids,
+        socket.assigns.closed_dm_at
+      )
+    )
+    |> assign(
+      :sidebar_sections,
+      resolve_sidebar_sections(
+        socket.assigns.user_id,
+        channels,
+        socket.assigns.hidden_channel_ids,
+        socket.assigns.agents_block
+      )
+    )
+  end
+
+  defp maybe_retitle_channel(socket, %{kind: "channel"} = space) do
+    assign(socket, :page_title, space_page_title(space, [], nil, space_mask(socket.assigns)))
+  end
+
+  defp maybe_retitle_channel(socket, _space), do: socket
+
   defp space_page_title(%{kind: "channel", name: name}, _participants, _user_id, mask) do
     "# #{mask_space_name(mask, name)}"
   end
