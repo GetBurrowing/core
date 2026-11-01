@@ -369,6 +369,18 @@ class DropletMeetingsRenderTest(unittest.TestCase):
                 with self.subTest(file=rel, absent=absent):
                     self.assertNotIn(absent, text)
 
+    def test_files_service_gets_no_stt_base_url(self):
+        # files-service reads STT_API_KEY from env (files-service app/stt.py:89,
+        # origin/main 30eb7dd2) and the shared secrets.env carries the
+        # transcriber's STT_API_KEY. Its transcription is gated on STT_BASE_URL
+        # (app/stt.py:83), which only speaches (voice) injects, so with voice off
+        # files-service never sends audio to the hosted key.
+        blocks = compose_blocks(self.files["compose.yaml"])
+        self.assertIn("STT_BASE_URL", blocks["meeting-transcriber"])  # positive control
+        self.assertNotIn("STT_BASE_URL", blocks["files-service"])
+        self.assertNotIn("STT_BASE_URL", env_names(self.files["secrets.env"]))
+        self.assertIn("STT_API_KEY", env_names(self.files["secrets.env"]))
+
     def test_user_data_fits_digitaloceans_64_kib_cap(self):
         size = len(self.files["user-data"].encode("utf-8"))
         self.assertGreater(size, len(self.base["user-data"].encode("utf-8")))
