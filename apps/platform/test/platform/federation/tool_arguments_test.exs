@@ -232,7 +232,10 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # 227 adds project_create's `name` (task 01a19aa4 stage 1). HONEST: the
   # handler reads `name` under its declared key only, and Tasks.create_project/1
   # refuses its absence with a changeset error; no alias, no context default.
-  @surveyed_required_count 227
+  # 229 adds space_rename's two HONEST declarations (task 01a19948 stage 2):
+  # space_id and name are read only through require_string/3; neither is
+  # aliased, defaulted or resolved from caller context.
+  @surveyed_required_count 229
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

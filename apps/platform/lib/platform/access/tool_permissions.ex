@@ -8,7 +8,7 @@ defmodule Platform.Access.ToolPermissions do
   @core for {permission, names} <- [
               {"access.manage", ~w(access_explain access_propose access_apply access_undo)},
               {"agents.manage_own",
-               ~w(dm_create federation_status feedback_submit principal_search space_create space_leave space_list_agents)},
+               ~w(dm_create federation_status feedback_submit principal_search space_create space_leave space_list_agents space_rename)},
               {"calendar.read", ~w(calendar_list)},
               {"calendar.write", ~w(calendar_propose)},
               {"canvas.read",
@@ -16,7 +16,7 @@ defmodule Platform.Access.ToolPermissions do
               {"canvas.write", ~w(canvas_create canvas_patch canvas_restore)},
               {"chat.read",
                ~w(space_get_context space_get_messages space_list space_search_messages)},
-              {"chat.write", ~w(react send_media space_rename)},
+              {"chat.write", ~w(react send_media)},
               {"experiments.propose",
                ~w(code_mode_report experiment_conclude experiment_create experiment_exclude experiment_goal_set experiment_promote experiment_start experiment_stop experiment_variant_add)},
               {"experiments.read",

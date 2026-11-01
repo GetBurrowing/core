@@ -926,6 +926,11 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a19aa4 stage 1: `project_create` joins the `task`
     # bundle after `project_update`. Measured on the test rig at the
     # stage's branch (2200efc79).
+    #
+    # Re-pinned by task 01a19948 stage 2: the new `space_rename` tool in the
+    # `space` bundle, and `space_get_context`'s `returns` now names the
+    # space map's `origin` field. Measured on the test rig at the stage's
+    # branch, rebased onto e978e422.
     @main_tool_digest_off "85bae99555f153190575aed4de80845e2981a3a803b7b35d9d8b7cc6df982b2e"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"

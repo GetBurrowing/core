@@ -8,13 +8,14 @@ defmodule Platform.Federation.SpaceRenameToolTest do
 
   import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
-  alias Platform.Access.ToolPermissions
+  alias Platform.Access.{RuntimeProfiles, ToolPermissions}
   alias Platform.Accounts.User
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.Space
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
+  alias Platform.Tenancy.OrgMembership
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -52,6 +53,33 @@ defmodule Platform.Federation.SpaceRenameToolTest do
     space
   end
 
+  # A runtime-bound read context, as `space_get_context` needs (mirrors
+  # space_restriction_tools_test.exs): an agent with a runtime owned by an
+  # internal member of the channel's org.
+  defp read_context!(space) do
+    owner = user!()
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: owner.id, org_id: acme_org_id(), role: "member"})
+    |> Repo.insert!()
+
+    agent = agent!()
+    {:ok, _} = Chat.add_agent_participant(space.id, agent.id)
+
+    rt =
+      Repo.insert!(%AgentRuntime{
+        agent_id: agent.id,
+        owner_user_id: owner.id,
+        runtime_id: "rename-tool-rt-#{unique()}",
+        status: "active"
+      })
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(rt, AgentRuntime.default_tool_profile(), nil)
+
+    %{agent_id: agent.id, runtime_id: rt.runtime_id}
+  end
+
   test "space_rename is listed in the space bundle with its docs and a chat.write permission" do
     tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "space_rename"))
 
@@ -62,7 +90,7 @@ defmodule Platform.Federation.SpaceRenameToolTest do
     assert tool.limitations =~ "Channels only"
     assert tool.when_to_use =~ "first_run_goal"
 
-    assert ToolPermissions.for_tool("space_rename") == "chat.write"
+    assert ToolPermissions.for_tool("space_rename") == "agents.manage_own"
   end
 
   test "Burrow, as a participant, renames the channel" do
@@ -144,32 +172,22 @@ defmodule Platform.Federation.SpaceRenameToolTest do
 
   describe "space_get_context origin" do
     test "is first_run_goal for a channel a first goal opened" do
-      agent = agent!()
       space = channel!(%{"origin" => "first_run_goal"})
-      {:ok, _} = Chat.add_agent_participant(space.id, agent.id)
+      context = read_context!(space)
 
       assert {:ok, %{space: meta}} =
-               ToolSurface.execute(
-                 "space_get_context",
-                 %{"space_id" => space.id},
-                 %{agent_id: agent.id}
-               )
+               ToolSurface.execute("space_get_context", %{"space_id" => space.id}, context)
 
       assert meta.origin == "first_run_goal"
       assert meta.id == space.id
     end
 
     test "is nil for any other channel" do
-      agent = agent!()
       space = channel!()
-      {:ok, _} = Chat.add_agent_participant(space.id, agent.id)
+      context = read_context!(space)
 
       assert {:ok, %{space: meta}} =
-               ToolSurface.execute(
-                 "space_get_context",
-                 %{"space_id" => space.id},
-                 %{agent_id: agent.id}
-               )
+               ToolSurface.execute("space_get_context", %{"space_id" => space.id}, context)
 
       assert Map.has_key?(meta, :origin)
       assert meta.origin == nil
