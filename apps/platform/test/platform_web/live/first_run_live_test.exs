@@ -212,7 +212,9 @@ defmodule PlatformWeb.FirstRunLiveTest do
   test "primary appears only on Send" do
     view = start!(member!())
 
-    tree = view |> render() |> LazyHTML.from_fragment()
+    # The page's own subtree. The shell around it (sidebar, unread dot) has
+    # its own primary uses, which this feature does not own.
+    tree = view |> element("[data-role=first-run]") |> render() |> LazyHTML.from_fragment()
 
     holders =
       tree
