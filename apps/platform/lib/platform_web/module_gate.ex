@@ -11,6 +11,9 @@ defmodule PlatformWeb.ModuleGate do
 
   @view_modules %{
     PlatformWeb.ChatLive => {:chat, nil},
+    # The first-run goal box (task 01a19554-fd07 stage 2) hands off into a
+    # chat DM, so a member without chat could not use it either.
+    PlatformWeb.FirstRunLive => {:chat, nil},
     PlatformWeb.ChangelogLive => {:activity, nil},
     PlatformWeb.InboxLive => {:inbox, nil},
     PlatformWeb.TasksLive => {:tasks, nil},

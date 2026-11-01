@@ -156,7 +156,10 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
   # `ExternalUserScope` already gates external users and would confound
   # the signal. The seeded "globex" org is used for the same reason it is
   # there — its slug atom is pre-registered for the authenticated shell.
-  defp internal_user! do
+  # `prefs` defaults to a member with no first_run_goal key, i.e. a
+  # first-run member (task 01a19554-fd07 stage 3). The chat-host root sends
+  # even that member to /chat; the app host would send them to /start.
+  defp internal_user!(prefs \\ %{}) do
     n = System.unique_integer([:positive])
 
     user =
@@ -164,7 +167,8 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
       |> User.changeset(%{
         email: "chat-host-root-#{n}@example.com",
         name: "ChatHostRoot #{n}",
-        oidc_sub: "oidc-chat-host-root-#{n}"
+        oidc_sub: "oidc-chat-host-root-#{n}",
+        preferences: prefs
       })
       |> Repo.insert!()
 
@@ -249,9 +253,13 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
     end
 
     test "the default host's own / is untouched and still redirects to /chat", %{conn: conn} do
+      # A member who predates the first-run box; a pending one goes to /start
+      # on this host (task 01a19554-fd07 stage 3, page_controller_test.exs).
+      user = internal_user!(%{"first_run_goal" => "existing"})
+
       conn =
         conn
-        |> signed_in_conn()
+        |> init_test_session(current_user_id: user.id)
         |> Map.put(:host, PlatformWeb.Endpoint.config(:url)[:host] || "localhost")
         |> get("/")
 

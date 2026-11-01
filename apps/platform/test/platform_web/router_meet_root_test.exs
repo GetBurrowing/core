@@ -82,7 +82,10 @@ defmodule PlatformWeb.RouterMeetRootTest do
       Repo.insert!(%User{
         email: "#{kind}_root_#{n}@example.com",
         name: "Root Viewer #{n}",
-        oidc_sub: "oidc-#{kind}-root-#{n}"
+        oidc_sub: "oidc-#{kind}-root-#{n}",
+        # Not a first-run member: `/` sends a pending member to /start
+        # (task 01a19554-fd07 stage 3), and these tests pin the /chat root.
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     %OrgMembership{}
