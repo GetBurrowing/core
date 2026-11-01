@@ -813,6 +813,14 @@
  * the fallback, should that be vetoed, is an orange primary on these grounds.
  * --edge clears 3:1 on base-100 and base-200 here (the control boundary),
  * which no other non-High-contrast preset's edge does (1.34-1.68:1).
+ *
+ * Stage 4 correction: daisyUI's .input/.select/.textarea/.file-input and
+ * .checkbox/.radio do NOT paint var(--edge). They paint --input-color, whose
+ * default is base-content at 20% (1.60-1.80:1 here). Each Sage block therefore
+ * declares --control-border, and the layered rule after these blocks routes
+ * those borders through it. Sage also declares --color-neutral and
+ * --color-neutral-content: app.css's dark neutral #4d4647 measures 1.7974:1 as
+ * text on Sage dark base-100.
  */
 [data-preset="sage"][data-theme="dark"]:not([data-theme-preview]) {
   color-scheme: dark;
@@ -822,6 +830,10 @@
   --color-base-300: #252b26;
   /* Control boundary: 3.5313:1 on base-100, 3.8315:1 on base-200. */
   --edge: #6b776d;
+  /* Form-control border (stage 4): daisyUI's fields, checkboxes and radios
+     paint it through the layered rule below; 3.5313:1 on base-100,
+     3.8315:1 on base-200. */
+  --control-border: var(--edge);
   /* Viewer ground (rung 13): the full-screen media viewer, identical in
      every theme, and the chrome text on it. */
   --viewer: #000000;
@@ -860,6 +872,13 @@
      this value measures 5.3312:1. */
   --color-error: #f06569;
   --color-error-content: #000000;
+  /* Neutral (stage 4). app.css's dark #4d4647 measures 1.7974:1 as
+     text-neutral on base-100. This value measures 6.4853:1 on base-100,
+     7.0364:1 on base-200 and 5.6715:1 on base-300; black on it measures
+     8.2361:1, so neutral fills (btn-neutral, tooltips) turn light with black
+     text in Sage dark. */
+  --color-neutral: #9aa59c;
+  --color-neutral-content: #000000;
   /* agent-slots:begin (task 01a19555 stage 2). Agent identity slots
      (ids as Platform.Agents.ColorPalette), burrow-forest dark's values:
      --ag-<id> is the rail, ring and pill border; --ag-<id>-text the name and
@@ -910,6 +929,10 @@
   --color-base-300: #e6ece2;
   /* Control boundary: 3.2879:1 on base-100, 3.1018:1 on base-200. */
   --edge: #7f8d81;
+  /* Form-control border (stage 4): daisyUI's fields, checkboxes and radios
+     paint it through the layered rule below; 3.2879:1 on base-100,
+     3.1018:1 on base-200. */
+  --control-border: var(--edge);
   /* Viewer ground (rung 13): the full-screen media viewer, identical in
      every theme, and the chrome text on it. */
   --viewer: #000000;
@@ -949,6 +972,11 @@
   --warning-dim: #ddb77e;
   --color-error: #a3252a;
   --color-error-content: #ffffff;
+  /* Neutral (stage 4): a green-cast grey in place of app.css's #5a5355
+     (7.0718:1 on base-100). It measures 7.3265:1 on base-100, 6.9118:1 on
+     base-200 and 6.4533:1 on base-300; base-100 on it measures 7.3265:1. */
+  --color-neutral: #4b554d;
+  --color-neutral-content: #f7f9f5;
   /* agent-slots:begin (task 01a19555 stage 2). Agent identity slots
      (ids as Platform.Agents.ColorPalette), burrow-forest light's values;
      a -text step taken one notch darker on the same oklch hue line where
@@ -990,4 +1018,62 @@
      (test/support/fixtures/painted_glass/); the masters' 0.72 would measure 2.6992:1. */
   --glass-alpha: 0.96;
   --glass-blur: 18px;
+}
+
+/*
+ * Sage form-control boundary (task 01a19555 stage 4). daisyUI 5 draws the
+ * border of .input, .select, .textarea and .file-input as
+ * border-color: var(--input-color), with --input-color set on the control to
+ * base-content at 20%; .checkbox and .radio draw
+ * var(--input-color, <base-content or currentColor at 20%>). None of them
+ * reads --edge. Only Sage declares --control-border, so these rules repaint
+ * Sage's controls and nothing else: wherever --control-border is undeclared
+ * the fallback is daisyUI's own default, character for character (held by
+ * test/platform/design/sage_control_boundary_guard_test.exs against
+ * assets/vendor/daisyui.js).
+ *
+ * LAYERED ON PURPOSE. daisyUI's control rules live in @layer utilities. These
+ * sit in the same layer, later, at the same (0,1,0), so they replace the
+ * resting default and still lose to every state daisyUI writes at (0,2,0):
+ * :focus/:focus-within (--input-color: base-content), a checked radio
+ * (border-color: currentColor), :disabled. A colour modifier (.input-error,
+ * .checkbox-primary, ...) sets --input-color itself: the field rule excludes
+ * them with a zero-specificity :where(), and the checkbox and radio rules
+ * read --input-color first. Unlayered, these rules would beat all of that.
+ * Being later in the layer, the checkbox and radio rules would also beat a
+ * Tailwind border utility on the element (agents_sheet.ex's radio carries
+ * border-subtle), so an element with any border-* class is left to it.
+ * Inside an org theme preview ([data-theme-preview]) daisyUI's default
+ * stands, since --control-border inherits from the page, not from the
+ * previewed theme.
+ *
+ * Toggles are left alone: their border is base-content at 50%, which
+ * measures 3.8302:1 at worst in Sage light and 4.2259:1 in Sage dark, both on
+ * base-300 (Chrome 151, computed styles).
+ */
+@layer utilities {
+  :is(.input, .select, .textarea, .file-input):not(
+      :where(
+        .input-neutral, .input-primary, .input-secondary, .input-accent,
+        .input-info, .input-success, .input-warning, .input-error,
+        .select-neutral, .select-primary, .select-secondary, .select-accent,
+        .select-info, .select-success, .select-warning, .select-error,
+        .textarea-neutral, .textarea-primary, .textarea-secondary, .textarea-accent,
+        .textarea-info, .textarea-success, .textarea-warning, .textarea-error,
+        .file-input-neutral, .file-input-primary, .file-input-secondary,
+        .file-input-accent, .file-input-info, .file-input-success,
+        .file-input-warning, .file-input-error,
+        [data-theme-preview] *
+      )
+    ) {
+    --input-color: var(--control-border, color-mix(in oklab, var(--color-base-content) 20%, #0000));
+  }
+
+  .checkbox:not(:where([data-theme-preview] *, [class*="border-"])) {
+    border-color: var(--input-color, var(--control-border, color-mix(in oklab, var(--color-base-content) 20%, #0000)));
+  }
+
+  .radio:not(:where([data-theme-preview] *, [class*="border-"])) {
+    border-color: var(--input-color, var(--control-border, color-mix(in srgb, currentColor 20%, #0000)));
+  }
 }
