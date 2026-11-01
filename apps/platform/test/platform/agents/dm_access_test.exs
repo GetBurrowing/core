@@ -134,7 +134,7 @@ defmodule Platform.Agents.DmAccessTest do
         Grants.deny(%{
           principal: {:user, owner.id},
           permission: "agents",
-          resource: {:module, tenant}
+          resource: {:module, tenant.id}
         })
 
       refute AgentAccess.manage?(Scope.for_user(owner), agent)
