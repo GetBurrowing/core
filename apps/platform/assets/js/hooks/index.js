@@ -89,6 +89,7 @@ import ThemeEditor from "./theme_editor"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
 import ViewportBreakpoint from "./viewport_breakpoint"
+import FirstRunGoal from "./first_run_goal"
 
 export default {
   // First, so a core hook of the same name wins over a module's.
@@ -181,4 +182,5 @@ export default {
   ThemePicker,
   ToastPause,
   ViewportBreakpoint,
+  FirstRunGoal,
 }

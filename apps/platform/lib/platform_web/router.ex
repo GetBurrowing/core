@@ -936,6 +936,9 @@ defmodule PlatformWeb.Router do
       # links to Usage / Admin / Prompts, sign out). Ungated in ModuleGate;
       # each row checks its own destination.
       live("/settings", SettingsLive, :index)
+      # Task 01a19554-fd07 stage 2: the first-run "What do you want to do?"
+      # box. A member who is not pending is sent on to /chat by its mount.
+      live("/start", FirstRunLive, :index)
       # Prompts is a module-admin view. It retains its stable URL and rail
       # destination, but belongs to this module-gated session instead of the
       # install-admin session.
