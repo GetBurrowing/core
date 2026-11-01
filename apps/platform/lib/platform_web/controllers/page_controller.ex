@@ -1,8 +1,29 @@
 defmodule PlatformWeb.PageController do
   use PlatformWeb, :controller
 
+  @doc """
+  ROOT LANDING for the app host and the chat host.
+
+  A first-run member (`Platform.Onboarding.FirstRunGoal.pending?/1` on the
+  user `PlatformWeb.Plugs.RequireAuth` assigns as `:current_user`) on the APP
+  host goes to `/start`, the "What do you want to do?" box (task
+  01a19554-fd07 stage 3). Everyone else goes to `/chat`, as before.
+
+  Only on the app host: `/start` lives in the default scope, which the
+  host fence (`PlatformWeb.Plugs.HostSurface`) closes to the `chat.` host,
+  so the chat host's root keeps sending everyone to `/chat`.
+
+  The bound, stated rather than hidden: a pending member who opens `/chat`
+  directly (the PWA `start_url`, a bookmark) gets the normal chat, and
+  gets the box at their next `/`. ChatLive is deliberately not gated.
+  """
   def home(conn, _params) do
-    redirect(conn, to: ~p"/chat")
+    if PlatformWeb.ExternalSurface.router_surface(conn) == :app and
+         Platform.Onboarding.FirstRunGoal.pending?(conn.assigns[:current_user]) do
+      redirect(conn, to: ~p"/start")
+    else
+      redirect(conn, to: ~p"/chat")
+    end
   end
 
   @doc """
