@@ -29,12 +29,12 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 sys.path.insert(0, HERE)
 
-from test_droplet import block_list, compose_blocks  # noqa: E402
+from test_droplet import block_list, compose_blocks
 
-from burrow_install import registry  # noqa: E402
-from burrow_install.manifest import load  # noqa: E402
-from burrow_install.render import build  # noqa: E402
-from burrow_install.validate import validate  # noqa: E402
+from burrow_install import registry
+from burrow_install.manifest import load
+from burrow_install.render import build
+from burrow_install.validate import validate
 
 
 def valid(raw):
@@ -141,9 +141,11 @@ class MeetingsProfileTest(unittest.TestCase):
         rendered = build(valid(raw), registry_auth=DO_AUTH).redacted()
         golden_dir = os.path.join(GOLDEN, "do-droplet-8gb")
         for rel, text in rendered.items():
-            with self.subTest(file=rel):
-                with open(os.path.join(golden_dir, rel), encoding="utf-8") as handle:
-                    self.assertEqual(text, handle.read())
+            with (
+                self.subTest(file=rel),
+                open(os.path.join(golden_dir, rel), encoding="utf-8") as handle,
+            ):
+                self.assertEqual(text, handle.read())
 
     def test_mac_renders_no_meetings_mem_limit_or_idle_setting(self):
         raw = load(MAC)
