@@ -1,7 +1,7 @@
-# build: HeadlessChrome/147.0.7727.15 -- HeadlessChrome 147 on a second machine, own browser context and target
-# user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.7727.15 Safari/537.36
+# build: Chrome/147.0.7727.15 -- docker.io/chromedp/headless-shell:147.0.7727.15@sha256:69e8a5a1fb39e8029683fb33f41a4a470e1ac183fe431a6a40631b977f6d62f3 in podman, --disable-gpu (software raster), CDP
+# user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Safari/537.36
 # Painted glass for the mobile tab bar (task 01a1557a-7a71-7000-8580-75565039bffe stage 1).
-# Each row: one .bottom-nav from the COMPILED app.css (sha256 4c6b27c3c379849c3831b103853aecee19d796256f397512400d872133aefb74),
+# Each row: one .bottom-nav from the COMPILED app.css (sha256 cf19c32079c0782dcb96e9356d2bec3acb4caa412a9a4978a58f50b9872dc473),
 # --glass-alpha overridden inline to `alpha`, over a full-width #000 or #fff panel, read
 # from Page.captureScreenshot (PNG, DPR 1). Layers are flat patches, not glyphs:
 #   glass          an empty spot of the bar
@@ -10,7 +10,7 @@
 #   dot            .bottom-nav-dot
 #   subtle         background: var(--color-subtle) inside the bar (the H-HC probe)
 #   ctl_white/black #fff and #000 control swatches in the same clip
-# Painted by paint_glass_01a1557a7a71.mjs (the stage-1 harness, kept with the task evidence).
+# Painted by apps/platform/priv/measurements/01a19555-preset-paint/paint.mjs (task 01a19555-1ed2-7000-bd9a-e743874c5ac0 stage 1; README there).
 # The CSS this sweep painted, as declared (whitespace collapsed). The guard
 # asserts app.css still declares exactly these; change one and repaint.
 # paint-input: .bottom-nav | background | color-mix(in srgb, var(--color-base-200) calc(var(--glass-alpha) * 100%), transparent)
@@ -122,8 +122,8 @@ burrow light,black,0.99,#f3f1ee,#6e6d6b,#6e6d6b,#ad4b07,#ad4b07,#ad4b07,#6e6d6b,
 burrow light,white,0.99,#f6f4f1,#6f6e6c,#6f6e6c,#ad4b07,#ad4b07,#ad4b07,#6f6e6c,#ffffff,#000000
 burrow light,black,1.00,#f6f4f1,#6f6e6d,#6f6e6d,#ad4b07,#ad4b07,#ad4b07,#6f6e6d,#ffffff,#000000
 burrow light,white,1.00,#f6f4f1,#6f6e6d,#6f6e6d,#ad4b07,#ad4b07,#ad4b07,#6f6e6d,#ffffff,#000000
-burrow dark,black,0.50,#09090a,#767777,#767777,#ed731e,#ed731e,#f47721,#878788,#ffffff,#000000
-burrow dark,white,0.50,#888889,#afb0b0,#afb0b0,#ed731e,#ed731e,#f47721,#c0c0c1,#ffffff,#000000
+burrow dark,black,0.50,#09090a,#878788,#878788,#f47721,#f47721,#f47721,#878788,#ffffff,#000000
+burrow dark,white,0.50,#888889,#c0c0c1,#c0c0c1,#f47721,#f47721,#f47721,#c0c0c1,#ffffff,#000000
 burrow dark,black,0.51,#09090a,#878788,#878788,#f47721,#f47721,#f47721,#878788,#ffffff,#000000
 burrow dark,white,0.51,#868687,#c0c0c1,#c0c0c1,#f47721,#f47721,#f47721,#c0c0c1,#ffffff,#000000
 burrow dark,black,0.52,#09090a,#878788,#878788,#f47721,#f47721,#f47721,#878788,#ffffff,#000000
@@ -224,8 +224,8 @@ burrow dark,black,0.99,#111214,#8a8b8d,#8a8b8d,#f47721,#f47721,#f47721,#8a8b8d,#
 burrow dark,white,0.99,#141517,#8b8c8e,#8b8c8e,#f47721,#f47721,#f47721,#8b8c8e,#ffffff,#000000
 burrow dark,black,1.00,#111214,#8a8b8d,#8a8b8d,#f47721,#f47721,#f47721,#8a8b8d,#ffffff,#000000
 burrow dark,white,1.00,#111214,#8a8b8d,#8a8b8d,#f47721,#f47721,#f47721,#8a8b8d,#ffffff,#000000
-burrow-midnight light,black,0.50,#77797c,#373b45,#373b45,#ba4c0c,#ba4c0c,#b4470a,#36373b,#ffffff,#000000
-burrow-midnight light,white,0.50,#f6f8fb,#70747e,#70747e,#ba4c0c,#ba4c0c,#b4470a,#6f7074,#ffffff,#000000
+burrow-midnight light,black,0.50,#77797c,#36373b,#36373b,#b4470a,#b4470a,#b4470a,#36373b,#ffffff,#000000
+burrow-midnight light,white,0.50,#f6f8fb,#6f7074,#6f7074,#b4470a,#b4470a,#b4470a,#6f7074,#ffffff,#000000
 burrow-midnight light,black,0.51,#797b7e,#37373c,#37373c,#b4470a,#b4470a,#b4470a,#37373c,#ffffff,#000000
 burrow-midnight light,white,0.51,#f6f8fb,#6f6f74,#6f6f74,#b4470a,#b4470a,#b4470a,#6f6f74,#ffffff,#000000
 burrow-midnight light,black,0.52,#7c7e81,#38393d,#38393d,#b4470a,#b4470a,#b4470a,#38393d,#ffffff,#000000
@@ -326,8 +326,8 @@ burrow-midnight light,black,0.99,#ebeff5,#6a6c71,#6a6c71,#b4470a,#b4470a,#b4470a
 burrow-midnight light,white,0.99,#eef2f8,#6b6d72,#6b6d72,#b4470a,#b4470a,#b4470a,#6b6d72,#ffffff,#000000
 burrow-midnight light,black,1.00,#eef2f8,#6b6d73,#6b6d73,#b4470a,#b4470a,#b4470a,#6b6d73,#ffffff,#000000
 burrow-midnight light,white,1.00,#eef2f8,#6b6d73,#6b6d73,#b4470a,#b4470a,#b4470a,#6b6d73,#ffffff,#000000
-burrow-midnight dark,black,0.50,#05080d,#72767e,#72767e,#f88338,#f88338,#ff8a3d,#82868d,#ffffff,#000000
-burrow-midnight dark,white,0.50,#84878c,#abafb7,#abafb7,#f88338,#f88338,#ff8a3d,#bbbfc6,#ffffff,#000000
+burrow-midnight dark,black,0.50,#05080d,#82868d,#82868d,#ff8a3d,#ff8a3d,#ff8a3d,#82868d,#ffffff,#000000
+burrow-midnight dark,white,0.50,#84878c,#bbbfc6,#bbbfc6,#ff8a3d,#ff8a3d,#ff8a3d,#bbbfc6,#ffffff,#000000
 burrow-midnight dark,black,0.51,#05080d,#82868d,#82868d,#ff8a3d,#ff8a3d,#ff8a3d,#82868d,#ffffff,#000000
 burrow-midnight dark,white,0.51,#82858a,#bbbfc6,#bbbfc6,#ff8a3d,#ff8a3d,#ff8a3d,#bbbfc6,#ffffff,#000000
 burrow-midnight dark,black,0.52,#05080e,#82868e,#82868e,#ff8a3d,#ff8a3d,#ff8a3d,#82868e,#ffffff,#000000
@@ -428,8 +428,8 @@ burrow-midnight dark,black,0.99,#0a0f1a,#848993,#848993,#ff8a3d,#ff8a3d,#ff8a3d,
 burrow-midnight dark,white,0.99,#0d121d,#858a94,#858a94,#ff8a3d,#ff8a3d,#ff8a3d,#858a94,#ffffff,#000000
 burrow-midnight dark,black,1.00,#0a0f1a,#848993,#848993,#ff8a3d,#ff8a3d,#ff8a3d,#848993,#ffffff,#000000
 burrow-midnight dark,white,1.00,#0a0f1a,#848993,#848993,#ff8a3d,#ff8a3d,#ff8a3d,#848993,#ffffff,#000000
-burrow-sand light,black,0.50,#78756c,#353330,#353330,#a64a0b,#a64a0b,#9c4306,#34322e,#ffffff,#000000
-burrow-sand light,white,0.50,#f7f4eb,#6c6a67,#6c6a67,#a64a0b,#a64a0b,#9c4306,#6b6965,#ffffff,#000000
+burrow-sand light,black,0.50,#78756c,#34322e,#34322e,#9c4306,#9c4306,#9c4306,#34322e,#ffffff,#000000
+burrow-sand light,white,0.50,#f7f4eb,#6b6965,#6b6965,#9c4306,#9c4306,#9c4306,#6b6965,#ffffff,#000000
 burrow-sand light,black,0.51,#7a776e,#34332f,#34332f,#9c4306,#9c4306,#9c4306,#34332f,#ffffff,#000000
 burrow-sand light,white,0.51,#f7f4eb,#6a6965,#6a6965,#9c4306,#9c4306,#9c4306,#6a6965,#ffffff,#000000
 burrow-sand light,black,0.52,#7d7a71,#363430,#363430,#9c4306,#9c4306,#9c4306,#363430,#ffffff,#000000
@@ -530,8 +530,8 @@ burrow-sand light,black,0.99,#ece6d5,#66635c,#66635c,#9c4306,#9c4306,#9c4306,#66
 burrow-sand light,white,0.99,#efe9d8,#67645d,#67645d,#9c4306,#9c4306,#9c4306,#67645d,#ffffff,#000000
 burrow-sand light,black,1.00,#efe9d8,#67655d,#67655d,#9c4306,#9c4306,#9c4306,#67655d,#ffffff,#000000
 burrow-sand light,white,1.00,#efe9d8,#67655d,#67655d,#9c4306,#9c4306,#9c4306,#67655d,#ffffff,#000000
-burrow-sand dark,black,0.50,#0c0a08,#79756f,#79756f,#e17e2a,#e17e2a,#e8842e,#8a867f,#ffffff,#000000
-burrow-sand dark,white,0.50,#8b8987,#b2aea8,#b2aea8,#e17e2a,#e17e2a,#e8842e,#c3bfb8,#ffffff,#000000
+burrow-sand dark,black,0.50,#0c0a08,#8a867f,#8a867f,#e8842e,#e8842e,#e8842e,#8a867f,#ffffff,#000000
+burrow-sand dark,white,0.50,#8b8987,#c3bfb8,#c3bfb8,#e8842e,#e8842e,#e8842e,#c3bfb8,#ffffff,#000000
 burrow-sand dark,black,0.51,#0c0a08,#8a867f,#8a867f,#e8842e,#e8842e,#e8842e,#8a867f,#ffffff,#000000
 burrow-sand dark,white,0.51,#898785,#c3bfb8,#c3bfb8,#e8842e,#e8842e,#e8842e,#c3bfb8,#ffffff,#000000
 burrow-sand dark,black,0.52,#0c0a08,#8a867f,#8a867f,#e8842e,#e8842e,#e8842e,#8a867f,#ffffff,#000000
@@ -632,8 +632,8 @@ burrow-sand dark,black,0.99,#17140f,#8f8b82,#8f8b82,#e8842e,#e8842e,#e8842e,#8f8
 burrow-sand dark,white,0.99,#1a1712,#908c83,#908c83,#e8842e,#e8842e,#e8842e,#908c83,#ffffff,#000000
 burrow-sand dark,black,1.00,#17140f,#8f8b82,#8f8b82,#e8842e,#e8842e,#e8842e,#8f8b82,#ffffff,#000000
 burrow-sand dark,white,1.00,#17140f,#8f8b82,#8f8b82,#e8842e,#e8842e,#e8842e,#8f8b82,#ffffff,#000000
-burrow-forest light,black,0.50,#777a78,#373937,#373937,#aa550e,#aa550e,#a3500a,#353736,#ffffff,#000000
-burrow-forest light,white,0.50,#f6f9f7,#707270,#707270,#aa550e,#aa550e,#a3500a,#6e706f,#ffffff,#000000
+burrow-forest light,black,0.50,#777a78,#353736,#353736,#a3500a,#a3500a,#a3500a,#353736,#ffffff,#000000
+burrow-forest light,white,0.50,#f6f9f7,#6e706f,#6e706f,#a3500a,#a3500a,#a3500a,#6e706f,#ffffff,#000000
 burrow-forest light,black,0.51,#797c7a,#363837,#363837,#a3500a,#a3500a,#a3500a,#363837,#ffffff,#000000
 burrow-forest light,white,0.51,#f6f9f7,#6f7170,#6f7170,#a3500a,#a3500a,#a3500a,#6f7170,#ffffff,#000000
 burrow-forest light,black,0.52,#7c7f7d,#383938,#383938,#a3500a,#a3500a,#a3500a,#383938,#ffffff,#000000
@@ -734,8 +734,8 @@ burrow-forest light,black,0.99,#ebf0ec,#6a6c6a,#6a6c6a,#a3500a,#a3500a,#a3500a,#
 burrow-forest light,white,0.99,#eef3ef,#6b6d6b,#6b6d6b,#a3500a,#a3500a,#a3500a,#6b6d6b,#ffffff,#000000
 burrow-forest light,black,1.00,#eef3ef,#6b6e6c,#6b6e6c,#a3500a,#a3500a,#a3500a,#6b6e6c,#ffffff,#000000
 burrow-forest light,white,1.00,#eef3ef,#6b6e6c,#6b6e6c,#a3500a,#a3500a,#a3500a,#6b6e6c,#ffffff,#000000
-burrow-forest dark,black,0.50,#070a09,#737775,#737775,#e9983b,#e9983b,#f0a040,#838886,#ffffff,#000000
-burrow-forest dark,white,0.50,#868988,#acb0ae,#acb0ae,#e9983b,#e9983b,#f0a040,#bcc1bf,#ffffff,#000000
+burrow-forest dark,black,0.50,#070a09,#838886,#838886,#f0a040,#f0a040,#f0a040,#838886,#ffffff,#000000
+burrow-forest dark,white,0.50,#868988,#bcc1bf,#bcc1bf,#f0a040,#f0a040,#f0a040,#bcc1bf,#ffffff,#000000
 burrow-forest dark,black,0.51,#070a09,#838886,#838886,#f0a040,#f0a040,#f0a040,#838886,#ffffff,#000000
 burrow-forest dark,white,0.51,#848786,#bcc1bf,#bcc1bf,#f0a040,#f0a040,#f0a040,#bcc1bf,#ffffff,#000000
 burrow-forest dark,black,0.52,#070a09,#838886,#838886,#f0a040,#f0a040,#f0a040,#838886,#ffffff,#000000
@@ -836,8 +836,8 @@ burrow-forest dark,black,0.99,#0e1411,#868d89,#868d89,#f0a040,#f0a040,#f0a040,#8
 burrow-forest dark,white,0.99,#111714,#878e8a,#878e8a,#f0a040,#f0a040,#f0a040,#878e8a,#ffffff,#000000
 burrow-forest dark,black,1.00,#0e1411,#868d89,#868d89,#f0a040,#f0a040,#f0a040,#868d89,#ffffff,#000000
 burrow-forest dark,white,1.00,#0e1411,#868d89,#868d89,#f0a040,#f0a040,#f0a040,#868d89,#ffffff,#000000
-high-contrast light,black,0.50,#808080,#060706,#060706,#943e06,#943e06,#8a3300,#3a3a3a,#ffffff,#000000
-high-contrast light,white,0.50,#ffffff,#0b0c0b,#0b0c0b,#943e06,#943e06,#8a3300,#737373,#ffffff,#000000
+high-contrast light,black,0.50,#808080,#000000,#000000,#8a3300,#8a3300,#8a3300,#3a3a3a,#ffffff,#000000
+high-contrast light,white,0.50,#ffffff,#000000,#000000,#8a3300,#8a3300,#8a3300,#737373,#ffffff,#000000
 high-contrast light,black,0.51,#828282,#000000,#000000,#8a3300,#8a3300,#8a3300,#3a3a3a,#ffffff,#000000
 high-contrast light,white,0.51,#ffffff,#000000,#000000,#8a3300,#8a3300,#8a3300,#737373,#ffffff,#000000
 high-contrast light,black,0.52,#858585,#000000,#000000,#8a3300,#8a3300,#8a3300,#3c3c3c,#ffffff,#000000
@@ -938,8 +938,8 @@ high-contrast light,black,0.99,#fcfcfc,#000000,#000000,#8a3300,#8a3300,#8a3300,#
 high-contrast light,white,0.99,#ffffff,#000000,#000000,#8a3300,#8a3300,#8a3300,#737373,#ffffff,#000000
 high-contrast light,black,1.00,#ffffff,#000000,#000000,#8a3300,#8a3300,#8a3300,#737373,#ffffff,#000000
 high-contrast light,white,1.00,#ffffff,#000000,#000000,#8a3300,#8a3300,#8a3300,#737373,#ffffff,#000000
-high-contrast dark,black,0.50,#000000,#e6e6e6,#e6e6e6,#f48326,#f48326,#ff8c2a,#8c8c8c,#ffffff,#000000
-high-contrast dark,white,0.50,#7f7f7f,#e6e6e6,#e6e6e6,#f48326,#f48326,#ff8c2a,#c5c5c5,#ffffff,#000000
+high-contrast dark,black,0.50,#000000,#ffffff,#ffffff,#ff8c2a,#ff8c2a,#ff8c2a,#8c8c8c,#ffffff,#000000
+high-contrast dark,white,0.50,#7f7f7f,#ffffff,#ffffff,#ff8c2a,#ff8c2a,#ff8c2a,#c5c5c5,#ffffff,#000000
 high-contrast dark,black,0.51,#000000,#ffffff,#ffffff,#ff8c2a,#ff8c2a,#ff8c2a,#8c8c8c,#ffffff,#000000
 high-contrast dark,white,0.51,#7d7d7d,#ffffff,#ffffff,#ff8c2a,#ff8c2a,#ff8c2a,#c4c4c4,#ffffff,#000000
 high-contrast dark,black,0.52,#000000,#ffffff,#ffffff,#ff8c2a,#ff8c2a,#ff8c2a,#8c8c8c,#ffffff,#000000

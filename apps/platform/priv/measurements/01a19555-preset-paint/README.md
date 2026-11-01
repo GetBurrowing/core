@@ -82,7 +82,10 @@ that header, and at `6b14b58c8` (task 01a1557a-7a71 stage 5) to
 `focus_ring.csv`'s header. None of the task 01a1557a-7a71 stage-1 commits in
 the local object store compiles to the glass sweep's `4c6b27c3...`.
 
-## Positive control: FAILS today (2026-11-01, branch base 8194f3c1)
+## Positive control against the ORIGINAL fixtures: failed (2026-11-01, base 8194f3c1)
+
+This section records the run against the fixtures as committed before this
+stage. The decision that followed is under "Regenerated fixtures" below.
 
 Commands (moon, both pins above; two full runs, byte-identical to each other):
 
@@ -162,12 +165,47 @@ chromedp 147 arm64 software and GPU (both worse); three page layouts (no
 change). The glass-sweep `chrome147.csv`, painted on a different box, matches
 this pin on every settled row.
 
+## Regenerated fixtures (the decision, 2026-11-01)
+
+The coordinator chose option 1: this harness is the instrument, and the
+committed fixtures were not a ground truth worth matching. (a) never had a
+single value, (c) is stale against the current CSS, and the build names
+denote raster paths rather than versions. (b) and (d) stay unexplained, are
+bounded at one 8-bit step, and are recorded above. All seven fixtures were
+repainted from the branch's compiled app.css (sha256
+`cf19c32079c0782dcb96e9356d2bec3acb4caa412a9a4978a58f50b9872dc473`), and their
+headers name the image digest, the flags and this harness. Every `# paint-input:`
+line is unchanged. The data rows are exactly `paint.mjs` output; none was
+edited by hand.
+
+Determinism: two independent full runs (`run.sh <out> all`, containers
+started fresh each time) give byte-identical output. Diffed against the
+regenerated fixtures, both report 0 differing lines in all seven files,
+alpha-0.50 rows included:
+
+```
+== painted_glass/chrome151.csv: 1021 lines, 0 differing lines
+== painted_glass/chrome147.csv: 1021 lines, 0 differing lines
+== painted_glass/underlay_chrome151.csv: 3151 lines, 0 differing lines
+== painted_glass/underlay_chrome147.csv: 3151 lines, 0 differing lines
+== painted_glass/focus_ring.csv: 41 lines, 0 differing lines
+== painted_mix/chrome151_tokens.csv: 400 lines, 0 differing lines
+== painted_mix/chrome147_tokens.csv: 400 lines, 0 differing lines
+```
+
+The original `chrome147` user agent, `HeadlessChrome/147.0.7727.15`, is the
+token Chrome for Testing's `chrome-headless-shell` reports. The chromedp image
+pinned here reports `Chrome/147.0.7727.15`, so the regenerated `chrome147`
+headers carry that. The guards only require `Chrome/147.`.
+
 ## The named mutation
 
 `GLASS_MIX=oklab` rewrites the five compiled glass declarations from
 `color-mix(in srgb, ...)` to `color-mix(in oklab, ...)`. Against the `srgb`
 run, 32 rows of `chrome151.csv` and 6 of `chrome147.csv` change, so the diff
 against the fixture is non-empty beyond (a) and (b). Example:
-`burrow dark,black,0.75` glass `#0d0e0f` becomes `#0d0d0f`. A mix with
+`burrow dark,black,0.75` glass `#0d0e0f` becomes `#0d0d0f`. Against the regenerated
+fixtures, `control.sh` reports 64 differing lines in `chrome151.csv` and 12 in
+`chrome147.csv` (exit 1). A mix with
 `transparent` differs between the two spaces only in rounding, so the
 mutation moves few rows. Revert is the default: the variable unset.

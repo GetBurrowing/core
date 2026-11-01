@@ -1,4 +1,4 @@
-# Chrome/151.0.7922.109, the shipped var(--ag-<id>-tint) tokens painted through the served app.css (task 01a1557a rung 3 stage 1).
+# Chrome/151.0.7922.109 (docker.io/chromedp/headless-shell:151.0.7922.109@sha256:2d349b544a1ea6b5b5fd7c0fe99215ff662339c57407ee2e8c0a11af93516b04, default flags), the shipped var(--ag-<id>-tint) tokens painted through the compiled app.css (sha256 cf19c32079c0782dcb96e9356d2bec3acb4caa412a9a4978a58f50b9872dc473) by priv/measurements/01a19555-preset-paint/paint.mjs (task 01a19555 stage 1; first painted by task 01a1557a rung 3 stage 1).
 # preset,mode,slot,token,ink,ground,strength,path,pixel
 burrow,dark,amber,tint,e5a33d,191b20,8,block_nested,292622
 burrow,dark,amber,tint,e5a33d,191b20,8,block_root,292622
