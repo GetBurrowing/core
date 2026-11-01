@@ -801,3 +801,279 @@
   --glass-alpha: 1;
   --glass-blur: 0px;
 }
+
+/*
+ * Sage (task 01a19555-1ed2-7000-bd9a-e743874c5ac0 stage 2; direction canvas
+ * 01a19556-6b31-7000-aa97-0ce7bdc14067). A soft, sage-tinted light preset with
+ * a muted green-grey dark twin. Sage has NO theme.js master: the canvas's
+ * provisional table is the source, and every value below was measured
+ * (Platform.Design.WcagContrast; 55%/60% ink painted, min over
+ * lib/platform/design/painted_composite.ex). Slot order follows burrow-forest.
+ * Sage is the first preset whose primary leaves Burrow orange (a deep sage);
+ * the fallback, should that be vetoed, is an orange primary on these grounds.
+ * --edge clears 3:1 on base-100 and base-200 here (the control boundary),
+ * which no other non-High-contrast preset's edge does (1.34-1.68:1).
+ *
+ * Stage 4 correction: daisyUI's .input/.select/.textarea/.file-input and
+ * .checkbox/.radio do NOT paint var(--edge). They paint --input-color, whose
+ * default is base-content at 20% (1.60-1.80:1 here). Each Sage block therefore
+ * declares --control-border, and the layered rule after these blocks routes
+ * those borders through it. Sage also declares --color-neutral and
+ * --color-neutral-content: app.css's dark neutral #4d4647 measures 1.7974:1 as
+ * text on Sage dark base-100.
+ */
+[data-preset="sage"][data-theme="dark"]:not([data-theme-preview]) {
+  color-scheme: dark;
+  /* A muted green-grey dark, not the blue-black default. */
+  --color-base-100: #1b201c;
+  --color-base-200: #141814;
+  --color-base-300: #252b26;
+  /* Control boundary: 3.5313:1 on base-100, 3.8315:1 on base-200. */
+  --edge: #6b776d;
+  /* Form-control border (stage 4): daisyUI's fields, checkboxes and radios
+     paint it through the layered rule below; 3.5313:1 on base-100,
+     3.8315:1 on base-200. */
+  --control-border: var(--edge);
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
+  --stage: #0b0e0c;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18). Declared
+     --scrim/--shade, never --color-*; see the @theme inline block. */
+  --scrim: rgba(6, 9, 7, 0.65);
+  --shade: rgba(0, 0, 0, 0.5);
+  /* --subtle (55%, painted) measures 4.7908:1 at its worst, on base-300. */
+  --color-base-content: #e9eee9;
+  --color-secondary: #a7b3a9;
+  --color-secondary-content: #000000;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Sage primary; black on it measures 9.5437:1. */
+  --color-primary: #93b897;
+  --color-primary-content: #000000;
+  --color-accent: #93b897;
+  --color-accent-content: #000000;
+  --color-interactive: #b3d4b6;
+  --focus-ring: var(--color-primary);
+  /* Slate blue, not teal (teal sits beside the sage action colour). */
+  --color-info: #8fb4e3;
+  --color-info-content: #000000;
+  --info-dim: #1e3550;
+  /* A saturated green, delta E 12.61 from the sage primary. */
+  --color-success: #3ecb63;
+  --color-success-content: #000000;
+  --success-dim: #1d4728;
+  --color-warning: #e6b04a;
+  --color-warning-content: #000000;
+  --warning-dim: #54431e;
+  /* Forest's #e94c51 measures 4.4232:1 as text on this base-100;
+     this value measures 5.3312:1. */
+  --color-error: #f06569;
+  --color-error-content: #000000;
+  /* Neutral (stage 4). app.css's dark #4d4647 measures 1.7974:1 as
+     text-neutral on base-100. This value measures 6.4853:1 on base-100,
+     7.0364:1 on base-200 and 5.6715:1 on base-300; black on it measures
+     8.2361:1, so neutral fills (btn-neutral, tooltips) turn light with black
+     text in Sage dark. */
+  --color-neutral: #9aa59c;
+  --color-neutral-content: #000000;
+  /* agent-slots:begin (task 01a19555 stage 2). Agent identity slots
+     (ids as Platform.Agents.ColorPalette), burrow-forest dark's values:
+     --ag-<id> is the rail, ring and pill border; --ag-<id>-text the name and
+     pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #22d3ee;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #6bae75;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #e5a33d;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #f47721;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
+  --radius-box: 12px;
+  --radius-field: 9px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  /* Glass floor (task 01a19555 stage 2). The lowest swept alpha that clears
+     4.5:1 for every tab label and 3:1 for every icon and the More dot, painted
+     over pure black and pure white on both builds, measures 4.5571:1
+     (test/support/fixtures/painted_glass/); the masters' 0.72 would measure 3.0625:1. */
+  --glass-alpha: 0.89;
+  --glass-blur: 18px;
+}
+
+[data-preset="sage"][data-theme="light"]:not([data-theme-preview]) {
+  color-scheme: light;
+  /* Canvas #f6f8f4 / #edf1ea / #e2e8dd, each lifted a step: 55% ink on
+     #e2e8dd painted 4.4621:1, under 4.5 even in black. On #e6ece2 it measures
+     4.5447:1 (base-100 4.6941:1, base-200 4.5881:1). base-200/base-300
+     separation 1.0710:1. */
+  --color-base-100: #f7f9f5;
+  --color-base-200: #eff3ec;
+  --color-base-300: #e6ece2;
+  /* Control boundary: 3.2879:1 on base-100, 3.1018:1 on base-200. */
+  --edge: #7f8d81;
+  /* Form-control border (stage 4): daisyUI's fields, checkboxes and radios
+     paint it through the layered rule below; 3.2879:1 on base-100,
+     3.1018:1 on base-200. */
+  --control-border: var(--edge);
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
+  --stage: #0b0b10;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18). Declared
+     --scrim/--shade, never --color-*; see the @theme inline block. */
+  --scrim: rgba(20, 30, 20, 0.45);
+  --shade: rgba(0, 0, 0, 0.5);
+  /* Canvas #141a14 measures 3.6803:1 at 55% on base-300 (painted); no
+     green-cast near-black clears 55% on these grounds, so ink is black. */
+  --color-base-content: #000000;
+  --color-secondary: #4f6153;
+  --color-secondary-content: #ffffff;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Deep sage primary; base-100 on it measures 5.6523:1. */
+  --color-primary: #4a6b4f;
+  --color-primary-content: #f7f9f5;
+  --color-accent: #4a6b4f;
+  --color-accent-content: #f7f9f5;
+  /* 6.3533:1 at its worst, on base-300. */
+  --color-interactive: #3e5a43;
+  --focus-ring: var(--color-interactive);
+  /* Slate blue, not teal (teal sits beside the sage action colour). */
+  --color-info: #3b5f8a;
+  --color-info-content: #ffffff;
+  --info-dim: #a9c1de;
+  /* Canvas #2d6a3a is only delta E 4.68 from the sage primary; this value
+     is delta E 6.58 from it, and white on it measures 6.5666:1. */
+  --color-success: #1d6b30;
+  --color-success-content: #ffffff;
+  --success-dim: #9fd2a9;
+  --color-warning: #925d0c;
+  --color-warning-content: #ffffff;
+  --warning-dim: #ddb77e;
+  --color-error: #a3252a;
+  --color-error-content: #ffffff;
+  /* Neutral (stage 4): a green-cast grey in place of app.css's #5a5355
+     (7.0718:1 on base-100). It measures 7.3265:1 on base-100, 6.9118:1 on
+     base-200 and 6.4533:1 on base-300; base-100 on it measures 7.3265:1. */
+  --color-neutral: #4b554d;
+  --color-neutral-content: #f7f9f5;
+  /* agent-slots:begin (task 01a19555 stage 2). Agent identity slots
+     (ids as Platform.Agents.ColorPalette), burrow-forest light's values;
+     a -text step taken one notch darker on the same oklch hue line where
+     forest's measured under 4.5:1 on Sage's painted 8% tint. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0e7382;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #2d7638;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #925d0c;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #b23e04;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* Forest's #1c72a4 measures 4.4687:1 on this tint; this measures 4.5278:1. */
+  --ag-blue-text: #1c71a3;
+  --ag-purple: #805eb6;
+  /* Forest's #7d5bb3 measures 4.4716:1 on this tint; this measures 4.5359:1. */
+  --ag-purple-text: #7c5ab2;
+  --ag-brick: #ae5548;
+  /* Forest's #aa5245 measures 4.4708:1 on this tint; this measures 4.5326:1. */
+  --ag-brick-text: #a95144;
+  --ag-rose: #a85276;
+  /* Forest's #a55074 measures 4.4850:1 on this tint; this measures 4.5476:1. */
+  --ag-rose-text: #a44f73;
+  --ag-indigo: #546aba;
+  --ag-indigo-text: #5267b7;
+  --ag-lime: #4f7b00;
+  /* Forest's #4d7802 measures 4.4797:1 on this tint; this measures 4.5339:1. */
+  --ag-lime-text: #4d7702;
+  /* agent-slots:end */
+  --radius-box: 12px;
+  --radius-field: 9px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  /* Glass floor (task 01a19555 stage 2). The lowest swept alpha that clears
+     4.5:1 for every tab label and 3:1 for every icon and the More dot, painted
+     over pure black and pure white on both builds, measures 4.5064:1
+     (test/support/fixtures/painted_glass/); the masters' 0.72 would measure 2.6992:1. */
+  --glass-alpha: 0.96;
+  --glass-blur: 18px;
+}
+
+/*
+ * Sage form-control boundary (task 01a19555 stage 4). daisyUI 5 draws the
+ * border of .input, .select, .textarea and .file-input as
+ * border-color: var(--input-color), with --input-color set on the control to
+ * base-content at 20%; .checkbox and .radio draw
+ * var(--input-color, <base-content or currentColor at 20%>). None of them
+ * reads --edge. Only Sage declares --control-border, so these rules repaint
+ * Sage's controls and nothing else: wherever --control-border is undeclared
+ * the fallback is daisyUI's own default, character for character (held by
+ * test/platform/design/sage_control_boundary_guard_test.exs against
+ * assets/vendor/daisyui.js).
+ *
+ * LAYERED ON PURPOSE. daisyUI's control rules live in @layer utilities. These
+ * sit in the same layer, later, at the same (0,1,0), so they replace the
+ * resting default and still lose to every state daisyUI writes at (0,2,0):
+ * :focus/:focus-within (--input-color: base-content), a checked radio
+ * (border-color: currentColor), :disabled. A colour modifier (.input-error,
+ * .checkbox-primary, ...) sets --input-color itself: the field rule excludes
+ * them with a zero-specificity :where(), and the checkbox and radio rules
+ * read --input-color first. Unlayered, these rules would beat all of that.
+ * Being later in the layer, the checkbox and radio rules would also beat a
+ * Tailwind border utility on the element (agents_sheet.ex's radio carries
+ * border-subtle), so an element with any border-* class is left to it.
+ * Inside an org theme preview ([data-theme-preview]) daisyUI's default
+ * stands, since --control-border inherits from the page, not from the
+ * previewed theme.
+ *
+ * Toggles are left alone: their border is base-content at 50%, which
+ * measures 3.8302:1 at worst in Sage light and 4.2259:1 in Sage dark, both on
+ * base-300 (Chrome 151, computed styles).
+ */
+@layer utilities {
+  :is(.input, .select, .textarea, .file-input):not(
+      :where(
+        .input-neutral, .input-primary, .input-secondary, .input-accent,
+        .input-info, .input-success, .input-warning, .input-error,
+        .select-neutral, .select-primary, .select-secondary, .select-accent,
+        .select-info, .select-success, .select-warning, .select-error,
+        .textarea-neutral, .textarea-primary, .textarea-secondary, .textarea-accent,
+        .textarea-info, .textarea-success, .textarea-warning, .textarea-error,
+        .file-input-neutral, .file-input-primary, .file-input-secondary,
+        .file-input-accent, .file-input-info, .file-input-success,
+        .file-input-warning, .file-input-error,
+        [data-theme-preview] *
+      )
+    ) {
+    --input-color: var(--control-border, color-mix(in oklab, var(--color-base-content) 20%, #0000));
+  }
+
+  .checkbox:not(:where([data-theme-preview] *, [class*="border-"])) {
+    border-color: var(--input-color, var(--control-border, color-mix(in oklab, var(--color-base-content) 20%, #0000)));
+  }
+
+  .radio:not(:where([data-theme-preview] *, [class*="border-"])) {
+    border-color: var(--input-color, var(--control-border, color-mix(in srgb, currentColor 20%, #0000)));
+  }
+}

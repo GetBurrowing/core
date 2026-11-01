@@ -54,6 +54,9 @@ const VARIANTS = [
   ["burrow-forest", "dark"],
   ["high-contrast", "light"],
   ["high-contrast", "dark"],
+  // Sage (task 01a19555 stage 2).
+  ["sage", "light"],
+  ["sage", "dark"],
 ];
 const GROUNDS = ["base-100", "base-200"];
 
@@ -117,7 +120,9 @@ const file = join(dir, "probe.html");
 writeFileSync(file, page());
 
 const W = 600;
-const H = VARIANTS.length * GROUNDS.length * 60;
+// A cell lays out at ~60.3px, so 60 per cell clipped the 24th (Sage,
+// task 01a19555 stage 2); 62 leaves room.
+const H = VARIANTS.length * GROUNDS.length * 62;
 const p = await isolatedPage(W, H);
 await p.navigate(pathToFileURL(file).href);
 

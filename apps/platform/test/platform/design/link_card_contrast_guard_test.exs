@@ -56,7 +56,9 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   # The type colours ChatLinkCard paints (canvas, prototype).
@@ -151,7 +153,7 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
 
   test "every pair clears its floor in all ten variants; the table prints",
        %{blocks: blocks, app_css: app_css} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, pairs(b, app_css)}
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))
 

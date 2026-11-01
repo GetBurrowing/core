@@ -94,7 +94,9 @@ defmodule Platform.Design.AgentsMembersSheetsContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -342,7 +344,7 @@ defmodule Platform.Design.AgentsMembersSheetsContrastGuardTest do
     slots: slots,
     painted: painted
   } do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b, slots, painted)}
 
@@ -400,7 +402,7 @@ defmodule Platform.Design.AgentsMembersSheetsContrastGuardTest do
     for key <- ["radio_off", "radio_on"],
         do: assert(classes[key] =~ ~s(class="#{s.radio}"), "re-measure: radio class moved")
 
-    assert length(painted["readings"]) == 20
+    assert length(painted["readings"]) == 24
 
     for b <- blocks, ground <- ["base-100", "base-200"] do
       r = painted_reading(painted, b, ground)

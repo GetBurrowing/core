@@ -8,6 +8,7 @@ defmodule PlatformWeb.ShellLive do
   require Logger
 
   alias Platform.Accounts
+  alias Platform.Accounts.ThemePreference
   alias Platform.Access.Live, as: AccessLive
   alias Platform.Access.Scope
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
@@ -689,8 +690,20 @@ defmodule PlatformWeb.ShellLive do
         # (window.burrowTheme.apply); this stores it so the next load, on any
         # device, server-renders it (task 01a1557a stage 4). An anonymous
         # shell or a value outside the registry writes nothing.
+        #
+        # Both theme events reply (task 01a19555 stage 3): `ok: false` tells
+        # the hook the write was refused (anonymous, or a value outside the
+        # registry), and the hook re-applies the previous theme and shows its
+        # save error.
         "set_theme", params, socket ->
-          {:halt, put_theme(socket, params)}
+          {reply, socket} = put_theme_reply(socket, params)
+          {:halt, reply, socket}
+
+        # "Use install default": forget the stored choice. The reply carries
+        # the install default the hook has already applied.
+        "clear_theme", _params, socket ->
+          {reply, socket} = clear_theme_reply(socket)
+          {:halt, reply, socket}
 
         # Screen-share name masking (task 01a1600d stage 1). `masked` is the
         # DESIRED state, as the Chat and Tasks rails already send it. The
@@ -1084,19 +1097,44 @@ defmodule PlatformWeb.ShellLive do
   # from the person's visible published set and rendered by OrgThemeCss,
   # which re-sanitises every stored value through the Tokens allowlist.
   @doc false
-  def put_theme(socket, params) when is_map(params) do
+  def put_theme(socket, params), do: socket |> put_theme_reply(params) |> elem(1)
+
+  @doc false
+  # `put_theme/2` plus the reply the hook reads: `%{ok: true}` when the
+  # choice was stored, `%{ok: false}` with the socket and the row untouched
+  # otherwise (task 01a19555 stage 3).
+  def put_theme_reply(socket, params) when is_map(params) do
     with %Accounts.User{} = user <- socket.assigns[:current_user_record],
          {:ok, %Accounts.User{} = updated} <-
            Accounts.put_theme_preference(user, Map.take(params, ["preset", "mode"])) do
-      socket
-      |> assign(:current_user_record, updated)
-      |> push_org_theme(updated)
+      socket =
+        socket
+        |> assign(:current_user_record, updated)
+        |> push_org_theme(updated)
+
+      {%{ok: true}, socket}
     else
-      _ -> socket
+      _ -> {%{ok: false}, socket}
     end
   end
 
-  def put_theme(socket, _params), do: socket
+  def put_theme_reply(socket, _params), do: {%{ok: false}, socket}
+
+  @doc false
+  # `clear_theme` (task 01a19555 stage 3): deletes the stored choice through
+  # `Accounts.clear_theme_preference/1` and replies with the install default
+  # the person now follows. An anonymous shell writes nothing: `ok: false`.
+  def clear_theme_reply(socket) do
+    default = ThemePreference.default()
+
+    with %Accounts.User{} = user <- socket.assigns[:current_user_record],
+         {:ok, %Accounts.User{} = updated} <- Accounts.clear_theme_preference(user) do
+      {%{ok: true, preset: default["preset"], mode: default["mode"]},
+       assign(socket, :current_user_record, updated)}
+    else
+      _ -> {%{ok: false, preset: default["preset"], mode: default["mode"]}, socket}
+    end
+  end
 
   defp push_org_theme(socket, user) do
     # The STORED preset (what put_theme_preference just accepted), looked up

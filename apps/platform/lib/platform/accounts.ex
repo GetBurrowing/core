@@ -936,6 +936,68 @@ defmodule Platform.Accounts do
 
   def put_theme_preference(_, _), do: {:error, :not_found}
 
+  @doc """
+  Forget the person's theme choice, so they follow the install default
+  (`ThemePreference.default/0`) again (task 01a19555 stage 3). Deletes the
+  `"theme"` key, preset and mode together, and nothing else.
+
+  The delete is one atomic `UPDATE users SET preferences = preferences -
+  'theme'`, never a read of the whole map followed by a write of it: a
+  concurrent write of another key (the notification level or mask names
+  from another tab or device) survives.
+
+  Returns `{:ok, %User{}}` (also when nothing was stored) or
+  `{:error, :not_found}`.
+  """
+  @spec clear_theme_preference(User.t() | binary() | nil) ::
+          {:ok, User.t()} | {:error, :not_found}
+  def clear_theme_preference(%User{id: user_id}), do: clear_theme_preference(user_id)
+
+  def clear_theme_preference(user_id) when is_binary(user_id) do
+    case Platform.UUID.cast(user_id) do
+      {:ok, id} -> delete_theme_key(id)
+      :error -> {:error, :not_found}
+    end
+  end
+
+  def clear_theme_preference(_), do: {:error, :not_found}
+
+  defp delete_theme_key(user_id) do
+    query =
+      from(u in User,
+        where: u.id == ^user_id,
+        select: u,
+        update: [
+          set: [
+            preferences:
+              fragment("coalesce(?, '{}'::jsonb) - ?::text", u.preferences, ^@theme_key),
+            updated_at: ^NaiveDateTime.utc_now(:second)
+          ]
+        ]
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [%User{} = user]} -> {:ok, user}
+      {0, _} -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Whether the person has a theme choice stored (`users.preferences["theme"]`).
+  `false` for nil, an unknown id, or a user who never chose (task 01a19555
+  stage 3): the picker offers "Use install default" only when this is true.
+  """
+  @spec theme_preference_stored?(User.t() | binary() | nil) :: boolean()
+  def theme_preference_stored?(%User{preferences: prefs}) when is_map(prefs),
+    do: Map.has_key?(prefs, @theme_key)
+
+  def theme_preference_stored?(%User{}), do: false
+
+  def theme_preference_stored?(user_id) when is_binary(user_id),
+    do: user_id |> get_user_preferences() |> Map.has_key?(@theme_key)
+
+  def theme_preference_stored?(_), do: false
+
   # ── Notification level (task 01a1557a-e538 stage 1) ─────────────────────
   #
   # Stored as `preferences["notification_level"]`, in the same JSONB map as

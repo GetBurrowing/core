@@ -82,7 +82,9 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -174,7 +176,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
   # ── contrast ───────────────────────────────────────────────────────────
 
   test "every pair clears its floor in all ten variants; the table prints", %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b)}
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))
@@ -207,7 +209,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
              ~S|"shrink-0 whitespace-nowrap tabular-nums text-xs",
                     if(@unread > 0, do: "text-base-content", else: "text-subtle")|
 
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     failures =
       for b <- blocks,
@@ -227,7 +229,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
              "flex shrink-0 items-center gap-1.5 normal-case tracking-normal text-base-content"
 
     assert src =~ ~s(data-role="chat-list-section-unread-count")
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     failures =
       for b <- blocks,
@@ -243,7 +245,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     # presses to base-100, with no hover.
     assert src =~ ~s(data-role="chat-list-section-toggle")
     assert src =~ "font-medium uppercase tracking-widest text-subtle active:bg-base-100"
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     failures =
       for b <- blocks,
@@ -280,7 +282,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     # No element between the button and the count re-colours it.
     refute between =~ ~r/class="[^"]*\btext-base-content/
 
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     failures =
       for b <- blocks,
@@ -298,7 +300,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     assert src =~
              "rounded-full bg-base-300 px-1.5 text-xs font-semibold tabular-nums text-base-content"
 
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     failures =
       for b <- blocks,

@@ -43,9 +43,17 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       splits comma stacks), body reads `var(--font-sans)`, and Burrow's
       `:root` stack is still Public Sans.
 
-  The last test builds the 12-row AA table (six master presets x two modes;
+  The last test builds the 14-row AA table (six master presets x two modes;
   the masters' Burrow dark and Burrow light both resolve to app.css's two
-  Burrow blocks) and prints it.
+  Burrow blocks; plus Sage's two) and prints it.
+
+  NO MASTER: SAGE (task 01a19555 stage 2). `sage` has no theme.js
+  counterpart: direction canvas 01a19556 gives provisional values, and every
+  value in its blocks is the measured one. The deviations test therefore has
+  no master value to name for it. That is a named carve-out, `@no_master`,
+  held by "every preset is in the deviations ledger or named as having no
+  master", not a silent skip: every other test in this file measures Sage's
+  blocks exactly as it measures the others.
 
   Named mutations, stage 5: (f) drop a formula from
   `PaintedComposite.formulas/0`; (g) revert a moved ground. Stage 5 r2: (h)
@@ -161,6 +169,9 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     {"high-contrast", "light", "--glass-alpha"} => "0.95"
   }
 
+  # Presets with no theme.js master (see the moduledoc's NO MASTER).
+  @no_master ["sage"]
+
   setup_all do
     css = File.read!(@presets_path)
     {:ok, css: css, app_css: File.read!(@app_css_path), blocks: preset_blocks(css)}
@@ -172,7 +183,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     test "every non-Burrow preset has a dark and a light block, and every block is registered",
          %{blocks: blocks} do
       ids = Enum.map(ThemePreference.presets(), & &1.id)
-      assert "burrow" in ids and length(ids) == 5
+      assert "burrow" in ids and length(ids) == 6
 
       expected = for id <- ids, id != "burrow", mode <- @modes, into: MapSet.new(), do: {id, mode}
       declared = blocks |> Enum.map(&{&1.id, &1.mode})
@@ -363,6 +374,26 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     assert failures == [], Enum.join(failures, "\n")
   end
 
+  test "every preset is in the deviations ledger or named as having no master", %{
+    blocks: blocks
+  } do
+    ledger = @deviations |> Map.keys() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+    ids = blocks |> Enum.map(& &1.id) |> MapSet.new()
+
+    assert MapSet.disjoint?(ledger, MapSet.new(@no_master)),
+           "a no-master preset has a theme.js deviation entry"
+
+    for id <- @no_master do
+      assert id in ids, "#{id} is named as having no master but declares no block"
+    end
+
+    unaccounted = ids |> MapSet.difference(ledger) |> MapSet.difference(MapSet.new(@no_master))
+
+    assert MapSet.to_list(unaccounted) == [],
+           "presets neither in the deviations ledger nor named in @no_master: " <>
+             inspect(MapSet.to_list(unaccounted))
+  end
+
   # ── specificity ──────────────────────────────────────────────────────────
 
   test "every preset selector is strictly more specific than every ThemeCss selector",
@@ -386,7 +417,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
           part <- String.split(sel, ","),
           do: String.trim(part)
 
-    assert length(preset_selectors) == 8
+    assert length(preset_selectors) == 10
 
     weak = for s <- preset_selectors, specificity(s) <= strongest, do: {s, specificity(s)}
 
@@ -428,7 +459,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
 
   # ── the 12-row AA table ──────────────────────────────────────────────────
 
-  test "the 12-row AA table: every master preset x mode passes", %{
+  test "the 14-row AA table: every master preset x mode, and Sage, passes", %{
     blocks: blocks,
     app_css: app_css
   } do
@@ -438,12 +469,12 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       for master <- ["burrow-dark", "burrow-light"], mode <- @modes do
         {"#{master} #{mode}", Map.fetch!(burrow, mode)}
       end ++
-        for id <- ["burrow-midnight", "burrow-sand", "high-contrast", "burrow-forest"],
+        for id <- ["burrow-midnight", "burrow-sand", "high-contrast", "burrow-forest", "sage"],
             mode <- @modes do
           {"#{id} #{mode}", Enum.find(blocks, &(&1.id == id and &1.mode == mode))}
         end
 
-    assert length(rows) == 12
+    assert length(rows) == 14
 
     lines =
       for {label, b} <- rows do

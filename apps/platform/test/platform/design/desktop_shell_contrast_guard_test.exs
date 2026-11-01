@@ -134,7 +134,9 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -314,7 +316,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "every claimed pair clears its floor in all ten variants; the table prints",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b), recorded(b)}
     {_, first, first_rec} = hd(rows)
@@ -356,7 +358,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "stage 2: the list pane and popover pairs clear their floors in all ten variants",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, list_pairs(b)}
 
     assert print_and_check(
@@ -399,7 +401,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "stage 3: the details panel pairs clear their floors in all ten variants; edge recorded",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, details_pairs(b)}
 
     assert print_and_check(
@@ -455,7 +457,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "stage 4: the main-pane header pairs clear their floors in all ten variants; edge recorded",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, head_pairs(b)}
 
     assert print_and_check(
@@ -517,7 +519,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "rung 23 stage 2: the command palette pairs clear their floors in all ten variants; edge recorded",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, palette_pairs(b)}
 
     assert print_and_check(
@@ -571,7 +573,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   test "rung 23 stage 3: the sidebar ⌘K button and hint pairs clear their floors in all ten variants; kbd edge recorded",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, cmdk_pairs(b)}
 
     assert print_and_check(

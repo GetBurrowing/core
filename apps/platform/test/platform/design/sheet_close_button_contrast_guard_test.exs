@@ -47,7 +47,9 @@ defmodule Platform.Design.SheetCloseButtonContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -104,8 +106,8 @@ defmodule Platform.Design.SheetCloseButtonContrastGuardTest do
   test "every state of the X clears 3:1 in all ten variants; the table prints",
        %{blocks: blocks} do
     # Anti-vacuity: exactly the ten variants, each pair a real ratio.
-    assert length(blocks) == 10
-    assert length(Enum.uniq_by(blocks, &{&1.id, &1.mode})) == 10
+    assert length(blocks) == 12
+    assert length(Enum.uniq_by(blocks, &{&1.id, &1.mode})) == 12
 
     rows = for b <- blocks, do: {b, pairs(b)}
 

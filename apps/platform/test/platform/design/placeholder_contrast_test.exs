@@ -287,7 +287,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
 
     # 10 blocks; the masters' burrow-dark and burrow-light rows both resolve
     # to Burrow's two blocks, which is the 12-variant set.
-    assert length(variants) == 10
+    assert length(variants) == 12
 
     measured =
       for {label, mode, decls} <- variants,
@@ -300,7 +300,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
         {label, selector, strength, r}
       end
 
-    assert length(measured) == 20
+    assert length(measured) == 24
 
     failures =
       for {label, selector, strength, r} <- measured,

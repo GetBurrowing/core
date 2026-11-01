@@ -43,6 +43,14 @@ defmodule PlatformWeb.Components.ThemePicker do
       (ShellLive reads them per mount; the root layout that paints their
       chips is not re-rendered on live navigation).
     * A click applies at once. There is no Save button.
+    * Task 01a19555 stage 3 (canvas 01a19556): the install default's row
+      (`ThemePreference.default/0`) carries an "Install default" badge
+      whatever is selected; "Use install default" clears the stored choice
+      (`clear_theme`) and is shown only while one is stored; one helper
+      line; and a save error the hook unhides when `set_theme` or
+      `clear_theme` replies `ok: false`, after it has put the previous theme
+      back. The helper and the error are `div`s, so the two group labels
+      stay the body's only `p`s.
     * The canvas's footer link "More in Settings > Appearance" is NOT
       rendered: no settings route exists yet (rung 19 builds it), and a link
       to nothing is worse than none. Known gap.
@@ -92,7 +100,12 @@ defmodule PlatformWeb.Components.ThemePicker do
         phx-window-keydown={@open && "close_theme_picker"}
         phx-key={@open && "Escape"}
       >
-        <.picker_body id="theme-picker-popover-body" pref={@pref} org_themes={@org_themes} />
+        <.picker_body
+          id="theme-picker-popover-body"
+          pref={@pref}
+          stored={@stored}
+          org_themes={@org_themes}
+        />
       </div>
     </div>
     """
@@ -117,18 +130,27 @@ defmodule PlatformWeb.Components.ThemePicker do
       class="lg:hidden"
     >
       <:title>Theme</:title>
-      <.picker_body id="theme-picker-sheet-body" pref={@pref} org_themes={@org_themes} />
+      <.picker_body
+        id="theme-picker-sheet-body"
+        pref={@pref}
+        stored={@stored}
+        org_themes={@org_themes}
+      />
     </.sheet>
     """
   end
 
   defp assign_pref(assigns) do
     visible = Enum.map(assigns.org_themes, &OrgTheme.preset_id/1)
-    assign(assigns, :pref, Accounts.theme_preference(assigns.user, visible))
+
+    assigns
+    |> assign(:pref, Accounts.theme_preference(assigns.user, visible))
+    |> assign(:stored, Accounts.theme_preference_stored?(assigns.user))
   end
 
   attr :id, :string, required: true
   attr :pref, :map, required: true
+  attr :stored, :boolean, default: false
   attr :org_themes, :list, default: []
 
   defp picker_body(assigns) do
@@ -146,6 +168,7 @@ defmodule PlatformWeb.Components.ThemePicker do
       |> assign(:modes, ThemePreference.modes())
       |> assign(:mode_labels, @mode_labels)
       |> assign(:resolved, resolved)
+      |> assign(:default_preset, ThemePreference.default()["preset"])
 
     ~H"""
     <div id={@id} phx-hook="ThemePicker" phx-update="ignore" class="theme-picker flex flex-col gap-4">
@@ -180,8 +203,25 @@ defmodule PlatformWeb.Components.ThemePicker do
           data-theme-group="preset"
           class="flex flex-col gap-0.5"
         >
-          <.preset_row :for={preset <- @presets} preset={preset} pref={@pref} resolved={@resolved} />
+          <.preset_row
+            :for={preset <- @presets}
+            preset={preset}
+            pref={@pref}
+            resolved={@resolved}
+            install_default={preset.id == @default_preset}
+          />
         </div>
+        <%!-- Task 01a19555 stage 3. The body is phx-update="ignore", so the
+             hook shows and hides this after a choice or a clear; the server
+             render is the first frame: shown only when a choice is stored. --%>
+        <button
+          type="button"
+          data-role="theme-use-install-default"
+          hidden={!@stored}
+          class="self-start rounded-field px-2 py-1 text-sm text-interactive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          Use install default
+        </button>
       </div>
 
       <div :if={@org_rows != []} class="flex flex-col gap-1.5" data-role="your-themes">
@@ -202,6 +242,13 @@ defmodule PlatformWeb.Components.ThemePicker do
           <.preset_row :for={preset <- @org_rows} preset={preset} pref={@pref} resolved={@resolved} />
         </div>
       </div>
+
+      <div data-role="theme-helper" class="text-xs text-subtle">
+        Your theme follows you to every device you sign in on.
+      </div>
+      <div data-role="theme-save-error" role="alert" hidden class="text-xs text-error">
+        Couldn't save your theme. Try again.
+      </div>
     </div>
     """
   end
@@ -214,6 +261,7 @@ defmodule PlatformWeb.Components.ThemePicker do
   attr :preset, :map, required: true
   attr :pref, :map, required: true
   attr :resolved, :string, required: true
+  attr :install_default, :boolean, default: false
 
   defp preset_row(assigns) do
     ~H"""
@@ -224,7 +272,7 @@ defmodule PlatformWeb.Components.ThemePicker do
       data-value={@preset.id}
       aria-checked={to_string(@preset.id == @pref["preset"])}
       tabindex={if @preset.id == @pref["preset"], do: "0", else: "-1"}
-      class="flex items-center gap-3 rounded-field px-2 py-1.5 text-left text-sm text-base-content lg:hover:bg-base-200 aria-checked:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      class="flex items-center gap-3 rounded-field border border-transparent px-2 py-1.5 text-left text-sm text-base-content lg:hover:bg-base-200 hover:border-edge aria-checked:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       <span
         class="theme-chip flex h-10 w-16 shrink-0 items-center gap-1.5 overflow-hidden rounded-box border border-edge bg-base-100 px-2"
@@ -237,6 +285,13 @@ defmodule PlatformWeb.Components.ThemePicker do
         <span class="theme-chip-sample text-sm leading-none text-base-content">Aa</span>
       </span>
       <span class="flex-1">{@preset.name}</span>
+      <span
+        :if={@install_default}
+        data-role="theme-install-default"
+        class="badge badge-sm shrink-0 whitespace-nowrap rounded-selector border-edge bg-base-100 text-xs font-medium text-base-content"
+      >
+        Install default
+      </span>
       <span
         data-theme-check
         class={[

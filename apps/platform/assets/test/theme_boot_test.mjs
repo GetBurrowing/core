@@ -167,6 +167,7 @@ test("the layout carries exactly one theme-boot script, and the registry parses"
     "burrow-sand",
     "burrow-forest",
     "high-contrast",
+    "sage",
   ]);
   assert.deepEqual(MODES, ["light", "dark", "system"]);
   assert.equal(BASE, "burrow");

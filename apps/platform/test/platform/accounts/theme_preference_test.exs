@@ -26,13 +26,14 @@ defmodule Platform.Accounts.ThemePreferenceTest do
   defp stored_prefs(user_id), do: Repo.get!(User, user_id).preferences
 
   describe "registry" do
-    test "presets are the five direction-canvas rows, in order" do
+    test "presets are the five direction-canvas rows, then Sage (task 01a19555), in order" do
       assert ThemePreference.presets() == [
                %{id: "burrow", name: "Burrow"},
                %{id: "burrow-midnight", name: "Burrow midnight"},
                %{id: "burrow-sand", name: "Burrow sand"},
                %{id: "burrow-forest", name: "Burrow forest"},
-               %{id: "high-contrast", name: "High contrast"}
+               %{id: "high-contrast", name: "High contrast"},
+               %{id: "sage", name: "Sage"}
              ]
     end
 
@@ -180,6 +181,72 @@ defmodule Platform.Accounts.ThemePreferenceTest do
   # theme, accepted on write only when visible to the writer and sent back to
   # the default on read once it is not. Mutation (c), keep an unpublished id
   # in normalize, turns "a stored org id falls back ..." red.
+  describe "clear_theme_preference/1 (task 01a19555 stage 3)" do
+    test "clear_theme_preference/1 removes the stored theme and theme_preference/1 returns the default" do
+      user = insert_user("clear")
+      {:ok, _} = Accounts.put_theme_preference(user.id, %{"preset" => "sage", "mode" => "light"})
+      assert Accounts.theme_preference(user.id) == %{"preset" => "sage", "mode" => "light"}
+      assert Accounts.theme_preference_stored?(user.id)
+
+      assert {:ok, %User{} = cleared} = Accounts.clear_theme_preference(user)
+
+      refute Map.has_key?(stored_prefs(user.id), "theme")
+      refute Map.has_key?(cleared.preferences, "theme")
+      assert Accounts.theme_preference(user.id) == ThemePreference.default()
+      assert Accounts.theme_preference(cleared) == ThemePreference.default()
+      refute Accounts.theme_preference_stored?(user.id)
+      refute Accounts.theme_preference_stored?(cleared)
+    end
+
+    test "clear_theme_preference/1 keeps every other preferences key" do
+      prefs = %{
+        "notification_level" => "mentions",
+        "hidden_channel_ids" => ["a", "b"],
+        "theme" => %{"preset" => "burrow-forest", "mode" => "dark"}
+      }
+
+      user = insert_user("keep", prefs)
+      assert {:ok, _} = Accounts.clear_theme_preference(user.id)
+      assert stored_prefs(user.id) == Map.delete(prefs, "theme")
+    end
+
+    test "a user who never chose reads the default and is not stored" do
+      user = insert_user("never", %{"notification_level" => "all"})
+      assert Accounts.theme_preference(user.id) == ThemePreference.default()
+      refute Accounts.theme_preference_stored?(user.id)
+      refute Accounts.theme_preference_stored?(user)
+      refute Accounts.theme_preference_stored?(nil)
+
+      # Clearing nothing is not an error and writes no theme key.
+      assert {:ok, _} = Accounts.clear_theme_preference(user.id)
+      assert stored_prefs(user.id) == %{"notification_level" => "all"}
+    end
+
+    test "a key written after the caller read the user survives the clear (atomic per-key delete)" do
+      user = insert_user("race", %{"theme" => %{"preset" => "sage", "mode" => "dark"}})
+      stale = Repo.get!(User, user.id)
+
+      # Another tab writes a different key after `stale` was read.
+      {1, _} =
+        from(u in User,
+          where: u.id == ^user.id,
+          update: [
+            set: [preferences: fragment("? || ?::jsonb", u.preferences, ^%{"mask_names" => true})]
+          ]
+        )
+        |> Repo.update_all([])
+
+      assert {:ok, _} = Accounts.clear_theme_preference(stale)
+      assert stored_prefs(user.id) == %{"mask_names" => true}
+    end
+
+    test "an unknown or malformed id returns :not_found" do
+      assert {:error, :not_found} = Accounts.clear_theme_preference(Ecto.UUID.generate())
+      assert {:error, :not_found} = Accounts.clear_theme_preference("not-a-uuid")
+      assert {:error, :not_found} = Accounts.clear_theme_preference(nil)
+    end
+  end
+
   describe "org presets" do
     import Platform.OrgThemeFixtures
 

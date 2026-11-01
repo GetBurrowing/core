@@ -65,7 +65,9 @@ defmodule Platform.Design.SpaceSheetContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -133,7 +135,7 @@ defmodule Platform.Design.SpaceSheetContrastGuardTest do
   defp f4(r), do: :erlang.float_to_binary(r / 1, decimals: 4)
 
   test "every pair clears its floor in all ten variants; the table prints", %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b)}
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))

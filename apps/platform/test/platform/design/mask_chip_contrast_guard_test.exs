@@ -71,7 +71,9 @@ defmodule Platform.Design.MaskChipContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -138,8 +140,8 @@ defmodule Platform.Design.MaskChipContrastGuardTest do
 
   test "every pair clears its floor in all ten variants; the table prints", %{blocks: blocks} do
     # Anti-vacuity: exactly the ten painted variants, each a real ratio.
-    assert length(@variants) == 10
-    assert length(blocks) == 10
+    assert length(@variants) == 12
+    assert length(blocks) == 12
 
     rows = for b <- blocks, do: {b, pairs(b)}
 

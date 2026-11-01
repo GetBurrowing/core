@@ -68,7 +68,9 @@ defmodule Platform.Design.PinnedReorderContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -136,7 +138,7 @@ defmodule Platform.Design.PinnedReorderContrastGuardTest do
 
   test "every claimed pair clears its floor in all ten variants; the table prints",
        %{blocks: blocks} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     rows = for b <- blocks, do: {b, pairs(b)}
     {_, first} = hd(rows)
     labels = Enum.map(first, &elem(&1, 0))

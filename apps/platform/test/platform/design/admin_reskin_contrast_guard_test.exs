@@ -86,7 +86,7 @@ defmodule Platform.Design.AdminReskinContrastGuardTest do
 
   test "every admin index pair clears its floor in all ten variants; the table prints" do
     rows = for {name, v} <- variants(), do: {name, v, pairs(v)}
-    assert length(rows) == 10
+    assert length(rows) == 12
 
     labels = rows |> hd() |> elem(2) |> Enum.map(&elem(&1, 0))
 
@@ -140,7 +140,7 @@ defmodule Platform.Design.AdminReskinContrastGuardTest do
 
   test "every admin sub-page pair clears its floor in all ten variants; the table prints" do
     rows = for {name, v} <- variants(), do: {name, sub_page_pairs(v)}
-    assert length(rows) == 10
+    assert length(rows) == 12
 
     labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))
     assert length(labels) == 12

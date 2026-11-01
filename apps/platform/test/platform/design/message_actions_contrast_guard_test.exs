@@ -94,7 +94,9 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
     {"burrow-forest", "light"},
     {"burrow-forest", "dark"},
     {"high-contrast", "light"},
-    {"high-contrast", "dark"}
+    {"high-contrast", "dark"},
+    {"sage", "light"},
+    {"sage", "dark"}
   ]
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
@@ -275,7 +277,7 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
 
   test "every pair clears its floor in all ten variants, with no exemption; the table prints",
        %{blocks: blocks, sources: src} do
-    assert length(blocks) == 10
+    assert length(blocks) == 12
     s = slots(src)
     rows = for b <- blocks, do: {b, pairs(b, s)}
     first = rows |> hd() |> elem(1)
