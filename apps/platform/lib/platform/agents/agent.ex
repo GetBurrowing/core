@@ -66,6 +66,7 @@ defmodule Platform.Agents.Agent do
   @valid_statuses ~w(active paused archived)
   @valid_kinds ~w(native external)
   @valid_endpoint_kinds ~w(openai_compat ollama_native)
+  @valid_dm_policies ~w(everyone admins specific)
 
   @external_only_fields [:endpoint_kind, :base_url, :model, :vault_key]
 
@@ -97,11 +98,13 @@ defmodule Platform.Agents.Agent do
     field(:avatar_url, :string)
     field(:avatar_storage_key, :string)
     field(:voice_config, :map, default: %{})
+    field(:dm_policy, :string, default: "everyone")
 
     timestamps(type: :utc_datetime_usec)
   end
 
   def valid_kinds, do: @valid_kinds
+  def valid_dm_policies, do: @valid_dm_policies
   def valid_endpoint_kinds, do: @valid_endpoint_kinds
 
   def changeset(agent, attrs) do
@@ -144,6 +147,22 @@ defmodule Platform.Agents.Agent do
       name: :agents_unique_slug,
       message: "slug already taken in this workspace"
     )
+  end
+
+  @doc """
+  The ONLY changeset that writes `dm_policy` (task 01a19776).
+
+  `dm_policy` is deliberately absent from `changeset/2`'s cast list, so a
+  generic agent config save cannot widen who may DM the agent by accident.
+  Callers go through `Platform.Agents.DmAccess.set_policy/4`, which checks
+  `Platform.Access.Agents.manage?/2` first.
+  """
+  def dm_policy_changeset(agent, policy) do
+    agent
+    |> cast(%{dm_policy: policy}, [:dm_policy])
+    |> validate_required([:dm_policy])
+    |> validate_inclusion(:dm_policy, @valid_dm_policies)
+    |> check_constraint(:dm_policy, name: :agents_dm_policy_check)
   end
 
   defp validate_external_fields(changeset) do
