@@ -90,6 +90,10 @@ defmodule PlatformWeb.FirstRunLiveTest do
            ]
 
     assert view |> element("button[data-role=first-run-skip]") |> render() =~ "Skip for now"
+
+    # The shell's mobile header names the page, not the module.
+    assert html =~ "Get started"
+    refute html =~ ~r/>\s*FirstRun\s*</
     refute html =~ "first-run-no-agent"
     refute html =~ "first-run-error"
   end
