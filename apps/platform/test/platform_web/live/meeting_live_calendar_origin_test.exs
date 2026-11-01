@@ -309,9 +309,13 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
          %{conn: conn, project: project} do
       quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
 
-      {:ok, cal, _html} = live(conn, "/calendar?date=2026-11-04")
+      {:ok, cal, _html} = live(conn, "/calendar")
       render_click(cal, "new_at", %{"date" => "2026-11-04", "minute" => "630"})
-      assert has_element?(cal, "#calendar-event-form input[name='event[start]'][value='10:30 AM']")
+
+      assert has_element?(
+               cal,
+               "#calendar-event-form input[name='event[start]'][value='10:30 AM']"
+             )
 
       {:ok, sheet, _html} =
         cal
