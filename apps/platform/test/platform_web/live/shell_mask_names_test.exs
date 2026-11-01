@@ -37,7 +37,8 @@ defmodule PlatformWeb.ShellMaskNamesTest do
       Repo.insert!(%User{
         email: "shell-mask-#{tag}-#{n}@example.com",
         name: "Shell Mask #{tag} #{n}",
-        oidc_sub: "oidc-shell-mask-#{tag}-#{n}"
+        oidc_sub: "oidc-shell-mask-#{tag}-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     if member? do

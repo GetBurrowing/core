@@ -229,7 +229,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooksOwnMessageBooleanTest do
     Repo.insert!(%User{
       email: "own-msg-#{tag}-#{unique}@example.com",
       name: "Own Msg #{tag} #{unique}",
-      oidc_sub: "oidc-own-msg-#{tag}-#{unique}"
+      oidc_sub: "oidc-own-msg-#{tag}-#{unique}",
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

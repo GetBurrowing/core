@@ -30,7 +30,8 @@ defmodule PlatformWeb.TabSwitchProbeTest do
       Repo.insert!(%User{
         email: "tab_probe_#{n}@example.com",
         name: "Tab Probe #{n}",
-        oidc_sub: "oidc-tab-probe-#{n}"
+        oidc_sub: "oidc-tab-probe-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
       |> Platform.TenancyFixtures.member_of_all_orgs!()
 

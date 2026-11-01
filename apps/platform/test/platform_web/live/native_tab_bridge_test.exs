@@ -23,7 +23,8 @@ defmodule PlatformWeb.NativeTabBridgeTest do
       Repo.insert!(%User{
         email: "native_tab_#{System.unique_integer([:positive])}@example.com",
         name: "Native Tab Test User",
-        oidc_sub: "oidc-native-tab-#{System.unique_integer([:positive])}"
+        oidc_sub: "oidc-native-tab-#{System.unique_integer([:positive])}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     acme = Tenancy.get_org_by_slug!("acme")

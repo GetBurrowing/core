@@ -107,12 +107,23 @@ defmodule Platform.ExternalUserFixtures do
 
   # ── Reusable builders (mirroring the per-member test helpers) ───────────
 
+  @doc """
+  An internal user row. Not a first-run member by default: its preferences
+  carry `"first_run_goal" => "existing"`, so a bare `GET /chat` renders chat
+  instead of `PlatformWeb.Plugs.FirstRunGate` sending it to `/start` (task
+  01a19943-c0b4). Pass `preferences: %{}` to get a pending member.
+  """
   def create_user!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
 
     attrs =
       Map.merge(
-        %{email: "ext-world-#{n}@example.com", name: "World #{n}", oidc_sub: "oidc-world-#{n}"},
+        %{
+          email: "ext-world-#{n}@example.com",
+          name: "World #{n}",
+          oidc_sub: "oidc-world-#{n}",
+          preferences: %{"first_run_goal" => "existing"}
+        },
         overrides
       )
 
@@ -128,7 +139,9 @@ defmodule Platform.ExternalUserFixtures do
 
   @doc "An external user whose (external) membership lives in `org`, allowlisted to DM `org` unless allowlist: false."
   def external_user!(org, opts \\ []) do
-    user = create_user!()
+    # No first_run_goal key: an external user is never pending whatever
+    # its preferences hold, and the first-run tests pin exactly that.
+    user = create_user!(%{preferences: %{}})
     {:ok, _} = Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})
     if Keyword.get(opts, :allowlist, true), do: Tenancy.allow_dm(user, org)
     user

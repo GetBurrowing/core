@@ -63,7 +63,8 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
     Repo.insert!(%User{
       email: "switch_budget_#{n}@example.com",
       name: "Switch Budget #{n}",
-      oidc_sub: "oidc-switch-budget-#{n}"
+      oidc_sub: "oidc-switch-budget-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
     |> Platform.TenancyFixtures.member_of_all_orgs!()
   end

@@ -28,7 +28,8 @@ defmodule PlatformWeb.ChatLiveDetailsPanelTest do
     Repo.insert!(%User{
       email: "details-#{tag}-#{n}@example.com",
       name: "Details #{tag} #{n}",
-      oidc_sub: "oidc-details-#{tag}-#{n}"
+      oidc_sub: "oidc-details-#{tag}-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

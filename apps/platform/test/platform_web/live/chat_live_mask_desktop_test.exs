@@ -37,7 +37,8 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
         email: "mask_desktop_test@example.com",
         name: "Mask Desktop Test User",
         oidc_sub: "oidc-mask-desktop-test",
-        avatar_url: nil
+        avatar_url: nil,
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     init_test_session(conn, current_user_id: user.id)

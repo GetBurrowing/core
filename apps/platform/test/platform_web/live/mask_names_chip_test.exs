@@ -41,7 +41,8 @@ defmodule PlatformWeb.MaskNamesChipTest do
       Repo.insert!(%User{
         email: "mask-chip-#{tag}-#{n}@example.com",
         name: "Mask Chip #{tag} #{n}",
-        oidc_sub: "oidc-mask-chip-#{tag}-#{n}"
+        oidc_sub: "oidc-mask-chip-#{tag}-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     if member? do

@@ -46,7 +46,8 @@ defmodule PlatformWeb.ChatLiveMessageAnchorTest do
         email: "anchor_#{n}@example.com",
         name: "Anchor Tester",
         oidc_sub: "oidc-anchor-#{n}",
-        avatar_url: nil
+        avatar_url: nil,
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     space = create_channel("anchor-#{n}")

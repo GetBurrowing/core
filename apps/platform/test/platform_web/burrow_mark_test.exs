@@ -107,7 +107,8 @@ defmodule PlatformWeb.BurrowMarkTest do
     |> User.changeset(%{
       email: "burrow-mark-#{n}@example.com",
       name: name,
-      oidc_sub: "oidc-burrow-mark-#{n}"
+      oidc_sub: "oidc-burrow-mark-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
     |> Repo.insert!()
   end

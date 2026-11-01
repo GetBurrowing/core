@@ -34,7 +34,8 @@ defmodule PlatformWeb.ChatLiveSectionLabelFollowsOrgTest do
         email: "label_follows_#{n}@example.com",
         name: "Label Follows #{n}",
         oidc_sub: "oidc-label-follows-#{n}",
-        avatar_url: nil
+        avatar_url: nil,
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     %OrgMembership{}

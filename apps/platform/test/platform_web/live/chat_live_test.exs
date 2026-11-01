@@ -60,7 +60,8 @@ defmodule PlatformWeb.ChatLiveTest do
       email: Map.get(attrs, :email, "chat_test@example.com"),
       name: Map.get(attrs, :name, "Chat Test User"),
       oidc_sub: Map.get(attrs, :oidc_sub, "oidc-chat-test"),
-      avatar_url: Map.get(attrs, :avatar_url)
+      avatar_url: Map.get(attrs, :avatar_url),
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 
@@ -3095,7 +3096,8 @@ defmodule PlatformWeb.ChatLiveTest do
         Repo.insert!(%User{
           email: "dm_settings_target@example.com",
           name: "DM Target",
-          oidc_sub: "oidc-dm-settings-target"
+          oidc_sub: "oidc-dm-settings-target",
+          preferences: %{"first_run_goal" => "existing"}
         })
 
       {:ok, dm_space} = Chat.find_or_create_dm(user_id, "user", other.id)

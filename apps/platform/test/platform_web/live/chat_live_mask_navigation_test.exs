@@ -51,7 +51,8 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
       email: "mask_nav_test@example.com",
       name: "Mask Nav Test User",
       oidc_sub: "oidc-mask-nav-test",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

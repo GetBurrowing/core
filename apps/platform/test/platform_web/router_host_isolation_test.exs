@@ -75,7 +75,8 @@ defmodule PlatformWeb.RouterHostIsolationTest do
       |> User.changeset(%{
         email: "host-isolation-#{n}@example.com",
         name: "HostIsolation #{n}",
-        oidc_sub: "oidc-host-isolation-#{n}"
+        oidc_sub: "oidc-host-isolation-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
       |> Repo.insert!()
 

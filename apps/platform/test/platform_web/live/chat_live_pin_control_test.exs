@@ -90,7 +90,8 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       email: "pin-control-#{suffix}@example.com",
       name: "Pin Control #{suffix}",
       oidc_sub: "oidc-pin-control-#{suffix}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

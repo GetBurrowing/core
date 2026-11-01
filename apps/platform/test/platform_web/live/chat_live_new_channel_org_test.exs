@@ -28,7 +28,8 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
     Repo.insert!(%User{
       email: "new_chan_org_#{suffix}@example.com",
       name: "New Chan Org #{suffix}",
-      oidc_sub: "oidc-new-chan-org-#{suffix}"
+      oidc_sub: "oidc-new-chan-org-#{suffix}",
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

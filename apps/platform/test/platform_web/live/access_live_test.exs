@@ -9,7 +9,12 @@ defmodule PlatformWeb.AccessLiveTest do
 
   defp user!(name) do
     n = System.unique_integer([:positive])
-    Repo.insert!(%User{name: name, email: "panel-#{n}@example.com", oidc_sub: "panel-#{n}"})
+    Repo.insert!(%User{
+      name: name,
+      email: "panel-#{n}@example.com",
+      oidc_sub: "panel-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
+    })
   end
 
   defp membership!(user, org, role) do

@@ -36,7 +36,8 @@ defmodule PlatformWeb.InstallIdentityRenderedPagesTest do
       |> User.changeset(%{
         email: "rendered-pages-#{n}@example.com",
         name: "Rendered Pages #{n}",
-        oidc_sub: "oidc-rendered-pages-#{n}"
+        oidc_sub: "oidc-rendered-pages-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
       |> Repo.insert!()
 

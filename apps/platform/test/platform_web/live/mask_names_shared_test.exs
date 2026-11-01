@@ -41,7 +41,8 @@ defmodule PlatformWeb.MaskNamesSharedTest do
       Repo.insert!(%User{
         email: "mask-shared-#{tag}-#{n}@example.com",
         name: "Mask Shared #{tag} #{n}",
-        oidc_sub: "oidc-mask-shared-#{tag}-#{n}"
+        oidc_sub: "oidc-mask-shared-#{tag}-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     # Tasks' project_sections are viewer-scoped, so a Tasks user is a member

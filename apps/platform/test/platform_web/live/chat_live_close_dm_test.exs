@@ -63,7 +63,8 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       email: "close-dm-#{n}@example.com",
       name: "Close DM #{n}",
       oidc_sub: "oidc-close-dm-#{n}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 
