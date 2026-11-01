@@ -20,6 +20,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
   alias PlatformWeb.CalendarLive, as: Cal
+  alias PlatformWeb.Components.NewKindToggle
 
   @primary_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-primary px-3 text-xs font-semibold text-primary-content hover:brightness-110"
   @ghost_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-subtle px-3 text-xs text-base-content hover:bg-base-300"
@@ -977,6 +978,11 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:invalid, :list, default: [])
   attr(:where_options, :list, default: [])
 
+  attr(:meetings_on, :boolean,
+    default: false,
+    doc: "Meetings module on: a NEW editor offers the Event | Meeting toggle (task 01a1986e)"
+  )
+
   @doc """
   New / Edit event: a 520px modal at `lg`, a bottom sheet below it. PR #51's
   all-day flag and custom recurrence stay (declared deviations): all-day is
@@ -1021,6 +1027,14 @@ defmodule PlatformWeb.CalendarLive.Components do
           novalidate
         >
           <input type="hidden" name={@form[:time_zone].name} value={@form[:time_zone].value} />
+          <%!-- New only, and only with Meetings on (task 01a1986e). Meeting
+               navigates to the MeetingLive scheduling sheet with this form's
+               date and start; Edit never changes an event's kind. --%>
+          <NewKindToggle.new_kind_toggle
+            :if={@new? and @meetings_on}
+            active={:event}
+            meeting_click="new_meeting"
+          />
           <label class="cal-field">
             Title<input
               type="text"

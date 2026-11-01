@@ -1184,4 +1184,119 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     assert [%{all_day: true, start_date: @typed_day}] = typed_day_events(scope)
   end
+
+  # ── New -> Event | Meeting (task 01a1986e stage 2) ───────────────────────
+
+  @toggle "#calendar-editor [data-role=new-kind-toggle]"
+
+  defp deny_meetings!(user) do
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, user.id},
+        permission: "meetings",
+        resource: {:module, Platform.TenancyFixtures.acme_org_id()}
+      })
+  end
+
+  defp redirect_query(to) do
+    %URI{path: path, query: query} = URI.parse(to)
+    {path, URI.decode_query(query || "")}
+  end
+
+  test "New renders the Event | Meeting toggle with Event checked", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+
+    assert has_element?(view, "#{@toggle}[role=radiogroup]")
+    assert has_element?(view, "#{@toggle} [role=radio][data-kind=event][aria-checked=true]")
+    assert has_element?(view, "#{@toggle} [role=radio][data-kind=meeting][aria-checked=false]")
+    assert has_element?(view, "#{@toggle} [data-kind=meeting] i.cal-sw.cal-k-meeting")
+  end
+
+  test "a New event still saves exactly one Event; Edit renders no toggle", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+
+    view
+    |> form("#calendar-event-form",
+      event: %{
+        title: "Plain event",
+        date: "2026-10-29",
+        start: "2:00 PM",
+        end: "3:00 PM",
+        repeat: "",
+        visibility: "details"
+      }
+    )
+    |> render_submit()
+
+    assert [%{title: "Plain event"}] =
+             Calendar.list_events(scope, ~U[2026-10-01 00:00:00Z], ~U[2026-11-01 00:00:00Z])
+
+    assert render(view) =~ "Event created"
+
+    view |> element("[data-role=calendar-details] button", "Edit") |> render_click()
+    assert has_element?(view, "#calendar-editor h2", "Edit event")
+    refute has_element?(view, @toggle)
+  end
+
+  test "with Meetings off, New renders no toggle and new_meeting does nothing", %{
+    conn: conn,
+    user: user
+  } do
+    deny_meetings!(user)
+    {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+
+    assert has_element?(view, "#calendar-editor h2", "New event")
+    refute has_element?(view, @toggle)
+    assert is_binary(render_click(view, "new_meeting", %{}))
+  end
+
+  test "a slot tap at 10:30, then Meeting, carries the date and time to the scheduler", %{
+    conn: conn
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    label = "New event #{Elixir.Calendar.strftime(today, "%a %-d %b")} 10:30"
+
+    view
+    |> element("[data-role=calendar-week] button.cal-slot[aria-label='#{label}']")
+    |> render_click()
+
+    view |> element("#{@toggle} [data-kind=meeting]") |> render_click()
+
+    {to, _flash} = assert_redirect(view)
+    {path, query} = redirect_query(to)
+    assert path == "/meetings"
+
+    assert query == %{
+             "schedule" => "true",
+             "from" => "calendar",
+             "date" => Date.to_iso8601(today),
+             "start_time" => "10:30 AM"
+           }
+  end
+
+  test "?new=1 with date and start presets that day and time", %{conn: conn} do
+    {:ok, view, _} =
+      live(zoned(conn, "America/Chicago"), "/calendar?new=1&date=2026-11-04&start=3:00 PM")
+
+    assert has_element?(view, "#calendar-editor h2", "New event")
+    assert has_element?(view, "#calendar-event-form input[name='event[date]'][value='2026-11-04']")
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='3:00 PM']")
+  end
+
+  test "?new=1 alone presets today at 14:00", %{conn: conn} do
+    zone = "America/Chicago"
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar?new=1")
+    today = Date.to_iso8601(local_today(zone))
+
+    assert has_element?(view, "#calendar-event-form input[name='event[date]'][value='#{today}']")
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='2:00 PM']")
+  end
 end
