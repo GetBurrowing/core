@@ -1318,6 +1318,24 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Hard-delete a channel its creator just made and has to abandon, e.g. when
+  `Platform.Onboarding.FirstRunGoal` fails to post the goal into the channel
+  it opened. The space's participants, messages and the other space-keyed
+  rows go with it through their `ON DELETE` foreign keys, as for
+  `Platform.Chat.SpacePurger`.
+
+  Channels only; any other kind is `{:error, :not_applicable}`. It does no
+  authorization: the caller is rolling back its own create.
+  """
+  @spec delete_abandoned_channel(Space.t()) :: :ok | {:error, :not_applicable}
+  def delete_abandoned_channel(%Space{kind: "channel", id: id}) when is_binary(id) do
+    Repo.delete_all(from(s in Space, where: s.id == ^id and s.kind == "channel"))
+    :ok
+  end
+
+  def delete_abandoned_channel(_space), do: {:error, :not_applicable}
+
+  @doc """
   Promote a group conversation to a channel.
 
   Only works on kind=group spaces. Sets name and slug from attrs.
