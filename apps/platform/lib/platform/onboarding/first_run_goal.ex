@@ -10,8 +10,8 @@ defmodule Platform.Onboarding.FirstRunGoal do
   The goal used to go into the member's DM with Burrow. It now opens an
   ordinary `kind: "channel"` space in the member's org, with the member as
   its admin, Burrow as its principal agent and the `"directed"` attention
-  policy, named by `placeholder_name/1` until Burrow helps rename it. Ryan,
-  #hosted-install 2026-11-01: "Perhaps instead of a DM it could be in a
+  policy, named by `placeholder_name/1` until Burrow helps rename it. The
+  product owner, 2026-11-01: "Perhaps instead of a DM it could be in a
   channel style space? Perhaps the burrow agent could help with the naming
   of that space", then "No, it's not private by default", then "we need to
   give users the control to disable DM with agents if needed. That shouldn't
