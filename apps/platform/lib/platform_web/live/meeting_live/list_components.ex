@@ -412,8 +412,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
               </option>
             </select>
           </label>
-          <p class="my-[1em] text-sm text-subtle">
-            Start a room now. Use Calendar to schedule a future meeting.
+          <p class="my-[1em] text-sm text-subtle" data-role="new-room-hint">
+            Start a room now, or schedule one from Calendar → New → Meeting.
           </p>
           <p :if={@error} class="cal-err" role="alert">{@error}</p>
           <div class="cal-ft">

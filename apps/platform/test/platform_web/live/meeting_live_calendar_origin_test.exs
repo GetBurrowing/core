@@ -222,6 +222,18 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
              |> element(~s(button[data-role="meeting-create-submit-calendar"][type="submit"]))
              |> render() =~ "Create meeting"
 
+      # The active Meeting dot takes the segment's content colour, so it
+      # does not vanish on the primary fill (stage 4).
+      assert has_element?(
+               view,
+               ~s([data-kind="meeting"][aria-checked="true"] [data-role="new-kind-swatch"].bg-primary-content)
+             )
+
+      refute has_element?(
+               view,
+               ~s([data-kind="meeting"][aria-checked="true"] [data-role="new-kind-swatch"].cal-k-meeting)
+             )
+
       refute has_element?(view, ~s([data-role="meeting-meet-now"]))
       refute has_element?(view, ~s([data-role="meeting-create-submit-mobile"]))
       refute has_element?(view, ~s([data-role="start-meeting-submit"]))
@@ -289,6 +301,61 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
                |> List.wrap()
 
       assert tag =~ "guest"
+    end
+  end
+
+  describe "Calendar to Meetings round trip (stage 4)" do
+    test "slot, Meeting, stage a member and a guest, create, and land back on the calendar",
+         %{conn: conn, project: project} do
+      quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
+
+      {:ok, cal, _html} = live(conn, "/calendar?date=2026-11-04")
+      render_click(cal, "new_at", %{"date" => "2026-11-04", "minute" => "630"})
+      assert has_element?(cal, "#calendar-event-form input[name='event[start]'][value='10:30 AM']")
+
+      {:ok, sheet, _html} =
+        cal
+        |> element("#calendar-editor [data-role=new-kind-toggle] [data-kind=meeting]")
+        |> render_click()
+        |> follow_redirect(conn)
+
+      assert has_element?(sheet, ~s([data-role="meeting-create-submit-calendar"]))
+      assert has_element?(sheet, "#meeting-create-date[value='2026-11-04']")
+      assert has_element?(sheet, "#meeting-create-start-time[value='10:30 AM']")
+
+      commit(sheet, "Quillon Zebedee")
+      commit(sheet, "guest@example.com")
+
+      result =
+        sheet
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "Round trip",
+            "project_id" => project.id,
+            "date" => "2026-11-04",
+            "start_time" => "10:30 AM",
+            "duration_minutes" => "30",
+            "invite_query" => ""
+          }
+        )
+        |> render_submit()
+
+      # Cross-live_session push_navigate: LiveViewTest reports it as a
+      # live_redirect; follow_redirect/2 mounts CalendarLive fresh.
+      assert {:error, {:live_redirect, %{to: "/calendar?" <> _}}} = result
+      {:ok, cal, html} = follow_redirect(result, conn)
+
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert %DateTime{} = meeting.scheduled_start_at
+      assert html =~ "Meeting created."
+
+      assert has_element?(cal, ".cal-ev[data-kind=meeting]", "Round trip")
+      assert has_element?(cal, "[data-role=calendar-details] h3", "Round trip")
+
+      invites = Repo.all(from(i in Invite, where: i.meeting_id == ^meeting.id))
+      assert length(invites) == 2
+      assert Enum.count(invites, &(&1.user_id == quill.id)) == 1
+      assert Enum.count(invites, &(&1.email == "guest@example.com" and is_nil(&1.user_id))) == 1
     end
   end
 end

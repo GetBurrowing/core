@@ -216,11 +216,10 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
     assert has_element?(view, "input[name=title][placeholder='Team catch-up']")
     assert has_element?(view, "select[name=project_id] option[value='#{project.id}']")
 
-    assert has_element?(
-             view,
-             "[data-role=meetings-new-room]",
-             "Start a room now. Use Calendar to schedule a future meeting."
-           )
+    assert view |> element("[data-role=meetings-new-room] [data-role=new-room-hint]") |> render() =~
+             "Start a room now, or schedule one from Calendar → New → Meeting."
+
+    refute render(view) =~ "Use Calendar to schedule a future meeting."
 
     view |> form("#meetings-new-room-form", %{title: ""}) |> render_submit()
 

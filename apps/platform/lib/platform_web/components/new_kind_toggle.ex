@@ -34,7 +34,7 @@ defmodule PlatformWeb.Components.NewKindToggle do
           Event
         </.segment>
         <.segment kind="meeting" checked={@active == :meeting} click={@meeting_click}>
-          <i class="cal-sw cal-k-meeting" aria-hidden="true"></i> Meeting
+          <i class={swatch_class(@active)} data-role="new-kind-swatch" aria-hidden="true"></i> Meeting
         </.segment>
       </div>
       <p class="text-[13px] text-subtle" data-role={@helper_role}>
@@ -43,6 +43,13 @@ defmodule PlatformWeb.Components.NewKindToggle do
     </div>
     """
   end
+
+  # The calendar's meeting swatch (`cal-k-meeting`) is drawn in `primary`,
+  # so on the selected (`bg-primary`) segment it would vanish. Active, the
+  # dot takes the segment's content colour instead; inactive it stays the
+  # legend's swatch.
+  defp swatch_class(:meeting), do: "cal-sw bg-primary-content"
+  defp swatch_class(_active), do: "cal-sw cal-k-meeting"
 
   attr(:kind, :string, required: true)
   attr(:checked, :boolean, required: true)
