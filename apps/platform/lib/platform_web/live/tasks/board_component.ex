@@ -2043,7 +2043,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
     stacks = Map.get(stacks_by_column || %{}, col_key, [])
 
-    BoardData.sort_items(tasks ++ stacks, board_sort || BoardData.default_sort(), stack_board_data)
+    BoardData.sort_items(
+      tasks ++ stacks,
+      board_sort || BoardData.default_sort(),
+      stack_board_data
+    )
   end
 
   # Stage-3 wrapper: filters `desktop_column_items/5` through the active

@@ -95,7 +95,9 @@ defmodule PlatformWeb.TasksMyTasksListTest do
   # 'mine · N open' subtitle are replaced by the project title picker.
   test "renders the narrowed list in board-sort order with status, project and priority",
        ctx do
-    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}")
+    # `?sort=priority`: the default sort is Recently updated since task
+    # 01a197a0, and these fixtures pin the priority order.
+    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&sort=priority")
     d = doc(html)
 
     rows = q(d, "#tasks-my-list [data-role=tasks-my-row]")
@@ -139,7 +141,7 @@ defmodule PlatformWeb.TasksMyTasksListTest do
   end
 
   test "?mine=1 narrows the list to the viewer's tasks, done included", ctx do
-    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&mine=1")
+    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&sort=priority&mine=1")
     rows = html |> doc() |> q("#tasks-my-list [data-role=tasks-my-row]")
 
     assert Enum.map(rows, &attr(&1, "data-row-task-id")) == [ctx.high.id, ctx.done.id, ctx.low.id]

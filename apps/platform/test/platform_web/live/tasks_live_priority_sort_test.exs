@@ -295,8 +295,8 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
       assert control_sorts(view) == ["updated", "updated"]
 
       for role <- @controls do
-        assert view |> element(~s([data-role="#{role}"] button[aria-label="Change sort order"])) |> render() =~
-                 "Sort: Recently updated"
+        trigger = ~s([data-role="#{role}"] button[aria-label="Change sort order"])
+        assert view |> element(trigger) |> render() =~ "Sort: Recently updated"
       end
 
       # The phone list's sort chip (`FilterBar.chips/1`).
@@ -352,7 +352,7 @@ defmodule PlatformWeb.TasksLivePrioritySortTest do
              )
     end
 
-    test "round trip: Sort: Priority patches to ?sort=priority, Sort: Recently updated restores the exact order",
+    test "round trip: Sort: Priority patches to ?sort=priority, Recently updated restores the order",
          %{conn: conn} do
       t = seed()
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")

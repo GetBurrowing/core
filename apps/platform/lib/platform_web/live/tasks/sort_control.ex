@@ -12,9 +12,10 @@ defmodule PlatformWeb.Tasks.SortControl do
   ## Why it looks the way it does
 
     * **The label states the CURRENT order** — "Sort: Recently updated"
-      (the default, `BoardData.default_sort/0`) or "Sort: Priority" — so nobody has to open it to learn what they are
-      looking at. There is no asc/desc arrow: these are two named orders,
-      not one axis with two directions.
+      (the default, `BoardData.default_sort/0`), "Sort: Priority", ... — so
+      nobody has to open it to learn what they are looking at. There is no
+      asc/desc arrow: these are named orders, not one axis with two
+      directions.
     * **A button with a caret at `rounded-field`, not a pill.** Pills on this
       surface are filters, and a sort does not narrow the set.
     * **No `--color-primary`.** The board spends it on the active row and

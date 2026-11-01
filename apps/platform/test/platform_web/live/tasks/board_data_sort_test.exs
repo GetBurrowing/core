@@ -364,7 +364,7 @@ defmodule PlatformWeb.Tasks.BoardDataSortTest do
       assert BoardData.decode_sort("Newest") == :updated
     end
 
-    test "only \"priority\" selects :priority; nil, \"updated\" and bogus are the default :updated" do
+    test "only \"priority\" selects :priority; nil, \"updated\", bogus are :updated" do
       assert BoardData.decode_sort("priority") == :priority
       assert BoardData.decode_sort("Priority") == :updated
       assert BoardData.decode_sort("updated") == :updated
