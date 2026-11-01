@@ -63,10 +63,25 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgent do
   alias Platform.Federation
   alias Platform.Repo
 
+  # The `agents` columns as they stood at this migration's version. Loading
+  # the LIVE `Agent` schema here selects every column the schema knows today,
+  # so a fresh `ecto.migrate` crashes with `undefined_column` the moment a
+  # later migration adds an agents column (task 01a19776 stage 1 added
+  # `dm_policy` and hit exactly that). Selecting this fixed list keeps the
+  # historical migration runnable whatever the schema grows.
+  @agent_fields ~w(
+    id workspace_id slug name status model_config tools_config thinking_default
+    heartbeat_config max_concurrent sandbox_mode parent_agent_id metadata
+    runtime_type runtime_id color kind endpoint_kind base_url model vault_key
+    last_probe_at last_probe_status last_probe_latency_ms last_successful_fire_at
+    avatar_url avatar_storage_key voice_config inserted_at updated_at
+  )a
+
   def up do
     Repo.all(
       from(a in Agent,
-        where: a.slug == "meeting-voice" and a.name == "Meeting Voice"
+        where: a.slug == "meeting-voice" and a.name == "Meeting Voice",
+        select: struct(a, ^@agent_fields)
       )
     )
     |> Enum.each(fn agent ->
