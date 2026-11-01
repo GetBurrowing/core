@@ -738,6 +738,102 @@ defmodule Platform.Chat do
     |> Repo.update()
   end
 
+  @space_name_max 80
+
+  @doc """
+  Rename a channel on behalf of one of its participants (task 01a19948 stage
+  2). `actor` is `{:user, id}` or `{:agent, id}` and must hold a participant
+  row in the space (`SpaceAccess.authorize_writer/2`); a user and an agent
+  are treated alike, so Burrow can rename a channel it is in once the people
+  there agree a name.
+
+  Channels only: any other kind is `{:error, :not_applicable}`. The name is
+  trimmed and must be 1..#{@space_name_max} characters, else a changeset
+  error. The slug is re-derived from the name with the settings form's rule;
+  if it collides with another channel in the org, `-` plus 6 random hex
+  characters is appended and the write retried once. Org channels route by
+  id (`space_path_segment/1`), so open URLs keep working.
+
+  Writes through `update_space/2`, then broadcasts `{:space_renamed, space}`
+  on the space's topic and on the global space-lifecycle topic, so an open
+  chat view updates its header and rail without a reload.
+  """
+  @spec rename_space(SpaceAccess.actor(), binary(), term()) ::
+          {:ok, Space.t()}
+          | {:error, :forbidden | :not_found | :not_applicable | :space_archived}
+          | {:error, Ecto.Changeset.t()}
+  def rename_space(actor, space_id, name) do
+    with {:ok, _writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_space_writable(space_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         :ok <- ensure_renamable(space),
+         {:ok, name} <- validate_space_name(space, name),
+         {:ok, renamed} <- update_space_name(space, name) do
+      ChatPubSub.broadcast(renamed.id, {:space_renamed, renamed})
+      ChatPubSub.broadcast_space_event({:space_renamed, renamed})
+      {:ok, renamed}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  defp ensure_renamable(%Space{kind: "channel"}), do: :ok
+  defp ensure_renamable(_space), do: {:error, :not_applicable}
+
+  defp validate_space_name(space, name) do
+    trimmed = if is_binary(name), do: String.trim(name), else: ""
+
+    changeset =
+      space
+      |> Ecto.Changeset.change(%{name: trimmed})
+      |> Ecto.Changeset.validate_required([:name])
+      |> Ecto.Changeset.validate_length(:name, min: 1, max: @space_name_max)
+
+    if changeset.valid?, do: {:ok, trimmed}, else: {:error, %{changeset | action: :update}}
+  end
+
+  defp update_space_name(space, name) do
+    base = channel_slug(name)
+
+    case update_space(space, %{name: name, slug: base}) do
+      {:error, %Ecto.Changeset{} = changeset} = error ->
+        if slug_taken?(changeset),
+          do: update_space(space, %{name: name, slug: base <> "-" <> hex_suffix()}),
+          else: error
+
+      ok ->
+        ok
+    end
+  end
+
+  # The settings form's slug rule (`SettingsComponent` `settings_save`), with
+  # a fallback for a name with no ASCII letter or digit and never a
+  # system-reserved prefix.
+  defp channel_slug(name) do
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    cond do
+      slug == "" -> "channel-" <> hex_suffix()
+      reserved_slug_prefix?(slug <> "-") -> "channel-" <> slug
+      true -> slug
+    end
+  end
+
+  defp slug_taken?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {:slug, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
+    end)
+  end
+
+  defp hex_suffix, do: Base.encode16(:crypto.strong_rand_bytes(3), case: :lower)
+
   @doc """
   Assign a channel space to an org by setting `chat_spaces.org_id`.
 

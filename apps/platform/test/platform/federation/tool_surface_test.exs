@@ -196,7 +196,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +2 owning-runtime dependency verification tools (task 01a18305 stage 2).
       # +2 owner-granted Calendar tools (task 01a16991 stage 5).
       # +1 `project_create` in `task` (task 01a19aa4 stage 1).
-      assert length(tools) == 154
+      # +1 `space_rename` in `space` (task 01a19948 stage 2).
+      assert length(tools) == 155
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names
@@ -212,6 +213,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "space_list" in tool_names
       assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names
+      assert "space_rename" in tool_names
       assert "canvas_create" in tool_names
       assert "canvas_patch" in tool_names
       assert "canvas_describe" in tool_names
