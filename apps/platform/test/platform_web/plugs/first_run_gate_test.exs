@@ -4,8 +4,9 @@ defmodule PlatformWeb.Plugs.FirstRunGateTest do
   member's bare `GET /chat`, the installed PWA's `start_url`, goes to
   `/start`; nothing else does.
 
-  `async: false` because two tests swap `conn.host`, mirroring
-  `chat_live_external_host_mount_test.exs`.
+  `async: false` because tests swap `conn.host`, mirroring
+  `chat_live_external_host_mount_test.exs`, and one writes the global
+  `:host_surface_enforcement` env.
   """
   use PlatformWeb.ConnCase, async: false
 
@@ -43,6 +44,15 @@ defmodule PlatformWeb.Plugs.FirstRunGateTest do
     ext = Platform.ExternalUserFixtures.external_user!(org)
     refute Map.has_key?(Platform.Accounts.get_user_preferences(ext.id), "first_run_goal")
     ext
+  end
+
+  # Same override pattern as `router_host_isolation_test.exs`. Global env,
+  # which is why this module is `async: false`.
+  defp with_enforcement(value) do
+    previous = Application.get_env(:platform, :host_surface_enforcement, :off)
+    Application.put_env(:platform, :host_surface_enforcement, value)
+    on_exit(fn -> Application.put_env(:platform, :host_surface_enforcement, previous) end)
+    :ok
   end
 
   defp authed(conn, user), do: init_test_session(conn, current_user_id: user.id)
@@ -144,6 +154,23 @@ defmodule PlatformWeb.Plugs.FirstRunGateTest do
 
       if conn.status in 300..399, do: refute(redirected_to(conn) == "/start")
     end
+  end
+
+  test "meet. host GET /chat is not sent to /start while the host fence is off", %{conn: conn} do
+    # `/chat` has no `meet.` route, so on a `meet.` host it falls through to
+    # the default scope. With `:host_surface_enforcement` `:off`, HostSurface
+    # lets it pass and only the gate's own `router_surface/1 == :app` check
+    # keeps a pending member off /start. (The `chat.` host test above cannot
+    # pin that check: the `chat.` scope never pipes through the gate.)
+    with_enforcement(:off)
+    pending = member!(%{})
+
+    conn =
+      %{conn | host: "meet.example.com"}
+      |> authed(pending)
+      |> get("/chat")
+
+    if conn.status in 300..399, do: refute(redirected_to(conn) == "/start")
   end
 
   test "no loop: pending member /start renders, and non-pending /start goes to /chat",
