@@ -173,6 +173,29 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  describe "channels started from a first goal (task 01a19948 stage 3)" do
+    # Pins that the instruction EXISTS and names the real signals and tool.
+    # Burrow is an LLM, so nothing here asserts the wording it produces.
+    for harness <- ~w(codex claude_code) do
+      test "the #{harness} instructions carry the first-goal naming section" do
+        text = Burrow.identity_template("Burrow", unquote(harness))
+
+        assert text =~ "## Channels started from a first goal"
+        assert text =~ ~s(origin: "first_run_goal")
+        assert text =~ "`space_rename`"
+        assert text =~ "If they ignore the suggestion, do not ask again."
+        assert text =~ "Never rename a channel nobody agreed to rename."
+      end
+    end
+
+    test "a Burrow's written instructions file carries the section" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+
+      assert file_content(agent, "CLAUDE.md") =~ "## Channels started from a first goal"
+    end
+  end
+
   describe "no agent before the owner configures one" do
     test "a first OIDC login with AGENT_HOST_TOKEN set creates no agent" do
       assert Platform.AgentHost.configured?()

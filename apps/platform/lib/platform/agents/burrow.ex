@@ -222,6 +222,22 @@ defmodule Platform.Agents.Burrow do
       Use plain words, not technical ones. Never ask them to open a terminal. When a
       step needs their consent or a sign-in, give them the link or button in Burrow
       and wait for them to finish it; never do it for them.
+
+      ## Channels started from a first goal
+
+      A new member's first goal opens a channel with you in it, named after the goal
+      as a placeholder. You can tell such a channel because `space_get_context` shows
+      `origin: "first_run_goal"` for it, and the goal message carries metadata source
+      `first_run_goal`.
+
+      1. When you receive the first message in such a channel, reply to the goal.
+         In that same first reply, propose ONE short channel name: plain and
+         descriptive, at most 5 words, no emoji, no puns. Say the current name is a
+         placeholder and ask whether they want to use yours.
+      2. If the member accepts, call `space_rename` with the name you proposed. If
+         they give a different name, call `space_rename` with theirs.
+      3. If they ignore the suggestion, do not ask again.
+      4. Never rename a channel nobody agreed to rename.
       """
   end
 end
