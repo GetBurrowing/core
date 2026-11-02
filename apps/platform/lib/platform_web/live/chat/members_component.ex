@@ -43,7 +43,20 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   `members_add_agent` from a member's socket is refused by the context.
 
   The picker offers `Chat.list_addable_agents/1`, the same eligibility set the
-  mention path matches against. There is no people-add control.
+  mention path matches against.
+
+  ## Adding people (task 01a199e4 stage 2)
+
+  A viewer for whom `Chat.can_manage_roles?/2` holds (a channel admin, an org
+  admin of the space's org, or a root admin; channels only, so never a DM,
+  group or execution space) gets an "Add people" picker under the People
+  list. It offers `Chat.list_addable_people/1`: internal members of the
+  space's org and of the root org who can already read the channel, minus
+  everyone already in it. External people are never offered; they are seated
+  only by a root admin through /admin/external-logins. The picker is
+  affordance only: `Chat.admin_add_person/3` re-authorizes and re-checks
+  eligibility on every call, so a forged `members_add_person` from any socket
+  is refused by the context.
 
   ## Channel admins (task 01a19355 stage 3)
 
@@ -72,6 +85,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     * `"members_add_agent"` — `%{"agent_id" => id}`
     * `"members_remove_agent"` — `%{"participant_id" => id}`
     * `"members_set_role"` — `%{"participant_id" => id, "role" => "admin" | "member"}`
+    * `"members_add_person"` — `%{"user_id" => id}`
 
   ## Messages sent to parent
 
@@ -147,6 +161,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         |> assign_new(:presence, fn -> {:ok, %{online: [], away: []}} end)
         |> assign_new(:attention, fn -> nil end)
         |> assign_new(:available_agents, fn -> [] end)
+        |> assign_new(:available_people, fn -> [] end)
       end
 
     {:ok, socket}
@@ -183,11 +198,15 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
     available = if socket.assigns[:can_manage?], do: Chat.list_addable_agents(space), else: []
 
+    available_people =
+      if socket.assigns[:can_manage_roles?], do: Chat.list_addable_people(space), else: []
+
     socket
     |> assign(:people, people)
     |> assign(:presence, Chat.space_member_presence(space_id, viewer))
     |> assign(:attention, Chat.agent_attention_state(space_id))
     |> assign(:available_agents, available)
+    |> assign(:available_people, available_people)
   end
 
   defp load_members(socket), do: socket
@@ -226,6 +245,27 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
           {:error, _} ->
             send(self(), {:members_flash, :error, "Could not add the agent."})
+            {:noreply, socket}
+        end
+    end
+  end
+
+  def handle_event("members_add_person", params, socket) do
+    user_id = params["user_id"]
+
+    case current_space(socket) do
+      nil ->
+        send(self(), {:members_flash, :error, "This channel no longer exists."})
+        {:noreply, socket}
+
+      space ->
+        case Chat.admin_add_person(space, socket.assigns[:current_user_id], user_id) do
+          {:ok, participant} ->
+            send(self(), {:members_flash, :info, "#{participant.display_name} added."})
+            {:noreply, load_members(socket)}
+
+          {:error, reason} ->
+            send(self(), {:members_flash, :error, add_person_error(reason, socket, user_id)})
             {:noreply, socket}
         end
     end
@@ -295,6 +335,27 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     end
   end
 
+  defp add_person_error(:unauthorized, _socket, _user_id),
+    do: "Only a channel admin can add people to this channel."
+
+  defp add_person_error(:external, _socket, _user_id),
+    do: "External people are added by a root admin."
+
+  defp add_person_error(:already_member, socket, user_id) do
+    case Enum.find(socket.assigns[:people] || [], &(&1.user_id == user_id)) do
+      %{name: name} when is_binary(name) and name != "" -> "#{name} is already in this channel."
+      _ -> "They are already in this channel."
+    end
+  end
+
+  defp add_person_error(:not_found, _socket, _user_id), do: "Pick someone to add."
+
+  defp add_person_error(:not_channel, _socket, _user_id),
+    do: "People can only be added to channels."
+
+  defp add_person_error(:space_archived, _socket, _user_id), do: "This channel is archived."
+  defp add_person_error(_reason, _socket, _user_id), do: "Could not add them."
+
   defp role_flash(%{role: "admin"} = p), do: "#{p.display_name || "They"} is now an admin."
   defp role_flash(p), do: "#{p.display_name || "They"} is no longer an admin."
 
@@ -336,6 +397,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
             can_manage?={@can_manage?}
             can_manage_roles?={@can_manage_roles?}
             available_agents={@available_agents}
+            available_people={@available_people}
           />
         </div>
       </.sheet>
@@ -370,6 +432,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           can_manage?={@can_manage?}
           can_manage_roles?={@can_manage_roles?}
           available_agents={@available_agents}
+          available_people={@available_people}
         />
       </div>
     </div>
@@ -385,6 +448,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   attr(:can_manage?, :boolean, required: true)
   attr(:can_manage_roles?, :boolean, required: true)
   attr(:available_agents, :list, required: true)
+  attr(:available_people, :list, required: true)
 
   defp body(assigns) do
     assigns =
@@ -443,6 +507,36 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         </li>
       </ul>
       <p :if={@people == []} class="px-4 py-2 text-[13px] text-subtle">No people yet.</p>
+
+      <form
+        :if={@can_manage_roles?}
+        phx-submit="members_add_person"
+        phx-target={@myself}
+        data-role="members-add-person"
+        class="mt-2 flex items-center gap-2 px-4"
+      >
+        <label for={"#{@id}-person-select"} class="sr-only">Add people</label>
+        <select
+          id={"#{@id}-person-select"}
+          name="user_id"
+          class="select select-sm min-h-11 flex-1 border-edge bg-base-100 text-base-content lg:min-h-0"
+          disabled={@available_people == []}
+        >
+          <option value="">
+            {if @available_people == [], do: "No one left to add", else: "Add people"}
+          </option>
+          <option :for={person <- @available_people} value={person.id}>
+            {person.name || person.email}
+          </option>
+        </select>
+        <button
+          type="submit"
+          class="btn btn-sm btn-primary min-h-11 lg:min-h-0"
+          disabled={@available_people == []}
+        >
+          Add
+        </button>
+      </form>
     </section>
 
     <section class="mt-2 border-t border-edge pt-2" data-role="members-agents">

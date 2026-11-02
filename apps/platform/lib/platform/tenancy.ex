@@ -1242,6 +1242,26 @@ defmodule Platform.Tenancy do
 
   def internal_member?(_, _), do: false
 
+  @doc """
+  A query selecting the distinct ids of users holding a NON-EXTERNAL
+  membership (any role) in any of `org_ids` — `internal_member?/2`'s rule
+  for a set of orgs, as a query a caller composes with `subquery/1` rather
+  than joining `org_memberships` itself (task 01a199e4 stage 1).
+
+  Ids that are not UUIDs are dropped, so a malformed id selects nothing
+  instead of raising a cast error; an empty list selects nothing.
+  """
+  @spec internal_member_ids_query([binary()]) :: Ecto.Query.t()
+  def internal_member_ids_query(org_ids) when is_list(org_ids) do
+    org_ids = Enum.filter(org_ids, &uuid?/1)
+
+    from(m in OrgMembership,
+      where: m.org_id in ^org_ids and m.external == false,
+      select: m.user_id,
+      distinct: true
+    )
+  end
+
   defp internal_membership_exists?(user_id, org_id, role) do
     if uuid?(user_id) and uuid?(org_id) do
       query =
