@@ -949,7 +949,9 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     assert has_element?(view, "#{@invite_header}", "Invited · 2")
     assert copy =~ "Priya Invitee"
-    assert copy =~ "elias@acme.com"
+    # MeetingLive's row shape: a guest reads as its display name, tagged guest.
+    assert copy =~ "Elias"
+    assert copy =~ "guest"
   end
 
   test "an expired guest invite still counts as invited", %{conn: conn} do
@@ -968,7 +970,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     copy = details_text(view)
 
     assert has_element?(view, "#{@invite_header}", "Invited · 1")
-    assert copy =~ "elias@acme.com"
+    # MeetingLive's row shape: a guest reads as its display name, tagged guest.
+    assert copy =~ "Elias"
+    assert copy =~ "guest"
+    assert copy =~ "expired"
   end
 
   test "a meeting with no invites reads 0 invited even with chat participants",
