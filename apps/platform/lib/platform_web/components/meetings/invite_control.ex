@@ -152,7 +152,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       search: "meeting_invite_search",
       stage: "meeting_invite_stage",
       add_people: "meeting_invite_add_people",
-      commit: "meeting_invite_commit"
+      commit: "meeting_invite_commit",
+      # Per guest row (task 01a19ea6): move that row's link expiry, or mint
+      # a lapsed row a new link. Live only: a draft row has no link yet.
+      expiry: "meeting_invite_expiry",
+      renew: "meeting_invite_renew"
     }
   }
 

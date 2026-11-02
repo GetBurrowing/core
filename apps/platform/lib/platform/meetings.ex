@@ -2172,6 +2172,14 @@ defmodule Platform.Meetings do
   # issued HMAC cannot be un-issued, so `revoke_invite/1` stamping one row is
   # the only way to kill one guest's link without invalidating every other
   # guest's at the same time. Do not add a `meeting_invite_link/1`.
+  #
+  # The host picks the expiry per row (task 01a19ea6). A guest added BY NAME
+  # in Add people defaults to the meeting's scheduled end
+  # (`guest_invite_expiry/3` with `:meeting_end`, 24h when there is no future
+  # end); the host can then move one row's expiry to the meeting end, 24h or
+  # 7 days (`set_guest_invite_expiry/3`) or, once it has lapsed, mint that
+  # person a fresh link (`renew_guest_invite/4`). Every one of those acts on
+  # ONE row. There is still no meeting-wide link.
 
   # Guest links expire in 24h unless the caller says otherwise, matching
   # `GuestInvite`'s own `@default_expiry_seconds` so the row's `expires_at`
@@ -2314,6 +2322,12 @@ defmodule Platform.Meetings do
   have no account. Optional `expires_in_hours`, defaulting to
   #{@guest_invite_default_expiry_hours}.
 
+  Optional `expires_at` — an absolute `DateTime` in the future, usually from
+  `guest_invite_expiry/3`. It wins over `expires_in_hours` when both are
+  given. A past or non-`DateTime` value answers `{:error, changeset}` with
+  the error on `:expires_at` and writes nothing: no row, no guest space, no
+  token. Never cast a client-supplied timestamp into it.
+
   ## Order of operations, and why
 
   The row is inserted FIRST so its id exists to sign into the token. Then a
@@ -2367,8 +2381,12 @@ defmodule Platform.Meetings do
   defp do_invite_guest(%Meeting{} = meeting, attrs) do
     attrs = normalize_attrs(attrs)
 
-    hours = Map.get(attrs, :expires_in_hours) || @guest_invite_default_expiry_hours
-    expires_at = DateTime.add(DateTime.utc_now(), trunc(hours * 3600), :second)
+    expiry = guest_invite_expires_at(attrs, DateTime.utc_now())
+    expires_at =
+      case expiry do
+        {:ok, %DateTime{} = at} -> at
+        {:error, _message} -> nil
+      end
     display_name = Map.get(attrs, :display_name)
 
     changeset =
@@ -2380,6 +2398,7 @@ defmodule Platform.Meetings do
         expires_at: expires_at
       })
       |> Ecto.Changeset.validate_required([:display_name])
+      |> put_expiry_error(expiry)
 
     with {:ok, invite} <- insert_guest_invite(changeset, @guest_short_code_attempts),
          {:ok, guest_space} <-
@@ -2631,6 +2650,208 @@ defmodule Platform.Meetings do
     |> Ecto.Changeset.validate_required([:email], message: "enter an email address")
     |> Repo.update(stale_error_field: :id)
   end
+
+  # `:expires_at` (absolute) wins over `:expires_in_hours` (relative). An
+  # explicit `:expires_at` that is not a future `DateTime` is refused rather
+  # than replaced by the default: a caller that named a moment and got a
+  # different one would hand out a link that dies at a time nobody chose.
+  defp guest_invite_expires_at(attrs, now) do
+    case Map.fetch(attrs, :expires_at) do
+      {:ok, %DateTime{} = at} ->
+        if DateTime.compare(at, now) == :gt, do: {:ok, at}, else: {:error, "must be in the future"}
+
+      {:ok, nil} ->
+        {:ok, default_guest_expires_at(attrs, now)}
+
+      {:ok, _other} ->
+        {:error, "is invalid"}
+
+      :error ->
+        {:ok, default_guest_expires_at(attrs, now)}
+    end
+  end
+
+  defp default_guest_expires_at(attrs, now) do
+    hours = Map.get(attrs, :expires_in_hours) || @guest_invite_default_expiry_hours
+    DateTime.add(now, trunc(hours * 3600), :second)
+  end
+
+  defp put_expiry_error(changeset, {:ok, _at}), do: changeset
+
+  defp put_expiry_error(changeset, {:error, message}),
+    do: Ecto.Changeset.add_error(changeset, :expires_at, message)
+
+  # The fallback the UI names when a meeting has no future scheduled end.
+  @guest_invite_fallback_hours 24
+
+  @doc """
+  The absolute expiry a host's CHOICE resolves to for a guest link on
+  `meeting` (task 01a19ea6).
+
+    * `:meeting_end` — `meeting.scheduled_end_at` when it is set AND after
+      `now`; otherwise `now` + #{@guest_invite_fallback_hours}h, the fallback
+      the UI names (`meeting_end_expiry?/2` says which one applied).
+    * `:hours_24` — `now` + 24 hours.
+    * `:days_7` — `now` + 7 days.
+
+  Any other choice raises `ArgumentError`. Choices are atoms the caller maps
+  from a fixed string allowlist; a client-supplied timestamp is never cast.
+  """
+  @spec guest_invite_expiry(Meeting.t(), :meeting_end | :hours_24 | :days_7, DateTime.t()) ::
+          DateTime.t()
+  def guest_invite_expiry(meeting, choice, now \\ DateTime.utc_now())
+
+  def guest_invite_expiry(%Meeting{} = meeting, :meeting_end, %DateTime{} = now) do
+    if meeting_end_expiry?(meeting, now),
+      do: meeting.scheduled_end_at,
+      else: DateTime.add(now, @guest_invite_fallback_hours * 3600, :second)
+  end
+
+  def guest_invite_expiry(%Meeting{}, :hours_24, %DateTime{} = now),
+    do: DateTime.add(now, 24 * 3600, :second)
+
+  def guest_invite_expiry(%Meeting{}, :days_7, %DateTime{} = now),
+    do: DateTime.add(now, 7 * 24 * 3600, :second)
+
+  def guest_invite_expiry(%Meeting{}, choice, _now) do
+    raise ArgumentError, "no guest invite expiry choice #{inspect(choice)}"
+  end
+
+  @doc """
+  Whether `guest_invite_expiry(meeting, :meeting_end, now)` resolves to the
+  meeting's real scheduled end (`true`) or fell back to 24 hours because
+  there is no scheduled end, or it is not after `now` (`false`).
+  """
+  @spec meeting_end_expiry?(Meeting.t(), DateTime.t()) :: boolean()
+  def meeting_end_expiry?(meeting, now \\ DateTime.utc_now())
+
+  def meeting_end_expiry?(%Meeting{scheduled_end_at: %DateTime{} = ends_at}, %DateTime{} = now),
+    do: DateTime.compare(ends_at, now) == :gt
+
+  def meeting_end_expiry?(%Meeting{}, %DateTime{}), do: false
+
+  @doc """
+  Move ONE guest row's expiry to the host's `choice` (see
+  `guest_invite_expiry/3`). Returns `{:ok, invite}`.
+
+  The row is loaded by `invite_id` SCOPED to `meeting.id`, guest rows only
+  (`user_id` nil, an `expires_at` set) and not revoked. A forged id from
+  another meeting, a member row, a revoked row or a malformed id answers
+  `{:error, :not_found}` and writes nothing. A row that has already expired
+  answers `{:error, :expired}`: that person gets a new link through
+  `renew_guest_invite/4` instead, so a lapsed link is never silently revived.
+
+  Only `expires_at` changes. Nothing is re-delivered. Because
+  `resolve_guest_invite/2` gates on the ROW's `expires_at`, the change
+  reaches a link that was already shared, as far as that link's own baked
+  expiry allows.
+  """
+  @spec set_guest_invite_expiry(Meeting.t(), binary(), :meeting_end | :hours_24 | :days_7) ::
+          {:ok, Invite.t()} | {:error, :not_found | :expired | Ecto.Changeset.t()}
+  def set_guest_invite_expiry(%Meeting{} = meeting, invite_id, choice) do
+    now = DateTime.utc_now()
+    expires_at = guest_invite_expiry(meeting, choice, now)
+
+    case get_live_guest_invite(meeting, invite_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Invite{} = invite ->
+        if guest_row_expired?(invite, now) do
+          {:error, :expired}
+        else
+          invite
+          |> Ecto.Changeset.change(expires_at: expires_at)
+          |> Repo.update()
+        end
+    end
+  end
+
+  @doc """
+  Give a guest whose link has EXPIRED a fresh one (task 01a19ea6).
+
+  Returns `{:ok, %{invite, token, url}}`, the shape `invite_guest/2` returns.
+
+  Only for a guest row of `meeting` (scoped exactly as
+  `set_guest_invite_expiry/3`) whose `expires_at` is past and `revoked_at`
+  nil. A missing, forged, member or revoked row answers `{:error, :not_found}`;
+  a row that has not expired answers `{:error, :not_expired}`. Both write
+  nothing: renewal is not a second live link for the same person.
+
+  ## Mint first, then revoke
+
+  A NEW per-person row is minted through `invite_guest/2` (same display name
+  and email, `expires_at` from `guest_invite_expiry/3`): a new token, a new
+  guest chat space and the normal delivery record. Only THEN is the old row
+  revoked. The other order leaves a window in which `list_invites/2` can be
+  empty, and an empty invite list widens `recipients_for_meeting/1` to every
+  participant of the backing space (see the `InviteControl` moduledoc).
+
+  The old row is REVOKED, not left: its link is already dead by expiry, and
+  the revocation stamps when it was replaced and drops it from
+  `list_invites/2`, so the list shows one row for that person.
+
+  The old row is locked for the duration, so two renewals racing on one row
+  mint one new link, not two.
+  """
+  @spec renew_guest_invite(
+          Meeting.t(),
+          binary(),
+          :meeting_end | :hours_24 | :days_7,
+          binary() | nil
+        ) ::
+          {:ok, %{invite: Invite.t(), token: binary(), url: binary()}}
+          | {:error, :not_found | :not_expired | term()}
+  def renew_guest_invite(%Meeting{} = meeting, invite_id, choice, host_user_id) do
+    now = DateTime.utc_now()
+    expires_at = guest_invite_expiry(meeting, choice, now)
+
+    Repo.transaction(fn ->
+      with %Invite{} = old <- get_live_guest_invite(meeting, invite_id, lock: true),
+           true <- guest_row_expired?(old, now) || :not_expired,
+           {:ok, minted} <-
+             invite_guest(meeting, %{
+               display_name: old.display_name,
+               email: old.email,
+               host_user_id: host_user_id,
+               expires_at: expires_at
+             }),
+           {:ok, _revoked} <- revoke_invite(old) do
+        minted
+      else
+        nil -> Repo.rollback(:not_found)
+        :not_expired -> Repo.rollback(:not_expired)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # A guest row of THIS meeting that still carries a link: user_id nil,
+  # expires_at set, not revoked. Everything else is `nil`, so a forged id
+  # cannot reach a member row or another meeting's guest.
+  defp get_live_guest_invite(meeting, invite_id, opts \\ [])
+
+  defp get_live_guest_invite(%Meeting{id: meeting_id}, invite_id, opts)
+       when is_binary(invite_id) do
+    if Platform.UUID.valid?(invite_id) do
+      query =
+        from(i in Invite,
+          where:
+            i.id == ^invite_id and i.meeting_id == ^meeting_id and is_nil(i.user_id) and
+              not is_nil(i.expires_at)
+        )
+        |> exclude_revoked()
+
+      query = if Keyword.get(opts, :lock, false), do: lock(query, "FOR UPDATE"), else: query
+
+      Repo.one(query)
+    end
+  end
+
+  defp get_live_guest_invite(_meeting, _invite_id, _opts), do: nil
+
+  defp guest_row_expired?(%Invite{expires_at: %DateTime{} = at}, now),
+    do: DateTime.compare(at, now) != :gt
 
   # ── External invites (task 019fb955-1d7b, stage 2) ───────────────────────
   #

@@ -3828,6 +3828,21 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, LiveInvites.stage(socket, meeting, params, socket.assigns.user_id)}
   end
 
+  # One guest row's link expiry, and a new link for a lapsed row (task
+  # 01a19ea6). Same authorization as staging: the meeting is this socket's
+  # selection, never a client value; the invite id is checked against it.
+  def handle_event("meeting_invite_expiry", %{"id" => _, "choice" => _} = params, socket) do
+    meeting = selected_live_invite_meeting!(socket)
+
+    {:noreply, LiveInvites.set_expiry(socket, meeting, params)}
+  end
+
+  def handle_event("meeting_invite_renew", %{"id" => _, "choice" => _} = params, socket) do
+    meeting = selected_live_invite_meeting!(socket)
+
+    {:noreply, LiveInvites.renew(socket, meeting, params, socket.assigns.user_id)}
+  end
+
   # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
   #
   # The search box and the project select are ONE form, and it pushes into
@@ -3990,7 +4005,8 @@ defmodule PlatformWeb.MeetingLive do
 
       case LiveInvites.commit_params(
              socket.assigns.meeting_create_invite_candidates,
-             socket.assigns.meeting_create_invite_email
+             socket.assigns.meeting_create_invite_email,
+             value
            ) do
         nil -> {:noreply, socket}
         params -> socket |> stage_via("meeting_create_invite_stage", params) |> reply_staged()

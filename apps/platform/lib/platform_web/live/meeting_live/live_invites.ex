@@ -45,6 +45,15 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
 
   @guest_host_message "Guest links are not available: MEETING_GUEST_HOST is not configured."
   @undelivered_message "That invite could not be sent."
+  @expiry_message "That link could not be updated."
+
+  # The only expiry choices a client may name; the atoms are what
+  # `Meetings.guest_invite_expiry/3` accepts. A client timestamp is never cast.
+  @expiry_choices %{"meeting_end" => :meeting_end, "hours_24" => :hours_24, "days_7" => :days_7}
+
+  # Same predicate as `Platform.Meetings`' `@invite_email_format`: a query
+  # this shape is an address, never a guest's name.
+  @address_shape ~r/^[^\s]+@[^\s]+$/
 
   @doc "Closed control, empty query, no candidates, no email option."
   def seed(socket) do
@@ -137,7 +146,8 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
 
       case commit_params(
              socket.assigns.meeting_invite_candidates,
-             socket.assigns.meeting_invite_email
+             socket.assigns.meeting_invite_email,
+             socket.assigns.meeting_invite_query
            ) do
         nil -> {:noop, socket}
         params -> {:staged, stage(socket, meeting, params, inviter_user_id)}
@@ -149,14 +159,76 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
   The option the invite dropdown highlights, as stage-event params, or nil
   when it highlights none. Mirrors `InviteControl`'s dropdown dispatch: one
   candidate is the only row; no candidates plus an address is the
-  `data-default` guest row. Shared with the create sheet's draft mode.
-  """
-  def commit_params([%{id: id}], _email), do: %{"kind" => "user", "id" => id}
+  `data-default` guest row; no candidates, no address and a typed NAME is
+  the guest-by-name row (task 01a19ea6: Enter commits a name just as it
+  does an address). Shared with the create sheet's draft mode.
 
-  def commit_params([], email) when is_binary(email),
+  `query` is the resolved search text. A query shaped like an address that
+  produced no email option (it is already invited) is NOT committed as a
+  guest name: nobody is called "someone@example.com".
+  """
+  def commit_params([%{id: id}], _email, _query), do: %{"kind" => "user", "id" => id}
+
+  def commit_params([], email, _query) when is_binary(email),
     do: %{"kind" => "guest", "email" => email}
 
-  def commit_params(_candidates, _email), do: nil
+  def commit_params([], nil, query) when is_binary(query) do
+    name = String.trim(query)
+
+    if name == "" or Regex.match?(@address_shape, name),
+      do: nil,
+      else: %{"kind" => "guest", "name" => name}
+  end
+
+  def commit_params(_candidates, _email, _query), do: nil
+
+  @doc """
+  Move one guest row's link expiry to the host's choice
+  (`InviteControl.event(:live, :expiry)`, task 01a19ea6).
+
+  `choice` is mapped through a fixed allowlist (`"meeting_end"`,
+  `"hours_24"`, `"days_7"`); anything else did not come from the control
+  and raises, as does an invite id that names no live guest row of
+  `meeting` (`:not_found`), the same rule as a forged candidate id. A
+  refusal the row's state explains (`:expired`, a changeset) is flashed.
+
+  Authorization is exactly today's live-invite rule: the caller resolves
+  `meeting` from its own viewer-scoped selection. No host gate is added.
+  """
+  def set_expiry(socket, %Meeting{} = meeting, %{"id" => id, "choice" => choice}) do
+    case Meetings.set_guest_invite_expiry(meeting, to_string(id), expiry_choice!(choice)) do
+      {:ok, _invite} -> socket
+      {:error, :not_found} -> raise ArgumentError, "cannot change expiry: no guest invite #{inspect(id)} on this meeting"
+      {:error, _reason} -> put_flash(socket, :error, @expiry_message)
+    end
+  end
+
+  @doc """
+  Mint a fresh per-person link for a guest row whose link has expired
+  (`InviteControl.event(:live, :renew)`, task 01a19ea6), via
+  `Meetings.renew_guest_invite/4`. Same allowlist, raise and flash rules as
+  `set_expiry/3`; a missing guest host gets the existing operator message.
+  """
+  def renew(socket, %Meeting{} = meeting, %{"id" => id, "choice" => choice}, inviter_user_id) do
+    case Meetings.renew_guest_invite(
+           meeting,
+           to_string(id),
+           expiry_choice!(choice),
+           inviter_user_id
+         ) do
+      {:ok, _result} -> socket
+      {:error, :not_found} -> raise ArgumentError, "cannot renew: no guest invite #{inspect(id)} on this meeting"
+      {:error, :guest_host_not_configured} -> put_flash(socket, :error, @guest_host_message)
+      {:error, _reason} -> put_flash(socket, :error, @expiry_message)
+    end
+  end
+
+  defp expiry_choice!(choice) do
+    case Map.fetch(@expiry_choices, choice) do
+      {:ok, atom} -> atom
+      :error -> raise ArgumentError, "no guest link expiry choice #{inspect(choice)}"
+    end
+  end
 
   @doc """
   Write and deliver one invite of `kind` for `meeting`.

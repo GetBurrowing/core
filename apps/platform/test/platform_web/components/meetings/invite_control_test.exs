@@ -318,6 +318,16 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert InviteControl.event(:live, :commit) == "meeting_invite_commit"
     end
 
+    # Task 01a19ea6: a guest row's expiry and New link exist only in :live;
+    # a draft row has no link yet.
+    test "expiry and renew are live-only events" do
+      assert InviteControl.event(:live, :expiry) == "meeting_invite_expiry"
+      assert InviteControl.event(:live, :renew) == "meeting_invite_renew"
+
+      assert_raise ArgumentError, fn -> InviteControl.event(:draft, :expiry) end
+      assert_raise ArgumentError, fn -> InviteControl.event(:draft, :renew) end
+    end
+
     test "the input has a name only when one is given" do
       unnamed = one(control(candidates: []), "[data-role=meeting-invite-search]")
 
