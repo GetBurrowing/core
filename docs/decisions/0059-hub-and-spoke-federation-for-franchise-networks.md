@@ -59,13 +59,7 @@ drafted that ticket had landed no findings, so this design rests on 0054 as writ
 and controller tests only, not on an end-to-end run. Nothing below should be treated as proven
 until that ticket reports.
 
-**Open question, owned by the proof ticket: the well-known path.** That ticket probes
-`/.well-known/burrow-federation`, while 0054 specifies `/.well-known/suite-federation` for the
-descriptor and keeps the client fetching that path
-(`0054-install-to-install-federation.md § Protocol versions`). Both paths are served, so the probe
-may be correct, but this ADR does not resolve it. Wherever this ADR says "the descriptor" it
-means whichever path 0054 serves, and the proof ticket decides which one an operator should
-probe.
+The well-known path discrepancy between the proof ticket and 0054 is recorded under `## Open questions` below.
 
 **Not experimentable.** This is a decision record. It introduces no model, prompt, threshold
 or generator.
@@ -198,3 +192,183 @@ of these types can dispatch an agent on the receiving install.
 - **Lockstep upgrades are not core's job.** Rolling a whole network to a new version together is
   an operational concern of the proprietary fleet layer, not of core. Core's contract is that
   adjacent minors interoperate and that a mismatch is reported rather than silently degraded.
+
+### 5. Trust and authorisation
+
+- **Pairing keys reuse 0054.** A hub and a spoke pair with the Ed25519 install keys, the
+  propose/accept exchange and the out-of-band fingerprint check of
+  `0054-install-to-install-federation.md § 1. Trust model`. No new key type exists. In the
+  default model a spoke pairs to exactly one hub; a second `hub_spoke` relationship in the
+  `spoke` role is refused. A hub pairs to many spokes.
+- **Per-direction scopes on the relationship.** The scopes are `upstream:journal`,
+  `downstream:canon`, `upstream:files` and `downstream:files`. A relationship holds the subset
+  both admins accepted at pairing, so a spoke can be paired read-only (`downstream:canon` and
+  `downstream:files` only). Scope is read from the relationship row on every envelope, as in
+  section 3.
+- **Spoke policy is enforced at the spoke, before send.** The hub is never trusted to filter
+  what it receives. The check in section 1 runs on the spoke when an entry or file is queued
+  upstream, so data the policy excludes never reaches the wire. The default is that nothing
+  goes up. The hub-side scope check is a second, independent refusal and never a substitute.
+- **Hub-side ACL for downstream.** The hub holds, per spoke, which canon pages and files that
+  spoke receives. Where the scopes of
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants` apply to the pages in
+  question, the ACL honours them; a spoke is not sent a page its relationship has no grant for.
+  `canon.publish` and `file.offer` are generated per spoke from that ACL.
+- **Inbound upstream text and files are untrusted to the hub.** Journal entries and files from
+  a spoke are external content. The hub wraps them with `Platform.Security.ExternalContent`
+  and applies `0054-install-to-install-federation.md § 6. Untrusted content`, including before
+  the Historian reads them. A spoke entry cannot dispatch an agent on the hub, cannot carry an
+  instruction the Historian is obliged to follow, and files are verified against their content
+  hash and stored as data, not executed or rendered as trusted markup.
+- **Revocation and key rotation.** Revoking a relationship stops the hub sending anything to
+  that spoke and stops it accepting anything from it, through 0054's existing revocation.
+  Rotating a key follows 0054's trust model; envelopes signed by the old key are refused once
+  the new key is accepted. Canon already delivered to a revoked spoke stays on that spoke,
+  because it is data now held by an install the hub does not control and the protocol cannot
+  recall it. Journal entries the spoke already pushed stay on the hub as the hub's data, unless
+  the spoke's admin asks the hub's admin to remove them. Neither side's data is deleted by the
+  protocol on revocation. A `hub/` copy left on a revoked spoke is marked detached and stops
+  receiving updates.
+- **Agent capping on the hub.** A Historian run on the hub is an agent whose effective
+  permissions are capped per `0058-rbac-v2-roles-scopes-and-agent-capping.md § Agents`. It reads
+  the per-spoke journal namespaces it has been granted and writes hub canon pages, and cannot
+  read beyond that scope: not another install's content, not memory outside its grants.
+  Per-spoke namespacing means a run curating from one spoke's feed holds no read on another
+  spoke's namespace unless the run is explicitly granted both.
+
+### 6. Open and proprietary boundary
+
+Core is Apache-2.0 and lives in `GetBurrowing/core`. The proprietary repo is working-named
+`GetBurrowing/burrow-cloud`. That repository exists today, so the name is not only an
+assumption; what is assumed is that fleet and curation code belongs there rather than in a new
+repository, because it must be able to depend on core's public protocol and not the reverse.
+
+| Piece | Where it lives | Repo | Licence | Notes |
+|---|---|---|---|---|
+| Hub/spoke protocol and envelopes (section 3) | core | GetBurrowing/core | Apache-2.0 | built on 0054 |
+| Relationship roles and per-direction scopes | core | GetBurrowing/core | Apache-2.0 | |
+| Per-spoke upstream policy engine, default nothing up | core | GetBurrowing/core | Apache-2.0 | enforced at the spoke |
+| `hub/` and `org/` namespaces | core | GetBurrowing/core | Apache-2.0 | |
+| File offer and fetch by content hash | core | GetBurrowing/core | Apache-2.0 | |
+| Version reporting in peer status, refusal on major mismatch | core | GetBurrowing/core | Apache-2.0 | reports only; never forces upgrades |
+| Minimal console or mix-task way to pair a hub and a spoke by hand | core | GetBurrowing/core | Apache-2.0 | self-hosting stays fully free and functional |
+| Historian curation hook on the hub | core | GetBurrowing/core | Apache-2.0 | the hook only |
+| One-click add-a-location provisioning and pairing | fleet layer | GetBurrowing/burrow-cloud | Proprietary | drives the core pairing path |
+| Lockstep upgrades | fleet layer | GetBurrowing/burrow-cloud | Proprietary | |
+| Fleet health and backups | fleet layer | GetBurrowing/burrow-cloud | Proprietary | |
+| Key rotation tooling | fleet layer | GetBurrowing/burrow-cloud | Proprietary | uses core's rotation rules |
+| Hub-curation layer: Historian and agent configuration, cross-location reporting | curation layer | GetBurrowing/burrow-cloud | Proprietary | configuration, not mechanism |
+| Enterprise extras: SSO, audit export, SLA, support via 0056 | enterprise | GetBurrowing/burrow-cloud | Proprietary | support follows [ADR 0056](0056-supporting-customer-installs.md) |
+
+**Nothing in core is a licence check, an entitlement gate or a feature flag keyed to payment.**
+Every row marked core works without any Kobo service, account or key.
+
+**Commercial context, not a core mechanism.** The pricing sketch is a hub platform fee plus a
+per-location managed-service fee; self-hosting is free. This describes what Kobo may charge for
+the proprietary layer and has no representation in core code.
+
+### 7. What Kobo can and cannot see
+
+- **Where installs run.** The hub and each spoke run in the customer's cloud account, or as
+  hosted installs billed to the customer.
+- **Fleet operations see lifecycle, never content.** The fleet layer sees that an install
+  exists, its version, its health, its backup status and its key-rotation events.
+  Checkable: the status data core reports to a peer or operator carries versions and health
+  (section 4), and no envelope or status field in section 3 or section 4 carries journal
+  bodies, page bodies or file bytes to anything other than the paired peer.
+- **Content only through granted support access.** Kobo sees content only through support access
+  the customer grants under [ADR 0056](0056-supporting-customer-installs.md)
+  (`0056-supporting-customer-installs.md § A.5 What the support agent can never do` bounds it).
+  Checkable: that access is a separate `support` relationship the customer's admin accepts, and
+  it can be revoked; nothing in `hub_spoke` creates or implies it.
+- **Kobo is never in the data path.** Hub and spokes talk directly, using the descriptor and
+  signed envelopes of 0054. There is no Kobo relay or broker. Checkable: a `hub_spoke`
+  relationship is addressed to a peer install's own URL and key, the protocol has no relay
+  envelope or forwarding hop, and trust is never transitive
+  (`0054-install-to-install-federation.md § 1. Trust model`), so a third party cannot be inserted.
+- **What would let Kobo see content, and its absence.** Kobo would need (a) a key trusted by
+  the hub or a spoke, (b) a relay hop, or (c) a field carrying content in a status or telemetry
+  report. The protocol has none of these: keys are the customer's own pairing keys, there is no
+  relay type, and `policy.report` and version reporting carry policy and versions only. A review
+  that finds any of the three has found a defect against this ADR.
+
+## Rejected alternatives
+
+- **(a) A licence or entitlement check inside core. Rejected.** Core is Apache-2.0, so any
+  in-core check is removable by a one-line fork. It protects nothing and taxes honest
+  self-hosters.
+- **(b) A single multi-tenant hub install holding every franchisee as an org. Rejected.** It
+  contradicts the owned-install decision in
+  `0053-install-manifest-and-renderers.md § 1. One declarative install manifest per install` and
+  customer isolation: one database would hold every franchisee's data.
+- **(c) Full mesh between all locations. Rejected.** It needs pairings that grow with the
+  square of the number of locations and leaves no single canon authority.
+- **(d) A Kobo-operated relay or broker between hub and spokes. Rejected.** It puts Kobo in the
+  data path, which section 7 rules out.
+- **(e) A closed-source protocol. Rejected.** The sponsor judges forks inevitable, and a closed
+  protocol loses the aim of being the best option to make this easy.
+- **(f) Whole-memory two-way sync. Rejected.** It is conflict-heavy and leaks customer data
+  that the spoke never chose to share.
+- **(g) Letting the hub filter upstream data after receipt. Rejected.** The data has already
+  left the spoke; enforcement belongs before send.
+- **(h) Spokes writing hub canon directly. Rejected.** It breaks the Historian as sole page
+  writer and makes canon quality depend on every spoke.
+
+## Staged build order
+
+1. **Dependency: the 1:1 proof.** Task 01a199b2-b20c-7000-a5b5-f55e7ecfdf5d. At the time of
+   writing it is in progress and has landed no findings, so this is unlanded and the plan rests
+   on [ADR 0054](0054-install-to-install-federation.md) as written. Exit condition: two real
+   installs paired and replicating a message.
+2. **Many-peer relationships and roles.** `kind = "hub_spoke"`, `role`, complementary-role
+   check, one hub per spoke. Exit: a hub holds relationships with two spokes, each with its own
+   key and revocation, and a second hub for a spoke is refused.
+3. **Upstream journal feed with spoke policy.** `journal.push`, idempotency, tombstones, the
+   default-nothing-up policy and `policy.report`. Exit: with the default policy a spoke sends
+   nothing; after an admin allows one namespace, only that namespace arrives, and a replay is a
+   no-op.
+4. **Historian curation hook on the hub.** The hook is in core; the curation configuration is
+   proprietary. Exit: the hub's Historian reads a spoke's pushed journal as external content and
+   writes a canon page, and a spoke entry cannot dispatch an agent.
+5. **Downstream canon under `hub/page/...`.** `canon.publish`, `canon.retract`, sequence
+   numbers and resync. Exit: a spoke shows a hub page read-only, a retraction removes it, and a
+   spoke returning after downtime catches up in order.
+6. **Files.** `file.offer` and fetch by hash under `hub/file/...`, plus the upstream file scope.
+   Exit: a spoke fetches a hub file, a corrupted transfer is detected by hash, and nothing
+   uploads without `upstream:files`.
+7. **Version reporting and refusal on major mismatch.** Exit: pairing across majors is refused
+   with a reason both admins see, and peer status shows negotiated and advertised versions.
+8. **Outside core, tracked in burrow-cloud: fleet provisioning and pairing.** One-click
+   add-a-location, lockstep upgrades, fleet health, backups and key rotation. Exit: a new
+   location is provisioned and paired to a hub without hand-run commands, using only core's
+   public pairing path.
+
+## Consequences
+
+- Self-hosters get hub and spoke fully functional in core; the commercial layer is convenience
+  and operation, not capability.
+- Spoke customer data stays on the spoke unless its admin opts in per policy; the default is
+  safe and a misconfigured hub cannot pull more.
+- The hub's Historian becomes the quality gate for canon, so canon is only as good as the
+  curation, and the hub carries the curation workload.
+- Revocation cannot recall delivered canon or pushed journal entries; operators need to know
+  that data already delivered stays where it landed.
+- More relationship state (kind, role, scopes, canon sequence per spoke) must be stored and
+  tested on top of an unproven 1:1 slice, which is why step 1 gates the rest.
+- Version drift across a network is reported by core and fixed by the proprietary fleet layer;
+  a self-hoster must upgrade by hand.
+
+## Open questions
+
+- **The well-known path.** The proof ticket (01a199b2-b20c-7000-a5b5-f55e7ecfdf5d) probes
+  `/.well-known/burrow-federation`, while 0054 specifies `/.well-known/suite-federation` for the
+  descriptor and keeps the client fetching that path
+  (`0054-install-to-install-federation.md § Protocol versions`). Both paths are served, so the
+  probe may be correct, but this ADR does not resolve it. Wherever this ADR says "the
+  descriptor" it means whichever path 0054 serves, and the proof ticket decides which one an
+  operator should probe.
+- **Whether the proof ticket's findings change the design.** Until it reports, nothing here is
+  proven end to end.
+- **Hub-wide shared spaces.** Whether a later ADR should lift the one-peer-per-space index.
+- **Where `ExternalContent` wrapping applies to files.** It is an existing module for text; the
+  treatment of file bytes needs confirming when step 6 is built.
