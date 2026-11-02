@@ -791,6 +791,138 @@ defmodule Platform.Responsibilities.RouterTest do
       assert row.trigger_config["event_match"] == "meeting_finished"
     end
 
+    test "a provider without output_meta/2 gets trigger_meta byte-identical in handle_output/3" do
+      feature_str = "router_om_probe_#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_responsibility, meta) do
+            send(unquote(test_pid), {:gathered_meta, meta})
+            {:ok, %{probe_fact: 42}}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, m) do
+            send(unquote(test_pid), {:output_meta, m})
+            :ok
+          end
+        end
+      )
+
+      key = "#{feature_str}.finished_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: key,
+        feature: feature_str,
+        trigger_kind: "event_topic",
+        trigger_config: %{"topic" => "meeting:finished", "event_match" => "meeting_finished"}
+      })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      {pid, _name} = start_router()
+      Req.Test.allow(:router_external_dispatch_test, self(), pid)
+
+      capture_log([level: :info], fn ->
+        :ok =
+          Platform.Meetings.PubSub.broadcast_meeting_finished("room-om", %{
+            transcript_id: "t-om",
+            room_id: "room-om",
+            space_id: "s-om"
+          })
+
+        assert_receive {:gathered_meta, gathered}, 1_000
+        assert_receive {:output_meta, output}, 1_000
+        assert output == gathered
+        assert Map.keys(output) == Map.keys(gathered)
+      end)
+    end
+
+    test "a provider exporting output_meta/2 has its enriched meta reach handle_output/3" do
+      feature_str = "router_om_probe_#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_responsibility, meta) do
+            send(unquote(test_pid), {:gathered_meta, meta})
+            {:ok, %{probe_fact: 42}}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, m) do
+            send(unquote(test_pid), {:output_meta, m})
+            :ok
+          end
+
+          @impl true
+          def output_meta(context, trigger_meta),
+            do: Map.put(trigger_meta, :enriched, context.probe_fact)
+        end
+      )
+
+      key = "#{feature_str}.finished_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: key,
+        feature: feature_str,
+        trigger_kind: "event_topic",
+        trigger_config: %{"topic" => "meeting:finished", "event_match" => "meeting_finished"}
+      })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      {pid, _name} = start_router()
+      Req.Test.allow(:router_external_dispatch_test, self(), pid)
+
+      capture_log([level: :info], fn ->
+        :ok =
+          Platform.Meetings.PubSub.broadcast_meeting_finished("room-om", %{
+            transcript_id: "t-om",
+            room_id: "room-om",
+            space_id: "s-om"
+          })
+
+        assert_receive {:gathered_meta, gathered}, 1_000
+        assert_receive {:output_meta, output}, 1_000
+        assert output.enriched == 42
+        assert Map.delete(output, :enriched) == gathered
+      end)
+    end
+
     test "every responsibility sharing a topic + event_match fires on one broadcast" do
       row_a =
         insert!(%{

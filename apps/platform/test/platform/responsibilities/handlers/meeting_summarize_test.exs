@@ -500,4 +500,33 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       assert Map.get(ctx, :agent_kind) == nil
     end
   end
+
+  describe "output_meta/2" do
+    test "copies the gathered summary_input_hash into trigger_meta" do
+      ctx = %{meeting_transcript: %{summary_input_hash: "abc123"}}
+
+      assert %{kind: :x, summary_input_hash: "abc123"} ==
+               MeetingSummarize.output_meta(ctx, %{kind: :x})
+    end
+
+    test "is nil when the context lacks the hash" do
+      assert %{kind: :x, summary_input_hash: nil} ==
+               MeetingSummarize.output_meta(%{}, %{kind: :x})
+    end
+
+    test "the Meetings provider routes meetings.summarize through it, others untouched" do
+      alias Platform.Responsibilities.Providers.Meetings
+      alias Platform.Responsibilities.Responsibility
+
+      ctx = %{
+        __responsibility__: %Responsibility{key: "meetings.summarize"},
+        meeting_transcript: %{summary_input_hash: "h1"}
+      }
+
+      assert %{summary_input_hash: "h1"} = Meetings.output_meta(ctx, %{})
+
+      other = %{ctx | __responsibility__: %Responsibility{key: "meetings.action_items"}}
+      assert %{k: 1} == Meetings.output_meta(other, %{k: 1})
+    end
+  end
 end

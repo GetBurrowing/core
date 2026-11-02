@@ -209,6 +209,14 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     end
   end
 
+  @impl true
+  def output_meta(context, trigger_meta) when is_map(context) do
+    case handler_for(Map.get(context, :__responsibility__)) do
+      Handlers.MeetingSummarize -> MeetingSummarize.output_meta(context, trigger_meta)
+      _ -> trigger_meta
+    end
+  end
+
   @doc """
   Route a pre-model refusal to the handler that owns per-dispatch state
   (task 019fb90f-36e3 e2e fix).

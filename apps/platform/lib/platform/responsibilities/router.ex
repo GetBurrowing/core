@@ -54,7 +54,7 @@ defmodule Platform.Responsibilities.Router do
   `[ResponsibilityRouter] no output handler for <key>` and returns `:ok`
   rather than crashing. This keeps stage 6 a no-op for feature areas
   whose providers haven't grown a handler yet (e.g. M6-only deploys
-  before M8 lands `meetings.summarize`).
+  before M8 lands its summariser).
 
   That log line used to be a single `Logger.info` covering three very
   different situations. Task 019f9b28 stage 2 split it by what
@@ -1407,15 +1407,7 @@ defmodule Platform.Responsibilities.Router do
             "agent=#{agent_slug(agent)}"
         )
 
-        output_meta =
-          if responsibility.key == "meetings.summarize",
-            do:
-              Map.put(
-                trigger_meta,
-                :summary_input_hash,
-                get_in(context, [:meeting_transcript, :summary_input_hash])
-              ),
-            else: trigger_meta
+        output_meta = output_meta_for(responsibility, context, trigger_meta)
 
         invoke_handle_output(responsibility, parsed, output_meta)
 
@@ -1658,6 +1650,29 @@ defmodule Platform.Responsibilities.Router do
   end
 
   defp gather_context(_responsibility, _trigger_meta), do: %{}
+
+  # Let the owning provider enrich the meta handed to `handle_output/3`
+  # with facts only the gathered context holds. Providers without an
+  # `output_meta/2` export get `trigger_meta` back unchanged. A raise is
+  # swallowed to the unchanged meta so enrichment can never fail a
+  # dispatch whose model call already succeeded.
+  defp output_meta_for(%Responsibility{feature: feature}, context, trigger_meta)
+       when is_binary(feature) do
+    provider_module = provider_module_for(feature)
+
+    if Code.ensure_loaded?(provider_module) and
+         function_exported?(provider_module, :output_meta, 2) do
+      try do
+        provider_module.output_meta(context, trigger_meta)
+      rescue
+        _ -> trigger_meta
+      end
+    else
+      trigger_meta
+    end
+  end
+
+  defp output_meta_for(_responsibility, _context, trigger_meta), do: trigger_meta
 
   # Resolve the provider module from the responsibility's `feature`
   # field (`"meetings"` → `Platform.Responsibilities.Providers.Meetings`).
