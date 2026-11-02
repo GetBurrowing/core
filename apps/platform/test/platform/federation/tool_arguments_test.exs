@@ -229,7 +229,10 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # list requires owner_id/from/to; propose requires owner_id/operation/
   # attributes/request_key. No handler default or context alias substitutes
   # for these fields. instant/1 and AgentAccess.propose/6 refuse their absence.
-  @surveyed_required_count 226
+  # 227 adds project_create's `name` (task 01a19aa4 stage 1). HONEST: the
+  # handler reads `name` under its declared key only, and Tasks.create_project/1
+  # refuses its absence with a changeset error; no alias, no context default.
+  @surveyed_required_count 227
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

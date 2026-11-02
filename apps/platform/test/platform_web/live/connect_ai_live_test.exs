@@ -218,7 +218,8 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       )
 
     assert length(kickoffs) == 1
-    assert hd(kickoffs).content =~ "integrations"
+    refute hd(kickoffs).content =~ "integrations"
+    assert hd(kickoffs).content =~ "first project"
     assert hd(kickoffs).content =~ "first space"
 
     members =
