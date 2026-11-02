@@ -419,11 +419,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # move. Measured on the test rig at the stage's branch (844c0c697).
     # Re-pinned by task 01a1845b stage 3: the `meeting_triage_file` description
     # now interpolates Platform.Meetings.CandidateGuidance.sentence/0, so both
-    # previous-digest pins move. Measured by CI on the PR #79 merge ref.
+    # previous and main tool-digest pins move. Measured by CI on the PR #79 merge ref.
     @previous_tool_digest_off "58b259c8a492c96381b47382ef17a2003835477c842617dd45863940d6bb5a6e"
     @previous_tool_digest_on "9fdf09757af866b9d3764e02d8797c3c1442e23ca81ab5e758abd419aa425886"
-    @main_tool_digest_off "c641382d626bc47fcf2dfdb7701a0e27bb4ed5d02749fd17268850a29f14c376"
-    @main_tool_digest_on "221fa47f207beb4866aca5d8b016eb58fae6e6d15d1baeb96b12038c9eaadcb7"
+    @main_tool_digest_off "ce66e11bc37fa0149a0eb7bd51fe890f07acb54310a268d0f042ebd18d61cc32"
+    @main_tool_digest_on "7c7043e1799fc964efc6b8ca6096125ed5f1954ab92be2dfffe88fd2ca95f451"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
