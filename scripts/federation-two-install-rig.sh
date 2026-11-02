@@ -66,6 +66,10 @@ vault_secret() { echo "fed-vault-$1-$TAG"; }
 cookie_secret() { echo "fed-cookie-$1-$TAG"; }
 uploads_volume() { echo "fed-uploads-$1-$TAG"; }
 node_name() { echo "fed_$1"; }
+CONTAINER_RE="^dev-fed-[ab]-$TAG\$"
+VOLUME_RE="^fed-uploads-[ab]-$TAG\$"
+SECRET_RE="^fed-(vault|cookie)-[ab]-$TAG\$"
+DB_RE="^fed_[ab]_$TAG\$"
 
 mkdir -p "$OUT"; chmod 700 "$OUT"
 LOG="$OUT/rig.log"
@@ -230,22 +234,25 @@ teardown() {
   done
   rm -f "$OUT"/.secret.* "$OUT"/.rpc.* 2>/dev/null || true
 
-  say "proof: podman ps -a --filter name=$TAG"
-  podman ps -a --filter "name=$TAG"
-  say "proof: podman volume ls --filter name=$TAG"
-  podman volume ls --filter "name=$TAG"
-  say "proof: podman secret ls --filter name=$TAG"
-  podman secret ls --filter "name=$TAG"
-  say "proof: databases matching $TAG on $PG_CONTAINER (psql \\l)"
-  psql_rig -l | { grep -F "$TAG" || true; }
+  # The proof matches the rig's OWN names only. A bare `01a199b2` also
+  # matches this task's core-test containers and test databases (measured:
+  # a concurrent core-test run made the first teardown report a leftover).
+  say "proof: podman ps -a --filter name='$CONTAINER_RE'"
+  podman ps -a --filter "name=$CONTAINER_RE"
+  say "proof: podman volume ls --filter name='$VOLUME_RE'"
+  podman volume ls --filter "name=$VOLUME_RE"
+  say "proof: podman secret ls (names matching '$SECRET_RE')"
+  podman secret ls --format '{{.Name}}' | { grep -E "$SECRET_RE" || true; }
+  say "proof: psql \\l on $PG_CONTAINER (names matching '$DB_RE')"
+  psql_rig -l | cut -d'|' -f1 | { grep -E "$DB_RE" || true; }
   say "proof: ls -A $OUT"
   ls -A "$OUT"
 
   local left=0
-  [ -z "$(podman ps -aq --filter "name=$TAG")" ] || left=1
-  [ -z "$(podman volume ls -q --filter "name=$TAG")" ] || left=1
-  [ -z "$(podman secret ls -q --filter "name=$TAG")" ] || left=1
-  [ -z "$(psql_rig -l | grep -F "$TAG" || true)" ] || left=1
+  [ -z "$(podman ps -a --format '{{.Names}}' | grep -E "$CONTAINER_RE" || true)" ] || left=1
+  [ -z "$(podman volume ls --format '{{.Name}}' | grep -E "$VOLUME_RE" || true)" ] || left=1
+  [ -z "$(podman secret ls --format '{{.Name}}' | grep -E "$SECRET_RE" || true)" ] || left=1
+  [ -z "$(psql_rig -l | cut -d'|' -f1 | grep -E "$DB_RE" || true)" ] || left=1
   ! ls -d "$OUT"/src-* >/dev/null 2>&1 || left=1
   [ "$left" -eq 0 ] || fail "teardown left something behind (see the listings above)"
   say "teardown complete: every listing above is empty"
