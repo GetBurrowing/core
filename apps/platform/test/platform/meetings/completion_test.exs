@@ -1213,6 +1213,8 @@ defmodule Platform.Meetings.CompletionTest do
     canvas
   end
 
+  defp normalize_ws(text), do: text |> String.split() |> Enum.join(" ")
+
   test "accepted candidate identity survives supported dispatch and real filing without backlink",
        ctx do
     candidate = accepted_action!(ctx.meeting)
@@ -1235,6 +1237,10 @@ defmodule Platform.Meetings.CompletionTest do
              [%{id: candidate.id, quote: candidate.evidence_quote, canvas_id: nil}]
 
     assert payload.candidate_provenance_instructions =~ "candidate_ids"
+
+    assert normalize_ws(payload.candidate_provenance_instructions) =~
+             normalize_ws(Platform.Meetings.CandidateGuidance.sentence())
+
     refute Enum.any?(payload.accepted_action_candidates, &(&1.id == rejected.id))
 
     canvas = provenance_canvas!(ctx)

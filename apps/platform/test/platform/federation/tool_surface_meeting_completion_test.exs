@@ -55,6 +55,10 @@ defmodule Platform.Federation.ToolSurfaceMeetingCompletionTest do
     tool = Enum.find(response["result"]["tools"], &(&1["name"] == "meeting_triage_file"))
     schema = tool["inputSchema"]["properties"]["action_items"]
     assert schema["type"] == "array"
+
+    assert String.split(schema["description"]) |> Enum.join(" ") =~
+             Platform.Meetings.CandidateGuidance.sentence() |> String.split() |> Enum.join(" ")
+
     assert schema["items"]["type"] == "object"
     properties = schema["items"]["properties"]
     assert properties["priority"]["enum"] == ["low", "medium", "high", "critical"]

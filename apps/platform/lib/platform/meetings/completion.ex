@@ -592,7 +592,7 @@ defmodule Platform.Meetings.Completion do
       source_transcript_ids: run.snapshot["source_transcript_ids"],
       accepted_action_candidates: accepted_actions(meeting),
       candidate_provenance_instructions:
-        "For each accepted_action_candidates entry, preserve its id in the final checklist note and submit that id in candidate_ids on the matching meeting_triage_file action item. Every accepted action must be explicitly accounted for by a filed item or an explicit exclude/duplicate/conflict decision. Use candidate_ids: [] for novel transcript-only follow-ups. Never infer candidate identity from title similarity; preserve item_id on replay."
+        "For each accepted_action_candidates entry, preserve its id in the final checklist note and submit that id in candidate_ids on the matching meeting_triage_file action item. #{Platform.Meetings.CandidateGuidance.sentence()}"
     }
 
   defp dispatch(run, role, fun, status) do

@@ -923,6 +923,77 @@ defmodule Platform.Responsibilities.RouterTest do
       end)
     end
 
+    test "a provider exporting output_meta/2 that raises falls back to unchanged trigger_meta and logs a warning" do
+      feature_str = "router_om_raise_#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      define_provider(
+        feature_str,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_responsibility, meta) do
+            send(unquote(test_pid), {:gathered_meta, meta})
+            {:ok, %{probe_fact: 42}}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, m) do
+            send(unquote(test_pid), {:output_meta, m})
+            :ok
+          end
+
+          @impl true
+          def output_meta(_context, _trigger_meta), do: raise("enricher boom")
+        end
+      )
+
+      key = "#{feature_str}.finished_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: key,
+        feature: feature_str,
+        trigger_kind: "event_topic",
+        trigger_config: %{"topic" => "meeting:finished", "event_match" => "meeting_finished"}
+      })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      {pid, _name} = start_router()
+      Req.Test.allow(:router_external_dispatch_test, self(), pid)
+
+      log =
+        capture_log([level: :info], fn ->
+          :ok =
+            Platform.Meetings.PubSub.broadcast_meeting_finished("room-om", %{
+              transcript_id: "t-om",
+              room_id: "room-om",
+              space_id: "s-om"
+            })
+
+          assert_receive {:gathered_meta, gathered}, 1_000
+          assert_receive {:output_meta, output}, 1_000
+          assert output == gathered
+        end)
+
+      assert log =~ "output_meta/2 raised for"
+      assert log =~ "key=#{key}"
+      assert log =~ "enricher boom"
+    end
+
     test "every responsibility sharing a topic + event_match fires on one broadcast" do
       row_a =
         insert!(%{

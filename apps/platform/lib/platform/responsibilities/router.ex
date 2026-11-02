@@ -1656,7 +1656,7 @@ defmodule Platform.Responsibilities.Router do
   # `output_meta/2` export get `trigger_meta` back unchanged. A raise is
   # swallowed to the unchanged meta so enrichment can never fail a
   # dispatch whose model call already succeeded.
-  defp output_meta_for(%Responsibility{feature: feature}, context, trigger_meta)
+  defp output_meta_for(%Responsibility{feature: feature} = responsibility, context, trigger_meta)
        when is_binary(feature) do
     provider_module = provider_module_for(feature)
 
@@ -1665,7 +1665,12 @@ defmodule Platform.Responsibilities.Router do
       try do
         provider_module.output_meta(context, trigger_meta)
       rescue
-        _ -> trigger_meta
+        error ->
+          Logger.warning(
+            "[Responsibilities] output_meta/2 raised for #{inspect(provider_module)} key=#{responsibility.key}; using trigger_meta unchanged: #{Exception.message(error)}"
+          )
+
+          trigger_meta
       end
     else
       trigger_meta
