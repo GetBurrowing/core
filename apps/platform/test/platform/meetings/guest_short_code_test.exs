@@ -39,7 +39,7 @@ defmodule Platform.Meetings.GuestShortCodeTest do
                     |> Path.dirname()
                     |> Path.dirname()
                     |> Path.dirname(),
-                    "priv/repo/migrations/20261030160000_add_short_code_to_meeting_invites.exs"
+                    "priv/repo/migrations/20261102230000_add_short_code_to_meeting_invites.exs"
                   ])
 
   setup_all do
