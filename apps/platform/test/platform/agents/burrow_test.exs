@@ -173,6 +173,180 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  # ── task 01a19aa4 stage 2: the setup guide ─────────────────────────────
+
+  defp templates,
+    do: [
+      Burrow.identity_template("Burrow", "codex"),
+      Burrow.identity_template("Burrow", "claude_code")
+    ]
+
+  # The "Helping your owner finish setup" section, up to the next heading.
+  defp setup_section(template) do
+    [_, rest] = String.split(template, "## Helping your owner finish setup", parts: 2)
+    rest |> String.split("\n## ", parts: 2) |> hd()
+  end
+
+  # The numbered steps of the setup section, in order.
+  defp setup_steps(template) do
+    [_intro | steps] = Regex.split(~r/\n\d\. /, setup_section(template))
+    [last | earlier] = Enum.reverse(steps)
+    Enum.reverse([last |> String.split("\n\n", parts: 2) |> hd() | earlier])
+  end
+
+  defp index_of(text, needle) do
+    case :binary.match(text, needle) do
+      {index, _} -> index
+      :nomatch -> flunk("#{inspect(needle)} not found")
+    end
+  end
+
+  describe "setup guide (identity_template/2)" do
+    test "setup guide puts the project step before the space step" do
+      for template <- templates() do
+        section = setup_section(template)
+        assert index_of(section, "project_create") < index_of(section, "first space")
+        assert index_of(section, "first project") < index_of(section, "first space")
+      end
+    end
+
+    test "setup guide orders understand, identity page, project, space, shape Burrow" do
+      for template <- templates() do
+        assert [understand, memory, project, space, shape] = setup_steps(template)
+
+        assert understand =~ "why they want Burrow"
+        assert understand =~ "who they and their org are"
+        assert understand =~ "who is involved"
+        assert understand =~ "one at a\n   time"
+        assert memory =~ "`org/page/identity.md`"
+        assert memory =~ "Read it\n   back to them"
+        assert project =~ "`project_create`"
+        assert space =~ "first space"
+        assert shape =~ "how you work for them"
+        assert shape =~ "/control/burrow/config"
+      end
+    end
+
+    test "setup guide says Burrow is the workspace and names no other chat tool to set up" do
+      prohibition =
+        ~r/Never suggest they need a separate chat or work tool, and never name one \(Slack, Teams, a task tracker\) as something to set up alongside Burrow\./
+
+      for template <- templates() do
+        assert template =~ prohibition
+        refute template =~ "(email, calendar, files, chat)"
+        refute template =~ "Suggest connecting the ones that matter most first"
+
+        # Slack and Teams appear once each, inside the prohibition sentence.
+        assert length(Regex.scan(~r/Slack/, template)) == 1
+        assert length(Regex.scan(~r/Teams/, template)) == 1
+        assert template |> String.replace(prohibition, "") |> String.contains?("Slack") == false
+
+        assert template =~ "Burrow is where their team chats, meets, plans and tracks work"
+        assert template =~ "rarely works as\nwell as doing the work in Burrow itself"
+      end
+    end
+
+    test "setup guide keeps the /tasks New Project fallback" do
+      for template <- templates() do
+        assert template =~
+                 ~s(If `project_create` is not among your tools, send them to\n   the "New Project" button on /tasks and wait for them to finish.)
+      end
+    end
+
+    test "setup guide hard-codes no family or business menu" do
+      for template <- templates() do
+        refute template =~ ~r/famil(y|ies)/i
+        refute template =~ ~r/\bbusiness(es)?\b/i
+        assert setup_section(template) =~ "offer a few example uses, then follow their\n   lead"
+      end
+    end
+
+    test "setup guide does not offer more agents as a default step" do
+      for template <- templates() do
+        refute template =~ ~r/more agents/i
+
+        for step <- setup_steps(template),
+            do: refute(step =~ ~r/(add|adding|another|more) agents?\b/i, step)
+
+        assert [_] = Regex.scan(~r/another agent/, template)
+
+        assert template =~
+                 "Mention adding another agent only when their aims call for it"
+      end
+    end
+
+    test "setup guide covers members and says Burrow works for everyone" do
+      for template <- templates() do
+        assert template =~ "the one agent\nfor everyone on it: you work for every member"
+
+        assert template =~
+                 "If anyone (owner or member) says they want to start a project, help them create one the same way."
+      end
+    end
+  end
+
+  # ── task 01a19aa4 stage 2: default roles ───────────────────────────────
+
+  describe "ensure/2 default roles" do
+    setup do
+      for role <- Burrow.default_roles(), do: :ok = Platform.Roles.unassign_role(role)
+      :ok
+    end
+
+    defp other_agent! do
+      n = System.unique_integer([:positive])
+
+      %Platform.Agents.Agent{}
+      |> Platform.Agents.Agent.changeset(%{
+        slug: "other-#{n}",
+        name: "Other #{n}",
+        status: "active"
+      })
+      |> Repo.insert!()
+    end
+
+    test "the four default roles are historian and the meeting roles" do
+      assert Burrow.default_roles() ==
+               ~w(historian meeting_scribe meeting_producer triage_officer)
+    end
+
+    for role <- ~w(historian meeting_scribe meeting_producer triage_officer) do
+      test "an unassigned #{role} goes to Burrow" do
+        owner = admin!()
+        assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+        assert Platform.Roles.agent_id_for_role(unquote(role)) == agent.id
+      end
+
+      test "a #{role} held by another agent is untouched" do
+        other = other_agent!()
+        {:ok, _} = Platform.Roles.assign_role(unquote(role), other.id)
+        owner = admin!()
+
+        assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+
+        assert Platform.Roles.agent_id_for_role(unquote(role)) == other.id
+
+        for held <- Burrow.default_roles() -- [unquote(role)],
+            do: assert(Platform.Roles.agent_id_for_role(held) == agent.id)
+      end
+    end
+
+    test "re-running ensure/2 changes no assignment and raises nothing" do
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      before = Repo.all(from(ra in Platform.Roles.RoleAssignment, order_by: ra.role_key))
+
+      assert {:ok, ^agent} = Burrow.ensure(owner.id, "claude_code")
+      assert {:ok, again} = Burrow.ensure(owner.id, "codex")
+      assert again.id == agent.id
+
+      assert Repo.all(from(ra in Platform.Roles.RoleAssignment, order_by: ra.role_key)) == before
+
+      for role <- Burrow.default_roles(),
+          do: assert(Platform.Roles.agent_id_for_role(role) == agent.id)
+    end
+  end
+
   describe "no agent before the owner configures one" do
     test "a first OIDC login with AGENT_HOST_TOKEN set creates no agent" do
       assert Platform.AgentHost.configured?()
