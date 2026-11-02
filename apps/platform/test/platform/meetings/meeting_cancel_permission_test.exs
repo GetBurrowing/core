@@ -62,7 +62,10 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
 
   defp meeting!(project, attrs \\ %{}) do
     name = "Cancel Meeting #{System.unique_integer([:positive])}"
-    {:ok, meeting} = Meetings.create_meeting(Map.merge(%{project_id: project.id, name: name}, attrs))
+
+    {:ok, meeting} =
+      Meetings.create_meeting(Map.merge(%{project_id: project.id, name: name}, attrs))
+
     meeting
   end
 
@@ -135,7 +138,10 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
 
       assert reload(meeting).created_by_user_id == nil
       assert Meetings.can_cancel_meeting?(meeting, host)
-      assert {:ok, %Meeting{status: "cancelled"}} = Meetings.cancel_meeting_for_user(meeting.id, host)
+
+      assert {:ok, %Meeting{status: "cancelled"}} =
+               Meetings.cancel_meeting_for_user(meeting.id, host)
+
       assert reload(meeting).status == "cancelled"
     end
 
@@ -145,7 +151,9 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
       participant = seat!(meeting, creator)
 
       assert Meetings.can_cancel_meeting?(meeting, creator)
-      assert {:ok, %Meeting{status: "cancelled"}} = Meetings.cancel_meeting_for_user(meeting.id, creator)
+
+      assert {:ok, %Meeting{status: "cancelled"}} =
+               Meetings.cancel_meeting_for_user(meeting.id, creator)
 
       cancelled = reload(meeting)
       assert cancelled.status == "cancelled"
@@ -157,7 +165,9 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
       admin = member!(user!(), org, role: "admin")
 
       assert Meetings.can_cancel_meeting?(meeting, admin)
-      assert {:ok, %Meeting{status: "cancelled"}} = Meetings.cancel_meeting_for_user(meeting.id, admin)
+
+      assert {:ok, %Meeting{status: "cancelled"}} =
+               Meetings.cancel_meeting_for_user(meeting.id, admin)
     end
 
     test "cancelling creates NO chat participant row for the canceller",
@@ -215,7 +225,9 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
 
     test "a malformed or unknown id is :not_found", %{creator: creator} do
       assert {:error, :not_found} = Meetings.cancel_meeting_for_user("not-a-uuid", creator)
-      assert {:error, :not_found} = Meetings.cancel_meeting_for_user(Ecto.UUID.generate(), creator)
+
+      assert {:error, :not_found} =
+               Meetings.cancel_meeting_for_user(Ecto.UUID.generate(), creator)
     end
   end
 
@@ -235,7 +247,9 @@ defmodule Platform.Meetings.MeetingCancelPermissionTest do
     test "a live meeting is cancellable", %{meeting: meeting, creator: creator} do
       {:ok, live} = Meetings.start_meeting(meeting)
       assert Meetings.cancellable_status?(live)
-      assert {:ok, %Meeting{status: "cancelled"}} = Meetings.cancel_meeting_for_user(meeting.id, creator)
+
+      assert {:ok, %Meeting{status: "cancelled"}} =
+               Meetings.cancel_meeting_for_user(meeting.id, creator)
     end
 
     test "re-cancel is {:ok, _} with no write and no broadcast",
