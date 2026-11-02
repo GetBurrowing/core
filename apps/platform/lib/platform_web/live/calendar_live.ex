@@ -631,8 +631,10 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  # The meeting's space, host and invitees, read from the chat rows the
-  # Meetings context already keeps for it (no new backend call).
+  # The meeting's space and host, read from the chat rows the Meetings
+  # context keeps for it. Invitees come from `meeting_invites` (revoked rows
+  # excluded), not chat participation: an invited member who has not joined
+  # the space, and every guest, are invited all the same.
   defp meeting_info(meeting) do
     space = meeting.chat_space_id && Platform.Chat.get_space(meeting.chat_space_id)
 
@@ -651,9 +653,21 @@ defmodule PlatformWeb.CalendarLive do
       meeting_id: meeting.id,
       space: space && "#" <> space.name,
       host: host && host.display_name,
-      invited: people |> Enum.map(& &1.display_name) |> Enum.reject(&is_nil/1)
+      invited:
+        meeting.id
+        |> Platform.Meetings.list_invites(preload: [:user])
+        |> Enum.map(&invitee_label/1)
+        |> Enum.reject(&is_nil/1)
     }
   end
+
+  # Same precedence as MeetingLive's invite rows for a member; a guest reads
+  # as the address they were invited at.
+  defp invitee_label(%Platform.Meetings.Invite{user: %Platform.Accounts.User{} = user} = invite),
+    do: user.name || user.email || invite.display_name
+
+  defp invitee_label(%Platform.Meetings.Invite{} = invite),
+    do: invite.email || invite.display_name
 
   defp handle_consent(socket, hold_id, verb) do
     owner_id = socket.assigns.current_user_record.id

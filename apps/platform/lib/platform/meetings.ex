@@ -2643,6 +2643,9 @@ defmodule Platform.Meetings do
   and every reader in v1 (the notifier above all) wants the live set. Pass
   `include_revoked: true` for an audit view.
 
+  `preload: assocs` preloads the given associations (e.g. `[:user]` for a
+  member invitee's name) so web callers need not reach for `Repo` themselves.
+
   Ordered by `inserted_at`, with `id` as a tiebreak so the order is total
   rather than merely usually-stable; ids are UUIDv7, so the tiebreak sorts the
   same direction as the timestamp.
@@ -2677,7 +2680,9 @@ defmodule Platform.Meetings do
         exclude_revoked(query)
       end
 
-    Repo.all(query)
+    query
+    |> Repo.all()
+    |> Repo.preload(Keyword.get(opts, :preload, []))
   end
 
   # The single definition of "not revoked" on this module. `do_list_invites/2`
