@@ -15,6 +15,36 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
   alias Phoenix.LiveView.Socket
   alias PlatformWeb.ChatLive.PresenceHooks
 
+  describe "sender_name/2 for a federation_inbound message (task 01a199c7)" do
+    @pid "fed-participant"
+    @via_map %{@pid => %{name: "Pat (via Red Star)"}}
+
+    test "shows the plain remote author, not the stored \"(via ...)\" name" do
+      msg = %{
+        participant_id: @pid,
+        author_display_name: "Pat (via Red Star)",
+        metadata: %{"source" => "federation_inbound", "remote_author" => "Pat"}
+      }
+
+      assert PresenceHooks.sender_name(@via_map, msg) == "Pat"
+      assert PresenceHooks.sender_name(%{}, msg) == "Pat"
+      refute PresenceHooks.sender_name(@via_map, msg) =~ "(via"
+    end
+
+    test "every other message keeps the participant's name" do
+      for metadata <- [
+            %{"source" => "email_inbound", "remote_author" => "Pat"},
+            %{"remote_author" => "Pat"},
+            %{"source" => "federation_inbound", "remote_author" => ""},
+            %{"source" => "federation_inbound"},
+            %{}
+          ] do
+        msg = %{participant_id: @pid, author_display_name: "snap", metadata: metadata}
+        assert PresenceHooks.sender_name(@via_map, msg) == "Pat (via Red Star)", inspect(metadata)
+      end
+    end
+  end
+
   describe "apply_agent_typing/3" do
     test "typing: true records the typing agent and the thinking status" do
       socket = build_socket(%{active_space: nil, agent_typing_pids: MapSet.new()})

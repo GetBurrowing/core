@@ -260,6 +260,79 @@ defmodule Platform.Federation.Peers.Ingest do
     |> ExternalContent.escape_mentions()
   end
 
+  # ── the human view (inverse of render_content/2) ───────────────────────
+
+  # Sentinels rendered through the REAL `ExternalContent.wrap/2` to derive the
+  # wrapper's literal text (notice, marker spelling, Source/From/--- lines), so
+  # the unwrap regex never restates any of it. Plain ASCII letters: neither
+  # `sanitize/1` nor `sanitize_line/1` alters them.
+  @sentinel_id "HUMANCONTENTSENTINELID"
+  @sentinel_from "HUMANCONTENTSENTINELFROM"
+  @sentinel_body "HUMANCONTENTSENTINELBODY"
+  @human_regex_key {__MODULE__, :human_content_regex}
+
+  @doc """
+  The text a HUMAN should see for content produced by `render_content/2`: the
+  peer's sanitized body (plus the truncation note, on its own paragraph, when
+  the body was capped), without the `Shared from` line, the SECURITY NOTICE or
+  the boundary markers. Agents never read this; the stored form is theirs.
+
+  It is ONE anchored regex: the end marker must carry the start marker's id
+  (backreference) and be followed by nothing but the optional truncation note
+  and end-of-string. A body cannot forge the end: markers in it were
+  neutralized by `ExternalContent.sanitize/1`, and the 16-hex id is random per
+  message. ANY input that does not match whole is returned UNCHANGED, so a
+  surprise shows the human the notice rather than a mis-cut body.
+  """
+  @spec human_content(String.t()) :: String.t()
+  def human_content(content) when is_binary(content) do
+    case Regex.named_captures(human_regex(), content) do
+      %{"body" => body, "note" => ""} -> body
+      %{"body" => body, "note" => note} -> body <> "\n\n" <> note
+      nil -> content
+    end
+  end
+
+  defp human_regex do
+    case :persistent_term.get(@human_regex_key, nil) do
+      nil ->
+        regex = Regex.compile!(human_regex_source(), "su")
+        :persistent_term.put(@human_regex_key, regex)
+        regex
+
+      regex ->
+        regex
+    end
+  end
+
+  @doc false
+  def human_regex_source do
+    template =
+      ExternalContent.wrap(@sentinel_body,
+        source: :federation,
+        sender: @sentinel_from,
+        id: @sentinel_id
+      )
+
+    # warning ... start-id | ">>>\nSource: Burrow peer\nFrom: " | "\n---\n" |
+    # "\n<<<END... id=\"" | "\">>>"
+    [before_start_id, before_from, before_body, before_end_id, after_end_id] =
+      String.split(template, [@sentinel_id, @sentinel_from, @sentinel_body])
+
+    "\\AShared from [^\\n]*\\n\\n" <>
+      Regex.escape(before_start_id) <>
+      "(?<id>[0-9a-f]{16})" <>
+      Regex.escape(before_from) <>
+      "[^\\n]*" <>
+      Regex.escape(before_body) <>
+      "(?<body>.*)" <>
+      Regex.escape(before_end_id) <>
+      "\\1" <>
+      Regex.escape(after_end_id) <>
+      "(?:\\n\\n(?<note>\\[Truncated: the message is \\d+ bytes; the first \\d+ are shown\\.\\]))?" <>
+      "\\z"
+  end
+
   defp cap_body(body) when byte_size(body) <= @content_cap_bytes, do: {body, nil}
 
   defp cap_body(body) do

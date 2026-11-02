@@ -127,8 +127,8 @@ defmodule PlatformWeb.ChatLive.ChatListData do
     with %{} = excerpts <- socket.assigns[:list_excerpts],
          true <- space_id in excerpt_space_ids(socket.assigns) do
       entry = %{
-        content: Chat.message_excerpt(msg.content),
-        author_name: msg.author_display_name,
+        content: Chat.message_excerpt(Chat.human_content(msg)),
+        author_name: Chat.human_author_name(msg) || msg.author_display_name,
         inserted_at: msg.inserted_at
       }
 

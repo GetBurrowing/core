@@ -146,7 +146,7 @@ defmodule PlatformWeb.ChatLive.QuotedMessage do
             )
         ),
       at: Chat.message_ordered_at(target),
-      preview: preview(target.content)
+      preview: preview(Chat.human_content(target))
     }
   end
 

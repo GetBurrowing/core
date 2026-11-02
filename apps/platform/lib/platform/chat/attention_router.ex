@@ -1248,7 +1248,9 @@ defmodule Platform.Chat.AttentionRouter do
 
     Platform.Push.Notification.chat(%{
       reason: reason,
-      author: sender_name,
+      # A peer install's message shows its plain remote author and unwrapped
+      # body to the human (task 01a199c7); the stored form stays the agents'.
+      author: Platform.Chat.human_author_name(message) || sender_name,
       author_type: author_type,
       author_id: author_id,
       author_avatar_url: avatar_url,
@@ -1259,7 +1261,7 @@ defmodule Platform.Chat.AttentionRouter do
       space_path: Platform.Chat.space_path_segment(space),
       space_id: space.id,
       message_id: message.id,
-      content: message.content,
+      content: Platform.Chat.human_content(message),
       attachments: attachments,
       # The install's product name for the title of a space with no name (a
       # DM or unnamed group): read once here, at the router boundary, so

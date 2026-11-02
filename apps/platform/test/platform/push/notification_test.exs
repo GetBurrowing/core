@@ -223,6 +223,51 @@ defmodule Platform.Push.NotificationTest do
     end
   end
 
+  # Task 01a199c7 stage 2: the push preview is a human surface.
+  describe "a peer install's message" do
+    @fed_meta %{
+      "source" => "federation_inbound",
+      "peer_display_name" => "Red Star",
+      "remote_author" => "Pat"
+    }
+
+    defp fed_content(body) do
+      Platform.Federation.Peers.Ingest.render_content(
+        %Platform.Federation.Peers.Peer{display_name: "Red Star"},
+        %{content: body, author_name: "Pat"}
+      )
+    end
+
+    test "the body is the peer's text, with no notice, markers or provenance line" do
+      content = fed_content("Hello from Red Star")
+      assert content =~ "SECURITY NOTICE"
+
+      msg = %Message{id: Ecto.UUID.generate(), content: content, metadata: @fed_meta}
+      n = AttentionRouter.push_notification("Pat (via Red Star)", msg, :all, space(), [])
+
+      assert String.starts_with?(n.body, "Hello from Red Star")
+      refute n.body =~ "SECURITY NOTICE"
+      refute n.body =~ "EXTERNAL_UNTRUSTED_CONTENT"
+      refute n.body =~ "Shared from"
+      assert n.author_name == "Pat"
+      refute n.title =~ "(via"
+    end
+
+    test "an inbound email's push body is unchanged" do
+      content = fed_content("an email that looks federated")
+
+      plain = %Message{id: Ecto.UUID.generate(), content: content}
+      email = %Message{plain | metadata: %{"source" => "email_inbound"}}
+
+      n_plain = AttentionRouter.push_notification("Mail", plain, :all, space(), [])
+      n_email = AttentionRouter.push_notification("Mail", email, :all, space(), [])
+
+      assert n_email.body == n_plain.body
+      assert n_email.body =~ "Shared from"
+      assert n_email.author_name == "Mail"
+    end
+  end
+
   describe "categories and grouping" do
     test "a mention gets SUITE_MENTION and is grouped by its space" do
       s = space()

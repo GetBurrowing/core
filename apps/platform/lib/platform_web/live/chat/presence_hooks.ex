@@ -482,8 +482,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   is preferred so renames propagate; the author snapshot (ADR 0038) is the
   fallback when the participant is no longer in the space (dismissed).
   """
+  # A peer install's message (task 01a199c7): the stored author is a system
+  # participant named "<author> (via <peer>)" for agents; humans see the plain
+  # remote author, with the peer named once by the gray "Shared from" header.
   def sender_name(participants_map, %{participant_id: pid} = msg) do
-    case Map.get(participants_map, pid) do
+    case Platform.Chat.human_author_name(msg) || Map.get(participants_map, pid) do
       %{name: name} when is_binary(name) and name != "" -> name
       name when is_binary(name) and name != "" -> name
       _ -> author_snapshot_name(msg)

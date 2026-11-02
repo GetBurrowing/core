@@ -44,6 +44,183 @@ defmodule Platform.ChatTest do
     "test-#{System.unique_integer([:positive])}"
   end
 
+  # ── human_content/1 (task 01a199c7 stage 1) ──────────────────────────────────
+
+  describe "human_content/1" do
+    alias Platform.Federation.Peers.Ingest
+    alias Platform.Federation.Peers.Peer
+    alias Platform.Mail.Account
+    alias Platform.Mail.Inbound
+    alias Platform.Mail.InboundMessage
+    alias Platform.Security.ExternalContent
+
+    defp federated_content(body) do
+      Ingest.render_content(%Peer{display_name: "Red Star"}, %{content: body, author_name: "Pat"})
+    end
+
+    defp stored_message(content, metadata) do
+      space = create_space()
+      p = create_participant(space.id)
+      msg = create_message(space.id, p.id, %{content: content, metadata: metadata})
+      Platform.Repo.get!(Platform.Chat.Message, msg.id)
+    end
+
+    defp email_content(body) do
+      Inbound.render_content(
+        %Account{name: "Ops", username: "ops@example.test", senders: []},
+        %InboundMessage{
+          from_address: "Recruiter <recruiter@corp.test>",
+          to_addresses: ["ops@example.test"],
+          subject: "Hello",
+          message_id_header: "<abc@corp.test>",
+          received_at: ~U[2026-11-01 12:00:00.000000Z]
+        },
+        %{text: body}
+      )
+    end
+
+    test "a federation_inbound message shows only the peer's body" do
+      content = federated_content("Hello from Red Star\n\nsecond paragraph")
+      msg = stored_message(content, %{"source" => "federation_inbound"})
+
+      # the stored (agent) form is untouched
+      assert msg.content == content
+      assert msg.content =~ ExternalContent.warning()
+
+      assert Chat.human_content(msg) == "Hello from Red Star\n\nsecond paragraph"
+    end
+
+    test "inbound email passes through byte-identical" do
+      content = email_content("Dear team,\n\nplease call me.")
+      assert content =~ ExternalContent.warning()
+
+      msg = stored_message(content, %{"source" => "email_inbound"})
+      assert Chat.human_content(msg) === content
+    end
+
+    test "only the federation_inbound source unwraps, even for federation-shaped content" do
+      content = federated_content("pasted")
+
+      # positive control: the same content does unwrap under the federation source
+      assert Chat.human_content(%{
+               content: content,
+               metadata: %{"source" => "federation_inbound"}
+             }) ==
+               "pasted"
+
+      for metadata <- [%{"source" => "email_inbound"}, %{}, %{"source" => nil}, nil, "x"] do
+        assert Chat.human_content(%{content: content, metadata: metadata}) === content,
+               inspect(metadata)
+      end
+
+      email_msg = stored_message(content, %{"source" => "email_inbound"})
+      assert Chat.human_content(email_msg) === content
+    end
+
+    test "nil content stays nil" do
+      assert Chat.human_content(%{content: nil, metadata: %{"source" => "federation_inbound"}}) ==
+               nil
+
+      assert Chat.human_content(%{content: nil, metadata: %{}}) == nil
+    end
+  end
+
+  # ── human surfaces (task 01a199c7 stage 2) ────────────────────────────────────
+
+  describe "human surfaces show a peer message unwrapped, under its plain author" do
+    alias PlatformWeb.ChatLive.ChatListData
+    alias PlatformWeb.ChatLive.RenderHelpers
+
+    @fed_meta %{
+      "source" => "federation_inbound",
+      "peer_display_name" => "Red Star",
+      "remote_author" => "Pat"
+    }
+
+    defp fed_setup(body \\ "Hello from Red Star\n\nsecond paragraph") do
+      space = create_space()
+      p = create_participant(space.id, %{display_name: "Pat (via Red Star)"})
+      content = federated_content(body)
+      msg = create_message(space.id, p.id, %{content: content, metadata: @fed_meta})
+      %{space: space, p: p, msg: Platform.Repo.get!(Platform.Chat.Message, msg.id)}
+    end
+
+    defp list_socket(space) do
+      %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, list_excerpts: %{}, channels: [space]}
+      }
+    end
+
+    test "last_message_excerpts/2 and ChatListData.put_message/2 shape it the same" do
+      %{space: space, msg: msg} = fed_setup()
+
+      # positive control: the stored snapshot carries "(via ...)" and the wrapper
+      assert msg.author_display_name == "Pat (via Red Star)"
+      assert msg.content =~ "SECURITY NOTICE"
+
+      entry = Chat.last_message_excerpts([space.id])[space.id]
+      assert entry.content == "Hello from Red Star second paragraph"
+      assert entry.author_name == "Pat"
+
+      patched = ChatListData.put_message(list_socket(space), msg)
+      assert patched.assigns.list_excerpts[space.id] == entry
+    end
+
+    test "an email message's excerpt is unchanged" do
+      space = create_space()
+      p = create_participant(space.id, %{display_name: "Email (external)"})
+      content = federated_content("an email that looks federated")
+
+      create_message(space.id, p.id, %{
+        content: content,
+        metadata: %{"source" => "email_inbound"}
+      })
+
+      %{} = excerpts = Chat.last_message_excerpts([space.id])
+      assert excerpts[space.id].content == Chat.message_excerpt(content)
+      assert excerpts[space.id].author_name == "Email (external)"
+    end
+
+    test "the search headline is an excerpt of the body, never the ts_headline slice" do
+      %{msg: msg} = fed_setup("<b>Hello</b> from Red Star")
+      wrapped_slice = "SECURITY NOTICE: The following <mark>content</mark>"
+
+      html =
+        %{msg | search_headline: wrapped_slice}
+        |> RenderHelpers.search_headline()
+        |> Phoenix.HTML.safe_to_string()
+
+      assert html == "&lt;b&gt;Hello&lt;/b&gt; from Red Star"
+      refute html =~ "SECURITY NOTICE"
+
+      # every other message keeps the ts_headline slice, marks re-enabled
+      plain = %{msg | metadata: %{}, search_headline: "a <mark>hit</mark>"}
+
+      assert plain |> RenderHelpers.search_headline() |> Phoenix.HTML.safe_to_string() ==
+               "a <mark>hit</mark>"
+    end
+
+    test "the space sheet's pin and thread rows show the body and the plain author" do
+      %{space: space, p: p, msg: msg} = fed_setup()
+
+      {:ok, _} =
+        Chat.pin_message({:user, p.participant_id}, %{space_id: space.id, message_id: msg.id})
+
+      [pin] = Chat.list_pins_with_messages(space.id)
+      assert pin.content == "Hello from Red Star\n\nsecond paragraph"
+      assert pin.author == "Pat"
+      refute Map.has_key?(pin, :metadata)
+
+      {:ok, thread} = Chat.create_thread(space.id, %{parent_message_id: msg.id})
+      create_message(space.id, p.id, %{thread_id: thread.id, content: "a reply"})
+
+      [summary] = Chat.list_thread_summaries(space.id)
+      assert summary.excerpt == "Hello from Red Star\n\nsecond paragraph"
+      assert summary.author == "Pat"
+      refute Map.has_key?(summary, :metadata)
+    end
+  end
+
   # ── Threads ───────────────────────────────────────────────────────────────────
 
   describe "create_thread/2 and get_thread_for_message/1" do

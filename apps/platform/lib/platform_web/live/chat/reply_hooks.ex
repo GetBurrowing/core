@@ -112,7 +112,7 @@ defmodule PlatformWeb.ChatLive.ReplyHooks do
         message_id: msg.id,
         space_id: space_id,
         author: PresenceHooks.sender_name(socket.assigns[:participants_map] || %{}, msg),
-        preview: QuotedMessage.preview(msg.content),
+        preview: QuotedMessage.preview(Chat.human_content(msg)),
         agent_slot:
           Platform.Agents.ColorPalette.slot_for(
             Map.get(socket.assigns[:agent_slots_map] || %{}, msg.participant_id)

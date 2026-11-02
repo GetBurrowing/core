@@ -301,6 +301,18 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     |> Enum.filter(fn {space, _idx} -> Map.get(unread_counts, space.id, 0) > 0 end)
   end
 
+  # A peer install's message (task 01a199c7): its stored content, and so the
+  # SQL `ts_headline` slice, is wrapped in the SECURITY NOTICE for agents. A
+  # human sees an excerpt of the unwrapped body instead, escaped whole with no
+  # `<mark>` re-enabled (the text is the peer's, not Postgres's). Known limit:
+  # a search for a word in the notice still MATCHES such a message.
+  def search_headline(%{metadata: %{"source" => "federation_inbound"}} = message) do
+    case Platform.Chat.message_excerpt(Platform.Chat.human_content(message)) do
+      "" -> Phoenix.HTML.html_escape("No searchable text")
+      excerpt -> Phoenix.HTML.html_escape(excerpt)
+    end
+  end
+
   def search_headline(message) do
     headline =
       cond do
