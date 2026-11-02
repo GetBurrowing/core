@@ -285,6 +285,7 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
+  alias PlatformWeb.MeetingLive.LiveInvites
   alias PlatformWeb.PublicSite
   alias PlatformWeb.SpaceTopics
 
@@ -684,7 +685,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:start_meeting_form, blank_start_meeting_form([]))
     |> assign(:start_meeting_error, nil)
     |> seed_create_invite_assigns()
-    |> seed_live_invite_assigns()
+    |> LiveInvites.seed()
   end
 
   # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
@@ -1438,10 +1439,7 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:selected_meeting_id, fn -> nil end)
      |> assign_new(:invite_ring_states, fn -> %{} end)
      |> assign_new(:ring_topic_meeting_ids, fn -> MapSet.new() end)
-     |> assign_new(:meeting_invite_open, fn -> false end)
-     |> assign_new(:meeting_invite_query, fn -> "" end)
-     |> assign_new(:meeting_invite_candidates, fn -> [] end)
-     |> assign_new(:meeting_invite_email, fn -> nil end)
+     |> seed_live_invites_once()
      |> assign_calendar_week(calendar_today(socket))
      |> assign_archive(params)
      |> maybe_open_scheduler(params)}
@@ -2788,7 +2786,7 @@ defmodule PlatformWeb.MeetingLive do
   #     room means no live call, and there is nothing to invite an agent into.
   #   * the AGENT id is the one client value, and it is resolved against
   #     `@invitable_agents` — the list this socket just rendered — rather than
-  #     against the `agents` table. Same rule `deliver_live_invite/4` applies
+  #     against the `agents` table. Same rule `LiveInvites.deliver/5` applies
   #     to its `"user"` kind one screen over.
   #
   # Authorization is NOT repeated here. `invite_agent/3` composes
@@ -3650,14 +3648,14 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:selected_meeting_id, meeting_id)
      |> subscribe_ring_reports(meeting_id)
-     |> seed_live_invite_assigns()}
+     |> LiveInvites.seed()}
   end
 
   def handle_event("close_meeting_detail", _params, socket) do
     {:noreply,
      socket
      |> assign(:selected_meeting_id, nil)
-     |> seed_live_invite_assigns()}
+     |> LiveInvites.seed()}
   end
 
   # ── Live invites (detail panel + sheet, task 019fb955-1d7b stage 5) ──────
@@ -3668,71 +3666,38 @@ defmodule PlatformWeb.MeetingLive do
   # row and delivers the invite in the same call. Nothing is staged and
   # there is no submit to lose it at.
 
+  # The bodies live in `PlatformWeb.MeetingLive.LiveInvites` (task 01a19e7b
+  # stage 1) so `CalendarLive` can drive the same control. What stays here is
+  # what only this LiveView knows: which meeting is selected and who is
+  # signed in.
   def handle_event("meeting_invite_add_people", _params, socket) do
-    {:noreply, socket |> seed_live_invite_assigns() |> assign(:meeting_invite_open, true)}
+    {:noreply, LiveInvites.open(socket)}
   end
 
   def handle_event("meeting_invite_search", %{"value" => query}, socket) do
-    {:noreply, assign_live_invite_candidates(socket, to_string(query))}
+    {:noreply, LiveInvites.search(socket, selected_meeting(socket.assigns), query)}
   end
 
   # Enter in the search box (the `InviteSearchEnter` hook, task 01a192d6).
-  # The hook sends the RAW typed value, because the dropdown only exists
-  # after the debounced search round trip and a fast type-then-Enter would
-  # find no option to click. So this re-resolves the query and then takes
-  # exactly the option the dropdown highlights: the default guest row for
-  # an address that matched nobody, or the one candidate when exactly one
-  # matched. Several candidates is a choice the user has to make, so
-  # nothing happens and the dropdown stays open. It goes through the stage
-  # handler, so every guard on a click applies to Enter too.
+  # A blank value is a no-op before any meeting is resolved, as it always
+  # was; anything else needs a selected meeting, because it may stage.
   def handle_event("meeting_invite_commit", %{"value" => value}, socket) do
-    value = to_string(value)
-
-    if String.trim(value) == "" do
+    if String.trim(to_string(value)) == "" do
       {:noreply, socket}
     else
-      socket = assign_live_invite_candidates(socket, value)
+      meeting = selected_live_invite_meeting!(socket)
 
-      case invite_commit_params(
-             socket.assigns.meeting_invite_candidates,
-             socket.assigns.meeting_invite_email
-           ) do
-        nil -> {:noreply, socket}
-        params -> socket |> stage_via("meeting_invite_stage", params) |> reply_staged()
+      case LiveInvites.commit(socket, meeting, value, socket.assigns.user_id) do
+        {:staged, socket} -> reply_staged(socket)
+        {:noop, socket} -> {:noreply, socket}
       end
     end
   end
 
-  def handle_event("meeting_invite_stage", %{"kind" => kind} = params, socket) do
+  def handle_event("meeting_invite_stage", %{"kind" => _kind} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
-    socket =
-      case deliver_live_invite(meeting, kind, params, socket) do
-        {:ok, _result} ->
-          socket
-
-        {:error, :guest_host_not_configured} ->
-          # A missing guest host is an OPERATOR fault, not a caller one, and
-          # the only person who can fix it is reading this flash. Folding it
-          # into the generic message below would make a deployment mistake
-          # indistinguishable from a bad email address. `invite_guest/2`
-          # already logged the same fact; this is its user-visible half.
-          put_flash(
-            socket,
-            :error,
-            "Guest links are not available: MEETING_GUEST_HOST is not configured."
-          )
-
-        {:error, _reason} ->
-          # A failure here is a real runtime outcome — a changeset error, a
-          # grant that could not be staged — not a caller bug, so it is
-          # reported rather than raised. What it must never be is silent:
-          # the row simply not appearing looks identical to a click that
-          # missed.
-          put_flash(socket, :error, "That invite could not be sent.")
-      end
-
-    {:noreply, clear_live_invite_search(socket)}
+    {:noreply, LiveInvites.stage(socket, meeting, params, socket.assigns.user_id)}
   end
 
   # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
@@ -3895,7 +3860,7 @@ defmodule PlatformWeb.MeetingLive do
     else
       socket = assign_create_invite_candidates(socket, value)
 
-      case invite_commit_params(
+      case LiveInvites.commit_params(
              socket.assigns.meeting_create_invite_candidates,
              socket.assigns.meeting_create_invite_email
            ) do
@@ -8470,17 +8435,6 @@ defmodule PlatformWeb.MeetingLive do
 
   defp same_text?(_value, _needle), do: false
 
-  # The option the invite dropdown highlights, as stage-event params, or nil
-  # when it highlights none. Mirrors `InviteControl`'s dropdown dispatch:
-  # one candidate is the only row; no candidates plus an address is the
-  # `data-default` guest row.
-  defp invite_commit_params([%{id: id}], _email), do: %{"kind" => "user", "id" => id}
-
-  defp invite_commit_params([], email) when is_binary(email),
-    do: %{"kind" => "guest", "email" => email}
-
-  defp invite_commit_params(_candidates, _email), do: nil
-
   defp assign_create_invite_candidates(socket, query) do
     staged = socket.assigns.meeting_create_invites
 
@@ -8628,40 +8582,14 @@ defmodule PlatformWeb.MeetingLive do
 
   defp subscribe_ring_reports(socket, _meeting_id), do: socket
 
-  defp seed_live_invite_assigns(socket) do
-    socket
-    |> assign(:meeting_invite_open, false)
-    |> clear_live_invite_search()
-  end
-
-  defp clear_live_invite_search(socket) do
-    socket
-    |> assign(:meeting_invite_query, "")
-    |> assign(:meeting_invite_candidates, [])
-    |> assign(:meeting_invite_email, nil)
-  end
-
-  # The exclusions come from the WRITTEN rows, not from a staging list:
-  # in live mode the invite exists the moment it is chosen, so "already
-  # invited" is a fact about the database. Without them the picker keeps
-  # offering someone who is already on the list one row above it.
-  defp assign_live_invite_candidates(socket, query) do
-    invites =
-      case selected_meeting(socket.assigns) do
-        %Meeting{} = meeting -> Meetings.list_invites(meeting.id)
-        nil -> []
-      end
-
-    %{users: users, email: email} =
-      Meetings.resolve_invite_candidates(query,
-        exclude_user_ids: for(%Invite{user_id: id} <- invites, is_binary(id), do: id),
-        exclude_emails: for(%Invite{email: address} <- invites, is_binary(address), do: address)
-      )
-
-    socket
-    |> assign(:meeting_invite_query, query)
-    |> assign(:meeting_invite_candidates, users)
-    |> assign(:meeting_invite_email, email)
+  # `handle_params/3` runs on every patch, and a patch (week navigation, a
+  # list filter) must not close an invite search that is open. So the
+  # assigns are seeded only when absent, the `assign_new/3` rule this block
+  # used before task 01a19e7b moved the seed into `LiveInvites`.
+  defp seed_live_invites_once(socket) do
+    if Map.has_key?(socket.assigns, :meeting_invite_open),
+      do: socket,
+      else: LiveInvites.seed(socket)
   end
 
   # The control only renders inside a rendered detail surface, and that
@@ -8677,46 +8605,6 @@ defmodule PlatformWeb.MeetingLive do
       nil ->
         raise ArgumentError, "cannot invite: no meeting is selected in the detail surface"
     end
-  end
-
-  # `:user` resolves against the RENDERED candidate list rather than the
-  # database, the same rule the draft path follows: the only legal source
-  # of that id is a row this socket just drew.
-  defp deliver_live_invite(meeting, "user", %{"id" => user_id}, socket) do
-    case Enum.find(socket.assigns.meeting_invite_candidates, &(&1.id == user_id)) do
-      nil ->
-        raise ArgumentError,
-              "cannot invite: no candidate is currently offered for that id"
-
-      user ->
-        # The inviter is named so a meeting that is LIVE right now rings
-        # the invitee (task 01a10db7 stage 2, rule R3); for a scheduled
-        # meeting this is the same alert-push invite as before.
-        Meetings.invite_user(meeting, user.id,
-          display_name: user.name || user.email,
-          inviter_user_id: socket.assigns[:user_id]
-        )
-    end
-  end
-
-  defp deliver_live_invite(meeting, "guest", %{"email" => email}, socket) do
-    address = email |> to_string() |> String.trim()
-
-    Meetings.invite_guest(meeting, %{
-      display_name: address,
-      email: address,
-      host_user_id: socket.assigns.user_id
-    })
-  end
-
-  defp deliver_live_invite(meeting, "external", %{"email" => email}, _socket) do
-    address = email |> to_string() |> String.trim()
-
-    Meetings.invite_external_user(meeting, address, display_name: address)
-  end
-
-  defp deliver_live_invite(_meeting, kind, _params, _socket) do
-    raise ArgumentError, "no live invite kind #{inspect(kind)}"
   end
 
   defp flash_undelivered_invites(socket, []), do: socket
