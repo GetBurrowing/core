@@ -74,6 +74,15 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
     view |> element(@search) |> render_hook("meeting_create_invite_commit", %{"value" => value})
   end
 
+  # The tap path the rig takes: type, then click the dropdown's guest row.
+  defp tap_stage_guest(view, address) do
+    view |> element(@search) |> render_keyup(%{"value" => address})
+
+    view
+    |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+    |> render_click()
+  end
+
   defp staged_ids(html) do
     html
     |> LazyHTML.from_fragment()
@@ -167,6 +176,60 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
       assert [%Meeting{} = meeting] = Repo.all(Meeting)
       assert [invite] = Meetings.list_invites(meeting.id)
       assert invite.email == "guest@example.com"
+    end
+  end
+
+  # A tap on a dropdown row stages the invite but leaves its text in the
+  # box, so Create posts it back (task 01a199ac). Text that names a staged
+  # invite is not an unadded address and must not block Create.
+  describe "submit with leftover text naming a staged invite" do
+    test "a staged guest's address left in the box still creates the meeting with that invite",
+         %{conn: conn, project: project} do
+      view = open_sheet(conn)
+      html = tap_stage_guest(view, "guest@example.com")
+      assert staged_ids(html) == ["guest:guest@example.com"]
+
+      html = submit(view, project, %{"invite_query" => "guest@example.com"})
+
+      assert html =~ "Meeting created."
+      refute html =~ "or clear it."
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.email == "guest@example.com"
+    end
+
+    test "the leftover address matches regardless of case and surrounding whitespace",
+         %{conn: conn, project: project} do
+      view = open_sheet(conn)
+      tap_stage_guest(view, "guest@example.com")
+
+      html = submit(view, project, %{"invite_query" => " Guest@Example.com "})
+
+      assert html =~ "Meeting created."
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.email == "guest@example.com"
+    end
+
+    test "a member staged by name, with the name left in the box, creates the meeting",
+         %{conn: conn, project: project} do
+      quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
+      view = open_sheet(conn)
+      view |> element(@search) |> render_keyup(%{"value" => "Quillon Zebedee"})
+
+      html =
+        view
+        |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{quill.id}"]))
+        |> render_click()
+
+      assert staged_ids(html) == ["user:" <> quill.id]
+
+      html = submit(view, project, %{"invite_query" => "Quillon Zebedee"})
+
+      assert html =~ "Meeting created."
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.user_id == quill.id
     end
   end
 end
