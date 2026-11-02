@@ -618,4 +618,285 @@ defmodule PlatformWeb.ChatLiveMembersTest do
       assert has_element?(member_view, @add_form)
     end
   end
+
+  describe "channel admins: Add people (task 01a199e4 stage 2)" do
+    @person_form "#members-popover [data-role=members-add-person]"
+
+    defp globex, do: Tenancy.get_org_by_slug!("globex")
+
+    defp membership!(user, org, role, external \\ false) do
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: org.id,
+        role: role,
+        external: external
+      })
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp globex_user!(tag, role \\ "member"), do: membership!(user!(tag), globex(), role)
+
+    defp person_selector(user),
+      do: "#{@popover} [data-role=members-person-row][data-user-id='#{user.id}']"
+
+    # The non-empty option values of one surface's Add people select.
+    defp person_options(view, scope \\ @popover) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#{scope} [data-role=members-add-person] option")
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "value"))
+      |> Enum.reject(&(&1 == ""))
+    end
+
+    defp user_rows(space, user) do
+      Repo.all(
+        from(p in Participant,
+          where:
+            p.space_id == ^space.id and p.participant_type == "user" and
+              p.participant_id == ^user.id
+        )
+      )
+    end
+
+    defp globex_channel!(admin), do: owned_channel!(admin, %{org_id: globex().id})
+
+    test "a channel admin adds an org member, whose row appears, and who then posts",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      ben = globex_user!("ben")
+      space = globex_channel!(ada)
+
+      view = conn |> live_as(ada, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, @person_form)
+      assert has_element?(view, "#{@person_form} button", "Add")
+      assert ben.id in person_options(view)
+      # The phone sheet carries the same picker.
+      assert ben.id in person_options(view, @sheet)
+      refute has_element?(view, person_selector(ben))
+
+      view |> form(@person_form, %{"user_id" => ben.id}) |> render_submit()
+
+      assert render(view) =~ "#{ben.name} added."
+      assert has_element?(view, person_selector(ben))
+      refute ben.id in person_options(view)
+
+      assert [row] = user_rows(space, ben)
+      assert row.role == "member"
+      assert row.display_name == ben.name
+      assert %DateTime{} = row.joined_at
+      assert row.history_visible_from == nil
+
+      ben_view = live_as(Phoenix.ConnTest.build_conn(), ben, ~p"/chat/#{space.slug}")
+
+      ben_view
+      |> form("#compose-form", compose: %{text: "hello from Ben"})
+      |> render_submit()
+
+      assert render(ben_view) =~ "hello from Ben"
+      assert [_] = user_rows(space, ben)
+    end
+
+    test "a plain member sees no picker, and a forged members_add_person is refused",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      dee = globex_user!("dee")
+      eve = globex_user!("eve")
+      space = globex_channel!(ada)
+
+      view = conn |> live_as(dee, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, @popover)
+      assert has_element?(view, person_selector(ada))
+      refute has_element?(view, "[data-role=members-add-person]")
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => eve.id})
+
+      assert render(view) =~ "Only a channel admin can add people to this channel."
+      assert user_rows(space, eve) == []
+    end
+
+    test "an org admin of the space's org sees and uses the picker", %{conn: conn} do
+      ada = globex_user!("ada")
+      org_admin = globex_user!("orgadmin", "admin")
+      ben = globex_user!("ben")
+      space = globex_channel!(ada)
+
+      view = conn |> live_as(org_admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      # Opening the channel seated the org admin as a plain member: the
+      # picker comes from the org-admin ground, not a channel role.
+      assert [%{role: "member"}] = user_rows(space, org_admin)
+      assert has_element?(view, @person_form)
+
+      view |> form(@person_form, %{"user_id" => ben.id}) |> render_submit()
+
+      assert has_element?(view, person_selector(ben))
+      assert [_] = user_rows(space, ben)
+    end
+
+    test "existing participants are never options, and a forged add of one is already_member",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      fay = globex_user!("fay")
+      gus = globex_user!("gus")
+      hal = globex_user!("hal")
+      space = globex_channel!(ada)
+      join!(space, fay)
+      join!(space, gus)
+      make_admin!(space, fay)
+
+      view = conn |> live_as(ada, ~p"/chat/#{space.slug}") |> open_members()
+      options = person_options(view)
+
+      assert hal.id in options
+      for seated <- [ada, fay, gus], do: refute(seated.id in options)
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => gus.id})
+
+      assert render(view) =~ "#{gus.name} is already in this channel."
+      assert [_] = user_rows(space, gus)
+    end
+
+    test "an external user is never an option, and a forged add renders the external flash",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      xan = membership!(user!("xan"), globex(), "member", true)
+      ben = globex_user!("ben")
+      space = globex_channel!(ada)
+
+      view = conn |> live_as(ada, ~p"/chat/#{space.slug}") |> open_members()
+      options = person_options(view)
+
+      # Positive control: the select lists someone, so the refute reads a list.
+      assert ben.id in options
+      refute xan.id in options
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => xan.id})
+
+      assert render(view) =~ "External people are added by a root admin."
+      assert user_rows(space, xan) == []
+    end
+
+    test "a group, a DM and an execution space render no picker, even for a root admin",
+         %{conn: conn} do
+      rae = membership!(user!("rae"), Tenancy.get_org_by_slug!("acme"), "admin")
+      sam = globex_user!("sam")
+      b = globex_user!("b")
+      c = globex_user!("c")
+
+      {:ok, group} =
+        Chat.create_group_conversation(rae.id, [
+          %{type: "user", id: b.id},
+          %{type: "user", id: c.id}
+        ])
+
+      group_view = live_as(conn, rae, "/chat/#{Chat.space_path_segment(group)}")
+      group_view |> element(@open_button) |> render_click()
+      assert has_element?(group_view, @popover)
+      refute has_element?(group_view, "[data-role=members-add-person]")
+
+      group_view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => sam.id})
+
+      assert render(group_view) =~ "People can only be added to channels."
+      assert user_rows(group, sam) == []
+
+      {:ok, dm} = Chat.find_or_create_dm(rae.id, "user", b.id)
+
+      dm_view =
+        live_as(Phoenix.ConnTest.build_conn(), rae, "/chat/#{Chat.space_path_segment(dm)}")
+
+      assert has_element?(dm_view, "#compose-form")
+      refute has_element?(dm_view, "[data-role=members-add-person]")
+
+      {:ok, project} =
+        Platform.Tasks.create_project(%{name: "People #{System.unique_integer([:positive])}"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored people",
+          sponsor_user_id: rae.id
+        })
+
+      {:ok, exec} =
+        Chat.create_space(%{kind: "execution", name: "exec", metadata: %{"task_id" => task.id}})
+
+      join!(exec, rae)
+
+      exec_view =
+        Phoenix.ConnTest.build_conn()
+        |> live_as(rae, "/chat/#{exec.id}")
+        |> open_members()
+
+      # The sponsor gets Add agent here; Add people stays channel-only.
+      assert has_element?(exec_view, @add_form)
+      refute has_element?(exec_view, "[data-role=members-add-person]")
+
+      exec_view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => sam.id})
+
+      assert render(exec_view) =~ "People can only be added to channels."
+      assert user_rows(exec, sam) == []
+    end
+
+    test "a space_id in the event params is ignored: the add lands in the open channel",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      ben = globex_user!("ben")
+      here = globex_channel!(ada)
+      # Ada administers this one too, so only the source of the space id decides.
+      elsewhere = globex_channel!(ada)
+
+      view = conn |> live_as(ada, ~p"/chat/#{here.slug}") |> open_members()
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_person", %{"user_id" => ben.id, "space_id" => elsewhere.id})
+
+      assert [_] = user_rows(here, ben)
+      assert user_rows(elsewhere, ben) == []
+    end
+
+    test "an add in one session drops the person from another open panel's select",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      fay = globex_user!("fay")
+      hal = globex_user!("hal")
+      space = globex_channel!(ada)
+      join!(space, fay)
+      make_admin!(space, fay)
+
+      view_a = conn |> live_as(ada, ~p"/chat/#{space.slug}") |> open_members()
+
+      view_b =
+        Phoenix.ConnTest.build_conn()
+        |> live_as(fay, ~p"/chat/#{space.slug}")
+        |> open_members()
+
+      assert hal.id in person_options(view_b)
+      refute has_element?(view_b, person_selector(hal))
+
+      view_a |> form(@person_form, %{"user_id" => hal.id}) |> render_submit()
+      assert [_] = user_rows(space, hal)
+
+      settle(view_b)
+
+      assert has_element?(view_b, person_selector(hal))
+      refute hal.id in person_options(view_b)
+    end
+  end
 end
