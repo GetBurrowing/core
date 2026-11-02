@@ -466,8 +466,30 @@ defmodule Platform.Federation.Peers.IngestTest do
     refute content =~ ExternalContent.end_marker(@forged_id)
   end
 
+  # A shared space in an org, so an MCP read's `chat.read` access check has an
+  # org to resolve (as `space_search_messages_probe_test.exs` sets up).
+  defp org_replica!(peer) do
+    org = Platform.Tenancy.get_org_by_slug!("globex")
+    n = System.unique_integer([:positive])
+
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Shared org #{n}",
+        slug: "fed-ingest-org-#{n}",
+        kind: "channel",
+        org_id: org.id
+      })
+
+    replica!(peer, space)
+  end
+
   defp external_agent_in!(space) do
-    owner = user!("Owner")
+    owner = Platform.ExternalUserFixtures.create_user!()
+
+    if space.org_id do
+      Platform.ExternalUserFixtures.plain_member!(owner, %{id: space.org_id})
+    end
+
     agent = agent!("Reader")
 
     {:ok, runtime} =
@@ -522,7 +544,7 @@ defmodule Platform.Federation.Peers.IngestTest do
 
   describe "agents keep the wrapped form" do
     test "MCP space_get_messages returns the stored wrapped content", ctx do
-      {space, _} = replica!(ctx.peer)
+      {space, _} = org_replica!(ctx.peer)
       reader = external_agent_in!(space)
       stored = ingest_hostile!(ctx, space)
 
@@ -542,7 +564,7 @@ defmodule Platform.Federation.Peers.IngestTest do
     end
 
     test "MCP space_search_messages returns the stored wrapped content", ctx do
-      {space, _} = replica!(ctx.peer)
+      {space, _} = org_replica!(ctx.peer)
       reader = external_agent_in!(space)
       stored = ingest_hostile!(ctx, space)
 
@@ -559,7 +581,7 @@ defmodule Platform.Federation.Peers.IngestTest do
     end
 
     test "the per-message MCP cap (64,000 chars) does not reach a capped peer body", ctx do
-      {space, _} = replica!(ctx.peer)
+      {space, _} = org_replica!(ctx.peer)
       reader = external_agent_in!(space)
       stored = ingest_hostile!(ctx, space, hostile_body() <> String.duplicate("z", 40_000))
 
@@ -702,7 +724,7 @@ defmodule Platform.Federation.Peers.IngestTest do
     end
 
     test "an email message read over MCP is still wrapped", ctx do
-      {space, _} = replica!(ctx.peer)
+      {space, _} = org_replica!(ctx.peer)
       reader = external_agent_in!(space)
       email = email_message!(space)
 
