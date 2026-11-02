@@ -675,6 +675,7 @@ defmodule Platform.ExtensionsTest do
       {"project_list", "task"},
       {"org_list_descendants", "task"},
       {"project_update", "task"},
+      {"project_create", "task"},
       {"epic_list", "task"},
       {"epic_update", "task"},
       {"epic_create", "task"},
@@ -920,7 +921,11 @@ defmodule Platform.ExtensionsTest do
     # when_to_use prose that documents it ("Human users are not added" is
     # gone). Names and bundles are unchanged. Measured on the test rig at
     # the stage's branch (5145a65ee).
-    @main_tool_digest_off "b683efb28235696216d333a479132deeda7feb8519dfe85a746e1b76e083f90f"
+    #
+    # Re-pinned by task 01a19aa4 stage 1: `project_create` joins the `task`
+    # bundle after `project_update`. Measured on the test rig at the
+    # stage's branch (2200efc79).
+    @main_tool_digest_off "85bae99555f153190575aed4de80845e2981a3a803b7b35d9d8b7cc6df982b2e"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

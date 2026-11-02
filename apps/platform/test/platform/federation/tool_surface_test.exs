@@ -195,7 +195,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +2 authenticated meeting completion tools (task 01a17f00 stage 2).
       # +2 owning-runtime dependency verification tools (task 01a18305 stage 2).
       # +2 owner-granted Calendar tools (task 01a16991 stage 5).
-      assert length(tools) == 153
+      # +1 `project_create` in `task` (task 01a19aa4 stage 1).
+      assert length(tools) == 154
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names
@@ -221,6 +222,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "skill_upsert" in tool_names
       assert "project_list" in tool_names
       assert "project_update" in tool_names
+      assert "project_create" in tool_names
       assert "epic_list" in tool_names
       assert "epic_create" in tool_names
       assert "task_create" in tool_names
@@ -10197,6 +10199,46 @@ defmodule Platform.Federation.ToolSurfaceTest do
             do: Enum.map(hits, fn {s, l} -> binary_part(string, s, l) end)
 
       assert offenders == []
+    end
+  end
+
+  # Task 01a19aa4 stage 1: `project_create`. The fence cases (an explicit
+  # org outside the caller's fence, an omitted org on a fenced runtime) live
+  # in tasks_write_fence_tools_test.exs.
+  describe "project_create" do
+    test "the in-process caller creates a project with the given name" do
+      name = "Acme Bakery #{System.unique_integer([:positive])}"
+
+      assert {:ok, result} = ToolSurface.execute("project_create", %{"name" => name}, %{})
+
+      assert result.name == name
+      assert is_binary(result.slug) and result.slug != ""
+      assert result.org_id == Tenancy.get_root_org().id
+      assert result.org_slug == Tenancy.get_root_org().slug
+
+      project = Tasks.get_project(result.id)
+      assert project.name == name
+      assert project.org_id == result.org_id
+    end
+
+    test "a blank name is a recoverable error and writes no row" do
+      before = Repo.aggregate(Platform.Tasks.Project, :count)
+
+      assert {:error, error} = ToolSurface.execute("project_create", %{"name" => ""}, %{})
+
+      assert error.recoverable == true
+      assert error.error =~ "Failed to create project"
+      assert error.error =~ "name"
+      assert Repo.aggregate(Platform.Tasks.Project, :count) == before
+    end
+
+    test "the created project is broadcast on the projects lifecycle topic" do
+      :ok = Tasks.subscribe_to_projects_lifecycle()
+      name = "Broadcast #{System.unique_integer([:positive])}"
+
+      assert {:ok, %{id: id}} = ToolSurface.execute("project_create", %{"name" => name}, %{})
+
+      assert_receive {:project_created, %{id: ^id, name: ^name}}
     end
   end
 end

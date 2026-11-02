@@ -664,6 +664,64 @@ defmodule PlatformWeb.ChatLiveMembersTest do
 
     defp globex_channel!(admin), do: owned_channel!(admin, %{org_id: globex().id})
 
+    # Header subtitle and Details Members row both read `:space_participants`,
+    # which used to be assigned only on space entry.
+    defp count_texts(view) do
+      %{
+        header: view |> element("[data-role=chat-subtitle]") |> render() |> text_of(),
+        details:
+          view |> element("#details-panel [data-role=details-members]") |> render() |> text_of()
+      }
+    end
+
+    defp text_of(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text()
+
+    test "joins and leaves update the header and Details counts without a re-mount",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      ben = globex_user!("ben")
+      space = globex_channel!(ada)
+
+      view = live_as(conn, ada, ~p"/chat/#{space.slug}")
+
+      assert %{header: header, details: details} = count_texts(view)
+      assert header =~ "1 person"
+      assert details =~ "1 person"
+
+      assert {:ok, _} = Chat.admin_add_person(space, ada.id, ben.id)
+      settle(view)
+
+      assert %{header: header, details: details} = count_texts(view)
+      assert header =~ "2 people"
+      assert details =~ "2 people"
+
+      [row] = user_rows(space, ben)
+      assert {:ok, _} = Chat.remove_participant(row)
+      settle(view)
+
+      assert %{header: header, details: details} = count_texts(view)
+      assert header =~ "1 person"
+      assert details =~ "1 person"
+    end
+
+    test "a participant_joined for a different space leaves the active counts alone",
+         %{conn: conn} do
+      ada = globex_user!("ada")
+      ben = globex_user!("ben")
+      space = globex_channel!(ada)
+      other = globex_channel!(ada)
+
+      view = live_as(conn, ada, ~p"/chat/#{space.slug}")
+      other_row = join!(other, ben)
+
+      send(view.pid, {:participant_joined, other_row})
+      settle(view)
+
+      assert %{header: header, details: details} = count_texts(view)
+      assert header =~ "1 person"
+      assert details =~ "1 person"
+    end
+
     test "a channel admin adds an org member, whose row appears, and who then posts",
          %{conn: conn} do
       ada = globex_user!("ada")
