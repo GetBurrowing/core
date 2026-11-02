@@ -34,9 +34,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={MapSet.new()}
-      participants_map={
-        %{"p-email" => %{name: @author_name, avatar_url: nil, avatar_seed: nil}}
-      }
+      participants_map={%{"p-email" => %{name: @author_name, avatar_url: nil, avatar_seed: nil}}}
       quick_emojis={[]}
       pinned_message_ids={MapSet.new()}
       canvases_by_id={%{}}
