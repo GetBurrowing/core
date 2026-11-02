@@ -1,7 +1,7 @@
-# Two-install federation rig (moon)
+# Two-install federation rig
 
 Proves install-to-install federation (ADR 0054) end to end: two real Suite
-installs on moon pair, share one channel, exchange messages both ways, catch up
+installs on the test-rig host pair, share one channel, exchange messages both ways, catch up
 after one goes offline, and stop talking after a unilateral revoke. Task
 `01a199b2`.
 
@@ -58,11 +58,13 @@ they talk only over signed HTTP envelopes.
 
 ## Prerequisites
 
-- Run it on moon, never on hive. The script refuses any other host.
-- `RIG_PG_PASSWORD_FILE` is the env file holding `DEV_PG_PASS`. On moon that is
-  `~/dev-from-hive/.env-dev-postgres`. There is no default.
+- Run it on the test-rig host, never on a production host. `RIG_HOST` (required,
+  no default) names the test-rig host's short hostname; the script refuses to
+  run when `hostname -s` differs.
+- `RIG_PG_PASSWORD_FILE` is the env file holding `DEV_PG_PASS` for the test
+  rig's dev-postgres. There is no default.
 - A core checkout of the branch to test, for example a clone from
-  `/var/home/rocks/mirrors/core.git`.
+  the test rig's core mirror.
 - A cold `up` takes about 4-6 minutes, because both installs fetch and compile
   everything. A later `start` takes about 20 s. `RIG_OUT` defaults to
   `~/testruns/rig-01a199b2`.
@@ -73,7 +75,8 @@ Run from the checkout, with `R=scripts/federation-two-install-rig.sh`. Use
 `RIG_KEEP=1` on `up`; without it, `up` tears the rig down when it exits.
 
 ```bash
-export RIG_PG_PASSWORD_FILE=$HOME/dev-from-hive/.env-dev-postgres
+export RIG_HOST=<test-rig short hostname>
+export RIG_PG_PASSWORD_FILE=<env file holding DEV_PG_PASS>
 RIG_KEEP=1 $R up . .                       # both 200, fingerprints printed
 $R rpc a identity.exs                      # note A's install_id and fingerprint
 $R rpc b identity.exs
@@ -144,7 +147,7 @@ expect those while a test run is going. `$RIG_OUT` keeps only `rig.log` and
 
 ## Measured run
 
-On moon, 2026-11-02, from a fresh clone of `task/01a199b2-b20c-7000-a5b5-f55e7ecfdf5d`
+On the test-rig host, 2026-11-02, from a fresh clone of `task/01a199b2-b20c-7000-a5b5-f55e7ecfdf5d`
 at `9677ec071` (the scripts as committed). Driver output is in the execution
 space of task 01a199b2. All times are UTC. A message id is the id on the
 install named in its column.

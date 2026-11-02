@@ -34,6 +34,6 @@ rollback, verification.
   — The ledger of `suite`-named identifiers the Burrow rename (task
   `01a14ba9`) keeps on purpose, each with its reason and removal condition.
 - [`federation-two-install-rig.md`](federation-two-install-rig.md)
-  — Two dev installs on moon pair, share a channel, exchange messages both
+  — Two dev installs on the test-rig host pair, share a channel, exchange messages both
   ways, catch up after one goes offline and stop after a unilateral revoke
   (ADR 0054, task `01a199b2`). States where the catch-up cursor lives.

@@ -5,7 +5,7 @@ defmodule Platform.Federation.Peers.TwoInstallRigContractTest do
   `scripts/federation_rig/*.exs` on its running node. Those files are never
   compiled, so a renamed or re-aritied `Platform.*` function they call would
   only surface as an `UndefinedFunctionError` halfway through a rig run on
-  moon.
+  the test-rig host.
 
   This test parses every one of them with `Code.string_to_quoted/1`, collects
   each remote call on a `Platform.*` / `PlatformWeb.*` module (plain calls,

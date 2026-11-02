@@ -37,10 +37,12 @@
 #        the uploads volumes and the source copies, then prints the listings
 #        (all empty) as proof.
 #
-# TEST-RIG ONLY (moon): it boots two dev BEAMs. It never talks to a production
+# TEST-RIG ONLY: it boots two dev BEAMs. It never talks to a production
 # install, and it adds no bypass a production install could reach: plain http
 # and private peer addresses are honoured only because MIX_ENV=dev
 # (Platform.Federation.Peers.Config.allow_http?/0 is false in :prod).
+# RIG_HOST (required, no default) is the test-rig host's short hostname; the
+# script refuses to run anywhere else.
 # RIG_PG_PASSWORD_FILE (required for up and down, no default) is the env file
 # holding DEV_PG_PASS. Secret values are generated per run, written 0600 only
 # long enough to hand to `podman secret create`, and never printed. The log
@@ -78,7 +80,8 @@ exec > >(tee -a "$LOG") 2>&1
 say() { echo "$(date -u +%H:%M:%S) [fed-rig $CMD $$] $*"; }
 fail() { say "FAIL: $*"; exit 1; }
 
-[ "$(hostname -s)" = moon ] || fail "test-rig only: this boots two dev BEAMs and must run on moon"
+[ -n "${RIG_HOST:-}" ] || fail "RIG_HOST is required (no default): the test-rig host's short hostname"
+[ "$(hostname -s)" = "$RIG_HOST" ] || fail "test-rig only: this boots two dev BEAMs and must run on the test-rig host (RIG_HOST=$RIG_HOST)"
 command -v podman >/dev/null || fail "podman not found"
 podman container exists "$PG_CONTAINER" || fail "no $PG_CONTAINER container: this rig runs on the test rig's dev services"
 
@@ -175,7 +178,7 @@ BOOT='set -e
 install -m 400 "/run/secrets/$RIG_COOKIE_SECRET" "$HOME/.erlang.cookie"
 mix local.hex --force >/dev/null
 mix local.rebar --force >/dev/null
-# Both installs fetch every hex package cold at once. Measured on moon (task
+# Both installs fetch every hex package cold at once. Measured on the test rig (task
 # 01a199b2): 2 of 10 cold install boots died here on one registry or tarball
 # fetch (llm_db, ex_mcp-1.5.0.tar :timeout). Retry, with a longer timeout.
 for try in 1 2 3; do
