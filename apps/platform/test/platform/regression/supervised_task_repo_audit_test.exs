@@ -131,6 +131,15 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # nothing to leak.
     "lib/platform/memory.ex",
 
+    # `Platform.Chat.add_message_attention/4` hands routing to an unlinked
+    # `Platform.TaskSupervisor` worker. Every post-commit step, worker
+    # included, runs inside `attention_side_effect/4`, whose generic
+    # `rescue`/`catch` routes every exception (OwnershipError included)
+    # through `log_attention_failure/6`, so the leak cannot propagate.
+    # Pinned by the "ownership failure" test in
+    # `test/platform/chat/message_attention_test.exs`.
+    "lib/platform/chat.ex",
+
     # `Platform.Chat.Canvas.Server.persist_async/5` (canvas/server.ex:398)
     # is gated on `Application.get_env(:platform, :canvas_persist_sync,
     # false)`. In `config/test.exs` this is set to `true`, so the
