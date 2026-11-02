@@ -860,14 +860,7 @@ defmodule PlatformWeb.CalendarLiveTest do
       })
 
     meeting = seed_meeting!(zone, today, "live")
-
-    {:ok, _} =
-      Platform.Chat.add_participant(meeting.chat_space_id, %{
-        participant_type: "user",
-        participant_id: user.id,
-        display_name: "Calendar user",
-        joined_at: DateTime.utc_now()
-      })
+    {:ok, _} = Platform.Meetings.invite_user(meeting, user.id)
 
     seed_external!(user, zone, today)
     seed_hold!(user, scope, zone, today)
@@ -912,6 +905,105 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert details_text(view) =~ "held by Higgins"
     assert has_element?(view, ".cal-dfoot button", "Approve")
     assert has_element?(view, ".cal-dfoot button", "Revert")
+  end
+
+  defp seed_member!(name) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      email: "invitee-#{n}@example.com",
+      name: name,
+      oidc_sub: "invitee-#{n}"
+    })
+  end
+
+  # A guest row as `Meetings.invite_guest/2` writes it, without the guest
+  # host config and guest chat space that path also needs.
+  defp seed_guest_invite!(meeting, email, expires_at \\ nil) do
+    %Platform.Meetings.Invite{}
+    |> Platform.Meetings.Invite.changeset(%{
+      meeting_id: meeting.id,
+      display_name: "Elias",
+      email: email,
+      expires_at: expires_at || DateTime.add(DateTime.utc_now(), 3600, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  test "meeting details count invites, members who never joined and guests alike",
+       %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    meeting = seed_meeting!(zone, today, "scheduled")
+    member = seed_member!("Priya Invitee")
+
+    {:ok, _} = Platform.Meetings.invite_user(meeting, member.id)
+    seed_guest_invite!(meeting, "elias@acme.com")
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+    copy = details_text(view)
+
+    assert copy =~ "2 invited"
+    assert copy =~ "Priya Invitee"
+    assert copy =~ "elias@acme.com"
+  end
+
+  test "an expired guest invite still counts as invited", %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    meeting = seed_meeting!(zone, today, "scheduled")
+    seed_guest_invite!(meeting, "elias@acme.com", DateTime.add(DateTime.utc_now(), -3600, :second))
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+    copy = details_text(view)
+
+    assert copy =~ "1 invited"
+    assert copy =~ "elias@acme.com"
+  end
+
+  test "a meeting with no invites reads 0 invited even with chat participants",
+       %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    meeting = seed_meeting!(zone, today, "scheduled")
+    member = seed_member!("Chatty Participant")
+
+    {:ok, _} =
+      Platform.Chat.add_participant(meeting.chat_space_id, %{
+        participant_type: "user",
+        participant_id: member.id,
+        display_name: "Chatty Participant",
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+    copy = details_text(view)
+
+    assert copy =~ "0 invited"
+    refute copy =~ "Chatty Participant"
+  end
+
+  test "a revoked invite is not counted", %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    meeting = seed_meeting!(zone, today, "scheduled")
+    kept = seed_member!("Kept Invitee")
+    gone = seed_member!("Revoked Invitee")
+
+    {:ok, _} = Platform.Meetings.invite_user(meeting, kept.id)
+    {:ok, revoked} = Platform.Meetings.invite_user(meeting, gone.id)
+    {:ok, _} = Platform.Meetings.revoke_invite(revoked)
+
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+    copy = details_text(view)
+
+    assert copy =~ "1 invited"
+    assert copy =~ "Kept Invitee"
+    refute copy =~ "Revoked Invitee"
   end
 
   test "Approve in the hold's details commits it through AgentAccess", %{
