@@ -273,6 +273,150 @@ defmodule Platform.Chat.MessageAttentionTest do
       assert log =~ "outcome=accepted"
       refute log =~ "router exit"
     end
+
+    test "an ownership failure in a post-commit side effect is logged by module, never raised" do
+      test_pid = self()
+      handler_id = {__MODULE__, :ownership_failure, make_ref()}
+
+      # This module is synchronous, so the sandbox is in shared mode and every
+      # process borrows the test connection; OwnershipError is unreachable
+      # there. Manual mode (restored on exit) is where an unowned process fails.
+      :ok = Sandbox.mode(Repo, :manual)
+      on_exit(fn -> Sandbox.mode(Repo, {:shared, test_pid}) end)
+
+      log =
+        with_info_log(fn ->
+          task =
+            Task.async(fn ->
+              # This process owns its own sandbox connection, so it can lose it
+              # mid-call: once the attention row is written the connection is
+              # checked in, and the post-commit broadcast query then raises
+              # DBConnection.OwnershipError inside attention_side_effect/4.
+              # Task.async would otherwise fall back to this test's connection via $callers.
+              Process.delete(:"$callers")
+              Sandbox.checkout(Repo)
+              space = channel!()
+              alice = member!(space, user!("Alice"))
+              {_agent, zip} = agent!(space, "Zip")
+              message = post!(space, alice, "ownership failure")
+              caller = self()
+
+              :telemetry.attach(
+                handler_id,
+                [:platform, :repo, :query],
+                fn _event, _measurements, metadata, _config ->
+                  query = to_string(metadata[:query])
+
+                  if self() == caller and
+                       String.contains?(query, "INSERT INTO \"chat_message_attentions\"") do
+                    Sandbox.checkin(Repo)
+                  end
+
+                  :ok
+                end,
+                nil
+              )
+
+              result =
+                try do
+                  Chat.add_message_attention(actor(alice), space.id, message.id, [
+                    zip.participant_id
+                  ])
+                after
+                  :telemetry.detach(handler_id)
+                end
+
+              {result, message.id, space.id}
+            end)
+
+          assert {{:ok, %{added: [_]}}, message_id, space_id} = Task.await(task, 30_000)
+          send(test_pid, {:ids, message_id, space_id})
+        end)
+
+      assert_received {:ids, message_id, space_id}
+
+      IO.puts(
+        log
+        |> String.split("\n")
+        |> Enum.filter(&(&1 =~ "failed" or &1 =~ "rror"))
+        |> Enum.map(&String.slice(&1, 0, 400))
+        |> Enum.join("\n")
+      )
+
+      assert log =~ "add_message_attention broadcast failed"
+      assert log =~ "message=#{message_id} space=#{space_id}"
+      assert log =~ "kind=error category=DBConnection.OwnershipError"
+    end
+
+    test "a stuck router times out each routing worker once, without retry or leaked workers" do
+      previous = Application.get_env(:platform, :attention_route_timeout)
+      Application.put_env(:platform, :attention_route_timeout, 200)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, :attention_route_timeout, previous),
+          else: Application.delete_env(:platform, :attention_route_timeout)
+      end)
+
+      space = channel!()
+      alice = member!(space, user!("Alice"))
+      agents = for n <- 1..3, do: elem(agent!(space, "Zip#{n}"), 1)
+      messages = for n <- 1..3, do: post!(space, alice, "stuck router #{n}")
+      router = Process.whereis(AttentionRouter)
+      before_pids = MapSet.new(Task.Supervisor.children(Platform.TaskSupervisor))
+      :ok = :sys.suspend(router)
+      on_exit(fn -> if Process.alive?(router), do: :sys.resume(router) end)
+
+      log =
+        with_info_log(fn ->
+          Enum.zip(messages, agents)
+          |> Enum.each(fn {message, agent} ->
+            assert {:ok, %{added: [_]}} =
+                     Chat.add_message_attention(actor(alice), space.id, message.id, [
+                       agent.participant_id
+                     ])
+          end)
+
+          workers =
+            Platform.TaskSupervisor
+            |> Task.Supervisor.children()
+            |> Enum.reject(&MapSet.member?(before_pids, &1))
+
+          assert length(workers) <= 3
+          refs = for pid <- workers, do: Process.monitor(pid)
+
+          for ref <- refs do
+            assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 1_500
+          end
+
+          assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+        end)
+
+      for {message, agent} <- Enum.zip(messages, agents) do
+        line =
+          "routing worker timed out (request may still dispatch) " <>
+            "message=#{message.id} space=#{space.id} recipients=#{agent.id}"
+
+        assert length(String.split(log, line)) - 1 == 1
+      end
+
+      refute log =~ "routing worker failed"
+      refute log =~ "stuck router"
+
+      # Resuming lets the router work through the three queued requests the
+      # timed-out workers already sent. That is the original calls being served,
+      # not a retry: each message is routed at most once.
+      :ok = :sys.resume(router)
+      drain()
+
+      for message <- messages do
+        assert Enum.count(rows(message.id)) == 1
+      end
+
+      assert Task.Supervisor.children(Platform.TaskSupervisor)
+             |> Enum.reject(&MapSet.member?(before_pids, &1))
+             |> Enum.empty?()
+    end
   end
 
   # ── Own message ────────────────────────────────────────────────────────────
