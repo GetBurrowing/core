@@ -3855,8 +3855,15 @@ defmodule PlatformWeb.MeetingLive do
   # this same LiveView, so the name is the only thing that tells a
   # create-sheet click apart from a detail-panel one.
 
+  # A blank query closes the dropdown rather than listing every member. The
+  # debounced keyup of the last typed character can land AFTER Enter has
+  # staged the address and cleared the box, carrying "" (task 01a199ac).
   def handle_event("meeting_create_invite_search", %{"value" => query}, socket) do
-    {:noreply, assign_create_invite_candidates(socket, to_string(query))}
+    query = to_string(query)
+
+    if String.trim(query) == "",
+      do: {:noreply, clear_create_invite_search(socket)},
+      else: {:noreply, assign_create_invite_candidates(socket, query)}
   end
 
   def handle_event("meeting_create_invite_stage", %{"kind" => kind} = params, socket) do

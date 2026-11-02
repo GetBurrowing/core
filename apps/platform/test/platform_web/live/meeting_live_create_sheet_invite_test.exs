@@ -151,6 +151,35 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
     end
   end
 
+  # The last character's debounced keyup can arrive after Enter staged the
+  # address and cleared the box, carrying "" (task 01a199ac stage 3).
+  describe "a blank search after staging" do
+    test "closes the dropdown instead of listing every member", %{conn: conn} do
+      member!("Quillon Zebedee", "quillon.zebedee@example.com")
+      view = open_sheet(conn)
+      commit(view, "guest@example.com")
+
+      html = view |> element(@search) |> render_keyup(%{"value" => ""})
+
+      assert staged_ids(html) == ["guest:guest@example.com"]
+      refute has_element?(view, ~s([data-role="meeting-invite-dropdown"]))
+      refute has_element?(view, ~s([data-role="meeting-invite-candidate"]))
+
+      view |> element(@search) |> render_keyup(%{"value" => "   "})
+      refute has_element?(view, ~s([data-role="meeting-invite-dropdown"]))
+    end
+
+    test "a non-blank query still lists matching members", %{conn: conn} do
+      member!("Quillon Zebedee", "quillon.zebedee@example.com")
+      view = open_sheet(conn)
+      commit(view, "guest@example.com")
+
+      view |> element(@search) |> render_keyup(%{"value" => "Quillon"})
+
+      assert has_element?(view, ~s([data-role="meeting-invite-candidate"]))
+    end
+  end
+
   describe "submit with a typed but unadded address" do
     test "is refused, writes no row, and keeps the staged guest and the typed text",
          %{conn: conn, project: project} do
