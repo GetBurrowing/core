@@ -98,7 +98,8 @@ defmodule Platform.Meetings.MeetingCancellationNoticeTest do
 
     host = user!("Hana")
     {:ok, host_participant} = seat(meeting, host, "Hana")
-    meeting = Repo.update!(Ecto.Changeset.change(meeting, host_participant_id: host_participant.id))
+    meeting =
+      Repo.update!(Ecto.Changeset.change(meeting, host_participant_id: host_participant.id))
 
     notifier = start_supervised!({MeetingNotifier, []})
 
@@ -245,7 +246,8 @@ defmodule Platform.Meetings.MeetingCancellationNoticeTest do
       assert_received {:inbox_emit, %{user_id: ^invitee_id, kind: "meeting_cancelled"}}
     end
 
-    test "the row body names the scheduled time when there is one", %{project: project, notifier: n} do
+    test "the row body names the scheduled time when there is one",
+         %{project: project, notifier: n} do
       starts = ~U[2031-04-02 15:30:00Z]
 
       {:ok, meeting} =
@@ -268,11 +270,23 @@ defmodule Platform.Meetings.MeetingCancellationNoticeTest do
   # ── External invitees ─────────────────────────────────────────────────────
 
   describe "an external invitee" do
-    test "gets one message in their delivery space", %{meeting: meeting, notifier: n} do
-      {_user, invite} = external_invitee!(meeting, "Ext")
+    test "gets one message in their delivery space, and no push or inbox row",
+         %{meeting: meeting, notifier: n} do
+      {user, invite} = external_invitee!(meeting, "Ext")
       before = messages_in(invite.delivery_space_id)
 
+      # Positive control for the negatives below: a live invite gives them
+      # `chat.read` on the meeting space, so the readability filter alone
+      # would let a push and an inbox row through.
+      assert Platform.Access.check(
+               Platform.Access.Scope.for_user(user),
+               "chat.read",
+               {:space, meeting.chat_space_id}
+             ) == :ok
+
       cancel!(meeting, n)
+
+      assert drain_pushes_and_rows() == []
 
       assert [message] = messages_in(invite.delivery_space_id) -- before
       assert message.content == "Roadmap review has been cancelled."

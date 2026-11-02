@@ -277,7 +277,11 @@ defmodule Platform.Meetings.MeetingNotifier do
     # Single recipient source for BOTH the #440 push path and the inbox path,
     # for both events. Which rule answered is carried on `:source` and drives
     # the push branch below; the inbox branch is the same either way.
-    recipients = meeting |> Meetings.recipients_for_meeting() |> readable_recipients(meeting)
+    recipients =
+      meeting
+      |> Meetings.recipients_for_meeting()
+      |> readable_recipients(meeting)
+      |> reachable_for(event)
 
     Logger.info(
       "[MeetingNotifier] meeting_#{event} — meeting=#{meeting.id} " <>
@@ -300,6 +304,30 @@ defmodule Platform.Meetings.MeetingNotifier do
     end
 
     :ok
+  end
+
+  # A cancellation reaches an external invitee ONLY as the chat message in
+  # their delivery space (`notify_external_invitees/1`), the one surface they
+  # can open: `/inbox` and `/meetings` are 403 for them
+  # (`ExternalUserScope.gate_external/2`). `readable_recipients/2` does NOT
+  # drop them, because a live invite grants `chat.read` on the meeting space
+  # (`Meetings.invited_to_space?/2`), so they are dropped here by membership.
+  # The start path keeps its audience exactly as it was.
+  defp reachable_for(recipients, :started), do: recipients
+
+  defp reachable_for(recipients, :cancelled) do
+    rows = Map.get(recipients, :chat_participants, [])
+
+    external =
+      (recipients.user_ids ++ Enum.map(rows, & &1.participant_id))
+      |> Enum.uniq()
+      |> Platform.Tenancy.external_user_ids()
+
+    external? = &MapSet.member?(external, &1)
+
+    recipients
+    |> Map.put(:user_ids, Enum.reject(recipients.user_ids, external?))
+    |> Map.put(:chat_participants, Enum.reject(rows, &external?.(&1.participant_id)))
   end
 
   defp push_payload(:started, %Meeting{} = meeting, host_display_name) do
