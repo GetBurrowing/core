@@ -17,6 +17,15 @@ export function clearIfStaged(el, reply) {
   if (reply && reply.staged) el.value = ""
 }
 
+// A TAP on a dropdown row is a plain `phx-click`, so it has no reply to
+// clear the box with; the server pushes `invite-search:clear` instead
+// (task 01a199ac). The payload names the input it means: the detail panel's
+// control uses this hook too, and its box must not clear when a create-sheet
+// invite is staged.
+export function clearIfTargeted(el, payload) {
+  if (payload && payload.id === el.id) el.value = ""
+}
+
 export function handleEnter(hook, e) {
   if (e.key !== "Enter" || e.isComposing) return false
   e.preventDefault()
@@ -44,6 +53,7 @@ const InviteSearchEnter = {
     this.onKeydown = (e) => handleEnter(this, e)
     this.el.addEventListener("keydown", this.onKeydown)
     this.el.addEventListener("keyup", swallowEnterKeyup)
+    this.handleEvent("invite-search:clear", (payload) => clearIfTargeted(this.el, payload))
   },
 
   destroyed() {

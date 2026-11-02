@@ -167,6 +167,27 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
       refute Repo.exists?(Meeting)
     end
 
+    test "a staged guest's address left in the box still creates and returns to the calendar",
+         %{conn: conn, project: project} do
+      {:ok, view, _html} = live(conn, @calendar_path)
+      view |> element(@search) |> render_keyup(%{"value" => "guest@example.com"})
+
+      html =
+        view
+        |> element(~s([data-role="meeting-invite-option"][data-option="guest"]))
+        |> render_click()
+
+      assert staged_ids(html) == ["guest:guest@example.com"]
+
+      result = submit(view, project, %{"invite_query" => "guest@example.com"})
+
+      assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.email == "guest@example.com"
+      assert {:error, {:live_redirect, %{to: to}}} = result
+      assert to == "/calendar?date=2026-11-04&select=#{meeting.id}"
+    end
+
     test "a sheet opened without from=calendar still stays on the index",
          %{conn: conn, project: project} do
       {:ok, view, _html} = live(conn, "/meetings?schedule=true")

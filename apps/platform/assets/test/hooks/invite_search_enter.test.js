@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest"
-import InviteSearchEnter, { clearIfStaged, handleEnter } from "../../js/hooks/invite_search_enter.js"
+import InviteSearchEnter, {
+  clearIfStaged,
+  clearIfTargeted,
+  handleEnter,
+} from "../../js/hooks/invite_search_enter.js"
 
 /**
  * Tests for the `InviteSearchEnter` hook (task 01a192d6 stage 3). The
@@ -11,7 +15,9 @@ import InviteSearchEnter, { clearIfStaged, handleEnter } from "../../js/hooks/in
 function setup({ target = null } = {}) {
   const pushes = []
   const listeners = {}
+  const serverEvents = {}
   const el = {
+    id: "meeting-create-invite-search",
     value: "guest@example.com",
     dataset: { commitEvent: "meeting_create_invite_commit" },
     getAttribute: (name) => (name === "phx-target" ? target : null),
@@ -21,8 +27,9 @@ function setup({ target = null } = {}) {
   const hook = Object.create(InviteSearchEnter)
   hook.el = el
   hook.pushEventTo = (to, event, payload, onReply) => pushes.push({ to, event, payload, onReply })
+  hook.handleEvent = (event, fn) => (serverEvents[event] = fn)
   hook.mounted()
-  return { hook, el, pushes, listeners }
+  return { hook, el, pushes, listeners, serverEvents }
 }
 
 function keyEvent(key, extra = {}) {
@@ -39,7 +46,39 @@ describe("clearIfStaged", () => {
   })
 })
 
+describe("clearIfTargeted", () => {
+  it("clears the box when the payload names it", () => {
+    const el = { id: "meeting-create-invite-search", value: "guest@example.com" }
+    clearIfTargeted(el, { id: "meeting-create-invite-search" })
+    expect(el.value).toBe("")
+  })
+
+  it("leaves the box alone when the payload names another input", () => {
+    const el = { id: "meeting-invite-search", value: "guest@example.com" }
+    clearIfTargeted(el, { id: "meeting-create-invite-search" })
+    expect(el.value).toBe("guest@example.com")
+  })
+
+  it("tolerates a missing payload", () => {
+    const el = { id: "meeting-create-invite-search", value: "x" }
+    clearIfTargeted(el, null)
+    clearIfTargeted(el, undefined)
+    expect(el.value).toBe("x")
+  })
+})
+
 describe("InviteSearchEnter", () => {
+  it("mounted registers invite-search:clear, which clears the targeted box", () => {
+    const { el, serverEvents } = setup()
+    expect(typeof serverEvents["invite-search:clear"]).toBe("function")
+
+    serverEvents["invite-search:clear"]({ id: "some-other-search" })
+    expect(el.value).toBe("guest@example.com")
+
+    serverEvents["invite-search:clear"]({ id: "meeting-create-invite-search" })
+    expect(el.value).toBe("")
+  })
+
   it("Enter prevents the form submit and pushes the commit event with the raw value", () => {
     const { el, pushes, listeners } = setup()
     const e = keyEvent("Enter")

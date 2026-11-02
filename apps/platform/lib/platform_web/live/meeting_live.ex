@@ -3855,8 +3855,15 @@ defmodule PlatformWeb.MeetingLive do
   # this same LiveView, so the name is the only thing that tells a
   # create-sheet click apart from a detail-panel one.
 
+  # A blank query closes the dropdown rather than listing every member. The
+  # debounced keyup of the last typed character can land AFTER Enter has
+  # staged the address and cleared the box, carrying "" (task 01a199ac).
   def handle_event("meeting_create_invite_search", %{"value" => query}, socket) do
-    {:noreply, assign_create_invite_candidates(socket, to_string(query))}
+    query = to_string(query)
+
+    if String.trim(query) == "",
+      do: {:noreply, clear_create_invite_search(socket)},
+      else: {:noreply, assign_create_invite_candidates(socket, query)}
   end
 
   def handle_event("meeting_create_invite_stage", %{"kind" => kind} = params, socket) do
@@ -3866,10 +3873,15 @@ defmodule PlatformWeb.MeetingLive do
     staged =
       if Enum.any?(staged, &(&1.id == entry.id)), do: staged, else: staged ++ [entry]
 
+    # A tap has no reply channel, and the box keeps its text after the
+    # server empties the query assign, so the hook is told to clear it
+    # (task 01a199ac). Enter reaches here through `stage_via/3` too; it also
+    # clears on its reply, and clearing twice is harmless.
     {:noreply,
      socket
      |> assign(:meeting_create_invites, staged)
-     |> clear_create_invite_search()}
+     |> clear_create_invite_search()
+     |> push_event("invite-search:clear", %{id: "meeting-create-invite-search"})}
   end
 
   # Enter in the create sheet's search box. Same rule as
@@ -3902,7 +3914,8 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
     name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
     project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
-    invite_query = invite_query(attrs)
+    staged = socket.assigns.meeting_create_invites
+    invite_query = attrs |> invite_query() |> leftover_invite_query(staged)
 
     cond do
       name == "" ->
@@ -3917,6 +3930,7 @@ defmodule PlatformWeb.MeetingLive do
       # A typed but unadded address BLOCKS rather than auto-adding: guest
       # vs external costs an org grant, and that choice belongs to the user
       # (task 01a192d6). The staged list and the typed text both survive.
+      # Text naming a staged invite was already added, so it is not an unadded address.
       invite_query != "" ->
         socket
         |> assign_create_invite_candidates(invite_query)
@@ -8432,6 +8446,29 @@ defmodule PlatformWeb.MeetingLive do
 
   defp invite_query(attrs),
     do: attrs |> Map.get("invite_query", "") |> to_string() |> String.trim()
+
+  # A tap on a dropdown row stages the invite but leaves its text in the
+  # box, so Create posts it back. That text names an invite already staged,
+  # so it is not an unadded address: drop it. Exact match only, case- and
+  # whitespace-insensitive, against a staged entry's email or a staged
+  # member's display name. Anything else is returned unchanged and refused.
+  defp leftover_invite_query("", _staged), do: ""
+
+  defp leftover_invite_query(query, staged) do
+    needle = query |> String.trim() |> String.downcase()
+
+    if Enum.any?(staged, &names_staged_invite?(&1, needle)), do: "", else: query
+  end
+
+  defp names_staged_invite?(entry, needle) do
+    same_text?(entry[:email], needle) or
+      (entry[:kind] == :user and same_text?(entry[:display_name], needle))
+  end
+
+  defp same_text?(value, needle) when is_binary(value),
+    do: value |> String.trim() |> String.downcase() == needle
+
+  defp same_text?(_value, _needle), do: false
 
   # The option the invite dropdown highlights, as stage-event params, or nil
   # when it highlights none. Mirrors `InviteControl`'s dropdown dispatch:
