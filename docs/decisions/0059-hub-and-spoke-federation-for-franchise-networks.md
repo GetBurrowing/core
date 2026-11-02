@@ -261,13 +261,13 @@ repository, because it must be able to depend on core's public protocol and not 
 | Enterprise extras: SSO, audit export, SLA, support via 0056 | enterprise | GetBurrowing/burrow-cloud | Proprietary | support follows [ADR 0056](0056-supporting-customer-installs.md) |
 
 **Nothing in core is a licence check, an entitlement gate or a feature flag keyed to payment.**
-Every row marked core works without any Kobo service, account or key.
+Every row marked core works without any vendor service, account or key.
 
 **Commercial context, not a core mechanism.** The pricing sketch is a hub platform fee plus a
-per-location managed-service fee; self-hosting is free. This describes what Kobo may charge for
+per-location managed-service fee; self-hosting is free. This describes what the vendor may charge for
 the proprietary layer and has no representation in core code.
 
-### 7. What Kobo can and cannot see
+### 7. What the vendor can and cannot see
 
 - **Where installs run.** The hub and each spoke run in the customer's cloud account, or as
   hosted installs billed to the customer.
@@ -276,17 +276,17 @@ the proprietary layer and has no representation in core code.
   Checkable: the status data core reports to a peer or operator carries versions and health
   (section 4), and no envelope or status field in section 3 or section 4 carries journal
   bodies, page bodies or file bytes to anything other than the paired peer.
-- **Content only through granted support access.** Kobo sees content only through support access
+- **Content only through granted support access.** The vendor sees content only through support access
   the customer grants under [ADR 0056](0056-supporting-customer-installs.md)
   (`0056-supporting-customer-installs.md § A.5 What the support agent can never do` bounds it).
   Checkable: that access is a separate `support` relationship the customer's admin accepts, and
   it can be revoked; nothing in `hub_spoke` creates or implies it.
-- **Kobo is never in the data path.** Hub and spokes talk directly, using the descriptor and
-  signed envelopes of 0054. There is no Kobo relay or broker. Checkable: a `hub_spoke`
+- **The vendor is never in the data path.** Hub and spokes talk directly, using the descriptor and
+  signed envelopes of 0054. There is no vendor relay or broker. Checkable: a `hub_spoke`
   relationship is addressed to a peer install's own URL and key, the protocol has no relay
   envelope or forwarding hop, and trust is never transitive
   (`0054-install-to-install-federation.md § 1. Trust model`), so a third party cannot be inserted.
-- **What would let Kobo see content, and its absence.** Kobo would need (a) a key trusted by
+- **What would let the vendor see content, and its absence.** The vendor would need (a) a key trusted by
   the hub or a spoke, (b) a relay hop, or (c) a field carrying content in a status or telemetry
   report. The protocol has none of these: keys are the customer's own pairing keys, there is no
   relay type, and `policy.report` and version reporting carry policy and versions only. A review
@@ -303,7 +303,7 @@ the proprietary layer and has no representation in core code.
   customer isolation: one database would hold every franchisee's data.
 - **(c) Full mesh between all locations. Rejected.** It needs pairings that grow with the
   square of the number of locations and leaves no single canon authority.
-- **(d) A Kobo-operated relay or broker between hub and spokes. Rejected.** It puts Kobo in the
+- **(d) A vendor-operated relay or broker between hub and spokes. Rejected.** It puts the vendor in the
   data path, which section 7 rules out.
 - **(e) A closed-source protocol. Rejected.** The sponsor judges forks inevitable, and a closed
   protocol loses the aim of being the best option to make this easy.
