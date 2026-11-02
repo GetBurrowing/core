@@ -264,6 +264,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
        Map.put(map, participant.id, participant_identity(participant, user, agent_avatars))
      end)
      |> reinsert_rendered_messages(MessagesHooks.active_space_id(socket))
+     |> refresh_space_participants(participant)
      |> refresh_members_panel()}
   end
 
@@ -273,15 +274,15 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # but ChatLive owns the subscription lifecycle (task 01a0181f) and its
   # release clause cannot see an event this hook halts.
   defp handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
-    socket = refresh_members_panel(socket)
+    socket = socket |> refresh_space_participants(participant) |> refresh_members_panel()
 
     if participant.participant_id == socket.assigns[:user_id],
       do: {:cont, socket},
       else: {:halt, socket}
   end
 
-  defp handle_info({:participant_left, _participant}, socket),
-    do: {:halt, refresh_members_panel(socket)}
+  defp handle_info({:participant_left, participant}, socket),
+    do: {:halt, socket |> refresh_space_participants(participant) |> refresh_members_panel()}
 
   # Broadcast after commit by `Chat.set_member_role/4`. Nothing in this hook's
   # roster render depends on the role; only the members panel does.
@@ -793,6 +794,21 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   rescue
     _ -> false
+  end
+
+  # `:space_participants` feeds the header subtitle count and the Details
+  # Members row, and is otherwise only assigned on space entry. Re-read the
+  # roster on a join or leave in the ACTIVE space; other spaces' events must
+  # not overwrite it. Counts: the Details Members row counts
+  # `participant_type == "user"` only; the header subtitle counts everyone.
+  defp refresh_space_participants(socket, participant) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} when space_id == participant.space_id ->
+        assign(socket, :space_participants, Chat.list_participants(space_id))
+
+      _ ->
+        socket
+    end
   end
 
   # The Members sheet (task 01a1557a-8f80 stage 3) lists the roster from the
