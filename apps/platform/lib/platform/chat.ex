@@ -7338,6 +7338,8 @@ defmodule Platform.Chat do
     {inserted, unchanged}
   end
 
+  @attention_route_timeout 60_000
+
   # Post-insert side effects for the NEWLY added only. Like the post path's
   # mention side effects, none of them may fail the call: the rows are
   # already durable.
@@ -7347,15 +7349,30 @@ defmodule Platform.Chat do
     attention_side_effect(message, added_ids, "routing handoff", fn ->
       case Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
              attention_side_effect(message, added_ids, "routing worker", fn ->
-               # The worker may wait for a busy router; the LiveView never does.
-               # A timed-out request can still dispatch, so do not retry it.
-               {:ok, _decisions} =
-                 Platform.Chat.AttentionRouter.route_attention(
-                   message,
-                   added_ids,
-                   writer,
-                   :infinity
-                 )
+               # The worker may wait for a busy router, but only up to a bound; the
+               # LiveView never waits. A timed-out request can still dispatch, so
+               # do not retry it.
+               try do
+                 {:ok, _decisions} =
+                   Platform.Chat.AttentionRouter.route_attention(
+                     message,
+                     added_ids,
+                     writer,
+                     Application.get_env(
+                       :platform,
+                       :attention_route_timeout,
+                       @attention_route_timeout
+                     )
+                   )
+               catch
+                 # Log ids only: the exit tuple embeds the GenServer request,
+                 # including message content (see log_attention_failure/6).
+                 :exit, {:timeout, _} ->
+                   Logger.warning(
+                     "[Chat] add_message_attention routing worker timed out (request may still dispatch) " <>
+                       "message=#{message.id} space=#{message.space_id} recipients=#{Enum.join(added_ids, ",")}"
+                   )
+               end
              end)
            end) do
         {:ok, _pid} ->

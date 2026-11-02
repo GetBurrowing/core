@@ -273,6 +273,76 @@ defmodule Platform.Chat.MessageAttentionTest do
       assert log =~ "outcome=accepted"
       refute log =~ "router exit"
     end
+
+    test "a stuck router times out each routing worker once, without retry or leaked workers" do
+      previous = Application.get_env(:platform, :attention_route_timeout)
+      Application.put_env(:platform, :attention_route_timeout, 200)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, :attention_route_timeout, previous),
+          else: Application.delete_env(:platform, :attention_route_timeout)
+      end)
+
+      space = channel!()
+      alice = member!(space, user!("Alice"))
+      agents = for n <- 1..3, do: elem(agent!(space, "Zip#{n}"), 1)
+      messages = for n <- 1..3, do: post!(space, alice, "stuck router #{n}")
+      router = Process.whereis(AttentionRouter)
+      before_pids = MapSet.new(Task.Supervisor.children(Platform.TaskSupervisor))
+      :ok = :sys.suspend(router)
+      on_exit(fn -> if Process.alive?(router), do: :sys.resume(router) end)
+
+      log =
+        with_info_log(fn ->
+          Enum.zip(messages, agents)
+          |> Enum.each(fn {message, agent} ->
+            assert {:ok, %{added: [_]}} =
+                     Chat.add_message_attention(actor(alice), space.id, message.id, [
+                       agent.participant_id
+                     ])
+          end)
+
+          workers =
+            Platform.TaskSupervisor
+            |> Task.Supervisor.children()
+            |> Enum.reject(&MapSet.member?(before_pids, &1))
+
+          assert length(workers) <= 3
+          refs = for pid <- workers, do: Process.monitor(pid)
+
+          for ref <- refs do
+            assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 1_500
+          end
+
+          assert :ok = Platform.SandboxHelpers.await_own_supervised_writes(self())
+        end)
+
+      for {message, agent} <- Enum.zip(messages, agents) do
+        line =
+          "routing worker timed out (request may still dispatch) " <>
+            "message=#{message.id} space=#{space.id} recipients=#{agent.id}"
+
+        assert length(String.split(log, line)) - 1 == 1
+      end
+
+      refute log =~ "routing worker failed"
+      refute log =~ "stuck router"
+
+      # Resuming lets the router work through the three queued requests the
+      # timed-out workers already sent. That is the original calls being served,
+      # not a retry: each message is routed at most once.
+      :ok = :sys.resume(router)
+      drain()
+
+      for message <- messages do
+        assert Enum.count(rows(message.id)) == 1
+      end
+
+      assert Task.Supervisor.children(Platform.TaskSupervisor)
+             |> Enum.reject(&MapSet.member?(before_pids, &1))
+             |> Enum.empty?()
+    end
   end
 
   # ── Own message ────────────────────────────────────────────────────────────
