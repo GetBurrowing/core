@@ -335,6 +335,11 @@ defmodule Platform.Federation.Peers.IngestTest do
         assert human == expected_human(body), "#{name}"
         refute human =~ @real_marker, "#{name}"
         refute String.starts_with?(human, "Shared from"), "#{name}"
+        # the stored provenance line and the From: "(via ...)" name stay agent-only
+        assert rendered =~ "Shared from Remote by Pat", "#{name}"
+        refute human =~ "Shared from Remote by Pat", "#{name}"
+        assert rendered =~ "Pat (via Remote)", "#{name}"
+        refute human =~ "(via Remote)", "#{name}"
         refute human =~ "@[", "#{name}"
 
         wrapper_notices = if name == :fake_notice, do: 1, else: 0
