@@ -422,7 +422,11 @@ defmodule Platform.Meetings do
             # for both leaves the ad-hoc path byte-for-byte unchanged, since
             # `cast/3` treats nil for an already-nil field as no change.
             scheduled_start_at: attrs[:scheduled_start_at],
-            scheduled_end_at: attrs[:scheduled_end_at]
+            scheduled_end_at: attrs[:scheduled_end_at],
+            # The organizer (task 01a19e7f). Same whitelist rule as above:
+            # unlisted, it would be dropped and nobody could ever be the
+            # creator of a meeting.
+            created_by_user_id: attrs[:created_by_user_id]
           }
 
           changeset =
@@ -1518,6 +1522,114 @@ defmodule Platform.Meetings do
       error ->
         error
     end
+  end
+
+  @doc """
+  May `user` call `meeting` off? The ONE cancel permission rule (task
+  01a19e7f), enforced by `cancel_meeting_for_user/2` and read by the UI to
+  decide whether to render the control at all.
+
+  True when ANY of these holds for a signed-in, non-external user:
+
+    * (a) they are the meeting's host (`host_user_id/1`);
+    * (b) they created it (`meetings.created_by_user_id`);
+    * (c) they are an admin of the meeting's project org
+      (`Platform.Tenancy.org_admin?/2`);
+    * (d) they are a root admin (`Platform.Tenancy.root_admin?/1`), the same
+      bypass `viewer_listing_query/1` uses.
+
+  External users and guests are never allowed, whatever else holds. This is
+  permission only: it says nothing about the meeting's status, see
+  `cancellable_status?/1`. It does not check visibility either;
+  `cancel_meeting_for_user/2` loads through the viewer scope first.
+  """
+  @spec can_cancel_meeting?(Meeting.t(), map() | nil) :: boolean()
+  def can_cancel_meeting?(%Meeting{} = meeting, %{id: user_id} = user) when is_binary(user_id) do
+    cond do
+      Platform.Tenancy.external_user?(user) -> false
+      not is_nil(meeting.created_by_user_id) and meeting.created_by_user_id == user_id -> true
+      host_user_id(meeting) == user_id -> true
+      Platform.Tenancy.root_admin?(user) -> true
+      true -> Platform.Tenancy.org_admin?(user, resolve_meeting_org_id(meeting))
+    end
+  end
+
+  def can_cancel_meeting?(_meeting, _user), do: false
+
+  @doc """
+  Is `meeting` in a status a cancel can move? `scheduled` and `live`, the
+  two sources `Meeting.status_changeset/3` accepts for `"cancelled"`.
+  """
+  @spec cancellable_status?(Meeting.t()) :: boolean()
+  def cancellable_status?(%Meeting{status: status}), do: status in ["scheduled", "live"]
+
+  @doc """
+  Cancel a meeting on behalf of a signed-in user: the entry point the
+  Meetings and Calendar pages call (task 01a19e7f). In this order:
+
+    1. Load the meeting through the viewer scope (`viewer_listing_query/1`).
+       A meeting the user cannot see, a malformed id and a nil user are all
+       `{:error, :not_found}`, never `:forbidden`, so the answer leaks
+       nothing about meetings in other orgs.
+    2. `{:error, :forbidden}` unless `can_cancel_meeting?/2`.
+    3. Already `"cancelled"`: `{:ok, meeting}` with NO write and NO
+       broadcast. Re-cancel is a no-op, so a second click or a second
+       window cannot produce a second notice.
+    4. `"ended"`: `{:error, :not_cancellable}`.
+    5. Otherwise `cancel_meeting/2`, attributed to the user's EXISTING
+       `chat_participants` row in the meeting's space, or nil. No row is
+       created: `recipients_for_meeting/1` would then count the canceller
+       as an attendee of the meeting they just called off.
+  """
+  @spec cancel_meeting_for_user(binary(), map() | nil) ::
+          {:ok, Meeting.t()}
+          | {:error, :not_found | :forbidden | :not_cancellable | Ecto.Changeset.t()}
+  def cancel_meeting_for_user(meeting_id, %{id: user_id} = user)
+      when is_binary(meeting_id) and is_binary(user_id) do
+    with {:ok, meeting} <- load_meeting_for_viewer(meeting_id, user),
+         true <- can_cancel_meeting?(meeting, user) || {:error, :forbidden} do
+      case meeting.status do
+        "cancelled" -> {:ok, meeting}
+        "ended" -> {:error, :not_cancellable}
+        _ -> cancel_meeting(meeting, existing_user_participant_id(meeting, user_id))
+      end
+    end
+  end
+
+  def cancel_meeting_for_user(_meeting_id, _user), do: {:error, :not_found}
+
+  defp load_meeting_for_viewer(meeting_id, user) do
+    if Platform.UUID.valid?(meeting_id) do
+      case user |> viewer_listing_query() |> where([m], m.id == ^meeting_id) |> Repo.one() do
+        %Meeting{} = meeting -> {:ok, meeting}
+        nil -> {:error, :not_found}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp existing_user_participant_id(%Meeting{chat_space_id: nil}, _user_id), do: nil
+
+  defp existing_user_participant_id(%Meeting{chat_space_id: space_id}, user_id) do
+    from(p in Platform.Chat.Participant,
+      where:
+        p.space_id == ^space_id and p.participant_type == "user" and
+          p.participant_id == ^user_id,
+      select: p.id,
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  How many people a cancellation notice for `meeting` goes to: the
+  notifier's own `recipients_for_meeting/1` count, so the confirm sentence
+  and the notice cannot disagree (task 01a19e7f).
+  """
+  @spec cancellation_audience_count(Meeting.t()) :: non_neg_integer()
+  def cancellation_audience_count(%Meeting{} = meeting) do
+    recipients_for_meeting(meeting).invitee_count
   end
 
   @doc """

@@ -303,7 +303,8 @@ defmodule Platform.Calendar.BookingLinks do
              project_id: link.project_id,
              name: link.title,
              scheduled_start_at: slot.starts_at,
-             scheduled_end_at: slot.ends_at
+             scheduled_end_at: slot.ends_at,
+             created_by_user_id: scope.actor.id
            }),
          {:ok, host} <-
            Platform.Chat.add_participant(meeting.chat_space_id, %{

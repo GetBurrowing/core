@@ -442,7 +442,8 @@ defmodule Platform.Mobile.AppEntities do
         project_id: project_id,
         name: meet_now_name(DateTime.utc_now()),
         scheduled_start_at: nil,
-        scheduled_end_at: nil
+        scheduled_end_at: nil,
+        created_by_user_id: user.id
       })
     end
   end

@@ -45,6 +45,14 @@ defmodule Platform.Meetings.Meeting do
     # Nil for meetings started before this column existed, and for a start
     # with no authenticated user behind it.
     belongs_to(:started_by_user, Platform.Accounts.User)
+    # Who scheduled the meeting (task 01a19e7f stage 1): the organizer, so
+    # `Platform.Meetings.can_cancel_meeting?/2` can let them call it off even
+    # though a sheet-created meeting has no host. Stamped by the creating
+    # caller through `create_meeting/1`'s `:created_by_user_id`. Nilified, not
+    # cascaded, when the user goes. Nil for meetings created before this
+    # column existed and for agent/tool creates; those fall back to host or
+    # admin.
+    belongs_to(:created_by_user, Platform.Accounts.User)
 
     field(:slug, :string)
     field(:name, :string)
@@ -95,7 +103,7 @@ defmodule Platform.Meetings.Meeting do
 
   @cast_fields ~w(project_id host_participant_id chat_space_id slug name status
                   livekit_room_name started_at ended_at
-                  scheduled_start_at scheduled_end_at)a
+                  scheduled_start_at scheduled_end_at created_by_user_id)a
   @required_fields ~w(project_id chat_space_id slug name livekit_room_name)a
 
   @doc """

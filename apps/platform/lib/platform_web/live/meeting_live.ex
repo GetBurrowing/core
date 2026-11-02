@@ -8112,6 +8112,7 @@ defmodule PlatformWeb.MeetingLive do
   defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode) do
     case Meetings.create_meeting(%{
            project_id: project_id,
+           created_by_user_id: socket.assigns.user_id,
            name: name,
            scheduled_start_at: starts_at,
            scheduled_end_at: ends_at
