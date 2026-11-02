@@ -676,7 +676,11 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # gained an `fn ->` head and an `end` (+8); the `import` of `span/2,3` is +1.
   # The wraps cannot move into the wrapped helpers: those helpers have other
   # call sites, which would then emit enter_space spans they are not part of.
-  @chat_live_code_line_count 2010
+  # Task 01a19948 stage 2 (live channel rename): +22, measured by this guard
+  # (2010 -> 2032). `handle_info({:space_renamed, _})` updates the open
+  # header, tab title and rail; the rail reload that `{:space_created, _}`
+  # held inline moved into `reload_rail_channels/1`, which both clauses call.
+  @chat_live_code_line_count 2032
 
   @doc """
   Count the CODE lines of a source file.

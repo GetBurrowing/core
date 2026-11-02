@@ -769,7 +769,9 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # these do not add a historian scheduler tool or change T6 triggers.
     # +2 owner-granted Calendar tools (task 01a16991 stage 5), which add
     # no historian scheduler endpoint or T6 trigger.
-    @t6_baseline_tool_count 153
+    # +1 `space_rename` in the space bundle (task 01a19948 stage 2), which
+    # adds no historian scheduler endpoint or T6 trigger.
+    @t6_baseline_tool_count 154
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 
