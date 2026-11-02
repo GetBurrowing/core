@@ -3866,10 +3866,15 @@ defmodule PlatformWeb.MeetingLive do
     staged =
       if Enum.any?(staged, &(&1.id == entry.id)), do: staged, else: staged ++ [entry]
 
+    # A tap has no reply channel, and the box keeps its text after the
+    # server empties the query assign, so the hook is told to clear it
+    # (task 01a199ac). Enter reaches here through `stage_via/3` too; it also
+    # clears on its reply, and clearing twice is harmless.
     {:noreply,
      socket
      |> assign(:meeting_create_invites, staged)
-     |> clear_create_invite_search()}
+     |> clear_create_invite_search()
+     |> push_event("invite-search:clear", %{id: "meeting-create-invite-search"})}
   end
 
   # Enter in the create sheet's search box. Same rule as

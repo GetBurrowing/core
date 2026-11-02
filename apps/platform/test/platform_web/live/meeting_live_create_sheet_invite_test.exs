@@ -198,6 +198,25 @@ defmodule PlatformWeb.MeetingLiveCreateSheetInviteTest do
       assert invite.email == "guest@example.com"
     end
 
+    test "tapping the guest row tells the hook to clear the search box", %{conn: conn} do
+      view = open_sheet(conn)
+      tap_stage_guest(view, "guest@example.com")
+
+      assert_push_event(view, "invite-search:clear", %{id: "meeting-create-invite-search"})
+    end
+
+    test "tapping a member row tells the hook to clear the search box", %{conn: conn} do
+      quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
+      view = open_sheet(conn)
+      view |> element(@search) |> render_keyup(%{"value" => "Quillon Zebedee"})
+
+      view
+      |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{quill.id}"]))
+      |> render_click()
+
+      assert_push_event(view, "invite-search:clear", %{id: "meeting-create-invite-search"})
+    end
+
     test "the leftover address matches regardless of case and surrounding whitespace",
          %{conn: conn, project: project} do
       view = open_sheet(conn)
