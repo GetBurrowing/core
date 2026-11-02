@@ -3952,6 +3952,7 @@ defmodule Platform.Chat do
         thread_id: t.id,
         parent_message_id: t.parent_message_id,
         excerpt: pm.content,
+        metadata: pm.metadata,
         author: a.display_name,
         reply_count: r.reply_count,
         last_reply_at: r.last_reply_at
@@ -3959,6 +3960,7 @@ defmodule Platform.Chat do
     )
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
+    |> Enum.map(&humanize_row(&1, :excerpt))
   end
 
   @doc """
@@ -4519,6 +4521,7 @@ defmodule Platform.Chat do
         message_id: m.id,
         space_id: p.space_id,
         content: m.content,
+        metadata: m.metadata,
         author: a.display_name,
         inserted_at: m.inserted_at,
         pinned_at: p.inserted_at
@@ -4526,6 +4529,20 @@ defmodule Platform.Chat do
     )
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
+    |> Enum.map(&humanize_row(&1, :content))
+  end
+
+  # The space sheet's thread and pin rows are human surfaces (task 01a199c7):
+  # a peer install's message shows its unwrapped body and plain remote author.
+  # `metadata` is selected only for this and dropped, so the row shape the
+  # sheet reads is unchanged.
+  defp humanize_row(%{metadata: metadata} = row, content_key) do
+    message = %{content: Map.fetch!(row, content_key), metadata: metadata}
+
+    row
+    |> Map.delete(:metadata)
+    |> Map.put(content_key, human_content(message))
+    |> Map.update!(:author, &(human_author_name(message) || &1))
   end
 
   # ── Canvases ─────────────────────────────────────────────────────────────────
@@ -7787,11 +7804,15 @@ defmodule Platform.Chat do
     space_ids
     |> newest_top_level_messages_query()
     |> ExternalScope.scope_by_space_id(Keyword.get(opts, :scope))
-    |> select([m], {m.space_id, m.content, m.author_display_name, m.inserted_at})
+    |> select([m], {m.space_id, m.content, m.metadata, m.author_display_name, m.inserted_at})
     |> Repo.all()
-    |> Map.new(fn {space_id, content, author_name, inserted_at} ->
+    |> Map.new(fn {space_id, content, metadata, author_name, inserted_at} ->
       {space_id,
-       %{content: message_excerpt(content), author_name: author_name, inserted_at: inserted_at}}
+       %{
+         content: message_excerpt(human_content(%{content: content, metadata: metadata})),
+         author_name: human_author_name(%{metadata: metadata}) || author_name,
+         inserted_at: inserted_at
+       }}
     end)
   end
 
@@ -7811,6 +7832,23 @@ defmodule Platform.Chat do
       do: Platform.Federation.Peers.human_content(content)
 
   def human_content(%{content: content}), do: content
+
+  @doc """
+  The author name a HUMAN sees for a peer install's message: the plain remote
+  author (`metadata["remote_author"]`, stamped and mention-escaped by
+  `Platform.Federation.Peers.Ingest`), without the `" (via <peer>)"` suffix
+  the stored system participant carries for agents. `nil` for every other
+  message, so callers fall back to their usual name: `human_author_name(m) ||
+  name`.
+  """
+  @spec human_author_name(map()) :: String.t() | nil
+  def human_author_name(%{
+        metadata: %{"source" => "federation_inbound", "remote_author" => name}
+      })
+      when is_binary(name) and name != "",
+      do: name
+
+  def human_author_name(_message), do: nil
 
   @doc """
   One message body as a list excerpt: whitespace (newlines included) collapsed

@@ -485,14 +485,8 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # A peer install's message (task 01a199c7): the stored author is a system
   # participant named "<author> (via <peer>)" for agents; humans see the plain
   # remote author, with the peer named once by the gray "Shared from" header.
-  def sender_name(_participants_map, %{
-        metadata: %{"source" => "federation_inbound", "remote_author" => name}
-      })
-      when is_binary(name) and name != "",
-      do: name
-
   def sender_name(participants_map, %{participant_id: pid} = msg) do
-    case Map.get(participants_map, pid) do
+    case Platform.Chat.human_author_name(msg) || Map.get(participants_map, pid) do
       %{name: name} when is_binary(name) and name != "" -> name
       name when is_binary(name) and name != "" -> name
       _ -> author_snapshot_name(msg)

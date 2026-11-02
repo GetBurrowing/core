@@ -335,7 +335,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         :pinned?,
         MapSet.member?(assigns.pinned_message_ids, assigns.open_message_actions_id)
       )
-      |> assign(:text, (msg && msg.content) || "")
+      |> assign(:text, (msg && Platform.Chat.human_content(msg)) || "")
       |> assign(:link, message_link(assigns.active_space, assigns.open_message_actions_id))
 
     ~H"""

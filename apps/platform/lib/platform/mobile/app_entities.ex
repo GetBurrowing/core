@@ -664,8 +664,8 @@ defmodule Platform.Mobile.AppEntities do
            inserted_at: m.inserted_at,
            author_type: m.author_participant_type,
            author_id: m.author_user_id || m.author_agent_id,
-           author_name: m.author_display_name,
-           content: m.content,
+           author_name: Chat.human_author_name(m) || m.author_display_name,
+           content: Chat.human_content(m),
            thread_id: m.thread_id
          }
        end)}

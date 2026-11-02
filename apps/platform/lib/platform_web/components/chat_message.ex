@@ -341,7 +341,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                anchors exactly as before. --%>
           <% rendered_content =
             Platform.Chat.ContentRenderer.render_message(
-              @msg.content,
+              Platform.Chat.human_content(@msg),
               cards:
                 Platform.Chat.LinkCards.bare_urls(Map.get(@msg, :link_cards)) ++
                   for(
@@ -650,7 +650,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                       />
                     </div>
                     <div class="msg-text">
-                      {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
+                      {Platform.Chat.ContentRenderer.render_message(Platform.Chat.human_content(tmsg))}
                     </div>
                     <.refused_summon_notice
                       :if={Map.has_key?(@refused_summons, tmsg.id)}
@@ -887,7 +887,7 @@ defmodule PlatformWeb.Components.ChatMessage do
         aria-label="Copy"
         title="Copy"
         data-role="message-pill-copy"
-        data-clipboard-text={@msg.content || ""}
+        data-clipboard-text={Platform.Chat.human_content(@msg) || ""}
       >
         <span class="message-pill-copy-glyph" aria-hidden="true">⧉</span>
         <span class="message-pill-copy-check hero-check size-4" aria-hidden="true"></span>
