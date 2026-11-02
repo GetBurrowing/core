@@ -19,6 +19,9 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
+  import PlatformWeb.Components.Meetings.InviteControl,
+    only: [invite_list: 1, invite_control: 1]
+
   alias PlatformWeb.CalendarLive, as: Cal
   alias PlatformWeb.Components.NewKindToggle
 
@@ -770,6 +773,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   # ── details (app.js `renderDetails`, index.html `.details`) ────────────
 
   attr(:detail, :map, required: true)
+  attr(:invite, :map, default: %{}, doc: "the caller's `:meeting_invite_*` assigns")
 
   @doc """
   The details: a 320px right column at `lg`, a bottom sheet over a scrim
@@ -805,7 +809,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <div class="flex flex-wrap gap-1.5"><.detail_pill detail={@detail} /></div>
         <h3>{@detail.title}</h3>
         <.detail_row icon="hero-clock" text={@detail.when} sub={@detail[:recurrence]} />
-        <.detail_body detail={@detail} />
+        <.detail_body detail={@detail} invite={@invite} />
       </div>
       <div :if={footer?(@detail)} class="cal-dfoot">
         <.detail_footer detail={@detail} />
@@ -858,6 +862,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   end
 
   attr(:detail, :map, required: true)
+  attr(:invite, :map, default: %{})
 
   defp detail_body(%{detail: %{kind: kind}} = assigns) when kind in ["native", "tentative"] do
     ~H"""
@@ -891,11 +896,24 @@ defmodule PlatformWeb.CalendarLive.Components do
       text={"Burrow meeting in #{@detail.space || "Meetings"}"}
       sub={@detail.host && "hosted by #{@detail.host}"}
     />
-    <.detail_row
-      icon="hero-user-group"
-      text={"#{length(@detail.invited)} invited"}
-      sub={if @detail.invited != [], do: Enum.join(@detail.invited, ", ")}
-    />
+    <%!-- The same live invite surface as /meetings' detail panel (task
+       01a19e7b). There is ONE aside for the lg column and the <lg sheet,
+       so one id prefix, distinct from MeetingLive's, keeps the per-row
+       CopyToClipboard ids unique. `dropdown={:inline}` is load-bearing:
+       `.cal-details` is overflow:hidden and `.cal-dbody` is the scroll
+       region, so a floating dropdown would be clipped. No meeting-wide
+       invite link: invites are minted per person. --%>
+    <.invite_list mode={:live} entries={@detail.invite_entries} id_prefix="calendar-detail-invite" />
+    <div :if={@invite[:open]} data-role="calendar-detail-invite-expansion">
+      <.invite_control
+        mode={:live}
+        id="calendar-detail-invite-control"
+        query={@invite.query}
+        candidates={@invite.candidates}
+        email_option={@invite.email}
+        dropdown={:inline}
+      />
+    </div>
     """
   end
 
