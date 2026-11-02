@@ -953,7 +953,12 @@ defmodule PlatformWeb.CalendarLiveTest do
     zone = midday_zone()
     today = local_today(zone)
     meeting = seed_meeting!(zone, today, "scheduled")
-    seed_guest_invite!(meeting, "elias@acme.com", DateTime.add(DateTime.utc_now(), -3600, :second))
+
+    seed_guest_invite!(
+      meeting,
+      "elias@acme.com",
+      DateTime.add(DateTime.utc_now(), -3600, :second)
+    )
 
     {:ok, view, _} = live(zoned(conn, zone), "/calendar")
     open_chip(view, "meeting")
