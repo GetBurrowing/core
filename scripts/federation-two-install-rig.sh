@@ -175,7 +175,14 @@ BOOT='set -e
 install -m 400 "/run/secrets/$RIG_COOKIE_SECRET" "$HOME/.erlang.cookie"
 mix local.hex --force >/dev/null
 mix local.rebar --force >/dev/null
-mix deps.get >/dev/null
+# Both installs fetch every hex package cold at once. Measured on moon (task
+# 01a199b2): 2 of 10 cold install boots died here on one registry or tarball
+# fetch (llm_db, ex_mcp-1.5.0.tar :timeout). Retry, with a longer timeout.
+for try in 1 2 3; do
+  HEX_HTTP_TIMEOUT=120 HEX_HTTP_CONCURRENCY=4 mix deps.get >/dev/null && break
+  [ "$try" = 3 ] && exit 1
+  echo "deps.get failed (try $try of 3); retrying in 15s" >&2; sleep 15
+done
 mix ecto.create
 mix ecto.migrate
 exec elixir --sname "$RIG_NODE" -S mix phx.server'
