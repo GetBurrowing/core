@@ -31,7 +31,8 @@ defmodule PlatformWeb.SettingsLiveTest do
       Repo.insert!(%User{
         email: "settings-#{n}@example.com",
         name: "Settings User #{n}",
-        oidc_sub: "settings-#{n}"
+        oidc_sub: "settings-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     %OrgMembership{}
@@ -68,7 +69,8 @@ defmodule PlatformWeb.SettingsLiveTest do
       Repo.insert!(%User{
         email: "settings-all-#{n}@example.com",
         name: "Settings All #{n}",
-        oidc_sub: "settings-all-#{n}"
+        oidc_sub: "settings-all-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     Enum.each(Tenancy.list_orgs(), fn org ->

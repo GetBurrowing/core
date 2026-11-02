@@ -30,7 +30,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       email: "admin_edit_#{suffix}@example.com",
       name: "Admin Edit #{suffix}",
       oidc_sub: "oidc-admin-edit-#{suffix}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

@@ -54,7 +54,8 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
       Repo.insert!(%User{
         email: "push-perm-#{n}@example.com",
         name: "Push Perm #{n}",
-        oidc_sub: "oidc-push-perm-#{n}"
+        oidc_sub: "oidc-push-perm-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     acme = Tenancy.get_org_by_slug!("acme")
@@ -98,7 +99,8 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
         Repo.insert!(%User{
           email: "push-chat-#{n}@example.com",
           name: "Push Chat #{n}",
-          oidc_sub: "oidc-push-chat-#{n}"
+          oidc_sub: "oidc-push-chat-#{n}",
+          preferences: %{"first_run_goal" => "existing"}
         })
 
       Repo.insert!(%OrgMembership{user_id: user.id, org_id: acme.id, role: "member"})

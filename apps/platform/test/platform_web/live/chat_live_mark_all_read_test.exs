@@ -35,7 +35,8 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
       Repo.insert!(%User{
         email: "mark_all_read_#{n}@example.com",
         name: "Reader #{n}",
-        oidc_sub: "oidc-mark-all-read-#{n}"
+        oidc_sub: "oidc-mark-all-read-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     root = Tenancy.get_org_by_slug!("acme")
@@ -167,7 +168,8 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
     Repo.insert!(%User{
       email: "mark_all_read_author_#{n}@example.com",
       name: "Author #{n}",
-      oidc_sub: "oidc-mark-all-read-author-#{n}"
+      oidc_sub: "oidc-mark-all-read-author-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

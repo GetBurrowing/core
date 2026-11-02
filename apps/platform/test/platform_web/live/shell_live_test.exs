@@ -15,7 +15,8 @@ defmodule PlatformWeb.ShellLiveTest do
       Repo.insert!(%User{
         email: "shell_test_#{System.unique_integer([:positive])}@example.com",
         name: "Shell Test User",
-        oidc_sub: "oidc-shell-test-#{System.unique_integer([:positive])}"
+        oidc_sub: "oidc-shell-test-#{System.unique_integer([:positive])}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     # MT/RBAC stack 2 (task 019e3c4a): the admin nav gate now reads
@@ -227,7 +228,8 @@ defmodule PlatformWeb.ShellLiveTest do
     Repo.insert!(%User{
       email: "shell-subscribe-#{n}@example.com",
       name: name,
-      oidc_sub: "oidc-shell-subscribe-#{n}"
+      oidc_sub: "oidc-shell-subscribe-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 
@@ -759,7 +761,8 @@ defmodule PlatformWeb.ShellLiveTest do
         Repo.insert!(%User{
           email: "inbox_other_#{System.unique_integer([:positive])}@example.com",
           name: "Other",
-          oidc_sub: "oidc-inbox-other-#{System.unique_integer([:positive])}"
+          oidc_sub: "oidc-inbox-other-#{System.unique_integer([:positive])}",
+          preferences: %{"first_run_goal" => "existing"}
         })
 
       {:ok, _} = Inbox.emit(inbox_attrs(user_id))
@@ -1749,7 +1752,8 @@ defmodule PlatformWeb.ShellLiveTest do
       Repo.insert!(%User{
         email: "reconcile-shell-#{n}@example.com",
         name: name,
-        oidc_sub: "oidc-reconcile-shell-#{n}"
+        oidc_sub: "oidc-reconcile-shell-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
     end
 

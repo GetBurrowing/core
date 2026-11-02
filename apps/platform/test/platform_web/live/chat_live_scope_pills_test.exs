@@ -43,7 +43,8 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       email: "scope_pills_test@example.com",
       name: "Scope Pills Test User",
       oidc_sub: "oidc-scope-pills-test",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

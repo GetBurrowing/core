@@ -51,7 +51,8 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       email: "section_render_test@example.com",
       name: "Section Render Test User",
       oidc_sub: "oidc-section-render-test",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

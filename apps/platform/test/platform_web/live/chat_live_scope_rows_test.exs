@@ -39,7 +39,8 @@ defmodule PlatformWeb.ChatLiveScopeRowsTest do
       Repo.insert!(%User{
         email: "scope-rows-#{n}@example.com",
         name: "Scope Rows #{n}",
-        oidc_sub: "oidc-scope-rows-#{n}"
+        oidc_sub: "oidc-scope-rows-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     %OrgMembership{}

@@ -42,7 +42,8 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
       email: "root-rail-#{n}@example.com",
       name: "Root Rail Viewer",
       oidc_sub: "oidc-root-rail-#{n}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

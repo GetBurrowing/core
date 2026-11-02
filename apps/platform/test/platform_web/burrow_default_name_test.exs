@@ -42,7 +42,8 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
       |> User.changeset(%{
         email: "burrow-name-#{n}@example.com",
         name: "Burrow Name Admin",
-        oidc_sub: "oidc-burrow-name-#{n}"
+        oidc_sub: "oidc-burrow-name-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
       |> Repo.insert!()
 

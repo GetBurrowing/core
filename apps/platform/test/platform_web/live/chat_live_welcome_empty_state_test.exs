@@ -42,7 +42,8 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
       Repo.insert!(%User{
         email: "welcome-empty-#{n}@example.com",
         name: "Welcome Empty #{n}",
-        oidc_sub: "oidc-welcome-empty-#{n}"
+        oidc_sub: "oidc-welcome-empty-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     acme = Tenancy.get_org_by_slug!("acme")

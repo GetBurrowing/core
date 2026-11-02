@@ -81,7 +81,8 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
       email: "agentdm-#{n}@example.com",
       name: Keyword.get(opts, :name, "Agent DM #{n}"),
       oidc_sub: "oidc-agentdm-#{n}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

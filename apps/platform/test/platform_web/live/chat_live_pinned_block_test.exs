@@ -47,7 +47,8 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       email: "pinned-block-#{suffix}@example.com",
       name: "Pinned Block #{suffix}",
       oidc_sub: "oidc-pinned-block-#{suffix}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

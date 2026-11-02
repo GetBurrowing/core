@@ -74,7 +74,8 @@ defmodule PlatformWeb.Components.SidebarTest do
       Repo.insert!(%User{
         email: "sidebar_#{System.unique_integer([:positive])}@example.com",
         name: "Sidebar Person",
-        oidc_sub: "oidc-sidebar-#{System.unique_integer([:positive])}"
+        oidc_sub: "oidc-sidebar-#{System.unique_integer([:positive])}",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     if role do

@@ -19,7 +19,8 @@ defmodule PlatformWeb.ModuleGateTest do
     |> User.changeset(%{
       email: "module-gate-#{n}@example.com",
       name: "Module Gate #{n}",
-      oidc_sub: "oidc-module-gate-#{n}"
+      oidc_sub: "oidc-module-gate-#{n}",
+      preferences: %{"first_run_goal" => "existing"}
     })
     |> Repo.insert!()
   end

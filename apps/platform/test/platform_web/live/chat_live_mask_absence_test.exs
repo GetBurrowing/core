@@ -74,7 +74,8 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
       email: "mask_absence_#{suffix}@example.com",
       name: "Mask Absence #{suffix}",
       oidc_sub: "oidc-mask-absence-#{suffix}",
-      avatar_url: nil
+      avatar_url: nil,
+      preferences: %{"first_run_goal" => "existing"}
     })
   end
 

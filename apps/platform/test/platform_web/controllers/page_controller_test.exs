@@ -87,11 +87,14 @@ defmodule PlatformWeb.PageControllerTest do
   end
 
   test "GET /chat renders the chat surface for authenticated users", %{conn: conn} do
+    # Not a first-run member: a pending one is sent to /start by
+    # `PlatformWeb.Plugs.FirstRunGate` (task 01a19943-c0b4 stage 1).
     user =
       Repo.insert!(%User{
         email: "user@example.com",
         name: "Test User",
-        oidc_sub: "oidc-subject"
+        oidc_sub: "oidc-subject",
+        preferences: %{"first_run_goal" => "existing"}
       })
 
     conn = init_test_session(conn, current_user_id: user.id)
