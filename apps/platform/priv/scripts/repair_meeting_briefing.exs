@@ -1,17 +1,34 @@
 # Task 01a1830b-026a-7000-b529-bd66e4a4a70b: exact-meeting, no-push one-off.
 # Release eval: Code.eval_file("/tmp/repair_meeting_briefing.exs");
-# MeetingBriefingRepair.run("01a182f9-2143-7000-a92f-2cf62a92cefc") # dry run
-# MeetingBriefingRepair.run("01a182f9-2143-7000-a92f-2cf62a92cefc", apply: true)
+# MeetingBriefingRepair.run("<meeting-uuid>", [])  # dry run
+# MeetingBriefingRepair.run("<meeting-uuid>", apply: true, confirm: "<meeting-uuid>")
 # Defines a NEW helper only; never hot-loads any Platform module.
 defmodule MeetingBriefingRepair do
   import Ecto.Query
   alias Platform.{Repo, Meetings, Inbox}
   alias Platform.Meetings.{Meeting, MeetingBriefing, MeetingCandidate, CompletionRun, Transcript}
-  @meeting_id "01a182f9-2143-7000-a92f-2cf62a92cefc"
   @withdrawn_reasons [:retracted, :duplicate, :vetoed]
 
-  def run(meeting_id, opts \\ []) do
-    if meeting_id != @meeting_id, do: raise(ArgumentError, "meeting not authorized")
+  def usage do
+    """
+    MeetingBriefingRepair usage:
+      MeetingBriefingRepair.run("<meeting-uuid>", [])  # dry run
+      MeetingBriefingRepair.run("<meeting-uuid>", apply: true, confirm: "<meeting-uuid>")
+    """
+  end
+
+  # Applying requires `confirm:` to equal the meeting id; raises before any DB work.
+  def check_confirm!(meeting_id, opts) do
+    if Keyword.get(opts, :apply, false) and Keyword.get(opts, :confirm) != meeting_id do
+      raise ArgumentError,
+            "refusing to apply: pass confirm: <meeting-uuid> equal to the meeting id"
+    end
+
+    :ok
+  end
+
+  def run(meeting_id, opts) when is_list(opts) do
+    check_confirm!(meeting_id, opts)
     preflight!()
 
     {:ok, result} =
@@ -233,5 +250,13 @@ defmodule MeetingBriefingRepair do
       )
     )
     |> Enum.filter(&belongs_to_meeting?(&1, meeting))
+  end
+end
+
+# Evaluated with no args (and not under the test env): print usage, touch nothing.
+unless Code.ensure_loaded?(Mix) and Mix.env() == :test do
+  if System.argv() == [] do
+    IO.puts(MeetingBriefingRepair.usage())
+    System.halt(0)
   end
 end

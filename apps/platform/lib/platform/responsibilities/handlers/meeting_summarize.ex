@@ -265,6 +265,15 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   end
 
   @impl true
+  def output_meta(context, trigger_meta) do
+    Map.put(
+      trigger_meta,
+      :summary_input_hash,
+      get_in(context, [:meeting_transcript, :summary_input_hash])
+    )
+  end
+
+  @impl true
   def handle_output(%Responsibility{} = responsibility, parsed) do
     handle_output(responsibility, parsed, %{kind: :unknown})
   end

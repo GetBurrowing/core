@@ -209,6 +209,17 @@ defmodule Platform.Responsibilities.Provider do
               trigger_meta :: map()
             ) :: :ok | {:error, term()}
 
+  @doc """
+  Enrich the `trigger_meta` the Router hands to `handle_output/3`.
+
+  Called on the external dispatch path with the gathered `context` and
+  the original `trigger_meta`; the returned map replaces `trigger_meta`
+  for `handle_output/3`. Implement it when the handler needs a fact that
+  only the gathered context holds. Providers that do not export it
+  receive `trigger_meta` unchanged.
+  """
+  @callback output_meta(context :: map(), trigger_meta :: map()) :: map()
+
   # Arity-3 handle_output is optional so M1 providers that still use
   # arity-2 keep compiling without forced churn. The Router probes for
   # the 3-arity version first and falls back to logging "no output
@@ -223,5 +234,5 @@ defmodule Platform.Responsibilities.Provider do
   # per-dispatch state and have nothing to release when the Router
   # declines to dispatch. Implement it only when a refusal leaves
   # something of yours in flight.
-  @optional_callbacks handle_output: 3, build_prompt: 1, handle_refusal: 3
+  @optional_callbacks handle_output: 3, build_prompt: 1, handle_refusal: 3, output_meta: 2
 end
