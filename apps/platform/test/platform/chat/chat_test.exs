@@ -44,6 +44,87 @@ defmodule Platform.ChatTest do
     "test-#{System.unique_integer([:positive])}"
   end
 
+  # ── human_content/1 (task 01a199c7 stage 1) ──────────────────────────────────
+
+  describe "human_content/1" do
+    alias Platform.Federation.Peers.Ingest
+    alias Platform.Federation.Peers.Peer
+    alias Platform.Mail.Account
+    alias Platform.Mail.Inbound
+    alias Platform.Mail.InboundMessage
+    alias Platform.Security.ExternalContent
+
+    defp federated_content(body) do
+      Ingest.render_content(%Peer{display_name: "Red Star"}, %{content: body, author_name: "Pat"})
+    end
+
+    defp stored_message(content, metadata) do
+      space = create_space()
+      p = create_participant(space.id)
+      msg = create_message(space.id, p.id, %{content: content, metadata: metadata})
+      Platform.Repo.get!(Platform.Chat.Message, msg.id)
+    end
+
+    defp email_content(body) do
+      Inbound.render_content(
+        %Account{name: "Ops", username: "ops@example.test", senders: []},
+        %InboundMessage{
+          from_address: "Recruiter <recruiter@corp.test>",
+          to_addresses: ["ops@example.test"],
+          subject: "Hello",
+          message_id_header: "<abc@corp.test>",
+          received_at: ~U[2026-11-01 12:00:00.000000Z]
+        },
+        %{text: body}
+      )
+    end
+
+    test "a federation_inbound message shows only the peer's body" do
+      content = federated_content("Hello from Red Star\n\nsecond paragraph")
+      msg = stored_message(content, %{"source" => "federation_inbound"})
+
+      # the stored (agent) form is untouched
+      assert msg.content == content
+      assert msg.content =~ ExternalContent.warning()
+
+      assert Chat.human_content(msg) == "Hello from Red Star\n\nsecond paragraph"
+    end
+
+    test "inbound email passes through byte-identical" do
+      content = email_content("Dear team,\n\nplease call me.")
+      assert content =~ ExternalContent.warning()
+
+      msg = stored_message(content, %{"source" => "email_inbound"})
+      assert Chat.human_content(msg) === content
+    end
+
+    test "only the federation_inbound source unwraps, even for federation-shaped content" do
+      content = federated_content("pasted")
+
+      # positive control: the same content does unwrap under the federation source
+      assert Chat.human_content(%{
+               content: content,
+               metadata: %{"source" => "federation_inbound"}
+             }) ==
+               "pasted"
+
+      for metadata <- [%{"source" => "email_inbound"}, %{}, %{"source" => nil}, nil, "x"] do
+        assert Chat.human_content(%{content: content, metadata: metadata}) === content,
+               inspect(metadata)
+      end
+
+      email_msg = stored_message(content, %{"source" => "email_inbound"})
+      assert Chat.human_content(email_msg) === content
+    end
+
+    test "nil content stays nil" do
+      assert Chat.human_content(%{content: nil, metadata: %{"source" => "federation_inbound"}}) ==
+               nil
+
+      assert Chat.human_content(%{content: nil, metadata: %{}}) == nil
+    end
+  end
+
   # ── Threads ───────────────────────────────────────────────────────────────────
 
   describe "create_thread/2 and get_thread_for_message/1" do

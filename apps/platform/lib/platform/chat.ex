@@ -7796,6 +7796,23 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The content a HUMAN sees for `message`. A peer install's message
+  (`metadata["source"] == "federation_inbound"`) is stored wrapped in the
+  SECURITY NOTICE and boundary markers for agents; this returns its body
+  without them (`Platform.Federation.Peers.human_content/1`, which returns the
+  input unchanged on anything it cannot parse whole). Every other message,
+  inbound email (`"email_inbound"`) included, comes back byte-identical.
+
+  For human render surfaces only. Agent reads keep `message.content`.
+  """
+  @spec human_content(map()) :: String.t() | nil
+  def human_content(%{content: content, metadata: %{"source" => "federation_inbound"}})
+      when is_binary(content),
+      do: Platform.Federation.Peers.human_content(content)
+
+  def human_content(%{content: content}), do: content
+
+  @doc """
   One message body as a list excerpt: whitespace (newlines included) collapsed
   to single spaces, truncated to #{@excerpt_max_graphemes} graphemes. `nil`
   gives `""`. The SAME shaping `last_message_excerpts/2` applies, exposed so

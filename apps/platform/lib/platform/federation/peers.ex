@@ -71,6 +71,16 @@ defmodule Platform.Federation.Peers do
   alias Platform.Repo
 
   @doc """
+  The human view of an ingested peer message's stored content: the body
+  without the provenance line, SECURITY NOTICE or boundary markers, or the
+  input unchanged when it does not parse whole. See
+  `Platform.Federation.Peers.Ingest.human_content/1`; this facade is what
+  `Platform.Chat.human_content/1` calls, so Chat does not reach into Ingest.
+  """
+  @spec human_content(String.t()) :: String.t()
+  defdelegate human_content(content), to: Platform.Federation.Peers.Ingest
+
+  @doc """
   Creates a peer row. `attrs` needs `peer_install_id`, `base_url` and
   `status` (`pending_outbound` or `pending_inbound`), and may carry
   `display_name`, `metadata` and `public_keys` (`[%{kid, public_key}]`,
