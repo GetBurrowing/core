@@ -6432,6 +6432,160 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The people a channel admin may seat in `space` from the members panel (task
+  01a199e4 stage 1), sorted by name (nil names last) then email.
+
+  Channels only; any other kind yields `[]`. A person is offered iff they:
+
+    * hold a NON-external membership in `COALESCE(space.org_id, root org)` or
+      in the root org (`Platform.Tenancy.internal_member_ids_query/1`);
+    * are not archived;
+    * have no `user` participant row in the space yet;
+    * are not an external user anywhere (`Platform.Tenancy.external_user_ids/1`),
+      even when they also hold an internal membership;
+    * already pass `Platform.Access.can?(Scope.for_user(user), "chat.read",
+      space)`, which applies the org fence, role-keyed channel restrictions and
+      explicit deny grants.
+
+  The last rule is why the scope is bounded: a participant row is itself a
+  ground in the org fence, so seating someone the fence keeps out would widen
+  tenancy. Adding someone from this list seats them without widening anyone's
+  access. External people are seated only through the root-admin grant surface.
+
+  Cost: two queries for the candidate set and the external subset, then one
+  `Scope.for_user/1` per candidate (built from preloaded memberships, so its
+  role/grant reads, not a membership read).
+  """
+  @spec list_addable_people(Space.t()) :: [Platform.Accounts.User.t()]
+  def list_addable_people(%Space{kind: "channel"} = space), do: addable_people(space, nil)
+  def list_addable_people(_space), do: []
+
+  @doc """
+  Seat a person in a channel on behalf of `actor_user_id` from the members
+  panel (task 01a199e4 stage 1).
+
+  Checked in this order, so each refusal is reached only past the ones before
+  it:
+
+    1. a non-channel space (dm, group, execution, system, meeting) ->
+       `{:error, :not_channel}`;
+    2. the actor fails `can_manage_roles?/2`, read fresh on EVERY call ->
+       `{:error, :unauthorized}`;
+    3. a malformed, unknown or archived user id -> `{:error, :not_found}`;
+    4. an external user -> `{:error, :external}`;
+    5. the user already has a `user` row here -> `{:error, :already_member}`;
+    6. the user is outside `list_addable_people/1`'s eligibility (another
+       org, a restricted channel, a deny) -> `{:error, :not_found}`, the same
+       answer as an unknown id so the call is not an existence oracle.
+
+  The row is written through `add_participant/2` (writable check, broadcasts)
+  with the human join rule `ChatLive.ensure_participant/2` uses: display name,
+  `joined_at`, role `"member"`, and NO `history_visible_from` (unbounded
+  history). A concurrent double add that trips the unique index is
+  `{:error, :already_member}`.
+  """
+  @spec admin_add_person(Space.t(), term(), term()) ::
+          {:ok, Participant.t()}
+          | {:error,
+             :not_channel
+             | :unauthorized
+             | :not_found
+             | :external
+             | :already_member
+             | :space_archived
+             | term()}
+  def admin_add_person(%Space{kind: kind}, _actor_user_id, _user_id) when kind != "channel",
+    do: {:error, :not_channel}
+
+  def admin_add_person(%Space{} = space, actor_user_id, user_id) do
+    with true <- can_manage_roles?(space, actor_user_id) || {:error, :unauthorized},
+         %Platform.Accounts.User{} = user <- live_user(user_id) || {:error, :not_found},
+         true <- not Tenancy.external_user?(user) || {:error, :external},
+         true <- not user_participant?(space.id, user.id) || {:error, :already_member},
+         [_] <- addable_people(space, user.id) do
+      space.id
+      |> add_participant(%{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name || user.email,
+        joined_at: DateTime.utc_now(),
+        role: "member"
+      })
+      |> already_member_on_conflict()
+    else
+      [] -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp live_user(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      Repo.one(
+        from(u in Platform.Accounts.User, where: u.id == ^user_id and is_nil(u.archived_at))
+      )
+    end
+  end
+
+  defp user_participant?(space_id, user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and
+            p.participant_id == ^user_id
+      )
+    )
+  end
+
+  defp already_member_on_conflict({:error, %Ecto.Changeset{errors: errors}} = result) do
+    unique? =
+      Enum.any?(errors, fn {field, {_msg, opts}} ->
+        field == :participant_id and opts[:constraint] == :unique
+      end)
+
+    if unique?, do: {:error, :already_member}, else: result
+  end
+
+  defp already_member_on_conflict(result), do: result
+
+  # The one statement of "a person a channel admin may seat in `space`"; both
+  # `list_addable_people/1` (all candidates) and `admin_add_person/3` (one
+  # candidate, `only_user_id`) read it, so the list and the write cannot
+  # disagree. Rules and their order are documented on `list_addable_people/1`.
+  defp addable_people(%Space{} = space, only_user_id) do
+    root_id =
+      case Tenancy.get_root_org() do
+        %{id: id} -> id
+        nil -> nil
+      end
+
+    org_ids = Enum.uniq(Enum.reject([space.org_id || root_id, root_id], &is_nil/1))
+
+    seated =
+      from(p in Participant,
+        where: p.space_id == ^space.id and p.participant_type == "user",
+        select: p.participant_id
+      )
+
+    query =
+      from(u in Platform.Accounts.User,
+        where: u.id in subquery(Tenancy.internal_member_ids_query(org_ids)),
+        where: is_nil(u.archived_at),
+        where: u.id not in subquery(seated),
+        order_by: [asc_nulls_last: u.name, asc: u.email],
+        preload: [org_memberships: :org]
+      )
+
+    query = if only_user_id, do: where(query, [u], u.id == ^only_user_id), else: query
+    candidates = Repo.all(query)
+    external = candidates |> Enum.map(& &1.id) |> Tenancy.external_user_ids()
+
+    Enum.filter(candidates, fn user ->
+      not MapSet.member?(external, user.id) and
+        Platform.Access.can?(Platform.Access.Scope.for_user(user), "chat.read", space)
+    end)
+  end
+
+  @doc """
   Whether `user_id` may promote or demote channel admins in `space` (task
   01a19355 stage 1).
 
