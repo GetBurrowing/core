@@ -28,6 +28,17 @@ defmodule Platform.Agents.Burrow do
   The "Getting started" space it opens once connected lives in
   `Platform.Agents.Burrow.GettingStarted`.
 
+  ## Default roles
+
+  `ensure/2` pins Burrow to each of `default_roles/0` (`historian`,
+  `meeting_scribe`, `meeting_producer`, `triage_officer`) that NO agent holds,
+  through `Platform.Roles.assign_role/2`, so historian curation (org-page
+  writes, starting with `org/page/identity.md` in the setup guide) and the
+  meeting roles work from the first run (task 01a19aa4 stage 2). A role
+  another agent already holds is never taken; `assign_role/2` does not
+  replace a pinned role either. Re-running `ensure/2` changes nothing. The
+  owner can change the roles later in the Control Center.
+
   ## Owner and admins
 
   The owner is `Platform.Accounts.install_owner/0` (the earliest non-archived
@@ -38,11 +49,19 @@ defmodule Platform.Agents.Burrow do
   the next start. The section is generated, never stored.
   """
 
+  require Logger
+
   alias Platform.AgentHost
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
+  alias Platform.Roles
 
   @name "Burrow"
   @slug "burrow"
+  @default_roles ~w(historian meeting_scribe meeting_producer triage_officer)
+
+  @doc "The roles `ensure/2` gives Burrow when no agent holds them."
+  @spec default_roles() :: [String.t()]
+  def default_roles, do: @default_roles
 
   @doc "The agent's display name."
   def name, do: @name
@@ -81,6 +100,12 @@ defmodule Platform.Agents.Burrow do
   """
   @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
+    owner_id
+    |> ensure_agent(harness)
+    |> assign_default_roles()
+  end
+
+  defp ensure_agent(owner_id, harness) do
     case get() do
       nil ->
         create(owner_id, harness)
@@ -107,11 +132,29 @@ defmodule Platform.Agents.Burrow do
       {:error, reason} ->
         # Lost a race with another tab: the agent the winner made is ours too.
         case get() do
-          %Agent{} = agent -> ensure(owner_id, harness_or(agent, harness))
+          %Agent{} = agent -> ensure_agent(owner_id, harness_or(agent, harness))
           nil -> {:error, reason}
         end
     end
   end
+
+  # Only roles no agent holds: never take a role from another agent.
+  defp assign_default_roles({:ok, %Agent{id: agent_id}} = ok) do
+    for role <- @default_roles, is_nil(Roles.agent_id_for_role(role)) do
+      case Roles.assign_role(role, agent_id) do
+        {:ok, _assignment} ->
+          :ok
+
+        {:error, reason} ->
+          # Lost a race for the role: whoever holds it now keeps it.
+          Logger.warning("[Burrow] role #{role} not assigned: #{inspect(reason)}")
+      end
+    end
+
+    ok
+  end
+
+  defp assign_default_roles(other), do: other
 
   defp harness_or(agent, fallback), do: harness(agent) || fallback
 
@@ -195,15 +238,18 @@ defmodule Platform.Agents.Burrow do
 
       ## Your role
 
-      You are the orchestrator and infra desk for this install. You plan and route
-      work, keep the machine and its services healthy, and answer for the install's
-      state to its owner and admins (listed at the end of this file).
+      You are the orchestrator and infra desk for this install, and the one agent
+      for everyone on it: you work for every member. You plan and route work, keep
+      the machine and its services healthy, and answer for the install's state to
+      its owner and admins (listed at the end of this file).
 
       ## Bundles you use
 
-      - `task` and `plan`: read tasks, draft and submit plans.
+      - `task` and `plan`: read tasks, draft and submit plans, and create projects
+        (`project_create`).
       - `messaging` and `space`: talk to people and agents in spaces.
-      - `memory`: keep durable notes about this install.
+      - `memory`: keep durable notes about this install and, while you hold the
+        historian role, the org's pages such as `org/page/identity.md`.
       - `context_read`: read shared context.
       - `admin`: install administration, when your tool profile includes it.
 
@@ -214,10 +260,37 @@ defmodule Platform.Agents.Burrow do
       You are the first agent on a new install, and your owner may not be technical.
       In the "Getting started" space, help them finish setting up, one step at a time:
 
-      1. Ask what their business does and which tools they already use (email,
-         calendar, files, chat). Suggest connecting the ones that matter most first.
-      2. Help them create a first space for real work, and say what it is for.
-      3. Offer to add more agents later, once the first space is in use.
+      1. Get to know them and why they want Burrow. Ask probing questions, one at a
+         time and in plain words: who they and their org are, what they do and why,
+         who is involved, and what they want to achieve with Burrow. Shape each
+         question to their last answer. People come to Burrow for very different
+         reasons; if they seem unsure, offer a few example uses, then follow their
+         lead.
+      2. Write what you learned to org memory with your memory tools, starting with
+         `org/page/identity.md`, the page every agent reads when it starts. Read it
+         back to them and fix anything they correct.
+      3. Create a first project named for that work. Propose a short name, confirm
+         it with them, then call `project_create`. Say that meetings and tasks live
+         inside a project. If `project_create` is not among your tools, send them to
+         the "New Project" button on /tasks and wait for them to finish.
+      4. Help them create a first space for real work in that project, and say what
+         it is for.
+      5. Offer to shape how you work for them: your focus, your habits, and what you
+         should remember. Save what they want remembered to memory as you go. Your
+         instructions file is edited by the owner on your config page in Burrow
+         (/control/burrow/config); give them the link and say what to add there.
+
+      If anyone (owner or member) says they want to start a project, help them create one the same way.
+
+      Burrow is where their team chats, meets, plans and tracks work, and where that
+      work and what they know stay. Never suggest they need a separate chat or work tool, and never name one (Slack, Teams, a task tracker) as something to set up alongside Burrow.
+      Bringing their data in, such as importing from a file store, is welcome.
+      Offer to connect another service (email, calendar, files) only when a goal
+      they described needs it, and say plainly that a connection rarely works as
+      well as doing the work in Burrow itself. Work they move into Burrow can
+      replace outside services they pay for.
+
+      Mention adding another agent only when their aims call for it, such as a group pooling several people's AI subscriptions; it is not a normal next step.
 
       Use plain words, not technical ones. Never ask them to open a terminal. When a
       step needs their consent or a sign-in, give them the link or button in Burrow

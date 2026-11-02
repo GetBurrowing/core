@@ -66,7 +66,8 @@ defmodule Platform.Agents.Burrow.GettingStartedTest do
 
     assert length(kickoffs) == 1
     assert hd(kickoffs).content =~ "@[Burrow]"
-    assert hd(kickoffs).content =~ "integrations"
+    refute hd(kickoffs).content =~ "integrations"
+    assert hd(kickoffs).content =~ "first project"
     assert hd(kickoffs).content =~ "first space"
 
     members =
@@ -78,5 +79,39 @@ defmodule Platform.Agents.Burrow.GettingStartedTest do
       )
 
     assert Enum.sort(members) == Enum.sort([{"user", admin.id}, {"agent", agent.id}])
+  end
+
+  # Task 01a19aa4 stage 2: the kickoff names the setup steps in order and
+  # points at no outside chat tool and no extra agents.
+  describe "kickoff_text/1" do
+    test "orders understand, identity page, first project, first space, shape Burrow" do
+      text = GettingStarted.kickoff_text("Burrow")
+
+      positions =
+        for needle <- [
+              "why they want Burrow",
+              "org/page/identity.md",
+              "first project",
+              "first space",
+              "shape how you work for them"
+            ] do
+          {index, _} = :binary.match(text, needle)
+          index
+        end
+
+      assert positions == Enum.sort(positions)
+    end
+
+    test "names no outside chat tool, no integrations and no extra agents" do
+      text = GettingStarted.kickoff_text("Burrow")
+
+      for banned <- ["integrations", "Slack", "Teams", "chat tool", "agents", "family"] do
+        refute text =~ banned, banned
+      end
+
+      assert text =~ "@[Burrow]"
+      assert text =~ "Keep it short and plain, one step at a time"
+      assert text =~ "send them the link or button in Burrow and wait for them"
+    end
   end
 end

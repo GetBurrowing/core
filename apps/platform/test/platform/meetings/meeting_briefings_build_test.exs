@@ -462,7 +462,7 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
 
     meeting =
       Repo.insert!(%Meeting{
-        id: "01a182f9-2143-7000-a92f-2cf62a92cefc",
+        id: Ecto.UUID.generate(),
         project_id: source.project_id,
         chat_space_id: source.chat_space_id,
         slug: "authorized-repair",
@@ -507,10 +507,13 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
              applied: false,
              before: %{rejected: 1},
              after: %{accepted: 1, rejected: 0}
-           } = MeetingBriefingRepair.run(meeting.id)
+           } = MeetingBriefingRepair.run(meeting.id, [])
 
     assert Repo.get!(MeetingBriefing, original.id).items == original.items
-    assert %{changed: true, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+
+    assert %{changed: true, applied: true} =
+             MeetingBriefingRepair.run(meeting.id, apply: true, confirm: meeting.id)
+
     refute_receive {:repair_push, _, _}
     repaired = Repo.get!(MeetingBriefing, original.id)
     assert Repo.get!(Platform.Inbox.Item, inbox.id) == inbox
@@ -519,6 +522,8 @@ defmodule Platform.Meetings.MeetingBriefingsBuildTest do
     assert repaired.attendee_user_ids == original.attendee_user_ids
     assert [%{"id" => id}] = repaired.items["_content"]["open_questions"]
     assert id == accepted.id
-    assert %{changed: false, applied: true} = MeetingBriefingRepair.run(meeting.id, apply: true)
+
+    assert %{changed: false, applied: true} =
+             MeetingBriefingRepair.run(meeting.id, apply: true, confirm: meeting.id)
   end
 end

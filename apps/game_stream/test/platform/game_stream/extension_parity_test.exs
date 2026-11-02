@@ -152,6 +152,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"project_list", "task"},
       {"org_list_descendants", "task"},
       {"project_update", "task"},
+      {"project_create", "task"},
       {"epic_list", "task"},
       {"epic_update", "task"},
       {"epic_create", "task"},
@@ -413,10 +414,16 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # bundles are unchanged. Previous pins measured by CI at 0794dc52e, main
     # pins at 8bfd916bd,
     # PR #65.
-    @previous_tool_digest_off "b958dd013e97043d9c4842e0ed764821cb4eb08eb36beb2cee64d31cbf0d819d"
-    @previous_tool_digest_on "724743df0c8e05175b004b7c9dcd8c1fe54f9fb9deeff3cb1ca9671ecfbc7536"
-    @main_tool_digest_off "668874280fa3235439906bc24c9fa6cef8d897c1aab5aa96837bdf8c8685d050"
-    @main_tool_digest_on "cb7feccd3d6f3649e1ec3153c21b94eb42d324e833eafa5eae12952e7772203c"
+    # Re-pinned by task 01a19aa4 stage 1: `project_create` joins the `task`
+    # bundle after `project_update`, so all four tool-definition digests
+    # move. Measured on the test rig at the stage's branch (844c0c697).
+    # Re-pinned by task 01a1845b stage 3: the `meeting_triage_file` description
+    # now interpolates Platform.Meetings.CandidateGuidance.sentence/0, so both
+    # previous and main tool-digest pins move. Measured by CI on the PR #79 merge ref.
+    @previous_tool_digest_off "58b259c8a492c96381b47382ef17a2003835477c842617dd45863940d6bb5a6e"
+    @previous_tool_digest_on "9fdf09757af866b9d3764e02d8797c3c1442e23ca81ab5e758abd419aa425886"
+    @main_tool_digest_off "ce66e11bc37fa0149a0eb7bd51fe890f07acb54310a268d0f042ebd18d61cc32"
+    @main_tool_digest_on "7c7043e1799fc964efc6b8ca6096125ed5f1954ab92be2dfffe88fd2ca95f451"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

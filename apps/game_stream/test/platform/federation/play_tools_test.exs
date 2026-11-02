@@ -62,10 +62,11 @@ defmodule Platform.Federation.PlayToolsTest do
   # start of meetings (task 01a17f00 stage 2).
   # 141 with blocker_recheck/blocker_verify before project_list (task 01a18305).
   # 143 with owner-granted calendar_list/calendar_propose after principal_search (task 01a16991 stage 5).
+  # 144 with `project_create` after `project_update` (task 01a19aa4 stage 1).
   @main_tool_names ~w(
     canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions
-    canvas_restore send_media react blocker_recheck blocker_verify project_list org_list_descendants project_update epic_list
-    epic_update epic_create task_create task_get task_transition_list runtime_event_list
+    canvas_restore send_media react blocker_recheck blocker_verify project_list org_list_descendants project_update project_create
+    epic_list epic_update epic_create task_create task_get task_transition_list runtime_event_list
     execution_lease_list task_list task_complete task_close_as_delivered task_delivery_candidate_list task_update task_start
     task_ack alarm_silence task_dependencies task_attach_canvas task_design_decline
     task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list
@@ -174,7 +175,7 @@ defmodule Platform.Federation.PlayToolsTest do
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
     test "tool_definitions/0 names include the two Calendar tools in order" do
-      assert length(@main_tool_names) == 143
+      assert length(@main_tool_names) == 144
       assert catalogue_names() == @main_tool_names
     end
 
