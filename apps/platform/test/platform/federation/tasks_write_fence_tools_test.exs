@@ -428,7 +428,11 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
   defp args_for("plan_submit", i), do: %{"plan_id" => i.plan}
   defp args_for("plan_update", i), do: %{"plan_id" => i.plan, "stages" => @stages}
 
-  defp args_for("project_create", i), do: %{"org_id" => i.org, "name" => "fence project"}
+  # The name is unique per call: the slug is generated from it, and a taken
+  # slug answers before the org's foreign key does, on the real and the
+  # random org alike, which would make the positive control blind.
+  defp args_for("project_create", i),
+    do: %{"org_id" => i.org, "name" => "fence project #{n()}"}
 
   defp args_for("project_update", i),
     do: %{"project_id" => i.project, "name" => "fence renamed project"}
