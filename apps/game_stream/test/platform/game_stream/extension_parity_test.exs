@@ -423,11 +423,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # previous and main tool-digest pins move. Measured by CI on the PR #79 merge ref.
     # Re-pinned by task 01a19948 stage 2: `space_rename` joins the `space`
     # bundle after `space_leave`, so all four tool-definition digests move.
-    # Measured by CI on PR #81 (runs 41492896250 and after).
+    # Measured by CI on PR #81 (runs 41492896250, 41493526292).
     @previous_tool_digest_off "172f0364df9869d7d37b9bf0c4f8d84048a56882183cd4822380c5e85a2982d9"
     @previous_tool_digest_on "abddd51a98abe14696876df58381705a1484348ea6b9113f606f43cd999c01c6"
-    @main_tool_digest_off "ce66e11bc37fa0149a0eb7bd51fe890f07acb54310a268d0f042ebd18d61cc32"
-    @main_tool_digest_on "7c7043e1799fc964efc6b8ca6096125ed5f1954ab92be2dfffe88fd2ca95f451"
+    @main_tool_digest_off "a1f51be5e1b70e2d9f19d116fe8418943a966876252b8493c3b5e51099241007"
+    @main_tool_digest_on "4e1e03cb43d5125bda3da5e5787d503e1d08e3ff6505efdef68148ce16fff070"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
