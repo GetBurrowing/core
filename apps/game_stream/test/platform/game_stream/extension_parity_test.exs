@@ -416,7 +416,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # PR #65.
     # Re-pinned by task 01a19aa4 stage 1: `project_create` joins the `task`
     # bundle after `project_update`, so all four tool-definition digests
-    # move. Measured on the test rig (moon) at the stage's branch (844c0c697).
+    # move. Measured on the test rig at the stage's branch (844c0c697).
     @previous_tool_digest_off "3ffd7b544c392d380d57e39ed3c75490022529a3da216fe214c0481e1901cfa7"
     @previous_tool_digest_on "027976e92b35c1193e8829393f56cae47543dfb6adcda0c6c6acd6e9c6a511e0"
     @main_tool_digest_off "c641382d626bc47fcf2dfdb7701a0e27bb4ed5d02749fd17268850a29f14c376"

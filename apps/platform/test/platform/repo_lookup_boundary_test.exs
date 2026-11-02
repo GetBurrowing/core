@@ -541,6 +541,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "callback checks all four caller-supplied UUID identities before any lookup; snapshot_hash is compared against persisted state separately."},
     {"platform/federation/tool_surface.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
      "meeting_completion_access resolves a validated meeting first and reads its project_id FK before tenant scope authorization."},
+    {"platform/federation/tool_surface.ex", :get, "Org", 1, :safe_internal,
+     "`execute(\"project_create\", ...)` reads `project.org_id` off the %Project{} that Tasks.create_project/1 just inserted and returned: a `projects.org_id` binary_id FK column that Ecto dumped on insert, so a canonical UUID by construction. The agent-supplied org_id never reaches this lookup; a malformed one fails the insert changeset first (task 01a19aa4)"},
     {"platform/meetings/transcript.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Transcript.changeset validates the optional caller space_id before Repo dumps that binary_id FK, so malformed create attrs return changeset errors rather than Ecto.ChangeError."},
     {"platform/meetings/agent_activity.ex", :platform_uuid_guard, "-", 1, :safe_internal,
