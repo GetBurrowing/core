@@ -98,6 +98,7 @@ defmodule Platform.Meetings.MeetingCancellationNoticeTest do
 
     host = user!("Hana")
     {:ok, host_participant} = seat(meeting, host, "Hana")
+
     meeting =
       Repo.update!(Ecto.Changeset.change(meeting, host_participant_id: host_participant.id))
 
