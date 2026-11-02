@@ -6,6 +6,7 @@ defmodule PlatformWeb.CalendarLive do
   alias Platform.Calendar, as: Events
   alias Platform.Calendar.Event
   alias PlatformWeb.MeetingLive.CalendarWindow
+  alias PlatformWeb.MeetingLive.LiveInvites
   alias PlatformWeb.TimeEntry
 
   @impl true
@@ -45,7 +46,8 @@ defmodule PlatformWeb.CalendarLive do
      |> assign(ext_error: nil, ext_url: nil, ext_label: nil)
      |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
      |> assign(:grant_form, agent_grant_form(nil, nil))
-     |> assign(:form, to_form(%{}, as: :event))}
+     |> assign(:form, to_form(%{}, as: :event))
+     |> LiveInvites.seed()}
   end
 
   @impl true
@@ -268,7 +270,9 @@ defmodule PlatformWeb.CalendarLive do
   # the occurrence of a recurring event.
   def handle_event("select", %{"id" => id, "kind" => kind} = params, socket)
       when kind in ~w(event meeting external) do
-    socket = select_entry(socket, kind, id, params["start"])
+    # The invite control is scoped to ONE meeting: a half-typed query must
+    # not carry over to another entry (MeetingLive's `select_meeting`).
+    socket = socket |> LiveInvites.seed() |> select_entry(kind, id, params["start"])
 
     if socket.assigns.selected,
       do: {:noreply, socket},
@@ -277,15 +281,51 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_event("select", _, socket), do: {:noreply, socket}
 
-  def handle_event("close_details", _, socket), do: {:noreply, assign(socket, :selected, nil)}
+  def handle_event("close_details", _, socket), do: {:noreply, close_details(socket)}
 
   # Escape closes the editor first, then the details (app.js keydown).
   def handle_event("escape", _, %{assigns: %{editing: %Event{}}} = socket),
     do: {:noreply, close_editor(socket)}
 
-  def handle_event("escape", _, socket), do: {:noreply, assign(socket, :selected, nil)}
+  def handle_event("escape", _, socket), do: {:noreply, close_details(socket)}
 
   def handle_event("close_editor", _, socket), do: {:noreply, close_editor(socket)}
+
+  # ── Live invites in the meeting details (task 01a19e7b stage 2) ─────────
+  #
+  # The same handlers as MeetingLive's detail panel, shared through
+  # `LiveInvites`. The meeting is never a client value: it is the entry the
+  # open details were built from, out of the viewer-scoped `visible_entries`
+  # (already filtered by `:meetings_on`), so a forged event with nothing
+  # selected raises and writes nothing. No host gate is added or removed:
+  # MeetingLive applies none either.
+  #
+  # After a write the details rebuild from `meeting_invites` so this socket
+  # shows the new row at once. `Meetings.invite_*` broadcast nothing, so
+  # another open window catches up only on its 60s `:calendar_tick` reload.
+  def handle_event("meeting_invite_add_people", _params, socket) do
+    _meeting = selected_meeting!(socket)
+    {:noreply, LiveInvites.open(socket)}
+  end
+
+  def handle_event("meeting_invite_search", %{"value" => query}, socket),
+    do: {:noreply, LiveInvites.search(socket, selected_meeting!(socket), query)}
+
+  def handle_event("meeting_invite_commit", %{"value" => value}, socket) do
+    meeting = selected_meeting!(socket)
+
+    case LiveInvites.commit(socket, meeting, value, socket.assigns.current_user_record.id) do
+      {:staged, socket} -> {:reply, %{staged: true}, refresh_selected(socket)}
+      {:noop, socket} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("meeting_invite_stage", %{"kind" => _} = params, socket) do
+    meeting = selected_meeting!(socket)
+    inviter_id = socket.assigns.current_user_record.id
+
+    {:noreply, socket |> LiveInvites.stage(meeting, params, inviter_id) |> refresh_selected()}
+  end
 
   # Approve / Revert on a tentative hold: the same AgentAccess.handle/4 the
   # Inbox consent card calls, keyed by the hold's consent.
@@ -571,6 +611,14 @@ defmodule PlatformWeb.CalendarLive do
 
   defp refresh_selected(socket), do: socket
 
+  defp close_details(socket), do: socket |> assign(:selected, nil) |> LiveInvites.seed()
+
+  defp selected_meeting!(%{assigns: %{selected: %{kind: "meeting", entry: %{meeting: meeting}}}}),
+    do: meeting
+
+  defp selected_meeting!(_socket),
+    do: raise(ArgumentError, "cannot invite: no meeting is selected in the details")
+
   defp select_entry(socket, kind, id, start) do
     candidates =
       Enum.filter(
@@ -653,21 +701,11 @@ defmodule PlatformWeb.CalendarLive do
       meeting_id: meeting.id,
       space: space && "#" <> space.name,
       host: host && host.display_name,
-      invited:
-        meeting.id
-        |> Platform.Meetings.list_invites(preload: [:user])
-        |> Enum.map(&invitee_label/1)
-        |> Enum.reject(&is_nil/1)
+      # MeetingLive's own rows. No ring states: CalendarLive does not
+      # subscribe to ring reports.
+      invite_entries: PlatformWeb.MeetingLive.detail_invite_rows(meeting)
     }
   end
-
-  # Same precedence as MeetingLive's invite rows for a member; a guest reads
-  # as the address they were invited at.
-  defp invitee_label(%Platform.Meetings.Invite{user: %Platform.Accounts.User{} = user} = invite),
-    do: user.name || user.email || invite.display_name
-
-  defp invitee_label(%Platform.Meetings.Invite{} = invite),
-    do: invite.email || invite.display_name
 
   defp handle_consent(socket, hold_id, verb) do
     owner_id = socket.assigns.current_user_record.id

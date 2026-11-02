@@ -87,7 +87,18 @@
     </div>
   </section>
 
-  <.details_panel :if={@selected && @live_action != :settings} detail={@selected} />
+  <.details_panel
+    :if={@selected && @live_action != :settings}
+    detail={@selected}
+    invite={
+      %{
+        open: @meeting_invite_open,
+        query: @meeting_invite_query,
+        candidates: @meeting_invite_candidates,
+        email: @meeting_invite_email
+      }
+    }
+  />
 
   <.event_editor
     :if={@editing}

@@ -789,6 +789,8 @@ defmodule PlatformWeb.CalendarLiveTest do
 
   # ── Calendar v4 details + editor (task 01a18d9f stage 2) ────────────────
 
+  @invite_header "[data-role=calendar-details] [data-role=meeting-invite-list-header]"
+
   defp details_text(view),
     do: view |> element("[data-role=calendar-details]") |> render() |> text()
 
@@ -874,7 +876,8 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-details] .cal-pill-ok", "Live")
     copy = details_text(view)
     assert copy =~ "Burrow meeting in #design-"
-    assert copy =~ "1 invitedCalendar user"
+    assert has_element?(view, "#{@invite_header}", "Invited · 1")
+    assert copy =~ "Calendar user"
 
     assert has_element?(
              view,
@@ -944,7 +947,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     open_chip(view, "meeting")
     copy = details_text(view)
 
-    assert copy =~ "2 invited"
+    assert has_element?(view, "#{@invite_header}", "Invited · 2")
     assert copy =~ "Priya Invitee"
     assert copy =~ "elias@acme.com"
   end
@@ -964,7 +967,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     open_chip(view, "meeting")
     copy = details_text(view)
 
-    assert copy =~ "1 invited"
+    assert has_element?(view, "#{@invite_header}", "Invited · 1")
     assert copy =~ "elias@acme.com"
   end
 
@@ -987,7 +990,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     open_chip(view, "meeting")
     copy = details_text(view)
 
-    assert copy =~ "0 invited"
+    assert has_element?(view, "#{@invite_header}", "Invited · 0")
     refute copy =~ "Chatty Participant"
   end
 
@@ -1006,9 +1009,237 @@ defmodule PlatformWeb.CalendarLiveTest do
     open_chip(view, "meeting")
     copy = details_text(view)
 
-    assert copy =~ "1 invited"
+    assert has_element?(view, "#{@invite_header}", "Invited · 1")
     assert copy =~ "Kept Invitee"
     refute copy =~ "Revoked Invitee"
+  end
+
+  # ── Live invites in the meeting details (task 01a19e7b stage 2) ────────
+
+  describe "meeting invites" do
+    @in_details "[data-role=calendar-details]"
+    @guest_host "meet.example.com"
+    @guest_host_message "Guest links are not available: MEETING_GUEST_HOST is not configured."
+
+    setup do
+      original = Application.get_env(:platform, :meeting_guest_host)
+      Application.put_env(:platform, :meeting_guest_host, @guest_host)
+
+      on_exit(fn ->
+        case original do
+          nil -> Application.delete_env(:platform, :meeting_guest_host)
+          value -> Application.put_env(:platform, :meeting_guest_host, value)
+        end
+      end)
+
+      zone = midday_zone()
+      today = local_today(zone)
+      meeting = seed_meeting!(zone, today, "scheduled")
+      member = seed_member!("Priya Invitee #{System.unique_integer([:positive])}")
+      {:ok, _} = Platform.Meetings.invite_user(meeting, member.id)
+
+      %{zone: zone, today: today, meeting: meeting, member: member}
+    end
+
+    defp open_meeting(conn, zone) do
+      {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+      open_chip(view, "meeting")
+      view
+    end
+
+    defp add_people(view),
+      do:
+        view |> element("#{@in_details} [data-role=meeting-invite-add-people]") |> render_click()
+
+    defp search(view, query),
+      do:
+        view
+        |> element("#{@in_details} [data-role=meeting-invite-search]")
+        |> render_keyup(%{"value" => query})
+
+    defp invite_rows(meeting), do: Platform.Meetings.list_invites(meeting.id)
+
+    test "the details show the invite list with its Add people row", %{
+      conn: conn,
+      zone: zone,
+      member: member
+    } do
+      view = open_meeting(conn, zone)
+
+      assert has_element?(view, "#{@in_details} [data-role=meeting-invite-list]")
+      assert has_element?(view, @invite_header, "Invited · 1")
+      assert has_element?(view, "#{@in_details} [data-role=meeting-invite-list]", member.name)
+      assert has_element?(view, "#{@in_details} [data-role=meeting-invite-add-people]")
+      refute has_element?(view, "[data-role=calendar-detail-invite-expansion]")
+    end
+
+    test "Add people, search, pick a member: one row written, the list grows in place", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      newcomer = seed_member!("Zed Newcomer #{System.unique_integer([:positive])}")
+      view = open_meeting(conn, zone)
+
+      add_people(view)
+      assert has_element?(view, "[data-role=calendar-detail-invite-expansion]")
+      search(view, newcomer.name)
+
+      view
+      |> element(
+        "#{@in_details} [data-role=meeting-invite-candidate][data-user-id='#{newcomer.id}']"
+      )
+      |> render_click()
+
+      assert [_] = Enum.filter(invite_rows(meeting), &(&1.user_id == newcomer.id))
+      assert length(invite_rows(meeting)) == 2
+      # The same socket, no remount: the details rebuilt from the rows.
+      assert has_element?(view, @invite_header, "Invited · 2")
+      assert has_element?(view, "#{@in_details} [data-role=meeting-invite-list]", newcomer.name)
+    end
+
+    test "Enter on a guest address replies staged and writes a guest row with its own link", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      address = "guest-#{System.unique_integer([:positive])}@example.test"
+      view = open_meeting(conn, zone)
+      add_people(view)
+
+      render_hook(view, "meeting_invite_commit", %{"value" => address})
+      assert_reply(view, %{staged: true})
+
+      assert [guest] = Enum.filter(invite_rows(meeting), &(&1.email == address))
+      assert guest.user_id == nil
+      assert %DateTime{} = guest.expires_at
+
+      copy = "#{@in_details} [data-role=meeting-invite-copy][data-entry-id='#{guest.id}']"
+      assert has_element?(view, copy)
+      assert has_element?(view, "#{copy}[data-clipboard-text*='#{@guest_host}']")
+      assert has_element?(view, @invite_header, "Invited · 2")
+      # The search box is cleared after the stage.
+      refute has_element?(view, "#{@in_details} [data-role=meeting-invite-option]")
+    end
+
+    test "with the guest host unset a guest flashes the operator message and writes nothing",
+         %{conn: conn, zone: zone, meeting: meeting} do
+      Application.delete_env(:platform, :meeting_guest_host)
+      view = open_meeting(conn, zone)
+      add_people(view)
+      search(view, "outsider@example.test")
+
+      html =
+        view
+        |> element("#{@in_details} [data-role=meeting-invite-option][data-option=guest]")
+        |> render_click()
+
+      assert html =~ @guest_host_message
+      assert length(invite_rows(meeting)) == 1
+      assert has_element?(view, @invite_header, "Invited · 1")
+    end
+
+    test "closing and reopening the details resets the search", %{conn: conn, zone: zone} do
+      view = open_meeting(conn, zone)
+      add_people(view)
+      search(view, "half-typed")
+
+      assert has_element?(
+               view,
+               "#{@in_details} [data-role=meeting-invite-search][value=half-typed]"
+             )
+
+      view |> element("button[aria-label='Close details']") |> render_click()
+      open_chip(view, "meeting")
+      refute has_element?(view, "[data-role=calendar-detail-invite-expansion]")
+
+      add_people(view)
+
+      refute has_element?(
+               view,
+               "#{@in_details} [data-role=meeting-invite-search][value=half-typed]"
+             )
+
+      # Escape resets it too.
+      search(view, "half-typed")
+      view |> element("[data-page=calendar]") |> render_keydown(%{"key" => "Escape"})
+      open_chip(view, "meeting")
+      refute has_element?(view, "[data-role=calendar-detail-invite-expansion]")
+    end
+
+    test "a forged stage with no meeting selected raises and writes nothing", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      Process.flag(:trap_exit, true)
+      {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+
+      reason =
+        catch_exit(
+          render_hook(view, "meeting_invite_stage", %{
+            "kind" => "guest",
+            "email" => "forged@example.test"
+          })
+        )
+
+      assert {{%ArgumentError{message: message}, _stacktrace}, _from} = reason
+      assert message =~ "no meeting is selected"
+      assert length(invite_rows(meeting)) == 1
+    end
+
+    test "a forged stage while a native event is open raises and writes nothing", %{
+      conn: conn,
+      scope: scope,
+      zone: zone,
+      today: today,
+      meeting: meeting
+    } do
+      {:ok, _} =
+        Calendar.create_event(scope, %{
+          title: "Plain event",
+          starts_at: at(zone, today, 12, 30),
+          ends_at: at(zone, today, 13, 15),
+          time_zone: zone
+        })
+
+      Process.flag(:trap_exit, true)
+      {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+      open_chip(view, "native")
+
+      refute has_element?(view, "#{@in_details} [data-role=meeting-invite-list]")
+
+      reason =
+        catch_exit(
+          render_hook(view, "meeting_invite_stage", %{
+            "kind" => "guest",
+            "email" => "forged@example.test"
+          })
+        )
+
+      assert {{%ArgumentError{}, _stacktrace}, _from} = reason
+      assert length(invite_rows(meeting)) == 1
+    end
+
+    test "nothing in the details copies or links a meeting-wide invite", %{
+      conn: conn,
+      zone: zone
+    } do
+      view = open_meeting(conn, zone)
+      add_people(view)
+      render_hook(view, "meeting_invite_commit", %{"value" => "solo@example.test"})
+
+      # The only clipboard controls are the per-row guest copies.
+      assert has_element?(view, "#{@in_details} [data-role=meeting-invite-copy]")
+
+      refute has_element?(
+               view,
+               "#{@in_details} [data-clipboard-text]:not([data-role=meeting-invite-copy])"
+             )
+
+      refute has_element?(view, "#{@in_details} a[href*='#{@guest_host}']")
+      refute has_element?(view, "#{@in_details} [data-role=meeting-invite-unstage]")
+    end
   end
 
   test "Approve in the hold's details commits it through AgentAccess", %{
