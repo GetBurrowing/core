@@ -8,7 +8,7 @@ defmodule PlatformWeb.InboxLive do
     * **Awaiting your review** — `review_request_pending`, `task_plan_review`,
       `task_sponsor_assigned` (and any unknown/future kind, which defaults here)
     * **Mentions** — `chat_mention`, grouped by space
-    * **Meetings** — `meeting_starting`, `meeting_invited`
+    * **Meetings** — `meeting_starting`, `meeting_invited`, `meeting_cancelled`
 
   Each section auto-hides when it has no items; when every section is empty the
   surface falls back to the `EmptyState` `:minimal` copy.
@@ -1185,6 +1185,8 @@ defmodule PlatformWeb.InboxLive do
   # perfectly well — filed under "Awaiting your review" next to plan reviews —
   # so the typed kind would exist and still not be groupable as an invite.
   defp section_for("meeting_invited"), do: :meetings
+  # Same reason: a cancellation is meeting news, not something to review.
+  defp section_for("meeting_cancelled"), do: :meetings
   # Unknown/future kinds route to :review — a real, rendered section with a
   # stream, count and template — rather than a nil section that streams into no
   # `phx-update` container and silently vanishes. `InboxItem.kind_label/1` +

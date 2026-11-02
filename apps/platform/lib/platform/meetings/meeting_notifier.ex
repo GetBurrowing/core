@@ -1,8 +1,28 @@
 defmodule Platform.Meetings.MeetingNotifier do
   @moduledoc """
   GenServer that subscribes to every project's meeting lifecycle topic and
-  fans out a push notification on `{:meeting_started, meeting}` and on
-  `{:meeting_cancelled, meeting}`.
+  tells the people who were expecting a meeting when it starts
+  (`{:meeting_started, meeting}`) and when it is called off
+  (`{:meeting_cancelled, meeting}`). `fan_out/2` takes the event, so the
+  two share one recipient resolution and differ only in what they say:
+
+    * `:started` — push "<host> started a meeting" into the room, one
+      `meeting_starting` inbox row per invitee not already in the room, then
+      `ring/1`.
+    * `:cancelled` (task 01a19e7f stage 2) — push "Meeting cancelled" to
+      `/meetings?meeting=<id>`, one `meeting_cancelled` inbox row for EVERY
+      recipient (no already-active skip: a cancellation is news to whoever is
+      in the room too), a "<name> has been cancelled." chat message in each
+      external invitee's delivery space, and a cancellation email to each
+      guest with an address through `Platform.Meetings.CancellationMail`.
+      Cancel never rings. The `meeting_cancelled` row has no
+      `row_stale?/1` clause in `Platform.Inbox`: it is a final fact and stays
+      until the person dismisses it.
+
+  Every channel of either event runs only inside the `{:ok, claimed}` branch
+  of its compare-and-swap (`mark_notified/1`, `mark_cancellation_notified/1`),
+  so a re-broadcast or a second delivery sends nothing. Each channel is
+  isolated: a failure is logged and never stops the others.
 
   Sits in the supervision tree (not in a LiveView) because the per-session
   subscriber in `PlatformWeb.MeetingLive` only fires when a meetings page is
@@ -88,6 +108,8 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   alias Platform.Chat.Participant
   alias Platform.Meetings
+  alias Platform.Meetings.CancellationMail
+  alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.Meeting
   alias Platform.Repo
   alias Platform.Tasks
@@ -158,7 +180,7 @@ defmodule Platform.Meetings.MeetingNotifier do
     # skip the fan-out — no preload, no recipient query, no broadcast.
     case Meetings.mark_notified(meeting) do
       {:ok, claimed} ->
-        fan_out(claimed)
+        fan_out(claimed, :started)
         ring(claimed)
 
       {:already_notified, _} ->
@@ -175,7 +197,7 @@ defmodule Platform.Meetings.MeetingNotifier do
 
   # A cancellation is told to the same people, through the same recipient
   # resolution, as a start (task 019fb954-c848) — which is the reason it is
-  # routed here rather than fanned out at the call site: `fan_out/1` already
+  # routed here rather than fanned out at the call site: `fan_out/2` already
   # knows how to answer "who was expecting this meeting", invite rows first
   # and chat participants otherwise, and duplicating that query is how the
   # two answers drift apart. Same CAS-before-any-work shape as
@@ -184,7 +206,7 @@ defmodule Platform.Meetings.MeetingNotifier do
   def handle_info({:meeting_cancelled, %Meeting{} = meeting}, state) do
     case Meetings.mark_cancellation_notified(meeting) do
       {:ok, claimed} ->
-        fan_out(claimed)
+        fan_out(claimed, :cancelled)
 
       {:already_notified, _} ->
         Logger.debug(
@@ -243,7 +265,7 @@ defmodule Platform.Meetings.MeetingNotifier do
     Application.get_env(:platform, :ringing_module, Platform.Meetings.Ringing)
   end
 
-  defp fan_out(%Meeting{} = meeting) do
+  defp fan_out(%Meeting{} = meeting, event) when event in [:started, :cancelled] do
     meeting = Repo.preload(meeting, :host_participant)
 
     host_display_name =
@@ -252,30 +274,53 @@ defmodule Platform.Meetings.MeetingNotifier do
         _ -> "Someone"
       end
 
-    # Single recipient source for BOTH the #440 push path and the inbox path.
-    # Which rule answered is carried on `:source` and drives the push branch
-    # below; the inbox branch is the same either way.
+    # Single recipient source for BOTH the #440 push path and the inbox path,
+    # for both events. Which rule answered is carried on `:source` and drives
+    # the push branch below; the inbox branch is the same either way.
     recipients = meeting |> Meetings.recipients_for_meeting() |> readable_recipients(meeting)
 
-    payload = %{
-      title: "#{host_display_name} started a meeting",
-      body: meeting.name,
-      url: "/meetings/#{meeting.slug}"
-    }
-
     Logger.info(
-      "[MeetingNotifier] meeting_started — meeting=#{meeting.id} " <>
+      "[MeetingNotifier] meeting_#{event} — meeting=#{meeting.id} " <>
         "project=#{meeting.project_id} source=#{recipients.source} " <>
         "invitees=#{recipients.invitee_count} recipients=#{length(recipients.user_ids)}"
     )
 
-    fan_out_push(meeting, recipients, payload)
+    fan_out_push(meeting, recipients, push_payload(event, meeting, host_display_name))
 
     # Parallel, additive inbox fan-out: one durable Inbox row per invited
     # human. Independent of the push path above — a per-recipient failure
     # never aborts the push or the remaining rows.
-    fan_out_inbox(meeting, recipients, host_display_name)
+    fan_out_inbox(event, meeting, recipients, host_display_name)
+
+    if event == :cancelled do
+      # The two audiences `readable_recipients/2` filters out: external
+      # invitees (no `chat.read` on the meeting space) and guests (no account).
+      notify_external_invitees(meeting)
+      notify_guests(meeting)
+    end
+
+    :ok
   end
+
+  defp push_payload(:started, %Meeting{} = meeting, host_display_name) do
+    %{
+      title: "#{host_display_name} started a meeting",
+      body: meeting.name,
+      url: "/meetings/#{meeting.slug}"
+    }
+  end
+
+  # The list detail, not the room: a cancelled meeting has no room to join,
+  # and the detail renders its cancelled state.
+  defp push_payload(:cancelled, %Meeting{} = meeting, _host_display_name) do
+    %{
+      title: "Meeting cancelled",
+      body: meeting.name,
+      url: cancelled_url(meeting)
+    }
+  end
+
+  defp cancelled_url(%Meeting{id: id}), do: "/meetings?meeting=#{id}"
 
   defp readable_recipients(recipients, %Meeting{chat_space_id: space_id}) do
     allowed? = fn user_id ->
@@ -330,7 +375,7 @@ defmodule Platform.Meetings.MeetingNotifier do
   # absent from `user_ids` on both branches. `invitee_count` is the declared
   # count, independent of the already-active skip — and on the `:invites`
   # branch it includes guests, who get no row of their own.
-  defp fan_out_inbox(%Meeting{} = meeting, recipients, host_display_name) do
+  defp fan_out_inbox(:started, %Meeting{} = meeting, recipients, host_display_name) do
     active_user_ids =
       meeting.chat_space_id
       |> Meetings.active_participants_for_space()
@@ -340,26 +385,105 @@ defmodule Platform.Meetings.MeetingNotifier do
 
     Enum.each(recipients.user_ids, fn user_id ->
       unless MapSet.member?(active_user_ids, user_id) do
-        emit_inbox_row(meeting, user_id, host_display_name, recipients.invitee_count)
+        emit_inbox_row(meeting, user_id, starting_row(meeting, host_display_name, recipients))
       end
     end)
   end
 
-  defp emit_inbox_row(%Meeting{} = meeting, user_id, host_display_name, invitee_count) do
-    inbox_module().emit(%{
-      user_id: user_id,
+  # Every recipient, with NO already-active skip: someone sitting in the room
+  # when it is called off still needs the durable record that it was.
+  defp fan_out_inbox(:cancelled, %Meeting{} = meeting, recipients, _host_display_name) do
+    Enum.each(recipients.user_ids, fn user_id ->
+      emit_inbox_row(meeting, user_id, cancelled_row(meeting))
+    end)
+  end
+
+  defp starting_row(%Meeting{} = meeting, host_display_name, recipients) do
+    %{
       kind: "meeting_starting",
-      source_type: "meeting",
-      source_id: meeting.id,
       title: "Meeting started: #{meeting.name}",
-      body: "Host: #{host_display_name} · #{invitee_count} invited",
+      body: "Host: #{host_display_name} · #{recipients.invitee_count} invited",
       url: "/meetings/#{meeting.id}"
-    })
+    }
+  end
+
+  defp cancelled_row(%Meeting{} = meeting) do
+    %{
+      kind: "meeting_cancelled",
+      title: "Meeting cancelled: #{meeting.name}",
+      body: cancelled_body(meeting),
+      url: cancelled_url(meeting)
+    }
+  end
+
+  defp cancelled_body(%Meeting{scheduled_start_at: %DateTime{} = starts_at}) do
+    "It was scheduled for " <> Calendar.strftime(starts_at, "%a %b %-d, %Y at %H:%M UTC") <> "."
+  end
+
+  defp cancelled_body(%Meeting{}), do: "It had no scheduled time."
+
+  defp emit_inbox_row(%Meeting{} = meeting, user_id, row) do
+    inbox_module().emit(
+      Map.merge(row, %{user_id: user_id, source_type: "meeting", source_id: meeting.id})
+    )
   rescue
     error ->
       Logger.warning(
         "[MeetingNotifier] inbox emit failed — meeting=#{meeting.id} " <>
           "user=#{user_id}: #{inspect(error)}"
+      )
+
+      :error
+  end
+
+  # External invitees were told about the meeting by a chat message in their
+  # invite's delivery space (`InviteDelivery.deliver/2`, carrier
+  # `external_chat`), the only surface they can reach, so that is where they
+  # are told it is off. One message per live invite; a failure on one is
+  # logged and never stops the next, the guest mail or anything else.
+  defp notify_external_invitees(%Meeting{} = meeting) do
+    meeting.id
+    |> Meetings.list_invites()
+    |> Enum.filter(&(&1.delivery_carrier == "external_chat" and is_binary(&1.delivery_space_id)))
+    |> Enum.each(&notify_external_invitee(meeting, &1))
+  end
+
+  defp notify_external_invitee(%Meeting{} = meeting, invite) do
+    result =
+      case Platform.Chat.get_space(invite.delivery_space_id) do
+        nil -> {:error, :delivery_space_missing}
+        space -> InviteDelivery.post_as_sender(space, "#{meeting.name} has been cancelled.")
+      end
+
+    case result do
+      {:ok, _message} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[MeetingNotifier] external cancellation message failed — meeting=#{meeting.id} " <>
+            "invite=#{invite.id}: #{inspect(reason)}"
+        )
+
+        :error
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] external cancellation message raised — meeting=#{meeting.id} " <>
+          "invite=#{invite.id}: #{Exception.message(error)}"
+      )
+
+      :error
+  end
+
+  defp notify_guests(%Meeting{} = meeting) do
+    CancellationMail.deliver(meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] guest cancellation mail raised — meeting=#{meeting.id}: " <>
+          Exception.message(error)
       )
 
       :error

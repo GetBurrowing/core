@@ -19,6 +19,8 @@ defmodule PlatformWeb.Components.InboxItemKindLabelTest do
     "chat_mention" => "Mention",
     "meeting_starting" => "Meeting starting",
     "meeting_invited" => "Meeting invite",
+    # Task 01a19e7f stage 2: a new kind, not a changed label.
+    "meeting_cancelled" => "Meeting cancelled",
     "task_sponsor_assigned" => "Task sponsor assigned",
     "lifecycle_step_failed" => "Lifecycle step failed",
     # Main's briefing kind (task 01a15ee1), humanized there: "Briefing".

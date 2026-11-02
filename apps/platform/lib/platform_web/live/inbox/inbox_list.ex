@@ -44,6 +44,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   | `review_request_pending` | Review         |
   | `meeting_starting`       | Starting now   |
   | `meeting_invited`        | Meeting invite |
+  | `meeting_cancelled`      | Cancelled      |
   | `task_sponsor_assigned`  | Sponsor        |
   | `lifecycle_step_failed`  | Step failed    |
   | `briefing`               | Briefing       |

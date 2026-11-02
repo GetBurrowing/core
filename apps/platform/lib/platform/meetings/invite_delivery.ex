@@ -64,16 +64,29 @@ defmodule Platform.Meetings.InviteDelivery do
   gap legible — a `carrier: :guest_link` event says plainly that nobody was
   contacted, where a silent success would read as a delivery that happened.
 
-  ## Cancellation is not modelled here, deliberately
+  The mail claim above is dated. An audited outbox exists now
+  (`Platform.Mail`), and two senders use it for guests: booking confirmations
+  (`Platform.Calendar.BookingConfirmation`) and cancellation notices
+  (`Platform.Meetings.CancellationMail`). Both need an org sender in
+  `:calendar_booking_mail_senders`. The invite itself still goes out as
+  `:guest_link`.
 
-  There is no "invite cancelled" carrier and no test that assumes one,
-  because meetings have no cancellation concept to hang it on:
-  `Meeting.@statuses` is `~w(scheduled live ended)` and
-  `status_changeset/3` admits only `scheduled -> live` and `live -> ended`.
-  Sibling task `019fb954-c848` has an approved plan whose first stage adds
-  exactly that model. Adding it here would duplicate that stage, put a
-  second concurrent migration on `meetings`, and leave the sibling's tests
-  exercising this module's code. It is filed, not smuggled in.
+  ## Cancellation reuses these carriers, it is not a carrier of its own
+
+  Meetings can be cancelled (`Platform.Meetings.cancel_meeting/2`, task
+  `019fb954-c848`), and the notice goes to the surface each invitee was
+  reached on here (task `01a19e7f` stage 2). It is sent by
+  `Platform.Meetings.MeetingNotifier` on `{:meeting_cancelled, _}`, not by
+  this module, so there is no "cancelled" carrier and `deliver/2` is
+  unchanged:
+
+    * internal invitees get a `meeting_cancelled` inbox row and a push;
+    * external invitees get "<name> has been cancelled." in the delivery
+      space recorded on their invite, posted through `post_as_sender/2`
+      below, the same seeded sender this module uses for the invite itself;
+    * guests with an email get a cancellation email from
+      `Platform.Meetings.CancellationMail` when a meeting mail sender is
+      configured for the org. A link-only guest still has no channel.
 
   ## Where the cross-cutting properties are checked
 
@@ -287,16 +300,7 @@ defmodule Platform.Meetings.InviteDelivery do
 
   defp deliver_external(%Invite{} = invite, %Meeting{} = meeting) do
     with {:ok, space} <- Meetings.delivery_space_for_invite(invite, meeting),
-         {:ok, author_participant_id} <- sender_participant_id(space),
-         {:ok, _message} <-
-           Chat.post_message(%{
-             space_id: space.id,
-             # The agent's PARTICIPANT ROW id, not the agent id.
-             # `chat_messages.participant_id` points at `chat_participants`.
-             participant_id: author_participant_id,
-             content_type: "text",
-             content: external_message(meeting, space)
-           }) do
+         {:ok, _message} <- post_as_sender(space, external_message(meeting, space)) do
       stamp_delivery(invite, :external_chat, space.id)
       emit_telemetry(invite, meeting, :external_chat)
 
@@ -314,6 +318,30 @@ defmodule Platform.Meetings.InviteDelivery do
         )
 
         {:error, reason}
+    end
+  end
+
+  @doc """
+  Post `content` into `space` as the seeded meetings sender
+  (`Platform.Meetings.SenderSeed`), the identity this module's external
+  carrier writes as. Shared with `Platform.Meetings.MeetingNotifier`'s
+  cancellation notice so the two cannot drift.
+
+  A strict read of the sender's participant row: nothing here inserts one. A
+  space the sender was never added to answers `{:error, :sender_not_seeded}`,
+  and `Chat.post_message/1`'s own errors pass through unchanged.
+  """
+  @spec post_as_sender(%{id: binary()}, String.t()) :: {:ok, term()} | {:error, term()}
+  def post_as_sender(%{id: space_id} = space, content) when is_binary(content) do
+    with {:ok, author_participant_id} <- sender_participant_id(space) do
+      Chat.post_message(%{
+        space_id: space_id,
+        # The agent's PARTICIPANT ROW id, not the agent id.
+        # `chat_messages.participant_id` points at `chat_participants`.
+        participant_id: author_participant_id,
+        content_type: "text",
+        content: content
+      })
     end
   end
 
