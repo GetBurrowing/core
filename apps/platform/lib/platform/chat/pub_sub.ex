@@ -77,9 +77,12 @@ defmodule Platform.Chat.PubSub do
     do: "chat:canvas_room:#{canvas_id}:#{node_id}:#{location_epoch(canvas_id)}"
 
   @doc """
-  Returns the global topic for space-lifecycle events (creation, archival).
+  Returns the global topic for space-lifecycle events (creation, archival,
+  rename).
 
-  Subscribers receive `{:space_created, space}` and `{:space_archived, space}`.
+  Subscribers receive `{:space_created, space}`, `{:space_archived, space}`
+  and `{:space_renamed, space}` (`Platform.Chat.rename_space/3`, which also
+  sends it on the space's own topic).
   """
   @spec spaces_topic() :: String.t()
   def spaces_topic, do: "chat:spaces"

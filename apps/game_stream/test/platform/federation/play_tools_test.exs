@@ -77,7 +77,7 @@ defmodule Platform.Federation.PlayToolsTest do
     plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate
     validation_pass stage_complete report_blocker validation_list prompt_template_list
     prompt_template_update review_request_create review_request_get review_item_list
-    design_critique_request space_create space_list space_list_agents space_leave dm_create
+    design_critique_request space_create space_list space_list_agents space_leave space_rename dm_create
     space_get_context space_search_messages space_get_messages canvas_list canvas_get
     principal_search calendar_list calendar_propose federation_status vault_fetch vault_list memory_view memory_create
     memory_str_replace memory_insert
@@ -175,7 +175,7 @@ defmodule Platform.Federation.PlayToolsTest do
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
     test "tool_definitions/0 names include the two Calendar tools in order" do
-      assert length(@main_tool_names) == 144
+      assert length(@main_tool_names) == 145
       assert catalogue_names() == @main_tool_names
     end
 

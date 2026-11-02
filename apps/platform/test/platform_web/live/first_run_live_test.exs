@@ -10,7 +10,7 @@ defmodule PlatformWeb.FirstRunLiveTest do
   alias Platform.Accounts.User
   alias Platform.AgentHost.State
   alias Platform.Agents.NativeAgents
-  alias Platform.Chat.Message
+  alias Platform.Chat.{Message, Participant, Space}
   alias Platform.Onboarding.FirstRunGoal
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
@@ -52,6 +52,27 @@ defmodule PlatformWeb.FirstRunLiveTest do
   defp goal_message_count do
     Repo.aggregate(
       from(m in Message, where: fragment("?->>'source' = 'first_run_goal'", m.metadata)),
+      :count
+    )
+  end
+
+  defp goal_channels(user) do
+    Repo.all(
+      from(s in Space,
+        where:
+          s.created_by == ^user.id and
+            fragment("?->>'origin' = 'first_run_goal'", s.metadata)
+      )
+    )
+  end
+
+  defp dm_count(user) do
+    Repo.aggregate(
+      from(s in Space,
+        join: p in Participant,
+        on: p.space_id == s.id,
+        where: s.kind == "dm" and p.participant_type == "user" and p.participant_id == ^user.id
+      ),
       :count
     )
   end
@@ -132,8 +153,8 @@ defmodule PlatformWeb.FirstRunLiveTest do
     assert FirstRunGoal.pending?(user)
   end
 
-  test "submit navigates to the Burrow DM with the info flash" do
-    agent = running_burrow!()
+  test "submit navigates to the new channel with Burrow, with the info flash" do
+    running_burrow!()
     user = member!()
     view = start!(user)
 
@@ -144,10 +165,13 @@ defmodule PlatformWeb.FirstRunLiveTest do
     {path, flash} = assert_redirect(view)
     assert flash["info"] == "Burrow is on it. This conversation stays in your sidebar."
 
-    {:ok, dm} = Platform.Chat.find_or_create_dm(user.id, "agent", agent.id)
-    assert path == "/chat/#{PlatformWeb.ChatLive.space_nav_target(dm)}"
+    assert [channel] = goal_channels(user)
+    assert channel.kind == "channel"
+    assert path == "/chat/#{PlatformWeb.ChatLive.space_nav_target(channel)}"
+    assert path == "/chat/#{channel.id}"
+    assert dm_count(user) == 0
 
-    [msg] = Repo.all(from(m in Message, where: m.space_id == ^dm.id))
+    [msg] = Repo.all(from(m in Message, where: m.space_id == ^channel.id))
     assert msg.content == "Help me plan this week's work for my team"
     refute FirstRunGoal.pending?(user)
   end
@@ -170,6 +194,8 @@ defmodule PlatformWeb.FirstRunLiveTest do
     assert html =~ "Skip for now"
     refute html =~ "first-run-error"
     assert goal_message_count() == 0
+    assert goal_channels(user) == []
+    assert dm_count(user) == 0
     assert FirstRunGoal.pending?(user)
   end
 

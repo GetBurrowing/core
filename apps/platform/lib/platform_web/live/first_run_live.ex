@@ -5,9 +5,10 @@ defmodule PlatformWeb.FirstRunLive do
   (revision 1).
 
   A new member types a goal; `Platform.Onboarding.FirstRunGoal.submit/3`
-  posts it into their DM with the Burrow agent, and the member lands in that
-  DM with an info flash. The page lives in the normal app shell, so the
-  sidebar stays visible.
+  opens a new, org-visible channel with the Burrow agent and posts the goal
+  there (not a DM: task 01a19948-d342, see `FirstRunGoal`), and the member
+  lands in that channel with an info flash. The page lives in the normal app
+  shell, so the sidebar stays visible.
 
   ## Who sees it
 
