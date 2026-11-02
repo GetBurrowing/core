@@ -421,8 +421,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1845b stage 3: the `meeting_triage_file` description
     # now interpolates Platform.Meetings.CandidateGuidance.sentence/0, so both
     # previous and main tool-digest pins move. Measured by CI on the PR #79 merge ref.
-    @previous_tool_digest_off "58b259c8a492c96381b47382ef17a2003835477c842617dd45863940d6bb5a6e"
-    @previous_tool_digest_on "9fdf09757af866b9d3764e02d8797c3c1442e23ca81ab5e758abd419aa425886"
+    # Re-pinned by task 01a19948 stage 2: `space_rename` joins the `space`
+    # bundle after `space_leave`, so all four tool-definition digests move.
+    # Measured by CI on PR #81 (runs 41492896250 and after).
+    @previous_tool_digest_off "172f0364df9869d7d37b9bf0c4f8d84048a56882183cd4822380c5e85a2982d9"
+    @previous_tool_digest_on "abddd51a98abe14696876df58381705a1484348ea6b9113f606f43cd999c01c6"
     @main_tool_digest_off "ce66e11bc37fa0149a0eb7bd51fe890f07acb54310a268d0f042ebd18d61cc32"
     @main_tool_digest_on "7c7043e1799fc964efc6b8ca6096125ed5f1954ab92be2dfffe88fd2ca95f451"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
