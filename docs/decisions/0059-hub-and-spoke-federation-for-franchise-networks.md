@@ -37,9 +37,9 @@ still `Proposed`:
   (`0054-install-to-install-federation.md § 1. Trust model`), which this ADR keeps.
 - It has no memory sync and no file sync. Org memory pages and journals, and stored files, are
   not envelope payloads.
-- ADRs 0055 to 0058 do not cover any of this. `0056-supporting-customer-installs.md § A.1 The
-  `support` relationship kind` shows that a new relationship kind can be added over 0054
-  without editing it, and this ADR follows that route.
+- ADRs 0055 to 0058 do not cover any of this. The `support` kind described in
+  0056-supporting-customer-installs.md § A.1 The `support` relationship kind
+  shows that a new relationship kind can be added over 0054 without editing it, and this ADR follows that route.
 
 The memory model this ADR syncs is the one in
 `0041-org-memory-v2-wiki-system.md § Historian as sole page writer`: agents append to journals,
