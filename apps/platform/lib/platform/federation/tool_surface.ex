@@ -2008,6 +2008,31 @@ defmodule Platform.Federation.ToolSurface do
           "When you need to set a project-level default deploy strategy, pause or resume dispatch for a whole project, set or change the project's plan auto-approval policy, answer the brand-direction question posted to a task's execution space, or update other project fields"
       },
       %{
+        name: "project_create",
+        description:
+          "Create a project. Meetings, tasks and epics all live inside a project, so an org needs one before any of them can be created.",
+        parameters: %{
+          name: %{type: "string", required: true, description: "The project's name"},
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID of the org the project belongs to. Omit it to use the calling runtime owner's primary org."
+          },
+          repo_url: %{type: "string", required: false, description: "Repository URL"},
+          default_branch: %{
+            type: "string",
+            required: false,
+            description: "Default git branch"
+          }
+        },
+        returns: "%{id, name, slug, org_id, org_slug} for the created project",
+        limitations:
+          "`org_id` defaults to the calling runtime owner's primary org (the root org for an in-process caller with no runtime). A target org the caller may not write gets the same answer as an org that does not exist, and no row is written. `config`, `deploy_config` and `dispatch_paused` are not settable here; call project_update afterwards. The slug is generated from the name.",
+        when_to_use:
+          "When the owner or a member needs a first or new project. Confirm the name with them first. Projects are required before meetings and tasks."
+      },
+      %{
         name: "epic_list",
         description: "List epics, optionally filtered by project.",
         parameters: %{
@@ -4223,6 +4248,7 @@ defmodule Platform.Federation.ToolSurface do
     "plan_reject" => [plan: "plan_id"],
     "plan_submit" => [plan: "plan_id"],
     "plan_update" => [plan: "plan_id"],
+    "project_create" => [org: "org_id"],
     "project_update" => [project: "project_id"],
     "report_blocker" => [task: "task_id"],
     "blocker_recheck" => [task: "task_id", stage: "stage_id"],
@@ -5097,6 +5123,40 @@ defmodule Platform.Federation.ToolSurface do
                  "Check that deploy_config.default_strategy uses a valid strategy type (none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files) and that plan_auto_approve is {enabled: boolean, max_stages: positive integer, allow_manual_approval?: boolean}"
              }}
         end
+    end
+  end
+
+  def execute("project_create", args, context) do
+    attrs =
+      args
+      |> Map.take(["name", "org_id", "repo_url", "default_branch"])
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+      |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
+      |> project_create_org(context)
+
+    # Tasks.create_project/1 broadcasts {:project_created, project} itself,
+    # so do NOT broadcast here.
+    case Tasks.create_project(attrs) do
+      {:ok, project} ->
+        org = Repo.get(Org, project.org_id)
+
+        {:ok,
+         %{
+           id: project.id,
+           name: project.name,
+           slug: project.slug,
+           org_id: project.org_id,
+           org_slug: org && org.slug
+         }}
+
+      {:error, changeset} ->
+        {:error,
+         %{
+           error: "Failed to create project: #{inspect_errors_safe(changeset)}",
+           recoverable: true,
+           suggestion:
+             "Check that name is provided and that org_id names an org you can write (use project_list or org_list_descendants), or omit org_id to use your owner's org"
+         }}
     end
   end
 
@@ -16464,6 +16524,47 @@ defmodule Platform.Federation.ToolSurface do
     |> memory_access_opts()
     |> Keyword.get(:access_scope)
     |> Platform.Access.check(permission, resource)
+  end
+
+  # `project_create` with no `org_id` (task 01a19aa4 stage 1). An explicit
+  # `org_id` was already decided by the `@task_write_targets` intercept. An
+  # omitted one defaults to the calling runtime owner's primary membership
+  # org, the same source the New Project form uses
+  # (`PlatformWeb.Tasks.SidebarComponent`), and to the root org with no
+  # runtime. The default is then decided exactly as an explicit id would be:
+  # a refused default is swapped for a fresh UUID, so a fenced runtime never
+  # lands in the root org and gets the answer a nonexistent org gets.
+  defp project_create_org(%{org_id: _} = attrs, _context), do: attrs
+
+  defp project_create_org(attrs, context) do
+    case project_create_default_org_id(context) do
+      nil ->
+        attrs
+
+      org_id ->
+        if task_write_check(context, [{:org, org_id}]) == :ok,
+          do: Map.put(attrs, :org_id, org_id),
+          else: Map.put(attrs, :org_id, Ecto.UUID.generate())
+    end
+  end
+
+  defp project_create_default_org_id(context) do
+    with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %{owner_user_id: owner_id} <-
+           Platform.Federation.get_runtime_by_runtime_id(runtime_id),
+         %{} = user <- Platform.Accounts.get_user(owner_id),
+         %{org: %Org{id: org_id}} <- Tenancy.load_membership(user) do
+      org_id
+    else
+      _ -> project_create_root_org_id()
+    end
+  end
+
+  defp project_create_root_org_id do
+    case Tenancy.get_root_org() do
+      %Org{id: id} -> id
+      nil -> nil
+    end
   end
 
   # The Tasks write re-check (task 01a1472d stage 2): `:ok` when the caller

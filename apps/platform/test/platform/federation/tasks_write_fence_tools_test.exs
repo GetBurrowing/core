@@ -36,6 +36,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Platform.TenancyFixtures
 
   alias Platform.Access.{Grants, Scope, ToolPermissions}
@@ -79,6 +80,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     plan_reject
     plan_submit
     plan_update
+    project_create
     project_update
     report_blocker
     review_request_create
@@ -233,8 +235,12 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
 
   @id_keys ~w(project epic stack task member plan stage validation request item)a
 
-  defp ids(w), do: Map.new(@id_keys, &{&1, Map.fetch!(w, &1).id})
-  defp random_ids, do: Map.new(@id_keys, &{&1, Ecto.UUID.generate()})
+  # `:org` is the world's org id itself (a binary, not a row), the target
+  # of `project_create` (task 01a19aa4 stage 1).
+  @swap_keys [:org | @id_keys]
+
+  defp ids(w), do: @id_keys |> Map.new(&{&1, Map.fetch!(w, &1).id}) |> Map.put(:org, w.org)
+  defp random_ids, do: Map.new(@swap_keys, &{&1, Ecto.UUID.generate()})
 
   defp agent! do
     i = n()
@@ -298,7 +304,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
 
   # `term` with every id of `from` read as the id of `to` at the same key.
   defp swap(term, from, to) do
-    pairs = for k <- @id_keys, do: {Map.fetch!(from, k), Map.fetch!(to, k)}
+    pairs = for k <- @swap_keys, do: {Map.fetch!(from, k), Map.fetch!(to, k)}
     replace(term, pairs)
   end
 
@@ -421,6 +427,8 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
 
   defp args_for("plan_submit", i), do: %{"plan_id" => i.plan}
   defp args_for("plan_update", i), do: %{"plan_id" => i.plan, "stages" => @stages}
+
+  defp args_for("project_create", i), do: %{"org_id" => i.org, "name" => "fence project"}
 
   defp args_for("project_update", i),
     do: %{"project_id" => i.project, "name" => "fence renamed project"}
@@ -791,6 +799,44 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     end
   end
 
+  # ── project_create with no org_id (task 01a19aa4 stage 1) ───────────────
+
+  describe "project_create without an org_id" do
+    defp projects_in(org), do: Repo.aggregate(from(p in Project, where: p.org_id == ^org), :count)
+
+    test "M's runtime lands in S, never in R", ctx do
+      {m_rt, _} = runtime!(ctx.m)
+      root_before = projects_in(ctx.root)
+
+      assert {:ok, result} = call(context(m_rt), "project_create", %{"name" => "Mine"})
+
+      assert result.org_id == ctx.s
+      assert row(Project, result.id).org_id == ctx.s
+      assert projects_in(ctx.root) == root_before
+    end
+
+    test "an in-process caller with no runtime lands in the root org", ctx do
+      assert {:ok, result} = call(context(:in_process), "project_create", %{"name" => "Root"})
+
+      assert result.org_id == ctx.root
+      assert row(Project, result.id).org_id == ctx.root
+    end
+
+    test "an S-pinned Scope with no runtime cannot default into root", ctx do
+      m_ctx = %{access_scope: Scope.for_user(ctx.m), agent_id: agent!().id}
+      before = snapshot([])
+
+      refused = call(m_ctx, "project_create", %{"name" => "Leak"})
+
+      assert snapshot([]) == before
+
+      assert refused ==
+               call(m_ctx, "project_create", %{"name" => "Leak", "org_id" => Ecto.UUID.generate()})
+
+      assert {:error, %{recoverable: true}} = refused
+    end
+  end
+
   # ── over the real MCP endpoint ──────────────────────────────────────────
 
   describe "over HTTP" do
@@ -863,7 +909,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     test "the raw ToolPermissions list equals @mcp_guarded ++ @mcp_exempt" do
       raw = permission_source_names(["tasks.write", "tasks.manage"])
 
-      assert length(raw) == 45
+      assert length(raw) == 46
       assert Enum.sort(raw) == Enum.sort(@mcp_guarded ++ @mcp_exempt)
 
       for name <- raw,

@@ -675,6 +675,7 @@ defmodule Platform.ExtensionsTest do
       {"project_list", "task"},
       {"org_list_descendants", "task"},
       {"project_update", "task"},
+      {"project_create", "task"},
       {"epic_list", "task"},
       {"epic_update", "task"},
       {"epic_create", "task"},
