@@ -15,7 +15,7 @@ defmodule Platform.Access.PermissionLabels do
     "prototypes.publish" => "Publish prototypes",
     "prototypes.read" => "View prototypes",
     "tasks.read" => "View tasks",
-    "tasks.write" => "Create and update tasks",
+    "tasks.write" => "Create and edit tasks",
     "tasks.manage" => "Approve and reject plans",
     "tasks.promote" => "Promote tasks",
     "canvas.read" => "View canvases",
