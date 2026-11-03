@@ -1319,7 +1319,23 @@ defmodule PlatformWeb.CalendarLive do
       top_min = chip.s |> max(window_start) |> min(window_end)
       top = min((top_min - window_start) / 60 * @hour_px, grid_px() - 22)
       height = max(22, (min(chip.e, window_end) - top_min) / 60 * @hour_px - 2)
-      Map.merge(chip, %{lanes: lanes, top: top, height: height, compact: height < 34})
+
+      Map.merge(chip, %{
+        lanes: lanes,
+        top: top,
+        height: height,
+        compact: height < 34,
+        # `lanes` is the DAY's lane count, so it says nothing about this
+        # block: a block that overlaps nothing still gets 1/lanes of the
+        # column. `overlapped` is per block (task 01a19e7f stage 5).
+        overlapped: overlaps_another?(chip, placed)
+      })
+    end)
+  end
+
+  defp overlaps_another?(chip, placed) do
+    Enum.any?(placed, fn other ->
+      other != chip and other.s < chip.e and chip.s < other.e
     end)
   end
 

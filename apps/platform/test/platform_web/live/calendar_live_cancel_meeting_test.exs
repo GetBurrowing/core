@@ -258,6 +258,24 @@ defmodule PlatformWeb.CalendarLiveCancelMeetingTest do
       assert has_element?(view, grid_chip(narrow) <> " b.line-through", "Narrow cancelled")
       refute has_element?(view, grid_chip(narrow) <> " [data-role=meeting-cancelled-chip]")
     end
+
+    test "on a day with an overlap, a cancelled block that overlaps nothing keeps the chip",
+         ctx do
+      # Lanes are counted per DAY, so this day has two lanes. Only the pair
+      # at 14:00 shares time; the 09:00 block shares it with nothing.
+      lone = meeting!(ctx, name: "Lone cancelled", start: {9, 0})
+      shared = meeting!(ctx, name: "Shared cancelled", start: {14, 0})
+      _overlap = meeting!(ctx, name: "Overlapping", start: {14, 30})
+
+      for m <- [lone, shared], do: {:ok, _} = Meetings.cancel_meeting_for_user(m.id, ctx.creator)
+
+      {:ok, view, _} = live(conn_for(ctx.creator, ctx.zone), "/calendar")
+
+      assert has_element?(view, grid_chip(lone) <> " [data-role=meeting-cancelled-chip]")
+      assert has_element?(view, grid_chip(shared) <> "[data-cancelled=true]")
+      assert has_element?(view, grid_chip(shared) <> " b.line-through", "Shared cancelled")
+      refute has_element?(view, grid_chip(shared) <> " [data-role=meeting-cancelled-chip]")
+    end
   end
 
   # ── The list query ────────────────────────────────────────────────────────

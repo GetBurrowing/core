@@ -555,9 +555,12 @@ defmodule PlatformWeb.CalendarLive.Components do
             "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
         label: Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
         cancelled: Cal.cancelled?(entry),
-        # The chip never takes space from the title on a short (compact) or
-        # shared-lane block: there the strike-through alone says it.
-        cancelled_chip: Cal.cancelled?(entry) and not chip.compact and chip.lanes == 1
+        # The chip drops on a short (compact) block and on a block that
+        # shares time with another (its lane is genuinely narrow); there the
+        # strike-through alone says it. A block that overlaps nothing keeps
+        # it even on a day whose other blocks overlap. Width is the CSS
+        # container query's job (app.css `.cal-cancelled`).
+        cancelled_chip: Cal.cancelled?(entry) and not chip.compact and not chip[:overlapped]
       )
 
     ~H"""
