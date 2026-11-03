@@ -6,7 +6,8 @@ defmodule Platform.Social.ClipRender do
   row here and earlier rows are never rewritten. Unique per `(clip_id, rev)`.
 
   Human removal tombstones the review entry and retains this row and its
-  completion identity. Administrative clip teardown cascades renders; deleting
+  completion identity. Branded headline contracts and private content artifact digests
+  are pinned in provenance.headline; missing historical receipts stay unknown. Administrative clip teardown cascades renders; deleting
   a Files row nils `file_id` and keeps the snapshot.
   """
   use Ecto.Schema

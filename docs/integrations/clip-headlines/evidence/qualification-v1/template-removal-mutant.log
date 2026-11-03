@@ -1,0 +1,94 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_________ test_real_contract_profile_and_private_content[chrome-hook] __________
+
+shim = <conftest.shim.<locals>.Shim object at 0x726e11241400>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-114/test_real_contract_profile_and0/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x726e10c36190>
+name = 'chrome-hook'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+        client = first_new_clip(shim, state_dir, headline_template=contract(name))
+        result = client.named('complete')[0][2]
+        receipt = result['headline_render']
+        assert result['headline_applied'] is True
+        assert receipt['template'] == name
+        assert receipt['timing'] == {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5}
+        artifact = state_dir / 'headline-content' / (receipt['content']['sha256'] + '.json')
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == receipt['content']['sha256']
+        assert json.loads(artifact.read_text())['wording'] == 'secret transcript words two'
+        assert artifact.stat().st_mode & 0o777 == 0o600
+        assert artifact.parent.stat().st_mode & 0o777 == 0o700
+        assert 'secret transcript words two' not in json.dumps(result)
+        assert 'emphasis_text' not in receipt
+        imported = [x['imported'] for x in shim.calls() if 'imported' in x]
+>       assert any('hook_title_template = "' + name + '"' in x for x in imported)
+E       assert False
+E        +  where False = any(<generator object test_real_contract_profile_and_private_content.<locals>.<genexpr> at 0x726e10d15d20>)
+
+rig/htc-template-s4/runner-mutant/tests/test_templates.py:52: AssertionError
+________ test_real_contract_profile_and_private_content[neon-broadcast] ________
+
+shim = <conftest.shim.<locals>.Shim object at 0x726e11242900>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-114/test_real_contract_profile_and1/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x726e10c36520>
+name = 'neon-broadcast'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+        client = first_new_clip(shim, state_dir, headline_template=contract(name))
+        result = client.named('complete')[0][2]
+        receipt = result['headline_render']
+        assert result['headline_applied'] is True
+        assert receipt['template'] == name
+        assert receipt['timing'] == {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5}
+        artifact = state_dir / 'headline-content' / (receipt['content']['sha256'] + '.json')
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == receipt['content']['sha256']
+        assert json.loads(artifact.read_text())['wording'] == 'secret transcript words two'
+        assert artifact.stat().st_mode & 0o777 == 0o600
+        assert artifact.parent.stat().st_mode & 0o777 == 0o700
+        assert 'secret transcript words two' not in json.dumps(result)
+        assert 'emphasis_text' not in receipt
+        imported = [x['imported'] for x in shim.calls() if 'imported' in x]
+>       assert any('hook_title_template = "' + name + '"' in x for x in imported)
+E       assert False
+E        +  where False = any(<generator object test_real_contract_profile_and_private_content.<locals>.<genexpr> at 0x726e10d157e0>)
+
+rig/htc-template-s4/runner-mutant/tests/test_templates.py:52: AssertionError
+_________ test_real_contract_profile_and_private_content[arcade-punch] _________
+
+shim = <conftest.shim.<locals>.Shim object at 0x726e112427b0>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-114/test_real_contract_profile_and2/state')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x726e112c8710>
+name = 'arcade-punch'
+
+    @pytest.mark.parametrize('name', ['chrome-hook', 'neon-broadcast', 'arcade-punch'])
+    def test_real_contract_profile_and_private_content(shim, state_dir, monkeypatch, name):
+        configure(shim, monkeypatch)
+        client = first_new_clip(shim, state_dir, headline_template=contract(name))
+        result = client.named('complete')[0][2]
+        receipt = result['headline_render']
+        assert result['headline_applied'] is True
+        assert receipt['template'] == name
+        assert receipt['timing'] == {'entrance_s': .2, 'hold_s': 3.05, 'exit_s': .25, 'total_s': 3.5}
+        artifact = state_dir / 'headline-content' / (receipt['content']['sha256'] + '.json')
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == receipt['content']['sha256']
+        assert json.loads(artifact.read_text())['wording'] == 'secret transcript words two'
+        assert artifact.stat().st_mode & 0o777 == 0o600
+        assert artifact.parent.stat().st_mode & 0o777 == 0o700
+        assert 'secret transcript words two' not in json.dumps(result)
+        assert 'emphasis_text' not in receipt
+        imported = [x['imported'] for x in shim.calls() if 'imported' in x]
+>       assert any('hook_title_template = "' + name + '"' in x for x in imported)
+E       assert False
+E        +  where False = any(<generator object test_real_contract_profile_and_private_content.<locals>.<genexpr> at 0x726e1126fca0>)
+
+rig/htc-template-s4/runner-mutant/tests/test_templates.py:52: AssertionError
+=========================== short test summary info ============================
+FAILED rig/htc-template-s4/runner-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[chrome-hook]
+FAILED rig/htc-template-s4/runner-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[neon-broadcast]
+FAILED rig/htc-template-s4/runner-mutant/tests/test_templates.py::test_real_contract_profile_and_private_content[arcade-punch]
+3 failed, 11 deselected in 2.32s

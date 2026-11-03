@@ -1,0 +1,8 @@
+YuNet face_detection_yunet_2023mar.onnx
+Origin: https://github.com/opencv/opencv_zoo/tree/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet
+SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+License: MIT, Copyright (c) 2020 Shiqi Yu. See YuNet-LICENSE (unaltered).
+Bytes copied from the previously provisioned model and checked against this pin.
+The adapter extends the existing local clip_agent.opencv_faces implementation;
+htc-clip-tool MIT attribution and NOTICE remain intact. It performs local inference
+only, never downloads at rendering time, and refuses missing/mismatched model bytes.

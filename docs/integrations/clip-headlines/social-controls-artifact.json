@@ -1,0 +1,64 @@
+{
+  "task_id": "01a18ef6-f0aa-7000-84b2-0dbea407507a",
+  "stage": 3,
+  "runtime": "isolated-linux-runtime",
+  "elixir": "1.20.4",
+  "otp": "28.1",
+  "postgres": "16.15",
+  "full_social": {
+    "passed": 1568,
+    "database": "platform_test_htc_templates_s3_full",
+    "scope": "before final metadata-detail regression and removal of unused legacy event"
+  },
+  "final_targeted_social": {
+    "passed": 105,
+    "scope": "includes final metadata-detail case and legacy event removal"
+  },
+  "last_headline_errors": {
+    "passed": 10,
+    "scope": "final source/timing error messages"
+  },
+  "helper_version": "0.10.1",
+  "helper_sha256": "f15a7976f12c4e2d369693d5eae15a354806003affc899ad85284d585b18f5ec",
+  "skill_sha256": "22edb804bf5555dd9f1ee29bc4e1653487889840ea1bcd75079ca296d8ea6678",
+  "published_skill_updated_at": "2026-10-30T23:53:03.745169Z",
+  "published_archive_exact_match": true,
+  "canonical_concurrent_source_checked": true,
+  "helper_tests_passed": 174,
+  "browser": {
+    "widths": [
+      1440,
+      375
+    ],
+    "actions": [
+      "template selection",
+      "independent emphasis",
+      "save show default",
+      "word edit visibly clears emphasis",
+      "unsupported and unsafe fit states",
+      "enqueue preserves player"
+    ],
+    "result": "browser-result.json",
+    "screenshot_canvas": "01a18f3d-80c8-7000-af17-4dcbac228eed",
+    "reference_before_code_canvas": "01a18f31-9d6c-7000-ae79-45589afa18f6"
+  },
+  "mutation": {
+    "change": "remove full-look title.enabled override in a separate materialized helper copy",
+    "outcome": "killed, exit1, expected False but got True",
+    "restored": "174 tests passed on unchanged final helper"
+  },
+  "lint": [
+    "Elixir compile --warnings-as-errors",
+    "mix format --check-formatted",
+    "git diff --check",
+    "Ruff F/E9 helper and headline tests; F/E9/I and format materializer"
+  ],
+  "constraints": [
+    "no publication or production installation/restart",
+    "old files/approvals/snapshots untouched",
+    "no caption default changes",
+    "no parallel legacy event or dual-write shim",
+    "original-source mapping required"
+  ],
+  "limitation": "No opening headline is per-clip only; saving a disabled show default is explicitly refused to preserve automatic headline policy."
+}

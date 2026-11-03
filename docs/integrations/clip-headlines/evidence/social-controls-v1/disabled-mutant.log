@@ -1,0 +1,21 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_disabled_opening_rerenders_original_without_altering_captions ______
+
+shim = <conftest.shim.<locals>.Shim object at 0x753d30f5f8c0>
+state_dir = PosixPath('/tmp/pytest-of-jordan/pytest-109/test_disabled_opening_rerender0/state')
+
+    def test_disabled_opening_rerenders_original_without_altering_captions(shim, state_dir):
+        first_new_clip(shim, state_dir)
+        client = FakeJobClient(jobs=[rerender_job(base_render_id="render-fixture-1", appearance=True,
+            look={"title": {"enabled": False}, "cap": {"style": "karaoke"}},
+            clip_overrides={"mapped": {"captions.hook_title": True}, "unmapped": []})])
+        assert run(client, state_dir)["status"] == "done"
+        profile = tomllib.loads(logged(shim, "imported")[-1]["imported"])
+>       assert profile["captions"]["hook_title"] is False
+E       assert True is False
+
+../../rig/htc-template-s3/runner-mutation/tests/test_headlines.py:149: AssertionError
+=========================== short test summary info ============================
+FAILED ../../rig/htc-template-s3/runner-mutation/tests/test_headlines.py::test_disabled_opening_rerenders_original_without_altering_captions
+1 failed, 13 deselected in 1.10s

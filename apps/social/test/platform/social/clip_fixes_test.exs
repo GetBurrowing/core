@@ -39,6 +39,25 @@ defmodule Platform.Social.ClipFixesTest do
         Map.put(attrs, :base_render_id, w.base.id)
       )
 
+  test "an edit cannot move previously bound emphasis onto different wording", w do
+    assert {:error, :headline_emphasis_stale} =
+             fix(w, %{
+               operation: "edit_headline",
+               headline: "Brand new words",
+               look: %{
+                 "title" => %{
+                   "template" => "chrome-hook",
+                   "secs" => 3.5,
+                   "emphasis" => [1],
+                   "emphasis_text" => "The team celebrated"
+                 }
+               }
+             })
+
+    assert Platform.Repo.aggregate(Platform.Social.ClipJob, :count) == 1
+    assert Platform.Repo.reload!(w.clip).rev == 1
+  end
+
   test "nudge uses immutable actual bounds; success appends n+1 and retains prior file", w do
     assert {:ok, job} = fix(w, %{operation: "nudge", edge: "start", delta_s: 1})
     assert job.payload["in_s"] == 11.2

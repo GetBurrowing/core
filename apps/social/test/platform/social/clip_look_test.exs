@@ -36,9 +36,9 @@ defmodule Platform.Social.ClipLookTest do
   @no_equivalent ~w(title.font title.size title.box title.twoLine outro music level cutaways)
 
   test "caption styles are validated and map to the CLI style field independently of presets" do
-    assert ClipLook.styles() == ["plain", "phrase-pop", "karaoke"]
+    assert ClipLook.styles() == ["plain", "phrase-pop", "karaoke", "subtle"]
 
-    for style <- ["plain", "phrase-pop", "karaoke"] do
+    for style <- ["plain", "phrase-pop", "karaoke", "subtle"] do
       assert {:ok, %{"cap" => %{"style" => ^style}}} = ClipLook.validate(%{cap: %{style: style}})
 
       assert ClipLook.to_clip_overrides(%{"cap" => %{"style" => style}}) ==
