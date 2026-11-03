@@ -2554,5 +2554,32 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert lazy(html, ~s([data-participant-id="u-1"] [data-role="participant-guest-badge"])) ==
                0
     end
+
+    # 01a18d0a's task review (validation 01a18d13-3017-700c), fixed in task
+    # 01a19ea6 stage 3: in the 312px desktop rail the badge sat beside the
+    # name as `shrink-0` and cut "Gus Guestperson (guest)" to "…(gu…". The
+    # badge must never share the name's line; it leads the guest sub-line.
+    test "the Guest badge never shares the name's line; the name carries its full title" do
+      html = rail([human("Guest Omega Longername (guest)", "u-2")])
+      row = ~s([data-participant-id="u-2"])
+
+      assert lazy(html, ~s(#{row} [data-role="participant-guest-line"] [data-role="participant-guest-badge"])) ==
+               1
+
+      assert lazy(html, ~s(#{row} [data-role="participant-name"] ~ [data-role="participant-guest-badge"])) ==
+               0
+
+      assert lazy(html, ~s(#{row} [data-role="participant-name"] [data-role="participant-guest-badge"])) ==
+               0
+
+      [name] =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#{row} [data-role="participant-name"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(name, "title") == ["Guest Omega Longername (guest)"]
+      assert name |> LazyHTML.text() |> String.trim() == "Guest Omega Longername (guest)"
+    end
   end
 end
