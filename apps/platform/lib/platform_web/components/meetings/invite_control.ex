@@ -641,7 +641,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
            ignored element. The id carries the entry id, so a renewed row is
            a new element and never copies a stale link. --%>
       <button
-        :if={@mode == :live and @copy_url and not @expired?}
+        :if={@mode == :live && @copy_url && !@expired?}
         type="button"
         id={"#{@id_prefix}-copy-#{@entry.id}"}
         phx-hook="CopyToClipboard"
@@ -657,7 +657,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         Copy link
       </button>
       <span
-        :if={@mode == :live and @copy_url and not @expired?}
+        :if={@mode == :live && @copy_url && !@expired?}
         id={"#{@id_prefix}-copy-status-#{@entry.id}"}
         class="sr-only"
         aria-live="polite"
