@@ -159,6 +159,64 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
     end
   end
 
+  describe "deliver/5 guest expiry (task 01a19ea6)" do
+    setup do
+      Application.put_env(:platform, :meeting_guest_host, @configured_host)
+      :ok
+    end
+
+    test "a guest added by name lasts until the meeting's scheduled end", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => " Guest Alpha "}, [], inviter.id)
+
+      assert invite.display_name == "Guest Alpha"
+      assert invite.email == nil
+
+      assert DateTime.compare(
+               Repo.get!(Invite, invite.id).expires_at,
+               meeting.scheduled_end_at
+             ) == :eq
+    end
+
+    test "a guest added by name to a meeting with no end gets the 24h fallback", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      meeting =
+        meeting
+        |> Ecto.Changeset.change(scheduled_start_at: nil, scheduled_end_at: nil)
+        |> Repo.update!()
+
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => "Guest Beta"}, [], inviter.id)
+
+      assert_in_delta DateTime.diff(invite.expires_at, DateTime.utc_now(), :second), 86_400, 10
+    end
+
+    test "an email guest keeps the 24h default", %{inviter: inviter, meeting: meeting} do
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(
+                 meeting,
+                 "guest",
+                 %{"email" => "gamma@example.test"},
+                 [],
+                 inviter.id
+               )
+
+      assert_in_delta DateTime.diff(invite.expires_at, DateTime.utc_now(), :second), 86_400, 10
+    end
+
+    test "a blank name writes nothing", %{inviter: inviter, meeting: meeting} do
+      assert {:error, :blank_name} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => "  "}, [], inviter.id)
+
+      assert Meetings.list_invites(meeting.id, include_revoked: true) == []
+    end
+  end
+
   describe "deliver/5" do
     test "a user id absent from the rendered candidates raises and writes nothing", %{
       inviter: inviter,
@@ -393,6 +451,22 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
 
       assert [invite] = Meetings.list_invites(meeting.id)
       assert invite.email == "newcomer@example.test"
+      assert staged.assigns.meeting_invite_query == ""
+    end
+
+    # Task 01a19ea6: Enter on a typed name stages the guest-by-name row.
+    test "a typed name that matches nobody stages a guest by name", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      Application.put_env(:platform, :meeting_guest_host, @configured_host)
+
+      assert {:staged, staged} = LiveInvites.commit(socket(), meeting, "Guest Delta", inviter.id)
+
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.display_name == "Guest Delta"
+      assert invite.email == nil
+      assert DateTime.compare(invite.expires_at, meeting.scheduled_end_at) == :eq
       assert staged.assigns.meeting_invite_query == ""
     end
 

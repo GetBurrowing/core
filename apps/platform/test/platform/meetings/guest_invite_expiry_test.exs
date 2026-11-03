@@ -127,13 +127,14 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
     meeting_id |> Meetings.list_invites(opts) |> length()
   end
 
-  # The link the host would copy NOW, re-minted from the row (the same
-  # property 01a18d0a's short links rely on), resolved as a guest would.
-  defp resolve_current_link(meeting, invite) do
-    invite = Repo.get!(Invite, invite.id)
-    url = Meetings.guest_invite_link(meeting, invite)
-    token = url |> URI.parse() |> Map.fetch!(:path) |> Path.basename()
-    Meetings.resolve_guest_invite(meeting.slug, token)
+  # The short link the host copies (01a18d0a: `/g/<code>`, a token re-minted
+  # from the row on every hit), followed as a guest would follow it.
+  defp resolve_short_link(meeting, %Invite{} = invite) do
+    %Invite{short_code: code} = Repo.get!(Invite, invite.id)
+
+    with {:ok, %{token: token}} <- Meetings.resolve_guest_short_code(code) do
+      Meetings.resolve_guest_invite(meeting.slug, token)
+    end
   end
 
   defp resolve_token(meeting, token), do: Meetings.resolve_guest_invite(meeting.slug, token)
@@ -264,14 +265,18 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
       assert {:ok, extended} = Meetings.set_guest_invite_expiry(meeting, invite.id, :days_7)
       assert close_to?(extended.expires_at, DateTime.add(DateTime.utc_now(), 7 * 86_400))
       assert close_to?(Repo.get!(Invite, invite.id).expires_at, extended.expires_at)
-      assert {:ok, %{display_name: "Guest Alpha"}} = resolve_current_link(meeting, invite)
+      assert {:ok, %{display_name: "Guest Alpha"}} = resolve_short_link(meeting, invite)
 
       assert {:ok, shortened} = Meetings.set_guest_invite_expiry(meeting, invite.id, :hours_24)
       assert close_to?(shortened.expires_at, DateTime.add(DateTime.utc_now(), 86_400))
 
       assert {:ok, at_end} = Meetings.set_guest_invite_expiry(meeting, invite.id, :meeting_end)
       assert DateTime.compare(at_end.expires_at, meeting.scheduled_end_at) == :eq
-      assert {:ok, %{display_name: "Guest Alpha"}} = resolve_current_link(meeting, invite)
+      assert {:ok, %{display_name: "Guest Alpha"}} = resolve_short_link(meeting, invite)
+
+      # The same short link stops working the moment the row lapses.
+      expire!(Repo.get!(Invite, invite.id))
+      assert {:error, :expired} = resolve_short_link(meeting, invite)
     end
 
     test "shortening reaches a link copied earlier: the row decides" do
@@ -365,6 +370,15 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
 
       assert {:error, :revoked} = resolve_token(meeting, old_token)
       assert {:ok, %{display_name: "Guest Alpha"}} = resolve_token(meeting, new_token)
+
+      # The short links: a new code, the old one refused, the new one admits.
+      refute new.short_code == old.short_code
+      assert url =~ "/g/#{new.short_code}"
+      # Re-minted from a row that is both lapsed and revoked, the old code's
+      # token fails its own expiry check first; either refusal is a refusal.
+      assert {:error, reason} = Meetings.resolve_guest_short_code(old.short_code)
+      assert reason in [:expired, :revoked]
+      assert {:ok, %{display_name: "Guest Alpha"}} = resolve_short_link(meeting, new)
     end
 
     test "the new row carries the old row's email" do

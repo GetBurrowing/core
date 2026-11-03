@@ -281,6 +281,10 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
   # A guest chosen by NAME: `invite_guest/2` needs only a display name, so
   # no email-only path is required (task 01a18d0a-ec37 stage 2). A blank
   # name writes nothing.
+  #
+  # The host hands this link over themselves, so it lasts until the meeting
+  # ends rather than 24h (task 01a19ea6; 24h when there is no future
+  # scheduled end). An EMAIL guest keeps the 24h default above.
   def deliver(meeting, "guest", %{"name" => name}, _candidates, inviter_user_id) do
     case String.trim(to_string(name)) do
       "" ->
@@ -290,7 +294,8 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
         Meetings.invite_guest(meeting, %{
           display_name: trimmed,
           email: nil,
-          host_user_id: inviter_user_id
+          host_user_id: inviter_user_id,
+          expires_at: Meetings.guest_invite_expiry(meeting, :meeting_end)
         })
     end
   end
