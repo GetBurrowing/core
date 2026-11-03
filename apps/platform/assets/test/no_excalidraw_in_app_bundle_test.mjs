@@ -72,7 +72,14 @@ const ASSETS = resolve(HERE, "..");
 // hooks/pinned_reorder.js (drag, Alt+arrow keys, undo burst) landed as
 // first-party hook code with no new dependency. 992 KB still catches the
 // ~8.2 MB leak.
-const MAX_BYTES = 992 * 1024;
+//
+// Raised from 992 KB to 1008 KB by task 01a19ea6 (Meeting invites: Copy link
+// for a per-person guest link): the WITH-Play app.js measured 1,015,996
+// bytes in CI run 41574482771, 188 over 992 KB, after
+// hooks/copy_to_clipboard.js gained the copied/failed result classes and
+// the aria-live announcement as first-party hook code with no new
+// dependency. 1008 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 1008 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three
