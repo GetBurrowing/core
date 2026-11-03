@@ -329,6 +329,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
   attr(:current_user_id, :string, default: nil)
+  attr(:can_grant?, :boolean, default: false)
+  attr(:grant_panel, :map, default: nil)
 
   def federation_panels(assigns) do
     ~H"""
@@ -357,6 +359,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         federation_online?={@federation_online?}
         can_manage?={@can_manage?}
         managed?={@managed?}
+        can_grant?={@can_grant?}
+        grant_panel={@grant_panel}
       />
       <PlatformWeb.TerminalPanel.entry agent={@agent} user_id={@current_user_id} />
     </section>

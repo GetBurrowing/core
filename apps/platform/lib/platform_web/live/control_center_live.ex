@@ -22,6 +22,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.AgentCrudEvents
   alias PlatformWeb.ControlCenter.AgentData
   alias PlatformWeb.ControlCenter.AgentDetail
+  alias PlatformWeb.ControlCenter.GrantEvents
   alias PlatformWeb.ControlCenter.MemoryEvents
   alias PlatformWeb.ControlCenter.NativeAgentEvents
   alias PlatformWeb.ControlCenter.NativeLogin, as: NativeLoginPanel
@@ -304,6 +305,13 @@ defmodule PlatformWeb.ControlCenterLive do
     "dismiss_regenerated_token" => :ui,
     "save_tool_profile" => :manage_selected,
     "save_agent_restrictions" => :manage_selected,
+    # Grant panel (task 01a1a2e4-9265 stage 3): org admin of the selected
+    # agent's owner org, never :manage_selected (a member owner manages
+    # their own agent but must not grant themselves a role).
+    "open_grant_panel" => :access_admin,
+    "close_grant_panel" => :ui,
+    "grant_path_change" => :access_admin,
+    "grant_capped_permission" => :access_admin,
     "show_add_space_modal" => :manage_selected,
     "hide_add_space_modal" => :ui,
     "add_agent_to_space" => :manage_selected,
@@ -342,6 +350,9 @@ defmodule PlatformWeb.ControlCenterLive do
         :federate ->
           Platform.Access.Agents.may_federate?(scope)
 
+        :access_admin ->
+          GrantEvents.can_grant?(scope, socket.assigns[:selected_agent])
+
         :create_ownerless ->
           Platform.Access.Agents.may_create_ownerless?(scope)
 
@@ -358,9 +369,16 @@ defmodule PlatformWeb.ControlCenterLive do
       handle_control_event(name, params, socket)
     else
       message =
-        if NativeAgents.managed?(socket.assigns[:selected_agent]),
-          do: NativeAgentEvents.refused_message(),
-          else: "You can only manage your own agents."
+        cond do
+          Map.get(@event_policy, name) == :access_admin ->
+            GrantEvents.forbidden_message()
+
+          NativeAgents.managed?(socket.assigns[:selected_agent]) ->
+            NativeAgentEvents.refused_message()
+
+          true ->
+            "You can only manage your own agents."
+        end
 
       {:noreply, put_flash(socket, :error, message)}
     end
@@ -759,6 +777,10 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("save_agent_restrictions", params, socket),
     do: RuntimeEvents.handle("save_agent_restrictions", params, socket)
 
+  defp handle_control_event(name, params, socket)
+       when name in ~w(open_grant_panel close_grant_panel grant_path_change grant_capped_permission),
+       do: GrantEvents.handle(name, params, socket)
+
   # ── Add agent to space ─────────────────────────────────────────────
 
   defp handle_control_event("show_add_space_modal", _params, socket) do
@@ -1020,6 +1042,8 @@ defmodule PlatformWeb.ControlCenterLive do
                 available_meeting_spaces={@available_meeting_spaces}
                 current_user_id={@current_user_id}
                 managed?={not is_nil(@native_header)}
+                can_grant?={@can_grant?}
+                grant_panel={@grant_panel}
                 can_manage?={
                   Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
                     (is_nil(@native_header) or @native_header.can_manage?)
@@ -1193,6 +1217,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_runtime, nil)
     |> assign(:federation_online?, false)
     |> assign(:federation_spaces, [])
+    |> assign(:can_grant?, false)
+    |> assign(:grant_panel, nil)
     |> assign(:show_add_space_modal, false)
     |> assign(:available_spaces, [])
     |> assign(:available_meeting_spaces, [])
@@ -1293,10 +1319,16 @@ defmodule PlatformWeb.ControlCenterLive do
     online? = runtime != nil && RuntimePresence.online?(runtime.runtime_id)
     spaces = Federation.agent_spaces(agent)
 
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns[:current_user_id]})
+    agent_id = agent.id
+    same_agent? = match?(%{agent_id: ^agent_id}, socket.assigns[:grant_panel])
+
     socket
     |> assign(:federation_runtime, runtime)
     |> assign(:federation_online?, online?)
     |> assign(:federation_spaces, spaces)
+    |> assign(:can_grant?, GrantEvents.can_grant?(scope, agent))
+    |> assign(:grant_panel, if(same_agent?, do: socket.assigns[:grant_panel], else: nil))
   end
 
   defp assign_federation_data(socket, _agent) do
@@ -1304,6 +1336,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_runtime, nil)
     |> assign(:federation_online?, false)
     |> assign(:federation_spaces, [])
+    |> assign(:can_grant?, false)
+    |> assign(:grant_panel, nil)
   end
 
   def reload_selected_agent(socket, opts \\ [])

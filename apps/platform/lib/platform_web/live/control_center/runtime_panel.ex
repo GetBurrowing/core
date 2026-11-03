@@ -67,6 +67,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
   attr(:can_grant?, :boolean, default: false)
+  attr(:grant_panel, :map, default: nil)
 
   def federation_connection_panel(assigns) do
     runtime = assigns.federation_runtime || Federation.get_runtime(assigns.agent.runtime_id)
@@ -255,6 +256,8 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </p>
       </div>
 
+      <.grant_panel :if={@grant_panel && @can_grant?} panel={@grant_panel} />
+
       <%!-- Regenerated token display --%>
       <div
         :if={@regenerated_token && !@managed?}
@@ -368,6 +371,20 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           </span>
         </span>
       </div>
+      <div :if={@owner_name && @can_grant?} class="pl-[22px]">
+        <button
+          :for={cap <- @capped}
+          type="button"
+          data-role="bundle-grant-button"
+          data-bundle={@module}
+          phx-click="open_grant_panel"
+          phx-value-bundle={@module}
+          phx-value-permission={cap.permission}
+          class="btn btn-primary btn-sm"
+        >
+          Grant…
+        </button>
+      </div>
       <p
         :if={@owner_name && !@can_grant?}
         data-role="bundle-ask-admin"
@@ -385,6 +402,171 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     >
       <span class="hero-information-circle size-4 shrink-0" aria-hidden="true" /> Inherited from owner
     </p>
+    """
+  end
+
+  # ── Grant panel (task 01a1a2e4-9265 stage 3) ───────────────────────────
+  #
+  # A right side panel at lg and up, a bottom sheet below lg only. Rendered
+  # outside the tool-profile form so the forms never nest. Every event is
+  # authorized server-side (ControlCenterLive :access_admin, then RoleAdmin).
+
+  attr(:panel, :map, required: true)
+
+  defp grant_panel(assigns) do
+    ~H"""
+    <div
+      id="grant-panel"
+      data-role="grant-panel"
+      class="fixed inset-0 z-[60] bg-black/40 lg:pointer-events-none lg:bg-transparent"
+    >
+      <button
+        type="button"
+        class="absolute inset-0 h-full w-full cursor-default lg:hidden"
+        phx-click="close_grant_panel"
+        aria-label="Close"
+      />
+      <div
+        role="dialog"
+        aria-labelledby="grant-panel-title"
+        class={[
+          "absolute inset-x-0 bottom-0 w-full max-h-[75vh] overflow-y-auto rounded-t-2xl bg-base-200 p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]",
+          "lg:pointer-events-auto lg:inset-y-0 lg:left-auto lg:right-0 lg:max-h-none lg:max-w-md lg:rounded-none lg:border-l lg:border-edge lg:shadow-xl"
+        ]}
+      >
+        <form
+          id="grant-form"
+          phx-change="grant_path_change"
+          phx-submit="grant_capped_permission"
+          class="space-y-4 text-sm"
+        >
+          <input type="hidden" name="bundle" value={@panel.bundle} />
+          <input type="hidden" name="permission" value={@panel.permission} />
+          <h3 id="grant-panel-title" class="font-semibold text-base-content">
+            Give {@panel.owner_name} and this agent:
+          </h3>
+          <p class="text-[13px] text-subtle">
+            "{@panel.label}" <span class="font-mono text-xs">{@panel.permission}</span>
+          </p>
+
+          <div class="space-y-2">
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="path"
+                value="existing"
+                data-role="grant-path-existing"
+                checked={@panel.path == "existing"}
+                disabled={@panel.roles == []}
+                class="radio radio-sm"
+              />
+              <span>Existing role</span>
+            </label>
+            <select
+              :if={@panel.roles != []}
+              name="role_key"
+              data-role="grant-existing-role"
+              disabled={@panel.path != "existing"}
+              class="select select-sm w-full"
+            >
+              <option
+                :for={role <- @panel.roles}
+                value={role.key}
+                selected={role.key == @panel.role_key}
+              >
+                {role.name}
+              </option>
+            </select>
+            <p :if={@panel.roles == []} class="pl-6 text-xs text-subtle">
+              No existing role has this permission
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="path"
+                value="new"
+                data-role="grant-path-new"
+                checked={@panel.path == "new"}
+                class="radio radio-sm"
+              />
+              <span>New role</span>
+            </label>
+            <div :if={@panel.path == "new"} class="space-y-2 pl-6">
+              <input
+                type="text"
+                name="name"
+                value={@panel.new_name}
+                placeholder="Role name"
+                data-role="grant-new-name"
+                class="input input-sm w-full"
+              />
+              <input type="hidden" name="permissions[]" value="" />
+              <label
+                :for={opt <- @panel.offered}
+                class="flex items-start gap-2"
+                data-role="grant-new-permission"
+              >
+                <input
+                  type="checkbox"
+                  name="permissions[]"
+                  value={opt.permission}
+                  checked={opt.permission in @panel.new_permissions}
+                  class="checkbox checkbox-sm mt-0.5"
+                />
+                <span class="min-w-0">
+                  <span class="block">{opt.label}</span>
+                  <span class="block truncate font-mono text-xs text-subtle">{opt.permission}</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <fieldset class="space-y-2">
+            <legend class="text-xs font-semibold text-subtle">Applies to:</legend>
+            <input type="hidden" name="owner" value="false" />
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="owner"
+                value="true"
+                checked={@panel.owner?}
+                data-role="grant-applies-owner"
+                class="checkbox checkbox-sm"
+              />
+              <span>{@panel.owner_name} (owner)</span>
+            </label>
+            <input type="hidden" name="agent" value="false" />
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="agent"
+                value="true"
+                checked={@panel.agent?}
+                data-role="grant-applies-agent"
+                class="checkbox checkbox-sm"
+              />
+              <span>{@panel.agent_name} (agent)</span>
+            </label>
+          </fieldset>
+
+          <p :if={@panel.error} data-role="grant-error" class="text-[13px] text-error" role="alert">
+            {@panel.error}
+          </p>
+
+          <div class="flex items-center gap-2">
+            <button type="submit" data-role="grant-submit" class="btn btn-primary btn-sm">
+              Grant
+            </button>
+            <button type="button" phx-click="close_grant_panel" class="btn btn-ghost btn-sm">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
     """
   end
 
