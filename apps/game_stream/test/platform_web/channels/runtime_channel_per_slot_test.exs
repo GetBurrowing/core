@@ -111,7 +111,7 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
   end
 
   describe "per-slot host" do
-    test "two players and one spectator get slot 0, slot 1 and shared views", ctx do
+    test "two players get their own slot view and a spectator the shared view", ctx do
       socket = FakePlayHost.join(ctx)
       {id, %{per_slot: true}} = start(ctx)
       FakePlayHost.drive(socket, id)
@@ -135,6 +135,13 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
                id1 => %{view: "slot", slot: 1},
                id_spec => %{view: "shared"}
              }
+
+      # The replies a viewer gets once the host has reported carry the view.
+      assert {:ok, %{view: %{view: "slot", slot: 0}}} = GameStream.join(id, p0, 0)
+      assert {:ok, %{view: %{view: "slot", slot: 1}}} = GameStream.join(id, p1, 0)
+
+      assert {:ok, %{peer_id: ^id_spec, view: %{view: "shared"}}} =
+               GameStream.attach_viewer(id, spec)
     end
 
     test "a player leaving and a new viewer taking slot 0: new peer slot 0, old peer shared",
@@ -153,7 +160,7 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
       settle(socket)
       assert views(id)[old_id] == %{view: "slot", slot: 0}
 
-      {:ok, _} = GameStream.leave(id, old)
+      {:ok, _} = GameStream.leave(id, old, :all)
       {:ok, _} = GameStream.join(id, new, 0)
 
       # The slot change cleared both views until the host re-reports.
@@ -161,6 +168,20 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
       assert views(id)[old_id] == nil
       FakePlayHost.answer_slots(socket, payload)
       settle(socket)
+
+      assert views(id) == %{
+               new_id => %{view: "slot", slot: 0},
+               old_id => %{view: "shared"}
+             }
+
+      # A stale report of slot 0 for the old peer contradicts the table.
+      assert {:error, :view_mismatch} =
+               GameStream.handle_peer_view(ctx.runtime.runtime_id, %{
+                 "session_id" => id,
+                 "peer_id" => old_id,
+                 "view" => "slot",
+                 "slot" => 0
+               })
 
       assert views(id) == %{
                new_id => %{view: "slot", slot: 0},
@@ -193,6 +214,8 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
       assert_receive {:DOWN, ^ref, :process, _, _}
       assert_receive {:game_stream, ^id, {:roster, %{views: dropped}}}, 1_000
       assert dropped == %{}
+      assert {:ok, %{state: "live"}} = GameStream.status(id)
+      assert views(id) == %{}
 
       again = FakePlayHost.join(ctx)
       :ok = FakePlayHost.resume(again, id, payload.peers)
@@ -241,8 +264,43 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
         "slot" => 32
       })
 
+      push(socket, "play_peer_view", %{"session_id" => id, "peer_id" => id0, "view" => "camera"})
+
+      push(socket, "play_peer_view", %{
+        "session_id" => id,
+        "peer_id" => "no-such-peer",
+        "view" => "shared"
+      })
+
       settle(socket)
       assert Process.alive?(socket.channel_pid)
+      assert {:ok, ^before} = GameStream.roster(id)
+
+      runtime_id = ctx.runtime.runtime_id
+      base = %{"session_id" => id, "peer_id" => id0}
+
+      assert {:error, :bad_peer_id} =
+               Platform.GameStream.Protocol.parse_peer_view(
+                 Map.merge(base, %{"peer_id" => long, "view" => "shared"})
+               )
+
+      assert {:error, :bad_slot} =
+               Platform.GameStream.Protocol.parse_peer_view(
+                 Map.merge(base, %{"view" => "slot", "slot" => 32})
+               )
+
+      assert {:error, :bad_view} =
+               Platform.GameStream.Protocol.parse_peer_view(
+                 Map.merge(base, %{"view" => "camera"})
+               )
+
+      assert {:error, :unknown_peer} =
+               GameStream.handle_peer_view(runtime_id, %{
+                 "session_id" => id,
+                 "peer_id" => "no-such-peer",
+                 "view" => "shared"
+               })
+
       assert {:ok, ^before} = GameStream.roster(id)
     end
   end
@@ -273,6 +331,14 @@ defmodule PlatformWeb.RuntimeChannelPerSlotTest do
       FakePlayHost.report(socket, id, peer_id, %{0 => 0})
       settle(socket)
       assert Process.alive?(socket.channel_pid)
+
+      assert {:error, :not_per_slot} =
+               GameStream.handle_peer_view(ctx.runtime.runtime_id, %{
+                 "session_id" => id,
+                 "peer_id" => peer_id,
+                 "view" => "slot",
+                 "slot" => 0
+               })
 
       {:ok, after_roster} = GameStream.roster(id)
       assert after_roster.per_slot == false
