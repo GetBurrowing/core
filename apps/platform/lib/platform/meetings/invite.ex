@@ -61,6 +61,21 @@ defmodule Platform.Meetings.Invite do
   None of the three claims to know the invitee's INTENT, which is what
   `accepted` / `declined` would have asserted and been wrong about. They
   record what this system did.
+
+  ## `short_code`: a code is stored, never a token (task 01a18d0a-ec37)
+
+  A guest's short link is `https://<guest host>/g/<short_code>`. The column
+  holds an opaque 22-character code from `Platform.Meetings.GuestShortCode`,
+  and nothing else. The signed `Platform.Meetings.GuestInvite` token is
+  deliberately NOT stored: it is a live bearer credential, so a copy at rest
+  is a copy anyone with read access to this table could use. The row is the
+  source of truth and is already enough to re-mint the token
+  (`Platform.Meetings.guest_invite_link/2`), which is what
+  `Platform.Meetings.resolve_guest_short_code/1` does on every hit.
+
+  `short_code` is not in the cast list. Only `Platform.Meetings` sets it, with
+  `put_change/3` on the same insert that creates the guest row, so no caller
+  can choose or overwrite a code. Account-holder rows never carry one.
   """
 
   use Ecto.Schema
@@ -81,6 +96,10 @@ defmodule Platform.Meetings.Invite do
     field(:expires_at, :utc_datetime_usec)
     field(:revoked_at, :utc_datetime_usec)
 
+    # Set only by `Platform.Meetings` internals; never cast. See the
+    # `short_code` section of the moduledoc.
+    field(:short_code, :string)
+
     # Delivery receipt (task `019fb955-6577-7fb0-8c97-c70d233bba23`). See the
     # "Delivery receipt" section of the moduledoc for why these three are not
     # the rejected `status` column.
@@ -94,8 +113,16 @@ defmodule Platform.Meetings.Invite do
   @cast_fields ~w(meeting_id user_id display_name email expires_at revoked_at
                   delivered_at delivery_carrier delivery_space_id)a
 
+  # The same predicate `Platform.Accounts.User.changeset/2` validates `:email`
+  # with, and the one `Meetings.resolve_invite_candidates/2` offers an address
+  # under. Checked only when an email is present: a guest invite needs no
+  # address at all (task 01a18d0a-ec37 stage 2, "+ Add email (optional)").
+  @email_format ~r/^[^\s]+@[^\s]+$/
+
   @doc """
   Changeset for creating or updating an invite.
+
+  `email` is optional; when given it must look like an address (`@email_format`).
 
   `meeting_id` is the only required field at the changeset level. The
   "who is this?" rule — a row must carry either a `user_id` or a
@@ -107,8 +134,10 @@ defmodule Platform.Meetings.Invite do
     invite
     |> cast(attrs, @cast_fields)
     |> validate_required([:meeting_id])
+    |> validate_format(:email, @email_format, message: "must be an email address")
     |> check_constraint(:display_name, name: :meeting_invites_identity_check)
     |> unique_constraint([:meeting_id, :user_id])
+    |> unique_constraint(:short_code, name: :meeting_invites_short_code_index)
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:user_id)
   end

@@ -1379,4 +1379,35 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert class_of(html, ~s([data-participant-type="agent"][data-participant-id])) == ["row"]
     end
   end
+
+  # ── task 01a18d0a-ec37 stage 2 ─────────────────────────────────────────
+
+  describe "the human invite state" do
+    @human_state %{
+      id: "call-rail",
+      query: "",
+      users: [],
+      guest_host?: true,
+      result: nil,
+      error: nil
+    }
+
+    test "is forwarded into the People pane's humans section" do
+      html = rail(active_tab: "people", human_invite: @human_state)
+
+      assert count(
+               html,
+               ~s([data-role="call-rail-pane"] [data-section="humans"] [data-role="meeting-human-invite"])
+             ) == 1
+    end
+
+    test "no state means no control (the default every other caller gets)" do
+      assert count(rail(active_tab: "people"), ~s([data-role="meeting-human-invite"])) == 0
+    end
+
+    test "is not drawn on another tab" do
+      html = rail(active_tab: "transcript", human_invite: @human_state)
+      assert count(html, ~s([data-role="meeting-human-invite"])) == 0
+    end
+  end
 end

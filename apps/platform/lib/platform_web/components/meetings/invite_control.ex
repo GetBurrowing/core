@@ -22,7 +22,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   | backing row | none — entries live in a socket assign | a `meeting_invites` row per entry |
   | selecting an option | stages an entry in the list | calls `invite_guest/2` / `invite_user/3` / `invite_external_user/3` |
   | the row's `X` | UNSTAGES (drops from the assign list); nothing is written and nothing is revoked | absent |
-  | copy control | absent — no token has been minted, so there is no link to copy | present on guest rows |
+  | copy control | absent — no token has been minted, so there is no link to copy | Copy link / New link on guest rows (task 01a19ea6) |
+  | guest expiry | absent | the expiry line and its inline select under the name |
   | `Add people` row | absent — the search box is already open above the list | present |
   | event names | `meeting_create_invite_*` | `meeting_invite_*` |
   | Enter in the search box | `meeting_create_invite_commit` | `meeting_invite_commit` |
@@ -86,14 +87,21 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       `:draft`.
     * `:name` — display name.
     * `:subtitle` — `nil`, or one line of STATE: the invitee's address
-      for an external, `expires in 24h` for a guest, `host` for the
-      host, `meeting producer` for the agent row. Never explanation.
+      for an external, `host` for the host, `meeting producer` for the
+      agent row. Never explanation. A live guest row has none: its state
+      is the expiry line below.
+    * `:expiry` — guest rows only, read with `Map.get`: `nil`, or
+      `%{expires_at: DateTime.t(), expired?: boolean, meeting_end?: boolean}`
+      (`meeting_end?` is `Meetings.meeting_end_expiry?/2`, which decides
+      whether the "Until the meeting ends" choice is offered). Drives the
+      expiry line, the select and the Copy link / New link swap.
     * `:user_id`, `:email`, `:expires_at`, `:external`, `:agent` — the
       tag derivation inputs above.
     * `:avatar_url` — passed through to `human_avatar/1`.
     * `:removable` / `:copy_url` — read by `invite_list/1` only, which
       accesses them with `.` so a caller that omits one gets a
-      `KeyError` rather than a silently missing control.
+      `KeyError` rather than a silently missing control. An expired
+      guest row's `:copy_url` is `nil`: it has no live link to copy.
 
   ## Tag tones — a documented deviation
 
@@ -152,7 +160,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       search: "meeting_invite_search",
       stage: "meeting_invite_stage",
       add_people: "meeting_invite_add_people",
-      commit: "meeting_invite_commit"
+      commit: "meeting_invite_commit",
+      # Per guest row (task 01a19ea6): move that row's link expiry, or mint
+      # a lapsed row a new link. Live only: a draft row has no link yet.
+      expiry: "meeting_invite_expiry",
+      renew: "meeting_invite_renew"
     }
   }
 
@@ -307,6 +319,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       <.dropdown
         candidates={@candidates}
         email_option={@email_option}
+        query={@query}
         mode={@mode}
         target={@target}
         dropdown={@dropdown}
@@ -360,9 +373,50 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   end
 
   # Nothing matched and the query is not an address the account schema
-  # would accept: no dropdown at all, rather than an empty panel.
+  # would accept. A blank query gets no dropdown at all, rather than an
+  # empty panel. A typed NAME gets one option: invite that name as a guest
+  # with no email (task 01a18d0a-ec37 stage 2), so a guest no longer needs
+  # an address to be invited. There is no external option here: an external
+  # member is an account-holder, and an account needs an address.
   defp dropdown(%{candidates: [], email_option: nil} = assigns) do
-    ~H""
+    assigns = assign(assigns, :name, String.trim(assigns.query || ""))
+
+    ~H"""
+    <div
+      :if={@name != ""}
+      class={dropdown_class(@dropdown)}
+      data-role="meeting-invite-dropdown"
+      data-dropdown-position={@dropdown}
+      data-dropdown-kind="guest-name"
+    >
+      <button
+        type="button"
+        data-role="meeting-invite-option"
+        data-option="guest-name"
+        data-default="true"
+        class="flex w-full items-center gap-2.5 bg-primary/10 px-3 py-2 text-left min-h-[52px] sm:min-h-11 lg:hover:bg-primary/15"
+        phx-click={event(@mode, :stage)}
+        phx-value-kind="guest"
+        phx-value-name={@name}
+        phx-target={@target}
+      >
+        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-warning/15">
+          <span class="hero-link size-4 text-warning" aria-hidden="true"></span>
+        </span>
+        <span class="min-w-0 flex-1">
+          <%!-- Copy from design canvas 01a19ea7 r1 (task 01a19ea6 stage 2),
+               replacing 01a18d0a's 'Invite "<name>" as a guest'. The host
+               hands this link over themselves, so the sub-line says so. --%>
+          <span class="block truncate text-sm font-semibold" data-role="meeting-invite-option-title">
+            Add guest “{@name}”
+          </span>
+          <span class="block text-xs text-subtle" data-role="meeting-invite-option-detail">
+            you'll share the link
+          </span>
+        </span>
+      </button>
+    </div>
+    """
   end
 
   defp dropdown(%{candidates: []} = assigns) do
@@ -469,6 +523,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:copy_url, :string, default: nil)
   attr(:target, :any, default: nil)
   attr(:id_prefix, :string, default: "meeting-invite")
+  attr(:time_zone, :string, default: nil)
 
   @doc """
   One invitee row: avatar, name, optional state sub-line, tag, optional
@@ -485,13 +540,28 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   LiveView keys by id. Two elements sharing one id means one of the two
   hooks never mounts and that button silently copies nothing. The default
   keeps the single-instance create sheet unchanged.
+
+  ## Guest rows in `:live` (task 01a19ea6 stage 2)
+
+  A guest row's entry carries `:expiry` (`%{expires_at, expired?,
+  meeting_end?}`, read with `Map.get` because only guest rows have it).
+  With it the row gets, under the name, the expiry line ("Link works until
+  Wed 4 Nov, 21:00" in `@time_zone`, or UTC suffixed "UTC" when the
+  surface has no zone) and an inline select of the three choices, and the
+  primary slot holds Copy link. An EXPIRED row reads "Link expired", has
+  no select and no copy URL, and its primary slot is New link instead.
   """
   def invite_row(assigns) do
-    assigns = assign(assigns, :tag, tag(assigns.entry))
+    expiry = if assigns.mode == :live, do: Map.get(assigns.entry, :expiry)
+
+    assigns =
+      assigns
+      |> assign(:tag, tag(assigns.entry))
+      |> assign(:expiry, expiry)
 
     ~H"""
     <div
-      class="mb-1.5 flex items-center gap-2 rounded-lg border border-edge bg-base-200/40 px-2 py-1.5 min-h-11"
+      class="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-edge bg-base-200/40 px-2 py-1.5 min-h-11"
       data-role="meeting-invite-row"
       data-entry-id={@entry.id}
       data-tag={@tag}
@@ -562,24 +632,192 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         <span class="hero-x-mark size-4" aria-hidden="true"></span>
       </button>
 
+      <%!-- A live row with a link but no expiry map (no caller builds one
+           today) keeps a plain Copy link here. Guest rows carry `:expiry`,
+           and their action sits under the expiry line instead. --%>
+      <.copy_link
+        :if={@mode == :live && @copy_url && is_nil(@expiry)}
+        entry={@entry}
+        copy_url={@copy_url}
+        id_prefix={@id_prefix}
+      />
+
+      <.guest_expiry
+        :if={@expiry}
+        entry={@entry}
+        expiry={@expiry}
+        copy_url={@copy_url}
+        time_zone={@time_zone}
+        target={@target}
+        id_prefix={@id_prefix}
+      />
+    </div>
+    """
+  end
+
+  # The row's primary action (canvas 01a19ea7: the signature element).
+  # `phx-update="ignore"` so a re-render cannot patch the server's "Copy
+  # link" back over the hook's "Copied" (the same reason as
+  # `human_invite_result/1`); the success colour keys on the hook's
+  # `copy-copied` CLASS, which LiveView leaves alone on an ignored element.
+  # The id carries the entry id, so a renewed row is a new element and never
+  # copies a stale link. The hidden `aria-live` region beside it is what the
+  # hook writes "Link copied" into.
+  attr(:entry, :map, required: true)
+  attr(:copy_url, :string, required: true)
+  attr(:id_prefix, :string, required: true)
+
+  defp copy_link(assigns) do
+    ~H"""
+    <button
+      type="button"
+      id={"#{@id_prefix}-copy-#{@entry.id}"}
+      phx-hook="CopyToClipboard"
+      phx-update="ignore"
+      data-clipboard-text={@copy_url}
+      data-copied-label="Copied"
+      data-copy-status-target={"#{@id_prefix}-copy-status-#{@entry.id}"}
+      data-role="meeting-invite-copy"
+      data-entry-id={@entry.id}
+      class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 min-w-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60 [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
+      aria-label={"Copy link for #{@entry.name}"}
+    >
+      Copy link
+    </button>
+    <span
+      id={"#{@id_prefix}-copy-status-#{@entry.id}"}
+      class="sr-only"
+      aria-live="polite"
+      phx-update="ignore"
+      data-role="meeting-invite-copy-status"
+    >
+    </span>
+    """
+  end
+
+  # The block under a guest's name: the expiry sentence with its inline
+  # select, then the row's primary action (Copy link, or New link once
+  # expired) beneath it. It spans the wrapping row, indented past the
+  # avatar, so the NAME line above holds only the name and its chip: the
+  # action never takes width from the name (the brand rule 01a18d0a's rail
+  # review enforced), and at 375px the sentence wraps rather than truncating.
+  # Neutral `text-subtle`, never the action colour (canvas palette rule 1).
+  #
+  # The select has no stored choice: a disabled, selected prompt comes
+  # first so picking ANY option fires `change`, and the form's id carries
+  # the row's `expires_at`, so after a change the form is a new element and
+  # the select is back on its prompt.
+  attr(:entry, :map, required: true)
+  attr(:expiry, :map, required: true)
+  attr(:copy_url, :string, default: nil)
+  attr(:time_zone, :string, default: nil)
+  attr(:target, :any, default: nil)
+  attr(:id_prefix, :string, required: true)
+
+  defp guest_expiry(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :form_id,
+        "#{assigns.id_prefix}-expiry-form-#{assigns.entry.id}-" <>
+          Integer.to_string(DateTime.to_unix(assigns.expiry.expires_at))
+      )
+
+    ~H"""
+    <div
+      class="flex w-full min-w-0 flex-col items-start gap-1 pl-8"
+      data-role="meeting-invite-expiry"
+      data-entry-id={@entry.id}
+      data-expired={to_string(@expiry.expired?)}
+    >
+      <div class="flex w-full min-w-0 items-center gap-1 text-xs text-subtle">
+        <span :if={@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
+          Link expired
+        </span>
+        <span :if={!@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
+          {expiry_sentence(@expiry, @time_zone)}
+        </span>
+        <form
+          :if={!@expiry.expired?}
+          id={@form_id}
+          class="shrink-0"
+          phx-change={event(:live, :expiry)}
+          phx-target={@target}
+          data-role="meeting-invite-expiry-form"
+        >
+          <%!-- `invite_id`, not `id`: an input NAMED `id` shadows the form
+             element's own id (LiveView warns at compile time). --%>
+          <input type="hidden" name="invite_id" value={@entry.id} />
+          <select
+            id={"#{@form_id}-select"}
+            name="choice"
+            data-role="meeting-invite-expiry-select"
+            aria-label={"Change link expiry for #{@entry.name}"}
+            class="w-[5.75rem] min-h-11 cursor-pointer rounded-md border-0 bg-transparent py-0 pl-1 pr-6 text-xs font-medium text-base-content focus:ring-2 focus:ring-primary/20 phx-change-loading:opacity-60"
+          >
+            <option value="" disabled selected>Change</option>
+            <option :if={@expiry.meeting_end?} value="meeting_end">Until the meeting ends</option>
+            <option value="hours_24">24 hours</option>
+            <option value="days_7">7 days</option>
+          </select>
+        </form>
+      </div>
+
+      <.copy_link
+        :if={@copy_url && !@expiry.expired?}
+        entry={@entry}
+        copy_url={@copy_url}
+        id_prefix={@id_prefix}
+      />
+
       <button
-        :if={@mode == :live and @copy_url}
+        :if={@expiry.expired?}
         type="button"
-        id={"#{@id_prefix}-copy-#{@entry.id}"}
-        phx-hook="CopyToClipboard"
-        data-clipboard-text={@copy_url}
-        data-role="meeting-invite-copy"
+        data-role="meeting-invite-renew"
         data-entry-id={@entry.id}
-        class="flex shrink-0 items-center justify-center gap-1 rounded-lg border border-warning/35 bg-warning/10 px-2 text-[11px] font-semibold text-base-content min-h-11 min-w-11 lg:hover:bg-warning/20"
-        aria-label={"Copy the personal link for #{@entry.name}"}
-        title="Copy link"
+        class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 min-w-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60"
+        aria-label={"New link for #{@entry.name}"}
+        phx-click={event(:live, :renew)}
+        phx-value-id={@entry.id}
+        phx-value-choice="meeting_end"
+        phx-target={@target}
       >
-        <span class="hero-link size-3.5 text-warning" aria-hidden="true"></span>
-        <span>Link</span>
+        New link
       </button>
     </div>
     """
   end
+
+  @doc """
+  The sentence on a live guest row's expiry line (task 01a19ea6 stage 2):
+  `Link works until Wed 4 Nov, 21:00` in `time_zone`. With no zone, or
+  `Etc/UTC`, the time is UTC and says so. When the meeting has no future
+  scheduled end and the link lasts no more than the 24-hour fallback, the
+  line adds why: `· no scheduled end, 24 hours`. A host who then picks
+  7 days gets a plain line, since the fallback no longer explains it.
+  """
+  @spec expiry_sentence(map(), String.t() | nil) :: String.t()
+  def expiry_sentence(%{expires_at: %DateTime{} = at} = expiry, time_zone) do
+    {local, suffix} =
+      case time_zone do
+        zone when zone in [nil, "", "Etc/UTC", "UTC"] ->
+          {DateTime.shift_zone!(at, "Etc/UTC"), " UTC"}
+
+        zone ->
+          {DateTime.shift_zone!(at, zone), ""}
+      end
+
+    base = "Link works until " <> Calendar.strftime(local, "%a %-d %b, %H:%M") <> suffix
+
+    if fallback_expiry?(expiry), do: base <> " · no scheduled end, 24 hours", else: base
+  end
+
+  # The fallback note applies only while the link is inside the 24h window
+  # the fallback grants (plus a minute of render slack).
+  defp fallback_expiry?(%{meeting_end?: false, expires_at: at}),
+    do: DateTime.diff(at, DateTime.utc_now(), :second) <= 24 * 3600 + 60
+
+  defp fallback_expiry?(_expiry), do: false
 
   # ── invite_list/1 ──────────────────────────────────────────────────────
 
@@ -587,6 +825,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   attr(:mode, :atom, required: true, values: [:draft, :live])
   attr(:target, :any, default: nil)
   attr(:id_prefix, :string, default: "meeting-invite")
+  attr(:time_zone, :string, default: nil)
 
   @doc """
   The `Invited · N` header, the rows, and — in `:live` only — the
@@ -618,6 +857,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         copy_url={entry.copy_url}
         target={@target}
         id_prefix={@id_prefix}
+        time_zone={@time_zone}
       />
 
       <button
@@ -631,6 +871,288 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         <span class="hero-plus size-4 shrink-0 text-primary" aria-hidden="true"></span>
         <span>Add people</span>
       </button>
+    </div>
+    """
+  end
+
+  # ── human_invite/1 (task 01a18d0a-ec37 stage 2) ────────────────────────
+
+  attr(:state, :map,
+    required: true,
+    doc: """
+    `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`'s map: `:id`
+    (DOM id prefix), `:query`, `:users` (the resolver's `users`),
+    `:guest_host?`, `:result` (`nil` or the created guest invite with its
+    `:url`, `:name`, `:email_open?`, `:email_error`), `:error` and `:gen`
+    (bumped when the field is cleared, so the input is re-keyed and a focused
+    field does not keep the invited name).
+    """
+  )
+
+  @doc """
+  The name-first Invite field at the foot of a live call's HUMANS section
+  (design canvas `01a18d0b-4f5a`, node md).
+
+  Typing a name opens a list in flow directly under the field: the matching
+  members from `Meetings.resolve_invite_candidates/2`, then, ALWAYS LAST and
+  set off by a divider, `Invite "<name>" as guest`. The canvas names
+  `base-300` for borders; this repo draws borders with `border-edge`
+  (`BorderTokenDirectionTest`: base-300 is a fill token here). The guest row
+  is rendered from the typed string, not from any query, whenever the
+  trimmed query is non-blank and a guest host is configured. So a name that
+  matches a member offers both, and an already-invited member (excluded by
+  the resolver) or a name matching nobody still offers the guest row.
+
+  The list is IN FLOW at every width, not absolutely positioned. On a phone
+  the participant list is already a bottom sheet, and the canvas wants the
+  options inline inside it; on desktop the People pane is a scrolling
+  column, where an absolutely positioned list is clipped by the pane (see
+  `invite_control/1`'s `@dropdown` note, which measured exactly that).
+
+  Choosing the guest row replaces it with a persistent result: the name, an
+  info Guest badge, "invited", the full short link in mono with no
+  ellipsis, a primary Copy link button and "+ Add email (optional)". It
+  stays until dismissed.
+
+  Event names are fixed (`meeting_human_invite_*`) and handled by
+  `MeetingHumanInvite` via `MeetingHooks`, on both call surfaces.
+  """
+  def human_invite(assigns) do
+    assigns =
+      assigns
+      |> assign(:name, String.trim(assigns.state.query || ""))
+      |> assign(:prefix, "#{assigns.state.id}-human-invite")
+
+    ~H"""
+    <div class="mt-1.5 px-2" data-role="meeting-human-invite" id={@prefix}>
+      <form
+        id={"#{@prefix}-form"}
+        phx-change="meeting_human_invite_search"
+        phx-submit="meeting_human_invite_search"
+        autocomplete="off"
+      >
+        <label class="flex min-h-11 items-center gap-2 rounded-lg border border-edge bg-base-100 px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+          <span class="hero-plus size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+          <span class="shrink-0 text-sm font-medium text-base-content">Invite</span>
+          <input
+            type="text"
+            name="query"
+            id={"#{@prefix}-search-#{Map.get(@state, :gen, 0)}"}
+            data-role="meeting-human-invite-search"
+            value={@state.query}
+            placeholder="Type a name…"
+            aria-label="Invite someone by name"
+            autocomplete="off"
+            phx-debounce="120"
+            class="w-full min-w-0 border-0 bg-transparent p-0 text-sm text-base-content focus:outline-none focus:ring-0"
+          />
+        </label>
+      </form>
+
+      <p
+        :if={@state.error}
+        class="mt-1 flex items-center gap-1.5 text-xs text-base-content"
+        data-role="meeting-human-invite-error"
+        role="alert"
+      >
+        <span class="hero-exclamation-circle size-4 shrink-0 text-error" aria-hidden="true"></span>
+        <span>{@state.error}</span>
+      </p>
+
+      <.human_invite_result :if={@state.result} result={@state.result} prefix={@prefix} />
+
+      <div
+        :if={@name != "" and (@state.users != [] or @state.guest_host?)}
+        class="mt-1 overflow-hidden rounded-lg border border-edge bg-base-100"
+        data-role="meeting-human-invite-dropdown"
+      >
+        <button
+          :for={user <- @state.users}
+          type="button"
+          data-role="meeting-human-invite-user"
+          data-user-id={user.id}
+          phx-click="meeting_human_invite_user"
+          phx-value-id={user.id}
+          class="flex min-h-11 w-full min-w-0 items-center gap-2.5 overflow-hidden px-2.5 py-2 text-left lg:hover:bg-base-200 phx-click-loading:opacity-60"
+        >
+          <.human_avatar name={user.name || user.email} seed={user.id} size="sm" class="shrink-0" />
+          <span class="flex min-w-0 flex-1 items-baseline gap-2">
+            <%!-- `shrink-0` so the email truncates FIRST; `max-w-full` plus
+                 the ellipsis only for a name too wide for the row on its
+                 own, which would otherwise be clipped mid-glyph by the
+                 row's `overflow-hidden` with no sign that it was cut. --%>
+            <span
+              class="max-w-full shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium text-base-content"
+              data-role="meeting-human-invite-user-name"
+            >
+              {user.name || user.email}
+            </span>
+            <span
+              :if={user.name}
+              class="min-w-0 truncate text-xs text-subtle"
+              data-role="meeting-human-invite-user-email"
+            >
+              {user.email}
+            </span>
+          </span>
+        </button>
+
+        <button
+          :if={@state.guest_host?}
+          type="button"
+          data-role="meeting-human-invite-guest"
+          phx-click="meeting_human_invite_guest"
+          class={[
+            "flex min-h-11 w-full min-w-0 items-center gap-2.5 px-2.5 py-2 text-left lg:hover:bg-base-200 phx-click-loading:opacity-60",
+            @state.users != [] && "border-t border-edge"
+          ]}
+        >
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full border border-edge">
+            <span class="hero-plus size-4 text-subtle" aria-hidden="true"></span>
+          </span>
+          <span class="min-w-0 flex-1">
+            <span
+              class="block truncate text-sm font-medium text-base-content"
+              data-role="meeting-human-invite-guest-label"
+            >
+              Invite "{@name}" as guest
+            </span>
+            <span class="mt-0.5 flex items-center gap-1.5">
+              <.chip
+                tone="info"
+                class="shrink-0 text-[10px]"
+                data-role="meeting-human-invite-guest-badge"
+              >
+                Guest
+              </.chip>
+              <span class="text-xs text-subtle">email optional</span>
+            </span>
+          </span>
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:result, :map, required: true)
+  attr(:prefix, :string, required: true)
+
+  defp human_invite_result(assigns) do
+    ~H"""
+    <div
+      class="mt-1 rounded-lg border border-edge bg-base-100 px-2.5 py-2"
+      data-role="meeting-human-invite-result"
+      data-invite-id={@result.invite.id}
+    >
+      <div class="flex min-w-0 items-center gap-1.5">
+        <span
+          class="shrink-0 whitespace-nowrap text-sm font-medium text-base-content"
+          data-role="meeting-human-invite-result-name"
+        >
+          {@result.name}
+        </span>
+        <.chip tone="info" class="shrink-0 text-[10px]" data-role="meeting-human-invite-result-badge">
+          Guest
+        </.chip>
+        <span class="min-w-0 flex-1 truncate text-xs text-subtle">invited</span>
+        <button
+          type="button"
+          phx-click="meeting_human_invite_dismiss"
+          data-role="meeting-human-invite-dismiss"
+          aria-label="Dismiss"
+          title="Dismiss"
+          class="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-subtle lg:hover:bg-base-200"
+        >
+          <span class="hero-x-mark size-4" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <code
+          class="min-w-0 break-all font-mono text-xs text-base-content"
+          data-role="meeting-human-invite-link"
+        >
+          {@result.url}
+        </code>
+        <%!-- `phx-update="ignore"`: the hook writes "Copied" / "Couldn't
+             copy" and `data-copy-state` into this button, and the call rail
+             re-renders every second (the agent-activity tick), which patched
+             the server's literal "Copy link" straight back over it. Measured
+             in a browser: the confirmation was gone before a person could
+             read it. The success colour keys on the hook's `copy-copied`
+             CLASS, not a `data-` attribute: LiveView still re-syncs and
+             strips `data-*` on an ignored element (see
+             `assets/js/hooks/copy_to_clipboard.js`). The id carries the
+             invite id, so a new invite is a new element and its link is never
+             stale. --%>
+        <button
+          type="button"
+          id={"#{@prefix}-copy-#{@result.invite.id}"}
+          phx-hook="CopyToClipboard"
+          phx-update="ignore"
+          data-clipboard-text={@result.url}
+          data-copied-label="Copied"
+          data-role="meeting-human-invite-copy"
+          class="min-h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-semibold text-primary-content [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
+        >
+          Copy link
+        </button>
+      </div>
+
+      <p
+        :if={@result.invite.email}
+        class="mt-1 truncate text-xs text-subtle"
+        data-role="meeting-human-invite-email-saved"
+      >
+        {@result.invite.email}
+      </p>
+
+      <button
+        :if={is_nil(@result.invite.email) and not @result.email_open?}
+        type="button"
+        phx-click="meeting_human_invite_email_open"
+        data-role="meeting-human-invite-add-email"
+        class="mt-1 min-h-11 text-left text-sm font-medium text-base-content lg:hover:underline"
+      >
+        + Add email (optional)
+      </button>
+
+      <form
+        :if={@result.email_open?}
+        id={"#{@prefix}-email-form"}
+        phx-submit="meeting_human_invite_email"
+        data-role="meeting-human-invite-email-form"
+        class="mt-1 flex items-center gap-2"
+      >
+        <input
+          type="text"
+          inputmode="email"
+          name="email"
+          id={"#{@prefix}-email"}
+          data-role="meeting-human-invite-email"
+          placeholder="name@example.com"
+          aria-label="Guest email (optional)"
+          autocomplete="off"
+          class="min-h-11 w-full min-w-0 rounded-lg border border-edge bg-base-100 px-2.5 text-sm text-base-content focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        />
+        <button
+          type="submit"
+          data-role="meeting-human-invite-email-save"
+          class="min-h-11 shrink-0 rounded-lg border border-edge px-3 text-sm font-medium text-base-content lg:hover:bg-base-200 phx-submit-loading:opacity-60"
+        >
+          Save
+        </button>
+      </form>
+
+      <p
+        :if={@result.email_error}
+        class="mt-1 flex items-center gap-1.5 text-xs text-base-content"
+        data-role="meeting-human-invite-email-error"
+        role="alert"
+      >
+        <span class="hero-exclamation-circle size-4 shrink-0 text-error" aria-hidden="true"></span>
+        <span>{@result.email_error}</span>
+      </p>
     </div>
     """
   end

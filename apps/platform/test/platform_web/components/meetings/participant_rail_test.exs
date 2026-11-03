@@ -2503,4 +2503,80 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert ".meeting-ask .ask" =~ ~r/\.ask|data-held/
     end
   end
+
+  # ── task 01a18d0a-ec37 stage 2: the human Invite control ───────────────
+
+  describe "the human invite control" do
+    @state %{id: "rail", query: "", users: [], guest_host?: true, result: nil, error: nil}
+
+    defp rail_with_invite(participants, state) do
+      render_component(&ParticipantRail.participant_rail/1,
+        participants: participants,
+        agents_by_id: %{},
+        meeting: %{id: "m-1", host_participant_id: "u-1"},
+        human_invite: state
+      )
+    end
+
+    defp lazy(html, selector),
+      do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
+
+    test "is nested INSIDE the humans section, after the rows" do
+      html = rail_with_invite([human("Ada", "u-1"), agent("Bot", "a-1")], @state)
+
+      assert lazy(html, ~s([data-section="humans"] [data-role="meeting-human-invite"])) == 1
+      assert lazy(html, ~s([data-role="meeting-human-invite"])) == 1
+    end
+
+    test "is nested inside the humans section when that section is EMPTY" do
+      html = rail_with_invite([agent("Bot", "a-1")], @state)
+
+      assert html =~ "No people yet."
+      assert lazy(html, ~s([data-section="humans"] [data-role="meeting-human-invite"])) == 1
+    end
+
+    test "is absent when no state is passed (anonymous guests, the desktop left rail)" do
+      html = rail([human("Ada", "u-1")])
+      assert lazy(html, ~s([data-role="meeting-human-invite"])) == 0
+    end
+
+    test "a guest participant carries the info Guest badge; a member does not" do
+      html = rail([human("Ada", "u-1"), human("Priyanka (guest)", "u-2")])
+
+      badges =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-participant-id="u-2"] [data-role="participant-guest-badge"]))
+
+      assert Enum.count(badges) == 1
+      assert badges |> LazyHTML.attribute("class") |> hd() =~ "chip-info"
+
+      assert lazy(html, ~s([data-participant-id="u-1"] [data-role="participant-guest-badge"])) ==
+               0
+    end
+
+    # 01a18d0a's task review (validation 01a18d13-3017-700c), fixed in task
+    # 01a19ea6 stage 3: in the 312px desktop rail the badge sat beside the
+    # name as `shrink-0` and cut "Gus Guestperson (guest)" to "…(gu…". The
+    # badge must never share the name's line; it leads the guest sub-line.
+    test "the Guest badge never shares the name's line; the name carries its full title" do
+      html = rail([human("Guest Omega Longername (guest)", "u-2")])
+      row = ~s([data-participant-id="u-2"])
+      name_el = ~s(#{row} [data-role="participant-name"])
+      badge = ~s([data-role="participant-guest-badge"])
+
+      assert lazy(html, ~s(#{row} [data-role="participant-guest-line"] #{badge})) == 1
+      assert lazy(html, "#{name_el} ~ #{badge}") == 0
+      assert lazy(html, "#{name_el} #{badge}") == 0
+
+      [name] =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#{row} [data-role="participant-name"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(name, "title") == ["Guest Omega Longername (guest)"]
+      assert name |> LazyHTML.text() |> String.trim() == "Guest Omega Longername (guest)"
+    end
+  end
 end

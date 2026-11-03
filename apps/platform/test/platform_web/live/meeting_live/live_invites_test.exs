@@ -16,12 +16,14 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
 
   alias Platform.{Chat, Meetings, Repo}
   alias Platform.Accounts.User
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Tasks.Project
   alias PlatformWeb.MeetingLive.LiveInvites
 
   @guest_host_message "Guest links are not available: MEETING_GUEST_HOST is not configured."
   @generic_message "That invite could not be sent."
+  @expiry_message "That link could not be updated."
   @configured_host "meet.example.com"
 
   setup do
@@ -92,6 +94,13 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
 
   defp error_flash(socket), do: Map.get(socket.assigns.flash, "error")
 
+  # A guest row whose link lapsed an hour ago; no API mints one.
+  defp expire!(invite) do
+    invite
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -3600, :second))
+    |> Repo.update!()
+  end
+
   describe "seed/1 and open/1" do
     test "seed is closed and empty; open is the same but open" do
       seeded = socket()
@@ -114,24 +123,97 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
     end
   end
 
-  describe "commit_params/2" do
+  describe "commit_params/3" do
     test "one candidate is the highlighted row" do
-      assert LiveInvites.commit_params([%{id: "u-1"}], "ignored@example.test") ==
+      assert LiveInvites.commit_params([%{id: "u-1"}], "ignored@example.test", "anything") ==
                %{"kind" => "user", "id" => "u-1"}
     end
 
     test "zero candidates plus an address is the default guest row" do
-      assert LiveInvites.commit_params([], "guest@example.test") ==
+      assert LiveInvites.commit_params([], "guest@example.test", "guest@example.test") ==
                %{"kind" => "guest", "email" => "guest@example.test"}
     end
 
     test "several candidates highlight nothing" do
-      assert LiveInvites.commit_params([%{id: "u-1"}, %{id: "u-2"}], nil) == nil
-      assert LiveInvites.commit_params([%{id: "u-1"}, %{id: "u-2"}], "a@example.test") == nil
+      assert LiveInvites.commit_params([%{id: "u-1"}, %{id: "u-2"}], nil, "Guest") == nil
+
+      assert LiveInvites.commit_params([%{id: "u-1"}, %{id: "u-2"}], "a@example.test", "a@") ==
+               nil
     end
 
-    test "zero candidates and no address highlight nothing" do
-      assert LiveInvites.commit_params([], nil) == nil
+    # Task 01a19ea6: Enter commits a typed name just as it does an address.
+    test "zero candidates, no address and a typed name is the guest-by-name row" do
+      assert LiveInvites.commit_params([], nil, "  Guest Alpha ") ==
+               %{"kind" => "guest", "name" => "Guest Alpha"}
+    end
+
+    test "a blank query highlights nothing" do
+      assert LiveInvites.commit_params([], nil, "   ") == nil
+      assert LiveInvites.commit_params([], nil, "") == nil
+    end
+
+    # An address that produced no email option (already invited) is not a
+    # name.
+    test "an address-shaped query with no email option highlights nothing" do
+      assert LiveInvites.commit_params([], nil, "taken@example.test") == nil
+    end
+  end
+
+  describe "deliver/5 guest expiry (task 01a19ea6)" do
+    setup do
+      Application.put_env(:platform, :meeting_guest_host, @configured_host)
+      :ok
+    end
+
+    test "a guest added by name lasts until the meeting's scheduled end", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => " Guest Alpha "}, [], inviter.id)
+
+      assert invite.display_name == "Guest Alpha"
+      assert invite.email == nil
+
+      assert DateTime.compare(
+               Repo.get!(Invite, invite.id).expires_at,
+               meeting.scheduled_end_at
+             ) == :eq
+    end
+
+    test "a guest added by name to a meeting with no end gets the 24h fallback", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      meeting =
+        meeting
+        |> Ecto.Changeset.change(scheduled_start_at: nil, scheduled_end_at: nil)
+        |> Repo.update!()
+
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => "Guest Beta"}, [], inviter.id)
+
+      assert_in_delta DateTime.diff(invite.expires_at, DateTime.utc_now(), :second), 86_400, 10
+    end
+
+    test "an email guest keeps the 24h default", %{inviter: inviter, meeting: meeting} do
+      assert {:ok, %{invite: invite}} =
+               LiveInvites.deliver(
+                 meeting,
+                 "guest",
+                 %{"email" => "gamma@example.test"},
+                 [],
+                 inviter.id
+               )
+
+      assert_in_delta DateTime.diff(invite.expires_at, DateTime.utc_now(), :second), 86_400, 10
+    end
+
+    test "a blank name writes nothing", %{inviter: inviter, meeting: meeting} do
+      assert {:error, :blank_name} =
+               LiveInvites.deliver(meeting, "guest", %{"name" => "  "}, [], inviter.id)
+
+      assert Meetings.list_invites(meeting.id, include_revoked: true) == []
     end
   end
 
@@ -217,6 +299,141 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
     end
   end
 
+  describe "set_expiry/3 and renew/4" do
+    setup %{meeting: meeting} do
+      Application.put_env(:platform, :meeting_guest_host, @configured_host)
+
+      {:ok, %{invite: invite}} =
+        Meetings.invite_guest(meeting, %{display_name: "Guest Alpha", email: nil})
+
+      {:ok, invite: invite}
+    end
+
+    test "each allowlisted choice moves the row", %{meeting: meeting, invite: invite} do
+      updated =
+        LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
+
+      assert error_flash(updated) == nil
+      week = Repo.get!(Invite, invite.id).expires_at
+      assert DateTime.diff(week, DateTime.utc_now(), :second) > 6 * 86_400
+
+      LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "meeting_end"})
+
+      assert DateTime.compare(
+               Repo.get!(Invite, invite.id).expires_at,
+               meeting.scheduled_end_at
+             ) == :eq
+
+      LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "hours_24"})
+      day = Repo.get!(Invite, invite.id).expires_at
+      assert_in_delta DateTime.diff(day, DateTime.utc_now(), :second), 86_400, 10
+    end
+
+    test "an unknown choice raises and writes nothing", %{meeting: meeting, invite: invite} do
+      for choice <- ["forever", "2099-01-01T00:00:00Z", nil] do
+        assert_raise ArgumentError, fn ->
+          LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => choice})
+        end
+
+        assert_raise ArgumentError, fn ->
+          LiveInvites.renew(socket(), meeting, %{"id" => invite.id, "choice" => choice}, nil)
+        end
+      end
+
+      assert Repo.get!(Invite, invite.id).expires_at == invite.expires_at
+      assert length(Meetings.list_invites(meeting.id, include_revoked: true)) == 1
+    end
+
+    test "a forged invite id raises and writes nothing", %{
+      inviter: inviter,
+      meeting: meeting,
+      invite: invite
+    } do
+      {:ok, member_invite} =
+        LiveInvites.deliver(meeting, "user", %{"id" => inviter.id}, [inviter], inviter.id)
+
+      for id <- [member_invite.id, Ecto.UUID.generate(), "nope"] do
+        assert_raise ArgumentError, fn ->
+          LiveInvites.set_expiry(socket(), meeting, %{"id" => id, "choice" => "days_7"})
+        end
+
+        assert_raise ArgumentError, fn ->
+          LiveInvites.renew(socket(), meeting, %{"id" => id, "choice" => "days_7"}, inviter.id)
+        end
+      end
+
+      assert Repo.get!(Invite, invite.id).expires_at == invite.expires_at
+      assert length(Meetings.list_invites(meeting.id, include_revoked: true)) == 2
+    end
+
+    test "an expired row flashes on set and renews on New link", %{
+      inviter: inviter,
+      meeting: meeting,
+      invite: invite
+    } do
+      expired = expire!(invite)
+
+      refused =
+        LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
+
+      assert error_flash(refused) == @expiry_message
+      assert Repo.get!(Invite, invite.id).expires_at == expired.expires_at
+
+      renewed =
+        LiveInvites.renew(
+          socket(),
+          meeting,
+          %{"id" => invite.id, "choice" => "meeting_end"},
+          inviter.id
+        )
+
+      assert error_flash(renewed) == nil
+      assert [fresh] = Meetings.list_invites(meeting.id)
+      refute fresh.id == invite.id
+      assert fresh.display_name == "Guest Alpha"
+    end
+
+    test "renewing a live row flashes and writes nothing", %{
+      inviter: inviter,
+      meeting: meeting,
+      invite: invite
+    } do
+      refused =
+        LiveInvites.renew(
+          socket(),
+          meeting,
+          %{"id" => invite.id, "choice" => "days_7"},
+          inviter.id
+        )
+
+      assert error_flash(refused) == @expiry_message
+      assert [only] = Meetings.list_invites(meeting.id, include_revoked: true)
+      assert only.id == invite.id
+    end
+
+    test "renew with the guest host unset flashes the operator message", %{
+      inviter: inviter,
+      meeting: meeting,
+      invite: invite
+    } do
+      expire!(invite)
+      Application.delete_env(:platform, :meeting_guest_host)
+
+      refused =
+        LiveInvites.renew(
+          socket(),
+          meeting,
+          %{"id" => invite.id, "choice" => "days_7"},
+          inviter.id
+        )
+
+      assert error_flash(refused) == @guest_host_message
+      assert [only] = Meetings.list_invites(meeting.id, include_revoked: true)
+      assert only.id == invite.id
+      assert only.revoked_at == nil
+    end
+  end
+
   describe "commit/4" do
     test "a blank value is a no-op", %{inviter: inviter, meeting: meeting} do
       assert {:noop, _socket} = LiveInvites.commit(socket(), meeting, "   ", inviter.id)
@@ -234,6 +451,22 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
 
       assert [invite] = Meetings.list_invites(meeting.id)
       assert invite.email == "newcomer@example.test"
+      assert staged.assigns.meeting_invite_query == ""
+    end
+
+    # Task 01a19ea6: Enter on a typed name stages the guest-by-name row.
+    test "a typed name that matches nobody stages a guest by name", %{
+      inviter: inviter,
+      meeting: meeting
+    } do
+      Application.put_env(:platform, :meeting_guest_host, @configured_host)
+
+      assert {:staged, staged} = LiveInvites.commit(socket(), meeting, "Guest Delta", inviter.id)
+
+      assert [invite] = Meetings.list_invites(meeting.id)
+      assert invite.display_name == "Guest Delta"
+      assert invite.email == nil
+      assert DateTime.compare(invite.expires_at, meeting.scheduled_end_at) == :eq
       assert staged.assigns.meeting_invite_query == ""
     end
 

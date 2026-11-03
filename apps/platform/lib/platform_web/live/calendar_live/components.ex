@@ -949,7 +949,12 @@ defmodule PlatformWeb.CalendarLive.Components do
        `.cal-details` is overflow:hidden and `.cal-dbody` is the scroll
        region, so a floating dropdown would be clipped. No meeting-wide
        invite link: invites are minted per person. --%>
-    <.invite_list mode={:live} entries={@detail.invite_entries} id_prefix="calendar-detail-invite" />
+    <.invite_list
+      mode={:live}
+      entries={@detail.invite_entries}
+      id_prefix="calendar-detail-invite"
+      time_zone={@detail[:time_zone]}
+    />
     <div :if={@invite[:open]} data-role="calendar-detail-invite-expansion">
       <.invite_control
         mode={:live}

@@ -1101,6 +1101,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:candidate_error, :string, default: nil)
   attr(:captions_available, :boolean, default: true)
 
+  attr(:human_invite, :map,
+    default: nil,
+    doc: "`MeetingHumanInvite.rail_state/2` for the quickmeet rail, or nil (task 01a18d0a-ec37)."
+  )
+
   def meeting_panel(assigns) do
     ~H"""
     <div
@@ -1544,6 +1549,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         now={@agent_activity_now}
         invite_rows={@invite_rows}
         invite_event="quickmeet_invite_agent"
+        human_invite={@human_invite}
         candidates={@candidates}
         candidates_closed={@candidates_closed}
         candidate_events={@candidate_events}

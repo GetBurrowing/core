@@ -120,7 +120,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       mode: Keyword.fetch!(opts, :mode),
       removable: Keyword.get(opts, :removable, false),
       copy_url: Keyword.get(opts, :copy_url),
-      target: nil
+      target: nil,
+      id_prefix: Keyword.get(opts, :id_prefix, "meeting-invite"),
+      time_zone: Keyword.get(opts, :time_zone)
     })
   end
 
@@ -316,6 +318,16 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       assert attr(live, "data-commit-event") == ["meeting_invite_commit"]
       assert InviteControl.event(:draft, :commit) == "meeting_create_invite_commit"
       assert InviteControl.event(:live, :commit) == "meeting_invite_commit"
+    end
+
+    # Task 01a19ea6: a guest row's expiry and New link exist only in :live;
+    # a draft row has no link yet.
+    test "expiry and renew are live-only events" do
+      assert InviteControl.event(:live, :expiry) == "meeting_invite_expiry"
+      assert InviteControl.event(:live, :renew) == "meeting_invite_renew"
+
+      assert_raise ArgumentError, fn -> InviteControl.event(:draft, :expiry) end
+      assert_raise ArgumentError, fn -> InviteControl.event(:draft, :renew) end
     end
 
     test "the input has a name only when one is given" do
@@ -574,6 +586,382 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       bare = internal_entry() |> Map.delete(:removable)
 
       assert_raise KeyError, fn -> list([bare], :draft) end
+    end
+  end
+
+  # ── task 01a19ea6 stage 2: guest rows in :live ─────────────────────────
+
+  describe "invite_row/1 — a live guest row (task 01a19ea6 stage 2)" do
+    # Wed 4 Nov 2026, 21:00 UTC: the canvas's own example time.
+    @ends_at ~U[2026-11-04 21:00:00Z]
+
+    defp expiry(overrides \\ []) do
+      Map.merge(
+        %{
+          expires_at: DateTime.add(DateTime.utc_now(), 2 * 86_400, :second),
+          expired?: false,
+          meeting_end?: true
+        },
+        Map.new(overrides)
+      )
+    end
+
+    defp live_guest(overrides \\ []) do
+      guest_entry(
+        Keyword.merge(
+          [
+            id: "guest-1",
+            name: "Guest Alpha",
+            expiry: expiry(),
+            copy_url: "https://meet.test/g/abc"
+          ],
+          overrides
+        )
+      )
+    end
+
+    defp live_row(entry, opts \\ []),
+      do: row(entry, Keyword.merge([mode: :live, copy_url: entry.copy_url], opts))
+
+    test "Copy link is the primary action and copies the row's own link" do
+      html = live_row(live_guest())
+
+      copy = one(html, "[data-role=meeting-invite-copy]")
+      assert text_of(copy) == "Copy link"
+      assert attr(copy, "data-clipboard-text") == ["https://meet.test/g/abc"]
+      assert attr(copy, "phx-hook") == ["CopyToClipboard"]
+      assert attr(copy, "phx-update") == ["ignore"]
+      assert attr(copy, "data-copied-label") == ["Copied"]
+      assert attr(copy, "aria-label") == ["Copy link for Guest Alpha"]
+      assert count(html, "[data-role=meeting-invite-renew]") == 0
+    end
+
+    test "the copy button names a polite aria-live region the hook writes" do
+      html = live_row(live_guest(), id_prefix: "panel")
+
+      copy = one(html, "[data-role=meeting-invite-copy]")
+      status = one(html, "[data-role=meeting-invite-copy-status]")
+      assert attr(copy, "data-copy-status-target") == attr(status, "id")
+      assert attr(status, "id") == ["panel-copy-status-guest-1"]
+      assert attr(status, "aria-live") == ["polite"]
+      assert attr(status, "phx-update") == ["ignore"]
+    end
+
+    test "the expiry line states the time in the viewer's zone" do
+      # Asia/Tokyo: UTC+9 with no DST rules, so the expectation cannot move
+      # with a tz database update (America/Edmonton gave 14:00 on one run and
+      # 15:00 on the next, as the suite's tzdata changed Alberta's rules).
+      html = live_row(live_guest(expiry: expiry(expires_at: @ends_at)), time_zone: "Asia/Tokyo")
+
+      # 21:00 UTC on Wed 4 Nov is 06:00 on Thu 5 Nov in Tokyo.
+      assert text_at(html, "[data-role=meeting-invite-expiry-text]") ==
+               "Link works until Thu 5 Nov, 06:00"
+    end
+
+    test "with no zone the line is UTC and says so" do
+      html = live_row(live_guest(expiry: expiry(expires_at: @ends_at)))
+
+      assert text_at(html, "[data-role=meeting-invite-expiry-text]") ==
+               "Link works until Wed 4 Nov, 21:00 UTC"
+    end
+
+    test "the select offers the three choices behind a disabled prompt" do
+      html = live_row(live_guest(), id_prefix: "panel")
+
+      select = one(html, "[data-role=meeting-invite-expiry-select]")
+      assert attr(select, "aria-label") == ["Change link expiry for Guest Alpha"]
+      assert attr(select, "name") == ["choice"]
+      assert [id] = attr(select, "id")
+      assert String.starts_with?(id, "panel-expiry-form-guest-1-")
+
+      values = html |> q("[data-role=meeting-invite-expiry-select] option") |> attr("value")
+      assert values == ["", "meeting_end", "hours_24", "days_7"]
+
+      prompt = html |> q("[data-role=meeting-invite-expiry-select] option[value='']")
+      assert attr(prompt, "disabled") == [""]
+      assert attr(prompt, "selected") == [""]
+
+      assert text_at(html, "[data-role=meeting-invite-expiry-select] option[value=meeting_end]") ==
+               "Until the meeting ends"
+
+      form = one(html, "[data-role=meeting-invite-expiry-form]")
+      assert attr(form, "phx-change") == ["meeting_invite_expiry"]
+
+      assert html
+             |> q("[data-role=meeting-invite-expiry-form] input[name=invite_id]")
+             |> attr("value") == ["guest-1"]
+    end
+
+    test "without a future scheduled end: two choices and the fallback named" do
+      soon = DateTime.add(DateTime.utc_now(), 24 * 3600, :second)
+      html = live_row(live_guest(expiry: expiry(expires_at: soon, meeting_end?: false)))
+
+      values = html |> q("[data-role=meeting-invite-expiry-select] option") |> attr("value")
+      assert values == ["", "hours_24", "days_7"]
+
+      assert text_at(html, "[data-role=meeting-invite-expiry-text]") =~
+               ~r/^Link works until \w{3} \d{1,2} \w{3}, \d{2}:\d{2} UTC · no scheduled end, 24 hours$/
+    end
+
+    test "seven days on a meeting with no end drops the fallback note" do
+      week = DateTime.add(DateTime.utc_now(), 7 * 86_400, :second)
+      html = live_row(live_guest(expiry: expiry(expires_at: week, meeting_end?: false)))
+
+      refute text_at(html, "[data-role=meeting-invite-expiry-text]") =~ "no scheduled end"
+    end
+
+    test "an expired row reads Link expired, offers New link and no copy or select" do
+      gone = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      html =
+        live_row(live_guest(expiry: expiry(expires_at: gone, expired?: true), copy_url: nil))
+
+      assert text_at(html, "[data-role=meeting-invite-expiry-text]") == "Link expired"
+      assert count(html, "[data-role=meeting-invite-copy]") == 0
+      assert count(html, "[data-role=meeting-invite-copy-status]") == 0
+      assert count(html, "[data-role=meeting-invite-expiry-select]") == 0
+      assert count(html, "[data-clipboard-text]") == 0
+
+      renew = one(html, "[data-role=meeting-invite-renew]")
+      assert text_of(renew) == "New link"
+      assert attr(renew, "phx-click") == ["meeting_invite_renew"]
+      assert attr(renew, "phx-value-id") == ["guest-1"]
+      assert attr(renew, "phx-value-choice") == ["meeting_end"]
+    end
+
+    test "member, external and draft rows get no expiry line" do
+      for html <- [
+            live_row(internal_entry(copy_url: nil)),
+            live_row(external_account_entry(copy_url: nil)),
+            row(live_guest(), mode: :draft, removable: true)
+          ] do
+        assert count(html, "[data-role=meeting-invite-expiry]") == 0
+        assert count(html, "[data-role=meeting-invite-renew]") == 0
+      end
+    end
+
+    test "no meeting-wide link, share or QR control anywhere on the row" do
+      html = live_row(live_guest())
+
+      for pattern <- [~r/share/i, ~r/qr/i, ~r/meeting link/i] do
+        refute html =~ pattern
+      end
+    end
+  end
+
+  # ── task 01a18d0a-ec37 stage 2 ─────────────────────────────────────────
+
+  describe "invite_control/1 — a typed name that matches nobody" do
+    test "offers ONE guest option carrying the name, and no external option" do
+      html = control(candidates: [], email_option: nil, query: "  Dana Whitfield ")
+
+      assert count(html, "[data-role=meeting-invite-option]") == 1
+      option = one(html, "[data-role=meeting-invite-option]")
+      assert attr(option, "data-option") == ["guest-name"]
+      assert attr(option, "phx-value-kind") == ["guest"]
+      assert attr(option, "phx-value-name") == ["Dana Whitfield"]
+      assert attr(option, "phx-value-email") == []
+
+      # Canvas 01a19ea7 r1 copy (task 01a19ea6 stage 2), curly quotes.
+      assert text_at(html, "[data-role=meeting-invite-option-title]") ==
+               "Add guest “Dana Whitfield”"
+
+      assert text_at(html, "[data-role=meeting-invite-option-detail]") ==
+               "you'll share the link"
+
+      assert count(html, "[data-option=external]") == 0
+    end
+
+    test "a whitespace-only query still renders no dropdown" do
+      html = control(candidates: [], email_option: nil, query: "   ")
+      assert count(html, "[data-role=meeting-invite-dropdown]") == 0
+    end
+  end
+
+  @human_users [
+    %User{
+      id: "3f1a0b6e-0000-4000-8000-0000000000a1",
+      name: "Dana Whitfield",
+      email: "dana.whitfield.has.a.very.long.address@example.test"
+    },
+    %User{id: "3f1a0b6e-0000-4000-8000-0000000000a2", name: "Dana Cole", email: "dc@example.test"}
+  ]
+
+  defp human_state(overrides) do
+    Map.merge(
+      %{
+        id: "rail",
+        query: "",
+        users: [],
+        guest_host?: true,
+        result: nil,
+        error: nil
+      },
+      Map.new(overrides)
+    )
+  end
+
+  defp human(overrides),
+    do: render_component(&InviteControl.human_invite/1, %{state: human_state(overrides)})
+
+  defp guest_result(overrides) do
+    Map.merge(
+      %{
+        invite: %Platform.Meetings.Invite{id: "inv-1", email: nil},
+        name: "Dana Whitfield",
+        url: "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv",
+        email_open?: false,
+        email_error: nil
+      },
+      Map.new(overrides)
+    )
+  end
+
+  describe "human_invite/1 — the field" do
+    test "is the inline 'Invite' field with 'Type a name…' and no dropdown while empty" do
+      html = human([])
+
+      input = one(html, "[data-role=meeting-human-invite-search]")
+      assert attr(input, "placeholder") == ["Type a name…"]
+      assert attr(input, "name") == ["query"]
+      assert html |> one("form") |> attr("phx-change") == ["meeting_human_invite_search"]
+      assert text_at(html, "[data-role=meeting-human-invite] label") == "Invite"
+      assert count(html, "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+
+    test "whitespace opens nothing" do
+      assert count(human(query: "   "), "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+  end
+
+  describe "human_invite/1 — the dropdown" do
+    setup do
+      %{html: human(query: "Dana Whitfield", users: @human_users)}
+    end
+
+    test "lists the user rows from the resolver and the guest row LAST", %{html: html} do
+      buttons =
+        html
+        |> q("[data-role=meeting-human-invite-dropdown] > button")
+        |> Enum.map(&(attr(&1, "data-role") |> List.first()))
+
+      assert buttons == [
+               "meeting-human-invite-user",
+               "meeting-human-invite-user",
+               "meeting-human-invite-guest"
+             ]
+
+      assert text_at(html, "[data-role=meeting-human-invite-guest-label]") ==
+               ~s(Invite "Dana Whitfield" as guest)
+
+      assert text_at(html, "[data-role=meeting-human-invite-guest-badge]") == "Guest"
+    end
+
+    test "user rows carry the rendered id; name is kept whole and the email truncates", %{
+      html: html
+    } do
+      [first | _] = html |> q("[data-role=meeting-human-invite-user]") |> Enum.to_list()
+      assert attr(first, "phx-value-id") == [hd(@human_users).id]
+      assert attr(first, "phx-click") == ["meeting_human_invite_user"]
+
+      name = html |> q("[data-role=meeting-human-invite-user-name]") |> Enum.at(0)
+      assert class_of(name) =~ "shrink-0"
+      assert class_of(name) =~ "whitespace-nowrap"
+      email = html |> q("[data-role=meeting-human-invite-user-email]") |> Enum.at(0)
+      assert class_of(email) =~ "min-w-0"
+      assert class_of(email) =~ "truncate"
+    end
+
+    test "the guest row is set off by a divider and uses the info badge", %{html: html} do
+      guest = one(html, "[data-role=meeting-human-invite-guest]")
+      assert class_of(guest) =~ "border-t border-edge"
+      assert attr(guest, "phx-click") == ["meeting_human_invite_guest"]
+
+      badge = one(html, "[data-role=meeting-human-invite-guest-badge]")
+      assert class_of(badge) =~ "chip-info"
+    end
+
+    test "a name matching nobody still gets the guest row, with no divider above it" do
+      html = human(query: "Nobody Atall", users: [])
+
+      assert count(html, "[data-role=meeting-human-invite-user]") == 0
+      guest = one(html, "[data-role=meeting-human-invite-guest]")
+      refute class_of(guest) =~ "border-t"
+    end
+
+    test "with no guest host the guest row is ABSENT" do
+      html = human(query: "Dana Whitfield", users: @human_users, guest_host?: false)
+
+      assert count(html, "[data-role=meeting-human-invite-user]") == 2
+      assert count(html, "[data-role=meeting-human-invite-guest]") == 0
+    end
+
+    test "no guest host and no match: no dropdown at all" do
+      html = human(query: "Nobody", users: [], guest_host?: false)
+      assert count(html, "[data-role=meeting-human-invite-dropdown]") == 0
+    end
+  end
+
+  describe "human_invite/1 — the persistent guest result" do
+    test "shows name, Guest badge, invited, the FULL link in mono, primary Copy link and + Add email" do
+      html = human(result: guest_result([]))
+
+      assert text_at(html, "[data-role=meeting-human-invite-result-name]") == "Dana Whitfield"
+      assert text_at(html, "[data-role=meeting-human-invite-result-badge]") == "Guest"
+
+      link = one(html, "[data-role=meeting-human-invite-link]")
+      assert text_of(link) == "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv"
+      assert class_of(link) =~ "font-mono"
+      refute class_of(link) =~ "truncate"
+
+      copy = one(html, "[data-role=meeting-human-invite-copy]")
+      assert text_of(copy) == "Copy link"
+      assert attr(copy, "phx-hook") == ["CopyToClipboard"]
+
+      assert attr(copy, "data-clipboard-text") == [
+               "https://meet.example.test/g/AbCdEfGhIjKlMnOpQrStUv"
+             ]
+
+      assert attr(copy, "data-copied-label") == ["Copied"]
+      assert class_of(copy) =~ "bg-primary"
+      assert class_of(copy) =~ "text-primary-content"
+      assert class_of(copy) =~ "[&.copy-copied]:bg-success"
+      assert attr(copy, "phx-update") == ["ignore"]
+
+      assert text_at(html, "[data-role=meeting-human-invite-add-email]") ==
+               "+ Add email (optional)"
+
+      assert count(html, "[data-role=meeting-human-invite-email-form]") == 0
+    end
+
+    test "Add email opens a form; its error renders without losing the link" do
+      html =
+        human(
+          result: guest_result(email_open?: true, email_error: "Email must be an email address.")
+        )
+
+      assert count(html, "[data-role=meeting-human-invite-email-form]") == 1
+      assert count(html, "[data-role=meeting-human-invite-add-email]") == 0
+
+      assert text_at(html, "[data-role=meeting-human-invite-email-error]") ==
+               "Email must be an email address."
+
+      assert count(html, "[data-role=meeting-human-invite-link]") == 1
+    end
+
+    test "a saved email is shown and the Add email affordance goes" do
+      invite = %Platform.Meetings.Invite{id: "inv-1", email: "dana@example.test"}
+      html = human(result: guest_result(invite: invite))
+
+      assert text_at(html, "[data-role=meeting-human-invite-email-saved]") == "dana@example.test"
+      assert count(html, "[data-role=meeting-human-invite-add-email]") == 0
+    end
+
+    test "carries no raw colour and no emoji" do
+      html = human(query: "Dana Whitfield", users: @human_users, result: guest_result([]))
+
+      refute html =~ ~r/#[0-9a-fA-F]{3,8}\b/
+      refute html =~ ~r/[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]/u
     end
   end
 end

@@ -213,8 +213,10 @@ defmodule Platform.Meetings.InvitesTest do
       assert payload.display_name == "Jane Doe"
       assert is_binary(payload.guest_space_id)
 
-      assert url =~ meeting.slug
-      assert url =~ token
+      # The URL handed out is the short link (task 01a18d0a-ec37); the token
+      # itself is never in it.
+      assert url == "https://#{GuestInvite.guest_host()}/g/#{persisted.short_code}"
+      refute url =~ token
     end
 
     # THE test. Two guests, one meeting: two rows, two DIFFERENT tokens, and

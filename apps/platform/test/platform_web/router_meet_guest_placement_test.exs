@@ -120,6 +120,33 @@ defmodule PlatformWeb.RouterMeetGuestPlacementTest do
     end
   end
 
+  describe "short guest link /g/:code (task 01a18d0a-ec37)" do
+    @code String.duplicate("A", 22)
+
+    test "/g/<22 chars> on the meet host reaches the short-link controller" do
+      # Both routes are two segments in one scope; only declaration order
+      # keeps `g` from being read as a meeting slug.
+      assert %{
+               route: "/g/:code",
+               plug: PlatformWeb.GuestShortLinkController,
+               plug_opts: :show,
+               path_params: %{"code" => @code}
+             } = info("/g/#{@code}", @meet_host)
+    end
+
+    test "/<slug>/<token> still reaches MeetingLive's guest session" do
+      assert %{route: "/:slug/:token", path_params: %{"slug" => "standup", "token" => "tok"}} =
+               info("/standup/tok", @meet_host)
+
+      assert {PlatformWeb.MeetingLive, :guest_meeting} =
+               live_view_and_session("/standup/tok", @meet_host)
+    end
+
+    test "/g/:code is not reachable on the app host" do
+      refute match?(%{route: "/g/:code"}, info("/g/#{@code}", @app_host))
+    end
+  end
+
   describe "positive control on the app host" do
     test "/tasks/:task_id on the app host is untouched by the hoist" do
       # Without this, a change that made the guest scope match-any-host

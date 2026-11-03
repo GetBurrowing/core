@@ -382,6 +382,22 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
+  # One guest row's link expiry, and a new link for a lapsed row (task
+  # 01a19ea6), under the same rule as staging: the meeting is the open
+  # selection, and `LiveInvites` checks the invite id against it.
+  def handle_event("meeting_invite_expiry", %{"choice" => _} = params, socket) do
+    meeting = selected_meeting!(socket)
+
+    {:noreply, socket |> LiveInvites.set_expiry(meeting, params) |> refresh_selected()}
+  end
+
+  def handle_event("meeting_invite_renew", %{"id" => _, "choice" => _} = params, socket) do
+    meeting = selected_meeting!(socket)
+    inviter_id = socket.assigns.current_user_record.id
+
+    {:noreply, socket |> LiveInvites.renew(meeting, params, inviter_id) |> refresh_selected()}
+  end
+
   # Approve / Revert on a tentative hold: the same AgentAccess.handle/4 the
   # Inbox consent card calls, keyed by the hold's consent.
   def handle_event("consent", %{"verb" => verb}, socket) when verb in ~w(approve revert) do
@@ -749,9 +765,12 @@ defmodule PlatformWeb.CalendarLive do
         })
 
       "meeting" ->
+        # The viewer's zone rides along for the guest rows' expiry line
+        # (task 01a19ea6 stage 2), the same zone `when` above is printed in.
         base
         |> Map.merge(meeting_info(entry.meeting))
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
+        |> Map.put(:time_zone, zone)
 
       "external" ->
         Map.merge(base, %{

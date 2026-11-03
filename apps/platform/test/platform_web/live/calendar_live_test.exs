@@ -1226,6 +1226,146 @@ defmodule PlatformWeb.CalendarLiveTest do
       assert length(invite_rows(meeting)) == 1
     end
 
+    # ── Guest link by name (task 01a19ea6 stage 2) ─────────────────────
+
+    defp end_in_two_hours!(meeting) do
+      # Microsecond precision: the column is `:utc_datetime_usec`.
+      ends_at = DateTime.add(DateTime.utc_now(), 2 * 3600, :second)
+
+      meeting
+      |> Ecto.Changeset.change(scheduled_end_at: ends_at)
+      |> Repo.update!()
+    end
+
+    defp local_label(%DateTime{} = at, zone) do
+      local = DateTime.shift_zone!(at, zone)
+      suffix = if zone == "Etc/UTC", do: " UTC", else: ""
+      "Link works until " <> Elixir.Calendar.strftime(local, "%a %-d %b, %H:%M") <> suffix
+    end
+
+    defp guest_row(guest),
+      do: "#{@in_details} [data-role=meeting-invite-row][data-entry-id='#{guest.id}']"
+
+    defp expiry_text(view, guest) do
+      view
+      |> element("#{guest_row(guest)} [data-role=meeting-invite-expiry-text]")
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.split()
+      |> Enum.join(" ")
+    end
+
+    test "a typed name becomes a guest row with Copy link and the meeting-end line", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      meeting = end_in_two_hours!(meeting)
+      view = open_meeting(conn, zone)
+      add_people(view)
+      search(view, "Guest Alpha")
+
+      assert has_element?(
+               view,
+               "#{@in_details} [data-role=meeting-invite-option-title]",
+               "Add guest “Guest Alpha”"
+             )
+
+      view
+      |> element("#{@in_details} [data-role=meeting-invite-option][data-option=guest-name]")
+      |> render_click()
+
+      assert [guest] = Enum.filter(invite_rows(meeting), &(&1.display_name == "Guest Alpha"))
+      assert guest.email == nil
+      assert DateTime.compare(guest.expires_at, meeting.scheduled_end_at) == :eq
+
+      assert has_element?(
+               view,
+               "#{guest_row(guest)} [data-role=meeting-invite-copy]",
+               "Copy link"
+             )
+
+      assert expiry_text(view, guest) == local_label(meeting.scheduled_end_at, zone)
+    end
+
+    test "choosing 7 days moves the row's expiry and its line", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      meeting = end_in_two_hours!(meeting)
+
+      {:ok, %{invite: guest}} =
+        Platform.Meetings.invite_guest(meeting, %{
+          display_name: "Guest Beta",
+          expires_at: meeting.scheduled_end_at
+        })
+
+      view = open_meeting(conn, zone)
+
+      view
+      |> element("#{guest_row(guest)} [data-role=meeting-invite-expiry-form]")
+      |> render_change(%{"invite_id" => guest.id, "choice" => "days_7"})
+
+      moved = Repo.get!(Platform.Meetings.Invite, guest.id).expires_at
+      assert DateTime.diff(moved, DateTime.utc_now(), :second) > 6 * 86_400
+      assert expiry_text(view, guest) == local_label(moved, zone)
+    end
+
+    test "an expired guest row offers New link, which replaces the row", %{
+      conn: conn,
+      zone: zone,
+      meeting: meeting
+    } do
+      {:ok, %{invite: old}} =
+        Platform.Meetings.invite_guest(meeting, %{display_name: "Guest Gamma"})
+
+      old
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -3600, :second))
+      |> Repo.update!()
+
+      view = open_meeting(conn, zone)
+      assert expiry_text(view, old) == "Link expired"
+      refute has_element?(view, "#{guest_row(old)} [data-role=meeting-invite-copy]")
+      refute has_element?(view, "#{guest_row(old)} [data-clipboard-text]")
+
+      view |> element("#{guest_row(old)} [data-role=meeting-invite-renew]") |> render_click()
+
+      assert [fresh] = Enum.filter(invite_rows(meeting), &(&1.display_name == "Guest Gamma"))
+      refute fresh.id == old.id
+      refute has_element?(view, guest_row(old))
+
+      assert has_element?(
+               view,
+               "#{guest_row(fresh)} [data-role=meeting-invite-copy]",
+               "Copy link"
+             )
+    end
+
+    test "a forged expiry event naming another meeting's guest raises and writes nothing", %{
+      conn: conn,
+      zone: zone,
+      today: today
+    } do
+      # Weeks out, so the only meeting chip on screen is the selected one.
+      other = seed_meeting!(zone, Date.add(today, 40), "scheduled")
+
+      {:ok, %{invite: foreign}} =
+        Platform.Meetings.invite_guest(other, %{display_name: "Guest Delta"})
+
+      view = open_meeting(conn, zone)
+      Process.flag(:trap_exit, true)
+
+      reason =
+        catch_exit(
+          render_hook(view, "meeting_invite_expiry", %{"id" => foreign.id, "choice" => "days_7"})
+        )
+
+      assert {{%ArgumentError{}, _stacktrace}, _from} = reason
+      assert Repo.get!(Platform.Meetings.Invite, foreign.id).expires_at == foreign.expires_at
+    end
+
     test "nothing in the details copies or links a meeting-wide invite", %{
       conn: conn,
       zone: zone

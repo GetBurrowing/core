@@ -167,8 +167,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   use Phoenix.Component
 
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
+  alias PlatformWeb.Components.Meetings.InviteControl
 
   import PlatformWeb.AvatarComponents
+  import PlatformWeb.CoreComponents, only: [chip: 1]
   import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   alias Platform.Agents.Agent
@@ -426,6 +428,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     ran), so this draws as its OWN list item rather than literally the
     departed row staying in place — same undo, same 8-second window,
     different presentation of the same fact.
+    """
+  )
+
+  attr(:human_invite, :map,
+    default: nil,
+    doc: """
+    The name-first Invite control's state (task 01a18d0a-ec37 stage 2), from
+    `PlatformWeb.ChatLive.MeetingHumanInvite.rail_state/2`, or `nil` for no
+    control. When set, `InviteControl.human_invite/1` renders INSIDE the
+    humans section, after the rows (and after the empty state when there are
+    none), so the person invited appears in the list they were invited
+    from. `CallShell.call_rail/1` forwards it; the desktop left rail passes
+    nothing, so the control exists once per document.
     """
   )
 
@@ -1002,19 +1017,30 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               class="flex-shrink-0"
             />
             <div class="min-w-0 flex-1">
+              <%!-- The NAME owns the whole first line (task 01a19ea6 stage 3,
+                   carrying 01a18d0a's review fix). The info Guest badge used
+                   to sit beside it as `shrink-0`, so in the 312px desktop
+                   rail "Gus Guestperson (guest)" was cut to "Gus
+                   Guestperson (gu…" while the badge kept its 50px: the badge
+                   took width from the name, which design canvas 01a18d0b
+                   forbids. The badge now leads the sub-line instead, and the
+                   name truncates only when the row itself cannot hold it,
+                   with the full name in `title`. --%>
               <div
                 class="truncate text-xs font-medium text-base-content"
                 data-role="participant-name"
+                title={p.display_name || "Unknown participant"}
               >
                 {p.display_name || "Unknown participant"}
               </div>
               <%!-- Stage 4 of task 019f2483: participants joined via a
                    guest invite carry a `" (guest)"` suffix on their
-                   display_name (see `Platform.Meetings.guest_livekit_token/2`
-                   → `meetings.ex:1269`). Surface that as a small
-                   sub-line so hosts can visually distinguish invited
-                   guests from account-holding humans without reading
-                   the suffix. --%>
+                   display_name (see `Platform.Meetings.guest_livekit_token/2`).
+                   Surface that as a small sub-line so hosts can visually
+                   distinguish invited guests from account-holding humans
+                   without reading the suffix. The info Guest badge (design
+                   canvas 01a18d0b-4f5a, the same badge the human invite
+                   control's guest row and result carry) leads it. --%>
               <%!-- `/60`, not `/50` — measured against the rail's actual
                    painted background, `/50` is 3.89:1 in the light theme at
                    this 11px size, under the 4.5:1 AA text floor; `/60` is
@@ -1022,10 +1048,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    above for how this was measured. --%>
               <div
                 :if={MeetingLive.via_guest_link?(p)}
-                class="truncate text-[11px] text-subtle"
-                data-role="participant-via-guest-link"
+                class="mt-0.5 flex min-w-0 items-center gap-1.5"
+                data-role="participant-guest-line"
               >
-                via guest link
+                <.chip tone="info" class="shrink-0 text-[10px]" data-role="participant-guest-badge">
+                  Guest
+                </.chip>
+                <span class="truncate text-[11px] text-subtle" data-role="participant-via-guest-link">
+                  via guest link
+                </span>
               </div>
             </div>
 
@@ -1053,6 +1084,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             No people yet.
           </li>
         </ul>
+
+        <InviteControl.human_invite :if={@human_invite} state={@human_invite} />
       </section>
 
       <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0 ("Design direction:
