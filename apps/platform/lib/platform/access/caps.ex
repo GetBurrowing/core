@@ -36,26 +36,32 @@ defmodule Platform.Access.Caps do
   @spec for_runtime(AgentRuntime.t()) :: %{String.t() => [capped()]}
   def for_runtime(%AgentRuntime{} = runtime) do
     profile = RuntimeProfiles.get(runtime)
-    scope = Scope.for_runtime(runtime, profile)
 
-    case scope do
-      %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner} ->
-        runtime
-        |> RuntimeProfiles.tool_profile(profile)
-        |> Enum.uniq()
-        |> Enum.reduce(%{}, fn bundle, acc ->
-          case capped_in(bundle, own, owner) do
-            [] -> acc
-            entries -> Map.put(acc, bundle, entries)
-          end
-        end)
-
-      _ ->
-        %{}
-    end
+    runtime
+    |> Scope.for_runtime(profile)
+    |> from_scope(RuntimeProfiles.tool_profile(runtime, profile))
   end
 
   def for_runtime(_), do: %{}
+
+  @doc """
+  The capped permissions of `bundles` over an already-built runtime Scope.
+  A Scope without both an own and an owner side caps nothing.
+  """
+  @spec from_scope(Scope.t(), [String.t()]) :: %{String.t() => [capped()]}
+  def from_scope(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, bundles)
+      when is_list(bundles) do
+    bundles
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn bundle, acc ->
+      case capped_in(bundle, own, owner) do
+        [] -> acc
+        entries -> Map.put(acc, bundle, entries)
+      end
+    end)
+  end
+
+  def from_scope(_scope, _bundles), do: %{}
 
   @doc """
   The runtime's owner and the owner's Scope org (the org a grant to lift the

@@ -30,7 +30,7 @@ defmodule Platform.Access.PermissionLabelsTest do
   test "every registered permission gets a non-empty label that is not its key" do
     for permission <- Registry.permission_names() do
       label = PermissionLabels.label(permission)
-      assert is_binary(label) and String.trim(label) != "", "#{permission} has an empty label"
+      assert String.trim(label) != "", "#{permission} has an empty label"
       refute label == permission, "#{permission} fell through to its raw key"
     end
   end

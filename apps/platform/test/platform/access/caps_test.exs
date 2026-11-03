@@ -54,7 +54,7 @@ defmodule Platform.Access.CapsTest do
     runtime =
       Repo.insert!(%AgentRuntime{
         agent_id: agent.id,
-        owner_user_id: owner && owner.id,
+        owner_user_id: owner.id,
         runtime_id: "caps-#{n}",
         status: "active"
       })
@@ -137,6 +137,10 @@ defmodule Platform.Access.CapsTest do
     assert Caps.for_runtime(runtime) == %{}
   end
 
+  test "a scope with no own/owner sides caps nothing" do
+    assert Caps.from_scope(%Platform.Access.Scope{}, ["prototype"]) == %{}
+  end
+
   describe "owner/1" do
     test "the owner and the owner's scope org", %{org: org} do
       owner = member!(org, "member")
@@ -146,10 +150,10 @@ defmodule Platform.Access.CapsTest do
       assert id == owner.id
     end
 
-    test "an ownerless runtime has no user and no org", %{org: _org} do
-      {runtime, _agent} = runtime!(nil, ["prototype"])
-
-      assert Caps.owner(runtime) == %{user: nil, org_id: nil}
+    test "an ownerless runtime has no user and no org" do
+      # agent_runtimes.owner_user_id is NOT NULL, so an ownerless runtime is
+      # only ever an in-memory struct.
+      assert Caps.owner(%AgentRuntime{owner_user_id: nil}) == %{user: nil, org_id: nil}
     end
   end
 end
