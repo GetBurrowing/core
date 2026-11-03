@@ -102,6 +102,7 @@ import {
   normalizeSlots,
   padRows,
   phoneLine,
+  viewAttr,
   reconcileSlots,
   sheetWatchingText,
   takeOverItems,
@@ -721,6 +722,7 @@ const GameStream = {
     this.roster = normalizeRoster(raw)
     this.multi = this.roster.multi
     this.rosterKnown = true
+    this.el.dataset.gsView = viewAttr({ roster: this.roster, peerId: this.peerId })
     if (reconcile && this.multi) {
       const kept = reconcileSlots(this.mine, this.roster, this.peerId)
       if (kept.size !== this.mine.size) return this.setMine(kept)

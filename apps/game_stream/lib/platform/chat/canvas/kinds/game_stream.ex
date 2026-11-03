@@ -696,7 +696,8 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
 
   defp lookup_roster(_), do: nil
 
-  defp normalize_roster(roster) when is_map(roster) do
+  @doc false
+  def normalize_roster(roster) when is_map(roster) do
     slots =
       for {slot, holder} <- Map.get(roster, :slots) || %{},
           slot = to_slot(slot),
@@ -714,6 +715,8 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
 
     %{
       multi: Map.get(roster, :multi) == true,
+      per_slot: Map.get(roster, :per_slot) == true,
+      views: normalize_views(Map.get(roster, :views)),
       max_players: max,
       slots: slots,
       spectators: Map.get(roster, :spectators) || 0,
@@ -721,8 +724,44 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
     }
   end
 
-  defp normalize_roster(_),
-    do: %{multi: false, max_players: 1, slots: %{}, spectators: 0, names: []}
+  def normalize_roster(_),
+    do: %{
+      multi: false,
+      per_slot: false,
+      views: %{},
+      max_players: 1,
+      slots: %{},
+      spectators: 0,
+      names: []
+    }
+
+  defp normalize_views(views) when is_map(views) do
+    for {peer_id, v} <- views, is_map(v), view = normalize_view(v), view != nil, into: %{} do
+      {peer_id, view}
+    end
+  end
+
+  defp normalize_views(_), do: %{}
+
+  defp normalize_view(v) do
+    case {Map.get(v, :view) || Map.get(v, "view"), Map.get(v, :slot, Map.get(v, "slot"))} do
+      {"shared", _} -> %{view: "shared"}
+      {"slot", n} when is_integer(n) and n >= 0 -> %{view: "slot", slot: n}
+      _ -> nil
+    end
+  end
+
+  # "your camera" / "shared view" on a per-slot host once this peer's view is
+  # reported, "" otherwise. Mirrors `viewLabel` in game_stream_roster.js.
+  defp view_label(%{per_slot: true, views: views}, peer_id) when not is_nil(peer_id) do
+    case Map.get(views, peer_id) do
+      %{view: "slot"} -> "your camera"
+      %{view: "shared"} -> "shared view"
+      _ -> ""
+    end
+  end
+
+  defp view_label(_roster, _peer_id), do: ""
 
   defp to_slot(n) when is_integer(n) and n >= 0, do: n
 
@@ -775,7 +814,9 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           else: "Ends the session for #{people} people"
         ),
       watch: if(mine == [], do: watch_view(roster, free)),
-      phone_line: phone_line(roster, mine, player_peers, peer_id, watching)
+      phone_line:
+        phone_line(roster, mine, player_peers, peer_id, watching)
+        |> with_view_label(view_label(roster, peer_id))
     }
   end
 
@@ -814,6 +855,9 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       line: "All #{roster.max_players} player slots are taken. You are watching.",
       join: nil
     }
+
+  defp with_view_label(line, ""), do: line
+  defp with_view_label(line, label), do: line <> " · " <> label
 
   defp phone_line(_roster, [], player_peers, _peer_id, watching),
     do: "You are watching · #{length(player_peers)} playing · #{watching}"

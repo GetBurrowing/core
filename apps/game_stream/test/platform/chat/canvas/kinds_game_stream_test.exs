@@ -725,6 +725,63 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
   # ── Task 01a1557a-efdd stage 2: the Game view's stage chrome ─────────────
 
+  describe "per-slot view label (01a1a34c)" do
+    @three %{0 => @sam, 1 => @alex, 2 => %{peer_id: "p3", name: "C", user_id: "u3"}}
+
+    test "per_slot true with an own slot view appends 'your camera'" do
+      r =
+        roster(@three, %{
+          spectators: 2,
+          per_slot: true,
+          views: %{"p-alex" => %{view: "slot", slot: 1}}
+        })
+        |> GameStreamKind.normalize_roster()
+
+      assert GameStreamKind.roster_view(r, "p-alex").phone_line ==
+               "You are P2 · 2 others playing · 2 watching · your camera"
+    end
+
+    test "per_slot true with an own shared view appends 'shared view'; no report appends nothing" do
+      r =
+        roster(@three, %{spectators: 2, per_slot: true, views: %{"p-alex" => %{view: "shared"}}})
+        |> GameStreamKind.normalize_roster()
+
+      assert GameStreamKind.roster_view(r, "p-alex").phone_line ==
+               "You are P2 · 2 others playing · 2 watching · shared view"
+
+      assert GameStreamKind.roster_view(r, "p-sam").phone_line ==
+               "You are P1 · 2 others playing · 2 watching"
+    end
+
+    test "per_slot false yields the pre-existing phrase exactly" do
+      r =
+        roster(@three, %{
+          spectators: 2,
+          per_slot: false,
+          views: %{"p-alex" => %{view: "slot", slot: 1}}
+        })
+        |> GameStreamKind.normalize_roster()
+
+      assert GameStreamKind.roster_view(r, "p-alex").phone_line ==
+               "You are P2 · 2 others playing · 2 watching"
+    end
+
+    test "the rendered first frame carries the suffix" do
+      html =
+        render_multi(
+          roster(@three, %{
+            spectators: 2,
+            per_slot: true,
+            views: %{"p-alex" => %{view: "slot", slot: 1}}
+          }),
+          peer_id: "p-alex"
+        )
+
+      assert text(one(html, "[data-gs-roster-line-text]")) ==
+               "You are P2 · 2 others playing · 2 watching · your camera"
+    end
+  end
+
   describe "chrome (Game view, 01a1557a-efdd stage 2)" do
     setup do
       enable!()
