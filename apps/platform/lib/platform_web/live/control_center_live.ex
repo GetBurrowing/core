@@ -777,9 +777,17 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("save_agent_restrictions", params, socket),
     do: RuntimeEvents.handle("save_agent_restrictions", params, socket)
 
-  defp handle_control_event(name, params, socket)
-       when name in ~w(open_grant_panel close_grant_panel grant_path_change grant_capped_permission),
-       do: GrantEvents.handle(name, params, socket)
+  defp handle_control_event("open_grant_panel", params, socket),
+    do: GrantEvents.handle("open_grant_panel", params, socket)
+
+  defp handle_control_event("close_grant_panel", params, socket),
+    do: GrantEvents.handle("close_grant_panel", params, socket)
+
+  defp handle_control_event("grant_path_change", params, socket),
+    do: GrantEvents.handle("grant_path_change", params, socket)
+
+  defp handle_control_event("grant_capped_permission", params, socket),
+    do: GrantEvents.handle("grant_capped_permission", params, socket)
 
   # ── Add agent to space ─────────────────────────────────────────────
 
@@ -1159,6 +1167,11 @@ defmodule PlatformWeb.ControlCenterLive do
       >
         <span class="hero-plus h-6 w-6" />
       </button>
+
+      <PlatformWeb.ControlCenter.RuntimePanel.grant_panel
+        :if={@grant_panel && @can_grant?}
+        panel={@grant_panel}
+      />
     </div>
     """
   end

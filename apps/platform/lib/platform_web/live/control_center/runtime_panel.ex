@@ -67,6 +67,8 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
   attr(:can_grant?, :boolean, default: false)
+  # Not rendered here (the panel lives at the LiveView root, see
+  # `grant_panel/1`); passed so the rows re-render when a grant closes it.
   attr(:grant_panel, :map, default: nil)
 
   def federation_connection_panel(assigns) do
@@ -256,8 +258,6 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </p>
       </div>
 
-      <.grant_panel :if={@grant_panel && @can_grant?} panel={@grant_panel} />
-
       <%!-- Regenerated token display --%>
       <div
         :if={@regenerated_token && !@managed?}
@@ -408,12 +408,14 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   # ── Grant panel (task 01a1a2e4-9265 stage 3) ───────────────────────────
   #
   # A right side panel at lg and up, a bottom sheet below lg only. Rendered
-  # outside the tool-profile form so the forms never nest. Every event is
+  # at the ControlCenterLive root, outside the tool-profile form (no nested
+  # forms) and outside the detail pane, whose containing block would
+  # otherwise clip a `fixed` panel. Every event is
   # authorized server-side (ControlCenterLive :access_admin, then RoleAdmin).
 
   attr(:panel, :map, required: true)
 
-  defp grant_panel(assigns) do
+  def grant_panel(assigns) do
     ~H"""
     <div
       id="grant-panel"
