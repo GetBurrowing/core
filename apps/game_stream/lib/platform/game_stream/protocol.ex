@@ -266,6 +266,62 @@ defmodule Platform.GameStream.Protocol do
   `enabled` is false whenever the host lacks the feature. `variant` is the
   experiment arm's slug, nil for the control or a promoted default.
 
+  ## Per-slot video (task 01a1a34c)
+
+  Today every peer receives the same encode: the host runs one encoder and
+  binds ONE shared video track to every peer's RTCPeerConnection (peers map
+  1:1 to connections, one `play_peer_open` each). With split screen, every
+  pilot then watches everyone's view. A host that declares
+  `game_stream_per_slot` (`per_slot_feature/0`) sends each pilot their own
+  camera instead. Play-host implements this EXACTLY as written here. If this
+  text is wrong, fix it here first and the host follows.
+
+  Nothing new crosses core to host. The host already receives the full slot
+  table on every change (`play_slots`, see Widening), and
+  `play_session_start` stays byte-identical for every host.
+
+  ### Host behaviour
+
+    * The feature REQUIRES `game_stream_multi`. A host declaring
+      `game_stream_per_slot` without `game_stream_multi` is treated as
+      having neither extension of this feature: it is ignored and core logs
+      once.
+    * The host runs one encoder per JOINED player slot plus one shared
+      encoder.
+    * It binds to peer P's connection the encoder of P's LOWEST slot in the
+      current `play_slots` table. One browser holding two pads therefore
+      sees its lowest slot's camera. A peer with no slot (a spectator) gets
+      the shared encoder.
+    * A slot change swaps the track on the EXISTING connection
+      (pion `RTPSender.ReplaceTrack`). It is never a re-offer, so no
+      renegotiation and no new `play_signal` exchange.
+
+  ### Host → core: `play_peer_view`
+
+      %{session_id, peer_id, view, slot}
+
+    * `view` is `slot` or `shared`.
+    * `slot` is a non-negative integer when `view` is `slot`, and absent or
+      nil when `view` is `shared`.
+    * Sent when a peer's connection first binds a track, on every swap, and
+      once per peer after a resume.
+
+  Core validates the frame with `parse_peer_view/1` (peer_id non-empty and
+  at most 64 bytes, slot an integer in 0..31, any extra key ignored).
+
+  ### Capability gate
+
+  A host without `game_stream_per_slot` (or with it but without
+  `game_stream_multi`) behaves exactly as today: core sends nothing new and
+  accepts no `play_peer_view` from it. So core may deploy before play-host
+  does. The session's public status and its roster both carry
+  `per_slot: boolean`, additive.
+
+  Not an experiment: the arm (per-slot encodes against one shared encode) is
+  a host capability declared at join, not a per-subject assignment core can
+  vary. Per-slot stats already land in `SessionRecord.slot_stats`, so the
+  input-to-photon metrics keep judging the worst slot unchanged.
+
   ## Why a second media plane, stated so a later task does not build a third
 
   Meetings already carry media over LiveKit (ADR 0030), with an SFU, TURN and
@@ -288,6 +344,7 @@ defmodule Platform.GameStream.Protocol do
 
   @multi_feature "game_stream_multi"
   @touch_feature "game_stream_touch"
+  @per_slot_feature "game_stream_per_slot"
   @max_peer_id_bytes 64
   # A host has at most a handful of slots; this bounds an abusive frame.
   @max_activity_slots 32
@@ -323,6 +380,9 @@ defmodule Platform.GameStream.Protocol do
   @doc "The `client_info.features` entry a host declares to accept touch input (task 01a0fe45)."
   @spec touch_feature() :: String.t()
   def touch_feature, do: @touch_feature
+
+  @spec per_slot_feature() :: String.t()
+  def per_slot_feature, do: @per_slot_feature
 
   @doc "The channel topic a host joins."
   @spec host_topic(String.t()) :: String.t()
@@ -388,6 +448,38 @@ defmodule Platform.GameStream.Protocol do
   end
 
   def parse_slot_activity(_), do: {:error, :malformed}
+
+  @doc """
+  Validates a host's `play_peer_view` frame (task 01a1a34c). Returns
+  `{:ok, %{session_id, peer_id, view, slot}}` (`slot` nil for `shared`) or
+  `{:error, :malformed | :bad_peer_id | :bad_view | :bad_slot}`. Extra keys
+  are ignored.
+  """
+  @spec parse_peer_view(map()) :: {:ok, map()} | {:error, atom()}
+  def parse_peer_view(%{"session_id" => id, "peer_id" => peer_id, "view" => view} = payload)
+      when is_binary(id) and is_binary(peer_id) do
+    cond do
+      peer_id == "" or byte_size(peer_id) > @max_peer_id_bytes ->
+        {:error, :bad_peer_id}
+
+      view == "slot" ->
+        case Map.get(payload, "slot") do
+          slot when is_integer(slot) and slot >= 0 and slot < @max_activity_slots ->
+            {:ok, %{session_id: id, peer_id: peer_id, view: "slot", slot: slot}}
+
+          _ ->
+            {:error, :bad_slot}
+        end
+
+      view == "shared" ->
+        {:ok, %{session_id: id, peer_id: peer_id, view: "shared", slot: nil}}
+
+      true ->
+        {:error, :bad_view}
+    end
+  end
+
+  def parse_peer_view(_), do: {:error, :malformed}
 
   @doc """
   Validates a host's `play_session_status` frame.

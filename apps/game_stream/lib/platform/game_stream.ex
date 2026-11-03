@@ -183,6 +183,7 @@ defmodule Platform.GameStream do
         roster: roster,
         multi: multi_host?(host),
         touch: touch_host?(host),
+        per_slot: per_slot_host?(host),
         touch_tuning: touch_tuning,
         touch_experiment_id: touch_experiment_id,
         touch_variant_slug: touch_variant_slug,
@@ -548,6 +549,32 @@ defmodule Platform.GameStream do
     case Federation.declared_features(metadata) do
       features when is_list(features) -> Protocol.touch_feature() in features
       :undeclared -> false
+    end
+  end
+
+  @doc """
+  Does `host` send each pilot their own camera? True only when its declared
+  features list BOTH `game_stream_multi` and `game_stream_per_slot`
+  (`Protocol.per_slot_feature/0`); per-slot without multi is ignored and
+  logged. Undeclared features fail closed. Public like `touch_host?/1`.
+  """
+  @spec per_slot_host?(%{metadata: map() | nil}) :: boolean()
+  def per_slot_host?(%{metadata: metadata}) do
+    case Federation.declared_features(metadata) do
+      features when is_list(features) ->
+        multi? = Protocol.multi_feature() in features
+        per_slot? = Protocol.per_slot_feature() in features
+
+        if per_slot? and not multi? do
+          Logger.warning(
+            "game_stream host declares game_stream_per_slot without game_stream_multi; ignoring"
+          )
+        end
+
+        multi? and per_slot?
+
+      :undeclared ->
+        false
     end
   end
 

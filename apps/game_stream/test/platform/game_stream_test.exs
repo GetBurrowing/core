@@ -1247,6 +1247,64 @@ defmodule Platform.GameStreamTest do
     end
   end
 
+  describe "the game_stream_per_slot capability gate (01a1a34c)" do
+    import ExUnit.CaptureLog
+
+    setup ctx do
+      task = task!(ctx.project, "in_review")
+      heads!(%{{"example/voltron", branch(task)} => @sha})
+      %{task: task}
+    end
+
+    defp features(list), do: %{metadata: %{"client_info" => %{"features" => list}}}
+
+    test "a host declaring multi and per_slot is per_slot; status and roster carry it", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+      {:ok, status} = start!(ctx.task)
+      {:ok, roster} = GameStream.roster(status.session_id)
+      {:ok, later} = GameStream.status(status.session_id)
+
+      assert status.per_slot == true
+      assert later.per_slot == true
+      assert roster.per_slot == true
+    end
+
+    test "a host with only game_stream_multi is NOT per_slot", ctx do
+      refute GameStream.per_slot_host?(features(["game_stream_host", "game_stream_multi"]))
+
+      host!(ctx.user, ["game_stream_host", "game_stream_multi"])
+      {:ok, status} = start!(ctx.task)
+      {:ok, roster} = GameStream.roster(status.session_id)
+
+      assert status.per_slot == false
+      assert roster.per_slot == false
+    end
+
+    test "per_slot without multi is ignored and logged" do
+      log =
+        capture_log(fn ->
+          refute GameStream.per_slot_host?(features(["game_stream_host", "game_stream_per_slot"]))
+        end)
+
+      assert log =~ "game_stream_per_slot without game_stream_multi"
+    end
+
+    test "undeclared features fail closed" do
+      refute GameStream.per_slot_host?(%{metadata: %{}})
+      refute GameStream.per_slot_host?(%{metadata: %{"client_info" => %{}}})
+      refute GameStream.per_slot_host?(%{metadata: nil})
+    end
+
+    test "nothing about per-slot is sent to the host: play_session_start is unchanged", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+      {:ok, _status} = start!(ctx.task)
+      assert_receive %Broadcast{event: "play_session_start", payload: payload}
+
+      assert Map.keys(payload) |> Enum.sort() ==
+               ~w(branch encoder ice_servers idle_timeout_s repo_url session_id sha task_id)a
+    end
+  end
+
   describe "summarize_stats/1" do
     test "one slot's figures are the row's figures exactly (identical to v1)" do
       one = %{0 => %{rtt_p50_ms: 31.0, rtt_p95_ms: 48.5, fps_avg: 59.9, connection_path: "lan"}}

@@ -258,6 +258,7 @@ defmodule Platform.GameStream.Session do
             started_at: now,
             multi: Map.get(args, :multi) == true,
             touch: Map.get(args, :touch) == true,
+            per_slot: Map.get(args, :per_slot) == true,
             touch_tuning: touch_tuning(Map.get(args, :touch_tuning, %{})),
             max_players: roster_int(roster, "max_players", @default_max_players, 1),
             max_spectators: roster_int(roster, "max_spectators", @default_max_spectators, 0),
@@ -916,7 +917,8 @@ defmodule Platform.GameStream.Session do
       multi: state.multi,
       # The roster is what the attach reply and every roster push carry to the
       # browser whole, so the touch gate and tuning ride here (01a0fe45).
-      touch: touch(state)
+      touch: touch(state),
+      per_slot: Map.get(state, :per_slot) == true
     }
   end
 
@@ -1141,7 +1143,8 @@ defmodule Platform.GameStream.Session do
       force_relay: Map.get(state, :force_relay) == true,
       multi: state.multi,
       max_players: effective_max_players(state),
-      touch: touch(state)
+      touch: touch(state),
+      per_slot: Map.get(state, :per_slot) == true
     }
   end
 
