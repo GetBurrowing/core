@@ -18,7 +18,10 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
       `recipients_for_meeting/1` to every participant of the backing space.
       The ordering test watches the list from inside the mint.
   """
-  use Platform.DataCase, async: true
+  # Not async: delivery is switched on through `:meetings_enabled`, which
+  # is global application env (`config/test.exs` turns it off), so the
+  # `:guest_link` delivery record the tests assert is actually written.
+  use Platform.DataCase, async: false
 
   alias Platform.Accounts.User
   alias Platform.Meetings
@@ -26,6 +29,20 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
   alias Platform.Meetings.Meeting
   alias Platform.Repo
   alias Platform.Tasks
+
+  setup do
+    prior = Application.fetch_env(:platform, :meetings_enabled)
+    Application.put_env(:platform, :meetings_enabled, true)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:platform, :meetings_enabled, value)
+        :error -> Application.delete_env(:platform, :meetings_enabled)
+      end
+    end)
+
+    :ok
+  end
 
   # ── Fixtures ────────────────────────────────────────────────────────────────
 
