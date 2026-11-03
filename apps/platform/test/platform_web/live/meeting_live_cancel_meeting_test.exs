@@ -252,6 +252,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
 
       row = "[data-role=workspace-meeting][data-meeting-id='#{meeting.id}']"
       assert has_element?(view, row <> " [data-role=meeting-cancelled-chip]")
+
       assert has_element?(
                view,
                row <> " [data-role=workspace-meeting-cancelled] strong",
