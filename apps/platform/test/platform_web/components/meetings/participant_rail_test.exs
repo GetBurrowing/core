@@ -2562,15 +2562,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "the Guest badge never shares the name's line; the name carries its full title" do
       html = rail([human("Guest Omega Longername (guest)", "u-2")])
       row = ~s([data-participant-id="u-2"])
+      name_el = ~s(#{row} [data-role="participant-name"])
+      badge = ~s([data-role="participant-guest-badge"])
 
-      assert lazy(html, ~s(#{row} [data-role="participant-guest-line"] [data-role="participant-guest-badge"])) ==
-               1
-
-      assert lazy(html, ~s(#{row} [data-role="participant-name"] ~ [data-role="participant-guest-badge"])) ==
-               0
-
-      assert lazy(html, ~s(#{row} [data-role="participant-name"] [data-role="participant-guest-badge"])) ==
-               0
+      assert lazy(html, ~s(#{row} [data-role="participant-guest-line"] #{badge})) == 1
+      assert lazy(html, "#{name_el} ~ #{badge}") == 0
+      assert lazy(html, "#{name_el} #{badge}") == 0
 
       [name] =
         html
