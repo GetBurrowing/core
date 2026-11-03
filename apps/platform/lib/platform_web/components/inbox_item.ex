@@ -209,6 +209,7 @@ defmodule PlatformWeb.Components.InboxItem do
     "chat_mention" => %{long: "Mention", short: "Mention"},
     "meeting_starting" => %{long: "Meeting starting", short: "Starting now"},
     "meeting_invited" => %{long: "Meeting invite", short: "Meeting invite"},
+    "meeting_cancelled" => %{long: "Meeting cancelled", short: "Cancelled"},
     "task_sponsor_assigned" => %{long: "Task sponsor assigned", short: "Sponsor"},
     "lifecycle_step_failed" => %{long: "Lifecycle step failed", short: "Step failed"},
     # Main's daily briefing kind (task 01a15ee1). Main had no explicit label,
@@ -255,6 +256,8 @@ defmodule PlatformWeb.Components.InboxItem do
   # An envelope (a message you were sent), not a camera (a call in progress).
   # MUST sit above the `hero-bell` catch-all.
   def kind_icon("meeting_invited"), do: "hero-envelope"
+  # A called-off meeting. Above the catch-all.
+  def kind_icon("meeting_cancelled"), do: "hero-calendar"
   # The camera `MeetingBriefingRow` shows. Above the catch-all too.
   def kind_icon("meeting_briefing"), do: "hero-video-camera"
 

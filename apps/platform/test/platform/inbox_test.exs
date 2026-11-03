@@ -1064,6 +1064,7 @@ defmodule Platform.InboxTest do
                "chat_mention",
                "meeting_starting",
                "meeting_invited",
+               "meeting_cancelled",
                "task_sponsor_assigned",
                "lifecycle_step_failed"
              ]

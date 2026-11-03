@@ -1442,7 +1442,8 @@ defmodule PlatformWeb.MeetingLive do
      |> seed_live_invites_once()
      |> assign_calendar_week(calendar_today(socket))
      |> assign_archive(params)
-     |> maybe_open_scheduler(params)}
+     |> maybe_open_scheduler(params)
+     |> sync_meeting_cancel()}
   end
 
   defp assign_list_selection(socket, params) do
@@ -2126,6 +2127,89 @@ defmodule PlatformWeb.MeetingLive do
   def selected_meeting(%{selected_meeting_id: id, calendar_week_meetings: meetings})
       when is_binary(id) and is_list(meetings),
       do: Enum.find(meetings, &(&1.id == id))
+
+  # ── Cancel meeting state (task 01a19e7f stage 3) ─────────────────────────
+  #
+  # `:meeting_cancel` is `%{meeting_id, can_cancel, audience, state}` for the
+  # meeting the viewer has SELECTED: `?meeting=<id>` in the list view, the
+  # grid selection in the calendar view. It is recomputed only when that
+  # selection changes, so the permission and audience queries run once per
+  # selection rather than once per render, and reset to `:idle` with it.
+
+  @doc false
+  def cancel_target_id(%{meetings_view: :list} = assigns), do: assigns[:list_meeting_id]
+  def cancel_target_id(%{meetings_view: :calendar} = assigns), do: assigns[:selected_meeting_id]
+  def cancel_target_id(_assigns), do: nil
+
+  @doc """
+  The `cancel` attrs for `meeting` as the detail surfaces render them, or
+  nil. `can_cancel` is false once the meeting is no longer scheduled or
+  live, so the control disappears with the cancellation that ended it.
+  """
+  def cancel_attrs(%{meeting_id: id} = cancel, %Meeting{id: id} = meeting) do
+    %{
+      can_cancel: cancel.can_cancel and Meetings.cancellable_status?(meeting),
+      state: cancel.state,
+      audience: cancel.audience
+    }
+  end
+
+  def cancel_attrs(_cancel, _meeting), do: nil
+
+  defp sync_meeting_cancel(socket) do
+    target = cancel_target_id(socket.assigns)
+
+    case socket.assigns[:meeting_cancel] do
+      %{meeting_id: ^target} -> socket
+      _ -> assign(socket, :meeting_cancel, build_meeting_cancel(socket, target))
+    end
+  end
+
+  defp build_meeting_cancel(_socket, nil),
+    do: %{meeting_id: nil, can_cancel: false, audience: 0, state: :idle}
+
+  defp build_meeting_cancel(socket, id) do
+    meeting =
+      Enum.find(socket.assigns[:meetings] || [], &(&1.id == id)) ||
+        Enum.find(socket.assigns[:calendar_week_meetings] || [], &(&1.id == id))
+
+    viewer = socket.assigns[:current_user_record]
+
+    case meeting do
+      %Meeting{} ->
+        can_cancel = Meetings.can_cancel_meeting?(meeting, viewer)
+
+        %{
+          meeting_id: id,
+          can_cancel: can_cancel,
+          audience: if(can_cancel, do: Meetings.cancellation_audience_count(meeting), else: 0),
+          state: :idle
+        }
+
+      nil ->
+        %{meeting_id: id, can_cancel: false, audience: 0, state: :idle}
+    end
+  end
+
+  defp put_meeting_cancel_state(socket, state) do
+    socket = sync_meeting_cancel(socket)
+    cancel = socket.assigns.meeting_cancel
+
+    if cancel.can_cancel or state == :idle or state == :working do
+      assign(socket, :meeting_cancel, %{cancel | state: state})
+    else
+      socket
+    end
+  end
+
+  defp reload_index_meetings(socket) do
+    meetings = Meetings.list_meetings_for_user(socket.assigns[:current_user_record])
+
+    socket
+    |> assign(:meetings, meetings)
+    |> assign(:grouped_meetings, group_meetings_by_status(meetings))
+    |> refresh_calendar_week()
+  end
 
   # ── The detail surface's invitee rows (task 019fb955-1d7b stage 5) ───────
   #
@@ -3648,14 +3732,57 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:selected_meeting_id, meeting_id)
      |> subscribe_ring_reports(meeting_id)
-     |> LiveInvites.seed()}
+     |> LiveInvites.seed()
+     |> sync_meeting_cancel()}
   end
 
   def handle_event("close_meeting_detail", _params, socket) do
     {:noreply,
      socket
      |> assign(:selected_meeting_id, nil)
-     |> LiveInvites.seed()}
+     |> LiveInvites.seed()
+     |> sync_meeting_cancel()}
+  end
+
+  # ── Cancel meeting (task 01a19e7f stage 3) ──────────────────────────────
+  #
+  # `PlatformWeb.Components.Meetings.CancelMeeting`'s three events. None
+  # carries a meeting id, and none is READ from the payload if one is
+  # forged: the target is the viewer's own SELECTION (`cancel_target_id/1`),
+  # the same rule `remove_agent_from_call` follows for its participant.
+  # The server rule lives in `Meetings.cancel_meeting_for_user/2`; the
+  # `can_cancel` flag only decides whether the row is drawn.
+  def handle_event("cancel_meeting_open", _params, socket) do
+    {:noreply, put_meeting_cancel_state(socket, :confirming)}
+  end
+
+  def handle_event("cancel_meeting_keep", _params, socket) do
+    case socket.assigns[:meeting_cancel] do
+      %{state: :working} -> {:noreply, socket}
+      _ -> {:noreply, put_meeting_cancel_state(socket, :idle)}
+    end
+  end
+
+  def handle_event("cancel_meeting_confirm", _params, socket) do
+    socket = sync_meeting_cancel(socket)
+
+    case {cancel_target_id(socket.assigns), socket.assigns.meeting_cancel.state} do
+      {nil, _} ->
+        {:noreply, socket}
+
+      {_id, :working} ->
+        {:noreply, socket}
+
+      {id, _} ->
+        viewer = socket.assigns[:current_user_record]
+
+        {:noreply,
+         socket
+         |> put_meeting_cancel_state(:working)
+         |> start_async(:cancel_meeting, fn ->
+           Meetings.cancel_meeting_for_user(id, viewer)
+         end)}
+    end
   end
 
   # ── Live invites (detail panel + sheet, task 019fb955-1d7b stage 5) ──────
@@ -4702,6 +4829,33 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
+  # ── Cancel meeting: the landing half (task 01a19e7f stage 3) ─────────────
+  #
+  # Success collapses the control and re-lists right here, so the row
+  # re-renders as cancelled even when this LiveView is not subscribed to the
+  # meeting's project topic (the `{:meeting_cancelled, _}` broadcast does the
+  # same for every other open window). A refusal writes nothing and says so
+  # in a flash; any other failure keeps the inset open with its error line.
+  def handle_async(:cancel_meeting, result, socket) do
+    socket =
+      case result do
+        {:ok, {:ok, _meeting}} ->
+          socket
+          |> put_meeting_cancel_state(:idle)
+          |> reload_index_meetings()
+
+        {:ok, {:error, reason}} when reason in [:forbidden, :not_found] ->
+          socket
+          |> put_meeting_cancel_state(:idle)
+          |> put_flash(:error, "You can't cancel this meeting.")
+
+        _other ->
+          put_meeting_cancel_state(socket, :error)
+      end
+
+    {:noreply, socket}
+  end
+
   # Task 01a0e906 stage 4: the 8-second Undo toast replaces the flash. The
   # agent id comes from the CLOSED ROW the context returned, never from the
   # click, and `undo_remove_agent` reads it back from this assign. Each
@@ -5309,7 +5463,8 @@ defmodule PlatformWeb.MeetingLive do
        socket
        |> assign(:meetings, meetings)
        |> assign(:grouped_meetings, group_meetings_by_status(meetings))
-       |> refresh_calendar_week()}
+       |> refresh_calendar_week()
+       |> sync_meeting_cancel()}
     else
       {:noreply, socket}
     end
@@ -8112,6 +8267,7 @@ defmodule PlatformWeb.MeetingLive do
   defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode) do
     case Meetings.create_meeting(%{
            project_id: project_id,
+           created_by_user_id: socket.assigns.user_id,
            name: name,
            scheduled_start_at: starts_at,
            scheduled_end_at: ends_at

@@ -39,6 +39,7 @@ defmodule PlatformWeb.CalendarLive do
      )
      |> assign(:view, "week")
      |> assign(:selected, nil)
+     |> assign(:meeting_cancel_state, :idle)
      |> assign(:editing, nil)
      |> assign(:editor_error, nil)
      |> assign(:editor_fields, [])
@@ -272,7 +273,11 @@ defmodule PlatformWeb.CalendarLive do
       when kind in ~w(event meeting external) do
     # The invite control is scoped to ONE meeting: a half-typed query must
     # not carry over to another entry (MeetingLive's `select_meeting`).
-    socket = socket |> LiveInvites.seed() |> select_entry(kind, id, params["start"])
+    socket =
+      socket
+      |> LiveInvites.seed()
+      |> assign(:meeting_cancel_state, :idle)
+      |> select_entry(kind, id, params["start"])
 
     if socket.assigns.selected,
       do: {:noreply, socket},
@@ -286,6 +291,12 @@ defmodule PlatformWeb.CalendarLive do
   # Escape closes the editor first, then the details (app.js keydown).
   def handle_event("escape", _, %{assigns: %{editing: %Event{}}} = socket),
     do: {:noreply, close_editor(socket)}
+
+  # Escape while the Cancel meeting inset is open collapses the inset only,
+  # not the details (task 01a19e7f stage 4).
+  def handle_event("escape", _, %{assigns: %{meeting_cancel_state: state}} = socket)
+      when state in [:confirming, :error],
+      do: {:noreply, assign(socket, :meeting_cancel_state, :idle)}
 
   def handle_event("escape", _, socket), do: {:noreply, close_details(socket)}
 
@@ -325,6 +336,50 @@ defmodule PlatformWeb.CalendarLive do
     inviter_id = socket.assigns.current_user_record.id
 
     {:noreply, socket |> LiveInvites.stage(meeting, params, inviter_id) |> refresh_selected()}
+  end
+
+  # ── Cancel meeting in the details (task 01a19e7f stage 4) ────────────────
+  #
+  # `PlatformWeb.Components.Meetings.CancelMeeting`'s events, as on
+  # /meetings. The meeting is never a client value: it is the entry the open
+  # details were built from (`selected.entry.meeting`, out of the
+  # viewer-scoped `visible_entries`), whatever the payload says. The rule is
+  # enforced again by `Meetings.cancel_meeting_for_user/2`.
+  def handle_event("cancel_meeting_open", _params, socket) do
+    case socket.assigns.selected do
+      %{kind: "meeting", can_cancel: true} ->
+        {:noreply, assign(socket, :meeting_cancel_state, :confirming)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_meeting_keep", _params, socket) do
+    case socket.assigns.meeting_cancel_state do
+      :working -> {:noreply, socket}
+      _ -> {:noreply, assign(socket, :meeting_cancel_state, :idle)}
+    end
+  end
+
+  def handle_event("cancel_meeting_confirm", _params, socket) do
+    case {socket.assigns.selected, socket.assigns.meeting_cancel_state} do
+      {_selected, :working} ->
+        {:noreply, socket}
+
+      {%{kind: "meeting", entry: %{meeting: %{id: id}}}, _state} ->
+        viewer = socket.assigns.current_user_record
+
+        {:noreply,
+         socket
+         |> assign(:meeting_cancel_state, :working)
+         |> start_async(:cancel_meeting, fn ->
+           Platform.Meetings.cancel_meeting_for_user(id, viewer)
+         end)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   # Approve / Revert on a tentative hold: the same AgentAccess.handle/4 the
@@ -543,6 +598,24 @@ defmodule PlatformWeb.CalendarLive do
   def handle_info(_, socket), do: {:noreply, reload(socket)}
 
   @impl true
+  def handle_async(:cancel_meeting, result, socket) do
+    socket =
+      case result do
+        {:ok, {:ok, _meeting}} ->
+          socket |> assign(:meeting_cancel_state, :idle) |> reload()
+
+        {:ok, {:error, reason}} when reason in [:forbidden, :not_found] ->
+          socket
+          |> assign(:meeting_cancel_state, :idle)
+          |> put_flash(:error, "You can't cancel this meeting.")
+
+        _other ->
+          assign(socket, :meeting_cancel_state, :error)
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_async({:external_added, _id, label}, result, socket) do
     flash =
       case result do
@@ -574,7 +647,9 @@ defmodule PlatformWeb.CalendarLive do
 
     {from, _} = CalendarWindow.day_bounds(first, zone)
     {_, to} = CalendarWindow.day_bounds(last, zone)
-    entries = Events.list_entries(scope, from, to, time_zone: zone)
+    # `:keep`: a cancelled meeting stays on the grid in its slot, struck
+    # through (task 01a19e7f stage 4). Only this caller asks for it.
+    entries = Events.list_entries(scope, from, to, time_zone: zone, cancelled_meetings: :keep)
     agents = hold_agents(entries, socket.assigns.current_user_record)
 
     visible =
@@ -611,7 +686,12 @@ defmodule PlatformWeb.CalendarLive do
 
   defp refresh_selected(socket), do: socket
 
-  defp close_details(socket), do: socket |> assign(:selected, nil) |> LiveInvites.seed()
+  defp close_details(socket),
+    do:
+      socket
+      |> assign(:selected, nil)
+      |> assign(:meeting_cancel_state, :idle)
+      |> LiveInvites.seed()
 
   defp selected_meeting!(%{assigns: %{selected: %{kind: "meeting", entry: %{meeting: meeting}}}}),
     do: meeting
@@ -669,7 +749,9 @@ defmodule PlatformWeb.CalendarLive do
         })
 
       "meeting" ->
-        Map.merge(base, meeting_info(entry.meeting))
+        base
+        |> Map.merge(meeting_info(entry.meeting))
+        |> Map.merge(meeting_cancel_info(entry.meeting, user))
 
       "external" ->
         Map.merge(base, %{
@@ -705,6 +787,20 @@ defmodule PlatformWeb.CalendarLive do
       # subscribe to ring reports.
       invite_entries: PlatformWeb.MeetingLive.detail_invite_rows(meeting)
     }
+  end
+
+  # The Cancel control's inputs (task 01a19e7f stage 4), kept apart from
+  # `meeting_info/1`, which the live-invite work owns. `can_cancel` is the
+  # permission rule AND a cancellable status, so the row disappears with the
+  # cancellation that ended it; `audience` is the notifier's own count.
+  defp meeting_cancel_info(meeting, user) do
+    can_cancel =
+      Platform.Meetings.cancellable_status?(meeting) and
+        Platform.Meetings.can_cancel_meeting?(meeting, user)
+
+    audience = if can_cancel, do: Platform.Meetings.cancellation_audience_count(meeting), else: 0
+
+    %{cancelled?: meeting.status == "cancelled", can_cancel: can_cancel, audience: audience}
   end
 
   defp handle_consent(socket, hold_id, verb) do
@@ -1107,6 +1203,10 @@ defmodule PlatformWeb.CalendarLive do
   def live?(%{kind: :meeting, meeting: %{status: "live"}}), do: true
   def live?(_), do: false
 
+  @doc "A meeting entry that was called off (task 01a19e7f stage 4)."
+  def cancelled?(%{kind: :meeting, meeting: %{status: "cancelled"}}), do: true
+  def cancelled?(_), do: false
+
   @doc "The title a chip shows: the hold's own title, never the list prefix."
   def chip_title(%{kind: :event, event: %{title: title}}) when is_binary(title), do: title
   def chip_title(%{title: title}), do: title || ""
@@ -1219,7 +1319,23 @@ defmodule PlatformWeb.CalendarLive do
       top_min = chip.s |> max(window_start) |> min(window_end)
       top = min((top_min - window_start) / 60 * @hour_px, grid_px() - 22)
       height = max(22, (min(chip.e, window_end) - top_min) / 60 * @hour_px - 2)
-      Map.merge(chip, %{lanes: lanes, top: top, height: height, compact: height < 34})
+
+      Map.merge(chip, %{
+        lanes: lanes,
+        top: top,
+        height: height,
+        compact: height < 34,
+        # `lanes` is the DAY's lane count, so it says nothing about this
+        # block: a block that overlaps nothing still gets 1/lanes of the
+        # column. `overlapped` is per block (task 01a19e7f stage 5).
+        overlapped: overlaps_another?(chip, placed)
+      })
+    end)
+  end
+
+  defp overlaps_another?(chip, placed) do
+    Enum.any?(placed, fn other ->
+      other != chip and other.s < chip.e and chip.s < other.e
     end)
   end
 

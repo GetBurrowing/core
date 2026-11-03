@@ -43,7 +43,11 @@ defmodule Platform.Inbox.Item do
   # refreshed only by `Platform.Inbox.upsert_meeting_briefing_item/3`, with
   # `source_type: "meeting_briefing"` and `source_id` = the
   # `meeting_briefings` id.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing)
+  # `meeting_cancelled` (task 01a19e7f stage 2) is a meeting being called
+  # off, emitted by `Platform.Meetings.MeetingNotifier` for every recipient.
+  # It is a final fact, so `Platform.Inbox` gives it no `row_stale?/1`
+  # clause: the row stays until the person dismisses it.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited meeting_cancelled task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from

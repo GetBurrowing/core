@@ -60,10 +60,13 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
   The invitee rows and the `Add people` row landed in stage 5 of task
   019fb955-1d7b — they are `InviteControl`'s `:live` mode, hosted inside
   `meeting_detail_body/1` because they are precisely the content that
-  grows. The red `Cancel meeting` action the canvas draws in the footer is
-  still absent: `Meetings.cancel_meeting/2` and the `"cancelled"` status
-  belong to the archive member, and rendering its control from here would
-  collide.
+  grows. The `Cancel meeting` action the canvas draws in the footer lives
+  in `meeting_detail_actions/1` (task 01a19e7f stage 3), below `Open
+  meeting` and separated from it by a rule. It is
+  `PlatformWeb.Components.Meetings.CancelMeeting`, the same control the
+  /meetings list detail and /calendar render, and it is drawn only for a
+  viewer `Meetings.can_cancel_meeting?/2` allows while the meeting is
+  scheduled or live. The caller passes it as `cancel`.
 
   There is deliberately no REVOKE control on any row. See
   `PlatformWeb.Components.Meetings.InviteControl`'s moduledoc for why —
@@ -91,6 +94,8 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
 
   import PlatformWeb.Components.Meetings.InviteControl,
     only: [invite_control: 1, invite_list: 1]
+
+  import PlatformWeb.Components.Meetings.CancelMeeting, only: [cancel_meeting: 1]
 
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.Meeting
@@ -206,9 +211,17 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
   """
   attr(:meeting, Meeting, required: true)
 
+  attr(:cancel, :map,
+    default: nil,
+    doc: "`%{can_cancel, state, audience}` for this meeting (task 01a19e7f); nil draws no control"
+  )
+
+  attr(:cancel_id_prefix, :string, default: "meeting-detail")
+
   def meeting_detail_actions(assigns) do
     ~H"""
     <.link
+      :if={@meeting.status != "cancelled"}
       navigate={~p"/meetings/#{@meeting.slug}"}
       data-role="meeting-detail-open"
       class="btn btn-primary btn-sm min-h-11 w-full gap-1.5"
@@ -216,6 +229,14 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
       <span class="hero-arrow-top-right-on-square size-4 flex-shrink-0" aria-hidden="true"></span>
       <span>Open meeting</span>
     </.link>
+    <.cancel_meeting
+      :if={@cancel}
+      can_cancel={@cancel.can_cancel}
+      state={@cancel.state}
+      audience={@cancel.audience}
+      id_prefix={@cancel_id_prefix}
+      class="mt-3"
+    />
     """
   end
 

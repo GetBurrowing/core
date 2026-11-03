@@ -122,11 +122,7 @@ defmodule Platform.Calendar do
         Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to,
           overlap: Keyword.get(opts, :meeting_overlap, false)
         )
-        |> Enum.reject(fn meeting ->
-          meeting.status == "cancelled" and
-            (is_nil(meeting.cancelled_at) or
-               DateTime.diff(DateTime.utc_now(), meeting.cancelled_at) > 86_400)
-        end)
+        |> reject_cancelled_meetings(Keyword.get(opts, :cancelled_meetings, :recent))
         |> Enum.map(
           &%{
             kind: :meeting,
@@ -150,6 +146,21 @@ defmodule Platform.Calendar do
   end
 
   def list_entries(_, _, _, _), do: []
+
+  # A cancelled meeting is listed for 24h after `cancelled_at` and then
+  # dropped (PR #51), unless the caller passes `cancelled_meetings: :keep`.
+  # Only `CalendarLive.reload/1` does (task 01a19e7f stage 4): the grid keeps
+  # a cancelled meeting in its slot, struck through. Agent access and
+  # booking availability keep the default.
+  defp reject_cancelled_meetings(meetings, :keep), do: meetings
+
+  defp reject_cancelled_meetings(meetings, _recent) do
+    Enum.reject(meetings, fn meeting ->
+      meeting.status == "cancelled" and
+        (is_nil(meeting.cancelled_at) or
+           DateTime.diff(DateTime.utc_now(), meeting.cancelled_at) > 86_400)
+    end)
+  end
 
   def rotate_feed(%Scope{actor: %Accounts.User{id: id}} = scope) do
     with :ok <- Access.authorize(scope, "calendar.read") do
