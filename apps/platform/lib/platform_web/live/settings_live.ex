@@ -97,6 +97,7 @@ defmodule PlatformWeb.SettingsLive do
       view: PlatformWeb.AdminFederationLive
     },
     %{label: "Branding", path: "/admin/branding", view: PlatformWeb.AdminBrandingLive},
+    %{label: "Custom roles", path: "/access/roles", view: PlatformWeb.AccessRolesLive},
     %{
       label: "External logins",
       path: "/admin/external-logins",

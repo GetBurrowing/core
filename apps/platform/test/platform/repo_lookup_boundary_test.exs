@@ -736,6 +736,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386e-59d1 stage 1: `get_role/1` looks up by `access_roles.key`, a TEXT column (custom keys are `custom:<uuidv7>`, built-ins `admin`/`member`/`guest`), so no value can raise Ecto.Query.CastError; an unknown key answers nil"},
     {"platform/access/roles.ex", :platform_uuid_guard, "-", 4, :must_cast,
      "task 01a1386e-59d1 stage 1: (1) `create_custom_role/2`'s org id before `get(Org)`; (2) `list_roles/1`'s org id before the custom-role `where: r.org_id == ^org_id`; (3) `unassign/1`'s id before `get(RoleAssignment)`; (4) `principal/1`'s `{:user | :agent, id}` before the membership and agent `exists?` queries. Every failure answers the site's not-found or `{:error, :invalid_principal}`; covered by custom_roles_test.exs \"refuses a non-member, an external member, a built-in role and a missing agent\""},
+    {"platform_web/live/access_roles_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1a2e4-9265 stage 4: `valid/2` checks the id in an `assign_role` event's `user:<id>` / `agent:<id>` principal (a LiveView param) before it reaches `RoleAdmin.assign/3`. Used as a BOOLEAN and the string discarded; a malformed id flashes \"Choose someone to assign.\" and writes nothing"},
     {"platform/access/role_admin.ex", :get, "RoleAssignment", 1, :must_cast,
      "task 01a1a2e4-9265 stage 1: `unassign/2` takes a raw assignment id a LiveView event will supply; guarded by Platform.UUID.valid?/1 (this file's :platform_uuid_guard) and answering `{:error, :not_found}`; covered by role_admin_test.exs \"a malformed or missing assignment id is :not_found\""},
     {"platform/access/role_admin.ex", :platform_uuid_guard, "-", 1, :must_cast,

@@ -922,6 +922,10 @@ defmodule PlatformWeb.Router do
       live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/access", AccessLive, :index)
+      # Custom roles (task 01a1a2e4-9265 stage 4). Declared before
+      # /access/:type/:id, which would otherwise swallow /access/roles/:key.
+      live("/access/roles", AccessRolesLive, :index)
+      live("/access/roles/:key", AccessRolesLive, :edit)
       live("/access/:type/:id", AccessLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
