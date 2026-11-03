@@ -679,7 +679,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       data-copy-status-target={"#{@id_prefix}-copy-status-#{@entry.id}"}
       data-role="meeting-invite-copy"
       data-entry-id={@entry.id}
-      class="ml-auto flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60 [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
+      class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60 [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
       aria-label={"Copy link for #{@entry.name}"}
     >
       Copy link
@@ -720,15 +720,16 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
     ~H"""
     <div
-      class="flex w-full min-w-0 items-center gap-1.5 pl-8 text-xs text-subtle"
+      class="flex w-full min-w-0 flex-col items-start gap-1 pl-8"
       data-role="meeting-invite-expiry"
       data-entry-id={@entry.id}
       data-expired={to_string(@expiry.expired?)}
     >
-      <span :if={@expiry.expired?} class="min-w-0 flex-1" data-role="meeting-invite-expiry-text">
+    <div class="flex w-full min-w-0 items-center gap-1 text-xs text-subtle">
+      <span :if={@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
         Link expired
       </span>
-      <span :if={!@expiry.expired?} class="min-w-0 flex-1" data-role="meeting-invite-expiry-text">
+      <span :if={!@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
         {expiry_sentence(@expiry, @time_zone)}
       </span>
       <form
@@ -747,7 +748,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           name="choice"
           data-role="meeting-invite-expiry-select"
           aria-label={"Change link expiry for #{@entry.name}"}
-          class="w-auto min-h-11 cursor-pointer rounded-md border-0 bg-transparent py-0 pl-1 pr-6 text-xs font-medium text-base-content focus:ring-2 focus:ring-primary/20 phx-change-loading:opacity-60"
+          class="w-[5.75rem] min-h-11 cursor-pointer rounded-md border-0 bg-transparent py-0 pl-1 pr-6 text-xs font-medium text-base-content focus:ring-2 focus:ring-primary/20 phx-change-loading:opacity-60"
         >
           <option value="" disabled selected>Change</option>
           <option :if={@expiry.meeting_end?} value="meeting_end">Until the meeting ends</option>
@@ -755,6 +756,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           <option value="days_7">7 days</option>
         </select>
       </form>
+    </div>
 
       <.copy_link
         :if={@copy_url && !@expiry.expired?}
@@ -768,7 +770,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         type="button"
         data-role="meeting-invite-renew"
         data-entry-id={@entry.id}
-        class="ml-auto flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60"
+        class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60"
         aria-label={"New link for #{@entry.name}"}
         phx-click={event(:live, :renew)}
         phx-value-id={@entry.id}
