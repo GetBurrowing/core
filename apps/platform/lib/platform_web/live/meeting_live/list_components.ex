@@ -18,6 +18,9 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
   alias Platform.Repo
   alias PlatformWeb.CalendarLive.Components, as: Cal
 
+  import PlatformWeb.Components.Meetings.CancelMeeting,
+    only: [cancel_meeting: 1, cancelled_chip: 1]
+
   @sections [{:live, "Live now"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]
 
   # ── data ───────────────────────────────────────────────────────────────
@@ -223,7 +226,18 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
               Live
             </b>
           </span>
-          <strong>{row.meeting.name}</strong>
+          <strong :if={row.meeting.status != "cancelled"}>{row.meeting.name}</strong>
+          <%!-- Cancelled (task 01a19e7f): struck through in the neutral slot
+             with a shrink-0 chip that never gives way to the title. `!` because
+             `.mt-row strong` sets the colour outside the utility layer. --%>
+          <span
+            :if={row.meeting.status == "cancelled"}
+            class="flex min-w-0 items-center gap-1.5"
+            data-role="workspace-meeting-cancelled"
+          >
+            <strong class="min-w-0 truncate line-through !text-neutral">{row.meeting.name}</strong>
+            <.cancelled_chip />
+          </span>
           <span :if={row.when}>{row.when}</span>
           <small :if={row.people != []}>{Enum.join(row.people, ", ")}</small>
           <small :if={key == :ended and artifacts(row) != []}>
@@ -252,6 +266,12 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
   attr(:tab, :string, default: "summary")
   attr(:calendar?, :boolean, default: true)
 
+  attr(:cancel, :map,
+    default: nil,
+    doc:
+      "`%{can_cancel, state, audience}` for the selected row (task 01a19e7f); nil draws no control"
+  )
+
   def detail(assigns) do
     ~H"""
     <section
@@ -274,7 +294,10 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         <div class="mt-kind">
           {section_label(@row.section)} · {@row.space || "Meeting"}
         </div>
-        <h2>{@row.meeting.name}</h2>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 class="min-w-0">{@row.meeting.name}</h2>
+          <.cancelled_chip :if={@row.meeting.status == "cancelled"} />
+        </div>
         <div :if={@row.when} class="cal-sub">{@row.when} · {@zone}</div>
         <div class="cal-panel">
           <h3>People</h3>
@@ -285,7 +308,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         </div>
         <div class="cal-segs">
           <.link
-            :if={@row.section != :ended}
+            :if={@row.section != :ended and @row.meeting.status != "cancelled"}
             navigate={~p"/meetings/#{@row.meeting.slug}"}
             class={[Cal.primary_btn(), "max-lg:!h-11"]}
             data-role="meetings-detail-open"
@@ -361,6 +384,16 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
             </p>
           </div>
         <% end %>
+        <%!-- At the BOTTOM, below everything else and off the action row
+           (design direction 01a19e80). Nothing at all for someone who may
+           not cancel, or once the meeting is no longer cancellable. --%>
+        <.cancel_meeting
+          :if={@cancel}
+          can_cancel={@cancel.can_cancel}
+          state={@cancel.state}
+          audience={@cancel.audience}
+          id_prefix="meetings-detail"
+        />
       </div>
     </section>
     """

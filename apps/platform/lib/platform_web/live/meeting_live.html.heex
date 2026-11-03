@@ -3699,14 +3699,15 @@
           empty?={@index_empty?}
           external?={@viewer_external?}
         />
+        <% list_row =
+          @list_meeting_id &&
+            PlatformWeb.MeetingLive.ListComponents.find_row(list_rows, @list_meeting_id) %>
         <PlatformWeb.MeetingLive.ListComponents.detail
-          row={
-            @list_meeting_id &&
-              PlatformWeb.MeetingLive.ListComponents.find_row(list_rows, @list_meeting_id)
-          }
+          row={list_row}
           zone={list_zone}
           tab={@list_tab}
           calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
+          cancel={cancel_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
         />
       </div>
       <PlatformWeb.MeetingLive.ListComponents.new_room_modal
@@ -4750,7 +4751,11 @@
             class="flex-none border-t border-edge px-4 py-3"
             data-role="meeting-detail-panel-footer"
           >
-            <.meeting_detail_actions meeting={detail_meeting} />
+            <.meeting_detail_actions
+              meeting={detail_meeting}
+              cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
+              cancel_id_prefix="meeting-detail-panel"
+            />
           </div>
         </aside>
       </div>
@@ -4835,7 +4840,11 @@
             class="flex-none border-t border-edge px-4 py-3"
             data-role="meeting-detail-sheet-footer"
           >
-            <.meeting_detail_actions meeting={detail_meeting} />
+            <.meeting_detail_actions
+              meeting={detail_meeting}
+              cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
+              cancel_id_prefix="meeting-detail-sheet"
+            />
           </div>
         </div>
       </div>
