@@ -3822,14 +3822,21 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("meeting_invite_expiry", %{"choice" => _} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
-    {:noreply, LiveInvites.set_expiry(socket, meeting, params)}
+    {:noreply, socket |> LiveInvites.set_expiry(meeting, params) |> touch_invite_rows()}
   end
 
   def handle_event("meeting_invite_renew", %{"id" => _, "choice" => _} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
-    {:noreply, LiveInvites.renew(socket, meeting, params, socket.assigns.user_id)}
+    {:noreply,
+     socket |> LiveInvites.renew(meeting, params, socket.assigns.user_id) |> touch_invite_rows()}
   end
+
+  # The detail rows are derived at render time from `meeting_invites`, and
+  # an expiry change or a renewal moves no assign, so LiveView would skip
+  # the render and keep showing the old row. Bumping this counter forces it.
+  defp touch_invite_rows(socket),
+    do: assign(socket, :meeting_invite_rows_rev, System.unique_integer([:positive]))
 
   # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
   #

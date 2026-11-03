@@ -5926,7 +5926,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # The fixture meeting ends at 15:00 Chicago today, which may already be
     # past when the suite runs; the meeting-end cases need a FUTURE end.
     defp with_future_end!(meeting) do
-      later = DateTime.utc_now() |> DateTime.add(2 * 3600, :second) |> DateTime.truncate(:second)
+      later = DateTime.add(DateTime.utc_now(), 2 * 3600, :second)
       ends_at = Enum.max([meeting.scheduled_end_at, later], DateTime)
 
       meeting |> Ecto.Changeset.change(scheduled_end_at: ends_at) |> Repo.update!()

@@ -679,7 +679,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       data-copy-status-target={"#{@id_prefix}-copy-status-#{@entry.id}"}
       data-role="meeting-invite-copy"
       data-entry-id={@entry.id}
-      class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60 [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
+      class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 min-w-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60 [&.copy-copied]:bg-success [&.copy-copied]:text-success-content"
       aria-label={"Copy link for #{@entry.name}"}
     >
       Copy link
@@ -775,7 +775,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         type="button"
         data-role="meeting-invite-renew"
         data-entry-id={@entry.id}
-        class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60"
+        class="flex shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-content min-h-11 min-w-11 lg:hover:bg-primary/90 phx-click-loading:opacity-60"
         aria-label={"New link for #{@entry.name}"}
         phx-click={event(:live, :renew)}
         phx-value-id={@entry.id}

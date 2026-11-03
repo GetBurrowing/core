@@ -1229,8 +1229,8 @@ defmodule PlatformWeb.CalendarLiveTest do
     # ── Guest link by name (task 01a19ea6 stage 2) ─────────────────────
 
     defp end_in_two_hours!(meeting) do
-      ends_at =
-        DateTime.utc_now() |> DateTime.add(2 * 3600, :second) |> DateTime.truncate(:second)
+      # Microsecond precision: the column is `:utc_datetime_usec`.
+      ends_at = DateTime.add(DateTime.utc_now(), 2 * 3600, :second)
 
       meeting
       |> Ecto.Changeset.change(scheduled_end_at: ends_at)
