@@ -9483,6 +9483,18 @@ body.screen-share-fullscreen-active {
 .cal-dot.cal-k-meeting.cal-cancelled {
   opacity: 0.35;
 }
+/* The chip is shrink-0 and the title truncates, so on a block too narrow
+   for both the chip would leave no title at all. Under 110px wide (a week
+   column with the details open, or a shared lane the server did not
+   already flag) the chip drops and the strike-through carries it. */
+.cal-ev.cal-cancelled {
+  container-type: inline-size;
+}
+@container (max-width: 110px) {
+  .cal-ev.cal-cancelled [data-role="meeting-cancelled-chip"] {
+    display: none;
+  }
+}
 .cal-k-meeting.cal-live small .cal-cam {
   color: var(--color-success);
 }
