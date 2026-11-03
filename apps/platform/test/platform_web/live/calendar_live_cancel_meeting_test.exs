@@ -70,7 +70,12 @@ defmodule PlatformWeb.CalendarLiveCancelMeetingTest do
         oidc_sub: "calendar-cancel-#{n}"
       })
 
-    Repo.insert!(%Platform.Tenancy.OrgMembership{user_id: user.id, org_id: org_id, role: "member"})
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: user.id,
+      org_id: org_id,
+      role: "member"
+    })
+
     user
   end
 

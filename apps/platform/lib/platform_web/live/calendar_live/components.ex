@@ -22,10 +22,10 @@ defmodule PlatformWeb.CalendarLive.Components do
   import PlatformWeb.Components.Meetings.InviteControl,
     only: [invite_list: 1, invite_control: 1]
 
-  alias PlatformWeb.CalendarLive, as: Cal
-
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
+
+  alias PlatformWeb.CalendarLive, as: Cal
   alias PlatformWeb.Components.NewKindToggle
 
   @primary_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-primary px-3 text-xs font-semibold text-primary-content hover:brightness-110"
