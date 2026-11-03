@@ -43,10 +43,10 @@ defmodule PlatformWeb.AccessRolesLive do
   end
 
   @impl true
-  def handle_params(%{"key" => key}, _uri, socket) do
+  def handle_params(%{"key" => segment}, _uri, socket) do
     scope = fresh(socket)
 
-    case Roles.get_role(key) do
+    case segment |> key_from_segment() |> Roles.get_role() do
       %Role{builtin: true} ->
         {:noreply, assign(socket, editor: nil, builtin_edit?: true, confirm: nil)}
 
@@ -126,7 +126,7 @@ defmodule PlatformWeb.AccessRolesLive do
          socket
          |> load(scope)
          |> put_flash(:info, "Role saved.")
-         |> push_patch(to: ~p"/access/roles/#{role.key}")}
+         |> push_patch(to: role_path(role.key))}
 
       {:error, reason} when reason in [:forbidden, :builtin] ->
         {:noreply, put_flash(socket, :error, flash_for(reason))}
@@ -292,7 +292,7 @@ defmodule PlatformWeb.AccessRolesLive do
                 class="border-t border-edge align-top"
               >
                 <td class="px-4 py-3 font-medium">
-                  <.link patch={~p"/access/roles/#{row.role.key}"} class="hover:underline">
+                  <.link patch={role_path(row.role.key)} class="hover:underline">
                     {row.role.name}
                   </.link>
                 </td>
@@ -317,7 +317,7 @@ defmodule PlatformWeb.AccessRolesLive do
             >
               <div class="flex items-start justify-between gap-2">
                 <.link
-                  patch={~p"/access/roles/#{row.role.key}"}
+                  patch={role_path(row.role.key)}
                   class="min-w-0 font-medium hover:underline"
                 >
                   {row.role.name}
@@ -364,7 +364,7 @@ defmodule PlatformWeb.AccessRolesLive do
       </summary>
       <ul class="menu dropdown-content z-10 w-32 rounded-box border border-edge bg-base-100 p-1 shadow">
         <li>
-          <.link patch={~p"/access/roles/#{@role.key}"} data-role="custom-role-edit">Edit</.link>
+          <.link patch={role_path(@role.key)} data-role="custom-role-edit">Edit</.link>
         </li>
         <li>
           <button
@@ -716,6 +716,19 @@ defmodule PlatformWeb.AccessRolesLive do
   defp sentence([]), do: "use this role"
   defp sentence([one]), do: one
   defp sentence(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)
+
+  @doc """
+  The page path for a role. A custom key is `custom:<uuidv7>`, and
+  `Plug.Static` refuses any path segment containing a colon
+  (`Plug.Static.InvalidPathError`), so the URL carries the uuid only.
+  """
+  @spec role_path(String.t()) :: String.t()
+  def role_path("custom:" <> uuid), do: ~p"/access/roles/#{uuid}"
+  def role_path(key), do: ~p"/access/roles/#{key}"
+
+  defp key_from_segment(segment) do
+    if Platform.UUID.valid?(segment), do: "custom:" <> segment, else: segment
+  end
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value

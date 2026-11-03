@@ -117,7 +117,19 @@ defmodule PlatformWeb.AccessRolesLiveTest do
 
     refute has_element?(view, ~s([data-role="custom-role-permission"][value="tasks.manage"]))
     refute has_element?(view, ~s([data-role="custom-role-permission"][value="prompts.manage"]))
-    refute has_element?(view, ~s([data-role="custom-role-permission"][value="agents.manage_all"]))
+    scope = Platform.Access.Scope.for_user(Platform.Accounts.get_user(ctx.admin.id))
+
+    lacked =
+      Platform.Access.Registry.permission_names()
+      |> Enum.reject(&(&1 in Platform.Access.Registry.module_admin_permissions()))
+      |> Enum.reject(&Platform.Access.holds_anywhere?(scope, &1))
+
+    assert [_ | _] = lacked
+
+    for permission <- lacked do
+      refute has_element?(view, ~s([data-role="custom-role-permission"][value="#{permission}"]))
+    end
+
     assert render(view) =~ "Publish prototypes"
 
     view
@@ -134,7 +146,8 @@ defmodule PlatformWeb.AccessRolesLiveTest do
              "prototypes.read" => "membership_org"
            }
 
-    assert_patch(view, "/access/roles/#{role.key}")
+    "custom:" <> uuid = role.key
+    assert_patch(view, "/access/roles/#{uuid}")
   end
 
   test "the list shows the permission count and the assigned names", ctx do
@@ -167,7 +180,9 @@ defmodule PlatformWeb.AccessRolesLiveTest do
     owner = member!(ctx.a)
     {agent, runtime} = agent_for!(owner)
 
-    {:ok, view, _} = live(as_user(ctx.conn, ctx.admin), "/access/roles/#{role.key}")
+    {:ok, view, _} =
+      live(as_user(ctx.conn, ctx.admin), PlatformWeb.AccessRolesLive.role_path(role.key))
+
     assert has_element?(view, ~s([data-role="custom-role-editor"]))
 
     view
@@ -208,6 +223,18 @@ defmodule PlatformWeb.AccessRolesLiveTest do
     refute Repo.get(RoleAssignment, owner_row.id)
     refute has_element?(view, ~s([data-role="custom-role-unassign-confirm"]))
     assert {:error, :forbidden} = ToolAuthorization.authorize("prototype_publish", runtime)
+  end
+
+  test "a custom role's edit URL survives the full endpoint (Plug.Static refuses a colon)",
+       ctx do
+    role = publisher!(ctx.a)
+    "custom:" <> uuid = role.key
+    path = PlatformWeb.AccessRolesLive.role_path(role.key)
+    assert path == "/access/roles/#{uuid}"
+
+    html = ctx.conn |> as_user(ctx.admin) |> get(path) |> html_response(200)
+    assert html =~ ~s(data-role="custom-role-editor")
+    assert html =~ role.name
   end
 
   test "a built-in role's edit route renders no form, and a pushed save_role changes nothing",
