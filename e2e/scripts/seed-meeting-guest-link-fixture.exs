@@ -80,16 +80,17 @@ meeting! = fn name, starts_at, ends_at ->
   |> Repo.insert!()
 end
 
-now = DateTime.utc_now() |> DateTime.truncate(:second)
-a_start = now |> DateTime.add(2 * 86_400, :second) |> Map.put(:minute, 0) |> Map.put(:second, 0)
+# Both meetings sit inside the calendars' default 08:00-18:00 hour window
+# (the spec runs in UTC), or they are never drawn and cannot be selected.
+now = DateTime.utc_now()
+today = DateTime.to_date(now)
+a_start = DateTime.new!(Date.add(today, 2), ~T[14:00:00], "Etc/UTC")
 meeting_a = meeting!.("Planning", a_start, DateTime.add(a_start, 2 * 3600, :second))
 
-meeting_b =
-  meeting!.(
-    "Retro",
-    DateTime.add(now, -3 * 3600, :second),
-    DateTime.add(now, -2 * 3600, :second)
-  )
+# Already over: today 09:00-10:00 once that is past, otherwise yesterday.
+b_day = if now.hour >= 11, do: today, else: Date.add(today, -1)
+b_start = DateTime.new!(b_day, ~T[09:00:00], "Etc/UTC")
+meeting_b = meeting!.("Retro", b_start, DateTime.add(b_start, 3600, :second))
 
 member =
   Repo.insert!(%User{
