@@ -1229,7 +1229,8 @@ defmodule PlatformWeb.CalendarLiveTest do
     # ── Guest link by name (task 01a19ea6 stage 2) ─────────────────────
 
     defp end_in_two_hours!(meeting) do
-      ends_at = DateTime.utc_now() |> DateTime.add(2 * 3600, :second) |> DateTime.truncate(:second)
+      ends_at =
+        DateTime.utc_now() |> DateTime.add(2 * 3600, :second) |> DateTime.truncate(:second)
 
       meeting
       |> Ecto.Changeset.change(scheduled_end_at: ends_at)
@@ -1242,7 +1243,8 @@ defmodule PlatformWeb.CalendarLiveTest do
       "Link works until " <> Elixir.Calendar.strftime(local, "%a %-d %b, %H:%M") <> suffix
     end
 
-    defp guest_row(guest), do: "#{@in_details} [data-role=meeting-invite-row][data-entry-id='#{guest.id}']"
+    defp guest_row(guest),
+      do: "#{@in_details} [data-role=meeting-invite-row][data-entry-id='#{guest.id}']"
 
     defp expiry_text(view, guest) do
       view
@@ -1278,7 +1280,12 @@ defmodule PlatformWeb.CalendarLiveTest do
       assert guest.email == nil
       assert DateTime.compare(guest.expires_at, meeting.scheduled_end_at) == :eq
 
-      assert has_element?(view, "#{guest_row(guest)} [data-role=meeting-invite-copy]", "Copy link")
+      assert has_element?(
+               view,
+               "#{guest_row(guest)} [data-role=meeting-invite-copy]",
+               "Copy link"
+             )
+
       assert expiry_text(view, guest) == local_label(meeting.scheduled_end_at, zone)
     end
 
@@ -1288,8 +1295,12 @@ defmodule PlatformWeb.CalendarLiveTest do
       meeting: meeting
     } do
       meeting = end_in_two_hours!(meeting)
+
       {:ok, %{invite: guest}} =
-        Platform.Meetings.invite_guest(meeting, %{display_name: "Guest Beta", expires_at: meeting.scheduled_end_at})
+        Platform.Meetings.invite_guest(meeting, %{
+          display_name: "Guest Beta",
+          expires_at: meeting.scheduled_end_at
+        })
 
       view = open_meeting(conn, zone)
 
@@ -1307,7 +1318,8 @@ defmodule PlatformWeb.CalendarLiveTest do
       zone: zone,
       meeting: meeting
     } do
-      {:ok, %{invite: old}} = Platform.Meetings.invite_guest(meeting, %{display_name: "Guest Gamma"})
+      {:ok, %{invite: old}} =
+        Platform.Meetings.invite_guest(meeting, %{display_name: "Guest Gamma"})
 
       old
       |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -3600, :second))
@@ -1323,7 +1335,12 @@ defmodule PlatformWeb.CalendarLiveTest do
       assert [fresh] = Enum.filter(invite_rows(meeting), &(&1.display_name == "Guest Gamma"))
       refute fresh.id == old.id
       refute has_element?(view, guest_row(old))
-      assert has_element?(view, "#{guest_row(fresh)} [data-role=meeting-invite-copy]", "Copy link")
+
+      assert has_element?(
+               view,
+               "#{guest_row(fresh)} [data-role=meeting-invite-copy]",
+               "Copy link"
+             )
     end
 
     test "a forged expiry event naming another meeting's guest raises and writes nothing", %{
@@ -1333,7 +1350,9 @@ defmodule PlatformWeb.CalendarLiveTest do
     } do
       # Weeks out, so the only meeting chip on screen is the selected one.
       other = seed_meeting!(zone, Date.add(today, 40), "scheduled")
-      {:ok, %{invite: foreign}} = Platform.Meetings.invite_guest(other, %{display_name: "Guest Delta"})
+
+      {:ok, %{invite: foreign}} =
+        Platform.Meetings.invite_guest(other, %{display_name: "Guest Delta"})
 
       view = open_meeting(conn, zone)
       Process.flag(:trap_exit, true)

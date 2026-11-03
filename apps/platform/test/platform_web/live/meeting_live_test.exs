@@ -5542,6 +5542,7 @@ defmodule PlatformWeb.MeetingLiveTest do
                |> LazyHTML.text()
                |> String.trim()
                |> String.starts_with?("Link works until ")
+
         assert subtitle.(surface, pending) == "jess@doeco.example"
       end
     end
@@ -5977,7 +5978,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert guest_expiry_texts(doc, invite) == [label, label]
 
       # One Copy link per surface, each with its own hook id and status region.
-      ids = doc |> LazyHTML.query(~s([data-role="meeting-invite-copy"])) |> LazyHTML.attribute("id")
+      ids =
+        doc |> LazyHTML.query(~s([data-role="meeting-invite-copy"])) |> LazyHTML.attribute("id")
+
       assert length(Enum.uniq(ids)) == 2
 
       assert doc
@@ -5992,14 +5995,21 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting = project |> seed_detail_meeting() |> with_future_end!()
 
       {:ok, %{invite: invite}} =
-        Meetings.invite_guest(meeting, %{display_name: "Guest Beta", expires_at: meeting.scheduled_end_at})
+        Meetings.invite_guest(meeting, %{
+          display_name: "Guest Beta",
+          expires_at: meeting.scheduled_end_at
+        })
 
       {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
       _ = select_meeting(view, meeting)
 
       doc =
         view
-        |> element(in_panel(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="meeting-invite-expiry-form"])))
+        |> element(
+          in_panel(
+            ~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="meeting-invite-expiry-form"])
+          )
+        )
         |> render_change(%{"invite_id" => invite.id, "choice" => "days_7"})
         |> LazyHTML.from_fragment()
 
@@ -6027,10 +6037,17 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       row = ~s([data-role="meeting-invite-row"][data-entry-id="#{old.id}"])
       assert doc |> LazyHTML.query("#{row} [data-clipboard-text]") |> Enum.count() == 0
-      assert doc |> LazyHTML.query("#{row} [data-role=\"meeting-invite-renew\"]") |> Enum.count() == 2
+
+      assert doc |> LazyHTML.query("#{row} [data-role=\"meeting-invite-renew\"]") |> Enum.count() ==
+               2
 
       # The row contract, not only the render: no copy URL for a dead link.
-      assert [entry] = Enum.filter(PlatformWeb.MeetingLive.detail_invite_rows(meeting), &(&1.id == old.id))
+      assert [entry] =
+               Enum.filter(
+                 PlatformWeb.MeetingLive.detail_invite_rows(meeting),
+                 &(&1.id == old.id)
+               )
+
       assert entry.copy_url == nil
       assert entry.expiry.expired? == true
 
@@ -6045,7 +6062,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert doc |> LazyHTML.query(row) |> Enum.count() == 0
 
       assert doc
-             |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{fresh.id}"] [data-role="meeting-invite-copy"]))
+             |> LazyHTML.query(
+               ~s([data-role="meeting-invite-row"][data-entry-id="#{fresh.id}"] [data-role="meeting-invite-copy"])
+             )
              |> Enum.count() == 2
     end
 

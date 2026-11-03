@@ -634,7 +634,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
       <%!-- A live row with a link but no expiry map (no caller builds one
            today) keeps a plain Copy link here. Guest rows carry `:expiry`,
-           and their action sits on the expiry line below instead. --%>
+           and their action sits under the expiry line instead. --%>
       <.copy_link
         :if={@mode == :live && @copy_url && is_nil(@expiry)}
         entry={@entry}
@@ -690,16 +690,17 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       aria-live="polite"
       phx-update="ignore"
       data-role="meeting-invite-copy-status"
-    ></span>
+    >
+    </span>
     """
   end
 
-  # The expiry line under a guest's name: the sentence, its inline select
-  # and the row's primary action (Copy link, or New link once expired). It
-  # is a full-width line of the wrapping row, indented past the avatar, so
-  # the NAME line above holds only the name and its chip: the action never
-  # takes width from the name (the brand rule 01a18d0a's rail review
-  # enforced), and at 375px the sentence wraps rather than truncating.
+  # The block under a guest's name: the expiry sentence with its inline
+  # select, then the row's primary action (Copy link, or New link once
+  # expired) beneath it. It spans the wrapping row, indented past the
+  # avatar, so the NAME line above holds only the name and its chip: the
+  # action never takes width from the name (the brand rule 01a18d0a's rail
+  # review enforced), and at 375px the sentence wraps rather than truncating.
   # Neutral `text-subtle`, never the action colour (canvas palette rule 1).
   #
   # The select has no stored choice: a disabled, selected prompt comes
@@ -715,8 +716,12 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
   defp guest_expiry(assigns) do
     assigns =
-      assign(assigns, :form_id, "#{assigns.id_prefix}-expiry-form-#{assigns.entry.id}-" <>
-        Integer.to_string(DateTime.to_unix(assigns.expiry.expires_at)))
+      assign(
+        assigns,
+        :form_id,
+        "#{assigns.id_prefix}-expiry-form-#{assigns.entry.id}-" <>
+          Integer.to_string(DateTime.to_unix(assigns.expiry.expires_at))
+      )
 
     ~H"""
     <div
@@ -725,38 +730,38 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       data-entry-id={@entry.id}
       data-expired={to_string(@expiry.expired?)}
     >
-    <div class="flex w-full min-w-0 items-center gap-1 text-xs text-subtle">
-      <span :if={@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
-        Link expired
-      </span>
-      <span :if={!@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
-        {expiry_sentence(@expiry, @time_zone)}
-      </span>
-      <form
-        :if={!@expiry.expired?}
-        id={@form_id}
-        class="shrink-0"
-        phx-change={event(:live, :expiry)}
-        phx-target={@target}
-        data-role="meeting-invite-expiry-form"
-      >
-        <%!-- `invite_id`, not `id`: an input NAMED `id` shadows the form
-             element's own id (LiveView warns at compile time). --%>
-        <input type="hidden" name="invite_id" value={@entry.id} />
-        <select
-          id={"#{@form_id}-select"}
-          name="choice"
-          data-role="meeting-invite-expiry-select"
-          aria-label={"Change link expiry for #{@entry.name}"}
-          class="w-[5.75rem] min-h-11 cursor-pointer rounded-md border-0 bg-transparent py-0 pl-1 pr-6 text-xs font-medium text-base-content focus:ring-2 focus:ring-primary/20 phx-change-loading:opacity-60"
+      <div class="flex w-full min-w-0 items-center gap-1 text-xs text-subtle">
+        <span :if={@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
+          Link expired
+        </span>
+        <span :if={!@expiry.expired?} class="min-w-0" data-role="meeting-invite-expiry-text">
+          {expiry_sentence(@expiry, @time_zone)}
+        </span>
+        <form
+          :if={!@expiry.expired?}
+          id={@form_id}
+          class="shrink-0"
+          phx-change={event(:live, :expiry)}
+          phx-target={@target}
+          data-role="meeting-invite-expiry-form"
         >
-          <option value="" disabled selected>Change</option>
-          <option :if={@expiry.meeting_end?} value="meeting_end">Until the meeting ends</option>
-          <option value="hours_24">24 hours</option>
-          <option value="days_7">7 days</option>
-        </select>
-      </form>
-    </div>
+          <%!-- `invite_id`, not `id`: an input NAMED `id` shadows the form
+             element's own id (LiveView warns at compile time). --%>
+          <input type="hidden" name="invite_id" value={@entry.id} />
+          <select
+            id={"#{@form_id}-select"}
+            name="choice"
+            data-role="meeting-invite-expiry-select"
+            aria-label={"Change link expiry for #{@entry.name}"}
+            class="w-[5.75rem] min-h-11 cursor-pointer rounded-md border-0 bg-transparent py-0 pl-1 pr-6 text-xs font-medium text-base-content focus:ring-2 focus:ring-primary/20 phx-change-loading:opacity-60"
+          >
+            <option value="" disabled selected>Change</option>
+            <option :if={@expiry.meeting_end?} value="meeting_end">Until the meeting ends</option>
+            <option value="hours_24">24 hours</option>
+            <option value="days_7">7 days</option>
+          </select>
+        </form>
+      </div>
 
       <.copy_link
         :if={@copy_url && !@expiry.expired?}

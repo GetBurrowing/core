@@ -597,7 +597,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
 
     defp expiry(overrides \\ []) do
       Map.merge(
-        %{expires_at: DateTime.add(DateTime.utc_now(), 2 * 86_400, :second), expired?: false, meeting_end?: true},
+        %{
+          expires_at: DateTime.add(DateTime.utc_now(), 2 * 86_400, :second),
+          expired?: false,
+          meeting_end?: true
+        },
         Map.new(overrides)
       )
     end
@@ -605,7 +609,12 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
     defp live_guest(overrides \\ []) do
       guest_entry(
         Keyword.merge(
-          [id: "guest-1", name: "Guest Alpha", expiry: expiry(), copy_url: "https://meet.test/g/abc"],
+          [
+            id: "guest-1",
+            name: "Guest Alpha",
+            expiry: expiry(),
+            copy_url: "https://meet.test/g/abc"
+          ],
           overrides
         )
       )
@@ -675,7 +684,10 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
 
       form = one(html, "[data-role=meeting-invite-expiry-form]")
       assert attr(form, "phx-change") == ["meeting_invite_expiry"]
-      assert html |> q("[data-role=meeting-invite-expiry-form] input[name=invite_id]") |> attr("value") == ["guest-1"]
+
+      assert html
+             |> q("[data-role=meeting-invite-expiry-form] input[name=invite_id]")
+             |> attr("value") == ["guest-1"]
     end
 
     test "without a future scheduled end: two choices and the fallback named" do
@@ -700,9 +712,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       gone = DateTime.add(DateTime.utc_now(), -3600, :second)
 
       html =
-        live_row(
-          live_guest(expiry: expiry(expires_at: gone, expired?: true), copy_url: nil)
-        )
+        live_row(live_guest(expiry: expiry(expires_at: gone, expired?: true), copy_url: nil))
 
       assert text_at(html, "[data-role=meeting-invite-expiry-text]") == "Link expired"
       assert count(html, "[data-role=meeting-invite-copy]") == 0
