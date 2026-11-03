@@ -60,4 +60,31 @@ describe("showCopyResult", () => {
     expect(el.dataset.copyState).toBeUndefined()
     expect(el.classList.contains("copy-copied")).toBe(false)
   })
+
+  // Task 01a19ea6: the meeting invite rows name an aria-live region the
+  // hook writes the outcome into, so a screen reader hears the swap.
+  const docWith = (region) => ({ getElementById: (id) => (id === "status-1" ? region : null) })
+
+  it("announces a copy in the named aria-live region, and clears it on reset", () => {
+    const region = { textContent: "" }
+    const el = button({ copiedLabel: "Copied", copyStatusTarget: "status-1" })
+    const original = showCopyResult(el, true, docWith(region))
+    expect(region.textContent).toBe("Link copied")
+    resetCopyResult(el, original, docWith(region))
+    expect(region.textContent).toBe("")
+  })
+
+  it("announces a failure as a failure, never as copied", () => {
+    const region = { textContent: "" }
+    const el = button({ copiedLabel: "Copied", copyStatusTarget: "status-1" })
+    showCopyResult(el, false, docWith(region))
+    expect(region.textContent).toBe("Couldn't copy")
+  })
+
+  it("writes nowhere when the button names no region", () => {
+    const region = { textContent: "untouched" }
+    const el = button({ copiedLabel: "Copied" })
+    showCopyResult(el, true, docWith(region))
+    expect(region.textContent).toBe("untouched")
+  })
 })

@@ -163,7 +163,12 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
          affordance is how a forwardable link gets minted, and a
          forwardable link destroys transcript attribution. Every invite
          here is minted per person. --%>
-      <.invite_list mode={:live} entries={@invite_entries} id_prefix={@id_prefix} />
+      <.invite_list
+        mode={:live}
+        entries={@invite_entries}
+        id_prefix={@id_prefix}
+        time_zone={@time_zone}
+      />
 
       <%!-- `dropdown={:inline}` is load-bearing here, not stylistic. This
          body is the surface's single scroll region and this control is at

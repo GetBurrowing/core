@@ -5531,7 +5531,17 @@ defmodule PlatformWeb.MeetingLiveTest do
         # subtitle" is a decision and not an absence of one.
         assert subtitle.(surface, internal) == ""
         assert subtitle.(surface, external) == Repo.get!(User, external.user_id).email
-        assert subtitle.(surface, guest) == "expires in 24h"
+        # A guest's state is its expiry line now (task 01a19ea6 stage 2),
+        # which replaced the "expires in 24h" sub-line.
+        assert subtitle.(surface, guest) == ""
+
+        assert surface
+               |> LazyHTML.query(
+                 ~s([data-role="meeting-invite-row"][data-entry-id="#{guest.id}"] [data-role="meeting-invite-expiry-text"])
+               )
+               |> LazyHTML.text()
+               |> String.trim()
+               |> String.starts_with?("Link works until ")
         assert subtitle.(surface, pending) == "jess@doeco.example"
       end
     end
@@ -5910,6 +5920,175 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert attrs_of(html, ~s([data-role="meeting-detail-invite-expansion"]), "data-role") == []
     end
 
+    # ── Guest link by name (task 01a19ea6 stage 2) ─────────────────────
+
+    # The fixture meeting ends at 15:00 Chicago today, which may already be
+    # past when the suite runs; the meeting-end cases need a FUTURE end.
+    defp with_future_end!(meeting) do
+      later = DateTime.utc_now() |> DateTime.add(2 * 3600, :second) |> DateTime.truncate(:second)
+      ends_at = Enum.max([meeting.scheduled_end_at, later], DateTime)
+
+      meeting |> Ecto.Changeset.change(scheduled_end_at: ends_at) |> Repo.update!()
+    end
+
+    defp chicago_label(%DateTime{} = at),
+      do:
+        "Link works until " <>
+          Calendar.strftime(DateTime.shift_zone!(at, @grid_zone), "%a %-d %b, %H:%M")
+
+    defp guest_expiry_texts(doc, invite) do
+      for surface <- [detail_panel(doc), detail_sheet(doc)] do
+        surface
+        |> LazyHTML.query(
+          ~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="meeting-invite-expiry-text"])
+        )
+        |> LazyHTML.text()
+        |> String.split()
+        |> Enum.join(" ")
+      end
+    end
+
+    test "a typed name becomes a guest row whose link lasts until the meeting ends", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = project |> seed_detail_meeting() |> with_future_end!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      _ = select_meeting(view, meeting)
+      view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      view
+      |> element(in_panel(~s([data-role="meeting-invite-search"])))
+      |> render_keyup(%{"value" => "Guest Alpha"})
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-option"][data-option="guest-name"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      assert [%Invite{} = invite] = Meetings.list_invites(meeting.id)
+      assert invite.display_name == "Guest Alpha"
+      assert invite.email == nil
+      assert DateTime.compare(invite.expires_at, meeting.scheduled_end_at) == :eq
+
+      label = chicago_label(meeting.scheduled_end_at)
+      assert guest_expiry_texts(doc, invite) == [label, label]
+
+      # One Copy link per surface, each with its own hook id and status region.
+      ids = doc |> LazyHTML.query(~s([data-role="meeting-invite-copy"])) |> LazyHTML.attribute("id")
+      assert length(Enum.uniq(ids)) == 2
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-invite-copy-status"]))
+             |> Enum.count() == 2
+    end
+
+    test "choosing 7 days moves the row and its line on both surfaces", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = project |> seed_detail_meeting() |> with_future_end!()
+
+      {:ok, %{invite: invite}} =
+        Meetings.invite_guest(meeting, %{display_name: "Guest Beta", expires_at: meeting.scheduled_end_at})
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      _ = select_meeting(view, meeting)
+
+      doc =
+        view
+        |> element(in_panel(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="meeting-invite-expiry-form"])))
+        |> render_change(%{"id" => invite.id, "choice" => "days_7"})
+        |> LazyHTML.from_fragment()
+
+      moved = Repo.get!(Invite, invite.id).expires_at
+      assert DateTime.diff(moved, DateTime.utc_now(), :second) > 6 * 86_400
+      assert guest_expiry_texts(doc, invite) == [chicago_label(moved), chicago_label(moved)]
+    end
+
+    test "an expired guest row offers New link, which replaces the row", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+
+      old =
+        meeting
+        |> seed_invite!("Guest Gamma")
+        |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -3600, :second))
+        |> Repo.update!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      doc = view |> select_meeting(meeting) |> LazyHTML.from_fragment()
+
+      assert guest_expiry_texts(doc, old) == ["Link expired", "Link expired"]
+
+      row = ~s([data-role="meeting-invite-row"][data-entry-id="#{old.id}"])
+      assert doc |> LazyHTML.query("#{row} [data-clipboard-text]") |> Enum.count() == 0
+      assert doc |> LazyHTML.query("#{row} [data-role=\"meeting-invite-renew\"]") |> Enum.count() == 2
+
+      # The row contract, not only the render: no copy URL for a dead link.
+      assert [entry] = Enum.filter(PlatformWeb.MeetingLive.detail_invite_rows(meeting), &(&1.id == old.id))
+      assert entry.copy_url == nil
+      assert entry.expiry.expired? == true
+
+      doc =
+        view
+        |> element(in_panel(~s(#{row} [data-role="meeting-invite-renew"])))
+        |> render_click()
+        |> LazyHTML.from_fragment()
+
+      assert [%Invite{} = fresh] = Meetings.list_invites(meeting.id)
+      refute fresh.id == old.id
+      assert doc |> LazyHTML.query(row) |> Enum.count() == 0
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-invite-row"][data-entry-id="#{fresh.id}"] [data-role="meeting-invite-copy"]))
+             |> Enum.count() == 2
+    end
+
+    test "a forged expiry event naming another meeting's guest raises and writes nothing", %{
+      conn: conn,
+      project: project
+    } do
+      meeting = seed_detail_meeting(project)
+      other = seed_detail_meeting(project, slug: "detail-other", start_hour: 16, end_hour: 17)
+      foreign = seed_invite!(other, "Guest Delta")
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      _ = select_meeting(view, meeting)
+      Process.flag(:trap_exit, true)
+
+      reason =
+        catch_exit(
+          render_hook(view, "meeting_invite_expiry", %{"id" => foreign.id, "choice" => "days_7"})
+        )
+
+      assert {{%ArgumentError{}, _stacktrace}, _from} = reason
+      assert Repo.get!(Invite, foreign.id).expires_at == foreign.expires_at
+    end
+
+    test "an email guest still gets the 24-hour link", %{conn: conn, project: project} do
+      meeting = project |> seed_detail_meeting() |> with_future_end!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      _ = select_meeting(view, meeting)
+      view |> element(in_panel(~s([data-role="meeting-invite-add-people"]))) |> render_click()
+
+      view
+      |> element(in_panel(~s([data-role="meeting-invite-search"])))
+      |> render_keyup(%{"value" => "guest.epsilon@doeco.example"})
+
+      view
+      |> element(in_panel(~s([data-role="meeting-invite-option"][data-option="guest"])))
+      |> render_click()
+
+      assert [%Invite{} = invite] = Meetings.list_invites(meeting.id)
+      assert_in_delta DateTime.diff(invite.expires_at, DateTime.utc_now(), :second), 86_400, 30
+    end
+
     defp in_panel(selector), do: ~s([data-role="meeting-detail-panel"] #{selector})
 
     # Task 01a10db7 stage 2: a declined ring is reported to the INVITER on
@@ -5972,42 +6151,6 @@ defmodule PlatformWeb.MeetingLiveTest do
       bystander_html = render(bystander_view)
       refute bystander_html =~ "Rhea Ringer declined"
       assert attrs_of(bystander_html, ring_tag, "data-role") == []
-    end
-  end
-
-  describe "MeetingLive.guest_expiry_label/1" do
-    # Spans chosen OFF the boundaries. `expires_at` is compared against
-    # `DateTime.utc_now()` at call time, so a fixture seeded at exactly
-    # 3600s reads back as 3599 and lands in the neighbouring branch — an
-    # assertion pinned to an edge would be flaky by construction. Each
-    # value here is far enough from its edge that elapsed test time cannot
-    # move it.
-    defp in_seconds(seconds), do: DateTime.add(DateTime.utc_now(), seconds, :second)
-
-    test "a freshly minted 24h link says 24h, not 23h" do
-      # The whole reason this rounds rather than truncates. `invite_guest/2`
-      # stamps `now + 24h`; by the time it renders the span is 23h59m59s,
-      # and truncation would tell the host an hour they still have is gone.
-      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(24 * 3600)) ==
-               "expires in 24h"
-    end
-
-    test "whole hours in between" do
-      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(2 * 3600 + 60)) ==
-               "expires in 2h"
-    end
-
-    test "a sub-hour span never claims an hour" do
-      # Rounding UP is the direction that misleads — a link with four
-      # minutes left must not read as having an hour — so a sub-hour span
-      # does not go through the hours form at all.
-      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(1800)) == "expires in <1h"
-    end
-
-    test "a past-due link says so rather than rendering as live" do
-      # Reachable: `list_invites/2` filters revoked rows and NOT expired
-      # ones, so an aged-out guest still draws a row.
-      assert PlatformWeb.MeetingLive.guest_expiry_label(in_seconds(-60)) == "expired"
     end
   end
 

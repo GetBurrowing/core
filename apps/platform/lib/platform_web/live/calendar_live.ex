@@ -765,9 +765,12 @@ defmodule PlatformWeb.CalendarLive do
         })
 
       "meeting" ->
+        # The viewer's zone rides along for the guest rows' expiry line
+        # (task 01a19ea6 stage 2), the same zone `when` above is printed in.
         base
         |> Map.merge(meeting_info(entry.meeting))
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
+        |> Map.put(:time_zone, zone)
 
       "external" ->
         Map.merge(base, %{

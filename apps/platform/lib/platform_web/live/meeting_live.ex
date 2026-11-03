@@ -2296,9 +2296,28 @@ defmodule PlatformWeb.MeetingLive do
       agent: false,
       avatar_url: nil,
       removable: false,
-      copy_url: invite_row_copy_url(meeting, invite)
+      copy_url: invite_row_copy_url(meeting, invite),
+      expiry: invite_row_expiry(meeting, invite)
     }
   end
+
+  # A guest row's expiry state for `InviteControl` (task 01a19ea6 stage 2):
+  # when the link lapses, whether it already has, and whether the meeting
+  # has a future scheduled end to offer as a choice. Nil for every other row.
+  defp invite_row_expiry(
+         %Meeting{} = meeting,
+         %Invite{user_id: nil, expires_at: %DateTime{} = expires_at}
+       ) do
+    now = DateTime.utc_now()
+
+    %{
+      expires_at: expires_at,
+      expired?: DateTime.compare(expires_at, now) != :gt,
+      meeting_end?: Meetings.meeting_end_expiry?(meeting, now)
+    }
+  end
+
+  defp invite_row_expiry(%Meeting{}, %Invite{}), do: nil
 
   # The user's own record wins over `display_name`, which is only ever
   # what the host happened to type — `invite_user/3` says as much. A row
@@ -2323,50 +2342,16 @@ defmodule PlatformWeb.MeetingLive do
   #   * an external account-holder — their address, because "external" on
   #     its own does not say which org they came from;
   #   * an internal member — nothing. Their name is the whole fact.
-  #   * a guest — how long their link has left, which is the only thing
-  #     about a guest that changes on its own;
+  #   * a guest — nothing here: the row's expiry line (`:expiry`, task
+  #     01a19ea6 stage 2) says how long their link works, and replaced the
+  #     old "expires in Nh" subtitle;
   #   * an external invite awaiting a grant — the address it was sent to,
   #     since there is no account to name yet.
   defp invite_row_subtitle(%Invite{user: %User{} = user}, true), do: user.email
   defp invite_row_subtitle(%Invite{user: %User{}}, false), do: nil
-
-  defp invite_row_subtitle(%Invite{expires_at: %DateTime{} = expires_at}, _external?),
-    do: guest_expiry_label(expires_at)
-
+  defp invite_row_subtitle(%Invite{expires_at: %DateTime{}}, _external?), do: nil
   defp invite_row_subtitle(%Invite{email: email}, _external?) when is_binary(email), do: email
   defp invite_row_subtitle(%Invite{}, _external?), do: nil
-
-  @doc """
-  How long a guest link has left — `expires in 24h`, `expires in <1h`, or
-  `expired`.
-
-  Whole hours and no minutes: the window is 24h by default and the reader
-  is deciding whether to re-send, not timing anything.
-
-  ## Rounded, not truncated — and why the sub-hour case is its own string
-
-  `expires_at` is stamped as `now + 24h` and read back a few milliseconds
-  later, so the remaining span is 23h59m59s. TRUNCATING that renders
-  `expires in 23h` for a link minted a moment ago, which reads as though
-  an hour had already been lost. Rounding renders `24h`, which is what the
-  host was told when they minted it.
-
-  Rounding UP is the direction that misleads — it would let a link with
-  four minutes left claim an hour — so the sub-hour span does not go
-  through the hours form at all. `expires in <1h` says the one thing that
-  matters about it without overstating. Past due gets its own string for
-  the same reason in the other direction: `list_invites/2` filters revoked
-  rows and NOT expired ones, so a dead link is reachable here, and
-  `expires in 0h` reads as a live one.
-  """
-  @spec guest_expiry_label(DateTime.t()) :: String.t()
-  def guest_expiry_label(%DateTime{} = expires_at) do
-    case DateTime.diff(expires_at, DateTime.utc_now(), :second) do
-      seconds when seconds <= 0 -> "expired"
-      seconds when seconds < 3600 -> "expires in <1h"
-      seconds -> "expires in #{round(seconds / 3600)}h"
-    end
-  end
 
   # `email` on an account-holding row is whatever the host typed, and the
   # account is authoritative. Only the tag derivation reads this key, and
@@ -2377,12 +2362,15 @@ defmodule PlatformWeb.MeetingLive do
   # ONLY a guest row has a link to copy. An account-holder signs in as
   # themselves and an external invite awaiting a grant has no token at
   # all, so both get no control rather than one that copies something
-  # that cannot admit anyone.
+  # that cannot admit anyone. An EXPIRED guest row has none either (task
+  # 01a19ea6 stage 2): its link is dead, so it offers New link instead.
   defp invite_row_copy_url(
          %Meeting{} = meeting,
-         %Invite{user_id: nil, expires_at: %DateTime{}} = i
-       ),
-       do: Meetings.guest_invite_link(meeting, i)
+         %Invite{user_id: nil, expires_at: %DateTime{} = expires_at} = i
+       ) do
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :gt,
+      do: Meetings.guest_invite_link(meeting, i)
+  end
 
   defp invite_row_copy_url(%Meeting{}, %Invite{}), do: nil
 
