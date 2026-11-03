@@ -42,6 +42,9 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.UserAccessLive => {:admin, nil},
     PlatformWeb.AccessLive => {:admin, "access.manage"},
     PlatformWeb.AccessViewAsLive => {:admin, "access.manage"},
+    # Custom roles (task 01a1a2e4-9265 stage 4). access.manage held anywhere
+    # admits the page; every write re-checks manages_org? in RoleAdmin.
+    PlatformWeb.AccessRolesLive => {:admin, "access.manage"},
     PlatformWeb.AdminOrgsLive => {:admin, nil},
     PlatformWeb.AdminBrandingLive => {:admin, nil},
     PlatformWeb.AdminThemesLive => {:admin, nil},

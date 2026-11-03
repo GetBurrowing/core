@@ -6,7 +6,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   use Phoenix.Component
 
   alias Platform.Agents.Agent
-  alias Platform.Access.{Registry, RuntimeProfiles, Scope}
+  alias Platform.Access.{Caps, Registry, RuntimeProfiles, Scope}
   alias Platform.Federation.ToolSurface
   alias Platform.Federation
 
@@ -66,6 +66,10 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   attr(:federation_online?, :boolean, default: false)
   attr(:can_manage?, :boolean, default: false)
   attr(:managed?, :boolean, default: false)
+  attr(:can_grant?, :boolean, default: false)
+  # Not rendered here (the panel lives at the LiveView root, see
+  # `grant_panel/1`); passed so the rows re-render when a grant closes it.
+  attr(:grant_panel, :map, default: nil)
 
   def federation_connection_panel(assigns) do
     runtime = assigns.federation_runtime || Federation.get_runtime(assigns.agent.runtime_id)
@@ -85,6 +89,11 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
     module_choices = modules ++ (ToolSurface.all_bundles() -- modules)
 
+    # The owner cap, read from the same runtime Scope ToolAuthorization uses
+    # (task 01a1a2e4-9265 stage 2). Never recomputed here.
+    caps = if runtime, do: Caps.for_runtime(runtime), else: %{}
+    owner = if runtime, do: Caps.owner(runtime), else: %{user: nil, org_id: nil}
+
     assigns =
       assigns
       |> assign(:fed_runtime, runtime)
@@ -92,6 +101,8 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
       |> assign(:module_choices, module_choices)
       |> assign(:restrictions, restrictions)
       |> assign(:owner_permissions, owner_permissions)
+      |> assign(:caps, caps)
+      |> assign(:owner_name, owner_name(owner))
 
     ~H"""
     <div :if={@fed_runtime} class="mt-4 space-y-3">
@@ -165,35 +176,49 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </p>
         <form :if={@can_manage?} phx-submit="save_tool_profile" class="mt-3 space-y-3">
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label
-              :for={module <- @module_choices}
-              class="flex items-center gap-2 text-xs"
-              data-role={if module in ToolSurface.all_bundles(), do: nil, else: "orphan-bundle"}
-            >
-              <input
-                :if={module not in ToolSurface.all_bundles()}
-                type="hidden"
-                name="modules[]"
-                value={module}
+            <div :for={module <- @module_choices} class="min-w-0 space-y-1">
+              <label
+                class="flex items-center gap-2 text-xs"
+                data-role={if module in ToolSurface.all_bundles(), do: nil, else: "orphan-bundle"}
+              >
+                <input
+                  :if={module not in ToolSurface.all_bundles()}
+                  type="hidden"
+                  name="modules[]"
+                  value={module}
+                />
+                <input
+                  type="checkbox"
+                  name="modules[]"
+                  value={module}
+                  checked={module in @tool_modules}
+                  disabled={module not in ToolSurface.all_bundles()}
+                  class="checkbox checkbox-xs"
+                />
+                <span class="break-all font-mono">{module}</span>
+                <span :if={module not in ToolSurface.all_bundles()}>(module not installed)</span>
+              </label>
+              <.bundle_status
+                :if={module in @tool_modules}
+                module={module}
+                capped={Map.get(@caps, module, [])}
+                owner_name={@owner_name}
+                can_grant?={@can_grant?}
               />
-              <input
-                type="checkbox"
-                name="modules[]"
-                value={module}
-                checked={module in @tool_modules}
-                disabled={module not in ToolSurface.all_bundles()}
-                class="checkbox checkbox-xs"
-              />
-              <span class="break-all font-mono">{module}</span>
-              <span :if={module not in ToolSurface.all_bundles()}>(module not installed)</span>
-            </label>
+            </div>
           </div>
           <button type="submit" class="btn btn-primary btn-sm">Save tool profile</button>
         </form>
-        <div :if={!@can_manage?} class="mt-2 flex flex-wrap gap-2">
-          <code :for={module <- @tool_modules} class="rounded bg-base-100 px-2 py-1 text-xs">
-            {module}
-          </code>
+        <div :if={!@can_manage?} class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div :for={module <- @tool_modules} class="min-w-0 space-y-1">
+            <code class="rounded bg-base-100 px-2 py-1 text-xs">{module}</code>
+            <.bundle_status
+              module={module}
+              capped={Map.get(@caps, module, [])}
+              owner_name={@owner_name}
+              can_grant?={@can_grant?}
+            />
+          </div>
         </div>
       </div>
 
@@ -306,6 +331,250 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     </div>
     """
   end
+
+  # ── Bundle status line (task 01a1a2e4-9265 stage 2) ──────────────────
+  #
+  # Under a bundle that is ON: one warning line per permission the owner cap
+  # removes (canvas 01a1a2e4-ef8e), or the info hint when nothing is capped.
+  # The toggle itself is never changed. The owner name and the label never
+  # truncate; only the mono key does.
+
+  attr(:module, :string, required: true)
+  attr(:capped, :list, required: true)
+  attr(:owner_name, :string, default: nil)
+  attr(:can_grant?, :boolean, default: false)
+
+  defp bundle_status(assigns) do
+    ~H"""
+    <div :if={@capped != []} class="space-y-1">
+      <div
+        :for={cap <- @capped}
+        data-role="bundle-capped-line"
+        data-bundle={@module}
+        data-permission={cap.permission}
+        class="flex min-w-0 items-start gap-1.5 text-[13px] leading-5 text-base-content"
+      >
+        <span
+          class="hero-exclamation-triangle mt-0.5 size-4 shrink-0 text-warning"
+          aria-hidden="true"
+        />
+        <span class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
+          <span :if={@owner_name}>
+            On, but capped: {@owner_name} doesn't have "{cap.label}"
+          </span>
+          <span :if={!@owner_name}>On, but capped by this agent's default member access</span>
+          <span
+            data-role="capped-permission-key"
+            class="min-w-0 max-w-full truncate font-mono text-xs text-subtle"
+          >
+            {cap.permission}
+          </span>
+        </span>
+      </div>
+      <div :if={@owner_name && @can_grant?} class="pl-[22px]">
+        <button
+          :for={cap <- @capped}
+          type="button"
+          data-role="bundle-grant-button"
+          data-bundle={@module}
+          phx-click="open_grant_panel"
+          phx-value-bundle={@module}
+          phx-value-permission={cap.permission}
+          class="btn btn-primary btn-sm"
+        >
+          Grant…
+        </button>
+      </div>
+      <p
+        :if={@owner_name && !@can_grant?}
+        data-role="bundle-ask-admin"
+        data-bundle={@module}
+        class="pl-[22px] text-xs text-subtle"
+      >
+        Ask an org admin to grant this
+      </p>
+    </div>
+    <p
+      :if={@capped == []}
+      data-role="bundle-inherited-hint"
+      data-bundle={@module}
+      class="flex items-center gap-1.5 text-xs text-info"
+    >
+      <span class="hero-information-circle size-4 shrink-0" aria-hidden="true" /> Inherited from owner
+    </p>
+    """
+  end
+
+  # ── Grant panel (task 01a1a2e4-9265 stage 3) ───────────────────────────
+  #
+  # A right side panel at lg and up, a bottom sheet below lg only. Rendered
+  # at the ControlCenterLive root, outside the tool-profile form (no nested
+  # forms) and outside the detail pane, whose containing block would
+  # otherwise clip a `fixed` panel. Every event is
+  # authorized server-side (ControlCenterLive :access_admin, then RoleAdmin).
+
+  attr(:panel, :map, required: true)
+
+  def grant_panel(assigns) do
+    ~H"""
+    <div
+      id="grant-panel"
+      data-role="grant-panel"
+      class="fixed inset-0 z-[60] bg-black/40 lg:pointer-events-none lg:bg-transparent"
+    >
+      <button
+        type="button"
+        class="absolute inset-0 h-full w-full cursor-default lg:hidden"
+        phx-click="close_grant_panel"
+        aria-label="Close"
+      />
+      <div
+        role="dialog"
+        aria-labelledby="grant-panel-title"
+        class={[
+          "absolute inset-x-0 bottom-0 w-full max-h-[75vh] overflow-y-auto rounded-t-2xl bg-base-200 p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]",
+          "lg:pointer-events-auto lg:inset-y-0 lg:left-auto lg:right-0 lg:max-h-none lg:max-w-md lg:rounded-none lg:border-l lg:border-edge lg:shadow-xl"
+        ]}
+      >
+        <form
+          id="grant-form"
+          phx-change="grant_path_change"
+          phx-submit="grant_capped_permission"
+          class="space-y-4 text-sm"
+        >
+          <input type="hidden" name="bundle" value={@panel.bundle} />
+          <input type="hidden" name="permission" value={@panel.permission} />
+          <h3 id="grant-panel-title" class="font-semibold text-base-content">
+            Give {@panel.owner_name} and this agent:
+          </h3>
+          <p class="text-[13px] text-subtle">
+            "{@panel.label}" <span class="font-mono text-xs">{@panel.permission}</span>
+          </p>
+
+          <div class="space-y-2">
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="path"
+                value="existing"
+                data-role="grant-path-existing"
+                checked={@panel.path == "existing"}
+                disabled={@panel.roles == []}
+                class="radio radio-sm"
+              />
+              <span>Existing role</span>
+            </label>
+            <select
+              :if={@panel.roles != []}
+              name="role_key"
+              data-role="grant-existing-role"
+              disabled={@panel.path != "existing"}
+              class="select select-sm w-full"
+            >
+              <option
+                :for={role <- @panel.roles}
+                value={role.key}
+                selected={role.key == @panel.role_key}
+              >
+                {role.name}
+              </option>
+            </select>
+            <p :if={@panel.roles == []} class="pl-6 text-xs text-subtle">
+              No existing role has this permission
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="path"
+                value="new"
+                data-role="grant-path-new"
+                checked={@panel.path == "new"}
+                class="radio radio-sm"
+              />
+              <span>New role</span>
+            </label>
+            <div :if={@panel.path == "new"} class="space-y-2 pl-6">
+              <input
+                type="text"
+                name="name"
+                value={@panel.new_name}
+                placeholder="Role name"
+                data-role="grant-new-name"
+                class="input input-sm w-full"
+              />
+              <input type="hidden" name="permissions[]" value="" />
+              <label
+                :for={opt <- @panel.offered}
+                class="flex items-start gap-2"
+                data-role="grant-new-permission"
+              >
+                <input
+                  type="checkbox"
+                  name="permissions[]"
+                  value={opt.permission}
+                  checked={opt.permission in @panel.new_permissions}
+                  class="checkbox checkbox-sm mt-0.5"
+                />
+                <span class="min-w-0">
+                  <span class="block">{opt.label}</span>
+                  <span class="block truncate font-mono text-xs text-subtle">{opt.permission}</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <fieldset class="space-y-2">
+            <legend class="text-xs font-semibold text-subtle">Applies to:</legend>
+            <input type="hidden" name="owner" value="false" />
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="owner"
+                value="true"
+                checked={@panel.owner?}
+                data-role="grant-applies-owner"
+                class="checkbox checkbox-sm"
+              />
+              <span>{@panel.owner_name} (owner)</span>
+            </label>
+            <input type="hidden" name="agent" value="false" />
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                name="agent"
+                value="true"
+                checked={@panel.agent?}
+                data-role="grant-applies-agent"
+                class="checkbox checkbox-sm"
+              />
+              <span>{@panel.agent_name} (agent)</span>
+            </label>
+          </fieldset>
+
+          <p :if={@panel.error} data-role="grant-error" class="text-[13px] text-error" role="alert">
+            {@panel.error}
+          </p>
+
+          <div class="flex items-center gap-2">
+            <button type="submit" data-role="grant-submit" class="btn btn-primary btn-sm">
+              Grant
+            </button>
+            <button type="button" phx-click="close_grant_panel" class="btn btn-ghost btn-sm">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    """
+  end
+
+  defp owner_name(%{user: %{name: name}}) when is_binary(name) and name != "", do: name
+  defp owner_name(%{user: %{email: email}}) when is_binary(email), do: email
+  defp owner_name(_owner), do: nil
 
   defp first_agent_grant?(%{metadata: %{"first_agent_grant" => true}}), do: true
   defp first_agent_grant?(_runtime), do: false
