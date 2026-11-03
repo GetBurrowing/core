@@ -385,7 +385,7 @@ defmodule PlatformWeb.CalendarLive do
   # One guest row's link expiry, and a new link for a lapsed row (task
   # 01a19ea6), under the same rule as staging: the meeting is the open
   # selection, and `LiveInvites` checks the invite id against it.
-  def handle_event("meeting_invite_expiry", %{"id" => _, "choice" => _} = params, socket) do
+  def handle_event("meeting_invite_expiry", %{"choice" => _} = params, socket) do
     meeting = selected_meeting!(socket)
 
     {:noreply, socket |> LiveInvites.set_expiry(meeting, params) |> refresh_selected()}

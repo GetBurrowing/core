@@ -1295,7 +1295,7 @@ defmodule PlatformWeb.CalendarLiveTest do
 
       view
       |> element("#{guest_row(guest)} [data-role=meeting-invite-expiry-form]")
-      |> render_change(%{"id" => guest.id, "choice" => "days_7"})
+      |> render_change(%{"invite_id" => guest.id, "choice" => "days_7"})
 
       moved = Repo.get!(Platform.Meetings.Invite, guest.id).expires_at
       assert DateTime.diff(moved, DateTime.utc_now(), :second) > 6 * 86_400

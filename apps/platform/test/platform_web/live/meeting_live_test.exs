@@ -6000,7 +6000,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       doc =
         view
         |> element(in_panel(~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="meeting-invite-expiry-form"])))
-        |> render_change(%{"id" => invite.id, "choice" => "days_7"})
+        |> render_change(%{"invite_id" => invite.id, "choice" => "days_7"})
         |> LazyHTML.from_fragment()
 
       moved = Repo.get!(Invite, invite.id).expires_at

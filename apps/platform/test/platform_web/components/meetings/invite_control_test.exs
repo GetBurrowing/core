@@ -675,7 +675,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
 
       form = one(html, "[data-role=meeting-invite-expiry-form]")
       assert attr(form, "phx-change") == ["meeting_invite_expiry"]
-      assert html |> q("[data-role=meeting-invite-expiry-form] input[name=id]") |> attr("value") == ["guest-1"]
+      assert html |> q("[data-role=meeting-invite-expiry-form] input[name=invite_id]") |> attr("value") == ["guest-1"]
     end
 
     test "without a future scheduled end: two choices and the fallback named" do

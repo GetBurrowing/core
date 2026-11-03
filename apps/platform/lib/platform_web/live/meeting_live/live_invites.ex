@@ -192,9 +192,15 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
   `meeting` (`:not_found`), the same rule as a forged candidate id. A
   refusal the row's state explains (`:expired`, a changeset) is flashed.
 
+  The row's inline form sends the id as `"invite_id"` (an input named `id`
+  shadows the form's own id); that shape is accepted as well as `"id"`.
+
   Authorization is exactly today's live-invite rule: the caller resolves
   `meeting` from its own viewer-scoped selection. No host gate is added.
   """
+  def set_expiry(socket, meeting, %{"invite_id" => id} = params),
+    do: set_expiry(socket, meeting, %{"id" => id, "choice" => Map.get(params, "choice")})
+
   def set_expiry(socket, %Meeting{} = meeting, %{"id" => id, "choice" => choice}) do
     case Meetings.set_guest_invite_expiry(meeting, to_string(id), expiry_choice!(choice)) do
       {:ok, _invite} ->

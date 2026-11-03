@@ -3819,7 +3819,7 @@ defmodule PlatformWeb.MeetingLive do
   # One guest row's link expiry, and a new link for a lapsed row (task
   # 01a19ea6). Same authorization as staging: the meeting is this socket's
   # selection, never a client value; the invite id is checked against it.
-  def handle_event("meeting_invite_expiry", %{"id" => _, "choice" => _} = params, socket) do
+  def handle_event("meeting_invite_expiry", %{"choice" => _} = params, socket) do
     meeting = selected_live_invite_meeting!(socket)
 
     {:noreply, LiveInvites.set_expiry(socket, meeting, params)}

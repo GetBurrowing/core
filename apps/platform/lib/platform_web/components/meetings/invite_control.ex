@@ -733,7 +733,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         phx-target={@target}
         data-role="meeting-invite-expiry-form"
       >
-        <input type="hidden" name="id" value={@entry.id} />
+        <%!-- `invite_id`, not `id`: an input NAMED `id` shadows the form
+             element's own id (LiveView warns at compile time). --%>
+        <input type="hidden" name="invite_id" value={@entry.id} />
         <select
           id={"#{@form_id}-select"}
           name="choice"
