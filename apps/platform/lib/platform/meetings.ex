@@ -2382,11 +2382,13 @@ defmodule Platform.Meetings do
     attrs = normalize_attrs(attrs)
 
     expiry = guest_invite_expires_at(attrs, DateTime.utc_now())
+
     expires_at =
       case expiry do
         {:ok, %DateTime{} = at} -> at
         {:error, _message} -> nil
       end
+
     display_name = Map.get(attrs, :display_name)
 
     changeset =
@@ -2658,7 +2660,9 @@ defmodule Platform.Meetings do
   defp guest_invite_expires_at(attrs, now) do
     case Map.fetch(attrs, :expires_at) do
       {:ok, %DateTime{} = at} ->
-        if DateTime.compare(at, now) == :gt, do: {:ok, at}, else: {:error, "must be in the future"}
+        if DateTime.compare(at, now) == :gt,
+          do: {:ok, at},
+          else: {:error, "must be in the future"}
 
       {:ok, nil} ->
         {:ok, default_guest_expires_at(attrs, now)}

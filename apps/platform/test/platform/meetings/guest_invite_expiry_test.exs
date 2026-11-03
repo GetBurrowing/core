@@ -134,7 +134,11 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
       messages_before = Repo.aggregate(Platform.Chat.Message, :count)
 
       assert {:ok, %{invite: invite, token: token}} =
-               Meetings.invite_guest(meeting, %{display_name: "Guest Alpha", email: nil, expires_at: at})
+               Meetings.invite_guest(meeting, %{
+                 display_name: "Guest Alpha",
+                 email: nil,
+                 expires_at: at
+               })
 
       persisted = Repo.get!(Invite, invite.id)
       assert DateTime.compare(persisted.expires_at, at) == :eq
@@ -255,6 +259,7 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
 
     test "shortening reaches a link copied earlier: the row decides" do
       meeting = meeting!()
+
       {:ok, %{invite: invite, token: token}} =
         Meetings.invite_guest(meeting, %{
           display_name: "Guest Alpha",
@@ -379,7 +384,8 @@ defmodule Platform.Meetings.GuestInviteExpiryTest do
 
       on_exit(fn -> :telemetry.detach("guest-renew-order-#{old.id}") end)
 
-      assert {:ok, %{invite: new}} = Meetings.renew_guest_invite(meeting, old.id, :meeting_end, nil)
+      assert {:ok, %{invite: new}} =
+               Meetings.renew_guest_invite(meeting, old.id, :meeting_end, nil)
 
       assert_received {:listed_during_mint, listed}
       ids = Enum.map(listed, & &1.id)

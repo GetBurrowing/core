@@ -252,7 +252,8 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
     end
 
     test "each allowlisted choice moves the row", %{meeting: meeting, invite: invite} do
-      updated = LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
+      updated =
+        LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
 
       assert error_flash(updated) == nil
       week = Repo.get!(Invite, invite.id).expires_at
@@ -290,7 +291,8 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
       meeting: meeting,
       invite: invite
     } do
-      {:ok, member_invite} = LiveInvites.deliver(meeting, "user", %{"id" => inviter.id}, [inviter], inviter.id)
+      {:ok, member_invite} =
+        LiveInvites.deliver(meeting, "user", %{"id" => inviter.id}, [inviter], inviter.id)
 
       for id <- [member_invite.id, Ecto.UUID.generate(), "nope"] do
         assert_raise ArgumentError, fn ->
@@ -313,7 +315,9 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
     } do
       expired = expire!(invite)
 
-      refused = LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
+      refused =
+        LiveInvites.set_expiry(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"})
+
       assert error_flash(refused) == @expiry_message
       assert Repo.get!(Invite, invite.id).expires_at == expired.expires_at
 
@@ -337,7 +341,12 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
       invite: invite
     } do
       refused =
-        LiveInvites.renew(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"}, inviter.id)
+        LiveInvites.renew(
+          socket(),
+          meeting,
+          %{"id" => invite.id, "choice" => "days_7"},
+          inviter.id
+        )
 
       assert error_flash(refused) == @expiry_message
       assert [only] = Meetings.list_invites(meeting.id, include_revoked: true)
@@ -353,7 +362,12 @@ defmodule PlatformWeb.MeetingLive.LiveInvitesTest do
       Application.delete_env(:platform, :meeting_guest_host)
 
       refused =
-        LiveInvites.renew(socket(), meeting, %{"id" => invite.id, "choice" => "days_7"}, inviter.id)
+        LiveInvites.renew(
+          socket(),
+          meeting,
+          %{"id" => invite.id, "choice" => "days_7"},
+          inviter.id
+        )
 
       assert error_flash(refused) == @guest_host_message
       assert [only] = Meetings.list_invites(meeting.id, include_revoked: true)

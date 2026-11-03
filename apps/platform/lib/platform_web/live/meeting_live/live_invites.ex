@@ -197,9 +197,15 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
   """
   def set_expiry(socket, %Meeting{} = meeting, %{"id" => id, "choice" => choice}) do
     case Meetings.set_guest_invite_expiry(meeting, to_string(id), expiry_choice!(choice)) do
-      {:ok, _invite} -> socket
-      {:error, :not_found} -> raise ArgumentError, "cannot change expiry: no guest invite #{inspect(id)} on this meeting"
-      {:error, _reason} -> put_flash(socket, :error, @expiry_message)
+      {:ok, _invite} ->
+        socket
+
+      {:error, :not_found} ->
+        raise ArgumentError,
+              "cannot change expiry: no guest invite #{inspect(id)} on this meeting"
+
+      {:error, _reason} ->
+        put_flash(socket, :error, @expiry_message)
     end
   end
 
@@ -216,10 +222,17 @@ defmodule PlatformWeb.MeetingLive.LiveInvites do
            expiry_choice!(choice),
            inviter_user_id
          ) do
-      {:ok, _result} -> socket
-      {:error, :not_found} -> raise ArgumentError, "cannot renew: no guest invite #{inspect(id)} on this meeting"
-      {:error, :guest_host_not_configured} -> put_flash(socket, :error, @guest_host_message)
-      {:error, _reason} -> put_flash(socket, :error, @expiry_message)
+      {:ok, _result} ->
+        socket
+
+      {:error, :not_found} ->
+        raise ArgumentError, "cannot renew: no guest invite #{inspect(id)} on this meeting"
+
+      {:error, :guest_host_not_configured} ->
+        put_flash(socket, :error, @guest_host_message)
+
+      {:error, _reason} ->
+        put_flash(socket, :error, @expiry_message)
     end
   end
 
