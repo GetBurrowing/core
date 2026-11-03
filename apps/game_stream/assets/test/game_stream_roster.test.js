@@ -16,6 +16,8 @@ import {
   reconcileSlots,
   sheetWatchingText,
   slotLabel,
+  viewAttr,
+  viewLabel,
   takeOverItems,
   watchView,
   watchingText,
@@ -206,5 +208,43 @@ describe("slots: core's {src: slot} and reconciling with the roster", () => {
     expect(reconcileSlots(mine, r, "p-alex")).toEqual(new Map([[1, 1]]))
     expect(mySlotList(new Map([[1, 2], [0, 0]]))).toEqual([0, 2])
     expect(nextFree(r)).toBe(3)
+  })
+})
+
+describe("per-slot view label (01a1a34c)", () => {
+  const slots = { 0: SAM, 1: ALEX, 2: { peer_id: "p3", name: "C" } }
+  const mine = new Map([[0, 1]])
+  const perSlot = (views, extra = {}) => normalizeRoster({ ...raw({ slots, spectators: 2 }), per_slot: true, views, ...extra })
+
+  it("own slot view -> 'your camera', appended to the phone line", () => {
+    const r = perSlot({ "p-alex": { view: "slot", slot: 1 } })
+    expect(viewLabel({ roster: r, peerId: "p-alex", mine })).toBe("your camera")
+    expect(phoneLine({ roster: r, peerId: "p-alex", mine })).toBe(
+      "You are P2 · 2 others playing · 2 watching · your camera",
+    )
+    expect(viewAttr({ roster: r, peerId: "p-alex" })).toBe("slot:1")
+  })
+
+  it("own shared view -> 'shared view'", () => {
+    const r = perSlot({ "p-alex": { view: "shared" } })
+    expect(viewLabel({ roster: r, peerId: "p-alex", mine })).toBe("shared view")
+    expect(phoneLine({ roster: r, peerId: "p-alex", mine })).toBe(
+      "You are P2 · 2 others playing · 2 watching · shared view",
+    )
+    expect(viewAttr({ roster: r, peerId: "p-alex" })).toBe("shared")
+  })
+
+  it("per_slot false -> no suffix, line identical to the existing case", () => {
+    const r = normalizeRoster({ ...raw({ slots, spectators: 2 }), per_slot: false, views: { "p-alex": { view: "slot", slot: 1 } } })
+    expect(viewLabel({ roster: r, peerId: "p-alex", mine })).toBe("")
+    expect(phoneLine({ roster: r, peerId: "p-alex", mine })).toBe("You are P2 · 2 others playing · 2 watching")
+    expect(viewAttr({ roster: r, peerId: "p-alex" })).toBe("")
+  })
+
+  it("a spectator on a per_slot host before any report -> no suffix", () => {
+    const r = perSlot({ "p-alex": { view: "slot", slot: 1 } })
+    expect(viewLabel({ roster: r, peerId: "p-spec", mine: new Map() })).toBe("")
+    expect(phoneLine({ roster: r, peerId: "p-spec", mine: new Map() })).toBe("You are watching · 3 playing · 2 watching")
+    expect(viewAttr({ roster: r, peerId: "p-spec" })).toBe("")
   })
 })

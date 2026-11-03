@@ -202,6 +202,49 @@ defmodule PlatformWeb.RuntimeChannelGameStreamTest do
       assert Process.alive?(socket.channel_pid)
     end
 
+    test "a game_stream_per_slot host's play_peer_view reaches the roster (01a1a34c)", ctx do
+      # The extension lists four runtime events since task 01a1a34c.
+      assert Enum.sort(Platform.GameStream.Extension.runtime_channel_events()) ==
+               ~w(play_peer_view play_session_status play_signal play_slot_activity)
+
+      socket = join_host(ctx, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+
+      {:ok, %{session_id: id, multi: true, per_slot: true}} =
+        GameStream.start_session(ctx.task.id, runner: StubRunner, linger_ms: 50)
+
+      assert_push("play_session_start", %{session_id: ^id})
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, GameStream.topic(id))
+      {:ok, %{peer_id: peer_id}} = GameStream.attach_viewer(id, self())
+      {:ok, _} = GameStream.join(id, self(), 0)
+
+      push(socket, "play_peer_view", %{
+        "session_id" => id,
+        "peer_id" => peer_id,
+        "view" => "slot",
+        "slot" => 0
+      })
+
+      assert_receive {:game_stream, ^id,
+                      {:roster, %{views: %{^peer_id => %{view: "slot", slot: 0}}}}}
+
+      # Malformed reports are dropped and the channel lives.
+      push(socket, "play_peer_view", %{
+        "session_id" => id,
+        "peer_id" => peer_id,
+        "view" => "slot",
+        "slot" => "zero"
+      })
+
+      push(socket, "play_peer_view", %{
+        "session_id" => id,
+        "peer_id" => String.duplicate("p", 65),
+        "view" => "shared"
+      })
+
+      :sys.get_state(socket.channel_pid)
+      assert Process.alive?(socket.channel_pid)
+    end
+
     test "a runtime that did not declare the feature is not a host", ctx do
       _socket = join_host(ctx, ["meeting_voice"])
       refute GameStream.host_available?()

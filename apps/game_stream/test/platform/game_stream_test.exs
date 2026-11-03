@@ -1247,6 +1247,223 @@ defmodule Platform.GameStreamTest do
     end
   end
 
+  describe "the game_stream_per_slot capability gate (01a1a34c)" do
+    import ExUnit.CaptureLog
+
+    setup ctx do
+      task = task!(ctx.project, "in_review")
+      heads!(%{{"example/voltron", branch(task)} => @sha})
+      %{task: task}
+    end
+
+    defp features(list), do: %{metadata: %{"client_info" => %{"features" => list}}}
+
+    test "a host declaring multi and per_slot is per_slot; status and roster carry it", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+      {:ok, status} = start!(ctx.task)
+      {:ok, roster} = GameStream.roster(status.session_id)
+      {:ok, later} = GameStream.status(status.session_id)
+
+      assert status.per_slot == true
+      assert later.per_slot == true
+      assert roster.per_slot == true
+    end
+
+    test "a host with only game_stream_multi is NOT per_slot", ctx do
+      refute GameStream.per_slot_host?(features(["game_stream_host", "game_stream_multi"]))
+
+      host!(ctx.user, ["game_stream_host", "game_stream_multi"])
+      {:ok, status} = start!(ctx.task)
+      {:ok, roster} = GameStream.roster(status.session_id)
+
+      assert status.per_slot == false
+      assert roster.per_slot == false
+    end
+
+    test "per_slot without multi is ignored and logged" do
+      log =
+        capture_log(fn ->
+          refute GameStream.per_slot_host?(features(["game_stream_host", "game_stream_per_slot"]))
+        end)
+
+      assert log =~ "game_stream_per_slot without game_stream_multi"
+    end
+
+    test "undeclared features fail closed" do
+      refute GameStream.per_slot_host?(%{metadata: %{}})
+      refute GameStream.per_slot_host?(%{metadata: %{"client_info" => %{}}})
+      refute GameStream.per_slot_host?(%{metadata: nil})
+    end
+
+    test "nothing about per-slot is sent to the host: play_session_start is unchanged", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+      {:ok, _status} = start!(ctx.task)
+      assert_receive %Broadcast{event: "play_session_start", payload: payload}
+
+      assert Map.keys(payload) |> Enum.sort() ==
+               ~w(branch encoder ice_servers idle_timeout_s repo_url session_id sha task_id)a
+    end
+  end
+
+  describe "views on a game_stream_per_slot host (01a1a34c)" do
+    import ExUnit.CaptureLog
+
+    setup ctx do
+      task = task!(ctx.project, "in_review")
+      heads!(%{{"example/voltron", branch(task)} => @sha})
+      %{task: task}
+    end
+
+    defp per_slot!(ctx) do
+      runtime =
+        host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
+
+      {runtime.runtime_id, multi!(ctx)}
+    end
+
+    defp report(rid, id, peer_id, view, slot \\ nil) do
+      payload = %{"session_id" => id, "peer_id" => peer_id, "view" => view}
+      payload = if slot, do: Map.put(payload, "slot", slot), else: payload
+      GameStream.handle_peer_view(rid, payload)
+    end
+
+    # The newest roster push in the mailbox (earlier ones are drained).
+    defp latest_roster(id, acc \\ nil) do
+      receive do
+        {:game_stream, ^id, {:roster, roster}} -> latest_roster(id, roster)
+      after
+        50 -> acc
+      end
+    end
+
+    test "(a) each reported view lands in the roster push and in its own peer's reply", ctx do
+      {rid, id} = per_slot!(ctx)
+      [a, b, c] = [viewer!(), viewer!(), viewer!()]
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, %{peer_id: pb}} = GameStream.attach_viewer(id, b)
+      {:ok, %{peer_id: pc}} = GameStream.attach_viewer(id, c)
+      assert {:ok, %{view: nil, role: :player}} = GameStream.join(id, a, 0)
+      assert {:ok, %{view: nil, role: :player}} = GameStream.join(id, b, 0)
+
+      assert :ok = report(rid, id, pa, "slot", 0)
+      assert :ok = report(rid, id, pb, "slot", 1)
+      assert :ok = report(rid, id, pc, "shared")
+
+      assert %{views: views, per_slot: true} = latest_roster(id)
+
+      assert views == %{
+               pa => %{view: "slot", slot: 0},
+               pb => %{view: "slot", slot: 1},
+               pc => %{view: "shared"}
+             }
+
+      # A re-attach of the same pid answers with that peer's own view.
+      assert {:ok, %{peer_id: ^pa, view: %{view: "slot", slot: 0}}} =
+               GameStream.attach_viewer(id, a)
+
+      assert {:ok, %{peer_id: ^pc, view: %{view: "shared"}}} = GameStream.attach_viewer(id, c)
+    end
+
+    test "(b) a report that contradicts the slot table is refused and changes nothing", ctx do
+      {rid, id} = per_slot!(ctx)
+      a = viewer!()
+      b = viewer!()
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, %{peer_id: pb}} = GameStream.attach_viewer(id, b)
+      {:ok, _} = GameStream.join(id, a, 0)
+      assert :ok = report(rid, id, pa, "slot", 0)
+      before = latest_roster(id)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, :view_mismatch} = report(rid, id, pa, "slot", 1)
+          # shared is only valid for a slotless peer; a slot view needs a slot.
+          assert {:error, :view_mismatch} = report(rid, id, pa, "shared")
+          assert {:error, :view_mismatch} = report(rid, id, pb, "slot", 0)
+        end)
+
+      assert log =~ pa
+      assert {:error, :unknown_peer} = report(rid, id, "nobody", "shared")
+      assert {:error, :not_host} = report(host!(ctx.user).runtime_id, id, pb, "shared")
+      assert {:ok, roster} = GameStream.roster(id)
+      assert roster.views == before.views
+      assert roster.views == %{pa => %{view: "slot", slot: 0}}
+    end
+
+    test "(c) leave nils the view until the host reports again", ctx do
+      {rid, id} = per_slot!(ctx)
+      a = viewer!()
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, _} = GameStream.join(id, a, 0)
+      assert :ok = report(rid, id, pa, "slot", 0)
+      assert %{views: %{^pa => _}} = latest_roster(id)
+
+      assert {:ok, %{view: nil}} = GameStream.leave(id, a)
+      assert %{views: views} = latest_roster(id)
+      refute Map.has_key?(views, pa)
+
+      assert :ok = report(rid, id, pa, "shared")
+      assert %{views: %{^pa => %{view: "shared"}}} = latest_roster(id)
+    end
+
+    test "(d) a slot handed to a new viewer is reported for the new peer only", ctx do
+      {rid, id} = per_slot!(ctx)
+      a = viewer!()
+      b = viewer!()
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, _} = GameStream.join(id, a, 0)
+      assert :ok = report(rid, id, pa, "slot", 0)
+
+      {:ok, _} = GameStream.leave(id, a)
+      {:ok, %{peer_id: pb}} = GameStream.attach_viewer(id, b)
+      assert {:ok, %{view: nil}} = GameStream.join(id, b, 0)
+
+      assert :ok = report(rid, id, pb, "slot", 0)
+      assert {:error, :view_mismatch} = report(rid, id, pa, "slot", 0)
+      assert :ok = report(rid, id, pa, "shared")
+
+      assert %{views: views} = latest_roster(id)
+
+      assert views == %{
+               pb => %{view: "slot", slot: 0},
+               pa => %{view: "shared"}
+             }
+    end
+
+    test "(e) a host socket drop clears the views; the resume re-reports them", ctx do
+      {rid, id} = per_slot!(ctx)
+      a = viewer!()
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, _} = GameStream.join(id, a, 0)
+      :ok = GameStream.handle_host_status(rid, frame(id, "live", %{"detail" => "Streaming"}))
+      assert :ok = report(rid, id, pa, "slot", 0)
+      assert %{views: %{^pa => _}} = latest_roster(id)
+
+      assert :ok = GameStream.host_disconnected(rid)
+      assert %{views: views} = latest_roster(id)
+      assert views == %{}
+
+      resume = %{"resume" => true, "peers" => [pa]}
+      assert :ok = GameStream.handle_host_status(rid, frame(id, "live", resume))
+      assert :ok = report(rid, id, pa, "slot", 0)
+      assert %{views: %{^pa => %{view: "slot", slot: 0}}} = latest_roster(id)
+      assert {:ok, %{state: "live"}} = GameStream.status(id)
+    end
+
+    test "(f) a multi host without per_slot refuses the report; no views in the roster", ctx do
+      rid = host!(ctx.user, ["game_stream_host", "game_stream_multi"]).runtime_id
+      id = multi!(ctx)
+      a = viewer!()
+      {:ok, %{peer_id: pa}} = GameStream.attach_viewer(id, a)
+      {:ok, _} = GameStream.join(id, a, 0)
+
+      assert {:error, :not_per_slot} = report(rid, id, pa, "slot", 0)
+      assert {:ok, roster} = GameStream.roster(id)
+      assert roster.per_slot == false
+      assert roster.views == %{}
+    end
+  end
+
   describe "summarize_stats/1" do
     test "one slot's figures are the row's figures exactly (identical to v1)" do
       one = %{0 => %{rtt_p50_ms: 31.0, rtt_p95_ms: 48.5, fps_avg: 59.9, connection_path: "lan"}}

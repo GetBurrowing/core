@@ -46,8 +46,16 @@ export function normalizeRoster(raw) {
   }
   const highest = slots.size ? Math.max(...slots.keys()) + 1 : 1
   const max = nonNegInt(r.max_players)
+  const views = new Map()
+  for (const [pid, v] of Object.entries(r.views || {})) {
+    if (!v) continue
+    if (v.view === "shared") views.set(pid, { view: "shared", slot: null })
+    else if (v.view === "slot" && nonNegInt(v.slot) != null) views.set(pid, { view: "slot", slot: nonNegInt(v.slot) })
+  }
   return {
     multi: r.multi === true,
+    perSlot: r.per_slot === true,
+    views,
     maxPlayers: max && max > 0 ? Math.max(max, highest) : highest,
     slots,
     spectators: nonNegInt(r.spectators) || 0,
@@ -172,8 +180,35 @@ function listLabels(slots) {
   return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`
 }
 
+/**
+ * Which video this window receives on a per-slot host (task 01a1a34c):
+ * "your camera" for a slot view, "shared view" for the shared one, and ""
+ * when the host is not per-slot or has not reported this peer's view yet.
+ */
+export function viewLabel({ roster, peerId, mine }) {
+  void mine
+  if (!roster.perSlot || peerId == null) return ""
+  const v = roster.views.get(peerId)
+  if (!v) return ""
+  return v.view === "slot" ? "your camera" : v.view === "shared" ? "shared view" : ""
+}
+
+/** The `data-gs-view` value: "slot:N", "shared" or "". */
+export function viewAttr({ roster, peerId }) {
+  if (!roster.perSlot || peerId == null) return ""
+  const v = roster.views.get(peerId)
+  if (!v) return ""
+  return v.view === "slot" ? `slot:${v.slot}` : "shared"
+}
+
 /** The phone's one-line roster: "You are P2 · 2 others playing · 2 watching". */
 export function phoneLine({ roster, peerId, mine }) {
+  const label = viewLabel({ roster, peerId, mine })
+  const line = phoneLineBase({ roster, peerId, mine })
+  return label ? `${line} · ${label}` : line
+}
+
+function phoneLineBase({ roster, peerId, mine }) {
   const slots = mySlotList(mine)
   const players = playerPeers(roster)
   const watching = `${roster.spectators} watching`
