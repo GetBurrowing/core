@@ -3832,12 +3832,6 @@ defmodule PlatformWeb.MeetingLive do
      socket |> LiveInvites.renew(meeting, params, socket.assigns.user_id) |> touch_invite_rows()}
   end
 
-  # The detail rows are derived at render time from `meeting_invites`, and
-  # an expiry change or a renewal moves no assign, so LiveView would skip
-  # the render and keep showing the old row. Bumping this counter forces it.
-  defp touch_invite_rows(socket),
-    do: assign(socket, :meeting_invite_rows_rev, System.unique_integer([:positive]))
-
   # ── Archive filters (`:index` action only, task 019fb954-c848) ──────────
   #
   # The search box and the project select are ONE form, and it pushes into
@@ -8795,6 +8789,12 @@ defmodule PlatformWeb.MeetingLive do
         raise ArgumentError, "cannot invite: no meeting is selected in the detail surface"
     end
   end
+
+  # The detail rows are derived at render time from `meeting_invites`, and
+  # an expiry change or a renewal moves no assign, so LiveView would skip
+  # the render and keep showing the old row. Bumping this counter forces it.
+  defp touch_invite_rows(socket),
+    do: assign(socket, :meeting_invite_rows_rev, System.unique_integer([:positive]))
 
   defp flash_undelivered_invites(socket, []), do: socket
 
