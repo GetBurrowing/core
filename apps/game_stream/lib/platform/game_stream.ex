@@ -363,6 +363,19 @@ defmodule Platform.GameStream do
   end
 
   @doc """
+  Stores a host's `play_peer_view` report (which video a peer's connection
+  carries). `runtime_id` is the SENDING runtime, which must be the host.
+  """
+  @spec handle_peer_view(String.t(), map()) :: :ok | {:error, atom()}
+  def handle_peer_view(runtime_id, payload)
+      when is_binary(runtime_id) and is_map(payload) do
+    with :ok <- ensure_enabled(),
+         {:ok, parsed} <- Protocol.parse_peer_view(payload) do
+      Session.call(parsed.session_id, {:peer_view, runtime_id, parsed})
+    end
+  end
+
+  @doc """
   Applies a host's `play_session_status` frame. `runtime_id` is the SENDING
   runtime, which must be the session's host.
   """

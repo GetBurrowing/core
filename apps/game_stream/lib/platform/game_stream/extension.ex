@@ -37,7 +37,7 @@ defmodule Platform.GameStream.Extension do
   alias Platform.Federation.PlayTools
   alias Platform.GameStream
 
-  @events ~w(play_session_status play_signal play_slot_activity)
+  @events ~w(play_session_status play_signal play_slot_activity play_peer_view)
 
   @inert_text "game_stream is disabled (GAME_STREAM_ENABLED is unset); further play frames " <>
                 "on this channel are dropped silently"
@@ -96,6 +96,9 @@ defmodule Platform.GameStream.Extension do
 
   defp dispatch("play_slot_activity", runtime_id, payload),
     do: GameStream.handle_slot_activity(runtime_id, payload)
+
+  defp dispatch("play_peer_view", runtime_id, payload),
+    do: GameStream.handle_peer_view(runtime_id, payload)
 
   @impl true
   def runtime_disconnected(runtime_id) do

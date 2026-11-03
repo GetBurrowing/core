@@ -137,6 +137,27 @@ defmodule Platform.GameStream.Session do
   its own `idle_timeout_s`, so the canvas and the row's `ended_reason` carry
   the design's wording. See `idle_reason/1`.
 
+  ### Views (task 01a1a34c)
+
+  Each peer map also carries `view: nil | %{view: "slot", slot: n} | %{view:
+  "shared"}`, the host's report (`play_peer_view`) of which video that
+  peer's connection carries. `{:peer_view, runtime_id, parsed}` is refused
+  `:not_host` unless `runtime_id` is the host, `:not_per_slot` when the host
+  never declared `game_stream_per_slot`, `:unknown_peer` for a peer not in
+  `peers`, and `:view_mismatch` when the report contradicts the slot table:
+  `slot` must equal the peer's LOWEST held slot and `shared` is valid only
+  for a peer with no slots. A mismatch is logged at warning (session and
+  peer id only); it is usually a stale report racing a slot change, and the
+  host re-reports after it applies the new `play_slots`. Success stores the
+  view and pushes the roster.
+
+  Any slot change for a peer (join, leave, take_over, displace, release)
+  sets its `view` back to nil until the host reports again, so the canvas
+  never claims the wrong camera. `drop_peer/2` forgets it with the peer, and
+  a host socket drop clears every peer's view (the host re-reports once per
+  peer on resume). The roster gains `views: %{peer_id => view}` (non-nil
+  views only) and `peer_reply/2` gains `view`; both are additive.
+
   ## PubSub
 
   Everything every viewer renders is published on `game_stream:<session_id>`
@@ -386,6 +407,40 @@ defmodule Platform.GameStream.Session do
     end
   end
 
+  def handle_call({:peer_view, runtime_id, parsed}, _from, state) do
+    cond do
+      runtime_id != state.host_runtime_id ->
+        {:reply, {:error, :not_host}, state}
+
+      terminal?(state) ->
+        {:reply, {:error, :terminal}, state}
+
+      Map.get(state, :per_slot) != true ->
+        {:reply, {:error, :not_per_slot}, state}
+
+      not Map.has_key?(state.peers, parsed.peer_id) ->
+        {:reply, {:error, :unknown_peer}, state}
+
+      not view_matches_slots?(state.peers[parsed.peer_id], parsed) ->
+        Logger.warning(
+          "[GameStream] session #{state.session_id} peer #{parsed.peer_id}: " <>
+            "reported view contradicts the slot table; dropped"
+        )
+
+        {:reply, {:error, :view_mismatch}, state}
+
+      true ->
+        view =
+          case parsed.view do
+            "slot" -> %{view: "slot", slot: parsed.slot}
+            "shared" -> %{view: "shared"}
+          end
+
+        state = put_in(state.peers[parsed.peer_id].view, view)
+        {:reply, :ok, changed(state)}
+    end
+  end
+
   def handle_call({:viewer_signal, {pid, token, peer_id}, parsed}, _from, state) do
     cond do
       terminal?(state) ->
@@ -582,6 +637,8 @@ defmodule Platform.GameStream.Session do
             "waits #{state.host_grace_ms} ms for it to resume"
         )
 
+        state = clear_views(state)
+        publish(state, {:roster, roster(state)})
         {:reply, :ok, %{state | host_away: ref}}
     end
   end
@@ -608,6 +665,18 @@ defmodule Platform.GameStream.Session do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ── A host that drops ───────────────────────────────────────────────────
+
+  # `slot` must be the peer's lowest held slot; `shared` only for a peer
+  # with no slots.
+  defp view_matches_slots?(peer, %{view: "slot", slot: slot}) do
+    peer.slots != %{} and slot == peer.slots |> Map.values() |> Enum.min()
+  end
+
+  defp view_matches_slots?(peer, %{view: "shared"}), do: peer.slots == %{}
+  defp view_matches_slots?(_peer, _parsed), do: false
+
+  defp clear_views(state),
+    do: %{state | peers: Map.new(state.peers, fn {id, peer} -> {id, %{peer | view: nil}} end)}
 
   defp host_spoke(state, pid) when is_pid(pid), do: %{state | host_pid: pid}
   defp host_spoke(state, _pid), do: state
@@ -658,7 +727,8 @@ defmodule Platform.GameStream.Session do
       token: epoch,
       user_id: Map.get(info, :user_id),
       name: Map.get(info, :name),
-      slots: %{}
+      slots: %{},
+      view: nil
     }
 
     {%{state | peers: Map.put(state.peers, peer_id, peer), epoch: epoch}, peer_id}
@@ -809,6 +879,7 @@ defmodule Platform.GameStream.Session do
 
   defp assign_slot(state, peer_id, src, slot) do
     state = update_in(state.peers[peer_id].slots, &Map.put(&1, src, slot))
+    state = put_in(state.peers[peer_id].view, nil)
     %{state | slots: Map.put(state.slots, slot, peer_id)}
   end
 
@@ -819,6 +890,7 @@ defmodule Platform.GameStream.Session do
 
       slot ->
         state = update_in(state.peers[peer_id].slots, &Map.delete(&1, src))
+        state = put_in(state.peers[peer_id].view, nil)
         %{state | slots: Map.delete(state.slots, slot)}
     end
   end
@@ -918,8 +990,15 @@ defmodule Platform.GameStream.Session do
       # The roster is what the attach reply and every roster push carry to the
       # browser whole, so the touch gate and tuning ride here (01a0fe45).
       touch: touch(state),
-      per_slot: Map.get(state, :per_slot) == true
+      per_slot: Map.get(state, :per_slot) == true,
+      views: peer_views(state)
     }
+  end
+
+  defp peer_views(state) do
+    for {peer_id, %{view: view}} when not is_nil(view) <- state.peers,
+        into: %{},
+        do: {peer_id, view}
   end
 
   # `enabled` is false whenever the host lacks `game_stream_touch`; the
@@ -969,7 +1048,8 @@ defmodule Platform.GameStream.Session do
       viewer: viewer?,
       viewer_token: if(viewer?, do: peer.token),
       role: if(map_size(peer.slots) > 0, do: :player, else: :spectator),
-      slots: peer.slots
+      slots: peer.slots,
+      view: Map.get(peer, :view)
     }
   end
 
@@ -982,6 +1062,7 @@ defmodule Platform.GameStream.Session do
       viewer_token: nil,
       role: nil,
       slots: %{},
+      view: nil,
       pending_offer: nil,
       roster: roster(state)
     })
