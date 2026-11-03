@@ -83,7 +83,7 @@ defmodule PlatformWeb.CalendarLiveCancelMeetingTest do
   defp meeting!(ctx, opts \\ []) do
     {h, m} = Keyword.get(opts, :start, {14, 0})
     minutes = Keyword.get(opts, :minutes, 60)
-    start = at(ctx.zone, ctx.today, h, m)
+    start = at(ctx.zone, Keyword.get(opts, :date, ctx.today), h, m)
 
     {:ok, meeting} =
       Meetings.create_meeting(%{
@@ -231,7 +231,14 @@ defmodule PlatformWeb.CalendarLiveCancelMeetingTest do
     end
 
     test "drops the chip on a narrow, shared-lane block and keeps the strike-through", ctx do
-      wide = meeting!(ctx, name: "Wide cancelled", start: {9, 0})
+      # Lanes are per DAY (every chip in a day shares the day's lane count),
+      # so the lone block sits on another day of the same week.
+      other_day =
+        if Date.day_of_week(ctx.today) == 1,
+          do: Date.add(ctx.today, 1),
+          else: Date.add(ctx.today, -1)
+
+      wide = meeting!(ctx, name: "Wide cancelled", start: {9, 0}, date: other_day)
       narrow = meeting!(ctx, name: "Narrow cancelled", start: {14, 0})
       _overlap = meeting!(ctx, name: "Overlapping", start: {14, 0})
 
