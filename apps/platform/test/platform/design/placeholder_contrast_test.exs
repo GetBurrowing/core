@@ -102,6 +102,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # The agent page's Grant panel "Role name" field (task 01a1a2e4-9265
+    # stage 3): no placeholder: utility, so the base ::placeholder rule.
+    "platform_web/live/control_center/runtime_panel.ex" => :global_default,
     # The v4 event editor's Title/Notes and the settings page's iCal URL
     # and Label fields (task 01a18d9f stages 2-3): `.cal-input::placeholder`
     # paints --color-subtle in app.css.
