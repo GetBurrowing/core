@@ -648,12 +648,14 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
     end
 
     test "the expiry line states the time in the viewer's zone" do
-      html =
-        live_row(live_guest(expiry: expiry(expires_at: @ends_at)), time_zone: "America/Edmonton")
+      # Asia/Tokyo: UTC+9 with no DST rules, so the expectation cannot move
+      # with a tz database update (America/Edmonton gave 14:00 on one run and
+      # 15:00 on the next, as the suite's tzdata changed Alberta's rules).
+      html = live_row(live_guest(expiry: expiry(expires_at: @ends_at)), time_zone: "Asia/Tokyo")
 
-      # 21:00 UTC is 14:00 in Edmonton (MST) on 4 Nov 2026.
+      # 21:00 UTC on Wed 4 Nov is 06:00 on Thu 5 Nov in Tokyo.
       assert text_at(html, "[data-role=meeting-invite-expiry-text]") ==
-               "Link works until Wed 4 Nov, 14:00"
+               "Link works until Thu 5 Nov, 06:00"
     end
 
     test "with no zone the line is UTC and says so" do
