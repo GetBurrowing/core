@@ -63,6 +63,12 @@ defmodule PlatformWeb.Components.Meetings.CancelMeeting do
   attr(:id_prefix, :string, required: true)
   attr(:class, :any, default: nil)
 
+  attr(:escape, :boolean,
+    default: true,
+    doc:
+      "bind Escape to `cancel_meeting_keep` here. A page that already binds Escape (CalendarLive's `escape`) passes false and collapses the inset itself, so one key press is one event"
+  )
+
   def cancel_meeting(assigns) do
     ~H"""
     <div
@@ -87,8 +93,8 @@ defmodule PlatformWeb.Components.Meetings.CancelMeeting do
         class="flex flex-col gap-2 rounded border border-edge bg-base-200 p-3 text-base-content"
         role="group"
         aria-labelledby={"#{@id_prefix}-meeting-cancel-heading"}
-        phx-window-keydown={@state in [:confirming, :error] && "cancel_meeting_keep"}
-        phx-key="Escape"
+        phx-window-keydown={(@escape and @state in [:confirming, :error]) && "cancel_meeting_keep"}
+        phx-key={@escape && "Escape"}
         data-role="meeting-cancel-confirm"
       >
         <p id={"#{@id_prefix}-meeting-cancel-heading"} class="m-0 text-sm font-medium">

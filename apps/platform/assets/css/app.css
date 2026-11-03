@@ -9470,6 +9470,19 @@ body.screen-share-fullscreen-active {
 .cal-k-meeting small .cal-cam {
   color: var(--color-primary);
 }
+/* A cancelled meeting stays in its slot (task 01a19e7f stage 4): the swatch
+   drawn at reduced opacity, muted rather than red, and never live. The
+   struck title and the chip are utilities in the markup. */
+.cal-k-meeting.cal-cancelled {
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-base-200));
+  border-left-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+.cal-k-meeting.cal-cancelled small .cal-cam {
+  opacity: 0.5;
+}
+.cal-dot.cal-k-meeting.cal-cancelled {
+  opacity: 0.35;
+}
 .cal-k-meeting.cal-live small .cal-cam {
   color: var(--color-success);
 }

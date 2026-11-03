@@ -23,6 +23,9 @@ defmodule PlatformWeb.CalendarLive.Components do
     only: [invite_list: 1, invite_control: 1]
 
   alias PlatformWeb.CalendarLive, as: Cal
+
+  import PlatformWeb.Components.Meetings.CancelMeeting,
+    only: [cancel_meeting: 1, cancelled_chip: 1]
   alias PlatformWeb.Components.NewKindToggle
 
   @primary_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-primary px-3 text-xs font-semibold text-primary-content hover:brightness-110"
@@ -550,14 +553,18 @@ defmodule PlatformWeb.CalendarLive.Components do
         style:
           "top: #{chip.top}px; height: #{chip.height}px; " <>
             "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
-        label: Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439))
+        label: Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
+        cancelled: Cal.cancelled?(entry),
+        # The chip never takes space from the title on a short (compact) or
+        # shared-lane block: there the strike-through alone says it.
+        cancelled_chip: Cal.cancelled?(entry) and not chip.compact and chip.lanes == 1
       )
 
     ~H"""
     <button
       type="button"
       id={"#{@id_prefix}-#{@chip.date}-#{@entry.kind}-#{@entry.id}-#{DateTime.to_unix(@entry.starts_at, :microsecond)}"}
-      class={["cal-ev", "cal-k-#{@kind}", @live && "cal-live"]}
+      class={["cal-ev", "cal-k-#{@kind}", @live && "cal-live", @cancelled && "cal-cancelled"]}
       style={@style}
       phx-click="select"
       phx-value-kind={@entry.kind}
@@ -566,8 +573,15 @@ defmodule PlatformWeb.CalendarLive.Components do
       aria-label={@label}
       aria-current={to_string(@selected)}
       data-kind={@kind}
+      data-cancelled={@cancelled && "true"}
     >
-      <b>{Cal.chip_title(@entry)}</b>
+      <b :if={!@cancelled}>{Cal.chip_title(@entry)}</b>
+      <span :if={@cancelled} class="flex min-w-0 items-center gap-1">
+        <b class="min-w-0 truncate line-through text-neutral dark:text-neutral-content">
+          {Cal.chip_title(@entry)}
+        </b>
+        <.cancelled_chip :if={@cancelled_chip} />
+      </span>
       <small :if={!@chip.compact} data-role="chip-meta">
         <.chip_meta entry={@entry} kind={@kind} live={@live} range={@range} />
       </small>
@@ -745,11 +759,21 @@ defmodule PlatformWeb.CalendarLive.Components do
             class={[
               if(@phone, do: "cal-dot", else: "cal-mchip mb-[3px]"),
               "cal-k-#{Cal.chip_kind(entry)}",
-              Cal.live?(entry) && "cal-live"
+              Cal.live?(entry) && "cal-live",
+              Cal.cancelled?(entry) && "cal-cancelled"
             ]}
+            data-cancelled={Cal.cancelled?(entry) && "true"}
           >
             <span :if={!@phone} class="cal-mono">{month_time(entry, day, @zone)}</span>
-            <span :if={!@phone}>{Cal.chip_title(entry)}</span>
+            <span
+              :if={!@phone}
+              class={
+                Cal.cancelled?(entry) &&
+                  "line-through text-neutral dark:text-neutral-content"
+              }
+            >
+              {Cal.chip_title(entry)}
+            </span>
           </button>
         </div>
         <span :if={!@phone and length(list) > @max} class="pl-1.5 text-xs text-subtle">
@@ -774,6 +798,11 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   attr(:detail, :map, required: true)
   attr(:invite, :map, default: %{}, doc: "the caller's `:meeting_invite_*` assigns")
+
+  attr(:cancel, :map,
+    default: nil,
+    doc: "`%{state}` for the selected meeting's Cancel control (task 01a19e7f); nil draws none"
+  )
 
   @doc """
   The details: a 320px right column at `lg`, a bottom sheet over a scrim
@@ -810,6 +839,14 @@ defmodule PlatformWeb.CalendarLive.Components do
         <h3>{@detail.title}</h3>
         <.detail_row icon="hero-clock" text={@detail.when} sub={@detail[:recurrence]} />
         <.detail_body detail={@detail} invite={@invite} />
+        <.cancel_meeting
+          :if={@detail.kind == "meeting" and @cancel}
+          can_cancel={@detail.can_cancel}
+          state={@cancel.state}
+          audience={@detail.audience}
+          escape={false}
+          id_prefix="calendar-detail-cancel"
+        />
       </div>
       <div :if={footer?(@detail)} class="cal-dfoot">
         <.detail_footer detail={@detail} />
@@ -822,6 +859,12 @@ defmodule PlatformWeb.CalendarLive.Components do
   defp footer?(_), do: true
 
   attr(:detail, :map, required: true)
+
+  defp detail_pill(%{detail: %{kind: "meeting", cancelled?: true}} = assigns) do
+    ~H"""
+    <.cancelled_chip />
+    """
+  end
 
   defp detail_pill(%{detail: %{kind: "meeting", live?: true}} = assigns) do
     ~H"""
@@ -973,7 +1016,11 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_footer(%{detail: %{kind: "meeting"}} = assigns) do
     ~H"""
-    <.link navigate={~p"/meetings/#{@detail.slug}"} class={primary_btn()}>
+    <.link
+      :if={!@detail[:cancelled?]}
+      navigate={~p"/meetings/#{@detail.slug}"}
+      class={primary_btn()}
+    >
       {if @detail.live?, do: "Join now", else: "Open meeting"}
     </.link>
     <.link navigate={~p"/meetings?#{%{meeting: @detail.meeting_id}}"} class={ghost_btn()}>
