@@ -1073,6 +1073,10 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.FirstRunLive ->
         "Get started"
 
+      # Task 01a1a2e4-9265 stage 4: the fallback would print "AccessRoles".
+      PlatformWeb.AccessRolesLive ->
+        "Custom roles"
+
       _ ->
         view
         |> Module.split()
