@@ -235,7 +235,9 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
             class="flex min-w-0 items-center gap-1.5"
             data-role="workspace-meeting-cancelled"
           >
-            <strong class="min-w-0 truncate line-through !text-neutral">{row.meeting.name}</strong>
+            <strong class="min-w-0 truncate line-through !text-neutral dark:!text-neutral-content">
+              {row.meeting.name}
+            </strong>
             <.cancelled_chip />
           </span>
           <span :if={row.when}>{row.when}</span>

@@ -139,14 +139,20 @@ defmodule PlatformWeb.Components.Meetings.CancelMeeting do
     """
   end
 
-  @doc "The neutral \"Cancelled\" chip for a cancelled meeting's header or row."
+  @doc """
+  The neutral "Cancelled" chip for a cancelled meeting's header or row.
+
+  `text-neutral` is the direction's slot. In the dark theme that slot is a
+  dark grey on a dark ground (measured about 1.5:1), so dark mode reads
+  `neutral-content` instead.
+  """
   attr(:class, :any, default: nil)
 
   def cancelled_chip(assigns) do
     ~H"""
     <span
       class={[
-        "inline-flex shrink-0 items-center rounded-full border border-edge px-2 text-xs font-medium leading-5 text-neutral",
+        "inline-flex shrink-0 items-center rounded-full border border-edge px-2 text-xs font-medium leading-5 text-neutral dark:text-neutral-content",
         @class
       ]}
       data-role="meeting-cancelled-chip"
