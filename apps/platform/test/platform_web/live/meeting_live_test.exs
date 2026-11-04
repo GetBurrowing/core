@@ -2997,6 +2997,119 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  # ── Two-person gallery (task 01a1a822 stage 1) ───────────────────────────
+  #
+  # Design direction canvas 01a1a822-6d28-7000-ac6c-f653ccb0616e: count the
+  # HUMAN video tiles. At exactly two (and no screen share) the grid holds
+  # the pair and nothing else. Agents never count and never take a cell.
+  describe "gallery_two_up?/2 (task 01a1a822)" do
+    alias PlatformWeb.MeetingLive
+
+    defp two_up_human(n), do: %{participant_type: "user", id: "human-#{n}"}
+    defp two_up_agent(n), do: %{participant_type: "agent", id: "agent-#{n}"}
+    defp two_up_humans(n), do: Enum.map(Enum.take(1..4, n), &two_up_human/1)
+
+    test "true at exactly two humans" do
+      assert MeetingLive.gallery_two_up?(two_up_humans(2), false)
+    end
+
+    for n <- [0, 1, 3, 4] do
+      test "false at #{n} humans" do
+        refute MeetingLive.gallery_two_up?(two_up_humans(unquote(n)), false)
+      end
+    end
+
+    test "true at two humans plus one agent: agents never count" do
+      assert MeetingLive.gallery_two_up?(two_up_humans(2) ++ [two_up_agent(1)], false)
+    end
+
+    test "true at two humans plus one agent when share is nil (unassigned)" do
+      assert MeetingLive.gallery_two_up?([two_up_agent(1) | two_up_humans(2)], nil)
+    end
+
+    test "false at one human plus one agent" do
+      refute MeetingLive.gallery_two_up?(two_up_humans(1) ++ [two_up_agent(1)], false)
+    end
+
+    test "false at two humans while a screen share is active" do
+      refute MeetingLive.gallery_two_up?(two_up_humans(2), true)
+    end
+  end
+
+  describe "two-person gallery renders the pair and nothing else (task 01a1a822)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "two-up-#{System.unique_integer([:positive])}",
+          name: "Two Up"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "two humans plus a speaking agent: two-up, two cells, the agent stays out of the grid",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      seed_meeting_presence(space, "user", "Grace Hopper")
+      {_agent, agent_id} = seed_meeting_presence(space, "agent", "Speaking Agent")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html = promote_agent(view, agent_id)
+
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert count(html, ~s([data-gallery-grid][data-gallery-two-up])) == 1
+      assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 2
+      assert count(html, ~s([data-gallery-grid] .meeting-agent-tile)) == 0
+      assert count(html, ~s([data-gallery-ghost-cell])) == 0
+      assert html =~ ~s(data-gallery-tile-count="2")
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-2")
+    end
+
+    test "DIRECTION CONTROL: one human plus a speaking agent still promotes the agent",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      {_agent, agent_id} = seed_meeting_presence(space, "agent", "Speaking Agent")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html = promote_agent(view, agent_id)
+
+      assert count(html, ~s([data-gallery-two-up])) == 0
+      assert count(html, ~s([data-gallery-grid] .meeting-agent-tile)) == 1
+      assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 2
+    end
+
+    test "two humans plus a canvas: two-up, no canvas tile in the grid",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      seed_meeting_presence(space, "user", "Grace Hopper")
+      _canvas = seed_canvas(space)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, ~s([data-gallery-grid][data-gallery-two-up])) == 1
+      assert count(html, ~s([data-gallery-grid] [data-role="canvas-tile"])) == 0
+      assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 2
+      assert count(html, ~s([data-gallery-ghost-cell])) == 0
+      assert html =~ ~s(data-gallery-tile-count="2")
+    end
+
+    test "three humans: no two-up, grid-cols-2 and the ghost cell, unchanged",
+         %{conn: conn, meeting: meeting, space: space} do
+      _ = space_with_humans(space, ~w(Ada Grace Hedy), 3)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ ~s(data-gallery-tile-count="3")
+      assert count(html, ~s([data-gallery-two-up])) == 0
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-2")
+      assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 3
+      assert count(html, ~s([data-gallery-ghost-cell])) == 1
+    end
+  end
+
   # ── Meetings index (:index action) ───────────────────────────────────────
   #
   # Task 019fb954-8ead stage 3 REPLACED the pre-calendar index surface. The

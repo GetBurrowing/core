@@ -2046,6 +2046,18 @@
                   </div>
                 </div>
               <% @current_stage_mode == :gallery -> %>
+                <%!-- TWO-UP (task 01a1a822): at exactly two humans and no
+                 screen share, the grid holds only the two human cells --
+                 no promoted agent, no canvas tile, no ghost cell. When it
+                 is false `gallery_cells` is exactly today's
+                 `gallery_participants/2` roster. See `gallery_two_up?/2`. --%>
+                <% two_up? =
+                  gallery_two_up?(assigns[:participants] || [], assigns[:screen_share_enabled]) %>
+                <% gallery_cells =
+                  if two_up?,
+                    do: gallery_participants(assigns[:participants] || []),
+                    else: gallery_participants(assigns[:participants] || [], @speaking_identities) %>
+                <% canvas_cell? = not two_up? and canvas_tile_canvas(assigns) != nil %>
                 <%!-- Gallery mode. Lay out one `<.video_tile>` per human
                  participant in a responsive grid. Agents are excluded —
                  Gallery is a face-grid and agents surface in the bottom
@@ -2057,14 +2069,10 @@
                   id="meeting-stage-gallery"
                   class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col"
                   data-placeholder="center-stage"
-                  data-gallery-tile-count={
-                    length(
-                      gallery_participants(assigns[:participants] || [], @speaking_identities)
-                    )
-                  }
+                  data-gallery-tile-count={length(gallery_cells)}
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
-                  <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
+                  <%= if gallery_cells == [] do %>
                     <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-subtle">
                       <span class="hero-squares-2x2 size-10"></span>
                       <p class="mt-2 text-sm font-medium text-base-content">
@@ -2077,31 +2085,16 @@
                       class={[
                         "grid min-h-0 w-full flex-1 auto-rows-fr gap-2.5 overflow-y-auto p-1",
                         gallery_grid_class(
-                          gallery_cell_count(
-                            length(
-                              gallery_participants(
-                                assigns[:participants] || [],
-                                @speaking_identities
-                              )
-                            ),
-                            canvas_tile_canvas(assigns) != nil
-                          ),
+                          gallery_cell_count(length(gallery_cells), canvas_cell?),
                           assigns[:chrome_mode] || :shell
                         )
                       ]}
                       data-gallery-grid
+                      data-gallery-two-up={two_up?}
                       data-role="call-tile-grid"
                       data-gallery-grid-shape={
                         gallery_grid_class(
-                          gallery_cell_count(
-                            length(
-                              gallery_participants(
-                                assigns[:participants] || [],
-                                @speaking_identities
-                              )
-                            ),
-                            canvas_tile_canvas(assigns) != nil
-                          ),
+                          gallery_cell_count(length(gallery_cells), canvas_cell?),
                           assigns[:chrome_mode] || :shell
                         )
                       }
@@ -2115,13 +2108,7 @@
                        wrapper fills its grid cell so the container
                        query has dimensions to work with. --%>
                       <div
-                        :for={
-                          p <-
-                            gallery_participants(
-                              assigns[:participants] || [],
-                              @speaking_identities
-                            )
-                        }
+                        :for={p <- gallery_cells}
                         class="relative grid h-full w-full"
                         data-gallery-cell
                       >
@@ -2289,7 +2276,7 @@
                        the move path has historically dropped injected
                        children. --%>
                       <div
-                        :if={canvas_tile_canvas(assigns)}
+                        :if={canvas_cell?}
                         class="relative grid h-full w-full"
                         data-gallery-cell
                       >
@@ -2320,17 +2307,10 @@
                        this cell has no tile. --%>
                       <div
                         :if={
-                          gallery_ghost_cell?(
-                            gallery_cell_count(
-                              length(
-                                gallery_participants(
-                                  assigns[:participants] || [],
-                                  @speaking_identities
-                                )
-                              ),
-                              canvas_tile_canvas(assigns) != nil
+                          not two_up? and
+                            gallery_ghost_cell?(
+                              gallery_cell_count(length(gallery_cells), canvas_cell?)
                             )
-                          )
                         }
                         class="rounded-xl border border-base-content/30 opacity-30"
                         data-gallery-ghost-cell

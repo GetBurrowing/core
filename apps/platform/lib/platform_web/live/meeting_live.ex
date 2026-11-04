@@ -9578,6 +9578,31 @@ defmodule PlatformWeb.MeetingLive do
   def gallery_grid_class(_n), do: "grid-cols-4"
 
   @doc """
+  True when the gallery should render the TWO-UP layout: exactly two
+  humans, laid out as an equal pair with nothing else in the grid.
+
+  Task 01a1a822 ("two-person calls show the two videos side by side"),
+  design direction canvas 01a1a822-6d28-7000-ac6c-f653ccb0616e: count the
+  HUMAN video tiles only. `gallery_participants/1` is the humans-only
+  roster (`participant_type == "user"`), so agents never count, whether
+  speaking or not, and the participant rail never counts.
+
+  It is false while a screen share is active: the share owns the stage
+  and the pair belongs in the filmstrip, so the two-up branch must not
+  fire (the canvas's self-critique calls this out).
+
+  When true the grid renders only the two human cells: a speaking agent
+  stays in the rail instead of being promoted, and the canvas tile and
+  the ghost cell are not rendered. Dropping the canvas tile at exactly
+  two humans is deliberate; keeping it would be a change to this
+  predicate's call site in the template only.
+  """
+  @spec gallery_two_up?(list(), boolean() | nil) :: boolean()
+  def gallery_two_up?(participants, screen_share_enabled?) do
+    length(gallery_participants(participants)) == 2 and screen_share_enabled? != true
+  end
+
+  @doc """
   True when the grid should render a GHOST cell — a dimmed, empty cell
   that completes the 2x2 block the mockup draws.
 
