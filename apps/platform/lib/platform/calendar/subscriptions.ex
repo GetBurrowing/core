@@ -91,12 +91,19 @@ defmodule Platform.Calendar.Subscriptions do
 
   def entries(scope, from, to, opts \\ []) do
     zone = CalendarWindow.resolve_time_zone(Keyword.get(opts, :time_zone, "Etc/UTC"))
+    # Floating times are the reader's wall clock (RFC 5545 §3.3.5), so they are
+    # placed only for a caller that names its zone, never a default UTC.
+    floating_zone = if Keyword.has_key?(opts, :time_zone), do: zone
 
     list(scope)
     |> Enum.flat_map(fn sub ->
       Enum.flat_map(sub.snapshot, fn row ->
         ICal.event(row, sub.id)
-        |> occurrences(from, to, zone)
+        |> then(fn event ->
+          if row["floating"],
+            do: floating(event, from, to, floating_zone),
+            else: occurrences(event, from, to, zone)
+        end)
         |> Enum.map(fn event ->
           %{
             kind: :external,
@@ -113,6 +120,32 @@ defmodule Platform.Calendar.Subscriptions do
         end)
       end)
     end)
+  end
+
+  defp floating(_event, _from, _to, nil), do: []
+
+  defp floating(event, from, to, zone) do
+    # starts_at/ends_at hold the wall clock labelled UTC; floating rows never recur.
+    first = wall_clock(event.starts_at, zone, :earliest)
+    last = wall_clock(event.ends_at, zone, :latest)
+
+    last =
+      if DateTime.compare(first, last) == :lt,
+        do: last,
+        else: DateTime.add(first, DateTime.diff(event.ends_at, event.starts_at))
+
+    if Recurrence.overlaps?(first, last, from, to),
+      do: [%{event | starts_at: first, ends_at: last, time_zone: zone}],
+      else: []
+  end
+
+  defp wall_clock(at, zone, pick) do
+    case DateTime.from_naive(DateTime.to_naive(at), zone) do
+      {:ok, local} -> local
+      {:gap, _before, after_gap} -> after_gap
+      {:ambiguous, early, late} -> if pick == :earliest, do: early, else: late
+    end
+    |> DateTime.shift_zone!("Etc/UTC")
   end
 
   defp occurrences(%{all_day: false} = event, from, to, _zone),
@@ -154,7 +187,10 @@ defmodule Platform.Calendar.Subscriptions do
 
       is_nil(zone) and
           Enum.any?(subscriptions, fn sub ->
-            Enum.any?(sub.snapshot, &(&1["all_day"] and not &1["transparent"]))
+            Enum.any?(
+              sub.snapshot,
+              &((&1["all_day"] or &1["floating"] == true) and not &1["transparent"])
+            )
           end) ->
         {:error, :external_timezone_required}
 

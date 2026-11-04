@@ -430,17 +430,27 @@ defmodule Platform.Calendar.SubscriptionsTest do
 
       rejected =
         for {label, body} <- [
-            calendar_x: cal.("X-APPLE-CALENDAR-COLOR:#1BADF8\r\n", event()),
-            event_x: feed(event("\r\nX-APPLE-CREATOR-IDENTITY:com.example")),
-            repeated_x: feed(event("\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:a\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:b")),
-            repeated_attendee:
-              feed(event("\r\nATTENDEE:mailto:a@example.invalid\r\nATTENDEE:mailto:b@example.invalid")),
-            vtimezone: cal.(tz, event()),
-            valarm: feed(event("\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM")),
-            floating: feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000")
-          ],
-          not match?({:ok, [_]}, ICal.parse(body)),
-          do: label
+              calendar_x: cal.("X-APPLE-CALENDAR-COLOR:#1BADF8\r\n", event()),
+              event_x: feed(event("\r\nX-APPLE-CREATOR-IDENTITY:com.example")),
+              repeated_x:
+                feed(
+                  event(
+                    "\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:a\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:b"
+                  )
+                ),
+              repeated_attendee:
+                feed(
+                  event(
+                    "\r\nATTENDEE:mailto:a@example.invalid\r\nATTENDEE:mailto:b@example.invalid"
+                  )
+                ),
+              vtimezone: cal.(tz, event()),
+              valarm:
+                feed(event("\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM")),
+              floating: feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000")
+            ],
+            not match?({:ok, [_]}, ICal.parse(body)),
+            do: label
 
       assert rejected == []
     end
@@ -473,8 +483,11 @@ defmodule Platform.Calendar.SubscriptionsTest do
             unknown_event_property: feed(event("\r\nBUSY:YES")),
             duplicate_dtstart: feed(event("\r\nDTSTART:20261030T180000Z")),
             floating_recurrence:
-              feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"),
-            floating_mixed_with_utc: feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z")
+              feed(
+                "UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"
+              ),
+            floating_mixed_with_utc:
+              feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z")
           ] do
         assert {{:error, :unsupported_or_malformed_feed}, ^label} = {ICal.parse(body), label}
       end
@@ -496,7 +509,11 @@ defmodule Platform.Calendar.SubscriptionsTest do
       assert floating.event.time_zone == "America/Chicago"
 
       tokyo = Subscriptions.entries(owner, @from, @to, time_zone: "Asia/Tokyo")
-      assert DateTime.compare(Enum.find(tokyo, &(&1.title == "Floating")).starts_at, ~U[2026-10-31 00:00:00Z]) == :eq
+
+      assert DateTime.compare(
+               Enum.find(tokyo, &(&1.title == "Floating")).starts_at,
+               ~U[2026-10-31 00:00:00Z]
+             ) == :eq
 
       refute Enum.any?(Subscriptions.entries(owner, @from, @to), &(&1.title == "Floating"))
       assert {:error, :external_timezone_required} = Subscriptions.availability(owner, @from, @to)
@@ -504,8 +521,15 @@ defmodule Platform.Calendar.SubscriptionsTest do
       assert {:ok, windows} =
                Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
 
-      assert Enum.any?(windows, &(DateTime.compare(&1.starts_at, ~U[2026-10-31 14:00:00Z]) == :eq))
-      assert Enum.any?(windows, &(DateTime.compare(&1.starts_at, ~U[2026-10-30 19:00:00Z]) == :eq))
+      assert Enum.any?(
+               windows,
+               &(DateTime.compare(&1.starts_at, ~U[2026-10-31 14:00:00Z]) == :eq)
+             )
+
+      assert Enum.any?(
+               windows,
+               &(DateTime.compare(&1.starts_at, ~U[2026-10-30 19:00:00Z]) == :eq)
+             )
     end
 
     test "a floating time in a DST gap or overlap still yields a positive window" do
