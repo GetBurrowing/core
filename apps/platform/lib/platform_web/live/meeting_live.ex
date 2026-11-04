@@ -583,6 +583,9 @@ defmodule PlatformWeb.MeetingLive do
      # stage 3) hydrates from localStorage so the preference survives
      # navigation + reload.
      |> assign(:chat_panel_collapsed, false)
+     # Task 01a1a822: true once the viewer toggles the rail themselves in
+     # this session. Session-only by design; nothing new is persisted.
+     |> assign(:rail_user_toggled?, false)
      # Snap-vs-animate for the rail's WIDTH change (task 01a0740d, per
      # Saru's design canvas 01a08374). `true` only when the viewer moved
      # the rail themselves via the chevron; `false` on every mode-driven
@@ -1325,7 +1328,7 @@ defmodule PlatformWeb.MeetingLive do
               socket
           end
 
-        {:noreply, socket}
+        {:noreply, apply_two_up_rail_default(socket)}
     end
   end
 
@@ -2909,6 +2912,7 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:active_meeting_tab, "chat")
      |> assign(:chat_panel_collapsed, false)
+     |> assign(:rail_user_toggled?, true)
      |> assign(:call_rail_open, true)
      |> assign(:call_rail_animate, true)
      |> assign(:call_rail_unread, false)
@@ -2959,7 +2963,7 @@ defmodule PlatformWeb.MeetingLive do
   # Anything but a literal boolean is ignored rather than coerced: a
   # malformed payload must not flip the rail into the wrong frame.
   def handle_event("meeting_viewport", %{"below" => below}, socket) when is_boolean(below) do
-    {:noreply, assign(socket, :mobile_viewport?, below)}
+    {:noreply, socket |> assign(:mobile_viewport?, below) |> apply_two_up_rail_default()}
   end
 
   def handle_event("meeting_viewport", _params, socket), do: {:noreply, socket}
@@ -3045,16 +3049,24 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply,
      socket
      |> assign(:chat_panel_collapsed, next)
+     |> assign(:rail_user_toggled?, true)
      |> assign(:call_rail_animate, true)
      |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: next})}
   end
 
   def handle_event("meeting_chat_pane_hydrate", %{"collapsed" => collapsed}, socket)
       when is_boolean(collapsed) do
-    if collapsed == socket.assigns.chat_panel_collapsed do
-      {:noreply, socket}
-    else
-      {:noreply, assign(socket, :chat_panel_collapsed, collapsed)}
+    cond do
+      collapsed == socket.assigns.chat_panel_collapsed ->
+        {:noreply, socket}
+
+      # Task 01a1a822: the stored preference is from an earlier session.
+      # Only a toggle in THIS session overrides the two-up default.
+      collapsed == false and two_up_rail_collapsed?(socket.assigns) ->
+        {:noreply, socket}
+
+      true ->
+        {:noreply, assign(socket, :chat_panel_collapsed, collapsed)}
     end
   end
 
@@ -3200,7 +3212,8 @@ defmodule PlatformWeb.MeetingLive do
          |> assign(:chat_panel_collapsed, collapsed)
          |> assign(:call_rail_animate, false)
          |> push_event("meeting_stage_mode_changed", %{mode: Atom.to_string(stage_mode)})
-         |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: collapsed})}
+         |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: collapsed})
+         |> apply_two_up_rail_default()}
 
       :error ->
         # Unknown mode — keep `:current_stage_mode` unchanged. No
@@ -6580,6 +6593,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:agents_by_id, load_agents_by_id(participants))
     |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
     |> assign_invite_rows(space_id, participants)
+    |> apply_two_up_rail_default()
   end
 
   defp refresh_participants(socket), do: socket
@@ -9600,6 +9614,42 @@ defmodule PlatformWeb.MeetingLive do
   @spec gallery_two_up?(list(), boolean() | nil) :: boolean()
   def gallery_two_up?(participants, screen_share_enabled?) do
     length(gallery_participants(participants)) == 2 and screen_share_enabled? != true
+  end
+
+  @doc """
+  True when the desktop call rail should be held COLLAPSED by the two-up
+  default (task 01a1a822 fix stage, canvas 01a1a822-6d28-7000-ac6c-f653ccb0616e).
+
+  With both side panes docked at 1280x800 the gallery stage is 374x632,
+  portrait, so the stage-aspect rule stacks the pair, which is the opposite
+  of the task. The rail yields so the stage is landscape: while the gallery
+  is two-up, the rail starts collapsed.
+
+  It holds only until the viewer toggles the rail in this session
+  (`:rail_user_toggled?`); an explicit toggle always wins. Leaving two-up
+  never forces the rail open again. `:chat_panel_collapsed` is the desktop
+  (`lg`) rail only; below `lg` the drawer reads `:call_rail_open`, and a
+  viewer the `ViewportBreakpoint` hook reports as below `lg`
+  (`:mobile_viewport?`) is skipped outright, so phones are unaffected.
+  """
+  @spec two_up_rail_collapsed?(map()) :: boolean()
+  def two_up_rail_collapsed?(assigns) do
+    assigns[:current_stage_mode] == :gallery and
+      assigns[:rail_user_toggled?] != true and
+      assigns[:mobile_viewport?] != true and
+      gallery_two_up?(assigns[:participants] || [], assigns[:screen_share_enabled])
+  end
+
+  # Applies the two-up rail default. Never expands, never pushes the
+  # persistence event: the stored preference is left as the viewer set it.
+  defp apply_two_up_rail_default(socket) do
+    if two_up_rail_collapsed?(socket.assigns) and socket.assigns[:chat_panel_collapsed] != true do
+      socket
+      |> assign(:chat_panel_collapsed, true)
+      |> assign(:call_rail_animate, false)
+    else
+      socket
+    end
   end
 
   @doc """

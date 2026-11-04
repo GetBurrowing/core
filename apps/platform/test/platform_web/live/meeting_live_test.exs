@@ -3036,6 +3036,126 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  describe "two_up_rail_collapsed?/1 (task 01a1a822 fix stage)" do
+    alias PlatformWeb.MeetingLive
+
+    defp rail_assigns(humans, overrides \\ %{}) do
+      Map.merge(
+        %{
+          current_stage_mode: :gallery,
+          participants:
+            Enum.map(Enum.take(1..4, humans), &%{participant_type: "user", id: "h#{&1}"}),
+          screen_share_enabled: false,
+          rail_user_toggled?: false,
+          mobile_viewport?: false
+        },
+        overrides
+      )
+    end
+
+    test "true in two-up gallery on desktop before any toggle" do
+      assert MeetingLive.two_up_rail_collapsed?(rail_assigns(2))
+    end
+
+    test "false at 1 and 3 humans" do
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(1))
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(3))
+    end
+
+    test "false once the viewer has toggled the rail this session" do
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(2, %{rail_user_toggled?: true}))
+    end
+
+    test "false outside gallery mode, while sharing, and below lg" do
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(2, %{current_stage_mode: :canvas}))
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(2, %{screen_share_enabled: true}))
+      refute MeetingLive.two_up_rail_collapsed?(rail_assigns(2, %{mobile_viewport?: true}))
+    end
+  end
+
+  describe "two-up on desktop collapses the call rail by default (task 01a1a822 fix stage)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{
+          slug: "two-up-rail-#{System.unique_integer([:positive])}",
+          name: "Two Up Rail"
+        })
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    defp rail_collapsed?(view), do: :sys.get_state(view.pid).socket.assigns.chat_panel_collapsed
+
+    defp rail_hook_state(html) do
+      html
+      |> frag()
+      |> LazyHTML.query("#meeting-chat-pane-collapse-hook")
+      |> LazyHTML.attribute("data-collapsed")
+    end
+
+    test "two humans: the rail mounts collapsed; a user re-open sticks across presence updates",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      seed_meeting_presence(space, "user", "Grace Hopper")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert count(html, ~s([data-gallery-two-up])) == 1
+      assert rail_hook_state(html) == ["true"]
+      assert rail_collapsed?(view)
+
+      # A stored "expanded" preference from an earlier session does not
+      # undo the default; only a toggle in this session does.
+      render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => false})
+      assert rail_collapsed?(view)
+
+      reopened =
+        view
+        |> element(~s([data-role="chat-pane-toggle"][aria-label="Expand call rail"]))
+        |> render_click()
+
+      assert rail_hook_state(reopened) == ["false"]
+
+      # The invite-an-agent entry is in the reopened rail.
+      assert count(reopened, ~s([data-role="meeting-agent-invite"])) >= 1
+
+      # Still two-up, still expanded after a presence refresh.
+      send(view.pid, {:meeting_presence_update, %{}})
+      after_refresh = render(view)
+      assert count(after_refresh, ~s([data-gallery-two-up])) == 1
+      refute rail_collapsed?(view)
+    end
+
+    test "DIRECTION CONTROL: one human leaves the rail expanded",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert rail_hook_state(html) == ["false"]
+      refute rail_collapsed?(view)
+    end
+
+    test "presence growing into two-up collapses; leaving two-up does not reopen",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      refute rail_collapsed?(view)
+
+      seed_meeting_presence(space, "user", "Grace Hopper")
+      send(view.pid, {:meeting_presence_update, %{}})
+      assert count(render(view), ~s([data-gallery-two-up])) == 1
+      assert rail_collapsed?(view)
+
+      seed_meeting_presence(space, "user", "Hedy Lamarr")
+      send(view.pid, {:meeting_presence_update, %{}})
+      assert count(render(view), ~s([data-gallery-two-up])) == 0
+      assert rail_collapsed?(view)
+    end
+  end
+
   describe "two-person gallery renders the pair and nothing else (task 01a1a822)" do
     setup %{conn: conn} do
       {meeting, space} =
