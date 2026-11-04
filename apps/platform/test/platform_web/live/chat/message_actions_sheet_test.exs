@@ -280,6 +280,28 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
       end
     end
 
+    test "(5) the preview sits inside the sheet the phone no-selection rule targets",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      # app.css scopes user-select: none below 64rem to
+      # [data-role="message-actions-sheet"] (task 01a1a74e stage 4), so a hold
+      # on the open sheet's preview cannot start a native iOS selection.
+      parent = post_msg(space, viewer, "the parent line")
+      body = "Preview reply: the copy changes are signed off."
+      reply = post_reply(space, parent, other, body)
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+
+      assert has_element?(
+               view,
+               ~s(#message-actions-sheet[data-role="message-actions-sheet"] [data-role="message-actions-preview"]),
+               body
+             )
+
+      # Copy text reads its attribute, not a selection, so it is unaffected.
+      assert copy_text(view, ~s([data-role="message-actions-sheet"])) == body
+    end
+
     test "(2) a federated reply copies its body without the Shared from line",
          %{conn: conn, space: space, viewer: viewer, other: other} do
       parent = post_msg(space, viewer, "the parent line")

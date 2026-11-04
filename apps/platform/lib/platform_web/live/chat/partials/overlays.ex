@@ -240,6 +240,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     <.sheet
       :if={@open_message_actions_id}
       id="message-actions-sheet"
+      data-role="message-actions-sheet"
       open={true}
       placement={:bottom}
       on_close="close_message_actions"

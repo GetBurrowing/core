@@ -27,7 +27,11 @@ defmodule Platform.Design.ThreadReplySelectionGuardTest do
        nothing re-enables it on a thread reply, its `.msg-text` or
        `.msg-header`, or a message body;
     3. no rule anywhere sets `user-select: text` on a `.thread-reply` or
-       anything inside one, so a desktop-scoped rule cannot leak it either.
+       anything inside one, so a desktop-scoped rule cannot leak it either;
+    4. the message actions sheet (`[data-role="message-actions-sheet"]`)
+       has selection and the callout off below 64rem, with only its fields
+       re-enabled: a further hold on the open sheet's preview text used to
+       start a native iOS selection there (stage 4 review finding).
   """
   use ExUnit.Case, async: true
 
@@ -78,6 +82,35 @@ defmodule Platform.Design.ThreadReplySelectionGuardTest do
 
     assert offenders == [],
            "user-select: text reaches a thread reply: #{inspect(offenders)}"
+  end
+
+  test "(4) the message actions sheet is not selectable on a phone, its fields are",
+       %{rules: rules} do
+    sheet = ~s([data-role="message-actions-sheet"])
+
+    off =
+      for r <- rules, @phone in r.context, normalize(r.selector) == sheet do
+        declarations(r.body)
+      end
+
+    assert Enum.any?(off, fn d ->
+             d["-webkit-touch-callout"] == "none" and d["-webkit-user-select"] == "none" and
+               d["user-select"] == "none"
+           end),
+           "no `#{sheet}` rule inside `#{@phone}` turns selection and the callout off: " <>
+             "a hold on the open sheet's preview starts a native iOS selection " <>
+             "(task 01a1a74e stage 4)"
+
+    reenabling =
+      for r <- rules,
+          @phone in r.context,
+          String.contains?(r.selector, sheet),
+          selectable?(r),
+          do: normalize(r.selector)
+
+    assert reenabling == [~s{#{sheet} :is(input, textarea, [contenteditable])}],
+           "expected only the field exception to re-enable selection in the sheet, got: " <>
+             inspect(reenabling)
   end
 
   test "the walker sees the phone block at all (guards the guard)", %{rules: rules} do

@@ -4658,6 +4658,23 @@ body, .font-suite {
      selects whatever the sheet put under the finger (a quick-react emoji,
      with the native edit menu). Copy text in the sheet is how a reply is
      copied on a phone. */
+
+  /* The message actions sheet itself is not selectable on a phone either
+     (task 01a1a74e): once it is open, a further hold on its preview text
+     started a native iOS selection ("changes" with handles and the Copy /
+     Look Up / Translate / Find menu), the wrong-place highlight again.
+     Copy text reads `data-clipboard-text`, not a selection, so it is
+     unaffected. Fields inside the sheet stay selectable. */
+  [data-role="message-actions-sheet"] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  [data-role="message-actions-sheet"] :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 @media (hover: hover) and (min-width: 1024px) {
