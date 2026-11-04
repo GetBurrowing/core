@@ -46,6 +46,7 @@ defmodule Platform.CalendarTest do
   test "the feed omits cancelled events and meetings and keeps live ones" do
     member = user()
     org_id = Platform.TenancyFixtures.acme_org_id()
+
     Repo.insert!(%Platform.Tenancy.OrgMembership{
       user_id: member.id,
       org_id: org_id,
