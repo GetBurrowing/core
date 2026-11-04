@@ -3127,6 +3127,56 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute rail_collapsed?(view)
     end
 
+    # Review round 2: share on, Gallery while sharing (the gallery-mode
+    # default opens the rail and two-up is off while sharing), share off.
+    # Two-up returns, so the rail default must be re-applied at share-off.
+    defp share_then_gallery_then_stop(view) do
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => true})
+
+      view
+      |> element(~s([data-stage-mode-button="gallery"]))
+      |> render_click()
+
+      # While sharing, two-up is off and the gallery default opened the rail.
+      refute rail_collapsed?(view)
+
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => false})
+    end
+
+    test "share on, Gallery, share off: two-up returns and the rail collapses again",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      seed_meeting_presence(space, "user", "Grace Hopper")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert rail_collapsed?(view)
+
+      html = share_then_gallery_then_stop(view)
+
+      assert count(html, ~s([data-gallery-grid][data-gallery-two-up])) == 1
+      assert rail_collapsed?(view)
+      assert rail_hook_state(html) == ["true"]
+    end
+
+    test "a rail the user opened before the share stays open after it ends",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Lovelace")
+      seed_meeting_presence(space, "user", "Grace Hopper")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      view
+      |> element(~s([data-role="chat-pane-toggle"][aria-label="Expand call rail"]))
+      |> render_click()
+
+      refute rail_collapsed?(view)
+
+      html = share_then_gallery_then_stop(view)
+
+      assert count(html, ~s([data-gallery-grid][data-gallery-two-up])) == 1
+      refute rail_collapsed?(view)
+    end
+
     test "DIRECTION CONTROL: one human leaves the rail expanded",
          %{conn: conn, meeting: meeting, space: space} do
       seed_meeting_presence(space, "user", "Ada Lovelace")

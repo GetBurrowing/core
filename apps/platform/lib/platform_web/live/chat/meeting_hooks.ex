@@ -118,7 +118,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # mute alive across a socket drop. See `seed_media_intent/1`.
       |> seed_media_intent()
       |> assign_native_call_defaults()
-      |> assign(:screen_share_enabled, false)
+      |> assign_screen_share(false)
       |> assign(:meeting_counts, %{})
       |> assign(:meeting_participants, [])
       # `assign_new`, not `assign`: on `/meetings` this runs AFTER
@@ -315,7 +315,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # committed pair. See `seed_media_intent/1` for the reasoning.
     |> seed_guest_media_intent()
     |> assign_native_call_defaults()
-    |> assign(:screen_share_enabled, false)
+    |> assign_screen_share(false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
     |> assign_new(:invite_rows, fn -> [] end)
@@ -823,7 +823,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp handle_event("meeting_toggle_screen_share", _params, socket) do
     {:halt,
      socket
-     |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
+     |> assign_screen_share(!socket.assigns.screen_share_enabled)
      |> push_event("toggle-screen-share", %{})}
   end
 
@@ -834,7 +834,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # because the JS has already done the LiveKit work.
   defp handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
        when is_boolean(enabled) do
-    {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
+    {:halt, socket |> assign_screen_share(enabled) |> maybe_switch_to_screen(enabled)}
   end
 
   # The `<lg` call-rail sheet. Server state rather than a `JS.toggle/1`
@@ -1013,13 +1013,13 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp handle_guest_event("meeting_toggle_screen_share", _params, socket) do
     {:halt,
      socket
-     |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
+     |> assign_screen_share(!socket.assigns.screen_share_enabled)
      |> push_event("toggle-screen-share", %{})}
   end
 
   defp handle_guest_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
        when is_boolean(enabled) do
-    {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
+    {:halt, socket |> assign_screen_share(enabled) |> maybe_switch_to_screen(enabled)}
   end
 
   # Explicit leave from the top-bar Leave button. No durable participant row
@@ -1136,6 +1136,19 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # (task 01a0740d). Stopping a share must not yank the rail back open on
   # someone who collapsed it deliberately.
   defp maybe_switch_to_screen(socket, false), do: socket
+
+  # Every local share-state write goes through here (task 01a1a822 fix
+  # stage, review round 2). Ending a share can put the gallery back into
+  # two-up, and the two-up desktop rail default has to be re-applied at that
+  # moment or the rail stays open and the pair stacks. The default is a
+  # no-op off `/meetings` (it requires `:current_stage_mode == :gallery`,
+  # which only MeetingLive assigns) and once the viewer has toggled the rail
+  # this session.
+  defp assign_screen_share(socket, enabled) do
+    socket
+    |> assign(:screen_share_enabled, enabled)
+    |> PlatformWeb.MeetingLive.apply_two_up_rail_default()
+  end
 
   # Return `{:cont, socket}` so the event continues to the host LV's own
   # `handle_info({:meeting_presence_update, _}, socket)` (notably
@@ -2177,6 +2190,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign(:mic_enabled, true)
     |> assign(:camera_enabled, true)
     |> assign_native_call_defaults()
-    |> assign(:screen_share_enabled, false)
+    |> assign_screen_share(false)
   end
 end

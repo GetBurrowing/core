@@ -3536,7 +3536,10 @@ defmodule PlatformWeb.MeetingLive do
   # and mirrors the stage switch.
   def handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
       when is_boolean(enabled) do
-    socket = assign(socket, :screen_share_enabled, enabled)
+    socket =
+      socket
+      |> assign(:screen_share_enabled, enabled)
+      |> apply_two_up_rail_default()
 
     socket =
       if enabled and Map.get(socket.assigns, :current_stage_mode) != :screen do
@@ -9640,9 +9643,17 @@ defmodule PlatformWeb.MeetingLive do
       gallery_two_up?(assigns[:participants] || [], assigns[:screen_share_enabled])
   end
 
-  # Applies the two-up rail default. Never expands, never pushes the
-  # persistence event: the stored preference is left as the viewer set it.
-  defp apply_two_up_rail_default(socket) do
+  @doc """
+  Applies the two-up rail default to `socket` (see `two_up_rail_collapsed?/1`).
+
+  Never expands and never pushes the persistence event, so the stored
+  preference is left as the viewer set it. Public because every local
+  share-state write in `PlatformWeb.ChatLive.MeetingHooks` calls it: that
+  hook halts, so it, not this module, is the path a share-stop takes on
+  `/meetings` (task 01a1a822 fix stage, review round 2).
+  """
+  @spec apply_two_up_rail_default(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def apply_two_up_rail_default(socket) do
     if two_up_rail_collapsed?(socket.assigns) and socket.assigns[:chat_panel_collapsed] != true do
       socket
       |> assign(:chat_panel_collapsed, true)
