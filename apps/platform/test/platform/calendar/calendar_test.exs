@@ -40,8 +40,62 @@ defmodule Platform.CalendarTest do
     assert cancelled.sequence == 2
     assert Calendar.list_events(owner, ~U[2026-10-01 00:00:00Z], ~U[2026-11-01 00:00:00Z]) == []
 
-    assert ICalendar.from_ics(Calendar.Feed.render(owner)) |> hd() |> Map.fetch!(:status) ==
-             "cancelled"
+    refute Calendar.Feed.render(owner) =~ "BEGIN:VEVENT"
+  end
+
+  test "the feed omits cancelled events and meetings and keeps live ones" do
+    member = user()
+    org_id = Platform.TenancyFixtures.acme_org_id()
+
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: member.id,
+      org_id: org_id,
+      role: "member"
+    })
+
+    scope = Scope.for_user(member)
+    n = System.unique_integer([:positive])
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{name: "Feed #{n}", slug: "feed-#{n}", org_id: org_id})
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{name: "feed-#{n}", slug: "feed-space-#{n}", kind: "channel"})
+
+    meeting = fn name, status ->
+      id = Platform.Types.UUIDv7.generate()
+
+      %Platform.Meetings.Meeting{id: id}
+      |> Platform.Meetings.Meeting.changeset(%{
+        project_id: project.id,
+        chat_space_id: space.id,
+        slug: "feed-#{n}-#{status}",
+        name: name,
+        livekit_room_name: "meeting-#{id}",
+        status: status,
+        scheduled_start_at: ~U[2026-11-04 20:00:00Z],
+        scheduled_end_at: ~U[2026-11-04 21:00:00Z]
+      })
+      |> Repo.insert!()
+    end
+
+    meeting.("Live standup", "scheduled")
+    meeting.("Called-off standup", "cancelled")
+    assert {:ok, _} = Calendar.create_event(scope, attrs(%{title: "Live interview"}))
+    assert {:ok, gone} = Calendar.create_event(scope, attrs(%{title: "Meeting with Elias"}))
+    assert {:ok, _} = Calendar.delete_event(scope, gone.id)
+
+    weekly = attrs(%{title: "Cancelled weekly", recurrence: "FREQ=WEEKLY"})
+    assert {:ok, series} = Calendar.create_event(scope, weekly)
+    assert {:ok, _} = Calendar.delete_event(scope, series.id)
+
+    feed = Calendar.Feed.render(scope)
+    assert feed =~ "Live interview"
+    assert feed =~ "Live standup"
+    refute feed =~ "Meeting with Elias"
+    refute feed =~ "Cancelled weekly"
+    refute feed =~ "Called-off standup"
+    refute feed =~ "CANCELLED"
   end
 
   test "feed credentials are hashed, rotated and revoked" do

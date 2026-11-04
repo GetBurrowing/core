@@ -202,9 +202,13 @@ defmodule Platform.Calendar do
 
   def feed_scope(_), do: {:error, :not_found}
 
+  # Cancelled events are omitted, not sent as STATUS:CANCELLED: Outlook's
+  # ICS import and many subscribers ignore STATUS and show them as live.
+  # A subscriber drops a VEVENT that disappears from the feed.
   def feed_events(%Scope{actor: %Accounts.User{}} = scope) do
     if Access.can?(scope, "calendar.read") do
       visible_query(scope)
+      |> where([e], is_nil(e.cancelled_at))
       |> order_by([e], asc: e.starts_at, asc: e.id)
       |> Repo.all()
       |> Enum.map(&feed_redact/1)
