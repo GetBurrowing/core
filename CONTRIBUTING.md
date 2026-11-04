@@ -108,3 +108,5 @@ PGUSER=$USER PGPASSWORD='' mix test
 ## More
 
 See `CLAUDE.md` for architecture, domain-context boundaries, Elixir/Phoenix idioms, and the ADR index under `docs/decisions/`.
+
+See the [development guide](docs/dev-environment/development-guide.md) for which command to run in which directory, and the local commands behind each CI job.
