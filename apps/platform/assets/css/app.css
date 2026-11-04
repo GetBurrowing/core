@@ -4638,7 +4638,7 @@ body, .font-suite {
   /* The hook owns press-and-hold on a message, so the native selection
      menu must not compete for it (the reason long-press was once dropped).
      Copy in the pill and the actions sheet replaces native selection on a
-     phone. Fields inside a message (the inline thread reply) stay
+     phone. Fields inside a message (the inline thread reply box) stay
      selectable. */
   [phx-hook="MessageGestures"] {
     -webkit-touch-callout: none;
@@ -4647,6 +4647,21 @@ body, .font-suite {
   }
 
   [phx-hook="MessageGestures"] :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Thread reply BODIES are the exception (Isaac Summers' report, task
+     01a1a74e): with the rule above inherited, the only selectable thing in
+     an open thread was the reply box, so a selection could not land on the
+     reply text the finger touched. Scoped to `.msg-text`, never the whole
+     `.thread-reply`, so a selection cannot start on or spill into the
+     sender name, AI badge or time (`.msg-header`). The touch callout stays
+     off (inherited): it governs the link / image callout, not text
+     selection. Top-level message bodies are unchanged. A long-press while
+     the user is selecting in a reply does not open the sheet
+     (MessageGestures.fireLongPress). */
+  [phx-hook="MessageGestures"] .thread-reply .msg-text {
     -webkit-user-select: text;
     user-select: text;
   }
