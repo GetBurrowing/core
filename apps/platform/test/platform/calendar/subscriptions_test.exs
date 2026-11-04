@@ -270,7 +270,11 @@ defmodule Platform.Calendar.SubscriptionsTest do
     end
 
     assert {:error, _} =
-             ICal.parse(feed("UID:floating\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000"))
+             ICal.parse(
+               feed(
+                 "UID:floating\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"
+               )
+             )
 
     assert {:error, _} =
              ICal.parse(
@@ -308,5 +312,241 @@ defmodule Platform.Calendar.SubscriptionsTest do
     assert {:ok, [%{"title" => "Updated appointment"}]} = ICal.parse(multiple)
     assert {:error, _} = ICal.parse(String.replace(multiple, "SEQUENCE:1", "SEQUENCE:2"))
     assert {:error, _} = ICal.parse(feed(event("\r\nUID:duplicate")))
+  end
+
+  # Synthetic feed shaped like a public iCloud calendar export (2026-11-04
+  # measurement of a real one: VTIMEZONE blocks, X-APPLE-* at calendar and
+  # event level, repeated ATTENDEE, TZID/DATE/floating times). No real data.
+  @icloud Enum.join(
+            [
+              "BEGIN:VCALENDAR",
+              "VERSION:2.0",
+              "PRODID:-//Apple Inc.//iCloud Calendar//EN",
+              "X-WR-CALNAME:Synthetic",
+              "X-APPLE-CALENDAR-COLOR:#1BADF8",
+              "BEGIN:VTIMEZONE",
+              "TZID:America/Chicago",
+              "X-LIC-LOCATION:America/Chicago",
+              "BEGIN:DAYLIGHT",
+              "TZOFFSETFROM:-0600",
+              "TZOFFSETTO:-0500",
+              "TZNAME:CDT",
+              "DTSTART:20070311T020000",
+              "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
+              "END:DAYLIGHT",
+              "BEGIN:STANDARD",
+              "TZOFFSETFROM:-0500",
+              "TZOFFSETTO:-0600",
+              "TZNAME:CST",
+              "DTSTART:20071104T020000",
+              "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU",
+              "END:STANDARD",
+              "BEGIN:STANDARD",
+              "TZOFFSETFROM:-0550",
+              "TZOFFSETTO:-0600",
+              "DTSTART:18831118T120900",
+              "RDATE:18831118T120900",
+              "END:STANDARD",
+              "END:VTIMEZONE",
+              "BEGIN:VEVENT",
+              "UID:synthetic-tzid@example.invalid",
+              "DTSTAMP:20261101T000000Z",
+              "CREATED:20261001T000000Z",
+              "LAST-MODIFIED:20261002T000000Z",
+              "SEQUENCE:0",
+              "SUMMARY:Planning sync",
+              "DESCRIPTION:Line one\\nline two",
+              "LOCATION:Room 1",
+              "URL;VALUE=URI:https://example.invalid/event",
+              "ORGANIZER;CN=\"Org: Person\":mailto:org@example.invalid",
+              "ATTENDEE;CN=A;PARTSTAT=ACCEPTED:mailto:a@example.invalid",
+              "ATTENDEE;CN=B;PARTSTAT=NEEDS-ACTION:mailto:b@example.invalid",
+              "DTSTART;TZID=America/Chicago:20261030T140000",
+              "DTEND;TZID=America/Chicago:20261030T150000",
+              "X-APPLE-CREATOR-IDENTITY:com.example.synthetic",
+              "X-APPLE-CREATOR-TEAM-IDENTITY:0000000000",
+              "X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-ADDRESS=\"1 Main St\";X-TITLE=\"Room",
+              " 1\":geo:0.000000,0.000000",
+              "X-APPLE-STRUCTURED-DATA;VALUE=BINARY;X-APPLE-TYPE=1:AAAA",
+              "X-APPLE-SUGGESTION-INFO-CHANGED-FIELDS:location",
+              "X-APPLE-SUGGESTION-INFO-CHANGES-ACKNOWLEDGED:1",
+              "X-APPLE-SUGGESTION-INFO-OPAQUE-KEY:k",
+              "X-APPLE-SUGGESTION-INFO-TIMESTAMP:20261001T000000Z",
+              "X-APPLE-SUGGESTION-INFO-UNIQUE-KEY:u",
+              "X-APPLE-SUGGESTION-INFO-UNIQUE-KEY:u2",
+              "BEGIN:VALARM",
+              "ACTION:DISPLAY",
+              "TRIGGER:-PT15M",
+              "DESCRIPTION:Reminder",
+              "END:VALARM",
+              "END:VEVENT",
+              "BEGIN:VEVENT",
+              "UID:synthetic-day@example.invalid",
+              "DTSTAMP:20261101T000000Z",
+              "SEQUENCE:0",
+              "SUMMARY:Holiday",
+              "DTSTART;VALUE=DATE:20261102",
+              "DTEND;VALUE=DATE:20261103",
+              "END:VEVENT",
+              "BEGIN:VEVENT",
+              "UID:synthetic-floating@example.invalid",
+              "DTSTAMP:20261101T000000Z",
+              "SEQUENCE:0",
+              "SUMMARY:Floating",
+              "DTSTART:20261031T090000",
+              "DTEND:20261031T100000",
+              "END:VEVENT",
+              "END:VCALENDAR",
+              ""
+            ],
+            "\r\n"
+          )
+
+  describe "iCloud-shaped feeds" do
+    test "the full synthetic iCloud feed parses" do
+      assert {:ok, rows} = ICal.parse(@icloud)
+      by_uid = Map.new(rows, &{&1["uid"], &1})
+
+      assert %{"starts_at" => "2026-10-30T19:00:00Z", "time_zone" => "America/Chicago"} =
+               tzid = by_uid["synthetic-tzid@example.invalid"]
+
+      refute tzid["floating"]
+      assert %{"all_day" => true} = by_uid["synthetic-day@example.invalid"]
+
+      assert %{"floating" => true, "starts_at" => "2026-10-31T09:00:00Z"} =
+               by_uid["synthetic-floating@example.invalid"]
+    end
+
+    test "each iCloud shape is accepted on its own" do
+      cal = fn head, body ->
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" <>
+          head <> "BEGIN:VEVENT\r\n" <> body <> "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      end
+
+      tz =
+        "BEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\nBEGIN:STANDARD\r\nTZOFFSETFROM:-0500\r\n" <>
+          "TZOFFSETTO:-0600\r\nDTSTART:20071104T020000\r\nRRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\r\n" <>
+          "END:STANDARD\r\nEND:VTIMEZONE\r\n"
+
+      rejected =
+        for {label, body} <- [
+              calendar_x: cal.("X-APPLE-CALENDAR-COLOR:#1BADF8\r\n", event()),
+              event_x: feed(event("\r\nX-APPLE-CREATOR-IDENTITY:com.example")),
+              repeated_x:
+                feed(
+                  event(
+                    "\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:a\r\nX-APPLE-SUGGESTION-INFO-UNIQUE-KEY:b"
+                  )
+                ),
+              repeated_attendee:
+                feed(
+                  event(
+                    "\r\nATTENDEE:mailto:a@example.invalid\r\nATTENDEE:mailto:b@example.invalid"
+                  )
+                ),
+              vtimezone: cal.(tz, event()),
+              valarm:
+                feed(event("\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM")),
+              floating: feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000")
+            ],
+            not match?({:ok, [_]}, ICal.parse(body)),
+            do: label
+
+      assert rejected == []
+    end
+
+    test "truly unsupported semantics still reject the whole feed" do
+      eastern =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:Eastern Standard Time\r\n" <>
+          "BEGIN:STANDARD\r\nTZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\nDTSTART:16010101T020000\r\n" <>
+          "END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:e\r\n" <>
+          "DTSTART;TZID=Eastern Standard Time:20261030T140000\r\n" <>
+          "DTEND;TZID=Eastern Standard Time:20261030T150000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      nested_event =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\n" <>
+          "BEGIN:VEVENT\r\n" <> event() <> "\r\nEND:VEVENT\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n"
+
+      for {label, body} <- [
+            non_iana_tzid: eastern,
+            event_inside_vtimezone: nested_event,
+            unterminated_vtimezone:
+              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\nEND:VCALENDAR\r\n",
+            vtodo:
+              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+            calendar_valarm:
+              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VALARM\r\nEND:VALARM\r\nEND:VCALENDAR\r\n",
+            nested_in_valarm:
+              feed(event("\r\nBEGIN:VALARM\r\nBEGIN:VEVENT\r\nEND:VEVENT\r\nEND:VALARM")),
+            unknown_calendar_property:
+              String.replace(feed(event()), "VERSION:2.0", "VERSION:2.0\r\nREFRESH-INTERVAL:PT1H"),
+            unknown_event_property: feed(event("\r\nBUSY:YES")),
+            duplicate_dtstart: feed(event("\r\nDTSTART:20261030T180000Z")),
+            floating_recurrence:
+              feed(
+                "UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"
+              ),
+            floating_mixed_with_utc:
+              feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z")
+          ] do
+        assert {{:error, :unsupported_or_malformed_feed}, ^label} = {ICal.parse(body), label}
+      end
+    end
+
+    test "floating times are placed in the reader's zone and never in an implicit UTC" do
+      owner = scope()
+
+      {:ok, sub} =
+        Subscriptions.create(owner, %{name: "iCloud", url: "https://calendar.example/feed"})
+
+      stub(@icloud)
+      assert {:ok, %{error: nil}} = Subscriptions.refresh(owner, sub.id)
+
+      chicago = Subscriptions.entries(owner, @from, @to, time_zone: "America/Chicago")
+      floating = Enum.find(chicago, &(&1.title == "Floating"))
+      assert DateTime.compare(floating.starts_at, ~U[2026-10-31 14:00:00Z]) == :eq
+      assert DateTime.compare(floating.ends_at, ~U[2026-10-31 15:00:00Z]) == :eq
+      assert floating.event.time_zone == "America/Chicago"
+
+      tokyo = Subscriptions.entries(owner, @from, @to, time_zone: "Asia/Tokyo")
+
+      assert DateTime.compare(
+               Enum.find(tokyo, &(&1.title == "Floating")).starts_at,
+               ~U[2026-10-31 00:00:00Z]
+             ) == :eq
+
+      refute Enum.any?(Subscriptions.entries(owner, @from, @to), &(&1.title == "Floating"))
+      assert {:error, :external_timezone_required} = Subscriptions.availability(owner, @from, @to)
+
+      assert {:ok, windows} =
+               Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+
+      assert Enum.any?(
+               windows,
+               &(DateTime.compare(&1.starts_at, ~U[2026-10-31 14:00:00Z]) == :eq)
+             )
+
+      assert Enum.any?(
+               windows,
+               &(DateTime.compare(&1.starts_at, ~U[2026-10-30 19:00:00Z]) == :eq)
+             )
+    end
+
+    test "a floating time in a DST gap or overlap still yields a positive window" do
+      owner = scope()
+
+      {:ok, sub} =
+        Subscriptions.create(owner, %{name: "DST", url: "https://calendar.example/feed"})
+
+      stub(feed("UID:gap\r\nDTSTART:20270314T020000\r\nDTEND:20270314T023000\r\nSUMMARY:Gap"))
+      {:ok, _} = Subscriptions.refresh(owner, sub.id)
+
+      assert [%{starts_at: first, ends_at: last}] =
+               Subscriptions.entries(owner, ~U[2027-03-13 00:00:00Z], ~U[2027-03-16 00:00:00Z],
+                 time_zone: "America/Chicago"
+               )
+
+      assert DateTime.compare(first, last) == :lt
+    end
   end
 end

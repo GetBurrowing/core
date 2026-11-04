@@ -1,15 +1,30 @@
 defmodule Platform.Calendar.ICal do
   @moduledoc """
   Conservative bounded RFC5545 import. Supports UTC/IANA TZID date-times, DATE,
-  DAILY/WEEKLY/MONTHLY rules supported by Recurrence and DATE EXDATEs. Floating
-  times, VTIMEZONE definitions, overrides, RDATE, complex rules and unknown event
-  semantics reject the complete snapshot, preserving an explicit unavailable state.
-  The existing icalendar test parser discards unsupported recurrence semantics and
-  is therefore unsuitable as the availability authority.
+  floating date-times, DAILY/WEEKLY/MONTHLY rules supported by Recurrence and
+  DATE EXDATEs.
+
+  Ignored without rejecting: any `X-` property at calendar or event level
+  (RFC 5545 §3.8.8.2), descriptive metadata, repeated multi-valued metadata
+  (ATTENDEE, CATEGORIES, COMMENT, CONTACT, RESOURCES), VTIMEZONE components
+  (including nested STANDARD/DAYLIGHT) and VALARM inside VEVENT. VTIMEZONE is
+  skipped, not interpreted: a TZID must still resolve as an IANA zone in the
+  time zone database, so a TZID that only a VTIMEZONE defines (for example
+  Outlook's "Eastern Standard Time") still rejects.
+
+  Floating date-times (no `Z`, no TZID) are kept as wall-clock times with
+  `"floating" => true` and are placed on the timeline only when read with an
+  explicit time zone (the viewer's), as DATE values are; they never recur.
+
+  Overrides, RDATE, DURATION, complex rules, any other component and any other
+  non-`X-` property reject the complete snapshot, preserving an explicit
+  unavailable state. The existing icalendar test parser discards unsupported
+  recurrence semantics and is therefore unsuitable as the availability authority.
   """
   alias Platform.Calendar.{Event, Recurrence}
   @max_bytes 1_048_576
-  @metadata ~w(DTSTAMP CREATED LAST-MODIFIED SEQUENCE DESCRIPTION LOCATION URL ORGANIZER ATTENDEE CATEGORIES CLASS PRIORITY RESOURCES CONTACT COMMENT X-MICROSOFT-CDO-BUSYSTATUS)
+  @metadata ~w(DTSTAMP CREATED LAST-MODIFIED SEQUENCE DESCRIPTION LOCATION URL ORGANIZER ATTENDEE CATEGORIES CLASS PRIORITY RESOURCES CONTACT COMMENT)
+  @repeatable ~w(ATTENDEE CATEGORIES COMMENT CONTACT RESOURCES)
 
   def parse(body) when is_binary(body) and byte_size(body) <= @max_bytes do
     with true <- String.valid?(body),
@@ -49,10 +64,22 @@ defmodule Platform.Calendar.ICal do
     with {:ok, row} <- event(Enum.reverse(props)), do: collect(rest, nil, [row | rows])
   end
 
+  # VTIMEZONE is skipped whole; TZIDs are resolved against the IANA database.
+  defp collect(["BEGIN:VTIMEZONE" | rest], nil, rows) do
+    with {:ok, rest} <- skip(rest, ["VTIMEZONE"]), do: collect(rest, nil, rows)
+  end
+
+  defp collect(["BEGIN:VALARM" | rest], props, rows) when is_list(props) do
+    with {:ok, rest} <- skip(rest, ["VALARM"]), do: collect(rest, props, rows)
+  end
+
   defp collect([line | rest], props, rows) do
     cond do
       String.starts_with?(line, "BEGIN:") and line != "BEGIN:VCALENDAR" ->
         {:error, :unsupported_component}
+
+      extension?(line) ->
+        collect(rest, props, rows)
 
       is_list(props) ->
         collect(rest, [line | props], rows)
@@ -63,13 +90,33 @@ defmodule Platform.Calendar.ICal do
         "VERSION:2.0",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH"
-      ] or String.starts_with?(line, "PRODID:") or String.starts_with?(line, "X-WR-") ->
+      ] or String.starts_with?(line, "PRODID:") ->
         collect(rest, nil, rows)
 
       true ->
         {:error, :unsupported_component}
     end
   end
+
+  # Skips a component and the sub-components RFC 5545 allows inside it
+  # (STANDARD/DAYLIGHT in VTIMEZONE, nothing in VALARM). Anything else nested,
+  # or an unterminated or mismatched block, is malformed.
+  defp skip([], _stack), do: {:error, :unterminated_component}
+
+  defp skip(["END:" <> name | rest], [name | stack]),
+    do: if(stack == [], do: {:ok, rest}, else: skip(rest, stack))
+
+  defp skip(["END:" <> _ | _], _stack), do: {:error, :unbalanced_component}
+
+  defp skip(["BEGIN:" <> name | rest], ["VTIMEZONE"] = stack)
+       when name in ["STANDARD", "DAYLIGHT"],
+       do: skip(rest, [name | stack])
+
+  defp skip(["BEGIN:" <> _ | _], _stack), do: {:error, :unsupported_component}
+  defp skip([_ | rest], stack), do: skip(rest, stack)
+
+  # RFC 5545 §3.8.8.2: unrecognised X- properties MUST be ignored.
+  defp extension?(line), do: line |> String.slice(0, 2) |> String.upcase() == "X-"
 
   defp event(lines) do
     pairs =
@@ -81,7 +128,11 @@ defmodule Platform.Calendar.ICal do
 
     props = Map.new(pairs)
 
-    with true <- map_size(props) == length(pairs),
+    with true <-
+           pairs
+           |> Enum.map(&elem(&1, 0))
+           |> Enum.reject(&(&1 in @repeatable))
+           |> then(&(length(&1) == length(Enum.uniq(&1)))),
          {[], uid} when byte_size(uid) in 1..1024 <- props["UID"],
          true <-
            Enum.all?(
@@ -110,7 +161,8 @@ defmodule Platform.Calendar.ICal do
              "title" => unescape(value(props["SUMMARY"]) || "Busy"),
              "starts_at" => DateTime.to_iso8601(first),
              "ends_at" => DateTime.to_iso8601(last),
-             "time_zone" => zone,
+             "time_zone" => if(zone == :floating, do: "Etc/UTC", else: zone),
+             "floating" => zone == :floating,
              "all_day" => not is_nil(date),
              "start_date" => date && Date.to_iso8601(date),
              "end_date" => end_date && Date.to_iso8601(end_date),
@@ -163,6 +215,13 @@ defmodule Platform.Calendar.ICal do
   end
 
   defp datetime({[], <<value::binary-size(15), "Z">>}), do: local(value, "Etc/UTC")
+
+  # Floating: the wall clock is stored as if UTC and flagged; Subscriptions
+  # places it in the reader's zone.
+  defp datetime({[], <<value::binary-size(15)>>}) do
+    with {:ok, at, "Etc/UTC", nil} <- local(value, "Etc/UTC"), do: {:ok, at, :floating, nil}
+  end
+
   defp datetime({["TZID=" <> zone], value}), do: local(value, zone)
   defp datetime(_), do: {:error, :unsupported_time}
 
