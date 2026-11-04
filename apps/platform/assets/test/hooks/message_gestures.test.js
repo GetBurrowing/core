@@ -201,19 +201,13 @@ describe("MessageGestures", () => {
   function replyTarget(el, replyId, inside = null) {
     const threadReplies = { _inside: el }
     const control = inside ? { _inside: el } : null
-    // The reply's body (`.msg-text`) and a text node inside it, for the
-    // selection cases.
-    const bodyText = { nodeType: 3 }
-    const body = { contains: (node) => node === bodyText }
     const reply = {
       _inside: el,
       dataset: { threadMessageId: replyId },
       contains: (node) => node === reply || (control !== null && node === control),
-      querySelector: (sel) => (sel === ".msg-text" ? body : null),
     }
     return {
       _inside: el,
-      bodyText,
       closest: (sel) => {
         if (sel === "[data-thread-message-id]") return reply
         const parts = sel.split(", ")
@@ -287,45 +281,6 @@ describe("MessageGestures", () => {
     down(el)
     vi.advanceTimersByTime(450)
     expect(hook.pushEvent).toHaveBeenLastCalledWith("open_message_actions", { id: "m-parent" })
-  })
-
-  const selection = (anchorNode, isCollapsed) => () => ({ anchorNode, isCollapsed })
-
-  it("(s1) a reply hold that fires while the user is selecting in its body pushes nothing", () => {
-    const { el, hook } = mount("m-parent")
-    const t = replyTarget(el, "r-2")
-    win.getSelection = selection(t.bodyText, false)
-    down(el, { target: t })
-    vi.advanceTimersByTime(450)
-    up(el, { target: t })
-    expect(hook.pushEvent).not.toHaveBeenCalled()
-    expect(pillOpen(el)).toBe(false)
-  })
-
-  it("(s2) with a collapsed selection in the reply body the hold opens the REPLY's actions", () => {
-    const { el, hook } = mount("m-parent")
-    const t = replyTarget(el, "r-2")
-    win.getSelection = selection(t.bodyText, true)
-    down(el, { target: t })
-    vi.advanceTimersByTime(450)
-    expect(hook.pushEvent).toHaveBeenCalledWith("open_message_actions", { id: "r-2" })
-  })
-
-  it("(s3) a selection anchored outside the reply body does not stop the reply's sheet", () => {
-    const { el, hook } = mount("m-parent")
-    const t = replyTarget(el, "r-2")
-    win.getSelection = selection({ nodeType: 3 }, false)
-    down(el, { target: t })
-    vi.advanceTimersByTime(450)
-    expect(hook.pushEvent).toHaveBeenCalledWith("open_message_actions", { id: "r-2" })
-  })
-
-  it("(s4) a top-level message ignores selection state", () => {
-    const { el, hook } = mount("m-top")
-    win.getSelection = selection({ nodeType: 3 }, false)
-    down(el)
-    vi.advanceTimersByTime(450)
-    expect(hook.pushEvent).toHaveBeenCalledWith("open_message_actions", { id: "m-top" })
   })
 
   it("(f) opening pill B closes pill A", () => {

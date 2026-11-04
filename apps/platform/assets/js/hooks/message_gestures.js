@@ -28,7 +28,9 @@
 // A tap on something inside the message that does its own thing (a link,
 // an image, a video, a button, a field, a reaction pill, the thread
 // indicator, the inline thread, anything with phx-click) never opens the
-// pill (direction rule 2).
+// pill (direction rule 2). A mouse is not a gesture source: on desktop the
+// pill shows on hover and focus in plain CSS, and a double-click selects a
+// word as it always has.
 //
 // THREAD REPLIES (`[data-thread-message-id]`, rendered inside the parent's
 // root by chat_message.ex) get LONG-PRESS only: a hold on a reply opens the
@@ -37,12 +39,8 @@
 // pill) still does its own thing; the `.thread-replies` container around
 // the reply no longer blocks the press. A short tap or a double-tap on a
 // reply does nothing: it must not open the parent's pill (task 01a1a74e).
-// A reply's BODY text is natively selectable on a phone (app.css), so iOS
-// may start its own word selection on the same hold: when the hold fires
-// with a non-collapsed selection anchored in that reply's `.msg-text`, the
-// user is selecting, and the sheet does not open. A mouse is not a gesture source: on desktop the
-// pill shows on hover and focus in plain CSS, and a double-click selects a
-// word as it always has.
+// Reply text is not natively selectable on a phone, as for any message
+// (app.css): Copy text in the sheet replaces it.
 //
 // The pill closes on a tap anywhere outside its message, on Esc, and when
 // the message scroller (`#chat-message-scroller`, found as an ancestor)
@@ -249,15 +247,6 @@ export function showCopied(messageEl, text = "Copied") {
   messageEl._copiedTimer = setTimeout(() => messageEl.removeAttribute("data-copied"), COPIED_MS)
 }
 
-// True when the page holds a non-collapsed selection whose anchor is inside
-// `replyEl`'s body text: a native selection the user is making on a reply.
-function selectingIn(replyEl) {
-  const sel = window.getSelection ? window.getSelection() : null
-  if (!sel || sel.isCollapsed || !sel.anchorNode) return false
-  const body = replyEl && replyEl.querySelector ? replyEl.querySelector(".msg-text") : null
-  return !!body && body.contains(sel.anchorNode)
-}
-
 const MessageGestures = {
   mounted() {
     this._lastTapAt = 0
@@ -352,7 +341,6 @@ const MessageGestures = {
     if (own && (!inReply || inReply.contains(own))) return
 
     this._pressReplyId = inReply ? inReply.dataset.threadMessageId : null
-    this._pressReplyEl = inReply
     this._longPress.start(e)
   },
 
@@ -375,16 +363,12 @@ const MessageGestures = {
   cancelPress() {
     if (this._longPress) this._longPress.cancel()
     this._pressReplyId = null
-    this._pressReplyEl = null
   },
 
   fireLongPress() {
     this._lastTapAt = 0
     const replyId = this._pressReplyId
-    const replyEl = this._pressReplyEl
     this._pressReplyId = null
-    this._pressReplyEl = null
-    if (replyId && selectingIn(replyEl)) return
     this.openActions(replyId || undefined)
   },
 
