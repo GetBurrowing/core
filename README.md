@@ -194,7 +194,7 @@ Core publishes Docker images to GitHub Container Registry. The deployment model 
 - **Core** defines deployment schemas, templates, contracts, and examples
 - **Core Ops** (private) owns real deployment targets, secrets, and production configuration
 
-See [`deployment/`](deployment/) for the reusable deployment contracts and examples.
+See [`deployment/`](deployment/) for the reusable deployment contracts and examples, and [`RELEASING.md`](RELEASING.md) for how a merge reaches a running install.
 
 ### Docker
 
