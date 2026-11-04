@@ -240,6 +240,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     <.sheet
       :if={@open_message_actions_id}
       id="message-actions-sheet"
+      data-role="message-actions-sheet"
       open={true}
       placement={:bottom}
       on_close="close_message_actions"
@@ -329,6 +330,10 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       |> assign(:row_class, @row_class)
       |> assign(:agent?, agent?)
       |> assign(:reply?, agent? and is_nil(Map.get(msg, :thread_id)))
+      # `open_inline_thread` anchors a thread on the message it is given, so
+      # on a thread reply it would open a new thread under the REPLY rather
+      # than the reply's own thread (task 01a1a74e). Top-level only.
+      |> assign(:thread_reply?, msg != nil and not is_nil(Map.get(msg, :thread_id)))
       |> assign(:own?, own?)
       |> assign(:editable?, own? and msg.content_type == "text")
       |> assign(
@@ -422,6 +427,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           <span data-role="message-actions-label">Reply</span>
         </button>
         <button
+          :if={!@thread_reply?}
           type="button"
           data-role="message-actions-reply"
           phx-click={

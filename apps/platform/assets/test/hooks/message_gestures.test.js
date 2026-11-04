@@ -195,6 +195,94 @@ describe("MessageGestures", () => {
     }
   })
 
+  // A thread reply (task 01a1a74e) renders INSIDE the parent's root, inside
+  // `.thread-replies`. `inside` names what the press lands on within the
+  // reply: its text (null), or a control such as a link ("a").
+  function replyTarget(el, replyId, inside = null) {
+    const threadReplies = { _inside: el }
+    const control = inside ? { _inside: el } : null
+    const reply = {
+      _inside: el,
+      dataset: { threadMessageId: replyId },
+      contains: (node) => node === reply || (control !== null && node === control),
+    }
+    return {
+      _inside: el,
+      closest: (sel) => {
+        if (sel === "[data-thread-message-id]") return reply
+        const parts = sel.split(", ")
+        if (control && parts.includes(inside)) return control
+        if (parts.includes(".thread-replies")) return threadReplies
+        return null
+      },
+    }
+  }
+
+  it("(r1) a long-press on a thread reply's text opens the actions for the REPLY's id", () => {
+    const { el, hook } = mount("m-parent")
+    const t = replyTarget(el, "r-2")
+    down(el, { target: t })
+    vi.advanceTimersByTime(449)
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(hook.pushEvent).toHaveBeenCalledTimes(1)
+    expect(hook.pushEvent).toHaveBeenCalledWith("open_message_actions", { id: "r-2" })
+    up(el, { target: t })
+    expect(pillOpen(el)).toBe(false)
+  })
+
+  it("(r2) a long-press on a link inside a thread reply pushes nothing", () => {
+    const { el, hook } = mount("m-parent")
+    const t = replyTarget(el, "r-2", "a")
+    down(el, { target: t })
+    vi.advanceTimersByTime(1000)
+    up(el, { target: t })
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+    expect(pillOpen(el)).toBe(false)
+  })
+
+  it("(r3) a tap or a double-tap on a thread reply opens no pill and no sheet", () => {
+    const { el, hook } = mount("m-parent")
+    const t = replyTarget(el, "r-2")
+    tap(el, { target: t })
+    expect(pillOpen(el)).toBe(false)
+    vi.advanceTimersByTime(100)
+    tap(el, { target: t })
+    expect(pillOpen(el)).toBe(false)
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+  })
+
+  it("(r4) a reply tap does not pair with a parent tap into a double-tap", () => {
+    const { el, hook } = mount("m-parent")
+    tap(el, { target: replyTarget(el, "r-2") })
+    vi.advanceTimersByTime(100)
+    tap(el)
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+    expect(pillOpen(el)).toBe(true)
+  })
+
+  it("(r5) the thread composer (inside .thread-replies, outside any reply) still blocks the press", () => {
+    const { el, hook } = mount("m-parent")
+    const composer = { _inside: el, closest: (sel) => (sel.split(", ").includes(".thread-replies") ? {} : null) }
+    down(el, { target: composer })
+    vi.advanceTimersByTime(1000)
+    up(el, { target: composer })
+    expect(hook.pushEvent).not.toHaveBeenCalled()
+    expect(pillOpen(el)).toBe(false)
+  })
+
+  it("(r6) after a reply long-press, a long-press on the parent opens the PARENT's id", () => {
+    const { el, hook } = mount("m-parent")
+    const t = replyTarget(el, "r-2")
+    down(el, { target: t })
+    vi.advanceTimersByTime(450)
+    up(el, { target: t })
+    win.fire("pointerdown", {})
+    down(el)
+    vi.advanceTimersByTime(450)
+    expect(hook.pushEvent).toHaveBeenLastCalledWith("open_message_actions", { id: "m-parent" })
+  })
+
   it("(f) opening pill B closes pill A", () => {
     const a = mount("m-a")
     const b = mount("m-b")

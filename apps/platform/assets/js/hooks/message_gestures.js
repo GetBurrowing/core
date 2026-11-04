@@ -32,6 +32,16 @@
 // pill shows on hover and focus in plain CSS, and a double-click selects a
 // word as it always has.
 //
+// THREAD REPLIES (`[data-thread-message-id]`, rendered inside the parent's
+// root by chat_message.ex) get LONG-PRESS only: a hold on a reply opens the
+// actions sheet for THAT reply's id, so its Copy text copies the reply's
+// body. A control inside the reply (a link, an image, a button, a reaction
+// pill) still does its own thing; the `.thread-replies` container around
+// the reply no longer blocks the press. A short tap or a double-tap on a
+// reply does nothing: it must not open the parent's pill (task 01a1a74e).
+// Reply text is not natively selectable on a phone, as for any message
+// (app.css): Copy text in the sheet replaces it.
+//
 // The pill closes on a tap anywhere outside its message, on Esc, and when
 // the message scroller (`#chat-message-scroller`, found as an ancestor)
 // scrolls more than 10px.
@@ -58,6 +68,7 @@ const COPIED_MS = 2000
 const COPY_CHECK_MS = 1500
 const FULLSCREEN_PROTOTYPE = '[data-role="prototype-canvas"][data-fullscreen="true"]'
 const SCROLLER = "#chat-message-scroller"
+const THREAD_REPLY = "[data-thread-message-id]"
 export const OWN_TAP_TARGETS = [
   "a",
   "img",
@@ -321,8 +332,15 @@ const MessageGestures = {
       this._lastTapAt = 0
       return
     }
-    if (closest(e.target, OWN_TAP_TARGETS)) return
+    // A thread reply inside this message: only a control INSIDE the reply
+    // counts as its own tap target; the `.thread-replies` container the
+    // reply sits in does not.
+    const reply = closest(e.target, THREAD_REPLY)
+    const inReply = reply && this.el.contains(reply) ? reply : null
+    const own = closest(e.target, OWN_TAP_TARGETS)
+    if (own && (!inReply || inReply.contains(own))) return
 
+    this._pressReplyId = inReply ? inReply.dataset.threadMessageId : null
     this._longPress.start(e)
   },
 
@@ -331,16 +349,27 @@ const MessageGestures = {
   },
 
   pointerUp(e) {
-    if (this._longPress.end(e) === "tap") this.tap(e.clientX, e.clientY)
+    const result = this._longPress.end(e)
+    if (result !== "tap") return
+    // A tap on a thread reply is not a tap on the parent message.
+    if (this._pressReplyId) {
+      this._pressReplyId = null
+      this._lastTapAt = 0
+      return
+    }
+    this.tap(e.clientX, e.clientY)
   },
 
   cancelPress() {
     if (this._longPress) this._longPress.cancel()
+    this._pressReplyId = null
   },
 
   fireLongPress() {
     this._lastTapAt = 0
-    this.openActions()
+    const replyId = this._pressReplyId
+    this._pressReplyId = null
+    this.openActions(replyId || undefined)
   },
 
   tap(x, y) {
@@ -382,8 +411,9 @@ const MessageGestures = {
     this._checkTimer = setTimeout(() => btn.removeAttribute("data-copy-check"), COPY_CHECK_MS)
   },
 
-  openActions() {
-    const messageId = this.el.dataset.messageId
+  // `messageId` is a thread reply's id for a long-press on that reply;
+  // every other entry (double-tap, keyboard) opens this message.
+  openActions(messageId = this.el.dataset.messageId) {
     if (!messageId) return
     if (navigator.vibrate) navigator.vibrate(HAPTIC_MS)
     this.pushEvent("open_message_actions", { id: messageId })

@@ -206,6 +206,183 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
     end
   end
 
+  # Task 01a1a74e: a long-press on an inline thread reply opens this sheet
+  # with the REPLY's id. Copy text must be that reply's body and nothing
+  # else, and Reply in thread (which anchors a thread on the id it is given)
+  # is not offered on a reply.
+  describe "a thread reply's sheet" do
+    @federation_meta %{
+      "source" => "federation_inbound",
+      "skip_mention_scan" => true,
+      "peer_id" => "019f0000-0000-7000-8000-000000000001",
+      "remote_message_id" => "019f0000-0000-7000-8000-000000000002",
+      "peer_display_name" => "Acme Suite",
+      "remote_author" => "Pat"
+    }
+
+    defp post_reply(space, parent, participant, content, metadata \\ %{}) do
+      {:ok, thread} = Chat.create_thread_for_message(space.id, parent.id)
+
+      {:ok, msg} =
+        Chat.post_message(%{
+          space_id: space.id,
+          thread_id: thread.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: content,
+          metadata: metadata
+        })
+
+      msg
+    end
+
+    defp copy_text(view, frame) do
+      [row] =
+        view
+        |> doc()
+        |> LazyHTML.query(~s(#{frame} [data-role="message-actions-copy-text"]))
+        |> Enum.to_list()
+
+      row |> LazyHTML.attribute("data-clipboard-text") |> hd()
+    end
+
+    defp roles(view, frame) do
+      view
+      |> doc()
+      |> LazyHTML.query(~s(#{frame} [data-role^="message-actions-"]))
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "data-role"))
+      |> Enum.filter(&(&1 not in ["message-actions-label"]))
+    end
+
+    test "(1) Copy text is the reply's body exactly: no sender name, no time",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      parent = post_msg(space, viewer, "the parent line")
+      body = "First reply: the release notes look right."
+      reply = post_reply(space, parent, other, body)
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+
+      assert has_element?(view, "#message-actions-sheet")
+
+      assert has_element?(
+               view,
+               ~s(#message-actions-sheet [data-role="message-actions-preview"]),
+               body
+             )
+
+      for frame <- ["#message-actions-sheet", "#message-actions-popover"] do
+        text = copy_text(view, frame)
+        assert text == body
+        refute text =~ other.display_name
+        refute text =~ "the parent line"
+        refute text =~ ~r/\b\d{1,2}:\d{2}\b/
+      end
+    end
+
+    test "(5) the preview sits inside the sheet the phone no-selection rule targets",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      # app.css scopes user-select: none below 64rem to
+      # [data-role="message-actions-sheet"] (task 01a1a74e stage 4), so a hold
+      # on the open sheet's preview cannot start a native iOS selection.
+      parent = post_msg(space, viewer, "the parent line")
+      body = "Preview reply: the copy changes are signed off."
+      reply = post_reply(space, parent, other, body)
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+
+      assert has_element?(
+               view,
+               ~s(#message-actions-sheet[data-role="message-actions-sheet"] [data-role="message-actions-preview"]),
+               body
+             )
+
+      # Copy text reads its attribute, not a selection, so it is unaffected.
+      assert copy_text(view, ~s([data-role="message-actions-sheet"])) == body
+    end
+
+    test "(2) a federated reply copies its body without the Shared from line",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      parent = post_msg(space, viewer, "the parent line")
+      body = "Hello from the peer install\n\nsecond paragraph"
+
+      content =
+        Platform.Federation.Peers.Ingest.render_content(
+          %Platform.Federation.Peers.Peer{display_name: "Acme Suite"},
+          %{content: body, author_name: "Pat"}
+        )
+
+      # positive control: the stored content carries the provenance line
+      assert content =~ "Shared from Acme Suite by Pat\n\n"
+
+      reply = post_reply(space, parent, other, content, @federation_meta)
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+
+      text = copy_text(view, "#message-actions-sheet")
+      assert text == body
+      refute text =~ "Shared from"
+      refute text =~ "Pat"
+      refute text =~ "SECURITY NOTICE"
+    end
+
+    test "(3) a markdown reply copies the raw markdown, as a top-level Copy text does",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      md = "**Bold** item, `code span`, and a [link](https://example.com)"
+      top = post_msg(space, other, md)
+      reply = post_reply(space, post_msg(space, viewer, "the parent line"), other, md)
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => top.id})
+      top_text = copy_text(view, "#message-actions-sheet")
+      render_click(view, "close_message_actions", %{})
+
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+      reply_text = copy_text(view, "#message-actions-sheet")
+
+      assert top_text == md
+      assert reply_text == md
+    end
+
+    test "(4) Reply in thread is not offered on a reply; a top-level message keeps every row",
+         %{conn: conn, space: space, viewer: viewer, other: other} do
+      top = post_msg(space, other, "their line")
+      reply = post_reply(space, post_msg(space, viewer, "the parent line"), other, "a reply")
+
+      view = open_chat(conn, space)
+      render_click(view, "open_message_actions", %{"id" => top.id})
+
+      top_roles = roles(view, "#message-actions-sheet")
+      assert "message-actions-reply" in top_roles
+
+      assert labels(view, "#message-actions-sheet") == [
+               "Reply in thread",
+               "Get someone's attention",
+               "Pin message",
+               "Copy text",
+               "Copy link"
+             ]
+
+      render_click(view, "close_message_actions", %{})
+      render_click(view, "open_message_actions", %{"id" => reply.id})
+
+      reply_roles = roles(view, "#message-actions-sheet")
+      refute "message-actions-reply" in reply_roles
+      assert reply_roles == top_roles -- ["message-actions-reply"]
+
+      assert labels(view, "#message-actions-sheet") == [
+               "Get someone's attention",
+               "Pin message",
+               "Copy text",
+               "Copy link"
+             ]
+
+      refute has_element?(view, ~s(#message-actions-popover [data-role="message-actions-reply"]))
+    end
+  end
+
   describe "the quick strip" do
     test "its order is Emoji.quick_defaults/0 in both frames, then the picker control",
          %{conn: conn, space: space, other: other} do
