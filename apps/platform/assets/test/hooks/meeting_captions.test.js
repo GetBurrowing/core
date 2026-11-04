@@ -654,3 +654,36 @@ describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (tas
     expect(hook.pushEvent).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("MeetingCaptions guest suffix", () => {
+  let hook
+
+  beforeEach(() => {
+    installDocumentStub()
+    hook = newHook()
+  })
+
+  afterEach(() => {
+    hook._clearHideTimer()
+    hook._clearStallTimer()
+    delete globalThis.document
+  })
+
+  const speakerOf = (detail) => {
+    hook._lines = []
+    hook._interimLine = null
+    hook._onCaption({ detail: { id: "x", text: "hi", final: true, ...detail } })
+    return hook._lines[0].speaker
+  }
+
+  it("shows the guest suffix exactly once", () => {
+    // The server already names a guest "Ada (guest)" in LiveKit.
+    expect(speakerOf({ speaker: "Ada (guest)", identity: "guest:g1" })).toBe("Ada (guest)")
+    expect(hook.el.innerHTML).not.toContain("(guest) (guest)")
+    // A guest label without the suffix (identity-only fallback) still gets it.
+    expect(speakerOf({ speaker: "Ada", identity: "guest:g1" })).toBe("Ada (guest)")
+    // Non-guests are unchanged.
+    expect(speakerOf({ speaker: "Ada", identity: "user:u1" })).toBe("Ada")
+    expect(speakerOf({ speaker: "Ada (guest)", identity: "user:u1" })).toBe("Ada (guest)")
+  })
+})

@@ -41,6 +41,22 @@ export function personIdentity(identity) {
   return PERSON_PREFIX + identity.slice(COMPANION_PREFIX.length)
 }
 
+// Guest LiveKit identities carry a `guest:` prefix. The server already puts
+// " (guest)" in a guest's LiveKit name (`Platform.Meetings` guest token,
+// `MeetingLive` guest join), so the transcript and caption bar add the suffix
+// only when the label does not end with it yet: "Ada (guest)" stays as is, and
+// an identity-only fallback label still gets marked.
+const GUEST_IDENTITY_PREFIX = "guest:"
+const GUEST_SUFFIX = " (guest)"
+
+/** The speaker label for a caption line, with " (guest)" at most once. */
+export function guestSpeakerLabel(speaker, identity) {
+  const isGuest = typeof identity === "string" && identity.startsWith(GUEST_IDENTITY_PREFIX)
+  if (!isGuest) return speaker
+  if (typeof speaker === "string" && speaker.endsWith(GUEST_SUFFIX)) return speaker
+  return `${speaker}${GUEST_SUFFIX}`
+}
+
 /** Parse `el.dataset.participantNames`; missing or malformed gives `{}`. */
 export function readParticipantNames(el) {
   const raw = el && el.dataset && el.dataset.participantNames

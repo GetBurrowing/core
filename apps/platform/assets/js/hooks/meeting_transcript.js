@@ -57,7 +57,8 @@
  *             "Unknown" (meeting_room.js, task 01a1117f stage 5)
  *   identity  participant.identity || "" — `user:<uuid>`, `agent:<slug>`
  *             or `guest:<uuid>`; the guest suffix and agent chip key on the
- *             prefix (see AGENT_IDENTITY_PREFIX / GUEST_IDENTITY_PREFIX)
+ *             prefix (see AGENT_IDENTITY_PREFIX here and guestSpeakerLabel
+ *             in lib/participant_label.js)
  *   text      seg.text || ""
  *   final     seg.final !== false — DEFAULTS TO TRUE when absent
  *   timestamp seg.startTime || Date.now() — epoch ms
@@ -78,7 +79,7 @@
  * `assets/README.md` ("Meetings: synthesising captions").
  */
 
-import { personIdentity } from "./lib/participant_label"
+import { guestSpeakerLabel, personIdentity } from "./lib/participant_label"
 
 // Scrollback cap. Bounded because this buffer lives for the length of a
 // call and every line is a DOM node; unbounded growth is a slow leak on a
@@ -97,9 +98,9 @@ const PIN_SLACK_PX = 24
 // signed-in viewer, `Platform.Meetings.generate_agent_token/3` mints
 // `agent:<slug>` for a voice runtime (`Meetings.agent_identity?/1` is the
 // server-side twin of this check), and guests get `guest:<uuid>`. The
-// agent chip and the guest suffix key on these and on nothing else.
+// agent chip and the guest suffix key on these and on nothing else. The guest
+// prefix lives with `guestSpeakerLabel` in lib/participant_label.js.
 const AGENT_IDENTITY_PREFIX = "agent:"
-const GUEST_IDENTITY_PREFIX = "guest:"
 
 // Set on the host while it holds at least one line. `app.css` hides the
 // wrap's sibling `[data-role="transcript-empty"]` when its host carries
@@ -214,8 +215,9 @@ const MeetingTranscript = {
     if (rawIdent !== ident && speaker === rawIdent) speaker = ident
 
     // Same guest-suffix rule as the overlay bar: MeetingRoom stamps guest
-    // LiveKit identities with a `guest:` prefix.
-    const displaySpeaker = ident.startsWith(GUEST_IDENTITY_PREFIX) ? `${speaker} (guest)` : speaker
+    // LiveKit identities with a `guest:` prefix, and the server's guest name
+    // may already end in " (guest)" (see `guestSpeakerLabel`).
+    const displaySpeaker = guestSpeakerLabel(speaker, ident)
 
     const at = this._normaliseTimestamp(timestamp)
 
