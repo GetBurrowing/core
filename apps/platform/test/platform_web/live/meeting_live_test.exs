@@ -3062,6 +3062,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(html, ~s([data-gallery-grid][data-gallery-two-up])) == 1
       assert count(html, ~s([data-gallery-grid] [data-gallery-cell])) == 2
       assert count(html, ~s([data-gallery-grid] .meeting-agent-tile)) == 0
+      # Stage 2: the stage is the size container the two-up CSS queries.
+      assert count(html, ~s(#meeting-stage-gallery[data-gallery-stage])) == 1
       assert count(html, ~s([data-gallery-ghost-cell])) == 0
       assert html =~ ~s(data-gallery-tile-count="2")
       assert html =~ ~s(data-gallery-grid-shape="grid-cols-2")
