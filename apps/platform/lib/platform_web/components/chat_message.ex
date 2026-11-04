@@ -597,6 +597,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 <div
                   :for={tmsg <- Map.get(@inline_thread_messages, @msg.id, [])}
                   id={"inline-thread-reply-#{tmsg.id}"}
+                  data-thread-message-id={tmsg.id}
                   class={[
                     "thread-reply",
                     if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
