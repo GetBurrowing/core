@@ -71,6 +71,23 @@ defmodule Platform.Feedback.GithubPublisherTest do
     Application.put_env(:platform, GithubPublisher, Keyword.merge(current, kw))
   end
 
+  describe "repository/0 (task 01a1a6a5 stage 1)" do
+    test "defaults to GetBurrowing/core when no repository is configured" do
+      current = Application.get_env(:platform, GithubPublisher, [])
+      Application.put_env(:platform, GithubPublisher, Keyword.delete(current, :repository))
+
+      assert GithubPublisher.repository() == "GetBurrowing/core"
+
+      put_publisher(repository: "   ")
+      assert GithubPublisher.repository() == "GetBurrowing/core"
+    end
+
+    test "an explicitly configured repository wins" do
+      put_publisher(repository: "acme/feedback")
+      assert GithubPublisher.repository() == "acme/feedback"
+    end
+  end
+
   describe "build_issue/2" do
     test "is built from the allowlisted structure only" do
       built = issue()
@@ -128,7 +145,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
 
   describe "Broker adapter (the installation side)" do
     setup do
-      put_publisher(adapter: Broker, repository: "Startup-Suite/core")
+      put_publisher(adapter: Broker, repository: "GetBurrowing/core")
       :ok
     end
 
@@ -140,7 +157,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
         send(test_pid, {:broker, conn.request_path, conn.req_headers, Jason.decode!(raw)})
 
         Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-          "repository" => "startup-suite/CORE",
+          "repository" => "getburrowing/CORE",
           "issue_number" => 12,
           "url" => "https://evil.example/x",
           "extra" => "ignored"
@@ -152,9 +169,9 @@ defmodule Platform.Feedback.GithubPublisherTest do
       assert {:ok, identity} = GithubPublisher.publish(built, fingerprint: @fp)
 
       assert identity == %{
-               repository: "Startup-Suite/core",
+               repository: "GetBurrowing/core",
                issue_number: 12,
-               url: "https://github.com/Startup-Suite/core/issues/12"
+               url: "https://github.com/GetBurrowing/core/issues/12"
              }
 
       assert_received {:broker, "/issues", headers, body}
@@ -162,7 +179,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
 
       assert body == %{
-               "repository" => "Startup-Suite/core",
+               "repository" => "GetBurrowing/core",
                "title" => built.title,
                "body" => built.body,
                "labels" => built.labels,
@@ -195,8 +212,8 @@ defmodule Platform.Feedback.GithubPublisherTest do
     test "a response naming another repository or no issue number is rejected" do
       for body <- [
             %{"repository" => "attacker/repo", "issue_number" => 1},
-            %{"repository" => "Startup-Suite/core", "issue_number" => "1"},
-            %{"repository" => "Startup-Suite/core", "issue_number" => -4},
+            %{"repository" => "GetBurrowing/core", "issue_number" => "1"},
+            %{"repository" => "GetBurrowing/core", "issue_number" => -4},
             %{"ok" => true}
           ] do
         Req.Test.stub(Broker, fn conn ->
@@ -223,7 +240,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       Req.Test.stub(Broker, fn conn ->
         case conn.request_path do
           "/issues/" <> @fp ->
-            Req.Test.json(conn, %{"repository" => "Startup-Suite/core", "issue_number" => 5})
+            Req.Test.json(conn, %{"repository" => "GetBurrowing/core", "issue_number" => 5})
         end
       end)
 
@@ -236,7 +253,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
 
   describe "GithubApp adapter (the Suite-hosted side)" do
     setup do
-      put_publisher(adapter: GithubApp, repository: "Startup-Suite/core")
+      put_publisher(adapter: GithubApp, repository: "GetBurrowing/core")
 
       {_, pem} = JOSE.JWK.generate_key({:rsa, 2048}) |> JOSE.JWK.to_pem()
       System.put_env("FEEDBACK_GITHUB_APP_ID", "424242")
@@ -256,7 +273,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
           {"POST", "/app/installations/9001/access_tokens"} ->
             Req.Test.json(Plug.Conn.put_status(conn, 201), %{"token" => token})
 
-          {"POST", "/repos/Startup-Suite/core/issues"} ->
+          {"POST", "/repos/GetBurrowing/core/issues"} ->
             Req.Test.json(Plug.Conn.put_status(conn, issue_status), %{
               "number" => 314,
               "html_url" => "https://evil.example/not-used"
@@ -274,9 +291,9 @@ defmodule Platform.Feedback.GithubPublisherTest do
           assert {:ok, identity} = GithubPublisher.publish(built, fingerprint: @fp)
 
           assert identity == %{
-                   repository: "Startup-Suite/core",
+                   repository: "GetBurrowing/core",
                    issue_number: 314,
-                   url: "https://github.com/Startup-Suite/core/issues/314"
+                   url: "https://github.com/GetBurrowing/core/issues/314"
                  }
         end)
 
@@ -294,7 +311,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       assert claims["iss"] == "424242"
       assert claims["exp"] - claims["iat"] <= 600
 
-      assert_received {:github, "POST", "/repos/Startup-Suite/core/issues", auth, issue_raw}
+      assert_received {:github, "POST", "/repos/GetBurrowing/core/issues", auth, issue_raw}
       assert auth == "Bearer " <> ctx.token
 
       assert Jason.decode!(issue_raw) == %{
@@ -371,7 +388,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       assert {:ok, %{issue_number: 99}} = GithubPublisher.find_existing(fingerprint: @fp)
       assert_received {:github, "GET", "/search/issues", query}
       q = URI.decode_query(query)["q"]
-      assert q =~ "repo:Startup-Suite/core"
+      assert q =~ "repo:GetBurrowing/core"
       assert q =~ @fp
     end
   end

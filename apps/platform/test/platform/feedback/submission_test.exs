@@ -39,7 +39,7 @@ defmodule Platform.Feedback.SubmissionTest do
       number = 1000 + :counters.get(counter, 1)
 
       Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-        "repository" => "Startup-Suite/core",
+        "repository" => "GetBurrowing/core",
         "issue_number" => number,
         "url" => "https://evil.example/phish",
         "token" => "ghs_leakedTokenFromBrokerShouldNeverSurface0000"
@@ -128,9 +128,9 @@ defmodule Platform.Feedback.SubmissionTest do
       assert first.status == "created"
 
       assert first.issue == %{
-               repository: "Startup-Suite/core",
+               repository: "GetBurrowing/core",
                issue_number: 1001,
-               url: "https://github.com/Startup-Suite/core/issues/1001"
+               url: "https://github.com/GetBurrowing/core/issues/1001"
              }
 
       assert {:ok, second} = Submission.submit(valid(), actor(agent))
@@ -193,11 +193,11 @@ defmodule Platform.Feedback.SubmissionTest do
       Req.Test.stub(@broker, fn conn ->
         case conn.method do
           "GET" ->
-            Req.Test.json(conn, %{"repository" => "Startup-Suite/core", "issue_number" => 77})
+            Req.Test.json(conn, %{"repository" => "GetBurrowing/core", "issue_number" => 77})
 
           "POST" ->
             Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-              "repository" => "Startup-Suite/core",
+              "repository" => "GetBurrowing/core",
               "issue_number" => 78
             })
         end
@@ -443,7 +443,7 @@ defmodule Platform.Feedback.SubmissionTest do
         send(test_pid, {:broker_retry, conn.method})
 
         Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-          "repository" => "Startup-Suite/core",
+          "repository" => "GetBurrowing/core",
           "issue_number" => 42
         })
       end)

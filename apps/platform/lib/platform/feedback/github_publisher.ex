@@ -1,8 +1,9 @@
 defmodule Platform.Feedback.GithubPublisher do
   @moduledoc """
   Server-side publication of a sanitized `feedback_submit` structure as one
-  GitHub issue on the Startup-Suite feedback repository (task 01a11ec3
-  stage 2).
+  GitHub issue on the core repository, `GetBurrowing/core` by default
+  (`FEEDBACK_REPOSITORY` overrides it; task 01a11ec3 stage 2, retargeted by
+  task 01a1a6a5 stage 1).
 
   ## Two adapters, and which install runs which
 
@@ -72,7 +73,7 @@ defmodule Platform.Feedback.GithubPublisher do
   @callback find_existing(keyword()) ::
               {:ok, %{repository: String.t(), issue_number: integer()} | nil} | {:error, error()}
 
-  @default_repository "Startup-Suite/core"
+  @default_repository "GetBurrowing/core"
   @repository_format ~r/\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}\z/
   @fingerprint_marker "suite-feedback-fingerprint"
   @max_issue_number 2_147_483_647

@@ -24,7 +24,7 @@ defmodule Platform.Feedback.IntakeTest do
   alias Platform.Tasks.Task
   alias Platform.Test.FeedbackIntakeStub, as: Stub
 
-  @feedback_repo "Startup-Suite/core"
+  @feedback_repo "GetBurrowing/core"
 
   setup do
     {:ok, project} =
@@ -110,6 +110,27 @@ defmodule Platform.Feedback.IntakeTest do
       assert records(issue.repository, issue.issue_number) == []
       assert Stub.external_tasks(issue.repository, issue.issue_number) == []
       assert drain_classifier_calls() == 0
+    end
+
+    test "an unset policy keeps intake off even though submission is on" do
+      Application.delete_env(:platform, :feedback_policy)
+      assert Platform.Feedback.Policy.enabled?()
+      issue = issue()
+
+      assert {:ignored, :feedback_disabled} = Intake.process(issue)
+      assert records(issue.repository, issue.issue_number) == []
+      assert Stub.external_tasks(issue.repository, issue.issue_number) == []
+      assert drain_classifier_calls() == 0
+      assert drain_dispositions() == []
+    end
+
+    test "an explicitly quarantined policy files the accepted issue" do
+      Application.put_env(:platform, :feedback_policy, "quarantined")
+      issue = issue()
+
+      assert {:ok, %{outcome: :task_filed, task_id: task_id}} = Intake.process(issue)
+      assert Repo.get!(Task, task_id).trust == "quarantined"
+      assert [_] = Stub.external_tasks(issue.repository, issue.issue_number)
     end
 
     test "a repository that is neither the feedback repository nor connected is out of scope" do

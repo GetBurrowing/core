@@ -1172,7 +1172,7 @@ defmodule Platform.Federation.ToolSurface do
     %{
       name: "feedback_submit",
       description:
-        "Report a defect in Burrow itself, or propose a concrete positive change to it, as one structured GitHub issue on the Startup-Suite feedback repository. Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
+        "Report a defect in Burrow itself, or propose a concrete positive change to it, as one structured GitHub issue on the core repository (GetBurrowing/core by default). Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
       parameters: %{
         category: %{
           type: "string",

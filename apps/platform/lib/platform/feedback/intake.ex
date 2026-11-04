@@ -424,7 +424,9 @@ defmodule Platform.Feedback.Intake do
   # ── helpers ─────────────────────────────────────────────────────────────
 
   defp enabled do
-    if Policy.enabled?(), do: :ok, else: {:ignored, :feedback_disabled}
+    # `explicit?/0`, not `enabled?/0`: the unset default turns submission on
+    # but must not turn intake on (task 01a1a6a5 stage 1).
+    if Policy.explicit?(), do: :ok, else: {:ignored, :feedback_disabled}
   end
 
   defp connected_project_id(repository) do
