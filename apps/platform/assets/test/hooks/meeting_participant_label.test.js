@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import MeetingRoom from "../../js/hooks/meeting_room.js"
 import MeetingClient from "../../js/hooks/meeting_client.js"
 import {
+  guestSpeakerLabel,
   isCompanionIdentity,
   participantLabel,
   personIdentity,
@@ -251,5 +252,16 @@ describe("personLabel — the sharer's name", () => {
 
   it("no participant is an empty label", () => {
     expect(personLabel(null, room(me), {})).toBe("")
+  })
+})
+
+describe("guestSpeakerLabel", () => {
+  it("adds \" (guest)\" for guest identities only, and never twice", () => {
+    expect(guestSpeakerLabel("Ada (guest)", "guest:g1")).toBe("Ada (guest)")
+    expect(guestSpeakerLabel("Ada", "guest:g1")).toBe("Ada (guest)")
+    expect(guestSpeakerLabel("guest:g1", "guest:g1")).toBe("guest:g1 (guest)")
+    expect(guestSpeakerLabel("Ada", "user:u1")).toBe("Ada")
+    expect(guestSpeakerLabel("Ada", "")).toBe("Ada")
+    expect(guestSpeakerLabel("Ada", null)).toBe("Ada")
   })
 })

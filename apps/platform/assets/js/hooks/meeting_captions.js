@@ -1,4 +1,5 @@
 import ClientState from "../client_state"
+import { guestSpeakerLabel } from "./lib/participant_label"
 
 /**
  * MeetingCaptions hook — renders a rolling caption overlay during meetings.
@@ -247,11 +248,10 @@ const MeetingCaptions = {
     // with a `guest:` prefix (mirrors participant_rail.ex's
     // `via_guest_link?` predicate). Threading identity through the
     // custom event lets the central bar attribute the line as
-    // `Name (guest): text` without a server round-trip.
-    const displaySpeaker =
-      typeof identity === "string" && identity.startsWith("guest:")
-        ? `${speaker} (guest)`
-        : speaker
+    // `Name (guest): text` without a server round-trip. The guest's
+    // LiveKit name usually already ends in " (guest)"; the helper adds the
+    // suffix only when it is missing, so it never shows twice.
+    const displaySpeaker = guestSpeakerLabel(speaker, identity)
 
     if (!final) {
       // Interim: update in place if same ID, or replace the interim slot

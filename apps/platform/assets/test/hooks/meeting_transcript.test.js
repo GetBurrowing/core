@@ -286,6 +286,17 @@ describe("MeetingTranscript", () => {
     expect(hook.el.innerHTML).not.toContain("<img src=x")
   })
 
+  // The server already names a guest "Ada (guest)" in LiveKit, so the pane
+  // must not add a second suffix; a bare label from a guest still gets one.
+  it("shows the guest suffix exactly once", () => {
+    caption(listeners, { id: "a", speaker: "Ada (guest)", identity: "guest:g1", text: "hi" })
+    caption(listeners, { id: "b", speaker: "Bo", identity: "guest:g2", text: "yo" })
+    caption(listeners, { id: "c", speaker: "Cy", identity: "user:u1", text: "hey" })
+
+    expect(renderedLines(hook)).toEqual(["Ada (guest) hi", "Bo (guest) yo", "Cy hey"])
+    expect(hook.el.innerHTML).not.toContain("(guest) (guest)")
+  })
+
   it("ignores blank captions", () => {
     caption(listeners, { id: "a", speaker: "Alex", text: "   " })
 
