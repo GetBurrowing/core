@@ -7,7 +7,10 @@ defmodule Platform.Calendar.Feed do
 
     meetings =
       if Platform.Access.can?(scope, "meetings.join") do
+        # Omitted for the same reason as cancelled events (`feed_events/1`).
+        # The single-meeting invite keeps METHOD:CANCEL; this feed does not.
         Platform.Meetings.list_meetings_for_user(scope.actor)
+        |> Enum.reject(&(&1.status == "cancelled"))
         |> Enum.flat_map(fn meeting ->
           case Platform.Meetings.CalendarFeed.render(meeting) do
             {:ok, document} ->
