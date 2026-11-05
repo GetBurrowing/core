@@ -25,6 +25,21 @@ defmodule Platform.Org.Wiki.Routing do
     UTC date. Stage 3's `tool_surface.ex` surfaces those fields directly in
     the tool error envelope — do not reshape this tuple without updating
     `memory_tools_test.exs` and the e2e Case B assertions.
+
+  ## People pages are owned by HR
+
+  Pages under `org/page/people/` classify as ordinary `org` page paths here
+  (`kind: :page`, Historian-writable) — nothing in this module is
+  people-aware, and `classify/1` / `gate_write/3` are deliberately unchanged.
+  Ownership is a routing rule, not a path rule: the HR responsibility
+  (`Platform.People.Pages`) creates and edits those pages, and the Historian's
+  scheduled digest (`historian.scheduled` in
+  `Platform.Orchestration.PromptTemplates`) is told not to. Each person has
+  two tiers: a card at `org/page/people/<slug>.md` readable by everyone, and
+  `org/page/people/<slug>/private.md` whose frontmatter carries
+  `readers: [subject, admins]`. The Wiki enforces that key generically
+  (`Platform.Org.Wiki.Readers`) and never reads People policy back: People
+  SETS the keys, the Wiki honours them, and the dependency points one way.
   """
 
   alias Platform.Agents.Agent

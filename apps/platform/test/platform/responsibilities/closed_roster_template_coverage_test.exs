@@ -118,6 +118,10 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     # Task 01a11ec3 stage 3: `feedback.intake` (triage officer) points at
     # this slug, seeded by `20261010160100_seed_feedback_intake_prompt.exs`.
     "feedback.intake.v1",
+    # Task 01a1aa47 stage 4: both `hr.*` keys (historian bundle) point at this
+    # one slug; descriptor in `default_templates/0`, row seeded by
+    # `20261105070000_seed_hr_profile_template_and_bundle.exs`.
+    "hr.profile.v1",
     # Task 019fa1ac-6685 stage 1: `janitor.cron_drain` (janitor role) points
     # at this slug; descriptor in `default_templates/0`, row seeded by
     # `20261009060918_add_janitor_role.exs`.

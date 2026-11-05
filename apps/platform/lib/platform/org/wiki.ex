@@ -44,6 +44,7 @@ defmodule Platform.Org.Wiki do
   alias Ecto.Adapters.SQL
   alias Platform.Files
   alias Platform.Org.Wiki.Nodes
+  alias Platform.Org.Wiki.Readers
   alias Platform.Org.Wiki.Routing
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
@@ -166,8 +167,14 @@ defmodule Platform.Org.Wiki do
 
   @doc false
   # The optional `:access_scope` seam shared with `Platform.Org.Wiki.Search`.
-  def maybe_scope_by(query, %Platform.Access.Scope{} = scope),
-    do: scope_by(query, scope, :memory_page)
+  # The generic `readers:` frontmatter rule (`Platform.Org.Wiki.Readers`)
+  # runs BEFORE the RBAC `scope_by/3`, so every reader of this seam inherits
+  # both: a page the scope may not read under either rule is absent.
+  def maybe_scope_by(query, %Platform.Access.Scope{} = scope) do
+    query
+    |> Readers.restrict(scope)
+    |> scope_by(scope, :memory_page)
+  end
 
   def maybe_scope_by(query, _scope), do: query
 
@@ -178,10 +185,11 @@ defmodule Platform.Org.Wiki do
 
   defp readable_or_nil(%WikiPage{id: id} = page, scope) do
     readable =
-      WikiPage
-      |> where([p], p.id == ^id)
-      |> maybe_scope_by(scope)
-      |> Repo.exists?()
+      Readers.readable?(page, scope) and
+        WikiPage
+        |> where([p], p.id == ^id)
+        |> maybe_scope_by(scope)
+        |> Repo.exists?()
 
     if readable, do: page, else: nil
   end

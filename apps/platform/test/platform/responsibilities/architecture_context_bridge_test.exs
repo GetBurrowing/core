@@ -201,6 +201,14 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
     "org_memory_entries" =>
       "architecture.audit_diff serves this from its own " <>
         "@canonical_memory_flags constant",
+    # Task 01a1aa47 stage 4: the four people_* slots. Handlers.Hr builds them
+    # itself in gather_context/2 from Platform.People.{Appearances, Pages,
+    # Staleness, OwnWords}; there is deliberately no ContextProviders clause
+    # because the window and subject list are per-fire inputs.
+    "people_roster" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
+    "people_appearances" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
+    "people_staleness" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
+    "people_own_words" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
     "canvas_snapshot" =>
       "design.spec_writer / design.brand_check are placeholder handlers " <>
         "returning `missing?: true` — no runtime yet. design.critique " <>

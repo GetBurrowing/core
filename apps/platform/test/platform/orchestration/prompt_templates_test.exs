@@ -2940,6 +2940,47 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
     @historian_slugs ~w(historian.scheduled historian.meeting_ended historian.threshold)
 
+    # Task 01a1aa47 stage 4: the HR prompt both `hr.*` rows render.
+    test "hr.profile.v1 declares exactly the variables Handlers.Hr.gather_context/2 supplies and interpolates each" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "hr.profile.v1"))
+
+      assert descriptor, "hr.profile.v1 should appear in default_templates/0"
+
+      assert descriptor.variables == [
+               "date",
+               "workspace_id",
+               "org_identity",
+               "people_roster",
+               "people_appearances",
+               "people_staleness",
+               "people_own_words",
+               "contract",
+               "page_grammar",
+               "experiment_directive"
+             ]
+
+      for var <- descriptor.variables do
+        assert descriptor.content =~ "{{#{var}}}",
+               "hr.profile.v1 declares `#{var}` but never interpolates it"
+      end
+
+      placeholders =
+        ~r/\{\{(\w+)\}\}/
+        |> Regex.scan(descriptor.content)
+        |> Enum.map(fn [_, name] -> name end)
+        |> Enum.uniq()
+
+      assert placeholders -- descriptor.variables == []
+
+      assert descriptor.content =~ "You are HR"
+      assert descriptor.content =~ "catalog, not psychology"
+      assert descriptor.content =~ "own words [cite: ...]"
+      assert descriptor.content =~ "said_by_subject"
+      assert descriptor.content =~ "The server drops anything else"
+    end
+
     test "every new historian.* slug appears in default_templates/0" do
       defaults = PromptTemplates.default_templates()
       slugs = Enum.map(defaults, & &1.slug)
@@ -3155,6 +3196,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
 
     test "seed_defaults inserts historian.* rows when missing" do
+      # The test DB's historian rows come from migrations, and seed_defaults
+      # never overwrites an existing slug, so make the rows MISSING first
+      # (sandboxed; rolled back) — otherwise this asserts a migration-era row
+      # against the current descriptor and fails on any seed-only change
+      # (task 01a1aa47-837b stage 2 added one sentence with no migration).
+      Platform.Repo.delete_all(
+        from(t in Platform.Orchestration.PromptTemplate, where: t.slug in ^@historian_slugs)
+      )
+
       :ok = PromptTemplates.seed_defaults()
 
       for slug <- @historian_slugs do

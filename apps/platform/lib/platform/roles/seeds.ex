@@ -104,7 +104,15 @@ defmodule Platform.Roles.Seeds do
         # from, the bundle records who does it. This is also the intent
         # that proves the pattern is not canvas-specific — its artifact
         # is the org journal.
-        "meetings.decision_recorded"
+        "meetings.decision_recorded",
+        # Task 01a1aa47 stage 4. Two `hr.*` keys in the HISTORIAN's bundle,
+        # deliberately: the roster is CLOSED by a DB CHECK and the people
+        # profiles are org memory, so the role that already curates memory
+        # curates people. The namespace records what the work is; the
+        # bundle records who does it. Existing DBs get both rows from
+        # `20261105070000_seed_hr_profile_template_and_bundle.exs`.
+        "hr.daily_sweep",
+        "hr.meeting_completed"
       ]
     },
     %{

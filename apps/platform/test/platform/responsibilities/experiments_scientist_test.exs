@@ -250,6 +250,8 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",
                  "dispatch.prompt",
+                 # Task 01a1aa47 stage 4: the HR surface.
+                 "hr.profile",
                  "mail.draft.generator",
                  "meetings.brief_synthesis",
                  "meetings.open_question_classifier",

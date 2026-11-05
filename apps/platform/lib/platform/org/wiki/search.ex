@@ -606,7 +606,14 @@ defmodule Platform.Org.Wiki.Search do
           uniq: true,
           do: id
 
-    if page_ids == [] or not Platform.Access.grants_apply?(scope, "memory.read") do
+    # The id query also runs for a user scope with no grant: the generic
+    # `readers:` rule (`Platform.Org.Wiki.Readers`, through
+    # `Wiki.maybe_scope_by/2`) can hide a page RBAC would show.
+    no_question =
+      not Platform.Access.grants_apply?(scope, "memory.read") and
+        not Platform.Org.Wiki.Readers.applies?(scope)
+
+    if page_ids == [] or no_question do
       resolved_hits
     else
       readable =

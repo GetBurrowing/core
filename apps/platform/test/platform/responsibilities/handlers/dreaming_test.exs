@@ -290,6 +290,58 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
       assert Map.has_key?(ctx, :org_identity)
       assert Map.has_key?(ctx, :rejected_exemplars)
     end
+
+    # Task 01a1aa47 stage 4: HR is an input to dreaming, never a gate on it.
+    test "gather_context still returns {:ok, ctx} while HR is in flight and emits hr_wait telemetry" do
+      parent = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "dreaming-hr-wait-#{inspect(ref)}",
+        [:platform, :memory, :dreaming, :hr_wait],
+        fn _event, measurements, meta, _ -> send(parent, {:hr_wait, measurements, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("dreaming-hr-wait-#{inspect(ref)}") end)
+
+      # A persisted "started" row with no "finished" row: the HR sweep is in
+      # flight right now. The wait budget is zeroed so the test does not sleep.
+      iso = DateTime.to_iso8601(DateTime.utc_now())
+
+      {:ok, _} =
+        OrgContext.append_memory_entry(%{
+          content: "HR daily sweep started #{iso}",
+          date: Date.utc_today(),
+          metadata: %{
+            "source" => Platform.People.SweepState.source(),
+            "phase" => "started",
+            "started_at" => iso
+          }
+        })
+
+      assert {:in_flight, _} = Platform.People.SweepState.status(DateTime.utc_now())
+
+      previous = Application.get_env(:platform, :dreaming_hr_wait_minutes)
+      Application.put_env(:platform, :dreaming_hr_wait_minutes, 0)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, :dreaming_hr_wait_minutes, previous),
+          else: Application.delete_env(:platform, :dreaming_hr_wait_minutes)
+      end)
+
+      assert {:ok, ctx} = Dreaming.gather_context(responsibility(), %{kind: :cron})
+      assert Map.has_key?(ctx, :recent_journal)
+      assert Map.has_key?(ctx, :org_identity)
+
+      assert_receive {:hr_wait, %{waited_ms: waited}, %{outcome: :proceeded_after_wait_budget}}
+      assert waited == 0
+
+      # A fallback fire does not even look.
+      assert {:ok, _} = Dreaming.gather_context(responsibility(), %{kind: :fallback})
+      assert_receive {:hr_wait, _, %{outcome: :skipped_fallback}}
+    end
   end
 
   describe "journal_file_key/1" do

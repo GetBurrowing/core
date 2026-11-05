@@ -70,6 +70,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Design
   alias Platform.Responsibilities.Providers.Experiments
   alias Platform.Responsibilities.Providers.Feedback
+  alias Platform.Responsibilities.Providers.Hr
   alias Platform.Responsibilities.Providers.Janitor
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
@@ -81,6 +82,8 @@ defmodule Platform.Responsibilities.Providers do
     "design" => Design,
     "experiments" => Experiments,
     "feedback" => Feedback,
+    # Task 01a1aa47 stage 4: `hr.daily_sweep` + `hr.meeting_completed`.
+    "hr" => Hr,
     # Task 019fa1ac-6685 stage 1: `janitor.cron_drain`. Removing this entry
     # is the canonical detonation for janitor_registration_test.exs.
     "janitor" => Janitor,

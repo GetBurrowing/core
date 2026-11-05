@@ -28,6 +28,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
   # plus Play's three (task 01a0fe45 added game_stream.touch), and nothing else.
   # Task 01a114a8 stage 4 added the core surface dispatch.code_mode.
   # Task 01a13867 added the core surface memory.insight_synthesis.
+  # Task 01a1aa47 added the core surface hr.profile.
   test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
@@ -41,6 +42,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",
                "meetings.open_question_classifier",
@@ -64,6 +66,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",
                "meetings.open_question_classifier",
