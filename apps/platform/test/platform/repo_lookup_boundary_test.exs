@@ -439,8 +439,6 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Meetings ───────────────────────────────────────────────────────
     {"platform/meetings/invite_delivery.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
      "deliver_internal/2 reads invite.user_id off a persisted %Invite{} row whose user_id is a UUID foreign key to users"},
-    {"platform/meetings/cancellation_mail.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
-     "task 01a19e7f stage 2 — `sender/1` reads `project_id` off the `%Meeting{}` row it was handed (a `:binary_id` FK column on a loaded meeting), never a boundary value"},
     {"platform/meetings/meeting_notifier.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
      "readable_recipients/2 receives ids selected from persisted Invite.user_id or Participant.participant_id :binary_id fields by Meetings.recipients_for_meeting/1"},
     # ── Email module (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6) ──────

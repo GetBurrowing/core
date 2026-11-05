@@ -56,6 +56,11 @@ defmodule Platform.Mail.Drafts do
   @editable ~w(account_id sender_key to_addresses to_user_ids subject body
                on_behalf_of_user_id responsibility task_id)a
 
+  # The rich parts (task 01a1a933): an HTML alternative, Reply-To and a
+  # calendar invite. System drafts only — the meeting invite mailer writes
+  # them; a person's or an agent's draft stays plain text.
+  @system_editable @editable ++ ~w(html_body reply_to calendar_method calendar_ics)a
+
   @type actor :: {:user, binary()} | {:agent, binary()} | User.t()
   @type error ::
           :unauthorized
@@ -118,7 +123,8 @@ defmodule Platform.Mail.Drafts do
 
     with {:ok, org_id} <- fetch_org(org_id),
          {:ok, stage_id} <- system_stage_id(stage_id),
-         {:ok, changes} <- validate(org_id, %{}, normalize(attrs)) do
+         {:ok, changes} <- validate(org_id, %{}, normalize(attrs, @system_editable)),
+         :ok <- check_reply_to(changes) do
       %Draft{}
       |> Draft.changeset(
         Map.merge(changes, %{
@@ -365,8 +371,8 @@ defmodule Platform.Mail.Drafts do
 
   # ── Private: validation ─────────────────────────────────────────────────
 
-  defp normalize(attrs) do
-    Enum.reduce(@editable, %{}, fn key, acc ->
+  defp normalize(attrs, keys \\ @editable) do
+    Enum.reduce(keys, %{}, fn key, acc ->
       case fetch_attr(attrs, key) do
         {:ok, value} -> Map.put(acc, key, value)
         :error -> acc
@@ -410,15 +416,24 @@ defmodule Platform.Mail.Drafts do
 
   defp check_strings(changes) do
     bad =
-      Enum.find(~w(subject body sender_key responsibility)a, fn key ->
-        case Map.fetch(changes, key) do
-          {:ok, value} -> not (is_nil(value) or is_binary(value))
-          :error -> false
+      Enum.find(
+        ~w(subject body sender_key responsibility html_body reply_to calendar_method calendar_ics)a,
+        fn key ->
+          case Map.fetch(changes, key) do
+            {:ok, value} -> not (is_nil(value) or is_binary(value))
+            :error -> false
+          end
         end
-      end)
+      )
 
     if bad, do: {:error, {:invalid, "#{bad} must be a string"}}, else: :ok
   end
+
+  defp check_reply_to(%{reply_to: address}) when is_binary(address) do
+    if valid_address?(address), do: :ok, else: {:error, {:invalid_addresses, [address]}}
+  end
+
+  defp check_reply_to(_changes), do: :ok
 
   defp check_addresses(%{to_addresses: addresses} = changes) when is_list(addresses) do
     if Enum.all?(addresses, &is_binary/1) do

@@ -42,34 +42,30 @@ defmodule Platform.Meetings.InviteDelivery do
   3. Route on AUDIENCE — `Invite.kind/1`, then org membership.
   4. Stamp `delivery_carrier` with the carrier that actually ran.
 
-  ## Guests get a link, and there is no email path to build
+  ## Every carrier is followed by an email (task 01a1a933 stage 3)
 
-  A guest's channel is the per-invite URL `Meetings.invite_guest/2` already
-  minted and returned to the host; the carrier is `:guest_link`. There is
-  **no outbound email capability in this repository** — re-verified for
-  this stage: `mix.lock` matches none of swoosh / bamboo / gen_smtp, no
-  module named `*Mailer` is defined anywhere under `apps/`, `runtime.exs`
-  carries no SMTP configuration, and a repo-wide grep for `deliver_now` /
-  `send_email` outside `deps/` returns no call site at all.
-  Recording the carrier and emitting telemetry is therefore the honest
-  outcome, and inventing a mail path here would be a much larger change
-  wearing this task's name. Do not add one.
+  A guest's in-app channel is still the per-invite URL `Meetings.invite_guest/2`
+  minted and returned to the host; that carrier is `:guest_link`. But a guest
+  with an address, a member and an external user also get an invitation
+  email with a calendar part (`Platform.Meetings.InviteMailer`), sent from
+  the org's own meeting sender (`Platform.Mail.OrgSender.resolve/2`, key
+  `"meetings"` on one send-enabled account) through the audited outbox.
 
-  This is a REAL LIMIT and not a TODO. A guest has no account, therefore no
-  inbox row, no push subscription and no chat identity: this system cannot
-  reach them through any channel it owns. `:guest_link` is not a degraded
-  send, it is an accurate record that the only channel is the URL already
-  in the host's hands, and handing that URL to a human is the separate
-  concern tracked as `019fb955-1d7b`. The telemetry event is what keeps the
-  gap legible — a `carrier: :guest_link` event says plainly that nobody was
-  contacted, where a silent success would read as a delivery that happened.
+  The email rides INSIDE the claimed branch, after the carrier ran, so the
+  `delivered_at` compare-and-swap that keeps a double-submit from pushing
+  twice also keeps it from mailing twice. It is a side effect in a rescue:
+  a mail failure never changes the carrier, the return value or the
+  committed invite. Its outcome is the invite's receipt instead:
+  `mail_delivery_id` (queued, or refused) and `mail_error` (why nothing was
+  queued: no meetings sender, mail off, a refused policy), and
+  `Platform.Meetings.invite_mail_failed?/1` reads a later SMTP failure off
+  the delivery row. A member who turned meeting emails off, a name-only
+  guest and the inviter themselves are owed no email and record nothing.
 
-  The mail claim above is dated. An audited outbox exists now
-  (`Platform.Mail`), and two senders use it for guests: booking confirmations
-  (`Platform.Calendar.BookingConfirmation`) and cancellation notices
-  (`Platform.Meetings.CancellationMail`). Both need an org sender, resolved
-  by `Platform.Mail.OrgSender.resolve/2`. The invite itself still goes out as
-  `:guest_link`.
+  `notify_email: false` skips the email (the booking path sends its own
+  `Booking confirmed:` message). A name-only guest still has no channel
+  but the link the host holds; the `carrier: :guest_link` telemetry event
+  keeps that legible.
 
   ## Cancellation reuses these carriers, it is not a carrier of its own
 
@@ -84,9 +80,11 @@ defmodule Platform.Meetings.InviteDelivery do
     * external invitees get "<name> has been cancelled." in the delivery
       space recorded on their invite, posted through `post_as_sender/2`
       below, the same seeded sender this module uses for the invite itself;
-    * guests with an email get a cancellation email from
-      `Platform.Meetings.CancellationMail` when a meeting mail sender is
-      configured for the org. A link-only guest still has no channel.
+    * guests with an email, and everyone who got an invitation email, get a
+      cancellation email (`METHOD:CANCEL`, same UID) from
+      `Platform.Meetings.CancellationMail`, which delegates to
+      `InviteMailer.send_cancellations/1`. A link-only guest still has no
+      channel.
 
   ## Where the cross-cutting properties are checked
 
@@ -189,6 +187,7 @@ defmodule Platform.Meetings.InviteDelivery do
   alias Platform.Meetings
   alias Platform.Meetings.Config
   alias Platform.Meetings.Invite
+  alias Platform.Meetings.InviteMailer
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.SenderSeed
   alias Platform.Repo
@@ -219,15 +218,19 @@ defmodule Platform.Meetings.InviteDelivery do
     * `{:error, reason}` — the external carrier could not deliver. The
       claim is released, so a later call can try again.
 
+  `opts` are the invite email's (`notify_email`, `inviter_user_id`,
+  `inviter_time_zone`); the email follows every carrier that ran, inside
+  the claim. See the moduledoc.
+
   Never raises for an expected condition, and never turns a committed
   invite row into a caller-visible failure — see
   `Platform.Meetings.invite_user/3`'s wiring.
   """
-  @spec deliver(Invite.t(), Meeting.t()) :: {:ok, carrier()} | {:error, term()}
-  def deliver(%Invite{} = invite, %Meeting{} = meeting) do
+  @spec deliver(Invite.t(), Meeting.t(), keyword()) :: {:ok, carrier()} | {:error, term()}
+  def deliver(%Invite{} = invite, %Meeting{} = meeting, opts \\ []) do
     if Config.enabled?() do
       case claim(invite) do
-        :claimed -> route(invite, meeting)
+        :claimed -> route(invite, meeting, opts)
         :already_delivered -> {:ok, :already_delivered}
       end
     else
@@ -275,34 +278,52 @@ defmodule Platform.Meetings.InviteDelivery do
 
   # ── Routing ───────────────────────────────────────────────────────────────
 
-  defp route(%Invite{} = invite, %Meeting{} = meeting) do
+  defp route(%Invite{} = invite, %Meeting{} = meeting, opts) do
     case Invite.kind(invite) do
-      :guest -> deliver_guest(invite, meeting)
-      :user -> deliver_user(invite, meeting)
+      :guest -> deliver_guest(invite, meeting, opts)
+      :user -> deliver_user(invite, meeting, opts)
     end
   end
 
-  defp deliver_guest(%Invite{} = invite, %Meeting{} = meeting) do
+  defp deliver_guest(%Invite{} = invite, %Meeting{} = meeting, opts) do
     stamp_carrier(invite, :guest_link)
     emit_telemetry(invite, meeting, :guest_link)
+    send_email(invite, meeting, opts)
     {:ok, :guest_link}
   end
 
-  defp deliver_user(%Invite{} = invite, %Meeting{} = meeting) do
+  defp deliver_user(%Invite{} = invite, %Meeting{} = meeting, opts) do
     if Platform.Tenancy.external_user?(%{id: invite.user_id}) do
-      deliver_external(invite, meeting)
+      deliver_external(invite, meeting, opts)
     else
-      deliver_internal(invite, meeting)
+      deliver_internal(invite, meeting, opts)
     end
+  end
+
+  # The invite email (task 01a1a933 stage 3). Runs only on a claimed,
+  # successful carrier, and is a side effect: whatever it does, the caller
+  # gets the carrier. See the moduledoc.
+  defp send_email(%Invite{} = invite, %Meeting{} = meeting, opts) do
+    InviteMailer.send_invitation(invite, meeting, opts)
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[InviteDelivery] invite email raised — invite=#{invite.id} " <>
+          "meeting=#{meeting.id}: #{Exception.message(error)}"
+      )
+
+      :ok
   end
 
   # ── The external carrier: a chat message, and ONLY a chat message ────────
 
-  defp deliver_external(%Invite{} = invite, %Meeting{} = meeting) do
+  defp deliver_external(%Invite{} = invite, %Meeting{} = meeting, opts) do
     with {:ok, space} <- Meetings.delivery_space_for_invite(invite, meeting),
          {:ok, _message} <- post_as_sender(space, external_message(meeting, space)) do
       stamp_delivery(invite, :external_chat, space.id)
       emit_telemetry(invite, meeting, :external_chat)
+      send_email(invite, meeting, opts)
 
       {:ok, :external_chat}
     else
@@ -375,7 +396,7 @@ defmodule Platform.Meetings.InviteDelivery do
 
   # ── The internal carrier: inbox row AND push, both, every time ───────────
 
-  defp deliver_internal(%Invite{} = invite, %Meeting{} = meeting) do
+  defp deliver_internal(%Invite{} = invite, %Meeting{} = meeting, opts) do
     host = host_display_name(meeting)
 
     title = "Meeting invite: #{meeting.name}"
@@ -410,6 +431,7 @@ defmodule Platform.Meetings.InviteDelivery do
 
     stamp_carrier(invite, :internal_inbox_push)
     emit_telemetry(invite, meeting, :internal_inbox_push)
+    send_email(invite, meeting, opts)
 
     {:ok, :internal_inbox_push}
   end

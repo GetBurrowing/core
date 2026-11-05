@@ -315,12 +315,17 @@ defmodule Platform.Calendar.BookingLinks do
            }),
          {:ok, meeting} <-
            Repo.update(Ecto.Changeset.change(meeting, host_participant_id: host.id)),
-         {:ok, _owner_invite} <- Platform.Meetings.invite_user(meeting, scope.actor.id),
+         # `notify_email: false` on both invites (task 01a1a933 stage 3): the
+         # owner is not mailed an invite to their own booking, and the booker
+         # gets the `Booking confirmed:` email below, not a second message.
+         {:ok, _owner_invite} <-
+           Platform.Meetings.invite_user(meeting, scope.actor.id, notify_email: false),
          {:ok, bundle} <-
            Platform.Meetings.invite_guest(meeting, %{
              display_name: attrs["name"],
              email: attrs["email"],
              host_user_id: scope.actor.id,
+             notify_email: false,
              expires_in_hours:
                max(24, div(DateTime.diff(slot.ends_at, DateTime.utc_now()), 3600) + 24)
            }) do

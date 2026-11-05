@@ -5466,13 +5466,15 @@ defmodule PlatformWeb.MeetingLive do
   # cancelled meeting: `CalendarWindow.placeable?/1` excludes the status,
   # but only if the assigns are refreshed to notice the change. Without it
   # the grid would keep showing a meeting that is off until a navigation.
+  # `:meeting_rescheduled` (task 01a1a933 stage 3) moves it on the grid.
   def handle_info({tag, %Meetings.Meeting{}}, socket)
       when tag in [
              :meeting_created,
              :meeting_started,
              :meeting_resumed,
              :meeting_ended,
-             :meeting_cancelled
+             :meeting_cancelled,
+             :meeting_rescheduled
            ] do
     if Map.has_key?(socket.assigns, :meetings) do
       # Scoped with the same viewer as the initial render. A peer's

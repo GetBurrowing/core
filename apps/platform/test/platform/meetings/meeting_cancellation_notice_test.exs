@@ -370,7 +370,10 @@ defmodule Platform.Meetings.MeetingCancellationNoticeTest do
       assert delivery.recipients == ["guest@example.com"]
       assert delivery.account_id == account.id
       assert delivery.subject == "Cancelled: Roadmap review"
-      assert delivery.body =~ "Roadmap review has been cancelled."
+      # The body is `Platform.Meetings.InviteMail`'s cancelled card since
+      # task 01a1a933 stage 3.
+      assert delivery.body =~ "This meeting was cancelled."
+      assert delivery.calendar_method in [nil, "CANCEL"]
       assert Repo.aggregate(Mail.Draft, :count) == 1
     end
   end

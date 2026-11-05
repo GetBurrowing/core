@@ -107,6 +107,12 @@ defmodule Platform.Meetings.Invite do
     field(:delivery_carrier, :string)
     belongs_to(:delivery_space, Platform.Chat.Space)
 
+    # Invite email receipt (task 01a1a933 stage 3), mirroring
+    # `Platform.Calendar.Booking`'s `delivery_id` / `delivery_error`. Written
+    # only by `Platform.Meetings.InviteMailer`; never cast.
+    belongs_to(:mail_delivery, Platform.Mail.Delivery)
+    field(:mail_error, :string)
+
     timestamps(type: :utc_datetime_usec)
   end
 

@@ -324,6 +324,82 @@ defmodule Platform.Calendar.BookingLinksTest do
              BookingLinks.book(link.token, guest(slot), "long-meeting-key-00")
   end
 
+  # Task 01a1a933 stage 3: a booking sends only its own `Booking confirmed:`
+  # email. The owner is not mailed an invite to their own meeting and the
+  # booker gets no second, `Invitation:` message, even with meetings and
+  # mail on and a `meetings` sender configured for the org.
+  test "a booked meeting sends exactly one Booking confirmed: and no invite email" do
+    keys = [:meetings_enabled, :mail_enabled, :calendar_booking_mail_senders]
+    prior = for key <- keys, into: %{}, do: {key, Application.fetch_env(:platform, key)}
+    Application.put_env(:platform, :meetings_enabled, true)
+    Application.put_env(:platform, :mail_enabled, true)
+    Application.delete_env(:platform, :calendar_booking_mail_senders)
+
+    on_exit(fn ->
+      for {key, value} <- prior do
+        case value do
+          {:ok, v} -> Application.put_env(:platform, key, v)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end
+    end)
+
+    owner = scope()
+    org_id = Platform.TenancyFixtures.acme_org_id()
+
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: owner.actor.id,
+      org_id: org_id,
+      role: "member"
+    })
+
+    owner = Scope.for_user(Platform.Accounts.get_user(owner.actor.id))
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Bookings mail",
+        slug: "bookings-mail-#{System.unique_integer([:positive])}",
+        org_id: org_id
+      })
+
+    account =
+      Repo.insert!(%Platform.Mail.Account{
+        org_id: org_id,
+        name: "Meetings sender #{System.unique_integer([:positive])}",
+        smtp_host: "smtp.example.com",
+        smtp_port: 2525,
+        smtp_tls: "none",
+        internal_only: false
+      })
+
+    Repo.insert!(%Platform.Mail.Sender{
+      account_id: account.id,
+      key: "meetings",
+      address: "meetings@example.com"
+    })
+
+    link = create(owner, %{create_meeting: true, project_id: project.id})
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    assert {:ok, booking} = BookingLinks.book(link.token, guest(slot), "booking-mail-key-0")
+    assert booking.meeting_id
+    assert booking.delivery_id
+
+    by_responsibility =
+      Platform.Mail.Delivery
+      |> Repo.all()
+      |> Enum.group_by(& &1.responsibility)
+
+    assert [confirmed] = Map.get(by_responsibility, "calendar.booking_confirmation")
+    assert confirmed.subject =~ "Booking confirmed:"
+    assert confirmed.recipients == ["guest@example.com"]
+    assert Map.get(by_responsibility, "meetings.invite_email", []) == []
+
+    for invite <- Platform.Meetings.list_invites(booking.meeting_id) do
+      assert invite.mail_error == nil
+      assert invite.mail_delivery_id == nil
+    end
+  end
+
   test "configured confirmation queues via exact audited sender; later delivery failure is visible" do
     old_mail = Application.get_env(:platform, :mail_enabled)
     old_senders = Application.get_env(:platform, :calendar_booking_mail_senders)

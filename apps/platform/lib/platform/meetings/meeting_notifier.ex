@@ -13,11 +13,16 @@ defmodule Platform.Meetings.MeetingNotifier do
       `/meetings?meeting=<id>`, one `meeting_cancelled` inbox row for EVERY
       recipient (no already-active skip: a cancellation is news to whoever is
       in the room too), a "<name> has been cancelled." chat message in each
-      external invitee's delivery space, and a cancellation email to each
-      guest with an address through `Platform.Meetings.CancellationMail`.
+      external invitee's delivery space, and a cancellation email
+      (`METHOD:CANCEL`) to each guest with an address and each invitee who
+      got an invitation email, through `Platform.Meetings.CancellationMail`.
       Cancel never rings. The `meeting_cancelled` row has no
       `row_stale?/1` clause in `Platform.Inbox`: it is a final fact and stays
       until the person dismisses it.
+
+  `{:meeting_rescheduled, meeting}` (task 01a1a933 stage 3) is an email
+  only: an `Updated:` message with the new time and the bumped SEQUENCE to
+  the same email audience, via `Platform.Meetings.InviteMailer.send_updates/1`.
 
   Every channel of either event runs only inside the `{:ok, claimed}` branch
   of its compare-and-swap (`mark_notified/1`, `mark_cancellation_notified/1`),
@@ -109,6 +114,7 @@ defmodule Platform.Meetings.MeetingNotifier do
   alias Platform.Chat.Participant
   alias Platform.Meetings
   alias Platform.Meetings.CancellationMail
+  alias Platform.Meetings.InviteMailer
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.Meeting
   alias Platform.Repo
@@ -217,6 +223,15 @@ defmodule Platform.Meetings.MeetingNotifier do
         :ok
     end
 
+    {:noreply, state}
+  end
+
+  # A new time (task 01a1a933 stage 3): everyone who may hold the event on a
+  # calendar gets an `Updated:` email carrying the bumped SEQUENCE.
+  # `Meetings.reschedule_meeting/3` broadcasts once per committed move, so
+  # there is no claim to take; a raise must not take the notifier down.
+  def handle_info({:meeting_rescheduled, %Meeting{} = meeting}, state) do
+    send_updates(meeting)
     {:noreply, state}
   end
 
@@ -500,6 +515,18 @@ defmodule Platform.Meetings.MeetingNotifier do
       Logger.warning(
         "[MeetingNotifier] external cancellation message raised — meeting=#{meeting.id} " <>
           "invite=#{invite.id}: #{Exception.message(error)}"
+      )
+
+      :error
+  end
+
+  defp send_updates(%Meeting{} = meeting) do
+    InviteMailer.send_updates(meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] update mail raised — meeting=#{meeting.id}: " <>
+          Exception.message(error)
       )
 
       :error
