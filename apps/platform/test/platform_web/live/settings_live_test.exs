@@ -262,6 +262,102 @@ defmodule PlatformWeb.SettingsLiveTest do
     end
   end
 
+  # Task 01a1a933 stage 4: the meeting-invitation email opt-out.
+  describe "email me meeting invitations" do
+    setup do
+      keys = [:meetings_enabled, :mail_enabled, :calendar_booking_mail_senders]
+      prior = for key <- keys, into: %{}, do: {key, Application.fetch_env(:platform, key)}
+
+      on_exit(fn ->
+        for {key, value} <- prior do
+          case value do
+            {:ok, v} -> Application.put_env(:platform, key, v)
+            :error -> Application.delete_env(:platform, key)
+          end
+        end
+      end)
+
+      :ok
+    end
+
+    test "on by default; a click stores false, flips, and survives a remount" do
+      member = member!()
+      {:ok, view, _html} = live(authed(member), "/settings")
+
+      assert has_element?(
+               view,
+               "[data-role=settings-email-notifications][aria-checked=true]",
+               "Email me meeting invitations"
+             )
+
+      view |> element("[data-role=settings-email-notifications]") |> render_click()
+
+      assert Accounts.get_user(member.id).preferences["email_notifications"] == false
+      refute Accounts.email_notifications?(member.id)
+      assert has_element?(view, "[data-role=settings-email-notifications][aria-checked=false]")
+
+      {:ok, fresh, _} = live(authed(member), "/settings")
+      assert has_element?(fresh, "[data-role=settings-email-notifications][aria-checked=false]")
+
+      fresh |> element("[data-role=settings-email-notifications]") |> render_click()
+      assert Accounts.email_notifications?(member.id)
+    end
+
+    test "after turning it off, an invite of that user queues no email" do
+      Application.put_env(:platform, :meetings_enabled, true)
+      Application.put_env(:platform, :mail_enabled, true)
+      Application.delete_env(:platform, :calendar_booking_mail_senders)
+
+      org_id = acme_org_id()
+      member = member!()
+      host = member!()
+      {:ok, view, _html} = live(authed(member), "/settings")
+      view |> element("[data-role=settings-email-notifications]") |> render_click()
+
+      account =
+        Repo.insert!(%Platform.Mail.Account{
+          org_id: org_id,
+          name: "settings-meetings-#{System.unique_integer([:positive])}",
+          smtp_host: "smtp.example.com",
+          smtp_port: 2525,
+          smtp_tls: "none",
+          internal_only: false
+        })
+
+      Repo.insert!(%Platform.Mail.Sender{
+        account_id: account.id,
+        key: "meetings",
+        address: "meetings@example.com"
+      })
+
+      project =
+        Repo.insert!(%Platform.Tasks.Project{
+          name: "Settings invite",
+          slug: "settings-invite-#{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "Settings check",
+          created_by_user_id: host.id
+        })
+
+      {:ok, invite} = Platform.Meetings.invite_user(meeting, member.id, inviter_user_id: host.id)
+
+      assert Repo.all(
+               from(d in Platform.Mail.Delivery,
+                 where: d.responsibility == "meetings.invite_email"
+               )
+             ) == []
+
+      invite = Repo.get!(Platform.Meetings.Invite, invite.id)
+      assert invite.mail_delivery_id == nil
+      assert invite.mail_error == nil
+    end
+  end
+
   describe "mask names" do
     test "aria-checked follows the stored state, and a click writes it and flips" do
       member = member!()

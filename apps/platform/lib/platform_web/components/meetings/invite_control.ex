@@ -554,10 +554,17 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   def invite_row(assigns) do
     expiry = if assigns.mode == :live, do: Map.get(assigns.entry, :expiry)
 
+    email_failed = assigns.mode == :live and Map.get(assigns.entry, :email_failed) == true
+
     assigns =
       assigns
       |> assign(:tag, tag(assigns.entry))
       |> assign(:expiry, expiry)
+      |> assign(:email_failed, email_failed)
+      |> assign(
+        :email_failed_url,
+        email_failed && (assigns.copy_url || Map.get(assigns.entry, :share_url))
+      )
 
     ~H"""
     <div
@@ -641,6 +648,28 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         copy_url={@copy_url}
         id_prefix={@id_prefix}
       />
+
+      <%!-- The invite email did not go (task 01a1a933 stage 4): a persistent
+           line in the warning slot, never a toast, on its own line under the
+           name (`basis-full`), with a Copy link so the host can send the link
+           themselves. Its copy button carries its own id prefix, so it never
+           shares a DOM id with a guest row's Copy link. --%>
+      <div
+        :if={@email_failed}
+        class="flex basis-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pl-8"
+        data-role="meeting-invite-email-failed"
+        data-entry-id={@entry.id}
+      >
+        <span class="min-w-0 text-xs text-warning" data-role="meeting-invite-email-failed-text">
+          Email not sent. Share the link instead.
+        </span>
+        <.copy_link
+          :if={@email_failed_url}
+          entry={@entry}
+          copy_url={@email_failed_url}
+          id_prefix={"#{@id_prefix}-mail"}
+        />
+      </div>
 
       <.guest_expiry
         :if={@expiry}
