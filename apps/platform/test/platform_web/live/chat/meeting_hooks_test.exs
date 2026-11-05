@@ -933,19 +933,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     end
 
     # DOCUMENTED, NOT PAPERED OVER. A quickmeet join calls
-    # `ensure_room/1`, which writes a `meeting_rooms` row — NOT a
-    # `meetings` row. `meetings` rows are created by `create_meeting/1`
-    # (the `/meetings` path). So a chat space whose call came up purely
-    # from the "Meet" button has no meeting id, and Canvas, Transcript
-    # and the agent-activity badges have nothing to read from.
-    #
-    # The People pane still works, because it is fed by
-    # `:meeting_participants`, which the join populates directly. That
-    # is the honest behaviour and it is asserted here rather than being
-    # hidden behind a fixture that always seeds a meeting: creating a
-    # `meetings` row from a chat join would mint a slug, an inbox row
-    # and a `room_finished` end-path, which is a lifecycle change and
-    # not a rail wiring change.
+    # `ensure_room/1`, which writes a `meeting_rooms` row, AND (task
+    # 01a04e9e stage 2) `ensure_live_meeting_for_space/1`, which mints the
+    # single LIVE `meetings` row bound to the channel's existing chat space
+    # — every call gets its session identity (Jordan Coombs, 2026-09-02). So
+    # a chat space whose call came up purely from the "Meet" button now HAS a
+    # meeting row, and Canvas, Transcript and the agent-activity badges read
+    # from it. The People pane is fed by `:meeting_participants`, which the
+    # join populates directly, and it keeps working as before.
     test "a join with no live meetings row leaves the shell empty but keeps People" do
       space = create_space()
       alice = create_user("Dev Alice")
@@ -974,8 +969,13 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
 
       joined = MeetingHooks.join(socket)
 
+      # Task 01a04e9e stage 2: the quick-meet join mints the channel-bound
+      # meetings row, so the shell is no longer empty — the join payload
+      # carries the fresh meeting id and the live meeting resolves for the
+      # space. The People pane still works exactly as before.
       assert joined.assigns.in_meeting == true
-      assert joined.assigns.quickmeet_meeting_id == nil
+      assert %Meetings.Meeting{} = Meetings.get_live_meeting_for_space(space.id)
+      assert is_binary(joined.assigns.quickmeet_meeting_id)
 
       names = Enum.map(joined.assigns.meeting_participants, & &1.display_name)
       assert "Dev Alice" in names
@@ -1620,7 +1620,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
   # Inside the Burrow iOS app, `meeting_client.js` hands the call to the
   # native `SuiteMeetings` plugin when the join payload names a meeting, and
   # builds its own LiveKit Room otherwise. Both sides pinned: a live meeting
-  # sends its id, a space with no meeting row sends nil.
+  # sends its id, and a channel quick-meet (task 01a04e9e stage 2) mints its
+  # channel-bound meetings row on join, so its payload always carries the
+  # fresh meeting id too.
   describe "join-meeting payload carries meeting_id (task 01a10db7 stage 3)" do
     setup [:put_livekit_env]
 
@@ -1663,14 +1665,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
       assert is_binary(payload.token)
     end
 
-    test "a chat quick-meet with no meeting row sends nil" do
+    test "a chat quick-meet mints and sends its meeting id" do
       space = create_space()
 
       payload =
         space |> hand_off_socket(create_user("Grace")) |> MeetingHooks.join() |> join_payload()
 
       assert Map.has_key?(payload, :meeting_id)
-      assert payload.meeting_id == nil
+      assert is_binary(payload.meeting_id)
+      assert payload.meeting_id == Meetings.get_live_meeting_for_space(space.id).id
     end
   end
 
