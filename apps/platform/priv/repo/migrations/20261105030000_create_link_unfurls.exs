@@ -21,6 +21,9 @@ defmodule Platform.Repo.Migrations.CreateLinkUnfurls do
       add(:site_name, :text)
       add(:author, :text)
       add(:provider, :text)
+      # The page's twitter:card, so a card can lead with an image of unknown
+      # size when the page declared summary_large_image (stage 4).
+      add(:twitter_card, :text)
       add(:media_kind, :text)
       add(:duration_seconds, :integer)
       add(:fetched_at, :utc_datetime_usec)

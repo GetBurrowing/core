@@ -275,4 +275,118 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
       for t <- ~w(pl-0.5 pr-2.5 py-px), do: refute(t in classes, t)
     end
   end
+
+  describe "unfurled outside-link cards (link unfurls stage 4, direction canvas 01a1a945)" do
+    @yt %{
+      url: "https://www.youtube.com/watch?v=abc123",
+      title: "How we rebuilt our deploy pipeline in a weekend",
+      description: "A walkthrough of the migration.",
+      image_url: "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+      image_width: 480,
+      image_height: 360,
+      site_name: "YouTube",
+      author: "Example Channel",
+      provider: "youtube",
+      twitter_card: nil,
+      media_kind: "video",
+      duration_seconds: nil
+    }
+
+    defp unfurled(url, unfurl), do: Map.put(link(url), :unfurl, unfurl)
+    defp one(html, sel), do: html |> q(sel) |> Enum.count()
+
+    test "a video leads with its image: 180px cap, lazy, no referrer; site and channel line" do
+      html = cards([unfurled(@yt.url, @yt)])
+      card = "#link-card-m1-0[data-unfurled=true][data-layout=wide]"
+      assert one(html, card) == 1
+
+      assert one(
+               html,
+               card <>
+                 " img[data-role=link-card-image][loading=lazy][referrerpolicy=no-referrer][alt='']"
+             ) == 1
+
+      assert "max-h-[180px]" in tokens(html, "[data-role=link-card-image]")
+      assert "object-cover" in tokens(html, "[data-role=link-card-image]")
+      assert "aspect-video" in tokens(html, "[data-role=link-card-media]")
+      assert text(html, "[data-role=link-card-site]") =~ "YouTube · Example Channel"
+      assert text(html, "[data-role=link-card-author]") =~ "Example Channel"
+      assert text(html, "[data-role=link-card-title]") == @yt.title
+      assert "p-3" in tokens(html, "[data-role=link-card-body]")
+      refute html =~ "shadow-"
+    end
+
+    test "the duration chip only when the provider stated one (POSITIVE CONTROL: Vimeo)" do
+      assert one(cards([unfurled(@yt.url, @yt)]), "[data-role=link-card-duration]") == 0
+
+      vimeo = %{@yt | provider: "vimeo", duration_seconds: 724, site_name: "Vimeo"}
+      html = cards([unfurled("https://vimeo.com/76979871", vimeo)])
+      assert text(html, "[data-role=link-card-duration]") == "12:04"
+      assert "font-mono" in tokens(html, "[data-role=link-card-duration]")
+      assert "text-[11px]" in tokens(html, "[data-role=link-card-duration]")
+      assert ChatLinkCard.format_duration(3723) == "1:02:03"
+    end
+
+    test "a wide article image leads; a square image is the 40px tile, not a lead image" do
+      article = %{@yt | media_kind: "article", image_width: 1200, image_height: 630, author: nil}
+      html = cards([unfurled("https://example.com/posts/calm", article)])
+      assert one(html, "[data-layout=wide] [data-role=link-card-image]") == 1
+      assert one(html, "[data-role=link-card-author]") == 0
+
+      square = %{article | image_width: 400, image_height: 400}
+      html = cards([unfurled("https://github.com/acme/api/pull/7", square)])
+      assert one(html, "[data-unfurled=true][data-layout=tile]") == 1
+      assert one(html, "[data-role=link-card-image]") == 0
+      assert "size-10" in tokens(html, "[data-role=link-card-tile-image]")
+      assert "p-3" in tokens(html, "[data-role=link-card][data-kind=link]")
+    end
+
+    test "unknown size leads only when the page declared summary_large_image" do
+      unknown = %{@yt | media_kind: "other", image_width: nil, image_height: nil}
+      assert ChatLinkCard.wide?(unknown) == false
+      assert ChatLinkCard.wide?(%{unknown | twitter_card: "summary_large_image"})
+      assert ChatLinkCard.wide?(%{unknown | image_url: nil, media_kind: "video"}) == false
+    end
+
+    test "without :unfurl the card is today's card, unfurled false, with no skeleton" do
+      html = cards([link("https://github.com/acme/api/pull/7")])
+      assert one(html, "#link-card-m1-0[data-unfurled=false]") == 1
+      assert text(html, "[data-role=link-card-title]") =~ "Pull request #7"
+      refute html =~ "animate-pulse"
+      refute html =~ "skeleton"
+    end
+
+    test "the remove control is only in the author's DOM, outside the card's button" do
+      card = unfurled(@yt.url, @yt)
+      own = render_component(&ChatLinkCard.link_cards/1, msg_id: "m1", cards: [card], own?: true)
+      other = render_component(&ChatLinkCard.link_cards/1, msg_id: "m1", cards: [card])
+
+      assert one(
+               own,
+               ~s(button[data-role=link-card-remove][aria-label="Remove preview"][phx-click=link_unfurl_hide][phx-value-message_id=m1])
+             ) == 1
+
+      assert one(own, "[data-role=link-card] [data-role=link-card-remove]") == 0
+      assert one(other, "[data-role=link-card-remove]") == 0
+      assert one(other, "[data-role=link-card]") == 1
+    end
+
+    test "no card of any kind carries a shadow" do
+      html =
+        cards([
+          canvas(),
+          prototype(),
+          link("https://example.com/a/b"),
+          unfurled(@yt.url, @yt),
+          locked()
+        ])
+
+      for node <- html |> q("[data-role=link-card]") |> Enum.to_list() do
+        [class] = LazyHTML.attribute(node, "class")
+        assert class |> String.split() |> Enum.filter(&String.starts_with?(&1, "shadow-")) == []
+      end
+
+      assert html |> q("[data-role=link-card]") |> Enum.count() == 5
+    end
+  end
 end

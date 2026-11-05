@@ -1205,6 +1205,18 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
      |> reinsert_refused_summon_row(msg_id)}
   end
 
+  # Link unfurls stage 4 (task 01a1a944): the author's "Remove preview".
+  # `Chat.hide_link_unfurls/2` is the authority; a refusal changes nothing,
+  # and success arrives back as `{:link_unfurls_ready, msg}` in every view.
+  defp handle_event("link_unfurl_hide", %{"message_id" => message_id}, socket) do
+    case socket.assigns[:current_participant] do
+      nil -> :ok
+      participant -> Chat.hide_link_unfurls(message_id, participant)
+    end
+
+    {:halt, socket}
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   # ── Info callbacks ────────────────────────────────────────────────────
@@ -1307,6 +1319,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
        |> stream_reinsert_with_day_label(enriched)
        |> put_attachment_map_entry(msg.id, attachments)
        |> SearchHooks.maybe_refresh()}
+    else
+      {:halt, socket}
+    end
+  end
+
+  # Link unfurls (task 01a1a944 stage 4): a preview landed, or the author
+  # hid it. Re-enrich ONE message and stream-insert it in place: no window
+  # reload, no stream reset.
+  defp handle_info({:link_unfurls_ready, msg}, socket) do
+    if same_active_space?(socket, msg) do
+      {:halt, stream_reinsert_with_day_label(socket, enrich_with_reactions(msg, socket))}
     else
       {:halt, socket}
     end

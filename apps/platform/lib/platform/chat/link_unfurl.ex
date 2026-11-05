@@ -28,7 +28,8 @@ defmodule Platform.Chat.LinkUnfurl do
   @media_kinds ~w(video article other)
 
   @fields ~w(url_key url status title description image_url image_width image_height
-             site_name author provider media_kind duration_seconds fetched_at expires_at)a
+             site_name author provider twitter_card media_kind duration_seconds fetched_at
+             expires_at)a
 
   @type t :: %__MODULE__{}
 
@@ -44,6 +45,7 @@ defmodule Platform.Chat.LinkUnfurl do
     field(:site_name, :string)
     field(:author, :string)
     field(:provider, :string)
+    field(:twitter_card, :string)
     field(:media_kind, :string)
     field(:duration_seconds, :integer)
     field(:fetched_at, :utc_datetime_usec)

@@ -170,6 +170,7 @@ defmodule Platform.Chat.LinkCards do
              :site_name,
              :author,
              :provider,
+             :twitter_card,
              :media_kind,
              :duration_seconds
            ])}

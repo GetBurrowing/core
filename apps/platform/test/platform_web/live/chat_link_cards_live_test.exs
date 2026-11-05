@@ -301,4 +301,193 @@ defmodule PlatformWeb.ChatLinkCardsLiveTest do
     render_hook(view, "link_card_open_canvas", %{"canvas-id" => ctx.secret.id})
     refute_redirected(view, "/canvases/#{ctx.secret.id}")
   end
+
+  describe "rich unfurls (link unfurls stage 4)" do
+    alias Platform.Chat.LinkUnfurls.Fetcher
+    alias Platform.SandboxHelpers
+
+    @yt_ip {142, 250, 1, 1}
+    @pub_ip {93, 184, 216, 34}
+    @fixtures Path.expand("../../support/fixtures/link_unfurls", __DIR__)
+
+    setup do
+      prev = Application.get_env(:platform, :link_unfurl_resolver)
+
+      Application.put_env(:platform, :link_unfurl_resolver, %{
+        "www.youtube.com" => [@yt_ip],
+        "public.test" => [@pub_ip]
+      })
+
+      on_exit(fn -> Application.put_env(:platform, :link_unfurl_resolver, prev) end)
+      :ok
+    end
+
+    defp fixture(name), do: File.read!(Path.join(@fixtures, name))
+    defp drain!, do: assert(SandboxHelpers.await_supervised_writes(timeout: 5_000) == :ok)
+
+    defp view_for(ctx, user) do
+      conn = init_test_session(build_conn(), current_user_id: user.id)
+      {:ok, view, _html} = live(conn, "/chat/#{ctx.room.slug}")
+      view
+    end
+
+    # The YouTube page fetch waits for :release from the test; oEmbed answers.
+    defp held_youtube_stub do
+      me = self()
+
+      Req.Test.stub(Fetcher, fn conn ->
+        case conn.request_path do
+          "/watch" ->
+            send(me, {:held, self()})
+
+            receive do
+              :release -> :ok
+            after
+              4_000 -> :ok
+            end
+
+            Req.Test.html(conn, "<html><head><title>YouTube</title></head></html>")
+
+          "/oembed" ->
+            Req.Test.json(conn, Jason.decode!(fixture("youtube_oembed.json")))
+        end
+      end)
+    end
+
+    defp yt_stub do
+      Req.Test.stub(Fetcher, fn conn ->
+        case conn.request_path do
+          "/oembed" -> Req.Test.json(conn, Jason.decode!(fixture("youtube_oembed.json")))
+          _ -> Req.Test.html(conn, "<html><head><title>YouTube</title></head></html>")
+        end
+      end)
+    end
+
+    # Statements `pid` ran while `fun` executed, by Ecto source.
+    defp sources_run_by(pid, fun) do
+      me = self()
+      id = "unfurl-swap-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          id,
+          [:platform, :repo, :query],
+          fn _, _, meta, _ -> if self() == pid, do: send(me, {:src, id, meta[:source]}) end,
+          nil
+        )
+
+      try do
+        fun.()
+      after
+        :telemetry.detach(id)
+      end
+
+      collect(id, [])
+    end
+
+    defp collect(id, acc) do
+      receive do
+        {:src, ^id, src} -> collect(id, [src | acc])
+      after
+        0 -> acc
+      end
+    end
+
+    test "today's card first, then the SAME card swaps in place to the unfurl, by stream insert",
+         ctx do
+      other = post!(ctx.room, ctx.p_a, "an earlier message")
+      view = view_for(ctx, ctx.a)
+      held_youtube_stub()
+
+      msg = post!(ctx.room, ctx.p_a, "https://www.youtube.com/watch?v=abc123")
+      card = "#link-card-#{msg.id}-0"
+      assert_receive {:held, stub_pid}, 3_000
+
+      # First render: today's URL-derived card, no skeleton.
+      assert has_element?(view, card <> "[data-unfurled=false]")
+      refute has_element?(view, card <> " [data-role=link-card-image]")
+      refute view |> element(card) |> render() =~ "animate-pulse"
+
+      sources =
+        sources_run_by(view.pid, fn ->
+          send(stub_pid, :release)
+          drain!()
+          _ = render(view)
+        end)
+
+      assert has_element?(view, card <> "[data-unfurled=true][data-layout=wide]")
+      assert has_element?(view, card <> " img[data-role=link-card-image].max-h-\\[180px\\]")
+
+      assert has_element?(
+               view,
+               card <> " [data-role=link-card-title]",
+               "How we rebuilt our deploy pipeline in a weekend"
+             )
+
+      assert has_element?(view, card <> " [data-role=link-card-author]", "Example Channel")
+      # The swap re-enriched one message: the LiveView ran no message-window
+      # query, and the earlier row is still in the DOM (no stream reset).
+      assert sources != []
+      refute "chat_messages" in sources
+      assert has_element?(view, ~s([data-message-id="#{other.id}"]))
+    end
+
+    test "the author gets Remove preview; the other reader does not; removing makes it a chip in both",
+         ctx do
+      yt_stub()
+      msg = post!(ctx.room, ctx.p_a, "https://www.youtube.com/watch?v=abc123")
+      drain!()
+
+      view_a = view_for(ctx, ctx.a)
+      view_b = view_for(ctx, ctx.b)
+      card = "#link-card-#{msg.id}-0"
+      remove = "#link-card-remove-#{msg.id}-0"
+
+      assert has_element?(view_a, card <> "[data-unfurled=true]")
+      assert has_element?(view_a, remove <> "[aria-label='Remove preview']")
+      assert has_element?(view_b, card <> "[data-unfurled=true]")
+      refute has_element?(view_b, "[data-role=link-card-remove]")
+
+      # A forged hide from the non-author changes nothing.
+      render_click(view_b, "link_unfurl_hide", %{"message_id" => msg.id})
+      assert has_element?(view_a, card)
+      assert has_element?(view_b, card)
+
+      view_a |> element(remove) |> render_click()
+
+      for view <- [view_a, view_b] do
+        refute has_element?(view, card)
+        assert has_element?(view, msg_sel(msg, "[data-role=link-chip]"))
+      end
+
+      # A reload keeps it hidden.
+      view_a2 = view_for(ctx, ctx.a)
+      refute has_element?(view_a2, card)
+      assert has_element?(view_a2, msg_sel(msg, "[data-role=link-chip]"))
+    end
+
+    test "a square image takes the 40px tile path; a failed unfurl stays today's card", ctx do
+      square =
+        ~s(<html><head><meta property="og:title" content="Fix unfurl padding #9"><meta property="og:image" content="https://cdn.public.test/sq.png"><meta property="og:image:width" content="400"><meta property="og:image:height" content="400"></head></html>)
+
+      Req.Test.stub(Fetcher, fn conn ->
+        case conn.request_path do
+          "/square" -> Req.Test.html(conn, square)
+          _ -> Plug.Conn.send_resp(conn, 500, "")
+        end
+      end)
+
+      sq = post!(ctx.room, ctx.p_a, "https://public.test/square")
+      bad = post!(ctx.room, ctx.p_a, "https://public.test/broken/page")
+      drain!()
+      view = view_for(ctx, ctx.a)
+
+      assert has_element?(view, "#link-card-#{sq.id}-0[data-unfurled=true][data-layout=tile]")
+      assert has_element?(view, "#link-card-#{sq.id}-0 [data-role=link-card-tile-image]")
+      refute has_element?(view, "#link-card-#{sq.id}-0 [data-role=link-card-image]")
+
+      assert has_element?(view, "#link-card-#{bad.id}-0[data-unfurled=false]")
+      refute view |> element("#link-card-#{bad.id}-0") |> render() =~ "animate-pulse"
+    end
+  end
 end

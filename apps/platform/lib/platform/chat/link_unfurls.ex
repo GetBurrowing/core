@@ -315,6 +315,7 @@ defmodule Platform.Chat.LinkUnfurls do
       site_name: page.site_name || o[:provider_name] || host(url),
       author: o[:author] || page.author,
       provider: o[:provider],
+      twitter_card: page.twitter_card,
       media_kind: media_kind(o[:type], page.og_type),
       duration_seconds: o[:duration_seconds] || page.duration_seconds
     }
@@ -340,6 +341,7 @@ defmodule Platform.Chat.LinkUnfurls do
     site_name: nil,
     author: nil,
     provider: nil,
+    twitter_card: nil,
     media_kind: nil,
     duration_seconds: nil
   }

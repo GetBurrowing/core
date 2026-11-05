@@ -387,6 +387,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             :if={@editing_message_id != @msg.id and Map.get(@msg, :link_cards) not in [nil, []]}
             msg_id={@msg.id}
             cards={@msg.link_cards}
+            own?={!!(@current_participant && @msg.participant_id == @current_participant.id)}
           />
 
           <%!-- Image gallery --%>
