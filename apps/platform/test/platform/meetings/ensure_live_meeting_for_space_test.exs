@@ -177,7 +177,8 @@ defmodule Platform.Meetings.EnsureLiveMeetingForSpaceTest do
       assert new_id != meeting.id
 
       assert [%Meeting{status: "live"}, %Meeting{status: "ended"}] =
-               meeting_rows(space.id) |> Enum.sort_by(& &1.inserted_at)
+               meeting_rows(space.id)
+               |> Enum.sort_by(& &1.inserted_at, :desc)
     end
   end
 
