@@ -574,7 +574,14 @@ defmodule Platform.Responsibilities.Handlers.Hr do
       workspace_id: workspace_id,
       metadata:
         Map.merge(
-          %{"source" => "responsibility:#{key}", "responsibility_key" => key},
+          %{
+            "source" => "responsibility:#{key}",
+            "responsibility_key" => key,
+            # The org-journal readers (`Wiki.Journal.get_for_date/2`, the
+            # `org/journal/<date>.md` virtual page) filter on this key;
+            # `append_memory_entry/2` does not stamp it (01a1aa47 stage 5).
+            "namespace" => Platform.Org.Wiki.Journal.default_namespace()
+          },
           metadata
         )
     }
