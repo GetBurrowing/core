@@ -430,8 +430,11 @@ defmodule Platform.Responsibilities.Handlers.HrTest do
               "said_by_subject" => true,
               "citation" => "meeting:transcript:abc:s2"
             },
+            # Plain, non-trait wording on purpose: the ONLY thing that keeps
+            # this off the page is `said_by_subject: false`, so the assertion
+            # below is about the others-said drop and nothing else.
             %{
-              "statement" => "Marisol is slow playing the deploy",
+              "statement" => "Marisol will finish the deploy by Friday",
               "said_by_subject" => false,
               "citation" => "meeting:transcript:abc:s1"
             },
@@ -450,11 +453,11 @@ defmodule Platform.Responsibilities.Handlers.HrTest do
     private = page(Visibility.private_path("marisol-tennebrook"))
     assert private.content =~ "2026-10-20 meeting: Deploy review"
     assert private.content =~ "I will own the pipeline — own words"
-    refute private.content =~ "slow playing"
+    refute private.content =~ "finish the deploy by Friday"
     refute private.content =~ "brilliant"
 
     card = page(Visibility.card_path("marisol-tennebrook"))
-    refute card.content =~ "slow playing"
+    refute card.content =~ "finish the deploy by Friday"
     refute card.content =~ "brilliant"
     refute card.content =~ "Deploy review"
   end
