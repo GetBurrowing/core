@@ -13,6 +13,12 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
   |-----------------------------------------------------------------|-------|
   | card title: base-content on base-200                            | 4.5   |
   | type line, meta and hint: --subtle on base-200 (painted)        | 4.5   |
+  | card title: base-content on base-100 (the card surface)         | 4.5   |
+  | type line, meta and hint: --subtle on base-100 (painted)        | 4.5   |
+
+  The card surface moved from base-200 to base-100 (link unfurls stage 1,
+  direction canvas 01a1a945: the border distinguishes the card, not its
+  fill), so the text pairs are held on both grounds.
   | chip label: base-content on base-300                            | 4.5   |
   | monogram letter: base-100 on each slot's --ag-<id>-text         | 4.5   |
   | type tile icon: --ag-<id>-text on --ag-<id>-tint (painted mix)  | 3.0   |
@@ -131,6 +137,9 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
       {"title / base-200", @aa_text,
        W.contrast(c(b, "--color-base-content"), c(b, "--color-base-200"))},
       {"subtle / base-200", @aa_text, subtle_on(b, "base-200")},
+      {"title / base-100", @aa_text,
+       W.contrast(c(b, "--color-base-content"), c(b, "--color-base-100"))},
+      {"subtle / base-100", @aa_text, subtle_on(b, "base-100")},
       {"chip label / base-300", @aa_text,
        W.contrast(c(b, "--color-base-content"), c(b, "--color-base-300"))}
     ] ++
@@ -198,6 +207,8 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
 
   test "the card paints the slots this guard measures", %{card: card, glyphs: glyphs} do
     assert card =~ "bg-base-200"
+    assert card =~ "rounded-box border border-edge bg-base-100 p-3"
+    assert card =~ "rounded-box border bg-base-100 p-3"
     assert card =~ "border border-edge bg-base-300"
     assert card =~ "text-base-content"
     assert card =~ "text-subtle"

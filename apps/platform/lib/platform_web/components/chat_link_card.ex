@@ -4,10 +4,19 @@ defmodule PlatformWeb.Components.ChatLinkCard do
   "CARD FAMILY"): one anatomy for canvas, prototype, link and locked cards,
   plus inline images and video for media URLs.
 
-  Anatomy: a `base-200` card on the `base-100` pane, `border-edge` (the repo's
-  border token; base-300 is a fill, see border_token_direction_test.exs),
-  `rounded-box`; a tile at the left; a 15px semibold title of at most two
-  lines; ONE 13px subtle description line. Every card and chip scales down
+  Anatomy (link unfurls stage 1, direction canvas 01a1a945): a `base-100`
+  card on the `base-100` pane, told apart by its `border-edge` border, not
+  its fill (the repo's border token; base-300 is a fill, see
+  border_token_direction_test.exs), `rounded-box`, a 12px inset and gap
+  (`p-3 gap-3`) to match the message row; a tile at the left; a 15px
+  semibold title of at most two lines; ONE 13px subtle description line.
+  No card carries a shadow or an accent bar; `primary` appears only on
+  hover (desktop, the outside-link card) and in the focus ring.
+
+  Text roles: the direction canvas calls the site name, description and
+  author `neutral`. That maps to `text-subtle`, the repo's measured
+  secondary-text token, NOT to `text-neutral`: in the dark theme
+  `--color-neutral` is a dark grey (app.css), which is dark on dark there. Every card and chip scales down
   on press (none under reduced motion). Images and video render inline as
   media, not as cards; video uses the shared
   `PlatformWeb.Components.ChatClipPlayer`.
@@ -22,7 +31,8 @@ defmodule PlatformWeb.Components.ChatLinkCard do
     * A canvas or prototype card leads with its cover (the canvas's first
       readable image) or a type-coloured tile, then the type line ("Canvas ·
       #space", "Mockup", "Prototype · v3"), the title, and the hint ("6
-      options · tap to open"), with a border and glow in the type colour.
+      options · tap to open"), with a border in the type colour, no shadow.
+      Same anatomy as every other card in the family.
 
   Cards come from `Platform.Chat.LinkCards` (already access-checked for the
   viewer). A locked card renders only its type and "You don't have access":
@@ -119,7 +129,7 @@ defmodule PlatformWeb.Components.ChatLinkCard do
       aria-label={@text <> " · " <> @card.preview.meta}
       class={[
         "inline-flex max-w-full items-center gap-1.5 rounded-full border border-edge bg-base-300",
-        "py-px pl-0.5 pr-2.5 align-[-4px] text-[13px] font-semibold leading-5 text-base-content",
+        "py-0.5 pl-1 pr-3 align-[-4px] text-[13px] font-semibold leading-5 text-base-content",
         press_class(),
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       ]}
@@ -217,7 +227,7 @@ defmodule PlatformWeb.Components.ChatLinkCard do
       data-kind="locked"
       data-locked-type={@card.type}
       aria-disabled="true"
-      class="flex w-full items-center gap-3 rounded-box border border-edge bg-base-200 p-2.5 text-left"
+      class="flex w-full items-center gap-3 rounded-box border border-edge bg-base-100 p-3 text-left"
     >
       <span class="flex size-10 shrink-0 items-center justify-center rounded-field bg-base-300">
         <.icon name="hero-lock-closed" class="size-5 text-subtle" />
@@ -426,27 +436,25 @@ defmodule PlatformWeb.Components.ChatLinkCard do
   defp burrow_card_class(:canvas),
     do: [
       burrow_card_base(),
-      "border-[color-mix(in_oklab,var(--ag-purple)_40%,var(--color-edge))]",
-      "shadow-[0_10px_24px_-16px_var(--ag-purple)]"
+      "border-[color-mix(in_oklab,var(--ag-purple)_40%,var(--color-edge))]"
     ]
 
   defp burrow_card_class(:prototype),
     do: [
       burrow_card_base(),
-      "border-[color-mix(in_oklab,var(--ag-orange)_40%,var(--color-edge))]",
-      "shadow-[0_10px_24px_-16px_var(--ag-orange)]"
+      "border-[color-mix(in_oklab,var(--ag-orange)_40%,var(--color-edge))]"
     ]
 
   defp burrow_card_base,
     do: [
-      "flex w-full items-center gap-3 rounded-box border bg-base-200 p-2 text-left",
+      "flex w-full items-center gap-3 rounded-box border bg-base-100 p-3 text-left",
       press_class(),
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     ]
 
   defp card_class,
     do: [
-      "flex w-full items-center gap-3 rounded-box border border-edge bg-base-200 p-2.5 text-left",
+      "flex w-full items-center gap-3 rounded-box border border-edge bg-base-100 p-3 text-left",
       "lg:hover:border-primary",
       press_class(),
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

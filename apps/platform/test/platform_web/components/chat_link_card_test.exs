@@ -65,6 +65,8 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
 
   defp cards(cards), do: render_component(&ChatLinkCard.link_cards/1, msg_id: "m1", cards: cards)
 
+  defp locked, do: %{kind: :locked, type: :prototype, url: "/proto/secret/1/", bare_line?: true}
+
   defp doc(html), do: LazyHTML.from_fragment(html)
   defp q(html, sel), do: html |> doc() |> LazyHTML.query(sel)
   defp text(html, sel), do: html |> q(sel) |> LazyHTML.text() |> String.trim()
@@ -158,7 +160,7 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
   end
 
   test "a locked card stays type-only" do
-    html = cards([%{kind: :locked, type: :prototype, url: "/proto/secret/1/", bare_line?: true}])
+    html = cards([locked()])
     assert text(html, "[data-kind=locked]") =~ "Prototype · You don't have access"
     assert Enum.count(q(html, "[data-kind=locked] [data-role=link-card-title]")) == 0
     assert Enum.count(q(html, "[data-kind=locked] [data-role=link-card-hint]")) == 0
@@ -206,6 +208,72 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
       assert html =~ "var(--ag-purple-tint)"
       assert html =~ "var(--ag-orange-tint)"
       assert Enum.count(q(html, "[data-role=link-card].active\\:scale-\\[0\\.97\\]")) == 2
+    end
+  end
+
+  describe "one card anatomy, no glow (link unfurls stage 1, direction canvas 01a1a945)" do
+    # The class tokens of the ONE element `sel` matches, so an absence is
+    # asserted on the same element whose presence is shown alongside it.
+    defp tokens(html, sel) do
+      assert [node] = html |> q(sel) |> Enum.to_list()
+      assert [class] = LazyHTML.attribute(node, "class")
+      String.split(class)
+    end
+
+    for {kind, slot} <- [canvas: "purple", prototype: "orange"] do
+      test "the #{kind} card has no shadow and keeps its tinted #{slot} border" do
+        html = cards([unquote(kind)()])
+        classes = tokens(html, "[data-role=link-card][data-kind=#{unquote(kind)}]")
+
+        # Positive control: the same class list is non-empty and carries the tint.
+        assert classes != []
+
+        assert "border-[color-mix(in_oklab,var(--ag-#{unquote(slot)})_40%,var(--color-edge))]" in
+                 classes
+
+        assert Enum.filter(classes, &String.starts_with?(&1, "shadow-")) == []
+        refute html =~ "shadow-"
+      end
+    end
+
+    test "canvas, prototype, link and locked cards share a 12px inset and gap on base-100" do
+      html = cards([canvas(), prototype(), link("https://github.com/acme/api/pull/7"), locked()])
+
+      for kind <- ~w(canvas prototype link locked) do
+        classes = tokens(html, "[data-role=link-card][data-kind=#{kind}]")
+        assert "p-3" in classes, "#{kind}: no p-3 in #{inspect(classes)}"
+        assert "gap-3" in classes, "#{kind}: no gap-3"
+        assert "bg-base-100" in classes, "#{kind}: not on base-100"
+
+        for old <- ~w(p-2 p-2.5 bg-base-200) do
+          refute old in classes, "#{kind}: still carries #{old}"
+        end
+      end
+    end
+
+    test "only the outside-link card turns primary, and only on desktop hover" do
+      html = cards([canvas(), prototype(), link("https://github.com/acme/api/pull/7")])
+      assert "lg:hover:border-primary" in tokens(html, "[data-kind=link]")
+
+      for kind <- ~w(canvas prototype link) do
+        primary = tokens(html, "[data-kind=#{kind}]") |> Enum.filter(&(&1 =~ "primary"))
+        assert Enum.all?(primary, &(&1 == "lg:hover:border-primary")), inspect(primary)
+      end
+    end
+
+    test "the inline chip pads 4px left, 12px right, 2px vertically" do
+      url = "https://github.com/acme/api/issues/42"
+
+      html =
+        "see #{url} for details"
+        |> ContentRenderer.render_message(
+          chips: ChatLinkCard.chips("m1", [link(url, bare: false, display: :chip)])
+        )
+        |> Phoenix.HTML.safe_to_string()
+
+      classes = tokens(html, "[data-role=link-chip]")
+      for t <- ~w(pl-1 pr-3 py-0.5 bg-base-300 border-edge), do: assert(t in classes, t)
+      for t <- ~w(pl-0.5 pr-2.5 py-px), do: refute(t in classes, t)
     end
   end
 end
