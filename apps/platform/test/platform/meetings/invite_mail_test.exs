@@ -224,7 +224,10 @@ defmodule Platform.Meetings.InviteMailTest do
 
     test "no image without a brand icon, no emoji, no in-body response buttons", %{built: built} do
       refute built.html_body =~ "<img"
-      refute built.html_body =~ ~r/Accept|Decline|Maybe/
+      # The stage 5 note names Accept and decline in prose; no element is a
+      # response control (a link or cell whose whole text is the verb).
+      refute built.html_body =~ ~r/>\s*(Accept|Decline|Maybe)\s*</i
+      refute built.html_body =~ ~r/href="[^"]*(accept|decline|partstat)/i
       assert built.html_body |> String.to_charlist() |> Enum.all?(&(&1 < 128))
     end
 

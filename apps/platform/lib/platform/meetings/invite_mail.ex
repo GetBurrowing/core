@@ -369,8 +369,8 @@ defmodule Platform.Meetings.InviteMail do
   @invite_note "This is a calendar invite. Accept or decline it in your mail client."
 
   # Under the join link, on an invitation or update that carries a calendar
-  # part: the Accept/Decline lives in the reader's mail client.
-  defp invite_note(%{kind: :cancelled}), do: nil
+  # part: the Accept/Decline lives in the reader's mail client. A cancellation
+  # never reaches here (its `action_text`/`action_html` clauses are separate).
   defp invite_note(%{calendar?: false}), do: nil
   defp invite_note(_facts), do: @invite_note
 
