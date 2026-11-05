@@ -22,7 +22,8 @@ defmodule Platform.Meetings.InviteMailTest do
     inviter: %{name: "Host One", time_zone: "America/Denver"},
     org_name: "Example Org",
     app_url: "https://app.example.com",
-    guest_url: "https://guest.example.com"
+    guest_url: "https://guest.example.com",
+    calendar_url: "https://app.example.com/meetings/abc/invite.ics?token=t"
   }
 
   @member %{name: "Member Two", email: "member@example.com", preferences: %{}}
@@ -111,30 +112,82 @@ defmodule Platform.Meetings.InviteMailTest do
     end
   end
 
-  describe "join link" do
-    test "a member gets the absolute /meetings/<slug> URL, as button and fallback line" do
+  describe "the action and the join link" do
+    test "the button is Add to calendar; the member's join link is plain text beneath it" do
       built = InviteMail.build(:invitation, meeting(), @member, @ctx)
       url = "https://app.example.com/meetings/roadmap"
+      calendar = @ctx.calendar_url
 
-      assert built.html_body =~ ~s(href="#{url}")
-      assert built.html_body =~ "Join meeting"
-      assert built.html_body =~ "or open: "
-      assert built.body =~ "Join meeting: #{url}"
+      assert built.html_body =~
+               ~r/background-color:#[0-9a-f]{6};border-radius:9px;">\s*<a class="im-button-text" href="#{Regex.escape(calendar)}"[^>]*>Add to calendar<\/a>/
+
+      assert built.html_body =~ ~s(Join the meeting: <a class="im-link" href="#{url}")
+      refute built.html_body =~ "Join meeting<"
+      assert built.body =~ "Add to calendar: #{calendar}\nJoin the meeting: #{url}"
+      refute built.html_body =~ "Join code"
     end
 
-    test "a guest gets their /g/<code> short link" do
+    test "a guest gets their /g/<code> short link and its join code" do
       built = InviteMail.build(:invitation, meeting(), @guest, @ctx)
       url = "https://guest.example.com/g/abc123"
 
       assert built.html_body =~ ~s(href="#{url}")
-      assert built.body =~ "Join meeting: #{url}"
+      assert built.html_body =~ "Join code: abc123"
+      assert built.body =~ "Join the meeting: #{url}\nJoin code: abc123"
       refute built.html_body =~ "/meetings/roadmap"
     end
 
-    test "the host comes from ctx: no base, no button" do
+    test "no calendar link, no button; no base, no join line" do
+      built = InviteMail.build(:invitation, meeting(), @member, Map.delete(@ctx, :calendar_url))
+      refute built.html_body =~ "Add to calendar"
+      refute built.html_body =~ "im-button"
+      assert built.html_body =~ "Join the meeting"
+
       built = InviteMail.build(:invitation, meeting(), @member, Map.delete(@ctx, :app_url))
-      refute built.html_body =~ "Join meeting"
-      refute built.body =~ "Join meeting"
+      refute built.html_body =~ "Join the meeting"
+      refute built.body =~ "Join the meeting"
+    end
+  end
+
+  describe "attendees and reason" do
+    test "attendees read as a short list, capped at five" do
+      two =
+        InviteMail.build(
+          :invitation,
+          meeting(),
+          @member,
+          Map.put(@ctx, :attendees, ["Ann", "Bo"])
+        )
+
+      assert two.html_body =~ "With Ann and Bo"
+      assert two.body =~ "With Ann and Bo"
+
+      one = InviteMail.build(:invitation, meeting(), @member, Map.put(@ctx, :attendees, ["Ann"]))
+      assert one.body =~ "With Ann\n"
+
+      seven = Enum.map(1..7, &"Person #{&1}")
+      many = InviteMail.build(:invitation, meeting(), @member, Map.put(@ctx, :attendees, seven))
+
+      assert many.body =~
+               "With Person 1, Person 2, Person 3, Person 4, Person 5 and 2 others"
+    end
+
+    test "a reason renders when given, and nothing does when it is not" do
+      with_reason =
+        InviteMail.build(
+          :invitation,
+          meeting(),
+          @member,
+          Map.put(@ctx, :reason, "Quarterly plan")
+        )
+
+      assert with_reason.html_body =~ "Quarterly plan"
+      assert with_reason.body =~ "Quarterly plan"
+
+      plain = InviteMail.build(:invitation, meeting(), @member, @ctx)
+      refute plain.html_body =~ "With "
+      refute plain.body =~ "With "
+      refute plain.html_body =~ ~s(margin:6px 0 0 0)
     end
   end
 
@@ -176,7 +229,7 @@ defmodule Platform.Meetings.InviteMailTest do
 
     test "inviter and footer lines", %{built: built} do
       assert built.html_body =~ "Host One invited you"
-      assert built.html_body =~ "Sent from Example Org on Burrow."
+      assert built.html_body =~ "Sent from Example Org."
       assert built.html_body =~ "Reply to reach Host One."
     end
 
@@ -187,7 +240,7 @@ defmodule Platform.Meetings.InviteMailTest do
             "America/Denver, MST",
             "Host One invited you.",
             "https://app.example.com/meetings/roadmap",
-            "Sent from Example Org on Burrow."
+            "Sent from Example Org."
           ] do
         assert built.body =~ fact
       end
@@ -212,7 +265,7 @@ defmodule Platform.Meetings.InviteMailTest do
       refute built.html_body =~ "<b>Host"
       assert built.html_body =~ "&lt;script&gt;alert(1)&lt;/script&gt;"
       assert built.html_body =~ "&lt;b&gt;Host&lt;/b&gt; invited you"
-      assert built.html_body =~ "Sent from A &amp; B on Burrow."
+      assert built.html_body =~ "Sent from A &amp; B."
     end
   end
 
@@ -273,6 +326,13 @@ defmodule Platform.Meetings.InviteMailTest do
       end
     end
 
+    test "the footer names this install, and nothing says Burrow", %{built: built} do
+      assert built.html_body =~ "Sent from Example Org on Northwind Labs."
+      assert built.body =~ "Sent from Example Org on Northwind Labs."
+      refute built.html_body =~ "Burrow"
+      refute built.body =~ "Burrow"
+    end
+
     test "brand/2 reads the row's name, icon and both palettes", %{brand: brand} do
       assert brand.app_name == "Northwind Labs"
       assert brand.light.primary == "#1d4ed8"
@@ -302,7 +362,8 @@ defmodule Platform.Meetings.InviteMailTest do
     test "cancelled replaces the button with a line; updated says the time changed" do
       cancelled = InviteMail.build(:cancelled, meeting(), @member, @ctx)
       assert cancelled.html_body =~ "This meeting was cancelled."
-      refute cancelled.html_body =~ "Join meeting"
+      refute cancelled.html_body =~ "Add to calendar"
+      refute cancelled.html_body =~ "Join the meeting"
       refute String.downcase(cancelled.html_body) =~ "#ad4b07"
       assert cancelled.body =~ "This meeting was cancelled."
 

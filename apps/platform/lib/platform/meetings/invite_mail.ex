@@ -26,7 +26,7 @@ defmodule Platform.Meetings.InviteMail do
     * base-content: body text;
     * muted (base-content at 55% over base-100, app.css's `--subtle`): the
       zone line, the inviter line, the footer;
-    * primary / primary-content: the Join meeting button and NOTHING else;
+    * primary / primary-content: the Add to calendar button and NOTHING else;
     * edge: the card border and the footer rule;
     * the fallback link is body text, underlined.
 
@@ -58,6 +58,15 @@ defmodule Platform.Meetings.InviteMail do
   there is no host in this module. With no base for the recipient there is
   no button and no fallback line.
 
+  ## The action, the people and the code
+
+  The one button is **Add to calendar** (`ctx.calendar_url`, the install's
+  calendar link for the meeting), with the join link in plain text beneath
+  it and, for a guest, their join code (the short code of their `/g/` link).
+  `ctx.attendees` (invitee names) renders as "With A, B and C" under the
+  inviter line, and `ctx.reason` as a line under that. Each is omitted
+  cleanly when absent. The footer names the install by its own `app_name`.
+
   ## Unscheduled meetings
 
   An ad-hoc meeting has no time to put on a calendar: no calendar part
@@ -73,6 +82,7 @@ defmodule Platform.Meetings.InviteMail do
   alias Platform.Meetings.Meeting
 
   @kinds [:invitation, :cancelled, :updated]
+  @attendee_cap 5
 
   @font "'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
@@ -94,7 +104,10 @@ defmodule Platform.Meetings.InviteMail do
           optional(:org_name) => String.t() | nil,
           optional(:app_url) => String.t() | nil,
           optional(:guest_url) => String.t() | nil,
-          optional(:brand) => brand()
+          optional(:brand) => brand(),
+          optional(:calendar_url) => String.t() | nil,
+          optional(:attendees) => [String.t()],
+          optional(:reason) => String.t() | nil
         }
   @type palette :: %{
           base_100: String.t(),
@@ -146,7 +159,12 @@ defmodule Platform.Meetings.InviteMail do
       zone_line: zone_line(when_, zone, zone_source),
       inviter: inviter_name(ctx),
       org_name: org_name(ctx),
-      join_url: join_url
+      app_name: app_name(ctx),
+      join_url: join_url,
+      calendar_url: present(Map.get(ctx, :calendar_url)),
+      join_code: present(Map.get(recipient, :short_code)),
+      attendees: attendees(Map.get(ctx, :attendees)),
+      reason: present(Map.get(ctx, :reason))
     }
 
     %{
@@ -299,13 +317,34 @@ defmodule Platform.Meetings.InviteMail do
   defp inviter_line(%{inviter: nil}), do: "You are invited"
   defp inviter_line(%{inviter: name}), do: name <> " invited you"
 
-  defp sent_from(%{org_name: nil}), do: "Sent from Burrow."
-  defp sent_from(%{org_name: org}), do: "Sent from " <> org <> " on Burrow."
+  # The footer names the install by its own `app_name`, never a product name.
+  defp sent_from(%{org_name: nil, app_name: nil}), do: nil
+  defp sent_from(%{org_name: nil, app_name: app}), do: "Sent from " <> app <> "."
+  defp sent_from(%{org_name: org, app_name: nil}), do: "Sent from " <> org <> "."
+  defp sent_from(%{org_name: org, app_name: app}), do: "Sent from " <> org <> " on " <> app <> "."
+
+  # "With A, B and C", at most @attendee_cap names, then "and N others".
+  defp attendees_line(%{attendees: []}), do: nil
+
+  defp attendees_line(%{attendees: names}) do
+    {shown, rest} = Enum.split(names, @attendee_cap)
+
+    case {shown, length(rest)} do
+      {[one], 0} -> "With " <> one
+      {_, 0} -> "With " <> Enum.join(Enum.drop(shown, -1), ", ") <> " and " <> List.last(shown)
+      {_, 1} -> "With " <> Enum.join(shown, ", ") <> " and 1 other"
+      {_, n} -> "With " <> Enum.join(shown, ", ") <> " and #{n} others"
+    end
+  end
+
+  defp join_code_line(%{join_code: nil}), do: nil
+  defp join_code_line(%{join_code: code}), do: "Join code: " <> code
 
   defp reply_line(%{inviter: nil}), do: "Reply to reach the organizer."
   defp reply_line(%{inviter: name}), do: "Reply to reach " <> name <> "."
 
   @cancelled_line "This meeting was cancelled."
+  @calendar_label "Add to calendar"
   @changed_line "Time changed"
 
   # ── Plain text ───────────────────────────────────────────────────────────
@@ -319,6 +358,8 @@ defmodule Platform.Meetings.InviteMail do
       facts.zone_line,
       "",
       inviter_line(facts) <> ".",
+      attendees_line(facts),
+      facts.reason,
       "",
       action_text(facts),
       "",
@@ -332,8 +373,19 @@ defmodule Platform.Meetings.InviteMail do
   end
 
   defp action_text(%{kind: :cancelled}), do: @cancelled_line
-  defp action_text(%{join_url: nil}), do: nil
-  defp action_text(%{join_url: url}), do: "Join meeting: " <> url
+
+  defp action_text(facts) do
+    [
+      facts.calendar_url && @calendar_label <> ": " <> facts.calendar_url,
+      facts.join_url && "Join the meeting: " <> facts.join_url,
+      join_code_line(facts)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      lines -> Enum.join(lines, "\n")
+    end
+  end
 
   # ── HTML ─────────────────────────────────────────────────────────────────
   #
@@ -379,9 +431,9 @@ defmodule Platform.Meetings.InviteMail do
     <h1 class="im-ink" style="margin:0 0 20px 0;font-size:22px;line-height:28px;font-weight:600;color:#{l.base_content};">#{h(facts.title)}</h1>
     #{changed_html(facts, l)}<p class="im-ink" style="margin:0;font-size:19px;line-height:26px;font-weight:600;color:#{l.base_content};">#{h(time_text(facts))}</p>
     #{zone_html(facts, l)}<p class="im-muted" style="margin:20px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(inviter_line(facts))}</p>
-    #{action_html(facts, l)}
+    #{muted_html(attendees_line(facts), l)}#{muted_html(facts.reason, l)}#{action_html(facts, l)}
     <hr class="im-rule" style="border:0;border-top:1px solid #{l.edge};margin:24px 0 16px 0;">
-    <p class="im-muted" style="margin:0;font-size:13px;line-height:20px;color:#{l.muted};">#{h(sent_from(facts))}<br>#{h(reply_line(facts))}</p>
+    <p class="im-muted" style="margin:0;font-size:13px;line-height:20px;color:#{l.muted};">#{footer_html(facts)}</p>
     </td></tr>
     </table>
     </td></tr>
@@ -433,21 +485,85 @@ defmodule Platform.Meetings.InviteMail do
       h(@cancelled_line) <> "</p>"
   end
 
-  defp action_html(%{join_url: nil}, _l), do: ""
+  # The primary action is "Add to calendar" (the APPROVED default): the
+  # install's calendar link for the meeting. The join link follows it in
+  # plain text, then a guest's join code. The button's fill sits on the cell,
+  # not the link, so it renders in clients that ignore padding on <a>; it is
+  # the only use of the primary colour in the email.
+  defp action_html(facts, l) do
+    button =
+      case facts.calendar_url do
+        nil ->
+          ""
 
-  # The button's fill sits on the cell, not the link, so it renders in
-  # clients that ignore padding on <a>. It is the only use of the primary
-  # colour in the email.
-  defp action_html(%{join_url: url}, l) do
-    """
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 0 0;">
-    <tr><td class="im-button" style="background-color:#{l.primary};border-radius:9px;">
-    <a class="im-button-text" href="#{h(url)}" style="display:inline-block;padding:12px 22px;font-family:#{@font};font-size:16px;line-height:20px;font-weight:600;color:#{l.primary_content};text-decoration:none;border-radius:9px;">Join meeting</a>
-    </td></tr>
-    </table>
-    <p class="im-ink" style="margin:12px 0 0 0;font-size:15px;line-height:22px;color:#{l.base_content};word-break:break-all;">or open: <a class="im-link" href="#{h(url)}" style="color:#{l.link};">#{h(url)}</a></p>\
-    """
+        url ->
+          """
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 0 0;">
+          <tr><td class="im-button" style="background-color:#{l.primary};border-radius:9px;">
+          <a class="im-button-text" href="#{h(url)}" style="display:inline-block;padding:12px 22px;font-family:#{@font};font-size:16px;line-height:20px;font-weight:600;color:#{l.primary_content};text-decoration:none;border-radius:9px;">#{@calendar_label}</a>
+          </td></tr>
+          </table>
+          """
+      end
+
+    join =
+      case facts.join_url do
+        nil ->
+          ""
+
+        url ->
+          ~s(<p class="im-ink" style="margin:12px 0 0 0;font-size:15px;line-height:22px;color:#{l.base_content};word-break:break-all;">Join the meeting: <a class="im-link" href="#{h(url)}" style="color:#{l.link};">#{h(url)}</a></p>\n)
+      end
+
+    code =
+      case join_code_line(facts) do
+        nil ->
+          ""
+
+        line ->
+          ~s(<p class="im-muted" style="margin:4px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(line)}</p>\n)
+      end
+
+    button <> join <> code
   end
+
+  defp muted_html(nil, _l), do: ""
+
+  defp muted_html(line, l) do
+    ~s(<p class="im-muted" style="margin:6px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">) <>
+      h(line) <> "</p>\n"
+  end
+
+  defp footer_html(facts) do
+    [sent_from(facts), reply_line(facts)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map_join("<br>", &h/1)
+  end
+
+  defp app_name(ctx) do
+    case ctx |> Map.get(:brand) |> then(&(&1 && Map.get(&1, :app_name))) do
+      name when is_binary(name) and name != "" -> single_line(name)
+      _ -> nil
+    end
+  end
+
+  defp present(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp present(_value), do: nil
+
+  defp attendees(names) when is_list(names) do
+    names
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&single_line/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp attendees(_names), do: []
 
   # ── Branding ─────────────────────────────────────────────────────────────
 

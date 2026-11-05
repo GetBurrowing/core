@@ -226,7 +226,9 @@ defmodule Platform.Meetings.InviteMailer do
            org_name: org_name,
            app_url: app_url,
            guest_url: guest_url(),
-           brand: brand(app_url)
+           brand: brand(app_url),
+           calendar_url: app_url <> Meetings.calendar_link_path(meeting),
+           attendees: attendee_names(meeting)
          }
        }}
     end
@@ -345,6 +347,20 @@ defmodule Platform.Meetings.InviteMailer do
   end
 
   defp app_url, do: PlatformWeb.Endpoint.url()
+
+  # Who else is invited, by the name the invite UI shows: an account's name,
+  # else the guest's display name. The meeting has no stored reason or
+  # agenda, so no `reason` is passed.
+  defp attendee_names(%Meeting{id: id}) do
+    id
+    |> Meetings.list_invites(preload: [:user])
+    |> Enum.map(fn
+      %Invite{user: %User{name: name}} when is_binary(name) -> name
+      %Invite{display_name: name} -> name
+    end)
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.uniq()
+  end
 
   defp guest_url do
     if GuestInvite.guest_host_configured?(), do: "https://" <> GuestInvite.guest_host()
