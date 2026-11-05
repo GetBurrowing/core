@@ -49,6 +49,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Memory.JournalSweep
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
+  alias Platform.People.ToolGuard
   alias Platform.Orchestration.Diagnostics
   alias Platform.Orchestration.ExecutionLease
   alias Platform.Tasks
@@ -8056,7 +8057,12 @@ defmodule Platform.Federation.ToolSurface do
   def execute("memory_view", args, context) do
     with {:ok, path} <- require_string(args, "path", "memory_view"),
          agent = load_agent(context),
-         :ok <- gate_to_envelope(Routing.gate_read(agent, path)) do
+         :ok <- gate_to_envelope(Routing.gate_read(agent, path)),
+         :ok <-
+           ToolGuard.before_read(
+             path,
+             Map.put(context || %{}, :workspace_id, args["workspace_id"])
+           ) do
       class = Routing.classify(path)
       workspace_id = Map.get(args, "workspace_id")
       view_range = Map.get(args, "view_range")
@@ -8085,7 +8091,13 @@ defmodule Platform.Federation.ToolSurface do
 
       case gate_to_envelope(Routing.gate_write(agent, path, gate_opts)) do
         :ok ->
-          do_memory_create(class, path, text, agent, workspace_id)
+          ToolGuard.wrap_write(
+            path,
+            text,
+            agent,
+            workspace_id,
+            &do_memory_create(class, path, &1, agent, workspace_id)
+          )
 
         {:error, _} = err ->
           err
@@ -8170,6 +8182,9 @@ defmodule Platform.Federation.ToolSurface do
            {:ok, opts} <- search_opts_from(args, agent) do
         query
         |> Search.search(opts ++ memory_access_opts(context))
+        |> ToolGuard.filter_search_hits(
+          Map.put(context || %{}, :workspace_id, args["workspace_id"])
+        )
         |> bound_memory_search_payload()
       end
     end
@@ -15051,7 +15066,13 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         new_content = String.replace(page.content, old_str, new_str, global: false)
 
-        upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+        ToolGuard.wrap_write(
+          path,
+          new_content,
+          agent,
+          workspace_id,
+          &upsert_with_lock(path, &1, page.version, agent, workspace_id, :page)
+        )
     end
   end
 
@@ -15077,7 +15098,13 @@ defmodule Platform.Federation.ToolSurface do
       new_lines = head ++ [insert_text] ++ tail
       new_content = Enum.join(new_lines, "\n")
 
-      upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+      ToolGuard.wrap_write(
+        path,
+        new_content,
+        agent,
+        workspace_id,
+        &upsert_with_lock(path, &1, page.version, agent, workspace_id, :page)
+      )
     end
   end
 

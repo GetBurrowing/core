@@ -79,4 +79,66 @@ defmodule Platform.People.Visibility do
   end
 
   def slug_of(_), do: nil
+
+  @doc """
+  May an agent surface `path` in this tool-call `context`?
+
+  Only the private tier is ever refused. A private page may be surfaced when
+  the call has no `:space_id` (a system or execution dispatch, proactive
+  work) or when the space is a dm / group / execution / system space AND the
+  page's `subject_user_id` is a participant of it. A channel refuses
+  regardless, as does any space the subject is not in, and so does a space
+  the engine cannot resolve. The answer never depends on whether the page
+  exists in a way a caller can tell apart: an absent page has no subject, so
+  it is refused exactly like a present page whose subject is elsewhere.
+
+  `context[:workspace_id]` scopes the page lookup when present.
+  """
+  @spec agent_context_allows?(String.t(), map() | nil) :: boolean()
+  def agent_context_allows?(path, context) when is_binary(path) do
+    if private_path?(path) do
+      case context_space_id(context) do
+        nil -> true
+        space_id -> space_allows_private?(space_id, path, context_workspace_id(context))
+      end
+    else
+      true
+    end
+  end
+
+  def agent_context_allows?(_, _), do: false
+
+  @private_space_kinds ~w(dm group execution system)
+
+  defp space_allows_private?(space_id, path, workspace_id) do
+    case Platform.Chat.get_space(space_id) do
+      %Platform.Chat.Space{kind: kind} when kind in @private_space_kinds ->
+        subject = subject_user_id(path, workspace_id)
+
+        is_binary(subject) and Platform.UUID.valid?(subject) and
+          Platform.Chat.participant?(space_id, subject)
+
+      _channel_or_unknown ->
+        false
+    end
+  end
+
+  defp subject_user_id(path, workspace_id) do
+    case Platform.Org.Wiki.get_page(path, workspace_id: workspace_id) do
+      %{frontmatter: %{} = frontmatter} -> Map.get(frontmatter, "subject_user_id")
+      _ -> nil
+    end
+  end
+
+  defp context_space_id(%{} = context) do
+    case Map.get(context, :space_id) do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  defp context_space_id(_), do: nil
+
+  defp context_workspace_id(%{} = context), do: Map.get(context, :workspace_id)
+  defp context_workspace_id(_), do: nil
 end
