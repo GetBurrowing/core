@@ -334,6 +334,38 @@ defmodule Platform.Chat.ContentRendererTest do
     end
   end
 
+  describe "email addresses" do
+    test "an address in a sentence is a mailto link, not a mention" do
+      result = render("send it to dev.alice+x@example.co.uk please")
+
+      assert result =~
+               ~s(<a class="link" data-email-address="dev.alice+x@example.co.uk" href="mailto:dev.alice+x@example.co.uk">dev.alice+x@example.co.uk</a>)
+
+      refute result =~ "bg-primary/20"
+    end
+
+    test "a mention next to an address still renders as a mention" do
+      result = render("@alice can you invite bob@example.com")
+      assert result =~ ~r{<span class="rounded bg-primary/20[^"]*">@alice</span>}
+      assert result =~ ~s(href="mailto:bob@example.com")
+      refute result =~ ~r{<span[^>]*>@example</span>}
+    end
+
+    test "an address inside code or an existing link is left alone" do
+      code = render(~S(`bob@example.com`))
+      refute code =~ "mailto:"
+      refute code =~ "bg-primary/20"
+
+      linked = render("[write to us](mailto:team@example.com)")
+      assert length(Regex.scan(~r/<a\b/, linked)) == 1
+    end
+
+    test "a bare @word glued to a word is not a mention" do
+      result = render("price@scale and foo@bar")
+      refute result =~ "bg-primary/20"
+    end
+  end
+
   describe "@-mention decoration" do
     test "decorates @mentions in text" do
       result = render("Hello @alice and @bob")

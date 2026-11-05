@@ -256,23 +256,53 @@ defmodule Platform.Chat.ContentRenderer do
   @mention_span_close "</span>"
 
   defp decorate_mentions(html) do
-    # Split on HTML tags to avoid decorating mentions inside tag attributes
+    # Split on HTML tags to avoid decorating mentions inside tag attributes.
+    # `skip` counts the open <a>, <code> and <pre> elements around a text
+    # part: an email address there is left as the sender wrote it (no link
+    # inside a link, no link inside code).
     html
     |> String.split(~r/(<[^>]+>)/, include_captures: true)
-    |> Enum.map(fn part ->
+    |> Enum.map_reduce(0, fn part, skip ->
       if String.starts_with?(part, "<") do
-        part
+        {part, skip + skip_delta(part)}
       else
-        # Order matters: legacy first (its `\w+` won't match `@[`, so it
-        # leaves bracketed mentions alone). Bracketed second — the legacy
-        # pass has already wrapped any bare `@word`, so the bracketed
-        # regex only sees un-wrapped `@[...]` tokens.
-        part
-        |> decorate_legacy_mentions()
-        |> decorate_bracketed_mentions()
+        # Order matters: emails first, so an address becomes a link before
+        # any mention pass sees it. Legacy second (its lookbehind refuses an
+        # `@` glued to a word, so `name@example.com` is never a mention; its
+        # `\w+` won't match `@[`, so it leaves bracketed mentions alone).
+        # Bracketed last: the legacy pass has already wrapped any bare
+        # `@word`, so the bracketed regex only sees un-wrapped `@[...]`.
+        decorated =
+          part
+          |> then(&if(skip > 0, do: &1, else: link_emails(&1)))
+          |> decorate_legacy_mentions()
+          |> decorate_bracketed_mentions()
+
+        {decorated, skip}
       end
     end)
+    |> elem(0)
     |> Enum.join()
+  end
+
+  defp skip_delta(tag) do
+    cond do
+      Regex.match?(~r/\A<(a|code|pre)[\s>]/i, tag) -> 1
+      Regex.match?(~r/\A<\/(a|code|pre)\s*>/i, tag) -> -1
+      true -> 0
+    end
+  end
+
+  # An email address typed in a message is an address, not an @-mention:
+  # it renders as a mailto link in the body face (tap to email), never with
+  # the mention pill. The text is post-Earmark and already html-escaped, and
+  # the address charset below holds nothing that needs escaping again.
+  @email_in_text ~r/(?<![\w.%+-])([A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![\w-])/
+
+  defp link_emails(text) do
+    Regex.replace(@email_in_text, text, fn _whole, address ->
+      ~s(<a class="link" data-email-address="#{address}" href="mailto:#{address}">#{address}</a>)
+    end)
   end
 
   # `text` arrives post-Earmark, which has already HTML-escaped content and
@@ -286,7 +316,7 @@ defmodule Platform.Chat.ContentRenderer do
   end
 
   defp decorate_legacy_mentions(text) do
-    String.replace(text, ~r/@(\w+)/, fn mention ->
+    String.replace(text, ~r/(?<![\w.%+-])@(\w+)/, fn mention ->
       @mention_span <> mention <> @mention_span_close
     end)
   end
