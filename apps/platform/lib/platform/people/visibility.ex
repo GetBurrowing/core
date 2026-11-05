@@ -140,5 +140,4 @@ defmodule Platform.People.Visibility do
   defp context_space_id(_), do: nil
 
   defp context_workspace_id(%{} = context), do: Map.get(context, :workspace_id)
-  defp context_workspace_id(_), do: nil
 end
