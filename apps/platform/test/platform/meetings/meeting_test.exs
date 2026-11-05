@@ -52,14 +52,18 @@ defmodule Platform.Meetings.MeetingTest do
       assert Ecto.Changeset.apply_changes(cs).status == "scheduled"
     end
 
-    test "requires project_id, chat_space_id, slug, name, livekit_room_name" do
+    test "requires chat_space_id, slug, name, livekit_room_name; project_id is nullable" do
       cs = Meeting.changeset(%Meeting{}, %{})
       refute cs.valid?
 
-      for field <- [:project_id, :chat_space_id, :slug, :name, :livekit_room_name] do
+      for field <- [:chat_space_id, :slug, :name, :livekit_room_name] do
         assert %{} = errors_on(cs)
         assert Keyword.has_key?(cs.errors, field)
       end
+
+      # project_id became nullable for ad-hoc (channel-bound) meetings
+      # (migration 20261105220000_make_meetings_project_id_nullable).
+      refute Keyword.has_key?(cs.errors, :project_id)
     end
 
     test "rejects an invalid status" do
