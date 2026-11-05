@@ -213,4 +213,36 @@ defmodule Platform.Mail.DelivererTest do
     assert content_type(message) == "text/plain"
     assert Mail.Message.get_header(message, :reply_to) == nil
   end
+
+  describe "describe_error/1" do
+    # gen_smtp turns Gmail's 535 into a closed socket (the server hangs up
+    # after the first rejected AUTH mechanism), so the recorded text has to
+    # name the likely cause instead of only the raw term.
+    test "a closed connection names the rejected login and keeps the raw term" do
+      reason = {:retries_exceeded, {:network_failure, ~c"smtp.example.test", {:error, :closed}}}
+      text = Platform.Mail.Deliverer.describe_error(reason)
+
+      assert text =~ "smtp.example.test closed the connection before accepting the message"
+      assert text =~ "username or password was rejected"
+      assert text =~ "465 with TLS, or 587 with STARTTLS"
+      assert String.ends_with?(text, "(#{inspect(reason)})")
+    end
+
+    test "a binary host is used as is" do
+      text =
+        Platform.Mail.Deliverer.describe_error(
+          {:retries_exceeded, {:network_failure, "smtp.example.test", {:error, :closed}}}
+        )
+
+      assert text =~ "smtp.example.test closed the connection"
+    end
+
+    test "other reasons are unchanged" do
+      assert Platform.Mail.Deliverer.describe_error("smtp_secret_unavailable: :missing") ==
+               "smtp_secret_unavailable: :missing"
+
+      reason = {:retries_exceeded, {:network_failure, ~c"smtp.example.test", {:error, :timeout}}}
+      assert Platform.Mail.Deliverer.describe_error(reason) == inspect(reason)
+    end
+  end
 end
