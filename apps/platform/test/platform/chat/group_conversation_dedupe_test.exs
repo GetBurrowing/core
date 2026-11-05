@@ -8,7 +8,8 @@ defmodule Platform.Chat.GroupConversationDedupeTest do
   runs OUTSIDE the SQL sandbox (`Sandbox.unboxed_run/2`), because inside it
   every process shares one connection and one transaction, so a lock can
   never block anybody there and a race test would pass without the lock. It
-  commits its fixtures and deletes them in `on_exit`.
+  commits its fixtures and deletes them, and the audit rows the participant
+  telemetry wrote for them, in `on_exit`.
 
   Mutation check (run when the stage shipped): deleting the
   `pg_advisory_xact_lock` line from `find_or_create_group_conversation/2`
@@ -408,6 +409,15 @@ defmodule Platform.Chat.GroupConversationDedupeTest do
           Repo.delete_all(from(m in Message, where: m.space_id in ^space_ids))
           Repo.delete_all(from(p in Participant, where: p.space_id in ^space_ids))
           Repo.delete_all(from(s in Space, where: s.id in ^space_ids))
+
+          # The audit telemetry handler commits a `chat.participant.added` row
+          # per seat outside the sandbox too; Platform.AuditTest counts rows.
+          Repo.delete_all(
+            from(e in Platform.Audit.Event,
+              where: e.resource_type == "chat" and e.resource_id in ^space_ids
+            )
+          )
+
           Repo.delete_all(from(u in User, where: u.id in ^user_ids))
         end)
       end)
