@@ -10,23 +10,31 @@ defmodule Platform.Meetings.InviteMail do
   fields `Platform.Mail.Drafts.create_system/2` takes:
   `%{subject, body, html_body, calendar_method, calendar_ics}`.
 
-  ## The card
+  ## The card, in the install's branding
 
-  One ~560px light card, inline hex only (email clients read no CSS
-  variables and ignore our dark theme). Every colour is a light-theme token
-  from `assets/css/app.css`:
+  One ~560px card, branded per install (task 01a1a933, the approved
+  prototype 01a1a93c v2): a header with the install's icon and name, then
+  the meeting. Nothing about the look is hardcoded here. `brand/2` turns the
+  install's `Platform.Branding.InstallBranding` row into the name, the
+  absolute URL of its 192px icon (served from the install host, never
+  inlined) and the light and dark palettes `Platform.Branding.Palette.derive/2`
+  yields. Light values are inlined on every element (email clients read no
+  CSS variables); the dark values ride in a `prefers-color-scheme: dark`
+  block with a `color-scheme` meta. Tokens used:
 
-    * `#fbfaf9` base-100, page and card surface; also primary-content, the
-      button text;
-    * `#000000` base-content, body text;
-    * `#635b53` secondary, the zone line, the inviter line, the footer;
-    * `#ad4b07` primary, the Join meeting button fill and NOTHING else;
-    * `#d9d3c9` the edge slot, the card border and the footer rule.
+    * base-100: page and card surface;
+    * base-content: body text;
+    * muted (base-content at 55% over base-100, app.css's `--subtle`): the
+      zone line, the inviter line, the footer;
+    * primary / primary-content: the Join meeting button and NOTHING else;
+    * edge: the card border and the footer rule;
+    * the fallback link is body text, underlined.
 
   The time block is the signature element: the largest line after the
-  title, with its zone named on the line under it. No logo, image, avatar
-  or emoji, and no Accept/Decline buttons: the calendar client renders
-  those from the `METHOD:REQUEST` part.
+  title, with its zone named on the line under it. No hero, avatar or
+  emoji, and no Accept/Decline buttons: the calendar client renders those
+  from the `METHOD:REQUEST` part. The only image is the install icon, and
+  the header names the install in text beside it.
 
   ## Time zone
 
@@ -58,18 +66,14 @@ defmodule Platform.Meetings.InviteMail do
   Every interpolated value is HTML-escaped: meeting names are user input.
   """
 
+  alias Platform.Branding
+  alias Platform.Branding.InstallBranding
+  alias Platform.Branding.Palette
   alias Platform.Meetings.InviteIcs
   alias Platform.Meetings.Meeting
 
   @kinds [:invitation, :cancelled, :updated]
 
-  # Light-theme tokens, assets/css/app.css. See the moduledoc.
-  @surface "#fbfaf9"
-  @ink "#000000"
-  @secondary "#635b53"
-  @primary "#ad4b07"
-  @on_primary "#fbfaf9"
-  @edge "#d9d3c9"
   @font "'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
   @utc "Etc/UTC"
@@ -89,7 +93,23 @@ defmodule Platform.Meetings.InviteMail do
           },
           optional(:org_name) => String.t() | nil,
           optional(:app_url) => String.t() | nil,
-          optional(:guest_url) => String.t() | nil
+          optional(:guest_url) => String.t() | nil,
+          optional(:brand) => brand()
+        }
+  @type palette :: %{
+          base_100: String.t(),
+          base_content: String.t(),
+          edge: String.t(),
+          primary: String.t(),
+          primary_content: String.t(),
+          link: String.t(),
+          muted: String.t()
+        }
+  @type brand :: %{
+          app_name: String.t() | nil,
+          icon_url: String.t() | nil,
+          light: palette(),
+          dark: palette()
         }
   @type built :: %{
           subject: String.t(),
@@ -109,7 +129,8 @@ defmodule Platform.Meetings.InviteMail do
   `ctx` carries the sending identity (`organizer: {display_name, address}`,
   the address the calendar part names as ORGANIZER), the inviter
   (`%{name, time_zone}`), the org's display name, and the absolute bases
-  for join links (`app_url`, `guest_url`).
+  for join links (`app_url`, `guest_url`), and `brand` — the install's
+  name, icon and palettes from `brand/2`.
   """
   @spec build(kind(), Meeting.t(), recipient(), ctx()) :: built()
   def build(kind, %Meeting{} = meeting, recipient, ctx) when kind in @kinds do
@@ -131,7 +152,7 @@ defmodule Platform.Meetings.InviteMail do
     %{
       subject: subject(facts),
       body: text_body(facts),
-      html_body: html_body(facts),
+      html_body: html_body(facts, Map.get(ctx, :brand) || default_brand()),
       calendar_method: calendar_method,
       calendar_ics: calendar_ics
     }
@@ -315,28 +336,52 @@ defmodule Platform.Meetings.InviteMail do
   defp action_text(%{join_url: url}), do: "Join meeting: " <> url
 
   # ── HTML ─────────────────────────────────────────────────────────────────
+  #
+  # Every colour below is a token of the install's palette (`brand/2`); the
+  # light value is inlined on the element and the dark value is applied by
+  # the `prefers-color-scheme: dark` block through the element's class.
+  # Clients that strip <style> keep the light card, which reads on its own.
 
-  defp html_body(facts) do
+  defp html_body(facts, brand) do
+    l = brand.light
+    d = brand.dark
+
     """
     <!DOCTYPE html>
     <html lang="en">
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
     <title>#{h(facts.title)}</title>
+    <style>
+    @media (prefers-color-scheme: dark) {
+      .im-page, .im-card { background-color: #{d.base_100} !important; }
+      .im-card { border-color: #{d.edge} !important; }
+      .im-ink { color: #{d.base_content} !important; }
+      .im-muted { color: #{d.muted} !important; }
+      .im-rule { border-top-color: #{d.edge} !important; }
+      .im-button { background-color: #{d.primary} !important; }
+      .im-button-text { color: #{d.primary_content} !important; }
+      .im-link { color: #{d.link} !important; }
+    }
+    </style>
     </head>
-    <body style="margin:0;padding:0;background-color:#{@surface};">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#{@surface};">
+    <body class="im-page" style="margin:0;padding:0;background-color:#{l.base_100};">
+    <table role="presentation" class="im-page" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#{l.base_100};">
     <tr><td align="center" style="padding:24px 12px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:#{@surface};border:1px solid #{@edge};border-radius:12px;">
-    <tr><td style="padding:28px 28px 24px 28px;font-family:#{@font};color:#{@ink};">
-    <h1 style="margin:0 0 20px 0;font-size:22px;line-height:28px;font-weight:600;color:#{@ink};">#{h(facts.title)}</h1>
-    #{changed_html(facts)}<p style="margin:0;font-size:19px;line-height:26px;font-weight:600;color:#{@ink};">#{h(time_text(facts))}</p>
-    #{zone_html(facts)}<p style="margin:20px 0 0 0;font-size:15px;line-height:22px;color:#{@secondary};">#{h(inviter_line(facts))}</p>
-    #{action_html(facts)}
-    <hr style="border:0;border-top:1px solid #{@edge};margin:24px 0 16px 0;">
-    <p style="margin:0;font-size:13px;line-height:20px;color:#{@secondary};">#{h(sent_from(facts))}<br>#{h(reply_line(facts))}</p>
+    <table role="presentation" class="im-card" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:#{l.base_100};border:1px solid #{l.edge};border-radius:12px;">
+    <tr><td style="padding:24px 28px 0 28px;font-family:#{@font};">
+    #{header_html(brand)}
+    </td></tr>
+    <tr><td style="padding:20px 28px 24px 28px;font-family:#{@font};color:#{l.base_content};">
+    <h1 class="im-ink" style="margin:0 0 20px 0;font-size:22px;line-height:28px;font-weight:600;color:#{l.base_content};">#{h(facts.title)}</h1>
+    #{changed_html(facts, l)}<p class="im-ink" style="margin:0;font-size:19px;line-height:26px;font-weight:600;color:#{l.base_content};">#{h(time_text(facts))}</p>
+    #{zone_html(facts, l)}<p class="im-muted" style="margin:20px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(inviter_line(facts))}</p>
+    #{action_html(facts, l)}
+    <hr class="im-rule" style="border:0;border-top:1px solid #{l.edge};margin:24px 0 16px 0;">
+    <p class="im-muted" style="margin:0;font-size:13px;line-height:20px;color:#{l.muted};">#{h(sent_from(facts))}<br>#{h(reply_line(facts))}</p>
     </td></tr>
     </table>
     </td></tr>
@@ -346,39 +391,134 @@ defmodule Platform.Meetings.InviteMail do
     """
   end
 
-  defp changed_html(%{kind: :updated}) do
-    ~s(<p style="margin:0 0 4px 0;font-size:15px;line-height:22px;font-weight:600;color:#{@ink};">) <>
+  # Install icon and name. The icon is referenced from the install host,
+  # never inlined, and the name follows it as text so the header reads with
+  # images off.
+  defp header_html(%{app_name: nil, icon_url: nil}), do: ""
+
+  defp header_html(brand) do
+    icon =
+      case brand.icon_url do
+        url when is_binary(url) and url != "" ->
+          ~s(<img src="#{h(url)}" width="32" height="32" alt="" style="display:block;width:32px;height:32px;border:0;border-radius:8px;">)
+
+        _ ->
+          ""
+      end
+
+    """
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+    <td style="padding:0 10px 0 0;vertical-align:middle;">#{icon}</td>
+    <td class="im-ink" style="vertical-align:middle;font-size:16px;line-height:20px;font-weight:600;color:#{brand.light.base_content};">#{h(brand.app_name)}</td>
+    </tr></table>\
+    """
+  end
+
+  defp changed_html(%{kind: :updated}, l) do
+    ~s(<p class="im-ink" style="margin:0 0 4px 0;font-size:15px;line-height:22px;font-weight:600;color:#{l.base_content};">) <>
       h(@changed_line) <> "</p>\n"
   end
 
-  defp changed_html(_facts), do: ""
+  defp changed_html(_facts, _l), do: ""
 
-  defp zone_html(%{zone_line: nil}), do: ""
+  defp zone_html(%{zone_line: nil}, _l), do: ""
 
-  defp zone_html(%{zone_line: line}) do
-    ~s(<p style="margin:2px 0 0 0;font-size:15px;line-height:22px;color:#{@secondary};">) <>
+  defp zone_html(%{zone_line: line}, l) do
+    ~s(<p class="im-muted" style="margin:2px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">) <>
       h(line) <> "</p>\n"
   end
 
-  defp action_html(%{kind: :cancelled}) do
-    ~s(<p style="margin:24px 0 0 0;font-size:16px;line-height:24px;font-weight:600;color:#{@ink};">) <>
+  defp action_html(%{kind: :cancelled}, l) do
+    ~s(<p class="im-ink" style="margin:24px 0 0 0;font-size:16px;line-height:24px;font-weight:600;color:#{l.base_content};">) <>
       h(@cancelled_line) <> "</p>"
   end
 
-  defp action_html(%{join_url: nil}), do: ""
+  defp action_html(%{join_url: nil}, _l), do: ""
 
   # The button's fill sits on the cell, not the link, so it renders in
-  # clients that ignore padding on <a>. It is the only #ad4b07 in the email.
-  defp action_html(%{join_url: url}) do
+  # clients that ignore padding on <a>. It is the only use of the primary
+  # colour in the email.
+  defp action_html(%{join_url: url}, l) do
     """
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 0 0;">
-    <tr><td style="background-color:#{@primary};border-radius:9px;">
-    <a href="#{h(url)}" style="display:inline-block;padding:12px 22px;font-family:#{@font};font-size:16px;line-height:20px;font-weight:600;color:#{@on_primary};text-decoration:none;border-radius:9px;">Join meeting</a>
+    <tr><td class="im-button" style="background-color:#{l.primary};border-radius:9px;">
+    <a class="im-button-text" href="#{h(url)}" style="display:inline-block;padding:12px 22px;font-family:#{@font};font-size:16px;line-height:20px;font-weight:600;color:#{l.primary_content};text-decoration:none;border-radius:9px;">Join meeting</a>
     </td></tr>
     </table>
-    <p style="margin:12px 0 0 0;font-size:15px;line-height:22px;color:#{@ink};word-break:break-all;">or open: <a href="#{h(url)}" style="color:#{@ink};">#{h(url)}</a></p>\
+    <p class="im-ink" style="margin:12px 0 0 0;font-size:15px;line-height:22px;color:#{l.base_content};word-break:break-all;">or open: <a class="im-link" href="#{h(url)}" style="color:#{l.link};">#{h(url)}</a></p>\
     """
   end
 
+  # ── Branding ─────────────────────────────────────────────────────────────
+
+  @doc """
+  The install branding `build/4` paints with, from an
+  `Platform.Branding.InstallBranding` row: its `app_name`, its 192px icon
+  made absolute against `base_url` (the install host), and the light and
+  dark palettes `Platform.Branding.Palette.derive/2` yields for its colours.
+  Pure: the caller reads the row (`Platform.Branding.get/0`).
+  """
+  @spec brand(InstallBranding.t(), String.t() | nil) :: brand()
+  def brand(%InstallBranding{} = branding, base_url) do
+    colours = Branding.app_colors(branding)
+
+    %{
+      app_name: branding.app_name,
+      icon_url: absolute(base_url, Branding.icon_url(branding, :icon_192)),
+      light: tokens(Palette.derive(:light, colours.light)),
+      dark: tokens(Palette.derive(:dark, colours.dark))
+    }
+  end
+
+  # With no branding passed, the shipped palette and no name or icon.
+  defp default_brand do
+    defaults = Palette.suite_defaults()
+
+    %{
+      app_name: nil,
+      icon_url: nil,
+      light: tokens(Palette.derive(:light, defaults.light)),
+      dark: tokens(Palette.derive(:dark, defaults.dark))
+    }
+  end
+
+  defp tokens(derived) do
+    surface = derived["--color-base-100"]
+    content = derived["--color-base-content"]
+
+    %{
+      base_100: surface,
+      base_content: content,
+      edge: derived["--edge"],
+      primary: derived["--color-primary"],
+      primary_content: derived["--color-primary-content"],
+      # The fallback link is body text, underlined: the primary colour is
+      # reserved for the one button.
+      link: content,
+      # The secondary text tier: body text at 55% over the surface, the
+      # same mix app.css's --subtle declares, flattened to hex for email.
+      muted: mix(content, surface, 0.55)
+    }
+  end
+
+  defp mix(fg, bg, weight) do
+    [fr, fg_, fb] = rgb(fg)
+    [br, bg_, bb] = rgb(bg)
+
+    [
+      fr * weight + br * (1 - weight),
+      fg_ * weight + bg_ * (1 - weight),
+      fb * weight + bb * (1 - weight)
+    ]
+    |> Enum.map(&(&1 |> round() |> Integer.to_string(16) |> String.pad_leading(2, "0")))
+    |> Enum.join()
+    |> String.downcase()
+    |> then(&("#" <> &1))
+  end
+
+  defp rgb("#" <> <<r::binary-size(2), g::binary-size(2), b::binary-size(2)>>),
+    do: Enum.map([r, g, b], &String.to_integer(&1, 16))
+
+  defp h(nil), do: ""
   defp h(value), do: value |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
 end

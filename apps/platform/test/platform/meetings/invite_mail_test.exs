@@ -6,6 +6,8 @@ defmodule Platform.Meetings.InviteMailTest do
   """
   use ExUnit.Case, async: true
 
+  alias Platform.Branding.InstallBranding
+  alias Platform.Branding.Palette
   alias Platform.Meetings.CalendarFeed
   alias Platform.Meetings.InviteMail
   alias Platform.Meetings.Meeting
@@ -141,20 +143,32 @@ defmodule Platform.Meetings.InviteMailTest do
       %{built: InviteMail.build(:invitation, meeting(), @member, @ctx)}
     end
 
-    test "the primary orange appears exactly once: the button", %{built: built} do
-      assert count(String.downcase(built.html_body), "#ad4b07") == 1
-      assert built.html_body =~ ~r/background-color:#ad4b07;border-radius:9px/
-      assert built.html_body =~ "color:#fbfaf9"
+    test "with no brand passed, the shipped palette's primary appears exactly once: the button",
+         %{built: built} do
+      light = Palette.derive(:light, Palette.suite_defaults().light)
+      primary = light["--color-primary"]
+
+      assert count(String.downcase(built.html_body), primary) == 1
+      assert built.html_body =~ "background-color:#{primary};border-radius:9px"
+      assert built.html_body =~ "color:#{light["--color-primary-content"]}"
     end
 
-    test "uses the app.css light tokens and the Public Sans stack", %{built: built} do
-      assert built.html_body =~ "border:1px solid #d9d3c9"
-      assert built.html_body =~ "color:#635b53"
+    test "uses the palette's edge, the Public Sans stack and a 560px card", %{built: built} do
+      light = Palette.derive(:light, Palette.suite_defaults().light)
+      assert built.html_body =~ "border:1px solid #{light["--edge"]}"
       assert built.html_body =~ "max-width:560px"
       assert built.html_body =~ "font-family:'Public Sans', system-ui"
     end
 
-    test "no image, no emoji, no in-body response buttons", %{built: built} do
+    test "declares a dark scheme and a prefers-color-scheme: dark block", %{built: built} do
+      dark = Palette.derive(:dark, Palette.suite_defaults().dark)
+      assert built.html_body =~ ~s(<meta name="color-scheme" content="light dark">)
+      [_, style] = String.split(built.html_body, "@media (prefers-color-scheme: dark)", parts: 2)
+      assert style =~ "background-color: #{dark["--color-base-100"]} !important"
+      assert style =~ "background-color: #{dark["--color-primary"]} !important"
+    end
+
+    test "no image without a brand icon, no emoji, no in-body response buttons", %{built: built} do
       refute built.html_body =~ "<img"
       refute built.html_body =~ ~r/Accept|Decline|Maybe/
       assert built.html_body |> String.to_charlist() |> Enum.all?(&(&1 < 128))
@@ -199,6 +213,72 @@ defmodule Platform.Meetings.InviteMailTest do
       assert built.html_body =~ "&lt;script&gt;alert(1)&lt;/script&gt;"
       assert built.html_body =~ "&lt;b&gt;Host&lt;/b&gt; invited you"
       assert built.html_body =~ "Sent from A &amp; B on Burrow."
+    end
+  end
+
+  describe "install branding" do
+    # A second install, nothing like the shipped one: its own name, an
+    # uploaded icon (so a versioned path) and its own colours.
+    @other_install %InstallBranding{
+      app_name: "Northwind Labs",
+      source_storage_key: "branding/0123456789ab/source.png",
+      version: "0123456789ab",
+      light_action: "#1d4ed8",
+      light_surface: "#f8fafc",
+      dark_action: "#60a5fa",
+      dark_surface: "#0f172a"
+    }
+
+    # The shipped palette's own action and surface hexes, light and dark.
+    @shipped ~w(#ad4b07 #fbfaf9 #f47721 #191b20)
+
+    setup do
+      brand = InviteMail.brand(@other_install, "https://app.example.com")
+      ctx = Map.put(@ctx, :brand, brand)
+      %{built: InviteMail.build(:invitation, meeting(), @guest, ctx), brand: brand}
+    end
+
+    test "the header carries the install's name and its icon from the install host",
+         %{built: built} do
+      assert built.html_body =~ "Northwind Labs"
+
+      assert [[src]] =
+               Regex.scan(~r/<img src="([^"]+)"/, built.html_body, capture: :all_but_first)
+
+      assert src == "https://app.example.com/branding/0123456789ab/icon_192"
+    end
+
+    test "the install's palette paints the card, light inline and dark in the block",
+         %{built: built} do
+      light = Palette.derive(:light, %{action: "#1d4ed8", surface: "#f8fafc", accent: nil})
+      dark = Palette.derive(:dark, %{action: "#60a5fa", surface: "#0f172a", accent: nil})
+
+      [inline, style] =
+        String.split(built.html_body, "@media (prefers-color-scheme: dark)", parts: 2)
+
+      assert built.html_body =~ "background-color:#1d4ed8;border-radius:9px"
+      assert built.html_body =~ "background-color:#f8fafc"
+      assert built.html_body =~ "border:1px solid #{light["--edge"]}"
+      assert inline =~ "<title>"
+      assert style =~ "background-color: #0f172a !important"
+      assert style =~ "background-color: #60a5fa !important"
+      assert style =~ "border-color: #{dark["--edge"]} !important"
+    end
+
+    test "none of the shipped palette's hexes appear", %{built: built} do
+      html = String.downcase(built.html_body)
+
+      for hex <- @shipped do
+        refute html =~ hex, "shipped colour #{hex} leaked into another install's email"
+      end
+    end
+
+    test "brand/2 reads the row's name, icon and both palettes", %{brand: brand} do
+      assert brand.app_name == "Northwind Labs"
+      assert brand.light.primary == "#1d4ed8"
+      assert brand.light.base_100 == "#f8fafc"
+      assert brand.dark.primary == "#60a5fa"
+      assert brand.dark.base_100 == "#0f172a"
     end
   end
 
