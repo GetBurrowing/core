@@ -140,7 +140,8 @@ defmodule Platform.Meetings.InviteMailTest do
     test "no calendar link, no button; no base, no join line" do
       built = InviteMail.build(:invitation, meeting(), @member, Map.delete(@ctx, :calendar_url))
       refute built.html_body =~ "Add to calendar"
-      refute built.html_body =~ "im-button"
+      # The dark block always names the button class; no element carries it.
+      refute built.html_body =~ ~s(class="im-button")
       assert built.html_body =~ "Join the meeting"
 
       built = InviteMail.build(:invitation, meeting(), @member, Map.delete(@ctx, :app_url))

@@ -424,10 +424,7 @@ defmodule Platform.Meetings.InviteMail do
     <table role="presentation" class="im-page" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#{l.base_100};">
     <tr><td align="center" style="padding:24px 12px;">
     <table role="presentation" class="im-card" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:#{l.base_100};border:1px solid #{l.edge};border-radius:12px;">
-    <tr><td style="padding:24px 28px 0 28px;font-family:#{@font};">
-    #{header_html(brand)}
-    </td></tr>
-    <tr><td style="padding:20px 28px 24px 28px;font-family:#{@font};color:#{l.base_content};">
+    #{header_row(brand)}<tr><td style="padding:20px 28px 24px 28px;font-family:#{@font};color:#{l.base_content};">
     <h1 class="im-ink" style="margin:0 0 20px 0;font-size:22px;line-height:28px;font-weight:600;color:#{l.base_content};">#{h(facts.title)}</h1>
     #{changed_html(facts, l)}<p class="im-ink" style="margin:0;font-size:19px;line-height:26px;font-weight:600;color:#{l.base_content};">#{h(time_text(facts))}</p>
     #{zone_html(facts, l)}<p class="im-muted" style="margin:20px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(inviter_line(facts))}</p>
@@ -446,7 +443,13 @@ defmodule Platform.Meetings.InviteMail do
   # Install icon and name. The icon is referenced from the install host,
   # never inlined, and the name follows it as text so the header reads with
   # images off.
-  defp header_html(%{app_name: nil, icon_url: nil}), do: ""
+  # No name and no icon (no brand passed): no header row at all.
+  defp header_row(%{app_name: nil, icon_url: nil}), do: ""
+
+  defp header_row(brand) do
+    ~s(<tr><td style="padding:24px 28px 0 28px;font-family:#{@font};">\n) <>
+      header_html(brand) <> "\n</td></tr>\n"
+  end
 
   defp header_html(brand) do
     icon =
