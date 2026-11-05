@@ -385,6 +385,12 @@ config :platform, :peer_federation_resolver, %{}
 config :platform, :user_avatar_req_options, plug: {Req.Test, Platform.Accounts.UserAvatarCache}
 config :platform, :user_avatar_resolver, %{}
 
+# Link unfurl fetches (`Platform.Chat.LinkUnfurls.Fetcher`, task 01a1a944):
+# every request goes to the `Req.Test` stub of that name, and no host resolves
+# unless a test stubs it, so nothing reaches DNS or the network.
+config :platform, :link_unfurl_req_options, plug: {Req.Test, Platform.Chat.LinkUnfurls.Fetcher}
+config :platform, :link_unfurl_resolver, %{}
+
 # APNs never reaches Apple in tests (task 01a10882 stage 2): every
 # `Platform.Push.APNs` request goes to the `Req.Test` stub of that name.
 config :platform, :apns_req_options, plug: {Req.Test, Platform.Push.APNs}

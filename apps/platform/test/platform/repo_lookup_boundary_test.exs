@@ -1338,6 +1338,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # is guarded by `Platform.UUID.valid?/1` one call earlier.
     "platform/chat/canvas_access.ex" => 1,
     "platform/chat/message_versions.ex" => 2,
+    # 0 -> 1 for task 01a1a944 stage 2's `get_fresh/1`. Triaged by hand: the
+    # where clause pins `u.url_key == ^key`, a TEXT column, and `key` is
+    # `normalize/1`'s output (a string built by the function itself, nil
+    # answered before the query). No id is cast, so no Ecto.Query.CastError
+    # is reachable and no `Platform.UUID.valid?/1` guard applies.
+    "platform/chat/link_unfurls.ex" => 1,
     # 0 → 1 for task 01a00910 stage 2's `ensure_default_section/1`. Triaged by
     # hand: the call is `Repo.one(from s in Section, select: max(s.position))`
     # — an aggregate over the whole table with NO `where:` clause at all, so

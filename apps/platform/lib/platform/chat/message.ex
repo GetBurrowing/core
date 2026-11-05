@@ -113,6 +113,16 @@ defmodule Platform.Chat.Message do
   end
 
   @doc """
+  Sets `metadata["unfurl_hidden"] = true` (task 01a1a944 stage 3) and
+  touches nothing else: like `freeze_changeset/2` it changes only its own
+  field, and it MERGES into the loaded metadata map, so every other key
+  survives.
+  """
+  def unfurl_hidden_changeset(message) do
+    change(message, metadata: Map.put(message.metadata || %{}, "unfurl_hidden", true))
+  end
+
+  @doc """
   Narrow changeset for stamping freeze metadata on an existing message.
 
   Casts only `:frozen_at` / `:frozen_by_participant_id` and keeps the

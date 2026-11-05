@@ -118,7 +118,7 @@ defmodule PlatformWeb.Components.LinkSiteGlyphs do
   def slot_class(slot), do: Map.fetch!(@slot_classes, slot)
 
   attr(:preview, :map, required: true, doc: "a `Platform.Chat.LinkSites.describe/1` result")
-  attr(:size, :atom, default: :card, values: [:card, :chip])
+  attr(:size, :atom, default: :card, values: [:card, :chip, :mark])
 
   @doc "The site tile: a brand mark on its colour, or a monogram."
   def site_tile(%{preview: %{site: site}} = assigns) when is_map_key(@palette, site) do
@@ -177,10 +177,14 @@ defmodule PlatformWeb.Components.LinkSiteGlyphs do
 
   defp tile_box(:card), do: "size-10 rounded-field"
   defp tile_box(:chip), do: "size-[18px] rounded-full"
+  # The 16px mark on an unfurled card's site line (task 01a1a944 stage 4).
+  defp tile_box(:mark), do: "size-4 rounded-[4px]"
 
   defp glyph_box(:card), do: "size-[22px]"
   defp glyph_box(:chip), do: "size-3"
+  defp glyph_box(:mark), do: "size-3"
 
   defp letter_size(:card), do: "text-[16px] leading-none"
   defp letter_size(:chip), do: "text-[10px] leading-none"
+  defp letter_size(:mark), do: "text-[9px] leading-none"
 end

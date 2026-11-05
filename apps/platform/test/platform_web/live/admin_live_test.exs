@@ -32,6 +32,7 @@ defmodule PlatformWeb.AdminLiveTest do
     {"themes", "/admin/themes"},
     {"prototypes", "/admin/prototypes"},
     {"insights", "/admin/insights"},
+    {"link-unfurls", "/admin/link-unfurls"},
     {"external-logins", "/admin/external-logins"},
     {"recovery", "/admin/recovery"}
   ]

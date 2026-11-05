@@ -100,6 +100,8 @@ defmodule Platform.Chat.Messages.Edit do
       {:ok, {updated, version}} ->
         broadcast_edit(updated, previous_content, content, version, participant)
         emit_telemetry(updated)
+        # An edit that adds an outside link unfurls it (task 01a1a944 stage 3).
+        Platform.Chat.LinkUnfurls.unfurl_message(updated)
         {:ok, updated}
 
       {:error, changeset} ->

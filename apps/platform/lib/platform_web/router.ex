@@ -1111,6 +1111,10 @@ defmodule PlatformWeb.Router do
       # tab (dissemination), install-wide for the same reason as prototypes.
       # `Platform.Memory.Insights.Settings.update/2` re-checks root admin.
       live("/admin/insights", AdminInsightsLive, :index)
+      # Task 01a1a944 stage 4: whether outside links in chat get fetched
+      # previews, install-wide for the same reason as insights.
+      # `Platform.Chat.LinkUnfurls.Settings.update/2` re-checks root admin.
+      live("/admin/link-unfurls", AdminLinkUnfurlsLive, :index)
       # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
       # `Platform.Vault.Shared` re-checks the actor on every call, so this
       # live_session's gate is not load-bearing alone.

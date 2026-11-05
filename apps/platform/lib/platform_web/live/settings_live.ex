@@ -104,6 +104,11 @@ defmodule PlatformWeb.SettingsLive do
       view: PlatformWeb.ExternalRecoveryLive
     },
     %{label: "Insights", path: "/admin/insights", view: PlatformWeb.AdminInsightsLive},
+    %{
+      label: "Link previews",
+      path: "/admin/link-unfurls",
+      view: PlatformWeb.AdminLinkUnfurlsLive
+    },
     %{label: "Orgs", path: "/admin/orgs", view: PlatformWeb.AdminOrgsLive},
     %{label: "Pipeline", path: "/tasks/pipeline", view: PlatformWeb.PipelineLive},
     %{label: "Prompts", path: "/admin/prompts", view: PlatformWeb.AdminPromptsLive},
