@@ -228,8 +228,7 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
         # Positive control: the same class list is non-empty and carries the tint.
         assert classes != []
 
-        assert "border-[color-mix(in_oklab,var(--ag-#{unquote(slot)})_40%,var(--color-edge))]" in
-                 classes
+        assert "border-[color-mix(in_oklab,var(--ag-#{unquote(slot)})_40%,var(--color-edge))]" in classes
 
         assert Enum.filter(classes, &String.starts_with?(&1, "shadow-")) == []
         refute html =~ "shadow-"
