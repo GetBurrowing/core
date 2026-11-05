@@ -6048,6 +6048,176 @@ defmodule Platform.Meetings do
     where(query, [t], t.space_id in ^space_ids)
   end
 
+  # ── People reads (task 01a1aa47 stage 3) ───────────────────────────────────
+  #
+  # Participant-first accessors the HR responsibility consumes. None of them
+  # touch `digest_eligible_transcripts_query/1`: attendance and a subject's own
+  # spoken words are not the Historian digest, and the summary is never read.
+
+  @doc """
+  Participant rows whose `joined_at` falls in `[window_start, window_end)`,
+  joined to their room and (when the room's space backs a meeting) the
+  meeting. Internal scope by default, through the same `:scope` partition as
+  `list_transcripts_since/2`.
+
+  Returns `%{display_name, user_id, agent_id, meeting_id, meeting_name,
+  project_id, space_id, joined_at}` ordered by `joined_at`.
+  """
+  @spec list_participants_between(DateTime.t(), DateTime.t(), keyword()) :: [map()]
+  def list_participants_between(%DateTime{} = window_start, %DateTime{} = window_end, opts \\ []) do
+    scope = Keyword.get(opts, :scope, :internal)
+
+    from(p in Participant,
+      join: r in Room,
+      on: r.id == p.room_id,
+      left_join: m in Meeting,
+      on: m.chat_space_id == r.space_id,
+      where: p.joined_at >= ^window_start and p.joined_at < ^window_end,
+      order_by: [asc: p.joined_at],
+      select: %{
+        display_name: p.display_name,
+        user_id: p.user_id,
+        agent_id: p.agent_id,
+        meeting_id: m.id,
+        meeting_name: m.name,
+        project_id: m.project_id,
+        space_id: r.space_id,
+        joined_at: p.joined_at
+      }
+    )
+    |> apply_room_digest_scope(scope)
+    |> Repo.all()
+  end
+
+  defp apply_room_digest_scope(query, :internal) do
+    exclude = Chat.external_space_ids()
+    where(query, [p, r], r.space_id not in ^exclude)
+  end
+
+  defp apply_room_digest_scope(query, {:external_spaces, space_ids}) do
+    where(query, [p, r], r.space_id in ^space_ids)
+  end
+
+  @doc """
+  The participants of the room a transcript was recorded in, in the same
+  shape as `list_participants_between/3`. The transcript's `room_id` is the
+  LiveKit room name; a transcript whose room is gone resolves through the
+  room on its `space_id`. `[]` when neither resolves.
+  """
+  @spec participants_for_transcript(String.t() | nil) :: [map()]
+  def participants_for_transcript(transcript_id) when is_binary(transcript_id) do
+    case get_transcript(transcript_id) do
+      nil ->
+        []
+
+      transcript ->
+        from(p in Participant,
+          join: r in Room,
+          on: r.id == p.room_id,
+          left_join: m in Meeting,
+          on: m.chat_space_id == r.space_id,
+          where: ^transcript_room_filter(transcript),
+          order_by: [asc: p.joined_at],
+          select: %{
+            display_name: p.display_name,
+            user_id: p.user_id,
+            agent_id: p.agent_id,
+            meeting_id: m.id,
+            meeting_name: m.name,
+            project_id: m.project_id,
+            space_id: r.space_id,
+            joined_at: p.joined_at
+          }
+        )
+        |> Repo.all()
+    end
+  end
+
+  def participants_for_transcript(_), do: []
+
+  @doc """
+  Ids of transcripts whose `completed_at` falls in `[window_start,
+  window_end)`, under the same `:scope` partition as `list_transcripts_since/2`.
+  Ids only — no summary, no segments. Pair with `segments_spoken_by/2`.
+  """
+  @spec completed_transcript_ids_between(DateTime.t(), DateTime.t(), keyword()) :: [String.t()]
+  def completed_transcript_ids_between(
+        %DateTime{} = window_start,
+        %DateTime{} = window_end,
+        opts \\ []
+      ) do
+    scope = Keyword.get(opts, :scope, :internal)
+
+    from(t in Transcript,
+      where:
+        t.status == "complete" and not is_nil(t.completed_at) and
+          t.completed_at >= ^window_start and t.completed_at < ^window_end,
+      order_by: [asc: t.completed_at],
+      select: t.id
+    )
+    |> apply_digest_scope(scope)
+    |> Repo.all()
+  end
+
+  @doc """
+  ONLY the segments of `transcript_id` spoken by one of `identities`: a
+  segment is kept when its `participant_identity` or `speaker_name`, after
+  `Platform.People.Identity.normalize_key/1`, equals one of the normalised
+  identities. Never the summary, never another speaker's segment.
+
+  Returns `%{text, spoken_at, segment_id}` in transcript order.
+  """
+  @spec segments_spoken_by(String.t() | nil, [String.t()]) :: [map()]
+  def segments_spoken_by(transcript_id, identities)
+      when is_binary(transcript_id) and is_list(identities) do
+    keys =
+      identities
+      |> Enum.map(&Platform.People.Identity.normalize_key/1)
+      |> Enum.reject(&(&1 == ""))
+      |> MapSet.new()
+
+    case {MapSet.size(keys), get_transcript(transcript_id)} do
+      {0, _} ->
+        []
+
+      {_, nil} ->
+        []
+
+      {_, %Transcript{segments: segments}} ->
+        (segments || [])
+        |> Enum.filter(&segment_spoken_by?(&1, keys))
+        |> Enum.map(fn segment ->
+          %{
+            text: segment_field(segment, "text"),
+            spoken_at: segment_field(segment, "spoken_at"),
+            segment_id: segment_field(segment, "id")
+          }
+        end)
+    end
+  end
+
+  def segments_spoken_by(_, _), do: []
+
+  defp segment_spoken_by?(segment, keys) do
+    [segment_field(segment, "participant_identity"), segment_field(segment, "speaker_name")]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&Platform.People.Identity.normalize_key/1)
+    |> Enum.any?(&MapSet.member?(keys, &1))
+  end
+
+  defp segment_field(segment, key) when is_map(segment) do
+    Map.get(segment, key) || Map.get(segment, String.to_existing_atom(key))
+  end
+
+  # The room name is the primary link; a transcript whose room row is gone
+  # falls back to the room on its space. Built as a dynamic so a nil
+  # `space_id` is never pinned into a comparison.
+  defp transcript_room_filter(%Transcript{room_id: room_name, space_id: nil}),
+    do: dynamic([p, r], r.livekit_room_name == ^room_name)
+
+  defp transcript_room_filter(%Transcript{room_id: room_name, space_id: space_id}),
+    do: dynamic([p, r], r.livekit_room_name == ^room_name or r.space_id == ^space_id)
+
   @doc """
   Reattach to the room's existing transcript, or create one if the room has
   no reusable row.
