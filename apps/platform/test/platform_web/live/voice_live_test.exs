@@ -183,7 +183,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       assert Enum.all?(ids, &String.starts_with?(&1, "turns-"))
     end
 
-    test "the mic area is idle: line, 14-bar meter, enabled mic, info chip", %{conn: conn} do
+    test "the mic area is idle: line, 14-bar meter, enabled mic, no info chip", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/voice")
       d = doc(view)
 
@@ -196,13 +196,11 @@ defmodule PlatformWeb.VoiceLiveTest do
 
       refute has_element?(view, "#mic[disabled]")
       assert attr(d, "#mic", "aria-pressed") == ["false"]
-      assert text(d, "#pipeline-info") == "uses meeting transcription · not a meeting"
+      # The "uses meeting transcription · not a meeting" chip was removed at
+      # the sponsor's request; nothing in the mic area may bring it back.
+      refute has_element?(view, "#pipeline-info")
+      refute render(view) =~ "not a meeting"
       refute has_element?(view, "#voice-toast")
-
-      view |> element("#pipeline-info") |> render_click()
-
-      assert view |> doc() |> text("#voice-toast") ==
-               "Same LiveKit + transcription as Meet, private 1:1 — no meeting created"
     end
 
     test "no phone surface carries a hover class; popover rows hover only at lg", %{
