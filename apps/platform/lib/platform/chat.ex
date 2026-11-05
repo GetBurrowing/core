@@ -1319,44 +1319,239 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Create a group conversation with multiple participants.
+  Start a group conversation with multiple participants, or reopen the one
+  that already exists for the same people.
 
-  `participant_specs` is a list of `%{type: "user"|"agent", id: uuid}`.
-  If only 1 other participant, redirects to find_or_create_dm.
+  `participant_specs` is a list of `%{type: "user"|"agent", id: id}` (atom or
+  string keys). User ids must be canonical UUIDs; agent ids may be a UUID or a
+  slug and are keyed on the resolved `agent.id`.
+
+  The member set is `{initiator} ∪ specs`, deduped and order-insensitive. When
+  a live (unarchived), unnamed `kind: "group"` space already exists whose
+  current user + agent participant rows equal that set exactly, it is returned
+  as-is: nothing is inserted and no participant is added. Several matches (old
+  duplicates) resolve to the one with the latest message, then the latest
+  `inserted_at`, then the highest id. Named groups, archived groups, promoted
+  groups (now `kind: "channel"`) and DMs never match.
+
+  Lookup and insert run in one transaction whose first statement is
+  `pg_advisory_xact_lock(hashtextextended("chat:group_member_set:" <> key, 0))`,
+  `key` being the sorted `"type:id"` list joined by `","`, so two concurrent
+  starts for the same set serialize and the second one finds the first's
+  space.
+
+  If exactly one other member remains after dedupe this delegates to
+  `find_or_create_dm/4`. A spec with an unknown type or a malformed id, or a
+  set with no other member, is `{:error, :invalid_participant}`, returned
+  before any query. The external-user allowlist runs before the lookup, so an
+  external user cannot reopen a group they could not have created.
   """
   @spec create_group_conversation(binary(), [map()], keyword()) ::
-          {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
+          {:ok, Space.t()}
+          | {:error, :dm_not_allowed | :invalid_participant | :agent_not_found | term()}
   def create_group_conversation(user_id, participant_specs, _opts \\ []) do
-    # If only one other participant, create a DM instead. That branch
-    # delegates to `find_or_create_dm/4`, which inherits the allowlist
-    # guard; the multi-participant branch needs its own check below.
-    cond do
-      length(participant_specs) == 1 ->
-        [spec] = participant_specs
-        type = Map.get(spec, :type) || Map.get(spec, "type")
-        id = Map.get(spec, :id) || Map.get(spec, "id")
-        find_or_create_dm(user_id, type, id)
+    with {:ok, initiator_id} <- normalize_group_initiator(user_id),
+         {:ok, specs} <- normalize_group_specs(participant_specs),
+         :ok <- group_specs_permitted(initiator_id, specs),
+         {:ok, members} <- resolve_group_members(initiator_id, specs) do
+      case members do
+        [] ->
+          {:error, :invalid_participant}
 
-      not all_participants_dm_permitted?(user_id, participant_specs) ->
-        {:error, :dm_not_allowed}
+        # Only one other participant: a DM, through the DM seam (which
+        # carries its own allowlist guard).
+        [{type, id, _agent}] ->
+          find_or_create_dm(initiator_id, type, id)
 
-      true ->
-        do_create_group_conversation(user_id, participant_specs)
+        _ ->
+          find_or_create_group_conversation(initiator_id, members)
+      end
     end
   end
+
+  defp normalize_group_initiator(user_id) do
+    case Platform.UUID.cast(user_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> {:error, :invalid_participant}
+    end
+  end
+
+  # Shape-only validation: no query runs here, so a malformed id from
+  # LiveView params can never reach an Ecto `in` clause and raise CastError.
+  defp normalize_group_specs(specs) when is_list(specs) do
+    Enum.reduce_while(specs, {:ok, []}, fn spec, {:ok, acc} ->
+      case normalize_group_spec(spec) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        :error -> {:halt, {:error, :invalid_participant}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      error -> error
+    end
+  end
+
+  defp normalize_group_specs(_specs), do: {:error, :invalid_participant}
+
+  defp normalize_group_spec(spec) when is_map(spec) do
+    type = Map.get(spec, :type) || Map.get(spec, "type")
+    id = Map.get(spec, :id) || Map.get(spec, "id")
+
+    case {type, id} do
+      {"user", id} ->
+        case Platform.UUID.cast(id) do
+          {:ok, uuid} -> {:ok, {"user", uuid}}
+          :error -> :error
+        end
+
+      # An agent may be named by slug; `resolve_agent/1` turns it into the
+      # agent row later. Anything that is neither a UUID nor a plausible
+      # slug is refused here.
+      {"agent", id} when is_binary(id) and id != "" ->
+        case Platform.UUID.cast(id) do
+          {:ok, uuid} -> {:ok, {"agent", uuid}}
+          :error -> {:ok, {"agent", id}}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_group_spec(_spec), do: :error
 
   # True unless the initiator is external and some participant spec is not
   # a permitted DM target. Internal initiators always pass (the predicate
   # short-circuits to `true` for them).
-  defp all_participants_dm_permitted?(user_id, participant_specs) do
-    Enum.all?(participant_specs, fn spec ->
-      type = Map.get(spec, :type) || Map.get(spec, "type")
-      id = Map.get(spec, :id) || Map.get(spec, "id")
-      external_dm_permitted?(user_id, type, id)
+  defp group_specs_permitted(initiator_id, specs) do
+    if Enum.all?(specs, fn {type, id} -> external_dm_permitted?(initiator_id, type, id) end) do
+      :ok
+    else
+      {:error, :dm_not_allowed}
+    end
+  end
+
+  # Resolve agents, dedupe on {type, id} and drop the initiator. Returns the
+  # OTHER members, in first-seen order, as `{type, id, agent_or_nil}`.
+  defp resolve_group_members(initiator_id, specs) do
+    Enum.reduce_while(specs, {:ok, []}, fn
+      {"agent", id}, {:ok, acc} ->
+        case resolve_agent(id) do
+          %Agent{} = agent -> {:cont, {:ok, [{"agent", agent.id, agent} | acc]}}
+          nil -> {:halt, {:error, :agent_not_found}}
+        end
+
+      {"user", id}, {:ok, acc} ->
+        {:cont, {:ok, [{"user", id, nil} | acc]}}
+    end)
+    |> case do
+      {:ok, acc} ->
+        members =
+          acc
+          |> Enum.reverse()
+          |> Enum.uniq_by(fn {type, id, _} -> {type, id} end)
+          |> Enum.reject(fn {type, id, _} -> type == "user" and id == initiator_id end)
+
+        {:ok, members}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  The advisory-lock key for a group member set.
+
+  `member_set` is a list of `{participant_type, participant_id}` pairs that
+  includes the initiator, e.g. `[{"user", id_a}, {"user", id_b}, {"agent",
+  agent_id}]`. The key is `"chat:group_member_set:"` followed by the
+  deduped, sorted `"type:id"` strings joined by `","`, so it is
+  order-insensitive.
+
+  Both `create_group_conversation/3` and the operator merge
+  `Platform.Chat.DuplicateGroups` take
+  `pg_advisory_xact_lock(hashtextextended(key, 0))` on this key, so a group
+  start and a merge of the same set serialize. It is also the grouping key
+  the merge uses to find duplicate sets. Build the key only through this
+  function: a second copy of the formula would let the two lock different
+  keys for the same people.
+  """
+  @spec group_member_set_lock_key([{String.t(), binary()}]) :: String.t()
+  def group_member_set_lock_key(member_set) do
+    key =
+      member_set
+      |> Enum.map(fn {type, id} -> "#{type}:#{id}" end)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.join(",")
+
+    "chat:group_member_set:" <> key
+  end
+
+  defp find_or_create_group_conversation(initiator_id, members) do
+    member_set = [{"user", initiator_id} | Enum.map(members, fn {t, id, _} -> {t, id} end)]
+    lock_key = group_member_set_lock_key(member_set)
+
+    Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock_key])
+
+      case existing_group_for_member_set(member_set) do
+        %Space{} = space ->
+          space
+
+        nil ->
+          case do_create_group_conversation(initiator_id, members) do
+            {:ok, space} -> space
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
     end)
   end
 
-  defp do_create_group_conversation(user_id, participant_specs) do
+  # Live, unnamed groups whose current user + agent participant rows are
+  # exactly `member_set`. Rows of other participant types are ignored.
+  # `chat_participants_unique` (space_id, participant_type, participant_id)
+  # makes "n rows, n of them in the set" equivalent to set equality.
+  defp existing_group_for_member_set(member_set) do
+    n = length(member_set)
+    user_ids = for {"user", id} <- member_set, do: id
+    agent_ids = for {"agent", id} <- member_set, do: id
+
+    matching_ids =
+      from(s in Space,
+        join: p in Participant,
+        on: p.space_id == s.id and p.participant_type in ["user", "agent"],
+        where:
+          s.kind == "group" and s.is_direct == false and is_nil(s.archived_at) and
+            (is_nil(s.name) or fragment("btrim(?)", s.name) == ""),
+        group_by: s.id,
+        having:
+          count(p.id) == ^n and
+            filter(
+              count(p.id),
+              (p.participant_type == "user" and p.participant_id in ^user_ids) or
+                (p.participant_type == "agent" and p.participant_id in ^agent_ids)
+            ) == ^n,
+        select: s.id
+      )
+
+    from(s in Space,
+      where: s.id in subquery(matching_ids),
+      left_join: m in Message,
+      on: m.space_id == s.id,
+      group_by: s.id,
+      order_by: [
+        desc_nulls_last: max(m.inserted_at),
+        desc: s.inserted_at,
+        desc: s.id
+      ],
+      limit: 1,
+      select: s
+    )
+    |> Repo.one()
+  end
+
+  defp do_create_group_conversation(user_id, members) do
     multi =
       Multi.new()
       |> Multi.insert(
@@ -1377,18 +1572,12 @@ defmodule Platform.Chat do
       end)
 
     multi =
-      participant_specs
+      members
       |> Enum.with_index()
-      |> Enum.reduce(multi, fn {spec, idx}, multi ->
-        type = Map.get(spec, :type) || Map.get(spec, "type")
-        id = Map.get(spec, :id) || Map.get(spec, "id")
-
+      |> Enum.reduce(multi, fn {{type, id, agent}, idx}, multi ->
         Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
           if type == "agent" do
-            case resolve_agent(id) do
-              %Agent{} = agent -> add_agent_participant(space.id, agent)
-              nil -> {:error, :agent_not_found}
-            end
+            add_agent_participant(space.id, agent)
           else
             add_participant(space.id, %{
               participant_type: "user",
