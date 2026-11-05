@@ -275,6 +275,34 @@ defmodule Platform.Mail.Deliverer do
     |> Kernel.in([Swoosh.Adapters.SMTP, Platform.Mail.SmtpAdapter])
   end
 
-  defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
+  defp format_error(reason), do: describe_error(reason)
+
+  @doc """
+  The text recorded on a failed delivery for an adapter error `reason`.
+
+  A server that closes the connection before the message is accepted is
+  spelled out instead of shown only as a raw term. gen_smtp reports a
+  rejected login this way: after Gmail answers `535 5.7.8 Username and
+  Password not accepted` to the first AUTH mechanism it hangs up, the client's
+  next mechanism finds the socket closed, and the 535 never reaches us. So a
+  closed connection on a correctly paired port and security is, in practice,
+  a bad username or app password. The raw term stays at the end for whoever
+  debugs it.
+  """
+  @spec describe_error(term()) :: String.t()
+  def describe_error(reason) when is_binary(reason), do: reason
+
+  def describe_error({:retries_exceeded, {:network_failure, host, {:error, :closed}}} = reason) do
+    "#{host_text(host)} closed the connection before accepting the message. " <>
+      "This usually means the username or password was rejected: check the " <>
+      "password (a Gmail app password is 16 letters with no spaces) and that " <>
+      "port and security match (465 with TLS, or 587 with STARTTLS). " <>
+      "(#{inspect(reason)})"
+  end
+
+  def describe_error(reason), do: inspect(reason)
+
+  defp host_text(host) when is_binary(host), do: host
+  defp host_text(host) when is_list(host), do: List.to_string(host)
+  defp host_text(host), do: inspect(host)
 end
