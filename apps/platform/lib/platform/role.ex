@@ -432,6 +432,13 @@ defmodule Platform.Role do
     },
     %{
       kind: :http,
+      file: "lib/platform/chat/link_unfurls/fetcher.ex",
+      class: :follows_caller,
+      note:
+        "SSRF-guarded GET of an outside link's page or fixed oEmbed endpoint; caller is LinkUnfurls.ensure/2's supervised fetch (task 01a1a944 stage 2)"
+    },
+    %{
+      kind: :http,
       file: "lib/platform/agents/providers/anthropic.ex",
       class: :follows_caller,
       note: "model call; native agent turns run under prod's AttentionRouter dispatch"
