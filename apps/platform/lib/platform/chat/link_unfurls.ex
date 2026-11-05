@@ -4,8 +4,21 @@ defmodule Platform.Chat.LinkUnfurls do
   server-side, stored per normalised URL in `link_unfurls`
   (`Platform.Chat.LinkUnfurl`), read back by URL key.
 
-  Nothing in chat calls this yet; stage 3 wires `ensure/2` into message
-  posts and `get_many/1` into `Platform.Chat.LinkCards`.
+  ## Wiring (stage 3)
+
+  `unfurl_message/1` is the one call chat makes: from
+  `Platform.Chat.publish_message_posted/2` (every insert path goes through
+  it) and after an edit commits (`Platform.Chat.Messages.Edit`). It never
+  blocks or fails the post: it only spawns, and the spawned work reads
+  `Platform.Chat.LinkUnfurls.Settings` (off: nothing is ensured, no row is
+  created) and calls `ensure/2` for each outside link. The links are the
+  message's `:link` targets from `Platform.Chat.LinkCards.card_targets/1`,
+  so the set of unfurled URLs is exactly the set of link cards: never a
+  same-install canvas, prototype or attachment, never an image or video
+  media URL. When a fetch this message started finishes with an `ok`
+  preview, the space topic gets `{:link_unfurls_ready, msg}`, a NEW event, so a subscriber of
+  `{:message_updated, _}` never mistakes a preview for an edit.
+  `Platform.Chat.LinkCards.annotate/2` reads stored rows with `get_many/1`.
 
   ## Fetch
 
@@ -34,8 +47,9 @@ defmodule Platform.Chat.LinkUnfurls do
 
   import Ecto.Query
 
-  alias Platform.Chat.LinkUnfurl
-  alias Platform.Chat.LinkUnfurls.{Fetcher, OEmbed, Parser}
+  alias Platform.Chat.{LinkCards, LinkUnfurl}
+  alias Platform.Chat.LinkUnfurls.{Fetcher, OEmbed, Parser, Settings}
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
   @ok_ttl_s 7 * 24 * 3600
@@ -91,6 +105,54 @@ defmodule Platform.Chat.LinkUnfurls do
       end)
 
     if kept == [], do: nil, else: Enum.join(kept, "&")
+  end
+
+  @doc """
+  Unfurl a posted or edited message's outside links. Returns `:ok` at once;
+  see "Wiring" above. A `log_only` or deleted message, or one with no
+  outside link, spawns nothing.
+  """
+  @spec unfurl_message(map()) :: :ok
+  def unfurl_message(%{} = msg) do
+    urls = link_urls(msg)
+
+    if urls != [] and not Map.get(msg, :log_only, false) and is_nil(Map.get(msg, :deleted_at)) do
+      Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+        try do
+          if Settings.enabled?() do
+            # Only a preview that will render changes what viewers see.
+            ready = fn
+              %LinkUnfurl{status: "ok"} ->
+                ChatPubSub.broadcast(msg.space_id, {:link_unfurls_ready, msg})
+
+              _row ->
+                :ok
+            end
+
+            Enum.each(urls, &ensure(&1, ready))
+          end
+        rescue
+          # A post that outlives its test's sandbox owner; nothing to report.
+          DBConnection.OwnershipError -> :ok
+        end
+      end)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @doc "The outside-link URLs of `msg`: its `:link` card targets, in order, unique."
+  @spec link_urls(map()) :: [String.t()]
+  def link_urls(msg) do
+    msg
+    |> LinkCards.card_targets()
+    |> Enum.flat_map(fn
+      %{kind: :link, url: url} -> [url]
+      _ -> []
+    end)
+    |> Enum.uniq_by(&normalize/1)
   end
 
   @doc "The fresh row for `url` (any status), or nil."

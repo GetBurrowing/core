@@ -14,7 +14,9 @@ defmodule Platform.Chat.LinkCards do
 
   Anything refused OR missing is a `:locked` card carrying only its type:
   no title, space, version or thumbnail (rule 4 of the direction canvas).
-  Nothing here fetches from the network.
+  Nothing here fetches from the network: `annotate/2` and `resolve/2` READ
+  stored link previews (`Platform.Chat.LinkUnfurls.get_many/1`), and the
+  fetching lives in `Platform.Chat.LinkUnfurls`.
 
   ## Outside links (link previews stage 1, mockup canvas 01a16ed5)
 
@@ -24,6 +26,13 @@ defmodule Platform.Chat.LinkCards do
   not a video page (the renderer swaps the anchor for a one-line chip, option
   3) and `:card` otherwise. A chip keeps its index in the card list, so the
   viewer resolves it like any card.
+
+  Link unfurls (task 01a1a944 stage 3): a `:link` card whose stored preview
+  is `ok` and fresh carries it as `:unfurl` (a plain map of the row's
+  preview fields). When the message's `metadata["unfurl_hidden"]` is true
+  (`Platform.Chat.hide_link_unfurls/2`), every `:link` card is a `:chip`
+  with no `:unfurl` and no bare-line drop: the URL stays in the text, as an
+  inline chip.
 
   ## Burrow cards: the preview seam
 
@@ -39,14 +48,15 @@ defmodule Platform.Chat.LinkCards do
   them into the attachment player.
 
   `annotate/2` resolves a whole page of messages at once: one canvas
-  prototype lookup, one prototype query and one space-name query per page,
-  with each distinct canvas and prototype checked once.
+  prototype lookup, one prototype query, one space-name query and one
+  link-preview query per page, with each distinct canvas and prototype
+  checked once.
   """
 
   import Ecto.Query
 
   alias Platform.Chat
-  alias Platform.Chat.{CanvasAccess, CanvasPreview, LinkSites, LinkTargets, Space}
+  alias Platform.Chat.{CanvasAccess, CanvasPreview, LinkSites, LinkTargets, LinkUnfurls, Space}
   alias Platform.Prototypes
   alias Platform.Prototypes.Prototype
   alias Platform.Repo
@@ -65,7 +75,8 @@ defmodule Platform.Chat.LinkCards do
     lookup = build_lookup(all, viewer_user_id)
 
     Enum.map(targets_by_msg, fn {msg, targets} ->
-      Map.put(msg, :link_cards, Enum.map(targets, &card_for(&1, lookup)))
+      cards = Enum.map(targets, &card_for(&1, lookup))
+      Map.put(msg, :link_cards, if(unfurl_hidden?(msg), do: hide_unfurls(cards), else: cards))
     end)
   end
 
@@ -80,7 +91,7 @@ defmodule Platform.Chat.LinkCards do
       lookup = build_lookup(targets, viewer_user_id)
       Enum.map(targets, &card_for(&1, lookup))
     else
-      Enum.map(targets, &card_for(&1, %{canvases: %{}, prototypes: %{}}))
+      Enum.map(targets, &card_for(&1, %{canvases: %{}, prototypes: %{}, unfurls: %{}}))
     end
   end
 
@@ -96,7 +107,13 @@ defmodule Platform.Chat.LinkCards do
 
   # ── internals ────────────────────────────────────────────────────────
 
-  defp card_targets(msg) do
+  @doc """
+  The card targets of a message (canvas, prototype, image, video and
+  outside `:link`), in order, as `Platform.Chat.LinkTargets` classifies its
+  content. `Platform.Chat.LinkUnfurls` unfurls exactly the `:link` ones.
+  """
+  @spec card_targets(map()) :: [LinkTargets.target()]
+  def card_targets(msg) do
     case Map.get(msg, :content) do
       content when is_binary(content) and content != "" ->
         if Map.get(msg, :content_type, "text") == "canvas",
@@ -109,6 +126,56 @@ defmodule Platform.Chat.LinkCards do
   end
 
   defp card_kind?(%{kind: kind}), do: kind in [:canvas, :prototype, :image, :video, :link]
+
+  defp unfurl_hidden?(msg) do
+    case Map.get(msg, :metadata) do
+      %{"unfurl_hidden" => true} -> true
+      _ -> false
+    end
+  end
+
+  # Hidden by the author: the link stays in the text as an inline chip.
+  defp hide_unfurls(cards) do
+    Enum.map(cards, fn
+      %{kind: :link} = card ->
+        card |> Map.delete(:unfurl) |> Map.merge(%{display: :chip, bare_line?: false})
+
+      card ->
+        card
+    end)
+  end
+
+  # One query for the page's outside links; `ok` rows only.
+  defp unfurls(targets) do
+    case for(
+           %{kind: :link, url: url} <- targets,
+           key = LinkUnfurls.normalize(url),
+           is_binary(key),
+           uniq: true,
+           do: key
+         ) do
+      [] ->
+        %{}
+
+      keys ->
+        for {key, %{status: "ok"} = row} <- LinkUnfurls.get_many(keys), into: %{} do
+          {key,
+           Map.take(row, [
+             :url,
+             :title,
+             :description,
+             :image_url,
+             :image_width,
+             :image_height,
+             :site_name,
+             :author,
+             :provider,
+             :media_kind,
+             :duration_seconds
+           ])}
+        end
+    end
+  end
 
   defp build_lookup(targets, user_id) do
     user = %{id: user_id}
@@ -154,6 +221,7 @@ defmodule Platform.Chat.LinkCards do
       canvases: canvases,
       canvas_protos: canvas_protos,
       prototypes: prototypes,
+      unfurls: unfurls(targets),
       user_id: user_id
     }
   end
@@ -217,7 +285,7 @@ defmodule Platform.Chat.LinkCards do
     end
   end
 
-  defp card_for(%{kind: :link, url: url} = t, _lookup) do
+  defp card_for(%{kind: :link, url: url} = t, lookup) do
     uri = URI.parse(url)
     host = String.downcase(uri.host || "")
 
@@ -239,6 +307,7 @@ defmodule Platform.Chat.LinkCards do
       preview: preview,
       display: if(t.bare_line? or preview.video?, do: :card, else: :chip)
     }
+    |> put_unfurl(Map.get(Map.get(lookup, :unfurls, %{}), LinkUnfurls.normalize(url)))
   end
 
   defp card_for(%{kind: :image, url: url} = t, _lookup),
@@ -246,6 +315,9 @@ defmodule Platform.Chat.LinkCards do
 
   defp card_for(%{kind: :video, url: url} = t, _lookup),
     do: %{kind: :video, url: url, bare_line?: t.bare_line?, filename: filename(url)}
+
+  defp put_unfurl(card, nil), do: card
+  defp put_unfurl(card, unfurl), do: Map.put(card, :unfurl, unfurl)
 
   defp prototype_card(t, %Prototype{} = proto, version) do
     open_url =

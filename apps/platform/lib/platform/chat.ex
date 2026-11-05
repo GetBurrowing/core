@@ -2704,6 +2704,29 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Hide the link previews of a message (task 01a1a944 stage 3): its outside
+  links render as inline chips for every viewer. AUTHOR ONLY:
+  `{:error, :not_author}` unless `actor` is the participant who posted it.
+  This server-side check is the authority; the UI hiding the control is
+  cosmetic. Sets `metadata["unfurl_hidden"]` through
+  `Message.unfurl_hidden_changeset/1`, which MERGES into the metadata map,
+  then broadcasts `{:link_unfurls_ready, msg}` so every open view swaps the
+  card for the chip.
+  """
+  @spec hide_link_unfurls(binary(), %{id: binary()}) ::
+          {:ok, Message.t()} | {:error, :not_found | :not_author | Ecto.Changeset.t()}
+  def hide_link_unfurls(message_id, %{id: actor_id}) do
+    with %Message{} = msg <- get_message(message_id) || {:error, :not_found},
+         true <- (is_binary(actor_id) and msg.participant_id == actor_id) || {:error, :not_author},
+         {:ok, updated} <- msg |> Message.unfurl_hidden_changeset() |> Repo.update() do
+      ChatPubSub.broadcast(updated.space_id, {:link_unfurls_ready, updated})
+      {:ok, updated}
+    end
+  end
+
+  def hide_link_unfurls(_message_id, _actor), do: {:error, :not_author}
+
+  @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 
   The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the message
@@ -3781,6 +3804,8 @@ defmodule Platform.Chat do
         )
 
         ChatPubSub.broadcast(msg.space_id, {:message_updated, msg})
+        # An edit that adds an outside link unfurls it (task 01a1a944 stage 3).
+        Platform.Chat.LinkUnfurls.unfurl_message(msg)
 
       _ ->
         :ok
@@ -8238,6 +8263,9 @@ defmodule Platform.Chat do
       pid when is_pid(pid) -> ChatPubSub.broadcast_from(msg.space_id, pid, {:new_message, msg})
       _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
     end
+
+    # Link unfurls (task 01a1a944 stage 3): one call, which only spawns.
+    Platform.Chat.LinkUnfurls.unfurl_message(msg)
   end
 
   @doc """
