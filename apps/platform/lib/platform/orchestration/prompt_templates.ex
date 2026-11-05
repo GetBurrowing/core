@@ -1421,6 +1421,8 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Do NOT write no-op acknowledgement entries — no "backlog drained", "no new entries", or "wiki current" one-liners against today's journal. Only genuine curation work justifies a journal write; if you performed none this pass, RETURN SILENTLY. The historian cursor advances via `Historian.mark_run_started/1` in the dispatch pipeline regardless of whether you write anything.
 
+        People pages under `org/page/people/` are owned by the HR responsibility; do not create or edit them from this digest.
+
         {{skills_reference}}\
         """
       },

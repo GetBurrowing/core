@@ -198,7 +198,16 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   #
   # Re-pinned by the pre-public scrub: one moduledoc line renamed a person
   # to a neutral persona. No code moved.
-  @wiki_ex_sha256_2026_09_08 "b046477a8a90b9a1e3cce63a2bb3fd6a73582ce358d79c08439614b3e68e3c40"
+  #
+  # Re-pinned 2026-11-05 (task 01a1aa47-837b stage 2, HR two-tier storage,
+  # authorized by the stage's specification): `maybe_scope_by/2` now runs the
+  # generic `Platform.Org.Wiki.Readers.restrict/2` BEFORE the RBAC
+  # `scope_by/3`, and `readable_or_nil/2` also checks `Readers.readable?/2`,
+  # so a page whose frontmatter carries `readers:` is absent for a user the
+  # key does not admit. Without `:access_scope` every query is byte-identical
+  # to before; a page without `readers:` is unchanged for every scope. One
+  # alias added; no write path moved.
+  @wiki_ex_sha256_2026_09_08 "0dd985e4f2be8e6ab55c6b9198b5d81362d4ed00bbc694f1142ad5c9d1e68204"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"

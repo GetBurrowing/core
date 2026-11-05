@@ -3155,6 +3155,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
 
     test "seed_defaults inserts historian.* rows when missing" do
+      # The test DB's historian rows come from migrations, and seed_defaults
+      # never overwrites an existing slug, so make the rows MISSING first
+      # (sandboxed; rolled back) — otherwise this asserts a migration-era row
+      # against the current descriptor and fails on any seed-only change
+      # (task 01a1aa47-837b stage 2 added one sentence with no migration).
+      Platform.Repo.delete_all(
+        from(t in Platform.Orchestration.PromptTemplate, where: t.slug in ^@historian_slugs)
+      )
+
       :ok = PromptTemplates.seed_defaults()
 
       for slug <- @historian_slugs do
