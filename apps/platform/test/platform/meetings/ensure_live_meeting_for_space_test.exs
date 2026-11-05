@@ -108,7 +108,11 @@ defmodule Platform.Meetings.EnsureLiveMeetingForSpaceTest do
       assert meeting.scheduled_start_at == nil
       assert meeting.scheduled_end_at == nil
       assert %DateTime{} = meeting.started_at
-      assert meeting.livekit_room_name == Meetings.room_name_for_space(space.id)
+      # The column convention, NOT the join room (`invite_room_parity`):
+      # globally unique per meeting (`meeting-<id>`), while joiner tokens
+      # mint into the space room `room_name_for_space/1` returns.
+      assert is_binary(meeting.livekit_room_name) and meeting.livekit_room_name != ""
+      assert meeting.livekit_room_name == "meeting-" <> meeting.id
       assert is_binary(meeting.slug) and meeting.slug != ""
       assert is_binary(meeting.name) and meeting.name != ""
     end

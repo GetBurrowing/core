@@ -3784,10 +3784,17 @@ defmodule Platform.Meetings do
   `status: "live"`, `scheduled_start_at`/`scheduled_end_at` nil (an
   ad-hoc meeting is started but never scheduled — the supported state
   `create_meeting/1`'s docs describe, byte-for-byte), `started_at` set to
-  now (the call is happening), `livekit_room_name`
-  `"space-<chat_space_id>"` (the room the join actually mints into —
-  `room_name_for_space/1`), and a `name`/`slug` naming the channel's
-  space.
+  now (the call is happening), `livekit_room_name` `"meeting-<id>"` — the
+  globally-unique-per-row name the column always carries (see the
+  `invite_room_parity` contract: the column is minted by
+  `create_meeting/1` and read by nothing that joins, while joiner tokens
+  are minted for `room_name_for_space/1`'s `"space-<id>"`, which only
+  `ensure_room/1` touches) — and a `name`/`slug` naming the channel's
+  space. Using `"meeting-<id>"` rather than `"space-<id>"` here is what
+  keeps a second quick-meet after an ended one mintable: the column is
+  globally unique, so two rows for one channel must not share it, and
+  `"space-<id>"` is exactly the row for the room, not the room for the
+  row.
 
   Returns `{:ok, meeting}` with the live meeting — the existing one when a
   call for the space is already live, the freshly minted one otherwise —
@@ -3838,7 +3845,13 @@ defmodule Platform.Meetings do
               slug: "live-#{meeting_id}",
               name: space.name || "Quick meet",
               status: "live",
-              livekit_room_name: room_name_for_space(space.id),
+              # The column convention, not the join room: globally unique
+              # per meeting (`invite_room_parity` — nothing joins on this
+              # column; joiner tokens mint into `room_name_for_space/1`'s
+              # `"space-<id>"`). Uniqueness across successive quick-meets
+              # of one channel is what lets row two mint after row one
+              # ended instead of tripping `unique_constraint(:livekit_room_name)`.
+              livekit_room_name: "meeting-#{meeting_id}",
               started_at: now,
               scheduled_start_at: nil,
               scheduled_end_at: nil
@@ -3852,7 +3865,7 @@ defmodule Platform.Meetings do
       {:ok, %Meeting{} = meeting} ->
         {:ok, meeting}
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         Logger.warning(
           "[Meetings] ensure_live_meeting_for_space mint failed for " <>
             "space=#{space.id}: #{inspect(changeset.errors)}"
@@ -3860,7 +3873,7 @@ defmodule Platform.Meetings do
 
         {:error, changeset}
 
-      {:error, reason} when is_atom(reason) ->
+      {:error, reason} ->
         Logger.warning(
           "[Meetings] ensure_live_meeting_for_space mint aborted for " <>
             "space=#{space.id}: #{inspect(reason)}"
@@ -3872,10 +3885,13 @@ defmodule Platform.Meetings do
 
   # The insert itself, extracted so the transaction wrapper stays readable.
   # `meetings` has no column unique per chat space (concurrency is the
-  # advisory lock's job), so the only expected conflict is on the PK/other
-  # unique constraints — re-read on conflict rather than bubbling the
-  # changeset up.
-  defp insert_live_meeting(%Space{} = space, meeting_id, attrs) do
+  # advisory lock's job), so the only expected insert error is a real
+  # constraint violation — bubbling the changeset up for the caller to see
+  # is the honest outcome. A re-read on error would query inside an already
+  # aborted transaction and raise `Postgrex.Error`, and the advisory lock
+  # already makes a concurrent-loser re-read impossible (the lock
+  # serialises mints per space, and the re-check runs under it).
+  defp insert_live_meeting(%Space{} = _space, meeting_id, attrs) do
     case %Meeting{}
          |> Meeting.changeset(attrs)
          |> Ecto.Changeset.put_change(:id, meeting_id)
@@ -3884,13 +3900,7 @@ defmodule Platform.Meetings do
         meeting
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        # The loser of a concurrent mint (or a UUID collision) should
-        # return the winner's live row, not an error the join then has
-        # to special-case.
-        case get_live_meeting_for_space(space.id) do
-          %Meeting{} = live -> live
-          nil -> Repo.rollback(changeset)
-        end
+        Repo.rollback(changeset)
     end
   end
 
