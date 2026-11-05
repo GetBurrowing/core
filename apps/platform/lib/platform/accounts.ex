@@ -574,6 +574,37 @@ defmodule Platform.Accounts do
 
   def insight_delivery_opted_out?(_user_id), do: false
 
+  @email_notifications_key "email_notifications"
+
+  @doc """
+  The `users.preferences` key a member's meeting-invitation email setting is
+  stored under (task 01a1a933 stage 3).
+  """
+  @spec email_notifications_key() :: String.t()
+  def email_notifications_key, do: @email_notifications_key
+
+  @doc """
+  True unless the user has turned meeting-invitation emails off. Default ON:
+  only a literal `false` opts out; an unknown user or a missing key is
+  `true`. Accepts a loaded `%User{}` (no query) or a user id.
+  """
+  @spec email_notifications?(User.t() | binary() | nil) :: boolean()
+  def email_notifications?(%User{preferences: prefs}),
+    do: Map.get(prefs || %{}, @email_notifications_key) != false
+
+  def email_notifications?(user_id) when is_binary(user_id) do
+    Map.get(get_user_preferences(user_id), @email_notifications_key) != false
+  end
+
+  def email_notifications?(_user), do: true
+
+  @doc "Turn meeting-invitation emails on (`true`) or off (`false`) for `user_id`."
+  @spec put_email_notifications(binary(), boolean()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def put_email_notifications(user_id, enabled) when is_boolean(enabled) do
+    update_user_preference(user_id, @email_notifications_key, enabled)
+  end
+
   # ── Tasks project and epic (task 01a161fd stage 2) ─────────────────────
   #
   # Stored as `preferences["tasks_project"] = %{"project_id" => uuid | nil,

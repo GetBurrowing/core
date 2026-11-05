@@ -409,7 +409,7 @@ end
 # send passes them as deliver/2 overrides built from the resolved mail account
 # and its Vault secret. :test keeps the recording adapter from test.exs.
 if config_env() != :test do
-  config :platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP
+  config :platform, Platform.Mail.Mailer, adapter: Platform.Mail.SmtpAdapter
 end
 
 # ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────

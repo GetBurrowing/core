@@ -2274,7 +2274,7 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def detail_invite_rows(%Meeting{} = meeting, _ring_states) do
-    invites = Repo.preload(Meetings.list_invites(meeting.id), :user)
+    invites = Repo.preload(Meetings.list_invites(meeting.id), [:user, :mail_delivery])
 
     external_ids =
       invites
@@ -2300,9 +2300,20 @@ defmodule PlatformWeb.MeetingLive do
       avatar_url: nil,
       removable: false,
       copy_url: invite_row_copy_url(meeting, invite),
-      expiry: invite_row_expiry(meeting, invite)
+      expiry: invite_row_expiry(meeting, invite),
+      # The invite email's receipt (task 01a1a933 stage 4): the row warns
+      # when it did not go, and a member row carries the absolute meeting
+      # URL the warning's Copy link shares (a guest row has `copy_url`).
+      email_failed: Meetings.invite_mail_failed?(invite),
+      share_url: invite_row_share_url(meeting, invite)
     }
   end
+
+  defp invite_row_share_url(%Meeting{slug: slug}, %Invite{user_id: user_id})
+       when is_binary(user_id) and is_binary(slug),
+       do: PlatformWeb.Endpoint.url() <> "/meetings/" <> slug
+
+  defp invite_row_share_url(_meeting, _invite), do: nil
 
   # A guest row's expiry state for `InviteControl` (task 01a19ea6 stage 2):
   # when the link lapses, whether it already has, and whether the meeting
@@ -5466,13 +5477,15 @@ defmodule PlatformWeb.MeetingLive do
   # cancelled meeting: `CalendarWindow.placeable?/1` excludes the status,
   # but only if the assigns are refreshed to notice the change. Without it
   # the grid would keep showing a meeting that is off until a navigation.
+  # `:meeting_rescheduled` (task 01a1a933 stage 3) moves it on the grid.
   def handle_info({tag, %Meetings.Meeting{}}, socket)
       when tag in [
              :meeting_created,
              :meeting_started,
              :meeting_resumed,
              :meeting_ended,
-             :meeting_cancelled
+             :meeting_cancelled,
+             :meeting_rescheduled
            ] do
     if Map.has_key?(socket.assigns, :meetings) do
       # Scoped with the same viewer as the initial render. A peer's

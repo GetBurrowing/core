@@ -1599,6 +1599,87 @@ defmodule Platform.Meetings do
 
   def cancel_meeting_for_user(_meeting_id, _user), do: {:error, :not_found}
 
+  @doc """
+  Move a scheduled meeting to a new time (task 01a1a933 stage 3).
+
+  `attrs` carries `scheduled_start_at` and `scheduled_end_at`. In order:
+
+    1. `{:error, :forbidden}` unless `can_cancel_meeting?/2`: the same
+       people who may call a meeting off may move it.
+    2. `{:error, :not_reschedulable}` unless the meeting is `scheduled`.
+    3. The pair is validated by `Meeting.changeset/2` (both or neither, end
+       after start); an invalid pair is `{:error, changeset}`.
+    4. A pair equal to the current one is `{:ok, meeting}` with no write.
+    5. ONE UPDATE writes the pair and increments `ical_sequence`, guarded on
+       `status == "scheduled"`, so the SEQUENCE an update email carries is
+       exactly the row's and two concurrent moves both advance it.
+    6. `{:meeting_rescheduled, meeting}` is broadcast on the project's
+       meetings topic. `Platform.Meetings.MeetingNotifier` emails the
+       invitees the new time (`InviteMailer.send_updates/1`).
+
+  There is no reschedule control in the UI yet.
+  """
+  @spec reschedule_meeting(Meeting.t(), map(), map() | nil) ::
+          {:ok, Meeting.t()}
+          | {:error, :forbidden | :not_reschedulable | Ecto.Changeset.t()}
+  def reschedule_meeting(%Meeting{} = meeting, attrs, user) when is_map(attrs) do
+    pair = %{
+      scheduled_start_at:
+        Map.get(attrs, :scheduled_start_at) || Map.get(attrs, "scheduled_start_at"),
+      scheduled_end_at: Map.get(attrs, :scheduled_end_at) || Map.get(attrs, "scheduled_end_at")
+    }
+
+    changeset = Meeting.changeset(meeting, pair)
+
+    cond do
+      not can_cancel_meeting?(meeting, user) ->
+        {:error, :forbidden}
+
+      meeting.status != "scheduled" ->
+        {:error, :not_reschedulable}
+
+      not changeset.valid? ->
+        {:error, changeset}
+
+      not Map.has_key?(changeset.changes, :scheduled_start_at) and
+          not Map.has_key?(changeset.changes, :scheduled_end_at) ->
+        {:ok, meeting}
+
+      true ->
+        do_reschedule(meeting, Ecto.Changeset.apply_changes(changeset))
+    end
+  end
+
+  defp do_reschedule(%Meeting{} = meeting, %Meeting{} = moved) do
+    now = DateTime.utc_now()
+
+    from(m in Meeting,
+      where: m.id == ^meeting.id and m.status == "scheduled",
+      select: m
+    )
+    |> Repo.update_all(
+      set: [
+        scheduled_start_at: moved.scheduled_start_at,
+        scheduled_end_at: moved.scheduled_end_at,
+        updated_at: now
+      ],
+      inc: [ical_sequence: 1]
+    )
+    |> case do
+      {1, [updated]} ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_rescheduled, updated}
+        )
+
+        {:ok, updated}
+
+      {0, _} ->
+        {:error, :not_reschedulable}
+    end
+  end
+
   defp load_meeting_for_viewer(meeting_id, user) do
     if Platform.UUID.valid?(meeting_id) do
       case user |> viewer_listing_query() |> where([m], m.id == ^meeting_id) |> Repo.one() do
@@ -2145,6 +2226,13 @@ defmodule Platform.Meetings do
   defp maybe_put_org_id(attrs, nil), do: attrs
   defp maybe_put_org_id(attrs, org_id) when is_binary(org_id), do: Map.put(attrs, :org_id, org_id)
 
+  @doc """
+  The org `meeting` belongs to (through its project), or nil. Used by
+  `Platform.Meetings.InviteMailer` to resolve the org's meeting sender.
+  """
+  @spec meeting_org_id(Meeting.t()) :: binary() | nil
+  def meeting_org_id(%Meeting{} = meeting), do: resolve_meeting_org_id(meeting)
+
   defp resolve_meeting_org_id(%Meeting{project_id: nil}), do: nil
 
   defp resolve_meeting_org_id(%Meeting{project_id: project_id}) when is_binary(project_id) do
@@ -2225,6 +2313,12 @@ defmodule Platform.Meetings do
   `Platform.Meetings.Ringing.ring_for_live_invite/3`, which rings them only if
   the meeting is live per the database and they are not the inviter. Without
   it (draft invites from the create sheet, the external path), nothing rings.
+  It is also the inviter the invite email names (task 01a1a933 stage 3;
+  without it, the meeting's creator).
+
+  `notify_email: false` sends no invite email (the booking path, which
+  sends its own confirmation). Default true; see
+  `Platform.Meetings.InviteMailer`.
 
   A `user_id` that is not a well-formed UUID answers `{:error, changeset}` with
   the error on `:user_id`. It is checked with `Platform.UUID.valid?/1` before
@@ -2247,7 +2341,7 @@ defmodule Platform.Meetings do
     if Platform.UUID.valid?(user_id) do
       case upsert_user_invite(meeting, user_id, attrs) do
         {:ok, %Invite{} = invite} ->
-          deliver_invite(invite, meeting)
+          deliver_invite(invite, meeting, mail_opts(opts))
           maybe_ring_live_invite(meeting, user_id, Keyword.get(opts, :inviter_user_id))
           {:ok, invite}
 
@@ -2417,7 +2511,10 @@ defmodule Platform.Meetings do
           invite_id: invite.id
         )
 
-      deliver_invite(invite, meeting)
+      deliver_invite(invite, meeting,
+        notify_email: Map.get(attrs, :notify_email, true),
+        inviter_user_id: Map.get(attrs, :host_user_id)
+      )
 
       # `token` is returned to the caller (booking links read the map) and
       # written nowhere. The URL handed out is the short one; it re-mints a
@@ -3104,7 +3201,7 @@ defmodule Platform.Meetings do
       end
 
     with {:ok, invite} <- result do
-      deliver_invite(invite, meeting)
+      deliver_invite(invite, meeting, mail_opts(opts))
       {:ok, invite}
     end
   end
@@ -3137,8 +3234,11 @@ defmodule Platform.Meetings do
   # return shape, and a raise inside it never turns a committed invite row
   # into an error for the caller. Same posture as
   # `MeetingNotifier.emit_inbox_row/4`.
-  defp deliver_invite(%Invite{} = invite, %Meeting{} = meeting) do
-    InviteDelivery.deliver(invite, meeting)
+  #
+  # `opts` are the invite email's (task 01a1a933 stage 3): `notify_email`,
+  # `inviter_user_id`, `inviter_time_zone`. See `InviteDelivery.deliver/3`.
+  defp deliver_invite(%Invite{} = invite, %Meeting{} = meeting, opts) do
+    InviteDelivery.deliver(invite, meeting, opts)
   rescue
     error ->
       Logger.warning(
@@ -3148,6 +3248,31 @@ defmodule Platform.Meetings do
 
       {:error, :delivery_raised}
   end
+
+  # The invite-email options `invite_user/3` and the external path accept.
+  defp mail_opts(opts) do
+    [
+      notify_email: Keyword.get(opts, :notify_email, true),
+      inviter_user_id: Keyword.get(opts, :inviter_user_id),
+      inviter_time_zone: Keyword.get(opts, :inviter_time_zone)
+    ]
+  end
+
+  @doc """
+  Did the invite email for `invite` fail (task 01a1a933 stage 3)? True when
+  no email was queued for a reason the host should act on (`mail_error`),
+  or when the preloaded `:mail_delivery` was later `failed` or `refused`.
+  Mirrors `Platform.Calendar.BookingLinks.receipts/1`. An opted-out member,
+  a name-only guest or an unloaded delivery with no error is not a failure.
+  """
+  @spec invite_mail_failed?(Invite.t()) :: boolean()
+  def invite_mail_failed?(%Invite{mail_error: error}) when is_binary(error) and error != "",
+    do: true
+
+  def invite_mail_failed?(%Invite{mail_delivery: %Platform.Mail.Delivery{status: status}}),
+    do: status in ["failed", "refused"]
+
+  def invite_mail_failed?(%Invite{}), do: false
 
   @doc """
   List a meeting's declared invitees, oldest first.

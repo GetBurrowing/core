@@ -10,6 +10,13 @@ defmodule Platform.Mail.Draft do
 
   `status` moves `draft -> dispatched` only when a send is ACCEPTED by the
   relay; a refused or failed send leaves the draft as a draft.
+
+  ## Rich parts (task 01a1a933 stage 1)
+
+  Optional `html_body` (an HTML alternative to `body`), `reply_to`, and a
+  calendar invite: `calendar_method` (`REQUEST` | `CANCEL`) with its
+  `calendar_ics` text. The two calendar fields are set together or not at
+  all. `Platform.Mail.Deliverer` renders them.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -20,6 +27,7 @@ defmodule Platform.Mail.Draft do
 
   @statuses ~w(draft dispatched discarded)
   @creator_types ~w(user agent system)
+  @calendar_methods ~w(REQUEST CANCEL)
 
   @type t :: %__MODULE__{}
 
@@ -31,6 +39,10 @@ defmodule Platform.Mail.Draft do
     field(:to_user_ids, {:array, :binary_id}, default: [])
     field(:subject, :string)
     field(:body, :string)
+    field(:html_body, :string)
+    field(:reply_to, :string)
+    field(:calendar_method, :string)
+    field(:calendar_ics, :string)
     field(:created_by_type, :string)
     field(:created_by_id, :binary_id)
     field(:on_behalf_of_user_id, :binary_id)
@@ -62,6 +74,10 @@ defmodule Platform.Mail.Draft do
       :to_user_ids,
       :subject,
       :body,
+      :html_body,
+      :reply_to,
+      :calendar_method,
+      :calendar_ics,
       :created_by_type,
       :created_by_id,
       :on_behalf_of_user_id,
@@ -73,8 +89,29 @@ defmodule Platform.Mail.Draft do
     |> validate_required([:org_id, :created_by_type, :status])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:created_by_type, @creator_types)
+    |> validate_inclusion(:calendar_method, @calendar_methods)
+    |> validate_calendar_pair()
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:account_id)
     |> check_constraint(:status, name: :mail_drafts_status_check)
+    |> check_constraint(:calendar_method, name: :mail_drafts_calendar_method_check)
   end
+
+  @doc "Calendar methods a draft may carry (`calendar_method`)."
+  @spec calendar_methods() :: [String.t()]
+  def calendar_methods, do: @calendar_methods
+
+  # `calendar_ics` is present exactly when `calendar_method` is: a method
+  # with no calendar would render an empty invite, and a calendar with no
+  # method would carry no Accept/Decline semantics.
+  defp validate_calendar_pair(changeset) do
+    case {present?(get_field(changeset, :calendar_method)),
+          present?(get_field(changeset, :calendar_ics))} do
+      {true, false} -> add_error(changeset, :calendar_ics, "is required with calendar_method")
+      {false, true} -> add_error(changeset, :calendar_method, "is required with calendar_ics")
+      _ -> changeset
+    end
+  end
+
+  defp present?(value), do: is_binary(value) and value != ""
 end

@@ -147,6 +147,11 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:mask_error, nil)
      |> assign(:level_error, nil)
      |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
+     |> assign(:email_error, nil)
+     |> assign(
+       :email_notifications?,
+       Accounts.email_notifications?(socket.assigns[:current_user_record])
+     )
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> open_from_params(params)}
@@ -243,6 +248,32 @@ defmodule PlatformWeb.SettingsLive do
     else
       # Revert: the switch keeps showing what is stored.
       {:noreply, assign(socket, :mask_error, "Couldn't save. Your setting hasn't changed.")}
+    end
+  end
+
+  # Meeting invitation emails (task 01a1a933 stage 4), default on. Same
+  # read-back as the mask toggle: the switch shows what is STORED, so a
+  # failed write reverts it and says so.
+  def handle_event("set_email_notifications", params, socket) do
+    enabled? = params["enabled"] in ["true", true]
+
+    case socket.assigns[:current_user_record] do
+      %Accounts.User{id: user_id} ->
+        case Accounts.put_email_notifications(user_id, enabled?) do
+          {:ok, user} ->
+            {:noreply,
+             socket
+             |> assign(:current_user_record, user)
+             |> assign(:email_notifications?, Accounts.email_notifications?(user))
+             |> assign(:email_error, nil)}
+
+          {:error, _} ->
+            {:noreply,
+             assign(socket, :email_error, "Couldn't save. Your setting hasn't changed.")}
+        end
+
+      _ ->
+        {:noreply, assign(socket, :email_error, "Couldn't save. Your setting hasn't changed.")}
     end
   end
 
@@ -381,6 +412,32 @@ defmodule PlatformWeb.SettingsLive do
           class="px-[18px] pb-2 text-xs text-subtle"
         >
           {@mask_error}
+        </p>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={to_string(@email_notifications?)}
+          phx-click="set_email_notifications"
+          phx-value-enabled={to_string(!@email_notifications?)}
+          data-role="settings-email-notifications"
+          class={row_class()}
+        >
+          <span class="min-w-0">
+            <span class="block">Email me meeting invitations</span>
+            <span class="block text-xs text-subtle">
+              Invitations, cancellations and time changes, with a calendar invite attached.
+            </span>
+          </span>
+          <span class={track_class(@email_notifications?)} aria-hidden="true">
+            <span class={knob_class(@email_notifications?)}></span>
+          </span>
+        </button>
+        <p
+          :if={@email_error}
+          data-role="settings-email-notifications-error"
+          class="px-[18px] pb-2 text-xs text-subtle"
+        >
+          {@email_error}
         </p>
 
         <.link
@@ -642,8 +699,8 @@ defmodule PlatformWeb.SettingsLive do
   # line; task 01a1557a-e538 stage 5's painted guard measured error on
   # base-100 under 4.5:1 in five variants (burrow light 3.74), so by the
   # stage's named fallback it is base-content: its words carry the meaning.
-  attr :state, :atom, required: true
-  attr :user_agent, :string, default: nil
+  attr(:state, :atom, required: true)
+  attr(:user_agent, :string, default: nil)
 
   defp push_row(assigns) do
     assigns =

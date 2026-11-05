@@ -51,13 +51,18 @@ defmodule Platform.Meetings.CalendarFeed do
 
   ## SEQUENCE is always emitted
 
-  `SEQUENCE:0` on the live path, `SEQUENCE:1` on the cancelled one. RFC
-  5545 §3.8.7.4 defaults an absent SEQUENCE to 0, so omitting it from
-  *both* states would give a cancellation the same effective sequence as
-  the original — and Google and Outlook discard an update whose sequence
-  does not exceed the stored one. That is precisely the "cancel the
-  client ignores" failure. Both values are derived from the row; there
-  is no counter column and none should be added.
+  `SEQUENCE:<ical_sequence>` on the live path and
+  `SEQUENCE:<ical_sequence + 1>` on the cancelled one. RFC 5545 §3.8.7.4
+  defaults an absent SEQUENCE to 0, so omitting it from *both* states
+  would give a cancellation the same effective sequence as the original —
+  and Google and Outlook discard an update whose sequence does not exceed
+  the stored one. That is precisely the "cancel the client ignores"
+  failure.
+
+  `meetings.ical_sequence` is the counter (task 01a1a933 stage 2): it
+  defaults to 0, so a never-rescheduled meeting still renders 0 live and 1
+  cancelled, and a reschedule bumps it so the emailed iTIP update
+  (`Platform.Meetings.InviteIcs`) and this feed advance together.
 
   ## Cancellation — a different document, never a different event
 
@@ -66,7 +71,7 @@ defmodule Platform.Meetings.CalendarFeed do
 
     * calendar-level `METHOD:CANCEL` for `METHOD:PUBLISH`
     * `STATUS:CANCELLED` for `STATUS:CONFIRMED` inside the `VEVENT`
-    * `SEQUENCE:1` for `SEQUENCE:0`
+    * `SEQUENCE:<ical_sequence + 1>` for `SEQUENCE:<ical_sequence>`
 
   All three, because clients disagree about which one they honour: a
   document that says only `METHOD:CANCEL` is ignored by a client keying
@@ -160,9 +165,9 @@ defmodule Platform.Meetings.CalendarFeed do
     # UID is deliberately NOT in this tuple, and must never join it.
     {method, status, sequence} =
       if cancelled?(meeting) do
-        {"CANCEL", "CANCELLED", "1"}
+        {"CANCEL", "CANCELLED", Integer.to_string(sequence(meeting) + 1)}
       else
-        {"PUBLISH", "CONFIRMED", "0"}
+        {"PUBLISH", "CONFIRMED", Integer.to_string(sequence(meeting))}
       end
 
     document =
@@ -196,6 +201,14 @@ defmodule Platform.Meetings.CalendarFeed do
   # row with a stamp and a non-cancelled status render a cancel.
   defp cancelled?(%Meeting{status: "cancelled"}), do: true
   defp cancelled?(%Meeting{}), do: false
+
+  @doc """
+  The SEQUENCE of `meeting`'s current schedule: `ical_sequence`, or 0 when
+  the field is unset (a struct built without the column).
+  """
+  @spec sequence(%Meeting{}) :: non_neg_integer()
+  def sequence(%Meeting{ical_sequence: n}) when is_integer(n) and n >= 0, do: n
+  def sequence(%Meeting{}), do: 0
 
   defp utc_stamp(value), do: Platform.ICal.utc_stamp(value)
   defp escape(value), do: Platform.ICal.escape(value)

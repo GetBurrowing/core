@@ -94,6 +94,12 @@ defmodule Platform.Meetings.Meeting do
     # `intent_mute_changeset/2`, so a stray attrs map cannot silently
     # create a meeting the agents are already ignoring.
     field(:intent_muted_at, :utc_datetime_usec)
+    # iCalendar SEQUENCE of the current schedule (task 01a1a933 stage 2).
+    # Read by `Platform.Meetings.CalendarFeed` and
+    # `Platform.Meetings.InviteIcs`; a cancellation renders it plus one.
+    # Deliberately NOT in `@cast_fields`: only the reschedule path bumps
+    # it, so a stray attrs map can never move it backwards.
+    field(:ical_sequence, :integer, default: 0)
 
     timestamps(type: :utc_datetime_usec)
   end
