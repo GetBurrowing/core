@@ -4,8 +4,10 @@ defmodule Platform.Mail.DelivererTest do
   the rich parts (task 01a1a933 stage 1): an HTML alternative, Reply-To, and
   a calendar invite.
 
-  The captured `Swoosh.Email` is rendered to wire MIME with the same helper
-  `Swoosh.Adapters.SMTP` uses, then parsed back with the `mail` package, so
+  The captured `Swoosh.Email` is rendered to wire MIME with
+  `Platform.Mail.Mime.render/2`, the function the production adapter
+  (`Platform.Mail.SmtpAdapter`) sends, then parsed back with the `mail`
+  package, so
   the assertions are about the message a relay would receive, not about the
   struct that described it.
 
@@ -94,10 +96,10 @@ defmodule Platform.Mail.DelivererTest do
     {delivery, email}
   end
 
-  # The bytes `Swoosh.Adapters.SMTP` would hand to gen_smtp, parsed back.
+  # The bytes `Platform.Mail.SmtpAdapter` hands to gen_smtp, parsed back.
   defp wire(email) do
     email
-    |> Swoosh.Adapters.SMTP.Helpers.body([])
+    |> Platform.Mail.Mime.render([])
     |> Mail.parse()
   end
 
@@ -165,15 +167,22 @@ defmodule Platform.Mail.DelivererTest do
       assert {"invite.ics", @ics} in Mail.get_attachments(message, :attachment)
     end
 
-    test "the MIME tree is mixed[alternative[plain, html], calendar, ics]", %{message: message} do
+    test "the MIME tree is mixed[alternative[plain, html, calendar], ics]", %{message: message} do
       assert tree(message) ==
                {"multipart/mixed",
                 [
-                  {"multipart/alternative", ["text/plain", "text/html"]},
-                  "text/calendar",
+                  {"multipart/alternative", ["text/plain", "text/html", "text/calendar"]},
                   "application/ics"
                 ]}
     end
+  end
+
+  test "with no html body the calendar still joins the plain part in an alternative", ctx do
+    {_delivery, email} = send!(ctx, %{calendar_method: "REQUEST", calendar_ics: @ics})
+
+    assert email |> wire() |> tree() ==
+             {"multipart/mixed",
+              [{"multipart/alternative", ["text/plain", "text/calendar"]}, "application/ics"]}
   end
 
   test "a CANCEL calendar names method=CANCEL", ctx do

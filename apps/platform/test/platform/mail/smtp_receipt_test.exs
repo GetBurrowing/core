@@ -1,6 +1,7 @@
 defmodule Platform.Mail.SmtpReceiptTest do
   @moduledoc """
-  "Send test" over the REAL `Swoosh.Adapters.SMTP` / gen_smtp stack to a
+  "Send test" over the REAL production adapter (`Platform.Mail.SmtpAdapter`,
+  Swoosh's SMTP adapter with `Platform.Mail.Mime` rendering) / gen_smtp stack to a
   loopback socket that answers with GreenMail 2.1.14's recorded SMTP bytes
   (task 01a0cf21 stage 7). Runs in the default suite and in CI.
 
@@ -14,6 +15,8 @@ defmodule Platform.Mail.SmtpReceiptTest do
   """
   use Platform.DataCase, async: false
 
+  alias Elixir.Mail, as: MimeMail
+  alias Elixir.Mail.Message, as: MimeMessage
   alias Platform.Accounts.User
   alias Platform.Mail
   alias Platform.Tenancy
@@ -94,7 +97,7 @@ defmodule Platform.Mail.SmtpReceiptTest do
     previous_enabled = Application.fetch_env(:platform, :mail_enabled)
     previous_mailer = Application.get_env(:platform, Platform.Mail.Mailer)
     Application.put_env(:platform, :mail_enabled, true)
-    Application.put_env(:platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP)
+    Application.put_env(:platform, Platform.Mail.Mailer, adapter: Platform.Mail.SmtpAdapter)
 
     on_exit(fn ->
       Application.put_env(:platform, Platform.Mail.Mailer, previous_mailer)
@@ -155,5 +158,68 @@ defmodule Platform.Mail.SmtpReceiptTest do
     # The real client authenticated with the vault credential before sending.
     assert_received {:smtp_line, :command, "AUTH" <> _}
     assert_received {:smtp_line, :data, ".\r\n"}
+  end
+
+  # Task 01a1a933 stage 2: the bytes the relay receives for a calendar
+  # invite, read off the socket and parsed with the `mail` package.
+  test "a calendar invite reaches the relay with text/calendar inside the alternative", ctx do
+    ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n"
+
+    draft =
+      %Mail.Draft{}
+      |> Mail.Draft.changeset(%{
+        org_id: ctx.account.org_id,
+        account_id: ctx.account.id,
+        sender_key: "ops",
+        to_addresses: [ctx.admin.email],
+        subject: "Invitation",
+        body: "Plain.",
+        html_body: "<p>Html.</p>",
+        reply_to: "organizer@example.test",
+        calendar_method: "REQUEST",
+        calendar_ics: ics,
+        created_by_type: "user",
+        created_by_id: ctx.admin.id
+      })
+      |> Repo.insert!()
+
+    assert {:ok, %{status: "accepted"}} = Mail.Dispatch.dispatch(draft.id, {:user, ctx.admin.id})
+
+    message = data_lines([]) |> MimeMail.parse()
+
+    assert tree(message) ==
+             {"multipart/mixed",
+              [
+                {"multipart/alternative", ["text/plain", "text/html", "text/calendar"]},
+                "application/ics"
+              ]}
+
+    %MimeMessage{parts: [alternative, attachment]} = message
+    calendar = List.last(alternative.parts)
+    assert ["text/calendar" | params] = MimeMessage.get_header(calendar, :content_type)
+    assert {"method", "REQUEST"} in params
+    assert calendar.body == ics
+    assert attachment.body == ics
+    assert {"invite.ics", ^ics} = hd(MimeMail.get_attachments(message, :attachment))
+    assert MimeMessage.get_header(message, :reply_to) == "organizer@example.test"
+  end
+
+  defp data_lines(acc) do
+    receive do
+      {:smtp_line, :data, ".\r\n"} -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+      {:smtp_line, :data, "." <> line} -> data_lines([line | acc])
+      {:smtp_line, :data, line} -> data_lines([line | acc])
+    after
+      10_000 -> flunk("no end of DATA")
+    end
+  end
+
+  defp tree(%MimeMessage{multipart: true, parts: parts} = message),
+    do: {content_type(message), Enum.map(parts, &tree/1)}
+
+  defp tree(%MimeMessage{} = part), do: content_type(part)
+
+  defp content_type(message) do
+    message |> MimeMessage.get_header(:content_type) |> List.wrap() |> hd() |> String.downcase()
   end
 end

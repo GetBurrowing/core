@@ -18,7 +18,7 @@ if System.get_env("GREENMAIL_HOST") do
   defmodule Platform.Mail.Imap.GreenMailLiveTest do
     @moduledoc """
     The real `Platform.Mail.Imap.WireClient` through `Platform.Mail.Inbound.poll/2`
-    and the real `Swoosh.Adapters.SMTP` through "Send test", against a live
+    and the real `Platform.Mail.SmtpAdapter` through "Send test", against a live
     GreenMail 2.1.14. See the file header for how to run it.
     """
     use Platform.DataCase, async: false
@@ -239,7 +239,7 @@ if System.get_env("GREENMAIL_HOST") do
     end
 
     test "Send test over real SMTP reports SMTP 250", ctx do
-      Application.put_env(:platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP)
+      Application.put_env(:platform, Platform.Mail.Mailer, adapter: Platform.Mail.SmtpAdapter)
       account = account!(ctx, %{})
       {:ok, _} = Mail.put_sender(ctx.admin, account, %{"key" => "ops", "address" => ctx.user})
 

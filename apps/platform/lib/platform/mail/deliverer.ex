@@ -114,7 +114,7 @@ defmodule Platform.Mail.Deliverer do
 
   defp put_reply_to(email, _reply_to), do: email
 
-  # A calendar invite (task 01a1a933 stage 1). Two parts carry the same
+  # A calendar invite (task 01a1a933 stages 1-2). Two parts carry the same
   # iCalendar bytes:
   #
   #   * a `text/calendar; charset=UTF-8; method=<METHOD>` part, which is what
@@ -122,21 +122,21 @@ defmodule Platform.Mail.Deliverer do
   #   * an `invite.ics` attachment (`application/ics`) for clients that only
   #     offer a file to open.
   #
-  # Swoosh 1.28's SMTP helper (`Swoosh.Adapters.SMTP.Helpers.prepare_parts/3`)
-  # builds the multipart/alternative from text_body + html_body only; it has
-  # no way to put a third, text/calendar alternative inside it. So the
-  # calendar part is an attachment-list entry whose Content-Type and
-  # Content-Disposition are given as explicit part headers (gen_smtp's
-  # mimemail keeps an explicit header over the one it would derive). The
-  # MIME tree produced, verified by parsing the rendered message in
-  # test/platform/mail/deliverer_test.exs:
+  # Swoosh builds its multipart/alternative from text_body + html_body only,
+  # so the calendar part is handed over as an attachment entry carrying its
+  # own Content-Type header, and `Platform.Mail.Mime` (what
+  # `Platform.Mail.SmtpAdapter` sends) moves it INSIDE the alternative:
   #
   #   multipart/mixed
-  #   ├── multipart/alternative        (only when html_body is set; else text/plain)
+  #   ├── multipart/alternative
   #   │   ├── text/plain; charset=utf-8
-  #   │   └── text/html; charset=utf-8
-  #   ├── text/calendar; charset=UTF-8; method=REQUEST   (inline, base64)
-  #   └── application/ics; invite.ics                    (attachment, base64)
+  #   │   ├── text/html; charset=utf-8        (when html_body is set)
+  #   │   └── text/calendar; charset=UTF-8; method=REQUEST
+  #   └── application/ics; invite.ics         (attachment, base64)
+  #
+  # Verified by parsing `Mime.render/2` output in
+  # test/platform/mail/deliverer_test.exs and the real adapter's DATA bytes
+  # in test/platform/mail/smtp_receipt_test.exs.
   defp put_calendar(email, method, ics)
        when method in ["REQUEST", "CANCEL"] and is_binary(ics) and ics != "" do
     calendar_type = "text/calendar; charset=UTF-8; method=#{method}"
@@ -253,7 +253,8 @@ defmodule Platform.Mail.Deliverer do
     end
   end
 
-  # `Swoosh.Adapters.SMTP` returns `{:ok, receipt}` only when
+  # `Platform.Mail.SmtpAdapter`, like the `Swoosh.Adapters.SMTP` it wraps,
+  # returns `{:ok, receipt}` only when
   # `:gen_smtp_client.send_blocking/2` returned a binary, and gen_smtp 1.3's
   # `try_DATA/4` returns one only from the clause matching `<<"250 ",
   # Receipt/binary>>` on the reply to the end-of-data `.` — every other reply
@@ -270,7 +271,8 @@ defmodule Platform.Mail.Deliverer do
   defp smtp_adapter? do
     :platform
     |> Application.get_env(Mailer, [])
-    |> Keyword.get(:adapter) == Swoosh.Adapters.SMTP
+    |> Keyword.get(:adapter)
+    |> Kernel.in([Swoosh.Adapters.SMTP, Platform.Mail.SmtpAdapter])
   end
 
   defp format_error(reason) when is_binary(reason), do: reason
