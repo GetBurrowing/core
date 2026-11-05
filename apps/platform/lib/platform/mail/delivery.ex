@@ -6,7 +6,9 @@ defmodule Platform.Mail.Delivery do
   Inserted by `Platform.Mail.Dispatch` in the committed transaction that
   evaluated the send policy — as `sending` (allowed) or `refused` (with a
   `refusal_reason`) — BEFORE anything reaches SMTP. It snapshots the From
-  address, the expanded recipients, subject and body, and who was
+  address, the expanded recipients, subject and body (plus the optional
+  `html_body`, `reply_to`, `calendar_method` and `calendar_ics`, task
+  01a1a933 stage 1), and who was
   responsible: the actor who sent it, who drafted it, on whose behalf.
 
   ## Immutable snapshot
@@ -41,6 +43,10 @@ defmodule Platform.Mail.Delivery do
     :recipients,
     :subject,
     :body,
+    :html_body,
+    :reply_to,
+    :calendar_method,
+    :calendar_ics,
     :actor_type,
     :actor_id,
     :drafted_by_type,
@@ -64,6 +70,10 @@ defmodule Platform.Mail.Delivery do
     field(:recipients, {:array, :string}, default: [])
     field(:subject, :string)
     field(:body, :string)
+    field(:html_body, :string)
+    field(:reply_to, :string)
+    field(:calendar_method, :string)
+    field(:calendar_ics, :string)
     field(:actor_type, :string)
     field(:actor_id, :binary_id)
     field(:drafted_by_type, :string)
@@ -115,6 +125,7 @@ defmodule Platform.Mail.Delivery do
     |> foreign_key_constraint(:account_id)
     |> foreign_key_constraint(:draft_id)
     |> check_constraint(:status, name: :mail_deliveries_status_check)
+    |> check_constraint(:calendar_method, name: :mail_deliveries_calendar_method_check)
   end
 
   @doc """

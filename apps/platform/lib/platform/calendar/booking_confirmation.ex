@@ -2,25 +2,21 @@ defmodule Platform.Calendar.BookingConfirmation do
   @moduledoc """
   Queues meeting guest confirmations through the existing audited mail outbox.
 
-  `:calendar_booking_mail_senders` maps project org ids to an explicit
-  `%{account_id: uuid, sender_key: key}`. No default account is inferred.
-  Missing configuration, disabled mail and policy refusals remain visible
-  on the booking receipt. SMTP runs after commit through Mail.Outbox.
+  The sender is the org's meeting sender, resolved by
+  `Platform.Mail.OrgSender.resolve/2`: an explicit app-env entry, else the
+  one send-enabled account carrying the `"meetings"` sender key. No default
+  account is inferred. Missing configuration, disabled mail and policy
+  refusals remain visible on the booking receipt. SMTP runs after commit
+  through Mail.Outbox.
   """
   alias Platform.{Mail, Repo}
 
   def enqueue(meeting, owner_id, guest, slot, guest_url) do
     project = Repo.get(Platform.Tasks.Project, meeting.project_id)
 
-    config =
-      case Application.get_env(:platform, :calendar_booking_mail_senders, %{}) do
-        value when is_map(value) -> value
-        _ -> %{}
-      end
-
     with %{org_id: org_id} when is_binary(org_id) <- project,
-         %{account_id: account, sender_key: sender} <- Map.get(config, org_id),
-         true <- Mail.Config.enabled?(),
+         {:ok, %{account_id: account, sender_key: sender}} <-
+           Mail.OrgSender.resolve(org_id, :meetings),
          {:ok, draft} <-
            Mail.Drafts.create_system(org_id, %{
              account_id: account,

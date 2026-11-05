@@ -9,8 +9,8 @@ defmodule Platform.Meetings.CancellationMail do
   audited outbox and the SAME org sender config as the booking confirmation
   (`Platform.Calendar.BookingConfirmation`):
 
-    * the sender is the org's entry in `:calendar_booking_mail_senders`
-      (`%{account_id: uuid, sender_key: key}`). No default is inferred;
+    * the sender is the org's meeting sender from
+      `Platform.Mail.OrgSender.resolve/2`. No default is inferred;
     * the draft is created with `Platform.Mail.Drafts.create_system/2` and
       queued with `Platform.Mail.Dispatch.enqueue/2`, with responsibility
       `meetings.cancellation_notice`. SMTP runs later in `Platform.Mail.Outbox`;
@@ -70,17 +70,13 @@ defmodule Platform.Meetings.CancellationMail do
   end
 
   defp sender(%Meeting{project_id: project_id}) do
-    config =
-      case Application.get_env(:platform, :calendar_booking_mail_senders, %{}) do
-        value when is_map(value) -> value
-        _ -> %{}
-      end
-
     with %{org_id: org_id} when is_binary(org_id) <-
            project_id && Repo.get(Platform.Tasks.Project, project_id),
-         %{account_id: _, sender_key: _} = sender <- Map.get(config, org_id) do
-      if Mail.Config.enabled?(), do: {:ok, org_id, sender}, else: {:skip, "mail is disabled"}
+         {:ok, sender} <- Mail.OrgSender.resolve(org_id, :meetings) do
+      {:ok, org_id, sender}
     else
+      {:skip, :mail_disabled} -> {:skip, "mail is disabled"}
+      {:skip, :ambiguous_sender} -> {:skip, "more than one account has a meetings sender"}
       _ -> {:skip, "no meeting mail sender is configured for the org"}
     end
   end

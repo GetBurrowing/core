@@ -67,8 +67,8 @@ defmodule Platform.Meetings.InviteDelivery do
   The mail claim above is dated. An audited outbox exists now
   (`Platform.Mail`), and two senders use it for guests: booking confirmations
   (`Platform.Calendar.BookingConfirmation`) and cancellation notices
-  (`Platform.Meetings.CancellationMail`). Both need an org sender in
-  `:calendar_booking_mail_senders`. The invite itself still goes out as
+  (`Platform.Meetings.CancellationMail`). Both need an org sender, resolved
+  by `Platform.Mail.OrgSender.resolve/2`. The invite itself still goes out as
   `:guest_link`.
 
   ## Cancellation reuses these carriers, it is not a carrier of its own

@@ -89,14 +89,79 @@ defmodule Platform.Mail.Deliverer do
     end
   end
 
-  defp build_email(%Delivery{} = delivery) do
+  @doc false
+  # Public for the deliverer tests only; `deliver/1` is the API.
+  @spec build_email(Delivery.t()) :: Swoosh.Email.t()
+  def build_email(%Delivery{} = delivery) do
     Swoosh.Email.new()
     |> Swoosh.Email.from(from(delivery))
     |> Swoosh.Email.to(delivery.recipients)
     |> Swoosh.Email.subject(delivery.subject || "")
     |> Swoosh.Email.text_body(delivery.body || "")
     |> Swoosh.Email.header("Message-ID", delivery.message_id_header)
+    |> put_html(delivery.html_body)
+    |> put_reply_to(delivery.reply_to)
+    |> put_calendar(delivery.calendar_method, delivery.calendar_ics)
   end
+
+  defp put_html(email, html) when is_binary(html) and html != "",
+    do: Swoosh.Email.html_body(email, html)
+
+  defp put_html(email, _html), do: email
+
+  defp put_reply_to(email, reply_to) when is_binary(reply_to) and reply_to != "",
+    do: Swoosh.Email.reply_to(email, reply_to)
+
+  defp put_reply_to(email, _reply_to), do: email
+
+  # A calendar invite (task 01a1a933 stage 1). Two parts carry the same
+  # iCalendar bytes:
+  #
+  #   * a `text/calendar; charset=UTF-8; method=<METHOD>` part, which is what
+  #     Gmail, Outlook and Apple Mail key their Accept/Decline bar on;
+  #   * an `invite.ics` attachment (`application/ics`) for clients that only
+  #     offer a file to open.
+  #
+  # Swoosh 1.28's SMTP helper (`Swoosh.Adapters.SMTP.Helpers.prepare_parts/3`)
+  # builds the multipart/alternative from text_body + html_body only; it has
+  # no way to put a third, text/calendar alternative inside it. So the
+  # calendar part is an attachment-list entry whose Content-Type and
+  # Content-Disposition are given as explicit part headers (gen_smtp's
+  # mimemail keeps an explicit header over the one it would derive). The
+  # MIME tree produced, verified by parsing the rendered message in
+  # test/platform/mail/deliverer_test.exs:
+  #
+  #   multipart/mixed
+  #   ├── multipart/alternative        (only when html_body is set; else text/plain)
+  #   │   ├── text/plain; charset=utf-8
+  #   │   └── text/html; charset=utf-8
+  #   ├── text/calendar; charset=UTF-8; method=REQUEST   (inline, base64)
+  #   └── application/ics; invite.ics                    (attachment, base64)
+  defp put_calendar(email, method, ics)
+       when method in ["REQUEST", "CANCEL"] and is_binary(ics) and ics != "" do
+    calendar_type = "text/calendar; charset=UTF-8; method=#{method}"
+
+    # `Swoosh.Email.attachment/2` prepends, so the .ics file goes on first
+    # to come out last.
+    email
+    |> Swoosh.Email.attachment(
+      Swoosh.Attachment.new({:data, ics},
+        filename: "invite.ics",
+        content_type: "application/ics",
+        type: :attachment
+      )
+    )
+    |> Swoosh.Email.attachment(
+      Swoosh.Attachment.new({:data, ics},
+        filename: "invite.ics",
+        content_type: "text/calendar",
+        type: :attachment,
+        headers: [{"Content-Type", calendar_type}, {"Content-Disposition", "inline"}]
+      )
+    )
+  end
+
+  defp put_calendar(email, _method, _ics), do: email
 
   # The display name is presentation, read from the sender at send time; the
   # address is the snapshot and never changes.

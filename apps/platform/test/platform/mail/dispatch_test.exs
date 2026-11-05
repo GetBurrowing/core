@@ -547,4 +547,105 @@ defmodule Platform.Mail.DispatchTest do
       assert fresh(ctx.delivery).body == "The body."
     end
   end
+
+  # ── Rich parts (task 01a1a933 stage 1) ──────────────────────────────────
+
+  describe "rich parts" do
+    setup ctx do
+      account = account!(ctx.admin, ctx.org_id, "rich", %{"internal_only" => false})
+      sender!(ctx.admin, account, "meetings", "meetings@example.test")
+      %{account: account}
+    end
+
+    @ics "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n"
+
+    test "the delivery snapshots html_body, reply_to, calendar_method and calendar_ics", ctx do
+      draft =
+        draft!(ctx.org_id, ctx.account, "meetings", [ctx.member.email], %{
+          html_body: "<p>Hi</p>",
+          reply_to: "organizer@example.test",
+          calendar_method: "REQUEST",
+          calendar_ics: @ics
+        })
+
+      assert {:ok, delivery} = Dispatch.dispatch(draft.id, ctx.actor)
+      row = fresh(delivery)
+
+      assert row.html_body == "<p>Hi</p>"
+      assert row.reply_to == "organizer@example.test"
+      assert row.calendar_method == "REQUEST"
+      assert row.calendar_ics == @ics
+
+      for field <- [:html_body, :reply_to, :calendar_method, :calendar_ics] do
+        assert field in Delivery.snapshot_fields()
+      end
+    end
+
+    test "the queued (enqueue) path snapshots them too", ctx do
+      draft =
+        draft!(ctx.org_id, ctx.account, "meetings", [ctx.member.email], %{
+          created_by_type: "system",
+          created_by_id: nil,
+          reply_to: "organizer@example.test",
+          calendar_method: "CANCEL",
+          calendar_ics: @ics
+        })
+
+      assert {:ok, delivery} = Dispatch.enqueue(draft.id, :system)
+      row = fresh(delivery)
+      assert row.status == "queued"
+      assert row.reply_to == "organizer@example.test"
+      assert row.calendar_method == "CANCEL"
+      assert row.calendar_ics == @ics
+    end
+
+    test "the database refuses an update to a new snapshot column", ctx do
+      draft =
+        draft!(ctx.org_id, ctx.account, "meetings", [ctx.member.email], %{
+          reply_to: "organizer@example.test"
+        })
+
+      {:ok, delivery} = Dispatch.dispatch(draft.id, ctx.actor)
+
+      for {field, value} <- [
+            html_body: "<p>rewritten</p>",
+            reply_to: "evil@example.test",
+            calendar_ics: "x"
+          ] do
+        assert_raise Postgrex.Error, ~r/snapshot columns are immutable/, fn ->
+          Repo.transaction(fn ->
+            from(d in Delivery, where: d.id == ^delivery.id)
+            |> Repo.update_all(set: [{field, value}])
+          end)
+        end
+      end
+
+      assert fresh(delivery).reply_to == "organizer@example.test"
+    end
+
+    test "the draft changeset requires calendar_method and calendar_ics together", ctx do
+      base = %{org_id: ctx.org_id, created_by_type: "system", status: "draft"}
+
+      assert Draft.changeset(%Draft{}, base).valid?
+
+      assert Draft.changeset(
+               %Draft{},
+               Map.merge(base, %{calendar_method: "REQUEST", calendar_ics: @ics})
+             ).valid?
+
+      no_ics = Draft.changeset(%Draft{}, Map.put(base, :calendar_method, "REQUEST"))
+      assert {"is required with calendar_method", _} = no_ics.errors[:calendar_ics]
+
+      no_method = Draft.changeset(%Draft{}, Map.put(base, :calendar_ics, @ics))
+      assert {"is required with calendar_ics", _} = no_method.errors[:calendar_method]
+
+      bad =
+        Draft.changeset(
+          %Draft{},
+          Map.merge(base, %{calendar_method: "PUBLISH", calendar_ics: @ics})
+        )
+
+      assert {_, [validation: :inclusion, enum: _]} = bad.errors[:calendar_method]
+    end
+  end
 end
