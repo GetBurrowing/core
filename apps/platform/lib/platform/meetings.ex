@@ -26,6 +26,7 @@ defmodule Platform.Meetings do
   alias Platform.Federation.RuntimePresence
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
+  alias Platform.Chat.Space
   alias Platform.Chat.SpaceAccess
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript, Whiteboard}
   alias Platform.Meetings.AgentActivity
@@ -3733,6 +3734,193 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── The channel quick-meet meeting row (task 01a04e9e stage 2) ──────────
+  #
+  # The channel quick-meet BINDS to the channel's EXISTING chat space
+  # (Jordan Coombs, 2026-09-02): one `meetings` row per call, `chat_space_id`
+  # = the channel's space id, and NO second chat space minted anywhere.
+  # `create_meeting/1` is deliberately NOT called — it stamps its own backing
+  # chat space, which would orphan one here — and nothing mint-and-deletes.
+
+  @doc """
+  Find or create the ONE live meeting bound to chat space `space_id`.
+
+  The channel quick-meet session identity (task 01a04e9e stage 2). Every
+  call in a channel has exactly one live `meetings` row bound to that
+  channel's existing chat space; reusing the row across joins is the
+  recovery contract `get_live_meeting_for_space/1` already implements for
+  the scheduled path's room lifecycle. Never mints a chat space: the
+  channel's own space is the meeting's `chat_space_id`, so this is safe to
+  call from the join chain where `ensure_room/1` already runs.
+
+  ## The concurrent quick-meet race
+
+  Two joins on a space with no live meeting both read nil and both insert;
+  `meetings` has no column that is unique per space, so the loser would
+  persist a duplicate row alongside the winner's — two live meetings for
+  one space, which `meeting_id_for_space/2` then breaks ties on by ordering.
+  Existing indexes do not prevent that (nothing unique keys on
+  `chat_space_id`), so this function serialises minting with an
+  `pg_advisory_xact_lock` keyed on `chat_space_id` (see the SHA-256 caveat
+  in `lock_ensure_meeting_for_space/1`). The lock closes inside the
+  transaction. A caller that holds one of these two locks and then calls
+  `ensure_live_meeting_for_space/1` for the same space would deadlock
+  itself: `get_live_meeting_for_space/1` never takes this lock and
+  `end_meeting/1` never takes it either, so no such nesting exists today.
+
+  ## `project_id`
+
+  Resolved from the space's own context: `space.metadata["project_id"]`
+  when present (the same source `Platform.Deploy.ProjectFiles`
+  `target_space_project_id/1` reads), else `nil`. A channel is not required
+  to belong to a project, and a project-less channel must still get its
+  meeting row — `meetings.project_id` is nullable by migration
+  `20261105220000_make_meetings_project_id_nullable`. The scheduled path
+  keeps enforcing `:project_id` through `create_meeting/1`'s
+  `require_present/2`; this ad-hoc path is the supported nil-project case.
+
+  ## Shape of the minted row
+
+  `status: "live"`, `scheduled_start_at`/`scheduled_end_at` nil (an
+  ad-hoc meeting is started but never scheduled — the supported state
+  `create_meeting/1`'s docs describe, byte-for-byte), `started_at` set to
+  now (the call is happening), `livekit_room_name`
+  `"space-<chat_space_id>"` (the room the join actually mints into —
+  `room_name_for_space/1`), and a `name`/`slug` naming the channel's
+  space.
+
+  Returns `{:ok, meeting}` with the live meeting — the existing one when a
+  call for the space is already live, the freshly minted one otherwise —
+  or `{:ok, nil}` when the space cannot be resolved (no row behind
+  `space_id`).
+  """
+  @spec ensure_live_meeting_for_space(binary()) :: {:ok, Meeting.t() | nil}
+  def ensure_live_meeting_for_space(space_id) when is_binary(space_id) do
+    case get_live_meeting_for_space(space_id) do
+      %Meeting{} = live ->
+        {:ok, live}
+
+      nil ->
+        case Chat.get_space(space_id) do
+          %Space{} = space -> mint_live_meeting_for_space(space)
+          nil -> {:ok, nil}
+        end
+    end
+  end
+
+  def ensure_live_meeting_for_space(_space_id), do: {:ok, nil}
+
+  defp mint_live_meeting_for_space(%Space{} = space) do
+    now = DateTime.utc_now()
+
+    # One row per space: the advisory lock serialises concurrent quick-meet
+    # mints (see `ensure_live_meeting_for_space/1` docs). The lock is
+    # transaction-scoped, so it MUST be taken inside this `Repo.transaction`
+    # and held across the re-check AND the insert — under autocommit the lock
+    # would be released before the insert ran and two concurrent mints could
+    # both persist a live row for the same space.
+    result =
+      Repo.transaction(fn ->
+        lock_ensure_meeting_for_space(space.id)
+
+        case get_live_meeting_for_space(space.id) do
+          %Meeting{} = live ->
+            live
+
+          nil ->
+            project_id = project_id_for_space(space)
+            meeting_id = Platform.Types.UUIDv7.generate()
+
+            attrs = %{
+              project_id: project_id,
+              host_participant_id: nil,
+              chat_space_id: space.id,
+              slug: "live-#{meeting_id}",
+              name: space.name || "Quick meet",
+              status: "live",
+              livekit_room_name: room_name_for_space(space.id),
+              started_at: now,
+              scheduled_start_at: nil,
+              scheduled_end_at: nil
+            }
+
+            insert_live_meeting(space, meeting_id, attrs)
+        end
+      end)
+
+    case result do
+      {:ok, %Meeting{} = meeting} ->
+        {:ok, meeting}
+
+      {:error, changeset} ->
+        Logger.warning(
+          "[Meetings] ensure_live_meeting_for_space mint failed for " <>
+            "space=#{space.id}: #{inspect(changeset.errors)}"
+        )
+
+        {:error, changeset}
+
+      {:error, reason} when is_atom(reason) ->
+        Logger.warning(
+          "[Meetings] ensure_live_meeting_for_space mint aborted for " <>
+            "space=#{space.id}: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  # The insert itself, extracted so the transaction wrapper stays readable.
+  # `meetings` has no column unique per chat space (concurrency is the
+  # advisory lock's job), so the only expected conflict is on the PK/other
+  # unique constraints — re-read on conflict rather than bubbling the
+  # changeset up.
+  defp insert_live_meeting(%Space{} = space, meeting_id, attrs) do
+    case %Meeting{}
+         |> Meeting.changeset(attrs)
+         |> Ecto.Changeset.put_change(:id, meeting_id)
+         |> Repo.insert() do
+      {:ok, meeting} ->
+        meeting
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        # The loser of a concurrent mint (or a UUID collision) should
+        # return the winner's live row, not an error the join then has
+        # to special-case.
+        case get_live_meeting_for_space(space.id) do
+          %Meeting{} = live -> live
+          nil -> Repo.rollback(changeset)
+        end
+    end
+  end
+
+  # The ad-hoc meeting's project comes from the channel context, exactly
+  # like `ProjectFiles.target_space_project_id/1` reads it: the execution
+  # and project-adjacent spaces carry `metadata["project_id"]`, and a
+  # channel may carry none. Seeded on space creation via
+  # `Chat.create_space`'s `:metadata`; nil means "no project", which the
+  # nullable column (20261105220000) absorbs.
+  defp project_id_for_space(%Space{metadata: %{"project_id" => id}}) when is_binary(id), do: id
+  defp project_id_for_space(_space), do: nil
+
+  # A session-scoped advisory lock on the chat-space id. `pg_advisory_xact_lock/1`
+  # takes a bigint; hashing the id (a UUID) onto a bigint avoids mapping
+  # collisions between distinct spaces, at the cost of theoretical hash
+  # collisions making unrelated spaces briefly serialize — the correct
+  # failure mode (a pause, never a wrong row). `hashtextextended/2` is the
+  # codebase's established key-hash (see `files.ex`, `access/changes.ex`,
+  # `experiments/guardrails.ex`): Postgres returns a signed bigint within
+  # `pg_advisory_xact_lock`'s int8 range, which an Elixir-side
+  # `decode_unsigned` of a sha256 prefix is NOT guaranteed to (a "live"
+  # escalation first landed here as an 8-byte unsigned → Postgrex
+  # EncodeError). Must be called INSIDE the `Repo.transaction` that guards
+  # the mint — the lock is transaction-scoped and autocommit would release
+  # it before the insert.
+  defp lock_ensure_meeting_for_space(space_id) do
+    Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [space_id])
+    :ok
+  end
+
   @doc "Get the active (non-idle) room for a space, if any."
   @spec get_active_room(binary()) :: Room.t() | nil
   def get_active_room(space_id) do
@@ -4361,6 +4549,16 @@ defmodule Platform.Meetings do
          # (task 01a174e2): clear the mode so `room_finished` summarizes it.
          {:ok, room} <- clear_session_mode(room),
          {:ok, room} <- activate_room_on_join(room),
+         # The ad-hoc meeting row for a channel quick-meet (task 01a04e9e
+         # stage 2). Every join lands in the room keyed on the space, so the
+         # meeting row must be ensured HERE — the one chokepoint both the
+         # web quick-meet (`MeetingHooks.do_join/1`) and the native join
+         # (`NativeCall.join/2`) pass through — and must bind to the space
+         # itself rather than minting a second chat space. A no-op when a
+         # live meeting already exists for the space (find-or-create), and a
+         # `{:ok, nil}` no-op when the space does not resolve: the join
+         # itself already succeeded, and a card feature must not fail it.
+         {:ok, _live_meeting} <- ensure_live_meeting_for_space(space_id),
          identity = "user:#{user_id}",
          # Prefer the caller's resolved name over a stale/blank participant
          # row name (legacy rows may carry the literal "User") so the

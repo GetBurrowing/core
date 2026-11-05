@@ -104,7 +104,18 @@ defmodule Platform.Meetings.Meeting do
   @cast_fields ~w(project_id host_participant_id chat_space_id slug name status
                   livekit_room_name started_at ended_at
                   scheduled_start_at scheduled_end_at created_by_user_id)a
-  @required_fields ~w(project_id chat_space_id slug name livekit_room_name)a
+  # `project_id` is deliberately ABSENT from `@required_fields` (task 01a04e9e
+  # stage 2, migration 20261105220000): a channel quick-meet BINDS its
+  # meetings row to the channel's existing chat space, so there is no
+  # project-scoped meeting to derive a project from, and a channel is not
+  # required to belong to a project at all. The scheduled path is still
+  # enforced project-first by `Platform.Meetings.create_meeting/1`'s own
+  # `require_present(project_id, :project_id)` guard, and the FK
+  # `foreign_key_constraint(:project_id)` below still validates any value
+  # that DOES arrive. A nil `project_id` row is the project-less channel's
+  # supported state, exactly as the both-nil intended-time pair is for every
+  # ad-hoc meeting.
+  @required_fields ~w(chat_space_id slug name livekit_room_name)a
 
   # Slugs that would collide with a guest-host route of their own. `g` is the
   # first segment of the short guest link `/g/<code>` (task 01a18d0a-ec37);
