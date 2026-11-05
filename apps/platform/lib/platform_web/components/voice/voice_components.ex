@@ -12,7 +12,7 @@ defmodule PlatformWeb.Components.Voice do
       "🎙️ transcribed · {time}" plus " · posted to {ctx}");
     * `pending_turn/1`: the live bubble while you talk (`.bubble.me.live`),
       the thinking dots and the failed reply (stage 3);
-    * `voice_area/1`: #listen-line, #meter, #mic and #pipeline-info, in every
+    * `voice_area/1`: #listen-line, #meter and #mic, in every
       talk state (idle, listening, toggled, thinking, blocked, unavailable).
       It carries the `VoiceTab` hook (stage 3);
     * `partner_sheet/1` (#partner-sheet) and `context_sheet/1` (#ctx-sheet).
@@ -344,16 +344,6 @@ defmodule PlatformWeb.Components.Voice do
         <.icon name="hero-microphone" class="size-10" />
       </button>
       <div id="voice-audio" class="hidden" phx-update="ignore"></div>
-      <button
-        type="button"
-        id="pipeline-info"
-        class="inline-flex items-center gap-1.5 rounded-full border border-dashed border-edge px-2 py-1 text-xs text-subtle active:bg-base-100"
-        title="Same LiveKit room + transcription pipeline as Meet, scoped to a private 1:1 — no meeting is created"
-        phx-click="pipeline_info"
-      >
-        <.icon name="hero-information-circle" class="size-3" />
-        uses meeting transcription · not a meeting
-      </button>
     </div>
     """
   end

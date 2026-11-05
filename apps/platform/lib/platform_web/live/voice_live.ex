@@ -93,8 +93,6 @@ defmodule PlatformWeb.VoiceLive do
   @default_slug "meeting-assistant"
   @burrow_greeting "Morning. Anything on your mind? Hold the mic and just talk — I'll keep the thread."
   @back_greeting "Back with you."
-  @toast_text "Same LiveKit + transcription as Meet, private 1:1 — no meeting created"
-  @toast_ms 3_000
   @too_short_ms 400
   @answer_timeout_ms 20_000
 
@@ -278,11 +276,6 @@ defmodule PlatformWeb.VoiceLive do
     end
   end
 
-  def handle_event("pipeline_info", _params, socket) do
-    Process.send_after(self(), :clear_toast, @toast_ms)
-    {:noreply, assign(socket, :toast, @toast_text)}
-  end
-
   # ── talking (the VoiceTab hook) ───────────────────────────────────────
 
   def handle_event("voice_start", _params, socket) do
@@ -390,7 +383,6 @@ defmodule PlatformWeb.VoiceLive do
   def handle_event("voice_type", _params, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_info(:clear_toast, socket), do: {:noreply, assign(socket, :toast, nil)}
 
   def handle_info({:answer_timeout, ref}, %{assigns: %{answer_ref: ref}} = socket)
       when is_reference(ref) do
