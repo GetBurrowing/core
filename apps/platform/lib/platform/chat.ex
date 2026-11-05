@@ -1459,9 +1459,25 @@ defmodule Platform.Chat do
     end
   end
 
-  # The advisory-lock key for a group member set, `{type, id}` pairs that
-  # include the initiator. Stage 2's duplicate merge takes the same key.
-  defp group_member_set_lock_key(member_set) do
+  @doc """
+  The advisory-lock key for a group member set.
+
+  `member_set` is a list of `{participant_type, participant_id}` pairs that
+  includes the initiator, e.g. `[{"user", id_a}, {"user", id_b}, {"agent",
+  agent_id}]`. The key is `"chat:group_member_set:"` followed by the
+  deduped, sorted `"type:id"` strings joined by `","`, so it is
+  order-insensitive.
+
+  Both `create_group_conversation/3` and the operator merge
+  `Platform.Chat.DuplicateGroups` take
+  `pg_advisory_xact_lock(hashtextextended(key, 0))` on this key, so a group
+  start and a merge of the same set serialize. It is also the grouping key
+  the merge uses to find duplicate sets. Build the key only through this
+  function: a second copy of the formula would let the two lock different
+  keys for the same people.
+  """
+  @spec group_member_set_lock_key([{String.t(), binary()}]) :: String.t()
+  def group_member_set_lock_key(member_set) do
     key =
       member_set
       |> Enum.map(fn {type, id} -> "#{type}:#{id}" end)

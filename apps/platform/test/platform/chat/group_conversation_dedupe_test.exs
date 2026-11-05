@@ -264,7 +264,7 @@ defmodule Platform.Chat.GroupConversationDedupeTest do
       reloaded = Repo.get!(Space, named.id)
       assert reloaded.name == "launch"
       assert is_nil(reloaded.archived_at)
-      assert MapSet.size(member_set(named.id)) == 3
+      assert member_set(named.id) == MapSet.new(for x <- [a, b, c], do: {"user", x.id})
     end
 
     test "an archived group" do
