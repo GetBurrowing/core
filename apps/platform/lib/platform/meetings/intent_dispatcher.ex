@@ -347,8 +347,13 @@ defmodule Platform.Meetings.IntentDispatcher do
   and the next drain after an unmute picks up where this one stopped.
   It is deliberately distinct from `:empty` — "held" and "nothing to
   do" are different facts.
+
+  `:ended` means the meeting has explicitly ended (task 01a04e9e stage
+  3): nothing was claimed and every queued row stays `:queued`, because
+  there is no room waiting for work on a call that is over.
   """
-  @spec drain(binary(), GenServer.server()) :: :dispatched | :busy | :empty | :muted
+  @spec drain(binary(), GenServer.server()) ::
+          :dispatched | :busy | :empty | :muted | :ended
   def drain(meeting_id, server \\ __MODULE__) when is_binary(meeting_id) do
     GenServer.call(server, {:drain, meeting_id})
   catch
@@ -441,11 +446,27 @@ defmodule Platform.Meetings.IntentDispatcher do
   # contract, and auto-firing N cancels nobody asked for would race the
   # 90s ack window and manufacture `:cancelled_late` rows for work that
   # had already landed.
+  #
+  # Meeting-ended hold (task 01a04e9e stage 3): checked alongside mute,
+  # BEFORE `claim_next/1`, so an ended meeting's queued rows are never
+  # claimed or dispatched — there is no room waiting for work on a call
+  # that is over. Dropping/leaving rows would race the 90s ack window the
+  # same way mute's comment above does, so rows stay `:queued` and the
+  # meeting simply stops forwarding; the queue's own lifecycle can
+  # reconcile them later. Deliberately narrow (only `status == "ended"`
+  # answers true, see `meetings.ex` `meeting_ended?/1`): a bare-ID queue
+  # with no row and a scheduled/live meeting keep draining exactly as
+  # before.
   defp do_drain(meeting_id, state) do
-    if Meetings.intent_muted?(meeting_id) do
-      {:muted, state}
-    else
-      claim_and_dispatch(meeting_id, state)
+    cond do
+      Meetings.intent_muted?(meeting_id) ->
+        {:muted, state}
+
+      Meetings.meeting_ended?(meeting_id) ->
+        {:ended, state}
+
+      true ->
+        claim_and_dispatch(meeting_id, state)
     end
   end
 

@@ -2377,4 +2377,59 @@ defmodule Platform.Meetings.IntentDispatcherTest do
                "the tick before concluding that mute is broken."
     end
   end
+
+  # ── Meeting-ended hold (task 01a04e9e stage 3) ────────────────────────────
+  describe "meeting-ended hold" do
+    test "an ended meeting claims nothing and its rows stay queued" do
+      # Symmetric to the mute hold: the "still :queued" assertions alone
+      # are satisfiable by a dispatcher that is simply broken, so the
+      # fixture also dispatches AFTER the gate clears — but with an ended
+      # meeting the gate must NOT clear (the meeting is over; there is no
+      # unmute). The end lifecycle is irreversible, so the second half is
+      # pinned by asserting the queue still holds the row after the
+      # dispatcher had every chance to claim it.
+      {meeting, _org_id} = new_real_meeting!()
+      {_agent, _runtime} = seed_target!("designer")
+      {_pid, name} = start_dispatcher!()
+
+      {:ok, live} = Meetings.start_meeting(meeting)
+      {:ok, _} = Meetings.end_meeting(live)
+
+      row = enqueue!(meeting.id, %{})
+
+      # The enqueue-notify path drains asynchronously; the explicit drain
+      # answers :ended and the row stays :queued either way.
+      assert IntentDispatcher.drain(meeting.id, name) == :ended
+
+      # Claimed nothing: the row is untouched and the cursor is free.
+      assert status_of(meeting.id, row.id) == :queued
+      assert IntentQueue.cursor(meeting.id) == nil
+
+      # The dispatcher's tick and enqueue-notify paths both drain the
+      # queue; after a drain, the ended meeting must not have dispatched.
+      refute_receive {:telemetry, [:platform, :meetings, :intent_dispatched], %{count: 1}, _},
+                     500
+
+      assert status_of(meeting.id, row.id) == :queued
+    end
+
+    test "a live meeting still dispatches and a bare-ID queue still drains" do
+      # The gate is deliberately narrow — only a row with status == "ended"
+      # stops the drain (see `Meetings.meeting_ended?/1`). A live meeting
+      # and a Registry-keyed queue with no row at all must behave exactly
+      # as before the gate existed.
+      {meeting, _org_id} = new_real_meeting!()
+      {_agent, _runtime} = seed_target!("designer")
+      {_pid, name} = start_dispatcher!()
+
+      {:ok, _live} = Meetings.start_meeting(meeting)
+
+      live_row = enqueue!(meeting.id, %{})
+      await_status(meeting.id, live_row.id, :dispatched)
+
+      bare_id = new_meeting!()
+      bare_row = enqueue!(bare_id, %{})
+      await_status(bare_id, bare_row.id, :dispatched)
+    end
+  end
 end

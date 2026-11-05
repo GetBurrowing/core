@@ -544,6 +544,36 @@ defmodule Platform.Meetings do
 
   def meeting_exists?(_id), do: false
 
+  @doc """
+  Whether the meeting `id` has explicitly ended (`status == "ended"`).
+
+  The intent-dispatch guard (task 01a04e9e stage 3): an ended meeting is
+  not a room waiting for work, so its queued intents must not be
+  dispatched with an urgency claim. Deliberately narrow — only a row
+  whose status is literally `"ended"` answers `true`:
+
+    * a LIVE meeting answers `false` (dispatch, the normal case);
+    * a bare UUID with no `meetings` row at all answers `false` (the
+      dispatcher's Registry-keyed queues predate `meetings` rows, and a
+      queue with no row is not a meeting that has ended);
+    * a row with any other status (scheduled, cancelled) answers `false`
+      — only "ended" means the call is explicitly over.
+
+  One indexed EXISTS on the primary key, mirroring `meeting_live?/1`.
+  """
+  @spec meeting_ended?(binary() | term()) :: boolean()
+  def meeting_ended?(id) when is_binary(id) do
+    case Platform.UUID.cast(id) do
+      {:ok, uuid} ->
+        Repo.exists?(from(m in Meeting, where: m.id == ^uuid and m.status == "ended"))
+
+      :error ->
+        false
+    end
+  end
+
+  def meeting_ended?(_id), do: false
+
   @doc "Get a meeting by its per-project slug. Returns `nil` if not found."
   @spec get_meeting_by_slug(binary(), String.t()) :: Meeting.t() | nil
   def get_meeting_by_slug(project_id, slug) do
