@@ -309,7 +309,10 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
       assert "max-h-[180px]" in tokens(html, "[data-role=link-card-image]")
       assert "object-cover" in tokens(html, "[data-role=link-card-image]")
       assert "aspect-video" in tokens(html, "[data-role=link-card-media]")
-      assert text(html, "[data-role=link-card-site]") =~ "YouTube · Example Channel"
+
+      assert text(html, "[data-role=link-card-site] > .truncate") ==
+               "youtube.com · Example Channel"
+
       assert text(html, "[data-role=link-card-author]") =~ "Example Channel"
       assert text(html, "[data-role=link-card-title]") == @yt.title
       assert "p-3" in tokens(html, "[data-role=link-card-body]")
@@ -334,11 +337,95 @@ defmodule PlatformWeb.Components.ChatLinkCardTest do
       assert one(html, "[data-role=link-card-author]") == 0
 
       square = %{article | image_width: 400, image_height: 400}
-      html = cards([unfurled("https://github.com/acme/api/pull/7", square)])
+      html = cards([unfurled("https://example.org/team/profile", square)])
       assert one(html, "[data-unfurled=true][data-layout=tile]") == 1
       assert one(html, "[data-role=link-card-image]") == 0
       assert "size-10" in tokens(html, "[data-role=link-card-tile-image]")
       assert "p-3" in tokens(html, "[data-role=link-card][data-kind=link]")
+    end
+
+    test "the site line is the host without www and the author, never the stored site_name" do
+      # From the YouTube oEmbed fixture: provider_name "YouTube", channel "Example Channel".
+      html = cards([unfurled(@yt.url, @yt)])
+
+      assert text(html, "[data-role=link-card-site] > .truncate") ==
+               "youtube.com · Example Channel"
+
+      refute text(html, "[data-role=link-card-site] > .truncate") =~ "YouTube"
+
+      blog = %{@yt | media_kind: "article", site_name: "The GitHub Blog", author: nil}
+      html = cards([unfurled("https://github.blog/news/2026/link-cards", blog)])
+      assert text(html, "[data-role=link-card-site] > .truncate") == "github.blog"
+    end
+
+    test "a GitHub PR with a wide summary_large_image card still takes the tile, with the site mark" do
+      gh = %{
+        @yt
+        | url: "https://github.com/acme/api/pull/91",
+          title: "Fix unfurl padding and drop the card glow by octo · Pull Request #91",
+          image_url: "https://opengraph.githubassets.com/abc/acme/api/pull/91",
+          image_width: 1200,
+          image_height: 600,
+          twitter_card: "summary_large_image",
+          site_name: "GitHub",
+          author: nil,
+          provider: nil,
+          media_kind: "other"
+      }
+
+      # The ratio rule alone would make it wide (POSITIVE CONTROL for the host rule).
+      assert ChatLinkCard.wide?(gh)
+
+      for url <- [
+            "https://github.com/acme/api/pull/91",
+            "https://www.github.com/acme/api/pull/91"
+          ] do
+        html = cards([unfurled(url, gh)])
+        assert one(html, "[data-unfurled=true][data-layout=tile]") == 1
+        assert one(html, "[data-role=link-card-image]") == 0
+        assert one(html, "[data-role=link-card-tile-image]") == 0
+
+        assert one(html, "[data-role=link-card] > [data-role=link-site-tile][data-site=github]") ==
+                 1
+
+        assert text(html, "[data-role=link-card-site] > .truncate") == "github.com"
+      end
+    end
+
+    test "an X post with a 1920x1080 image takes the tile, its image square-cropped" do
+      x = %{
+        @yt
+        | url: "https://x.com/example_dev/status/1854",
+          title: "Shipped link previews today.",
+          image_url: "https://pbs.example.com/media/wide.jpg",
+          image_width: 1920,
+          image_height: 1080,
+          twitter_card: "summary_large_image",
+          site_name: "X (formerly Twitter)",
+          author: "Example Dev",
+          provider: "x",
+          media_kind: "other"
+      }
+
+      assert ChatLinkCard.wide?(x)
+
+      for url <- [
+            "https://x.com/example_dev/status/1854",
+            "https://twitter.com/example_dev/status/1854",
+            "https://www.twitter.com/example_dev/status/1854",
+            "https://mobile.twitter.com/example_dev/status/1854"
+          ] do
+        html = cards([unfurled(url, x)])
+        assert one(html, "[data-unfurled=true][data-layout=tile]") == 1, url
+        assert one(html, "[data-role=link-card-image]") == 0, url
+        assert one(html, "[data-role=link-card-tile-image] img.object-cover") == 1, url
+      end
+
+      assert text(
+               cards([unfurled("https://x.com/example_dev/status/1854", x)]),
+               "[data-role=link-card-site]"
+             ) ==
+               "x.com · Example Dev"
     end
 
     test "unknown size leads only when the page declared summary_large_image" do

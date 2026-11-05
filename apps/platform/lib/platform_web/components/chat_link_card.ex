@@ -40,9 +40,11 @@ defmodule PlatformWeb.Components.ChatLinkCard do
   (a video, an image at least 1.5:1, or one of unknown size on a page that
   declared `twitter:card` `summary_large_image`) leads the card at full
   width, at most 180px tall and cropped; under it sit the 16px site mark,
-  the site name (and, for a video, the channel), the title and one line of
-  description. A square or small image (an avatar, a repository image)
-  becomes the 40px tile in today's anatomy instead. A duration chip appears
+  the host without `www.` (and the author, a video's channel, when there is
+  one), the title and one line of description. A square or small image
+  becomes the 40px tile in today's anatomy instead, and so does every X
+  post and GitHub page whatever its image (stage 5): X shows its image
+  square-cropped, GitHub its site mark. A duration chip appears
   only when the provider stated one. Without `:unfurl` (pending, failed,
   refused, no metadata) the card is today's URL-derived card, unchanged:
   no skeleton, so the swap when the preview lands is calm. `data-unfurled`
@@ -233,10 +235,14 @@ defmodule PlatformWeb.Components.ChatLinkCard do
     assigns =
       assigns
       |> assign(:u, unfurl)
-      |> assign(:wide?, wide?(unfurl))
+      |> assign(:wide?, not tile_host?(assigns.card.host) and wide?(unfurl))
+      |> assign(
+        :tile_image,
+        if(github_host?(assigns.card.host), do: nil, else: unfurl[:image_url])
+      )
       |> assign(:video?, unfurl[:media_kind] == "video")
       |> assign(:title, unfurl[:title] || assigns.card.preview.title)
-      |> assign(:site_name, unfurl[:site_name] || assigns.card.host)
+      |> assign(:site_name, display_host(assigns.card.host))
       |> assign(:duration, format_duration(unfurl[:duration_seconds]))
 
     ~H"""
@@ -279,7 +285,7 @@ defmodule PlatformWeb.Components.ChatLinkCard do
         </span>
       </span>
       <span class="flex min-w-0 flex-col gap-0.5 p-3" data-role="link-card-body">
-        <.site_line card={@card} site_name={@site_name} author={@video? && @u[:author]} />
+        <.site_line card={@card} site_name={@site_name} author={@u[:author]} />
         <span data-role="link-card-title" class={title_class()}>{@title}</span>
         <span :if={@u[:description]} data-role="link-card-meta" class={meta_class()}>
           {@u.description}
@@ -302,22 +308,22 @@ defmodule PlatformWeb.Components.ChatLinkCard do
       class={card_class()}
     >
       <span
-        :if={@u[:image_url]}
+        :if={@tile_image}
         data-role="link-card-tile-image"
         aria-hidden="true"
         class="block size-10 shrink-0 overflow-hidden rounded-field bg-base-200"
       >
         <img
-          src={@u.image_url}
+          src={@tile_image}
           alt=""
           loading="lazy"
           referrerpolicy="no-referrer"
           class="block size-full object-cover"
         />
       </span>
-      <.site_tile :if={!@u[:image_url]} preview={@card.preview} />
+      <.site_tile :if={!@tile_image} preview={@card.preview} />
       <span class="min-w-0 flex-1">
-        <.site_line card={@card} site_name={@site_name} author={@video? && @u[:author]} />
+        <.site_line card={@card} site_name={@site_name} author={@u[:author]} />
         <span data-role="link-card-title" class={title_class()}>{@title}</span>
         <span :if={@u[:description]} data-role="link-card-meta" class={meta_class()}>
           {@u.description}
@@ -507,11 +513,13 @@ defmodule PlatformWeb.Components.ChatLinkCard do
   end
 
   attr(:card, :map, required: true)
-  attr(:site_name, :string, required: true)
+  attr(:site_name, :any, required: true)
   attr(:author, :any, default: nil)
 
-  # The unfurled card's site line: the 16px mark, the site name and, for a
-  # video, " · " and the channel. 12/16 medium, text-subtle.
+  # The unfurled card's site line: the 16px mark, the host without `www.`
+  # (youtube.com, github.com, x.com) and, when there is one, " · " and the
+  # author (a video's channel). The stored site_name is not shown here.
+  # 12/16 medium, text-subtle.
   defp site_line(assigns) do
     ~H"""
     <span
@@ -525,6 +533,27 @@ defmodule PlatformWeb.Components.ChatLinkCard do
     </span>
     """
   end
+
+  # Posts and pull requests always take the 40px tile, whatever their
+  # og:image: an X post's image is the author's media, and GitHub's social
+  # card is a text banner that is illegible cropped, so GitHub shows its site
+  # mark instead of the image. Checked ahead of the ratio rule.
+  @tile_hosts ~w(github.com www.github.com x.com www.x.com mobile.x.com twitter.com www.twitter.com mobile.twitter.com)
+
+  @doc false
+  def tile_host?(host) when is_binary(host), do: String.downcase(host) in @tile_hosts
+  def tile_host?(_host), do: false
+
+  defp github_host?(host) when is_binary(host),
+    do: String.downcase(host) in ~w(github.com www.github.com)
+
+  defp github_host?(_host), do: false
+
+  @doc false
+  def display_host(host) when is_binary(host),
+    do: host |> String.downcase() |> String.replace_prefix("www.", "")
+
+  def display_host(_host), do: nil
 
   # Wide: a video, an image of at least 1.5:1, or an image of unknown size on
   # a page that declared summary_large_image. Never without an image.
