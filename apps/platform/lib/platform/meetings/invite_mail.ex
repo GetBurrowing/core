@@ -67,6 +67,14 @@ defmodule Platform.Meetings.InviteMail do
   inviter line, and `ctx.reason` as a line under that. Each is omitted
   cleanly when absent. The footer names the install by its own `app_name`.
 
+  An invitation or update with a calendar part adds, under the join link,
+  "This is a calendar invite. Accept or decline it in your mail client."
+  (never on a cancellation). Every kind's footer says why the reader got
+  it: "You're getting this because <inviter> invited you to a meeting on
+  <app_name>.", or on a cancellation "... because you were invited to this
+  meeting on <app_name>.". Both are in the plain-text part too, in the
+  muted (secondary-text) token. Copy from task 01a1a933 stage 5.
+
   ## Unscheduled meetings
 
   An ad-hoc meeting has no time to put on a calendar: no calendar part
@@ -154,6 +162,7 @@ defmodule Platform.Meetings.InviteMail do
 
     facts = %{
       kind: kind,
+      calendar?: not is_nil(calendar_method),
       title: single_line(meeting.name),
       when: when_,
       zone_line: zone_line(when_, zone, zone_source),
@@ -340,11 +349,35 @@ defmodule Platform.Meetings.InviteMail do
   defp join_code_line(%{join_code: nil}), do: nil
   defp join_code_line(%{join_code: code}), do: "Join code: " <> code
 
+  # Why the reader got this email (task 01a1a933 stage 5, coordinator's
+  # copy: the prototype bytes were unavailable). A cancellation drops the
+  # "invited you" phrasing.
+  defp why_line(%{kind: :cancelled} = facts),
+    do: "You're getting this because you were invited to this meeting" <> on_app(facts) <> "."
+
+  defp why_line(%{inviter: nil} = facts),
+    do: "You're getting this because you were invited to a meeting" <> on_app(facts) <> "."
+
+  defp why_line(%{inviter: name} = facts),
+    do:
+      "You're getting this because " <>
+        name <> " invited you to a meeting" <> on_app(facts) <> "."
+
+  defp on_app(%{app_name: nil}), do: ""
+  defp on_app(%{app_name: app}), do: " on " <> app
+
+  # Under the join link, on an invitation or update that carries a calendar
+  # part: the Accept/Decline lives in the reader's mail client.
+  defp invite_note(%{kind: :cancelled}), do: nil
+  defp invite_note(%{calendar?: false}), do: nil
+  defp invite_note(_facts), do: @invite_note
+
   defp reply_line(%{inviter: nil}), do: "Reply to reach the organizer."
   defp reply_line(%{inviter: name}), do: "Reply to reach " <> name <> "."
 
   @cancelled_line "This meeting was cancelled."
   @calendar_label "Add to calendar"
+  @invite_note "This is a calendar invite. Accept or decline it in your mail client."
   @changed_line "Time changed"
 
   # ── Plain text ───────────────────────────────────────────────────────────
@@ -365,6 +398,7 @@ defmodule Platform.Meetings.InviteMail do
       "",
       "--",
       sent_from(facts),
+      why_line(facts),
       reply_line(facts)
     ]
     |> Enum.reject(&is_nil/1)
@@ -378,7 +412,8 @@ defmodule Platform.Meetings.InviteMail do
     [
       facts.calendar_url && @calendar_label <> ": " <> facts.calendar_url,
       facts.join_url && "Join the meeting: " <> facts.join_url,
-      join_code_line(facts)
+      join_code_line(facts),
+      invite_note(facts)
     ]
     |> Enum.reject(&is_nil/1)
     |> case do
@@ -527,7 +562,16 @@ defmodule Platform.Meetings.InviteMail do
           ~s(<p class="im-muted" style="margin:4px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(line)}</p>\n)
       end
 
-    button <> join <> code
+    note =
+      case invite_note(facts) do
+        nil ->
+          ""
+
+        line ->
+          ~s(<p class="im-muted" data-role="invite-note" style="margin:8px 0 0 0;font-size:15px;line-height:22px;color:#{l.muted};">#{h(line)}</p>\n)
+      end
+
+    button <> join <> code <> note
   end
 
   defp muted_html(nil, _l), do: ""
@@ -538,7 +582,7 @@ defmodule Platform.Meetings.InviteMail do
   end
 
   defp footer_html(facts) do
-    [sent_from(facts), reply_line(facts)]
+    [sent_from(facts), why_line(facts), reply_line(facts)]
     |> Enum.reject(&is_nil/1)
     |> Enum.map_join("<br>", &h/1)
   end

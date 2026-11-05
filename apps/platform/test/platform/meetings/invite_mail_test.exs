@@ -330,6 +330,8 @@ defmodule Platform.Meetings.InviteMailTest do
     test "the footer names this install, and nothing says Burrow", %{built: built} do
       assert built.html_body =~ "Sent from Example Org on Northwind Labs."
       assert built.body =~ "Sent from Example Org on Northwind Labs."
+      assert built.body =~ "invited you to a meeting on Northwind Labs."
+      assert built.html_body =~ "invited you to a meeting on Northwind Labs."
       refute built.html_body =~ "Burrow"
       refute built.body =~ "Burrow"
     end
@@ -340,6 +342,80 @@ defmodule Platform.Meetings.InviteMailTest do
       assert brand.light.base_100 == "#f8fafc"
       assert brand.dark.primary == "#60a5fa"
       assert brand.dark.base_100 == "#0f172a"
+    end
+  end
+
+  describe "calendar-invite note and why-line (stage 5)" do
+    @note "This is a calendar invite. Accept or decline it in your mail client."
+
+    defp brand_ctx(name) do
+      Map.put(@ctx, :brand, InviteMail.brand(%InstallBranding{app_name: name}, nil))
+    end
+
+    test "invitation and updated carry the note under the join link, in HTML and text" do
+      for kind <- [:invitation, :updated] do
+        built = InviteMail.build(kind, meeting(), @guest, brand_ctx("Example App"))
+
+        assert built.html_body =~ @note, "#{kind} html"
+        assert built.body =~ @note, "#{kind} text"
+
+        [_, after_join] = String.split(built.html_body, "Join the meeting:", parts: 2)
+        assert after_join =~ @note
+        [_, after_join_text] = String.split(built.body, "Join the meeting:", parts: 2)
+        assert after_join_text =~ @note
+      end
+    end
+
+    test "a cancellation has no note" do
+      built = InviteMail.build(:cancelled, meeting(), @guest, brand_ctx("Example App"))
+      refute built.html_body =~ @note
+      refute built.body =~ @note
+    end
+
+    test "an unscheduled meeting (no calendar part) has no note" do
+      built =
+        InviteMail.build(
+          :invitation,
+          meeting(%{scheduled_start_at: nil, scheduled_end_at: nil}),
+          @guest,
+          brand_ctx("Example App")
+        )
+
+      refute built.html_body =~ @note
+    end
+
+    test "every kind says why the reader got it; a cancellation drops 'invited you'" do
+      invited = "You're getting this because Host One invited you to a meeting on Example App."
+
+      for kind <- [:invitation, :updated] do
+        built = InviteMail.build(kind, meeting(), @guest, brand_ctx("Example App"))
+        assert built.html_body =~ "You&#39;re getting this because Host One invited you"
+        assert built.body =~ invited, "#{kind}"
+      end
+
+      cancelled = InviteMail.build(:cancelled, meeting(), @guest, brand_ctx("Example App"))
+
+      assert cancelled.body =~
+               "You're getting this because you were invited to this meeting on Example App."
+
+      assert cancelled.html_body =~ "you were invited to this meeting on Example App."
+      refute cancelled.body =~ "invited you to a meeting"
+
+      # Under the Sent from line, in the footer.
+      [_, footer] = String.split(cancelled.body, "--\n", parts: 2)
+      assert footer =~ ~r/Sent from Example Org on Example App\.\nYou're getting this/
+    end
+
+    test "the why-line and note use the muted token, no new colour" do
+      built = InviteMail.build(:invitation, meeting(), @guest, brand_ctx("Example App"))
+      light = Palette.derive(:light, Palette.suite_defaults().light)
+
+      muted_hexes =
+        Regex.scan(~r/data-role="invite-note" style="[^"]*color:(#[0-9a-f]{6})/, built.html_body)
+
+      assert [[_, hex]] = muted_hexes
+      assert built.html_body =~ "color:#{hex};\">Sent from"
+      refute hex in [light["--color-primary"]]
     end
   end
 
