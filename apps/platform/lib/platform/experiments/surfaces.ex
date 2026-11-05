@@ -75,7 +75,11 @@ defmodule Platform.Experiments.Surfaces do
     # and dissemination thresholds. The control is no directive,
     # min_confidence "high" and (task 01a15587) auto_apply_min_confidence
     # "medium"; nothing is seeded.
-    Platform.Experiments.Surfaces.InsightSynthesis
+    Platform.Experiments.Surfaces.InsightSynthesis,
+    # Task 01a1aa47 stage 4: the HR responsibility's directive, lookback and
+    # name-resolution threshold. Nothing is seeded; the control is the
+    # handler's defaults.
+    Platform.Experiments.Surfaces.HrProfile
   ]
 
   @prompt_surface "dispatch.prompt"

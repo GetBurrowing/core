@@ -78,7 +78,10 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.FeedbackIntake,
       # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain, a
       # Router cron row (Monday 06:00 UTC) gated on the `janitor` role.
-      Handlers.JanitorCronDrain
+      Handlers.JanitorCronDrain,
+      # Task 01a1aa47 stage 4: HR, the people-profile curator. Two keys in the
+      # historian bundle; an input to dreaming, never a gate on it.
+      Handlers.Hr
     ]
   end
 end

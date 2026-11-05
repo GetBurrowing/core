@@ -155,6 +155,8 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
   @impl true
   def gather_context(%Responsibility{} = _responsibility, ctx) when is_map(ctx) do
+    # Task 01a1aa47 stage 4: consult HR once, bounded wait, never an error.
+    _hr_wait = Platform.People.SweepState.maybe_wait_for_hr(ctx, [])
     workspace_id = Map.get(ctx, :workspace_id) || Map.get(ctx, "workspace_id")
 
     opts =

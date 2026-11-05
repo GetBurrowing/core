@@ -109,7 +109,7 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts ten roles and thirty-two bundle rows on a fresh DB" do
+    test "inserts ten roles and thirty-four bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 10 roles: designer, historian, meeting_producer, meeting_scribe,
@@ -164,7 +164,10 @@ defmodule Platform.Roles.SeedsTest do
       # agent chosen for sorting.
       # 31 -> 32 in task 01a16974 stage 3: native brief synthesis belongs
       # to the existing meeting_scribe role; the role count stays at 10.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 32
+      # 32 -> 34 in task 01a1aa47 stage 4: `hr.daily_sweep` and
+      # `hr.meeting_completed` joined the EXISTING `historian` bundle (the
+      # roster is CLOSED by a DB CHECK; people profiles are org memory).
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 34
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
@@ -173,11 +176,11 @@ defmodule Platform.Roles.SeedsTest do
 
       assert Repo.aggregate(Role, :count, :key) == 10
 
-      # Same 32 as the fresh-DB case above — the point of this test is
+      # Same 34 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 32
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 34
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

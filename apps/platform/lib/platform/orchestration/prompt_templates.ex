@@ -1447,6 +1447,82 @@ defmodule Platform.Orchestration.PromptTemplates do
         content: @dreaming_content
       },
       %{
+        slug: "hr.profile.v1",
+        name: "HR — People Profile Curation",
+        description:
+          "User turn for both `hr.*` responsibilities (task 01a1aa47 stage 4): the 04:00 " <>
+            "America/Chicago `hr.daily_sweep` cron and the `meeting:finished` " <>
+            "`hr.meeting_completed` event. The SERVER gathers roster, appearances, staleness " <>
+            "and each subject's own words; the model catalogues, never judges. Seeded by " <>
+            "`20261105070000_seed_hr_profile_template_and_bundle.exs`.",
+        # EVERY name here is supplied by `Handlers.Hr.gather_context/2` as a
+        # binary; `interpolate/2` renders an unsupplied assign as "".
+        variables: [
+          "date",
+          "workspace_id",
+          "org_identity",
+          "people_roster",
+          "people_appearances",
+          "people_staleness",
+          "people_own_words",
+          "contract",
+          "page_grammar",
+          "experiment_directive"
+        ],
+        content: """
+        You are HR for this organisation on {{date}}. You keep the people profiles current: who someone is, where they appeared, what they are working on, and what they themselves have said. You catalogue people; you never judge them. This is a catalog, not psychology.
+
+        Workspace: {{workspace_id}}
+
+        ## Who this organisation is
+
+        {{org_identity}}
+
+        ## The contract every page is written under
+
+        {{contract}}
+
+        ## Two tiers
+
+        1. The CARD (`org/page/people/<slug>.md`) is visible to everyone in the organisation: name, aliases, relation, organisation, role, current projects, agents. No interactions, no perspectives.
+        2. The PRIVATE page (`org/page/people/<slug>/private.md`) is readable by the subject and admins only: everything on the card plus dated, cited interactions and perspectives.
+
+        Perspectives are the subject's OWN cited statements only. What someone else said about them is never a perspective. A trait judgement (lazy, brilliant, difficult, "seems like a", "the kind of person") is never written anywhere. The server drops anything else.
+
+        ## The current roster
+
+        {{people_roster}}
+
+        ## Who appeared in the window
+
+        {{people_appearances}}
+
+        ## Staleness report
+
+        {{people_staleness}}
+
+        ## Each subject's own words (the only admissible source for a perspective)
+
+        {{people_own_words}}
+
+        ## Page grammar (the server enforces this exactly)
+
+        {{page_grammar}}
+
+        ## What to produce
+
+        If you answer as structured output, return exactly this JSON shape and nothing else:
+
+            {"people": [{"slug": "...", "name": "...", "aliases": [], "user_id": "...", "relation": "team|client|prospect|investor|collaborator|former|unknown", "organisation": "...", "role": "...", "current_projects": [], "interactions": [{"date": "YYYY-MM-DD", "kind": "...", "title": "...", "citation": "..."}], "perspectives": [{"statement": "...", "said_by_subject": true, "citation": "..."}], "agents": []}], "review": ["..."]}
+
+        Put a name you cannot resolve to exactly one person in `review`, not in `people`. The server resolves every slug itself; an ambiguous one is written nowhere.
+
+        If you write the pages yourself with the memory tools, write markdown in the page grammar above: a card and a private page per person, every Perspectives bullet ending in `own words [cite: ...]`, every Interactions bullet carrying a date, a kind, a title and a cite. The server drops anything else.
+
+        {{experiment_directive}}
+        """
+      },
+      %{
         slug: "memory.dreaming.v1",
         name: "Memory Dreaming Dispatch Prompt (legacy slug)",
         description:

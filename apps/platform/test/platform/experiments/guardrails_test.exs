@@ -87,6 +87,8 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",
                  "dispatch.prompt",
+                 # Task 01a1aa47 stage 4: the HR surface, a dispatch path.
+                 "hr.profile",
                  "mail.draft.generator",
                  "mail.test.generator",
                  "meetings.brief_synthesis",
