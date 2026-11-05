@@ -650,7 +650,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       />
 
       <%!-- The invite email did not go (task 01a1a933 stage 4): a persistent
-           line in the warning slot, never a toast, on its own line under the
+           line marked with the warning slot's icon, never a toast, on its own line under the
            name (`basis-full`), with a Copy link so the host can send the link
            themselves. Its copy button carries its own id prefix, so it never
            shares a DOM id with a guest row's Copy link. --%>
@@ -660,8 +660,17 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-role="meeting-invite-email-failed"
         data-entry-id={@entry.id}
       >
-        <span class="min-w-0 text-xs text-warning" data-role="meeting-invite-email-failed-text">
-          Email not sent. Share the link instead.
+        <span class="flex min-w-0 items-start gap-1 text-xs">
+          <%!-- The warning slot carries the icon; the sentence stays body text
+               (the room palette guard keeps status hues off text). --%>
+          <span
+            class="hero-exclamation-triangle mt-px size-4 shrink-0 text-warning"
+            aria-hidden="true"
+          >
+          </span>
+          <span class="min-w-0" data-role="meeting-invite-email-failed-text">
+            Email not sent. Share the link instead.
+          </span>
         </span>
         <.copy_link
           :if={@email_failed_url}
