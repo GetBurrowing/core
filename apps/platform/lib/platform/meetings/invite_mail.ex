@@ -366,6 +366,8 @@ defmodule Platform.Meetings.InviteMail do
   defp on_app(%{app_name: nil}), do: ""
   defp on_app(%{app_name: app}), do: " on " <> app
 
+  @invite_note "This is a calendar invite. Accept or decline it in your mail client."
+
   # Under the join link, on an invitation or update that carries a calendar
   # part: the Accept/Decline lives in the reader's mail client.
   defp invite_note(%{kind: :cancelled}), do: nil
@@ -377,7 +379,6 @@ defmodule Platform.Meetings.InviteMail do
 
   @cancelled_line "This meeting was cancelled."
   @calendar_label "Add to calendar"
-  @invite_note "This is a calendar invite. Accept or decline it in your mail client."
   @changed_line "Time changed"
 
   # ── Plain text ───────────────────────────────────────────────────────────
