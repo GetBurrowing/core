@@ -145,12 +145,16 @@ defmodule Platform.People.SweepState do
 
   # ── internals ────────────────────────────────────────────────────────────
 
+  # Each pass sleeps one poll (clipped to what is left of the budget) and
+  # re-reads. A zero poll means "do not poll": the budget is treated as spent
+  # rather than spun on, so the loop always terminates.
   defp wait_loop(now_fun, status_opts, poll_ms, budget_ms, waited_ms) do
-    if waited_ms >= budget_ms do
+    sleep_ms = poll_ms |> max(0) |> min(budget_ms - waited_ms)
+
+    if sleep_ms <= 0 do
       emit(waited_ms, :proceeded_after_wait_budget)
     else
-      sleep_ms = poll_ms |> max(0) |> min(budget_ms - waited_ms)
-      if sleep_ms > 0, do: Process.sleep(sleep_ms)
+      Process.sleep(sleep_ms)
       waited_ms = waited_ms + sleep_ms
 
       case safe_status(now_fun, status_opts) do
