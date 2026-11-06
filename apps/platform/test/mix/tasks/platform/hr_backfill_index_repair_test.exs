@@ -67,7 +67,7 @@ defmodule Mix.Tasks.Platform.HrBackfillIndexRepairTest do
     {"Quinn Sample", "quinn-sample", "Team", "Designer", ""},
     {"Rowan Fixture", "rowan-fixture", "Team", "Support lead", "2026-10-01"},
     {"Casey Placeholder", "casey-placeholder", "Clients", "Buyer", "2026-09-21"},
-    {"Morgan Testwell", "morgan-testwell", "Clients", "Operations / Sample Mills", ""},
+    {"Morgan Testwell", "morgan-testwell", "Clients", "Operations lead", ""},
     {"Taylor Mockridge", "taylor-mockridge", "Clients", "Founder / Mockridge Goods",
      "2026-09-30"},
     {"Emery Stub", "emery-stub", "Clients", "Finance / Stub Holdings", "2026-09-15"},
@@ -78,15 +78,16 @@ defmodule Mix.Tasks.Platform.HrBackfillIndexRepairTest do
   ]
 
   # Cards in the shape the first backfill left them: `tier: card`, an H1 and
-  # the body's own `## Role` line (or none).
+  # the body's own `## Role` line, which wins over the index row and is cut
+  # to its label.
   @cards %{
     "avery-example" => {"Avery Example", "Platform engineer"},
     "dana-mcallister-ruiz" => {"Dana McAllister-Ruiz", "Account manager"},
     "quinn-sample" => {"Quinn Sample", "Designer"},
     "casey-placeholder" => {"Casey Placeholder", "Buyer. Reach them on [REDACTED: phone]."},
-    "morgan-testwell" => {"Morgan Testwell", nil},
+    "morgan-testwell" => {"Morgan Testwell", "Operations lead - they run the depot"},
     "harper-dummyson" => {"Harper Dummyson", "Illustrator"},
-    "sky-notreal" => {"Sky Notreal", nil}
+    "sky-notreal" => {"Sky Notreal", "Researcher; they publish quarterly"}
   }
 
   @restored ["Rowan Fixture", "Taylor Mockridge", "Emery Stub", "Lane Imaginary", "Reese Pretend"]
