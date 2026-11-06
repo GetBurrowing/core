@@ -2,7 +2,7 @@ defmodule Platform.People.Pages do
   @moduledoc """
   Reads and writes the two people-page tiers through `Platform.Org.Wiki`.
 
-    * `roster/1` — the person cards (tier `card` or absent) under
+    * `roster/1` / `roster_from_pages/1` — the person cards (tier `card` or absent) under
       `org/page/people/`, parsed into roster entries; an absent `tier:` is a
       legacy card (`legacy: true`).
     * `index_names/1` — the bold names and `[[org/page/people/<slug>.md]]`
@@ -61,6 +61,18 @@ defmodule Platform.People.Pages do
   def roster(workspace_id) do
     Visibility.prefix()
     |> Wiki.list_pages_under(workspace_id: workspace_id)
+    |> roster_from_pages()
+  end
+
+  @doc """
+  The roster entries for page-shaped maps (`file_key`, `content`, optional
+  `updated_at`) — the same parsing `roster/1` applies to stored pages, so a
+  caller can render an index from contents it has not written (the HR
+  backfill dry run). Pure: reads nothing.
+  """
+  @spec roster_from_pages([map()]) :: [roster_entry()]
+  def roster_from_pages(pages) when is_list(pages) do
+    pages
     |> Enum.filter(&(Visibility.tier_of(&1.file_key) == :card))
     |> Enum.flat_map(fn page ->
       {frontmatter, body} = Wiki.parse_frontmatter(page.content || "")
@@ -251,7 +263,7 @@ defmodule Platform.People.Pages do
       organisation: string_or(Map.get(frontmatter, "organisation"), nil),
       role: string_or(Map.get(frontmatter, "role"), nil),
       last_seen: string_or(Map.get(frontmatter, "last_seen"), nil),
-      updated_at: page.updated_at,
+      updated_at: Map.get(page, :updated_at),
       legacy: legacy?
     }
   end

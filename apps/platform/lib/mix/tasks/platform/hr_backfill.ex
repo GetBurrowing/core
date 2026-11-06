@@ -85,7 +85,7 @@ defmodule Mix.Tasks.Platform.HrBackfill do
 
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
-  alias Platform.People.{LegacyIndex, Pages, Visibility}
+  alias Platform.People.{LegacyIndex, PageGuard, Pages, Visibility}
 
   @shortdoc "Rewrite legacy people cards through the page guard and regenerate the index"
 
@@ -96,7 +96,9 @@ defmodule Mix.Tasks.Platform.HrBackfill do
           index_only_names: [String.t()],
           rewritten: [%{path: String.t(), counts: map()}],
           enriched: [%{path: String.t(), added: [String.t()]}],
+          created: [String.t()],
           index: :regenerated | :unchanged | :skipped | {:error, term()},
+          index_diff: [String.t()],
           dry_run: boolean()
         }
 
@@ -138,35 +140,56 @@ defmodule Mix.Tasks.Platform.HrBackfill do
     dry_run? = Keyword.get(opts, :dry_run, false)
 
     # Read before anything is written: the regeneration below overwrites it.
+    stored = stored_index(workspace_id)
+
     index_rows =
       opts
       |> Keyword.get(:previous_index)
-      |> Kernel.||(stored_index(workspace_id))
+      |> Kernel.||(stored)
       |> LegacyIndex.parse()
 
-    roster = Pages.roster(workspace_id)
+    pages = Wiki.list_pages_under(Visibility.prefix(), workspace_id: workspace_id)
+    roster = Pages.roster_from_pages(pages)
     legacy = roster |> Enum.filter(& &1.legacy) |> Enum.sort_by(& &1.path)
     index_only = index_only_names(roster, Pages.index_names(workspace_id))
+
+    # One plan, computed in memory, drives both the dry run and the writes.
+    cards = plan_cards(pages, roster, index_rows)
+    created = plan_minimal_cards(index_rows, Enum.map(cards, & &1.planned), workspace_id)
 
     base = %{
       legacy_cards: Enum.map(legacy, & &1.path),
       index_only_names: index_only,
       rewritten: [],
       enriched: [],
+      created: [],
       index: :skipped,
+      index_diff: [],
       dry_run: dry_run?
     }
 
     if dry_run? do
-      base
-    else
-      rewritten = Enum.flat_map(legacy, &rewrite_card(&1, workspace_id, updated_by))
+      planned_roster =
+        cards
+        |> Enum.map(& &1.planned)
+        |> Kernel.++(Enum.map(created, &%{file_key: &1.path, content: guarded(&1.content)}))
+        |> Pages.roster_from_pages()
 
-      enriched =
-        workspace_id
-        |> Pages.roster()
-        |> Enum.sort_by(& &1.path)
-        |> Enum.flat_map(&enrich_card(&1, index_rows, workspace_id, updated_by))
+      %{
+        base
+        | rewritten: for(%{rewrite: %{} = r} <- cards, do: r),
+          enriched: for(%{enrich: %{} = e} <- cards, do: e),
+          created: Enum.map(created, & &1.path),
+          index_diff: index_diff(stored, Pages.render_index(planned_roster))
+      }
+    else
+      written =
+        Enum.filter(cards, &(is_binary(&1.write) and write_ok?(&1, workspace_id, updated_by)))
+
+      created_paths =
+        for card <- created,
+            write_ok?(%{slug: card.slug, write: card.content}, workspace_id, updated_by),
+            do: card.path
 
       index =
         case Pages.regenerate_index(workspace_id, updated_by) do
@@ -175,7 +198,14 @@ defmodule Mix.Tasks.Platform.HrBackfill do
           {:error, _} = err -> err
         end
 
-      report = %{base | rewritten: rewritten, enriched: enriched, index: index}
+      report = %{
+        base
+        | rewritten: for(%{rewrite: %{} = r} <- written, do: r),
+          enriched: for(%{enrich: %{} = e} <- written, do: e),
+          created: created_paths,
+          index: index
+      }
+
       journal(report, workspace_id, updated_by)
       report
     end
@@ -205,50 +235,206 @@ defmodule Mix.Tasks.Platform.HrBackfill do
         "  enriched #{path} +#{Enum.join(added, ", ")}"
       end)
 
+    created = Enum.map(report.created, &"  created #{&1}")
+
     tail =
-      if report.dry_run,
-        do: ["Dry run: nothing written."],
-        else:
-          ["Rewritten: #{length(report.rewritten)}" | rewritten] ++
-            ["Enriched: #{length(report.enriched)}" | enriched] ++
-            ["Index: #{inspect(report.index)}"]
+      if report.dry_run do
+        diff =
+          case report.index_diff do
+            [] -> ["  (no change)"]
+            diff_lines -> Enum.map(diff_lines, &"  #{&1}")
+          end
+
+        ["Would rewrite: #{length(report.rewritten)}" | rewritten] ++
+          ["Would enrich: #{length(report.enriched)}" | enriched] ++
+          ["Would create: #{length(report.created)}" | created] ++
+          ["Index diff:" | diff] ++
+          ["Dry run: nothing written."]
+      else
+        ["Rewritten: #{length(report.rewritten)}" | rewritten] ++
+          ["Enriched: #{length(report.enriched)}" | enriched] ++
+          ["Created: #{length(report.created)}" | created] ++
+          ["Index: #{inspect(report.index)}"]
+      end
 
     legacy ++ index_only ++ tail
   end
 
   # -- internals --------------------------------------------------------------
 
-  defp rewrite_card(%{slug: slug, path: path}, workspace_id, updated_by) do
-    case Wiki.get_page(path, workspace_id: workspace_id) do
-      %{content: content} when is_binary(content) ->
-        case Pages.write_card(workspace_id, slug, content, updated_by) do
-          {:ok, _page, counts} -> [%{path: path, counts: counts}]
-          {:error, _} -> []
+  # Per card: what the legacy rewrite and the enrichment would produce, the
+  # markdown to hand to `Pages.write_card/4` (nil: nothing to write) and the
+  # page as it would be stored afterwards (`planned`).
+  defp plan_cards(pages, roster, rows) do
+    by_path = Map.new(pages, &{&1.file_key, &1})
+
+    roster
+    |> Enum.sort_by(& &1.path)
+    |> Enum.map(fn entry ->
+      page = Map.fetch!(by_path, entry.path)
+      original = page.content || ""
+
+      {rewrite, content} =
+        if entry.legacy do
+          {rewritten, counts} = PageGuard.enforce(:card, original)
+          {%{path: entry.path, counts: counts}, rewritten}
+        else
+          {nil, original}
         end
 
-      _ ->
-        []
+      name =
+        case Pages.roster_from_pages([%{file_key: entry.path, content: content}]) do
+          [%{name: name}] -> name
+          _ -> entry.name
+        end
+
+      {frontmatter, body} = Wiki.parse_frontmatter(content)
+      added = LegacyIndex.derive_frontmatter(body, frontmatter, index_row(rows, entry.path, name))
+
+      {enrich, write} =
+        cond do
+          added != %{} ->
+            {%{path: entry.path, added: added |> Map.keys() |> Enum.sort()},
+             add_frontmatter(content, added)}
+
+          rewrite ->
+            {nil, original}
+
+          true ->
+            {nil, nil}
+        end
+
+      planned = if write, do: guarded(write), else: original
+
+      %{
+        slug: entry.slug,
+        path: entry.path,
+        rewrite: rewrite,
+        enrich: enrich,
+        write: write,
+        planned: %{file_key: entry.path, content: planned, updated_at: page.updated_at}
+      }
+    end)
+  end
+
+  defp guarded(markdown), do: markdown |> then(&PageGuard.enforce(:card, &1)) |> elem(0)
+
+  defp write_ok?(%{slug: slug, write: markdown}, workspace_id, updated_by) do
+    match?({:ok, _page, _counts}, Pages.write_card(workspace_id, slug, markdown, updated_by))
+  end
+
+  # One minimal `tier: card` per index row whose person has no card: matched
+  # by link path, then case-insensitive name against every card's display
+  # name and `# ` H1. Rows naming the same person (same slug or same name)
+  # make ONE card. An existing card or private page at the slug blocks it:
+  # this never overwrites.
+  defp plan_minimal_cards(rows, planned_pages, workspace_id) do
+    entries = Pages.roster_from_pages(planned_pages)
+    card_paths = entries |> Enum.map(& &1.path) |> MapSet.new()
+
+    card_names =
+      planned_pages
+      |> Enum.map(fn page ->
+        page.content |> Wiki.parse_frontmatter() |> elem(1) |> Pages.h1()
+      end)
+      |> Kernel.++(Enum.map(entries, & &1.name))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&String.downcase/1)
+      |> MapSet.new()
+
+    rows
+    |> Enum.reject(fn row ->
+      (is_binary(row.path) and MapSet.member?(card_paths, row.path)) or
+        MapSet.member?(card_names, String.downcase(row.name))
+    end)
+    |> group_people()
+    |> Enum.flat_map(fn group ->
+      slug = minimal_slug(group)
+
+      cond do
+        slug in [nil, ""] -> []
+        page_exists?(Visibility.card_path(slug), workspace_id) -> []
+        page_exists?(Visibility.private_path(slug), workspace_id) -> []
+        true -> [%{slug: slug, path: Visibility.card_path(slug), content: minimal_card(group)}]
+      end
+    end)
+  end
+
+  defp page_exists?(path, workspace_id),
+    do: Wiki.get_page(path, workspace_id: workspace_id) != nil
+
+  # Rows in index order, grouped into people; a row joins a group that
+  # shares its slug or its (case-insensitive) name.
+  defp group_people(rows) do
+    rows
+    |> Enum.reduce([], fn row, groups ->
+      key_slug = row_slug(row)
+      key_name = String.downcase(row.name)
+
+      case Enum.find_index(groups, fn group ->
+             Enum.any?(group, &(row_slug(&1) == key_slug or String.downcase(&1.name) == key_name))
+           end) do
+        nil -> groups ++ [[row]]
+        index -> List.update_at(groups, index, &(&1 ++ [row]))
+      end
+    end)
+  end
+
+  defp minimal_slug(group) do
+    case Enum.find(group, &is_binary(&1.path)) do
+      %{path: path} -> Visibility.slug_of(path)
+      nil -> group |> hd() |> row_slug()
     end
+  end
+
+  defp row_slug(%{path: path}) when is_binary(path), do: Visibility.slug_of(path)
+
+  defp row_slug(%{name: name}) do
+    name |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
+  end
+
+  # Only the Person name, the relation from the section heading and the Role
+  # column: no other column, no free text.
+  defp minimal_card([first | _] = group) do
+    relation =
+      Enum.find_value(group, fn row -> if row.relation != "unknown", do: row.relation end)
+
+    role = Enum.find_value(group, & &1.role)
+
+    frontmatter =
+      ["tier: card", "name: #{yaml_string(first.name)}"] ++
+        if(relation, do: ["relation: #{relation}"], else: []) ++
+        if(role, do: ["role: #{yaml_string(role)}"], else: [])
+
+    Enum.join(["---"] ++ frontmatter ++ ["---", "", "# #{first.name}", ""], "\n")
+  end
+
+  # Lines only in the stored index ("- ") then lines only in the new one ("+ ").
+  defp index_diff(old, new) do
+    old_lines = String.split(old, "\n")
+    new_lines = String.split(new, "\n")
+    old_set = MapSet.new(old_lines)
+    new_set = MapSet.new(new_lines)
+
+    removed =
+      for line <- Enum.uniq(old_lines),
+          line != "",
+          not MapSet.member?(new_set, line),
+          do: "- " <> line
+
+    added =
+      for line <- Enum.uniq(new_lines),
+          line != "",
+          not MapSet.member?(old_set, line),
+          do: "+ " <> line
+
+    removed ++ added
   end
 
   defp stored_index(workspace_id) do
     case Wiki.get_page(Visibility.index_path(), workspace_id: workspace_id) do
       %{content: content} when is_binary(content) -> content
       _ -> ""
-    end
-  end
-
-  defp enrich_card(%{slug: slug, path: path, name: name}, rows, workspace_id, updated_by) do
-    with %{content: content} when is_binary(content) <-
-           Wiki.get_page(path, workspace_id: workspace_id),
-         {frontmatter, body} = Wiki.parse_frontmatter(content),
-         row = index_row(rows, path, name),
-         added when added != %{} <- LegacyIndex.derive_frontmatter(body, frontmatter, row),
-         {:ok, _page, _counts} <-
-           Pages.write_card(workspace_id, slug, add_frontmatter(content, added), updated_by) do
-      [%{path: path, added: added |> Map.keys() |> Enum.sort()}]
-    else
-      _ -> []
     end
   end
 
@@ -302,8 +488,12 @@ defmodule Mix.Tasks.Platform.HrBackfill do
     Enum.uniq(from_names ++ from_paths)
   end
 
-  defp journal(%{rewritten: [], enriched: [], index: :unchanged}, _workspace_id, _updated_by),
-    do: :ok
+  defp journal(
+         %{rewritten: [], enriched: [], created: [], index: :unchanged},
+         _workspace_id,
+         _updated_by
+       ),
+       do: :ok
 
   defp journal(report, workspace_id, updated_by) do
     paths = Enum.map(report.rewritten, & &1.path)
@@ -322,16 +512,19 @@ defmodule Mix.Tasks.Platform.HrBackfill do
             "#{path} (+#{Enum.join(added, " ")})"
           end)
 
+    created = if report.created == [], do: "none", else: Enum.join(report.created, ", ")
+
     attrs =
       %{
         content:
-          "HR backfill: rewrote legacy cards #{rewrote}; enriched #{enriched}; index #{inspect(report.index)}; index-only names #{index_only}",
+          "HR backfill: rewrote legacy cards #{rewrote}; enriched #{enriched}; created #{created}; index #{inspect(report.index)}; index-only names #{index_only}",
         date: Date.utc_today(),
         workspace_id: workspace_id,
         metadata: %{
           "source" => @journal_source,
           "rewritten" => paths,
           "enriched" => Enum.map(report.enriched, &%{"path" => &1.path, "added" => &1.added}),
+          "created" => report.created,
           "index_only_names" => report.index_only_names
         }
       }
