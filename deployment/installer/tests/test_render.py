@@ -1308,6 +1308,11 @@ class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
     def render(self, hosted, feedback=None, path=EXAMPLE):
         raw = copy.deepcopy(load(path))
         raw["install"]["hosted"] = hosted
+        if hosted and raw.get("backup", {}).get("target", "none") == "none":
+            # A hosted install needs a backup target or the explicit opt-out
+            # (backup_required_hosted); the opt-out keeps the backup render
+            # identical, so the hosted/self-host diff is only the feedback line.
+            raw.setdefault("backup", {})["hosted_opt_out"] = True
         if feedback is not None:
             raw["feedback"] = feedback
         return build(valid(raw), **self.build_kwargs(path))
