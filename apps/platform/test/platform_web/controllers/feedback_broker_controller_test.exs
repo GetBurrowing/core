@@ -140,7 +140,10 @@ defmodule PlatformWeb.FeedbackBrokerControllerTest do
       |> put_req_header("content-type", "application/json")
       |> post(@path, Jason.encode!([1, 2, 3]))
 
-    assert json_response(conn, 422) == %{"error" => "invalid_arguments"}
+    # A JSON array arrives as `%{"_json" => [...]}`: no repository, so it is
+    # refused at the first check, and nothing is published.
+    assert json_response(conn, 422) == %{"error" => "repository_mismatch"}
+    assert github_issues() == []
   end
 
   test "a broker without a GitHub App answers 502 with the bounded code", %{conn: conn} do
