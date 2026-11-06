@@ -256,4 +256,46 @@ defmodule Platform.People.PagesTest do
     assert Visibility.tier_of(Visibility.index_path()) == :index
     assert Visibility.tier_of("org/page/other.md") == :unknown
   end
+
+  describe "display name" do
+    defp legacy_card!(slug, content) do
+      {:ok, _} = Wiki.upsert_page("org/page/people/#{slug}.md", %{content: content})
+    end
+
+    defp roster_name(slug) do
+      nil |> Pages.roster() |> Enum.find(&(&1.slug == slug)) |> Map.fetch!(:name)
+    end
+
+    test "roster takes the card H1 in original case when name frontmatter is absent" do
+      legacy_card!(
+        "dana-mcallister-ruiz",
+        "---\nrelation: team\n---\n\n# Dana McAllister-Ruiz\n\n## Role\nSomething.\n"
+      )
+
+      assert roster_name("dana-mcallister-ruiz") == "Dana McAllister-Ruiz"
+
+      index = Pages.render_index(Pages.roster(nil))
+      assert index =~ "**Dana McAllister-Ruiz**"
+      refute index =~ "dana mcallister-ruiz"
+    end
+
+    test "name frontmatter wins over the H1" do
+      legacy_card!(
+        "avery-example",
+        "---\nname: Avery Example-Stone\n---\n\n# Avery Example\n\n## Role\nSomething.\n"
+      )
+
+      assert roster_name("avery-example") == "Avery Example-Stone"
+    end
+
+    test "a card with neither falls back to the humanized slug" do
+      # an H1 below the first section is not the card's title
+      legacy_card!(
+        "sample-person",
+        "---\nrelation: client\n---\n\n## Role\nSomething.\n\n# Not A Title\n"
+      )
+
+      assert roster_name("sample-person") == "sample person"
+    end
+  end
 end

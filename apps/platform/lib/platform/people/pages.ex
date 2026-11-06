@@ -56,11 +56,11 @@ defmodule Platform.People.Pages do
     |> Wiki.list_pages_under(workspace_id: workspace_id)
     |> Enum.filter(&(Visibility.tier_of(&1.file_key) == :card))
     |> Enum.flat_map(fn page ->
-      {frontmatter, _body} = Wiki.parse_frontmatter(page.content || "")
+      {frontmatter, body} = Wiki.parse_frontmatter(page.content || "")
 
       case Map.get(frontmatter, "tier") do
-        nil -> [entry(page, frontmatter, true)]
-        "card" -> [entry(page, frontmatter, false)]
+        nil -> [entry(page, frontmatter, body, true)]
+        "card" -> [entry(page, frontmatter, body, false)]
         _other_tier -> []
       end
     end)
@@ -231,13 +231,13 @@ defmodule Platform.People.Pages do
 
   defp key?(line, key), do: String.starts_with?(String.trim_leading(line), key <> ":")
 
-  defp entry(page, frontmatter, legacy?) do
+  defp entry(page, frontmatter, body, legacy?) do
     slug = Visibility.slug_of(page.file_key)
 
     %{
       slug: slug,
       path: page.file_key,
-      name: string_or(Map.get(frontmatter, "name"), humanize(slug)),
+      name: display_name(frontmatter, body, slug),
       aliases: aliases(Map.get(frontmatter, "aliases")),
       user_id: string_or(Map.get(frontmatter, "user_id"), nil),
       relation: relation_of(%{relation: Map.get(frontmatter, "relation")}),
@@ -271,6 +271,42 @@ defmodule Platform.People.Pages do
   defp string_or(value, _default) when is_binary(value), do: value
   defp string_or(%Date{} = date, _default), do: Date.to_iso8601(date)
   defp string_or(value, _default), do: to_string(value)
+
+  # The displayed name keeps the case the card was written in: a non-blank
+  # `name:` key, else the card's `# ` H1 (legacy cards carry no `name:`),
+  # else the humanized slug. Never downcased; sorting downcases on its own.
+  defp display_name(frontmatter, body, slug) do
+    case Map.get(frontmatter, "name") do
+      name when is_binary(name) ->
+        if String.trim(name) == "",
+          do: h1(body) || humanize(slug),
+          else: String.trim(name)
+
+      nil ->
+        h1(body) || humanize(slug)
+
+      other ->
+        string_or(other, humanize(slug))
+    end
+  end
+
+  @h1_re ~r/\A#\s+(.+?)\s*\z/
+
+  defp h1(body) when is_binary(body) do
+    body
+    |> String.split(["\r\n", "\n"])
+    |> Enum.reduce_while(nil, fn line, nil ->
+      line = String.trim(line)
+
+      cond do
+        String.starts_with?(line, "##") -> {:halt, nil}
+        match = Regex.run(@h1_re, line, capture: :all_but_first) -> {:halt, hd(match)}
+        true -> {:cont, nil}
+      end
+    end)
+  end
+
+  defp h1(_body), do: nil
 
   defp humanize(nil), do: "Unknown"
   defp humanize(slug), do: slug |> String.replace(["-", "_"], " ") |> String.trim()
