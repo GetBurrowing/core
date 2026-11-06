@@ -778,6 +778,14 @@ class Service:
         return self.mem_limit(ctx) if callable(self.mem_limit) else self.mem_limit
 
 
+def feedback_enabled(m):
+    """``[feedback] enabled`` if set, otherwise ``install.hosted``."""
+    explicit = m.get("feedback", {}).get("enabled")
+    if explicit is not None:
+        return explicit is True
+    return m["install"]["hosted"] is True
+
+
 def _core_env(ctx):
     env = {
         "PHX_SERVER": "true",
@@ -809,6 +817,12 @@ def _core_env(ctx):
         # Agents in the agent-host container reach core on the agents network,
         # not through the public URL (AgentHost.core_url/0's default).
         env["AGENT_HOST_CORE_URL"] = AGENT_HOST_CORE_URL
+    if feedback_enabled(ctx.m):
+        # Core task 01a1a6a5 stage 4: feedback is opt-in in core; this is the
+        # opt-in. The broker URL and repository come from core's defaults,
+        # and an install never holds a GitHub or broker credential, so this
+        # is the ONE feedback variable an install is ever rendered.
+        env["FEEDBACK_POLICY"] = "quarantined"
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]

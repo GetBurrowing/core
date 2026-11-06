@@ -211,6 +211,13 @@ SCHEMA = {
         # admin_deploy and admin_rollback tools.
         "full_root": _bool(False),
     },
+    # External feedback (core task 01a1a6a5 stage 4). NO default: unset means
+    # "follow install.hosted", so a hosted install renders
+    # FEEDBACK_POLICY=quarantined into core's environment and a self-hosted
+    # one renders nothing. An explicit value wins either way.
+    "feedback": {
+        "enabled": Field("bool"),
+    },
     # Web Push (VAPID) keys for core (core task 01a10315 stage 1).
     "push": {
         "vapid": _enum(VAPID_MODES, "off"),

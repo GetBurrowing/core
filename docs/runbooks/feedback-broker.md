@@ -17,6 +17,13 @@ Feedback is **opt-in**. It is off unless the install sets:
 | --- | --- | --- |
 | `FEEDBACK_POLICY` | `quarantined` (or `trusted`) | Turns on the agent tool, the person form, and intake. Unset, blank, `disabled` or any other value means off. |
 
+Installs rendered by the installer opt in with the manifest's `[feedback] enabled`
+(`deployment/schema/install-manifest.md`). It defaults to `install.hosted`, so a hosted install
+gets `FEEDBACK_POLICY=quarantined` and a self-hosted one gets nothing unless it sets
+`enabled = true`. A hosted install opts out with `enabled = false`. A hosted install picks this
+up only once its renderer runs an installer that has the `[feedback]` table; installs provisioned
+before that render nothing.
+
 A self-hoster who does not use the installer opts in by setting
 `FEEDBACK_POLICY=quarantined` in core's environment.
 
