@@ -36,6 +36,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.Invite
   alias Platform.Meetings.Membership
   alias Platform.Meetings.InviteDelivery
+  alias Platform.Meetings.InviteMailer
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.SayRegistry
   alias Platform.Meetings.SayTelemetry
@@ -218,7 +219,7 @@ defmodule Platform.Meetings do
   # `root_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
   # wider. Swapping them is an access change, not a refactor.
   defp viewer_meeting_query(slug, _user_id, true = _root_admin?) do
-    from(m in Meeting, where: m.slug == ^slug, limit: 2)
+    from(m in Meeting, where: m.slug == ^slug and is_nil(m.deleted_at), limit: 2)
   end
 
   defp viewer_meeting_query(slug, user_id, false = _root_admin?) do
@@ -227,7 +228,7 @@ defmodule Platform.Meetings do
     from(m in Meeting,
       join: p in Platform.Tasks.Project,
       on: p.id == m.project_id,
-      where: m.slug == ^slug and p.org_id in subquery(viewer_org_ids),
+      where: m.slug == ^slug and p.org_id in subquery(viewer_org_ids) and is_nil(m.deleted_at),
       limit: 2
     )
   end
@@ -549,11 +550,12 @@ defmodule Platform.Meetings do
     Repo.get_by(Meeting, project_id: project_id, slug: slug)
   end
 
-  @doc "List all meetings for a project, newest first."
+  @doc "List all meetings for a project, newest first. Soft-deleted meetings are left out."
   @spec list_meetings_for_project(binary()) :: [Meeting.t()]
   def list_meetings_for_project(project_id) do
     Meeting
     |> where([m], m.project_id == ^project_id)
+    |> where([m], is_nil(m.deleted_at))
     |> order_by([m], desc: m.inserted_at)
     |> Repo.all()
   end
@@ -580,6 +582,7 @@ defmodule Platform.Meetings do
   @spec list_all_meetings_unscoped() :: [Meeting.t()]
   def list_all_meetings_unscoped do
     Meeting
+    |> where([m], is_nil(m.deleted_at))
     |> order_by([m], desc: m.inserted_at)
     |> Repo.all()
   end
@@ -633,6 +636,7 @@ defmodule Platform.Meetings do
   def list_meetings_in_range(%DateTime{} = from, %DateTime{} = to, opts \\ []) do
     Meeting
     |> where([m], m.scheduled_start_at >= ^from and m.scheduled_start_at < ^to)
+    |> where([m], is_nil(m.deleted_at))
     |> scope_range_to_project(Keyword.get(opts, :project_id))
     |> order_by([m], asc: m.scheduled_start_at, asc: m.inserted_at)
     |> Repo.all()
@@ -745,7 +749,17 @@ defmodule Platform.Meetings do
   #
   #   * Internal user — org membership, mirroring `viewer_meeting_query/3`:
   #     join the project and require its `org_id` among the viewer's orgs.
+  #
+  # Every branch leaves out a soft-deleted meeting (task 01a1b281 stage 2),
+  # root admins included: a deleted meeting is gone from every listing and
+  # every by-id read that goes through here.
   defp viewer_listing_query(user) do
+    user
+    |> viewer_listing_base()
+    |> where([m], is_nil(m.deleted_at))
+  end
+
+  defp viewer_listing_base(user) do
     cond do
       Platform.Tenancy.root_admin?(user) ->
         from(m in Meeting)
@@ -1016,6 +1030,7 @@ defmodule Platform.Meetings do
     |> where([m], not is_nil(m.scheduled_start_at))
     |> where([m], m.scheduled_start_at < ^now)
     |> where([m], is_nil(m.started_at))
+    |> where([m], is_nil(m.deleted_at))
     |> scope_range_to_project(Keyword.get(opts, :project_id))
     |> order_by([m], asc: m.scheduled_start_at)
     |> Repo.all()
@@ -1680,9 +1695,458 @@ defmodule Platform.Meetings do
     end
   end
 
-  defp load_meeting_for_viewer(meeting_id, user) do
+  # ── Edit in place and delete (task 01a1b281 stage 2) ─────────────────────
+
+  @doc """
+  May `user` edit `meeting` in place? `can_cancel_meeting?/2` (host,
+  creator, org admin, root admin; externals never) AND the meeting is
+  `scheduled` AND it has not already finished (`scheduled_end_at` nil or in
+  the future). A live, ended or cancelled meeting is not editable.
+  """
+  @spec can_edit_meeting?(Meeting.t(), map() | nil, DateTime.t()) :: boolean()
+  def can_edit_meeting?(meeting, user, now \\ DateTime.utc_now())
+
+  def can_edit_meeting?(%Meeting{status: "scheduled"} = meeting, user, %DateTime{} = now) do
+    not past_end?(meeting, now) and can_cancel_meeting?(meeting, user)
+  end
+
+  def can_edit_meeting?(_meeting, _user, _now), do: false
+
+  @doc """
+  May `user` delete `meeting`? `can_cancel_meeting?/2` AND the meeting is
+  over: `cancelled` or `ended`, or `scheduled` with a `scheduled_end_at` in
+  the past (it never happened). A live meeting, and a scheduled one still
+  ahead, is not deletable: cancel it first.
+  """
+  @spec can_delete_meeting?(Meeting.t(), map() | nil, DateTime.t()) :: boolean()
+  def can_delete_meeting?(meeting, user, now \\ DateTime.utc_now())
+
+  def can_delete_meeting?(%Meeting{} = meeting, user, %DateTime{} = now) do
+    deletable_status?(meeting, now) and can_cancel_meeting?(meeting, user)
+  end
+
+  def can_delete_meeting?(_meeting, _user, _now), do: false
+
+  defp deletable_status?(%Meeting{status: status}, _now) when status in ["cancelled", "ended"],
+    do: true
+
+  defp deletable_status?(%Meeting{status: "scheduled", scheduled_end_at: %DateTime{}} = m, now),
+    do: past_end?(m, now)
+
+  defp deletable_status?(%Meeting{}, _now), do: false
+
+  defp past_end?(%Meeting{scheduled_end_at: %DateTime{} = ends_at}, %DateTime{} = now),
+    do: DateTime.compare(ends_at, now) != :gt
+
+  defp past_end?(%Meeting{}, _now), do: false
+
+  @doc """
+  What saving `attrs` against `meeting` would do, without doing it: the
+  answer the edit form's "When you save" summary renders. Built from the
+  SAME plan `update_meeting_for_user/3` executes and the SAME recipient rule
+  `Platform.Meetings.InviteMailer` sends to (`InviteMailer.audience/2`,
+  `InviteMailer.recipient_for/2`), so the sentence and the mail cannot
+  disagree.
+
+  `attrs` takes `name`, `description`, `scheduled_start_at`,
+  `scheduled_end_at`, `remove_invite_ids` and `add_invitees` (entries
+  shaped like the create sheet's: `%{kind: :user, user_id: ...}`,
+  `%{kind: :guest, display_name: ..., email: ...}`,
+  `%{kind: :external, email: ...}`), atom or string keys.
+
+  Returns
+
+      %{
+        changed: [:name | :description | :time | :invitees],
+        update_recipients: [recipient],   # existing invitees, new time/title
+        cancel_recipients: [recipient],   # removed invitees, METHOD:CANCEL
+        invite_recipients: [recipient],   # added invitees, one invitation
+        emails?: boolean(),
+        link: "/meetings/<slug>",         # unchanged by any edit
+        refusal: nil | :last_invitee
+      }
+
+  where each recipient is `%{name, email}`. A notes-only change has
+  `emails?: false`.
+  """
+  @spec preview_meeting_edit(Meeting.t(), map()) :: map()
+  def preview_meeting_edit(%Meeting{} = meeting, attrs) when is_map(attrs) do
+    plan = plan_edit(meeting, attrs)
+
+    update_recipients =
+      if plan.update_invite_ids == [] do
+        []
+      else
+        meeting
+        |> InviteMailer.audience(only: plan.update_invite_ids)
+        |> Enum.map(fn {_invite, recipient} -> recipient end)
+      end
+
+    cancel_recipients =
+      plan.removed
+      |> Enum.filter(&InviteMailer.calendar_holder?/1)
+      |> Enum.map(&InviteMailer.recipient_for(&1, meeting))
+
+    invite_recipients =
+      plan.added
+      |> Enum.map(&prospective_invite(meeting, &1, plan.live))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&InviteMailer.recipient_for(&1, meeting))
+
+    [update_recipients, cancel_recipients, invite_recipients] =
+      Enum.map(
+        [update_recipients, cancel_recipients, invite_recipients],
+        fn list ->
+          list
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(&%{name: Map.get(&1, :name), email: &1.email})
+          |> Enum.uniq_by(&String.downcase(&1.email))
+        end
+      )
+
+    %{
+      changed: plan.changed,
+      update_recipients: update_recipients,
+      cancel_recipients: cancel_recipients,
+      invite_recipients: invite_recipients,
+      emails?: update_recipients != [] or cancel_recipients != [] or invite_recipients != [],
+      link: "/meetings/#{meeting.slug}",
+      refusal: plan.refusal
+    }
+  end
+
+  @doc """
+  Edit a scheduled meeting IN PLACE on behalf of a signed-in user: same
+  id, same slug, same `/g/<short_code>` guest links, no cancel-and-recreate
+  (task 01a1b281 stage 2). `attrs` is `preview_meeting_edit/2`'s.
+
+  In order:
+
+    1. Load through the viewer scope (`viewer_listing_query/1`): an unseen,
+       deleted or malformed meeting is `{:error, :not_found}`.
+    2. `{:error, :forbidden}` unless `can_edit_meeting?/2`.
+    3. `{:error, changeset}` for an invalid name or time pair.
+    4. `{:error, :last_invitee}` when the edit would leave a meeting that
+       had invitees with none: `recipients_for_meeting/1` would then fall
+       back to every chat participant and widen who is told.
+    5. ONE transaction: a guarded UPDATE (still `scheduled`, not deleted)
+       of the changed fields, incrementing `ical_sequence` iff the time or
+       the name changed (both are on every calendar copy; notes are not),
+       and `revoke_invite/1` on each removed invite.
+    6. The update audience is SNAPSHOTTED before anyone is added: the
+       existing calendar holders minus the removed. After commit
+       `{:meeting_updated, meeting, %{update_invite_ids, cancelled_invite_ids,
+       changed}}` is broadcast, and `Platform.Meetings.MeetingNotifier`
+       sends `InviteMailer.send_updates(meeting, only: update_invite_ids)`
+       and one `InviteMailer.send_cancellation/2` per removed calendar
+       holder.
+    7. Added invitees then go through `invite_user/3`, `invite_guest/2`
+       and `invite_external_user/3`, so each new row takes its own
+       `InviteDelivery` claim and gets exactly one invitation, at the new
+       SEQUENCE, and no update (they are not in the snapshot).
+
+  A notes-only edit bumps nothing and emails nobody. An edit that changes
+  nothing at all writes and broadcasts nothing.
+
+  Returns `{:ok, %{meeting: meeting, added: [invite], failed: [entry]}}`,
+  `failed` being the added entries that produced no row.
+  """
+  @spec update_meeting_for_user(binary(), map(), map() | nil) ::
+          {:ok, %{meeting: Meeting.t(), added: [Invite.t()], failed: [map()]}}
+          | {:error, :not_found | :forbidden | :last_invitee | :not_editable | Ecto.Changeset.t()}
+  def update_meeting_for_user(meeting_id, attrs, %{id: user_id} = user)
+      when is_binary(meeting_id) and is_binary(user_id) and is_map(attrs) do
+    with {:ok, meeting} <- load_meeting_for_viewer(meeting_id, user),
+         true <- can_edit_meeting?(meeting, user) || {:error, :forbidden},
+         plan = plan_edit(meeting, attrs),
+         true <- plan.changeset.valid? || {:error, plan.changeset},
+         nil <- plan.refusal && {:error, plan.refusal},
+         {:ok, updated} <- commit_edit(meeting, plan) do
+      if plan.changed != [] do
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_updated, updated,
+           %{
+             update_invite_ids: plan.update_invite_ids,
+             cancelled_invite_ids: plan.cancelled_invite_ids,
+             changed: plan.changed
+           }}
+        )
+      end
+
+      {added, failed} = add_edit_invitees(updated, plan.added, user_id)
+      {:ok, %{meeting: updated, added: added, failed: failed}}
+    end
+  end
+
+  def update_meeting_for_user(_meeting_id, _attrs, _user), do: {:error, :not_found}
+
+  # Everything the edit would do, computed once for both the preview and
+  # the write.
+  defp plan_edit(%Meeting{} = meeting, attrs) do
+    changeset = Meeting.edit_changeset(meeting, edit_field_attrs(attrs))
+    changes = changeset.changes
+    time? = Map.has_key?(changes, :scheduled_start_at) or Map.has_key?(changes, :scheduled_end_at)
+    name? = Map.has_key?(changes, :name)
+    description? = Map.has_key?(changes, :description)
+
+    live = list_invites(meeting.id)
+    remove_ids = attr_list(attrs, :remove_invite_ids) |> Enum.filter(&is_binary/1) |> MapSet.new()
+    {removed, kept} = Enum.split_with(live, &MapSet.member?(remove_ids, &1.id))
+    added = attr_list(attrs, :add_invitees) |> Enum.filter(&is_map/1)
+    bump? = time? or name?
+
+    # The snapshot: who holds the event on a calendar NOW, minus whoever this
+    # edit removes. Taken before any invitee is added, so an added invitee
+    # gets their invitation and never an update as well.
+    update_invite_ids =
+      if bump? do
+        removed_ids = MapSet.new(removed, & &1.id)
+
+        meeting
+        |> InviteMailer.audience()
+        |> Enum.map(fn {invite, _recipient} -> invite.id end)
+        |> Enum.reject(&MapSet.member?(removed_ids, &1))
+      else
+        []
+      end
+
+    changed =
+      [
+        name? && :name,
+        description? && :description,
+        time? && :time,
+        (removed != [] or added != []) && :invitees
+      ]
+      |> Enum.filter(& &1)
+
+    %{
+      changeset: changeset,
+      bump?: bump?,
+      changed: changed,
+      live: live,
+      removed: removed,
+      added: added,
+      update_invite_ids: update_invite_ids,
+      cancelled_invite_ids:
+        removed |> Enum.filter(&InviteMailer.calendar_holder?/1) |> Enum.map(& &1.id),
+      refusal: if(live != [] and removed != [] and kept == [] and added == [], do: :last_invitee)
+    }
+  end
+
+  @edit_field_keys [:name, :description, :scheduled_start_at, :scheduled_end_at]
+
+  # Only the keys the caller sent, so an absent field is "unchanged", never
+  # "cleared".
+  defp edit_field_attrs(attrs) do
+    Enum.reduce(@edit_field_keys, %{}, fn key, acc ->
+      string_key = Atom.to_string(key)
+
+      cond do
+        Map.has_key?(attrs, key) -> Map.put(acc, key, Map.get(attrs, key))
+        Map.has_key?(attrs, string_key) -> Map.put(acc, key, Map.get(attrs, string_key))
+        true -> acc
+      end
+    end)
+  end
+
+  defp attr_list(attrs, key) when is_atom(key) do
+    case Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key)) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  end
+
+  defp commit_edit(%Meeting{} = meeting, plan) do
+    changes = plan.changeset.changes
+
+    Repo.transaction(fn ->
+      updated =
+        if changes == %{} do
+          meeting
+        else
+          write_edit(meeting, changes, plan.bump?)
+        end
+
+      Enum.each(plan.removed, &revoke_invite/1)
+      updated
+    end)
+  end
+
+  defp write_edit(%Meeting{} = meeting, changes, bump?) do
+    set =
+      changes
+      |> Map.take([:name, :description, :scheduled_start_at, :scheduled_end_at])
+      |> Map.put(:updated_at, DateTime.utc_now())
+      |> Enum.to_list()
+
+    inc = if bump?, do: [inc: [ical_sequence: 1]], else: []
+
+    from(m in Meeting,
+      where: m.id == ^meeting.id and m.status == "scheduled" and is_nil(m.deleted_at),
+      select: m
+    )
+    |> Repo.update_all([set: set] ++ inc)
+    |> case do
+      {1, [updated]} -> updated
+      {0, _} -> Repo.rollback(:not_editable)
+    end
+  end
+
+  # An entry that would add nobody new (already a live invitee) yields nil.
+  defp prospective_invite(_meeting, entry, live) do
+    case invitee_entry(entry) do
+      {:user, user_id, _name, _email} ->
+        if Enum.any?(live, &(&1.user_id == user_id)), do: nil, else: %Invite{user_id: user_id}
+
+      {kind, nil, name, email} when kind in [:guest, :external] and is_binary(email) ->
+        address = String.trim(email)
+
+        case kind == :external && Repo.get_by(User, email: address) do
+          %User{id: user_id} ->
+            prospective_invite(nil, %{kind: :user, user_id: user_id}, live)
+
+          _ ->
+            if Enum.any?(live, &same_invite_address?(&1, address)),
+              do: nil,
+              else: %Invite{email: address, display_name: name || address}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp same_invite_address?(%Invite{email: email}, address) when is_binary(email),
+    do: String.downcase(String.trim(email)) == String.downcase(address)
+
+  defp same_invite_address?(_invite, _address), do: false
+
+  defp invitee_entry(entry) do
+    get = fn key -> Map.get(entry, key) || Map.get(entry, Atom.to_string(key)) end
+
+    kind =
+      case get.(:kind) do
+        k when k in [:user, "user"] -> :user
+        k when k in [:guest, "guest"] -> :guest
+        k when k in [:external, "external"] -> :external
+        _ -> nil
+      end
+
+    case kind do
+      :user ->
+        case get.(:user_id) do
+          id when is_binary(id) -> {:user, id, get.(:display_name), nil}
+          _ -> nil
+        end
+
+      nil ->
+        nil
+
+      kind ->
+        {kind, nil, get.(:display_name), get.(:email)}
+    end
+  end
+
+  defp add_edit_invitees(%Meeting{} = meeting, entries, inviter_user_id) do
+    entries
+    |> Enum.map(fn entry -> {entry, add_edit_invitee(meeting, entry, inviter_user_id)} end)
+    |> Enum.reduce({[], []}, fn
+      {_entry, {:ok, %Invite{} = invite}}, {added, failed} ->
+        {[invite | added], failed}
+
+      {_entry, {:ok, %{invite: %Invite{} = invite}}}, {added, failed} ->
+        {[invite | added], failed}
+
+      {entry, _error}, {added, failed} ->
+        {added, [entry | failed]}
+    end)
+    |> then(fn {added, failed} -> {Enum.reverse(added), Enum.reverse(failed)} end)
+  end
+
+  defp add_edit_invitee(meeting, entry, inviter_user_id) do
+    case invitee_entry(entry) do
+      {:user, user_id, name, _email} ->
+        invite_user(meeting, user_id, display_name: name, inviter_user_id: inviter_user_id)
+
+      {:guest, nil, name, email} ->
+        invite_guest(meeting, %{display_name: name, email: email, host_user_id: inviter_user_id})
+
+      {:external, nil, name, email} when is_binary(email) ->
+        invite_external_user(meeting, email,
+          display_name: name || String.trim(email),
+          inviter_user_id: inviter_user_id
+        )
+
+      _ ->
+        {:error, :invalid_invitee}
+    end
+  end
+
+  @doc """
+  Soft-delete a meeting on behalf of a signed-in user (task 01a1b281 stage
+  2). Loads through the viewer scope (`{:error, :not_found}` otherwise),
+  `{:error, :forbidden}` unless `can_cancel_meeting?/2`, and
+  `{:error, :not_deletable}` for a live meeting or a scheduled one still
+  ahead (`can_delete_meeting?/2`): cancel it first.
+
+  ONE guarded UPDATE stamps `deleted_at` and `deleted_by_user_id` where
+  `deleted_at IS NULL`, so a second delete (stale struct or second window)
+  changes nothing and still answers `{:ok, meeting}`. No email is sent:
+  a cancelled meeting already told everyone, and a past one is history.
+  `{:meeting_deleted, meeting}` is broadcast once, by the call that won.
+
+  The transcript (`meeting_transcripts.meeting_id` stays set), recordings
+  (they hang off the room and space) and the chat space are untouched.
+  """
+  @spec delete_meeting_for_user(binary(), map() | nil) ::
+          {:ok, Meeting.t()} | {:error, :not_found | :forbidden | :not_deletable}
+  def delete_meeting_for_user(meeting_id, %{id: user_id} = user)
+      when is_binary(meeting_id) and is_binary(user_id) do
+    with {:ok, meeting} <- load_meeting_for_viewer(meeting_id, user, include_deleted: true),
+         true <- can_cancel_meeting?(meeting, user) || {:error, :forbidden},
+         true <- can_delete_meeting?(meeting, user) || {:error, :not_deletable} do
+      soft_delete(meeting, user_id)
+    end
+  end
+
+  def delete_meeting_for_user(_meeting_id, _user), do: {:error, :not_found}
+
+  # Already deleted: the same answer, no write and no second broadcast.
+  defp soft_delete(%Meeting{deleted_at: %DateTime{}} = meeting, _user_id), do: {:ok, meeting}
+
+  defp soft_delete(%Meeting{} = meeting, user_id) do
+    now = DateTime.utc_now()
+
+    from(m in Meeting, where: m.id == ^meeting.id and is_nil(m.deleted_at), select: m)
+    |> Repo.update_all(set: [deleted_at: now, deleted_by_user_id: user_id, updated_at: now])
+    |> case do
+      {1, [deleted]} ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(deleted.project_id),
+          {:meeting_deleted, deleted}
+        )
+
+        {:ok, deleted}
+
+      {0, _} ->
+        {:ok, Repo.get!(Meeting, meeting.id)}
+    end
+  end
+
+  # `include_deleted: true` is for `delete_meeting_for_user/2` alone, so a
+  # repeated delete answers `{:ok, meeting}` instead of `:not_found`. The
+  # viewer rule is the same `viewer_listing_base/1` either way.
+  defp load_meeting_for_viewer(meeting_id, user, opts \\ []) do
+    query =
+      if Keyword.get(opts, :include_deleted, false),
+        do: viewer_listing_base(user),
+        else: viewer_listing_query(user)
+
     if Platform.UUID.valid?(meeting_id) do
-      case user |> viewer_listing_query() |> where([m], m.id == ^meeting_id) |> Repo.one() do
+      case query |> where([m], m.id == ^meeting_id) |> Repo.one() do
         %Meeting{} = meeting -> {:ok, meeting}
         nil -> {:error, :not_found}
       end

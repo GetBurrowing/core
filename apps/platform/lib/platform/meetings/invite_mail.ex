@@ -90,6 +90,7 @@ defmodule Platform.Meetings.InviteMail do
   alias Platform.Meetings.Meeting
 
   @kinds [:invitation, :cancelled, :updated]
+  @changed_line "Time changed"
   @attendee_cap 5
 
   @font "'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
@@ -115,7 +116,8 @@ defmodule Platform.Meetings.InviteMail do
           optional(:brand) => brand(),
           optional(:calendar_url) => String.t() | nil,
           optional(:attendees) => [String.t()],
-          optional(:reason) => String.t() | nil
+          optional(:reason) => String.t() | nil,
+          optional(:changed_line) => String.t() | nil
         }
   @type palette :: %{
           base_100: String.t(),
@@ -173,7 +175,11 @@ defmodule Platform.Meetings.InviteMail do
       calendar_url: present(Map.get(ctx, :calendar_url)),
       join_code: present(Map.get(recipient, :short_code)),
       attendees: attendees(Map.get(ctx, :attendees)),
-      reason: present(Map.get(ctx, :reason))
+      reason: present(Map.get(ctx, :reason)),
+      # What an `:updated` email says moved (task 01a1b281 stage 2): the
+      # caller names it, "Time changed" when it does not.
+      changed_line:
+        if(kind == :updated, do: present(Map.get(ctx, :changed_line)) || @changed_line)
     }
 
     %{
@@ -379,7 +385,6 @@ defmodule Platform.Meetings.InviteMail do
 
   @cancelled_line "This meeting was cancelled."
   @calendar_label "Add to calendar"
-  @changed_line "Time changed"
 
   # ── Plain text ───────────────────────────────────────────────────────────
 
@@ -387,7 +392,7 @@ defmodule Platform.Meetings.InviteMail do
     [
       facts.title,
       "",
-      if(facts.kind == :updated, do: @changed_line),
+      facts.changed_line,
       time_text(facts),
       facts.zone_line,
       "",
@@ -505,9 +510,9 @@ defmodule Platform.Meetings.InviteMail do
     """
   end
 
-  defp changed_html(%{kind: :updated}, l) do
+  defp changed_html(%{kind: :updated, changed_line: line}, l) do
     ~s(<p class="im-ink" style="margin:0 0 4px 0;font-size:15px;line-height:22px;font-weight:600;color:#{l.base_content};">) <>
-      h(@changed_line) <> "</p>\n"
+      h(line) <> "</p>\n"
   end
 
   defp changed_html(_facts, _l), do: ""

@@ -87,7 +87,9 @@ defmodule PlatformWeb.MeetingCalendarController do
     with {:ok, token} <- fetch_token(params),
          {:ok, payload} <- CalendarLink.verify(token),
          :ok <- authorize_payload(payload, id),
-         %Meeting{} = meeting <- Meetings.get_meeting(id),
+         # A soft-deleted meeting is a 404 (task 01a1b281 stage 2), the same
+         # answer as a meeting that never existed.
+         %Meeting{deleted_at: nil} = meeting <- Meetings.get_meeting(id),
          {:ok, body} <- CalendarFeed.render(meeting) do
       conn
       |> put_resp_content_type(@content_type)
