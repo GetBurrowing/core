@@ -1,6 +1,6 @@
 defmodule Platform.Repo.Migrations.BackfillExternalAgentHttpRuntimeType do
   @moduledoc """
-  External HTTP-delegated agents (`kind = 'external'` with an
+  Task 01a1b20f: external HTTP-delegated agents (`kind = 'external'` with an
   `endpoint_kind`) were saved with the schema default
   `runtime_type = 'built_in'`, which claims the built-in BEAM runtime they
   do not run in. `Platform.ExternalAgents.create_external_agent/1` now
