@@ -15,7 +15,7 @@ defmodule Platform.GameStream.ReleaseRollbackTest do
 
   alias Platform.Release
 
-  @play_versions [20_260_926_030_000, 20_260_928_200_000]
+  @play_versions [20_260_926_030_000, 20_260_928_200_000, 20_261_027_040_000]
 
   test "the release migrates core's path first, then Play's" do
     [core, play] = Release.migrations_paths(Repo)
@@ -55,11 +55,12 @@ defmodule Platform.GameStream.ReleaseRollbackTest do
     assert Enum.count(Ecto.Migrator.migrations(Repo), &(elem(&1, 0) == :down)) == 0
   end
 
-  test "a rollback to a version above both of Play's crosses none of them" do
-    assert Release.module_versions_crossed(20_260_928_200_001, @play_versions) == []
+  test "a rollback to a version above all of Play's crosses none of them" do
+    assert Release.module_versions_crossed(20_261_027_040_001, @play_versions) == []
 
     assert Release.module_versions_crossed(20_260_928_200_000, @play_versions) == [
-             20_260_928_200_000
+             20_260_928_200_000,
+             20_261_027_040_000
            ]
   end
 
