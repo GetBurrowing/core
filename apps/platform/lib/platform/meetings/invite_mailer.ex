@@ -116,25 +116,100 @@ defmodule Platform.Meetings.InviteMailer do
   def send_cancellations(%Meeting{} = meeting), do: send_to_audience(:cancelled, meeting)
 
   @doc """
-  Email everyone who may hold `meeting` on a calendar its new time
+  Email everyone who may hold `meeting` on a calendar its new time or name
   (`METHOD:REQUEST`, same UID, the bumped SEQUENCE). Returns how many were
   queued.
+
+  Options (task 01a1b281 stage 2):
+
+    * `only: invite_ids` narrows the audience to those invites. The edit
+      path snapshots the audience BEFORE it adds invitees and passes the
+      snapshot here, so an invitee added by the same edit gets their
+      invitation and never an update as well. Recipients are still resolved
+      now, so someone who opted out in between is not mailed.
+    * `changed: fields` names what moved (`:time`, `:name`) for the
+      email's "changed" line. Without it the line reads "Time changed".
   """
-  @spec send_updates(Meeting.t()) :: non_neg_integer()
-  def send_updates(%Meeting{} = meeting), do: send_to_audience(:updated, meeting)
+  @spec send_updates(Meeting.t(), keyword()) :: non_neg_integer()
+  def send_updates(%Meeting{} = meeting, opts \\ []) do
+    send_to_audience(:updated, meeting, opts)
+  end
+
+  @doc """
+  Email ONE removed invitee that `meeting` is off for them (`METHOD:CANCEL`,
+  same UID, SEQUENCE + 1), while the meeting itself goes ahead (task
+  01a1b281 stage 2). Sent only when `invite` is in the calendar audience
+  (`calendar_holder?/1`): someone who never got an invitation email holds
+  no calendar copy to remove. Never to the inviter.
+  """
+  @spec send_cancellation(Invite.t(), Meeting.t()) :: result()
+  def send_cancellation(%Invite{} = invite, %Meeting{} = meeting) do
+    inviter = inviter(meeting, nil)
+
+    with true <- calendar_holder?(invite) || :not_owed,
+         %{} = recipient <- recipient(invite, inviter) || :not_owed,
+         {:ok, setup} <- setup(meeting, inviter, []) do
+      result = send_one(:cancelled, meeting, recipient, setup)
+      log_failure(:cancelled, meeting, result)
+      nudge([result])
+      result
+    end
+  end
 
   # ── Audience ─────────────────────────────────────────────────────────────
 
-  defp send_to_audience(kind, %Meeting{} = meeting) do
+  @doc """
+  The ONE rule for who gets a cancellation or an update email about
+  `meeting`, as `[{invite, recipient}]` (task 01a1b281 stage 2 exposed it so
+  `Platform.Meetings.preview_meeting_edit/2` reads the same answer the mail
+  is sent to): every live invite that is a `calendar_holder?/1`, resolved
+  through `recipient/2` (account email unless opted out; guest address;
+  never the inviter), one per address.
+
+  `only: invite_ids` narrows to those invites.
+  """
+  @spec audience(Meeting.t(), keyword()) :: [{Invite.t(), InviteMail.recipient()}]
+  def audience(%Meeting{} = meeting, opts \\ []) do
     inviter = inviter(meeting, nil)
 
-    recipients =
-      meeting.id
-      |> Meetings.list_invites()
-      |> Enum.filter(&(not is_nil(&1.mail_delivery_id) or guest_with_address?(&1)))
-      |> Enum.map(&recipient(&1, inviter))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq_by(&String.downcase(&1.email))
+    meeting.id
+    |> Meetings.list_invites()
+    |> narrow_to(Keyword.get(opts, :only))
+    |> Enum.filter(&calendar_holder?/1)
+    |> Enum.map(&{&1, recipient(&1, inviter)})
+    |> Enum.reject(fn {_invite, recipient} -> is_nil(recipient) end)
+    |> Enum.uniq_by(fn {_invite, recipient} -> String.downcase(recipient.email) end)
+  end
+
+  @doc """
+  May `invite`'s invitee hold the meeting on a calendar? True when an
+  invitation email was queued for it (`mail_delivery_id`) or it is a guest
+  with an address.
+  """
+  @spec calendar_holder?(Invite.t()) :: boolean()
+  def calendar_holder?(%Invite{} = invite),
+    do: not is_nil(invite.mail_delivery_id) or guest_with_address?(invite)
+
+  @doc """
+  Who an email about `meeting` for `invite` would go to, or nil: the same
+  `recipient/2` every send uses, with the meeting's creator as the inviter.
+  `invite` need not be persisted, so a preview can ask about an invitee it
+  has not added yet.
+  """
+  @spec recipient_for(Invite.t(), Meeting.t()) :: InviteMail.recipient() | nil
+  def recipient_for(%Invite{} = invite, %Meeting{} = meeting),
+    do: recipient(invite, inviter(meeting, nil))
+
+  defp narrow_to(invites, nil), do: invites
+
+  defp narrow_to(invites, ids) when is_list(ids) do
+    keep = MapSet.new(ids)
+    Enum.filter(invites, &MapSet.member?(keep, &1.id))
+  end
+
+  defp send_to_audience(kind, %Meeting{} = meeting, opts \\ []) do
+    inviter = inviter(meeting, nil)
+    recipients = meeting |> audience(opts) |> Enum.map(&elem(&1, 1))
 
     case recipients do
       [] ->
@@ -143,6 +218,7 @@ defmodule Platform.Meetings.InviteMailer do
       _ ->
         case setup(meeting, inviter, []) do
           {:ok, setup} ->
+            setup = put_changed_line(setup, Keyword.get(opts, :changed))
             results = Enum.map(recipients, &send_one(kind, meeting, &1, setup))
             Enum.each(results, &log_failure(kind, meeting, &1))
             nudge(results)
@@ -158,6 +234,19 @@ defmodule Platform.Meetings.InviteMailer do
         end
     end
   end
+
+  defp put_changed_line(setup, changed) when is_list(changed) do
+    line =
+      case {:time in changed, :name in changed} do
+        {true, true} -> "Time and title changed"
+        {false, true} -> "Title changed"
+        _ -> nil
+      end
+
+    if line, do: put_in(setup, [:ctx, :changed_line], line), else: setup
+  end
+
+  defp put_changed_line(setup, _changed), do: setup
 
   defp guest_with_address?(%Invite{user_id: nil, email: email}), do: present?(email)
   defp guest_with_address?(%Invite{}), do: false

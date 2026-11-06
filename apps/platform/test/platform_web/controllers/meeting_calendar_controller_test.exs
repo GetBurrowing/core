@@ -97,6 +97,24 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
     hd(events)
   end
 
+  describe "show/2 — a soft-deleted meeting (task 01a1b281 stage 2)" do
+    test "the same URL that served it answers 404 once it is deleted", %{conn: conn} do
+      meeting = create_meeting!()
+      path = feed_path(meeting)
+
+      assert get(conn, path).status == 200
+
+      {1, _} =
+        Meeting
+        |> where([m], m.id == ^meeting.id)
+        |> Repo.update_all(set: [deleted_at: DateTime.utc_now()])
+
+      conn = get(Phoenix.ConnTest.build_conn(), path)
+      assert conn.status == 404
+      assert conn.resp_body == ""
+    end
+  end
+
   describe "show/2 — a scheduled meeting" do
     test "serves the meeting's single VEVENT with its UID and times", %{conn: conn} do
       meeting = create_meeting!()
