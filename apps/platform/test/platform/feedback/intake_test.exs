@@ -161,7 +161,7 @@ defmodule Platform.Feedback.IntakeTest do
     test "the feedback repository and connected repositories are in scope, case-insensitively",
          %{project: project} do
       assert {:ok, %{kind: :feedback_repository, project_id: id}} =
-               Intake.scope("startup-suite/CORE")
+               Intake.scope("getburrowing/CORE")
 
       assert id == project.id
 
