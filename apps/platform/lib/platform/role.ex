@@ -212,6 +212,7 @@ defmodule Platform.Role do
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
     Platform.Calendar.BookingRateLimit,
+    Platform.Feedback.BrokerRateLimit,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,

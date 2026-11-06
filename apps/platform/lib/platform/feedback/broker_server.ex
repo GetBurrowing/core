@@ -30,12 +30,14 @@ defmodule Platform.Feedback.BrokerServer do
   a display hint (validated to agent | person) that keeps the person footer
   and the person required-field rule.
 
-  ## Shared ledger on Kobo prod
+  ## Shared ledger on the broker host
 
-  On Kobo prod (burrow.kobo-ai.com) the broker shares the
-  `feedback_submissions` table, and so the installation-wide cap, with Kobo's
-  own agents and people. This is accepted: one table is what makes a
-  submission from any install and from Kobo itself dedupe to one issue.
+  The broker host (the install `GithubPublisher.Broker.default_broker_url/0`
+  points at) is also an ordinary install, so the broker shares its
+  `feedback_submissions` table, and so the installation-wide cap, with that
+  install's own agents and people. This is accepted: one table is what makes
+  a submission from any install and from the host itself dedupe to one
+  issue.
   """
 
   import Ecto.Query, only: [from: 2]

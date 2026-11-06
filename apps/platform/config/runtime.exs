@@ -423,7 +423,7 @@ end
 #
 # Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
 # adapter: `broker` (default; every Burrow installation) posts to
-# FEEDBACK_BROKER_URL (unset: the Kobo prod broker,
+# FEEDBACK_BROKER_URL (unset: the hosted Burrow broker,
 # `Platform.Feedback.GithubPublisher.Broker.default_broker_url/0`) and holds
 # no GitHub secret at all; `github_app` is for
 # the Burrow-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,

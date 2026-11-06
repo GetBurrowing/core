@@ -9,7 +9,8 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
   ## Wire contract
 
     * The base URL is `FEEDBACK_BROKER_URL`, or `default_broker_url/0`
-      (Kobo prod) when it is unset or blank (task 01a1a6a5 stage 3).
+      (the hosted Burrow broker) when it is unset or blank (task 01a1a6a5
+      stage 3).
     * `POST <base>/issues` with JSON
       `%{repository, fingerprint, installation, submission}` and the
       fingerprint as the `idempotency-key` header. `installation` is the
@@ -96,7 +97,8 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
   @doc """
   The broker every install uses unless `FEEDBACK_BROKER_URL` overrides it:
-  Kobo prod (task 01a1a6a5 stage 3). This is the ONE place it is written.
+  the hosted Burrow broker (task 01a1a6a5 stage 3). This is the ONE place
+  in the tree it is written.
   Moving the broker means changing this value in a release, or setting
   `FEEDBACK_BROKER_URL` on each install.
   """

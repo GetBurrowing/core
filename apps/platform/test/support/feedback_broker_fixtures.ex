@@ -58,7 +58,7 @@ defmodule Platform.FeedbackBrokerFixtures do
       Keyword.merge(current,
         adapter: GithubApp,
         repository: "GetBurrowing/core",
-        installation_label: "kobo-broker"
+        installation_label: "hosted-broker"
       )
     )
   end

@@ -25,9 +25,9 @@ A self-hoster who does not use the installer opts in by setting
 Once `FEEDBACK_POLICY` is set, an install needs nothing else:
 
 * Repository: `GetBurrowing/core` (`Platform.Feedback.GithubPublisher`).
-* Broker: `https://burrow.kobo-ai.com/api/feedback-broker/v1`, the Kobo prod
-  broker (`Platform.Feedback.GithubPublisher.Broker.default_broker_url/0`,
-  the one place it is written).
+* Broker: the hosted Burrow broker, `https://<broker host>/api/feedback-broker/v1`.
+  The exact value is `Platform.Feedback.GithubPublisher.Broker.default_broker_url/0`,
+  the one place in the tree it is written.
 
 ### Overrides
 
@@ -37,10 +37,11 @@ Once `FEEDBACK_POLICY` is set, an install needs nothing else:
 | `FEEDBACK_REPOSITORY` | Target another `owner/name` repository. The broker must be configured for the same one, or it answers `repository_mismatch`. |
 | `FEEDBACK_INSTALLATION_LABEL` | The install's label, shown in the issue's attribution (reduced to `A-Za-z0-9._-`). |
 
-## On the broker host (Kobo prod, burrow.kobo-ai.com)
+## On the broker host
 
-The broker runs **in core**, behind a flag, on Kobo prod. Set these keys in
-Kobo prod's core environment:
+The broker runs **in core**, behind a flag, on the production install that
+`default_broker_url/0` points at. Set these keys in that install's core
+environment:
 
 | Key | Purpose |
 | --- | --- |
@@ -63,14 +64,14 @@ and treated as hostile:
   `{"error": <code>}` (422, 429, 502, 503). It never echoes request text,
   headers, GitHub's response or an exception, and both routes are mounted
   with `log: false`.
-* On Kobo prod the broker shares the `feedback_submissions` table, and so
-  the installation-wide cap, with Kobo's own agents and people. This is
+* On the broker host the broker shares the `feedback_submissions` table, and
+  so the installation-wide cap, with that install's own agents and people. This is
   accepted and documented in `Platform.Feedback.BrokerServer`.
 
 ## The one infra precondition outside the code
 
-A GitHub App with **issues: write** on `GetBurrowing/core`, installed for Kobo
-prod, whose id, installation id and private key are set as the three
+A GitHub App with **issues: write** on `GetBurrowing/core`, installed for the
+broker host, whose id, installation id and private key are set as the three
 `FEEDBACK_GITHUB_APP_*` keys above. Until it exists the broker answers
 `publisher_not_configured` (502) and installs see the same code.
 

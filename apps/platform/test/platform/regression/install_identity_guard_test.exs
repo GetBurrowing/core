@@ -61,12 +61,20 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
 
   # %{relative_path => exact hit count}.
   #
+  # One entry is not English words: the feedback broker's default URL
+  # (task 01a1a6a5 stage 3, approved plan v2), which every install calls
+  # unless FEEDBACK_BROKER_URL overrides it, so it has to be compiled in. It
+  # is written in exactly ONE place; its tests pin it by sha256 and every doc
+  # names `Broker.default_broker_url/0` instead of the host.
+  #
   # Stage 6 inlined the dark-mode glyph as an SVG and renamed the theme
   # toggle's variables, so app.css, theme_toggle.js, layouts.ex,
   # shell.html.heex and theme_toggle_test.exs left this list at 0 hits.
   @allowlist %{
     # KEEP: emoji keyword data (English words and one country name)
-    "apps/platform/assets/emoji/data.js" => 37
+    "apps/platform/assets/emoji/data.js" => 37,
+    # KEEP: the hosted feedback broker's default URL, the one place it is written
+    "apps/platform/lib/platform/feedback/github_publisher/broker.ex" => 2
   }
 
   # Empty since the pre-public scrub. Its one entry, the security guard

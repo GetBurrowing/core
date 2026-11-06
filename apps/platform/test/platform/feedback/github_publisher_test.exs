@@ -256,7 +256,12 @@ defmodule Platform.Feedback.GithubPublisherTest do
       end
     end
 
-    test "an unset or blank broker url uses the Kobo prod default (task 01a1a6a5 stage 3)" do
+    # sha256 of the hosted broker's base URL. The value is pinned by digest
+    # because the install identity guard forbids spelling an operator's host
+    # in the tree outside the one allowlisted place (broker.ex).
+    @default_url_sha256 "c84b22984a4788862b1ac20428dbea6716dff71c128885ba10835a5b3e4eb6aa"
+
+    test "an unset or blank broker url uses the hosted default (task 01a1a6a5 stage 3)" do
       test_pid = self()
 
       # Req.Test intercepts the request: nothing leaves the test.
@@ -272,13 +277,21 @@ defmodule Platform.Feedback.GithubPublisherTest do
       for value <- [nil, "", "   "] do
         put_publisher(broker_url: value)
         assert {:ok, %{issue_number: 3}} = publish(issue())
-        assert_received {:url, :https, "burrow.kobo-ai.com", "/api/feedback-broker/v1/issues"}
+        assert_received {:url, :https, host, "/api/feedback-broker/v1/issues"}
+        assert host == URI.parse(Broker.default_broker_url()).host
       end
 
       current = Application.get_env(:platform, GithubPublisher)
       Application.put_env(:platform, GithubPublisher, Keyword.delete(current, :broker_url))
-      assert {:ok, "https://burrow.kobo-ai.com/api/feedback-broker/v1"} = Broker.base_url()
-      assert Broker.default_broker_url() == "https://burrow.kobo-ai.com/api/feedback-broker/v1"
+      assert {:ok, url} = Broker.base_url()
+      assert url == Broker.default_broker_url()
+
+      assert :crypto.hash(:sha256, Broker.default_broker_url()) |> Base.encode16(case: :lower) ==
+               @default_url_sha256
+
+      assert %URI{scheme: "https", path: "/api/feedback-broker/v1"} =
+               URI.parse(Broker.default_broker_url())
+
       refute Broker.default_broker_url() =~ "feedback.getburrow.ing"
     end
 
