@@ -389,6 +389,62 @@ defmodule Platform.ExternalAgents.DispatcherTest do
     end
   end
 
+  # ── task 01a1b20f stage 2 — the chat opt-out stops at the chat seam ─────
+  #
+  # `accepts_chat: false` is read by `Platform.Chat.AgentResponder` only. A
+  # single-purpose agent opted out of chat is exactly the agent that MUST keep
+  # answering its responsibility, so the dispatcher may not consult the flag
+  # (or runtime_type). A real `%Agent{}` struct, so a guard pattern-matching
+  # the schema struct would be caught too.
+  describe "an agent that does not take chat (task 01a1b20f)" do
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_dispatcher_test, fn conn ->
+        send(test_pid, {:dispatch_req, conn.request_path})
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{
+              "message" => %{
+                "role" => "assistant",
+                "content" => ~s({"intent": "action_items", "confidence": 0.9})
+              }
+            }
+          ]
+        })
+      end)
+
+      :ok
+    end
+
+    for runtime_type <- ["http", "built_in"] do
+      test "runtime_type #{runtime_type}: still dispatched and classified" do
+        agent =
+          struct!(
+            Platform.Agents.Agent,
+            "openai_compat"
+            |> build_agent(%{
+              name: "Classifier",
+              runtime_type: unquote(runtime_type),
+              accepts_chat: false
+            })
+          )
+
+        assert agent.accepts_chat == false
+        :ok = EphemeralCredentials.put(agent.id, "sk-test")
+        on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+        responsibility = build_responsibility(%{output_contract: %{"type" => "object"}})
+
+        assert {:ok, %{"intent" => "action_items", "confidence" => 0.9}} =
+                 Dispatcher.dispatch(responsibility, agent, %{topic: "meeting chunk"})
+
+        assert_receive {:dispatch_req, "/chat/completions"}
+      end
+    end
+  end
+
   # ── task 019f2570 stage 1 — pre-built messages / prompt overrides ──────
   describe "dispatch/4 opts overrides (task 019f2570)" do
     setup do

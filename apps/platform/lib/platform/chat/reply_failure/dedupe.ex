@@ -68,6 +68,19 @@ defmodule Platform.Chat.ReplyFailure.Dedupe do
     end
   end
 
+  @doc """
+  Claim the right to post one declined-chat notice for `agent_id` about
+  `message_id` (task 01a1b20f). Per message only: no agent window, and a
+  key of its own, so it neither holds nor is held by a failure notice's
+  claims. Returns `:ok` once per pair inside `@message_ttl_ms`.
+  """
+  @spec claim_message(binary(), binary(), integer()) :: :ok | :duplicate
+  def claim_message(agent_id, message_id, now_ms \\ System.monotonic_time(:millisecond)) do
+    if claim_key({:declined, agent_id, message_id}, now_ms + @message_ttl_ms, now_ms),
+      do: :ok,
+      else: :duplicate
+  end
+
   @doc "How long a delivered message stays pending: 10 minutes."
   @spec pending_ttl_ms() :: pos_integer()
   def pending_ttl_ms, do: @pending_ttl_ms

@@ -139,6 +139,12 @@ defmodule Platform.Chat.AgentResponder do
     :role_scoped
   ]
 
+  # Reasons that mean a person's chat message reached this agent. The
+  # addressed ones get the one-line notice; ambient ones (`:active_agent`,
+  # `:watch`) are skipped silently, because nobody asked this agent.
+  @addressed_reasons [:mention, :directed, :multi_mention, :reply]
+  @chat_reasons @addressed_reasons ++ [:active_agent, :watch]
+
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: reason} = signal) when reason in @routable_reasons do
     Logger.info(
@@ -158,14 +164,24 @@ defmodule Platform.Chat.AgentResponder do
         is_nil(context.message) ->
           dispatch_system_event(signal, context)
 
+        # An agent that opted out of chat (`accepts_chat: false`, task
+        # 01a1b20f) is never dispatched for a person's message, whatever its
+        # runtime: no typing, no model call, no runtime broadcast. Above the
+        # runtime clauses so it cannot be bypassed by any of them.
+        # `:system_event` and `:role_scoped` are not chat from a person and
+        # fall through unchanged.
+        context.agent.accepts_chat == false and reason in @chat_reasons ->
+          decline_chat(reason, context)
+
         context.agent.runtime_type == "external" ->
           Logger.info("[AgentResponder] dispatching to external runtime")
           dispatch_to_external(signal, context)
 
-        # An external HTTP agent keeps `runtime_type: "built_in"` (the schema
-        # default), so without this clause its chat went to QuickAgent and
-        # never reached its `base_url`. Same reply/notice handling as the
-        # built-in path; only the model call differs.
+        # An external HTTP agent carries `runtime_type: "http"` (task
+        # 01a1b20f; rows saved before it carry the `"built_in"` default). This
+        # clause matches by `kind`, not runtime_type, so both reach the
+        # agent's `base_url` instead of QuickAgent. Same reply/notice handling
+        # as the built-in path; only the model call differs.
         context.agent.kind == "external" ->
           Logger.info("[AgentResponder] dispatching to external http agent=#{context.agent.slug}")
 
@@ -193,6 +209,19 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   def respond(_signal), do: :ok
+
+  # ── Chat opt-out (task 01a1b20f) ────────────────────────────────────
+
+  defp decline_chat(reason, context) when reason in @addressed_reasons do
+    Logger.info(
+      "[AgentResponder] agent=#{context.agent.slug} does not take chat; posting notice (reason=#{reason})"
+    )
+
+    _ = ReplyFailure.chat_declined(context)
+    :ok
+  end
+
+  defp decline_chat(_reason, _context), do: :ok
 
   # ── Built-in agent dispatch (original behavior) ─────────────────────
 

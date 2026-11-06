@@ -19,6 +19,10 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       itself is re-checked server-side;
     * everyone else reads "Someone who manages <Name> can fix this in Agent
       Resources."
+
+  A declined-chat notice (`cause: "chat_declined"`, task 01a1b20f) is one
+  line, "<Name> doesn't take chat messages.", with no action and no
+  hand-off: nothing is broken, so there is nothing to fix.
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
@@ -40,7 +44,12 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
     agent = load_agent(metadata["agent_id"])
     name = (agent && agent.name) || "This agent"
     cause = metadata["cause"]
-    [line1, line2] = lines(assigns.msg.content, name, cause)
+    declined? = cause == "chat_declined"
+
+    [line1, line2] =
+      if declined?,
+        do: [ReplyFailure.chat_declined_line(name), nil],
+        else: lines(assigns.msg.content, name, cause)
 
     assigns =
       assigns
@@ -49,6 +58,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       |> assign(:cause, cause)
       |> assign(:line1, line1)
       |> assign(:line2, line2)
+      |> assign(:declined?, declined?)
       |> assign(:can_manage?, NativeAgents.can_manage?(assigns.viewer_user_id, agent))
       |> assign(:native?, NativeAgents.managed?(agent))
 
@@ -69,9 +79,9 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       <span class="hero-exclamation-circle mt-0.5 size-5 shrink-0 text-error" aria-hidden="true" />
       <div class="min-w-0 flex-1 text-sm leading-5 text-base-content">
         <p class="font-semibold">{@line1}</p>
-        <p>{@line2}</p>
+        <p :if={@line2}>{@line2}</p>
         <.link
-          :if={@can_manage? && @agent}
+          :if={!@declined? && @can_manage? && @agent}
           navigate={~p"/control/#{@agent.slug}"}
           data-role="reply-failure-action"
           class={[
@@ -83,7 +93,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
           {action_label(@cause, @name, @native?)}
         </.link>
         <p
-          :if={!@can_manage?}
+          :if={!@declined? && !@can_manage?}
           data-role="reply-failure-handoff"
           class="mt-1 text-xs leading-4 text-subtle"
         >

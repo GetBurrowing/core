@@ -58,6 +58,21 @@ defmodule Platform.Chat.ReplyFailure do
   read per call). The state is ephemeral (`Platform.Chat.ReplyFailure.Dedupe`,
   ETS, per node): a restart may let one extra notice through, which is the
   cheaper failure.
+
+  ## Declined chat (task 01a1b20f)
+
+  An agent with `accepts_chat: false` is single-purpose: it answers
+  responsibility dispatches, not people. `chat_declined/1` tells the person
+  who addressed it with ONE line, "<Name> doesn't take chat messages.",
+  posted the same way and with the same `kind`, so `notice?/1` and the
+  router's exit cover it too. Its metadata `cause` is `"chat_declined"`.
+
+  It is deduped per `(agent_id, message_id)` only. The per-agent window
+  does not apply: the opt-out is a standing fact, not a failure storm, and a
+  second person addressing the agent a minute later must still be told. The
+  claim is an ETS `insert_new` (two concurrent dispatches of one message
+  cannot both post), backed by a lookup of an existing notice row for that
+  message, so a restart or a second node does not post a second one either.
   """
 
   require Logger
@@ -75,6 +90,7 @@ defmodule Platform.Chat.ReplyFailure do
   import Ecto.Query, only: [from: 2]
 
   @kind "reply_failure"
+  @chat_declined_cause "chat_declined"
   @causes ~w(needs_login stopped crashed unknown)a
   @default_dedupe_s 300
 
@@ -124,6 +140,75 @@ defmodule Platform.Chat.ReplyFailure do
   end
 
   def notify(_context, _reason), do: {:error, :invalid_context}
+
+  @doc """
+  Post the one-line notice that `context`'s agent does not take chat
+  messages (`accepts_chat: false`), for the message that addressed it.
+
+  Returns `{:ok, notice}`, `:deduped` when this agent's notice for this
+  message already exists, `:skipped` in a system-event space, or
+  `{:error, reason}`. Never raises. Clears the agent's typing indicator
+  either way.
+  """
+  @spec chat_declined(%{agent: Agent.t(), message: Message.t()}) ::
+          {:ok, Message.t()} | :deduped | :skipped | {:error, term()}
+  def chat_declined(%{agent: %Agent{} = agent, message: %Message{} = message} = context) do
+    result =
+      cond do
+        system_event_space?(message.space_id) -> :skipped
+        Dedupe.claim_message(agent.id, message.id) == :duplicate -> :deduped
+        chat_declined_posted?(agent, message) -> :deduped
+        true -> post_chat_declined(agent, message)
+      end
+
+    stop_typing(context_participant(context), message)
+    result
+  rescue
+    error ->
+      Logger.warning(
+        "[ReplyFailure] could not post chat_declined notice for agent=#{agent.id}: #{Exception.message(error)}"
+      )
+
+      {:error, error}
+  end
+
+  def chat_declined(_context), do: {:error, :invalid_context}
+
+  @doc "The text of the declined-chat notice."
+  @spec chat_declined_line(String.t()) :: String.t()
+  def chat_declined_line(name), do: "#{name} doesn't take chat messages."
+
+  @doc "True for a declined-chat notice (see `chat_declined/1`)."
+  @spec chat_declined?(Message.t() | map()) :: boolean()
+  def chat_declined?(%{metadata: %{"cause" => @chat_declined_cause}} = message),
+    do: notice?(message)
+
+  def chat_declined?(_), do: false
+
+  # The durable half of the dedupe: the notice row itself, keyed by the
+  # agent and the message it answers. Survives a restart and a second node,
+  # which the ETS claim does not.
+  defp chat_declined_posted?(%Agent{id: agent_id}, %Message{id: message_id, space_id: space_id}) do
+    Repo.exists?(
+      from(m in Message,
+        where:
+          m.space_id == ^space_id and m.content_type == "system" and is_nil(m.deleted_at) and
+            fragment("?->>'kind'", m.metadata) == ^@kind and
+            fragment("?->>'cause'", m.metadata) == ^@chat_declined_cause and
+            fragment("?->>'agent_id'", m.metadata) == ^agent_id and
+            fragment("?->>'message_id'", m.metadata) == ^message_id
+      )
+    )
+  end
+
+  defp post_chat_declined(%Agent{} = agent, %Message{} = message) do
+    post_system_line(message, chat_declined_line(agent.name), %{
+      "kind" => @kind,
+      "agent_id" => agent.id,
+      "message_id" => message.id,
+      "cause" => @chat_declined_cause
+    })
+  end
 
   @doc """
   Remember that `context`'s message was delivered to the agent's runtime, so
@@ -363,21 +448,30 @@ defmodule Platform.Chat.ReplyFailure do
   defp detail(_reason), do: nil
 
   defp post(%Agent{} = agent, %Message{} = message, cause, detail) do
+    post_system_line(
+      message,
+      headline(agent.name) <> "\n" <> cause_line(cause, agent.name),
+      %{
+        "kind" => @kind,
+        "agent_id" => agent.id,
+        "message_id" => message.id,
+        "cause" => Atom.to_string(cause)
+      }
+      |> maybe_put("detail", detail)
+    )
+  end
+
+  # Every notice is a `system` message from the space's system participant,
+  # in the thread of the message it answers.
+  defp post_system_line(%Message{} = message, content, metadata) do
     with {:ok, system} <- ExecutionSpace.ensure_system_participant(message.space_id) do
       Chat.post_message(%{
         space_id: message.space_id,
         thread_id: message.thread_id,
         participant_id: system.id,
         content_type: "system",
-        content: headline(agent.name) <> "\n" <> cause_line(cause, agent.name),
-        metadata:
-          %{
-            "kind" => @kind,
-            "agent_id" => agent.id,
-            "message_id" => message.id,
-            "cause" => Atom.to_string(cause)
-          }
-          |> maybe_put("detail", detail)
+        content: content,
+        metadata: metadata
       })
     end
   end
