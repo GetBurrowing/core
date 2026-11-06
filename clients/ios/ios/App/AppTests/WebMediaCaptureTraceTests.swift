@@ -96,9 +96,11 @@ final class WebMediaCaptureTraceTests: XCTestCase {
         XCTAssertTrue((trace.forwardingTarget(for: Self.alertPanel) as? FakeTarget) === target)
         // Nothing behind the proxy implements it, so WebKit must not see it.
         XCTAssertFalse(trace.responds(to: Self.confirmPanel))
-        // The capture method is the proxy's own.
+        // The capture method is the proxy's own, so the Objective-C runtime
+        // calls it directly and never asks forwardingTarget for it.
         XCTAssertTrue(trace.responds(to: Self.mediaCapture))
-        XCTAssertNil(trace.forwardingTarget(for: Self.mediaCapture))
+        XCTAssertTrue(WebMediaCaptureTrace.instancesRespond(to: Self.mediaCapture))
+        XCTAssertFalse(WebMediaCaptureTrace.instancesRespond(to: Self.alertPanel))
     }
 
     func testDoesNotRetainItsTarget() {
