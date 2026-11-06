@@ -2,7 +2,7 @@ defmodule Platform.People.Pages do
   @moduledoc """
   Reads and writes the two people-page tiers through `Platform.Org.Wiki`.
 
-    * `roster/1` — the person cards (tier `card` or absent) under
+    * `roster/1` / `roster_from_pages/1` — the person cards (tier `card` or absent) under
       `org/page/people/`, parsed into roster entries; an absent `tier:` is a
       legacy card (`legacy: true`).
     * `index_names/1` — the bold names and `[[org/page/people/<slug>.md]]`
@@ -49,18 +49,37 @@ defmodule Platform.People.Pages do
           legacy: boolean()
         }
 
+  @doc """
+  The relation keys in index order mapped to their index section titles
+  (`"client" => "Clients"`, ..., `"unknown" => "Unknown relation"`).
+  """
+  @spec relation_titles() :: [{String.t(), String.t()}]
+  def relation_titles, do: Enum.map(@relations, &{&1, Map.fetch!(@relation_titles, &1)})
+
   @doc "The person cards under the people prefix. Private pages and the index are skipped."
   @spec roster(binary() | nil) :: [roster_entry()]
   def roster(workspace_id) do
     Visibility.prefix()
     |> Wiki.list_pages_under(workspace_id: workspace_id)
+    |> roster_from_pages()
+  end
+
+  @doc """
+  The roster entries for page-shaped maps (`file_key`, `content`, optional
+  `updated_at`) — the same parsing `roster/1` applies to stored pages, so a
+  caller can render an index from contents it has not written (the HR
+  backfill dry run). Pure: reads nothing.
+  """
+  @spec roster_from_pages([map()]) :: [roster_entry()]
+  def roster_from_pages(pages) when is_list(pages) do
+    pages
     |> Enum.filter(&(Visibility.tier_of(&1.file_key) == :card))
     |> Enum.flat_map(fn page ->
-      {frontmatter, _body} = Wiki.parse_frontmatter(page.content || "")
+      {frontmatter, body} = Wiki.parse_frontmatter(page.content || "")
 
       case Map.get(frontmatter, "tier") do
-        nil -> [entry(page, frontmatter, true)]
-        "card" -> [entry(page, frontmatter, false)]
+        nil -> [entry(page, frontmatter, body, true)]
+        "card" -> [entry(page, frontmatter, body, false)]
         _other_tier -> []
       end
     end)
@@ -231,20 +250,20 @@ defmodule Platform.People.Pages do
 
   defp key?(line, key), do: String.starts_with?(String.trim_leading(line), key <> ":")
 
-  defp entry(page, frontmatter, legacy?) do
+  defp entry(page, frontmatter, body, legacy?) do
     slug = Visibility.slug_of(page.file_key)
 
     %{
       slug: slug,
       path: page.file_key,
-      name: string_or(Map.get(frontmatter, "name"), humanize(slug)),
+      name: display_name(frontmatter, body, slug),
       aliases: aliases(Map.get(frontmatter, "aliases")),
       user_id: string_or(Map.get(frontmatter, "user_id"), nil),
       relation: relation_of(%{relation: Map.get(frontmatter, "relation")}),
       organisation: string_or(Map.get(frontmatter, "organisation"), nil),
       role: string_or(Map.get(frontmatter, "role"), nil),
       last_seen: string_or(Map.get(frontmatter, "last_seen"), nil),
-      updated_at: page.updated_at,
+      updated_at: Map.get(page, :updated_at),
       legacy: legacy?
     }
   end
@@ -271,6 +290,47 @@ defmodule Platform.People.Pages do
   defp string_or(value, _default) when is_binary(value), do: value
   defp string_or(%Date{} = date, _default), do: Date.to_iso8601(date)
   defp string_or(value, _default), do: to_string(value)
+
+  # The displayed name keeps the case the card was written in: a non-blank
+  # `name:` key, else the card's `# ` H1 (legacy cards carry no `name:`),
+  # else the humanized slug. Never downcased; sorting downcases on its own.
+  defp display_name(frontmatter, body, slug) do
+    case Map.get(frontmatter, "name") do
+      name when is_binary(name) ->
+        if String.trim(name) == "",
+          do: h1(body) || humanize(slug),
+          else: String.trim(name)
+
+      nil ->
+        h1(body) || humanize(slug)
+
+      other ->
+        string_or(other, humanize(slug))
+    end
+  end
+
+  @h1_re ~r/\A#\s+(.+?)\s*\z/
+
+  @doc """
+  The card body's `# ` H1 text, or `nil`. Only lines before the first `##`
+  heading are considered.
+  """
+  @spec h1(String.t() | nil) :: String.t() | nil
+  def h1(body) when is_binary(body) do
+    body
+    |> String.split(["\r\n", "\n"])
+    |> Enum.reduce_while(nil, fn line, nil ->
+      line = String.trim(line)
+
+      cond do
+        String.starts_with?(line, "##") -> {:halt, nil}
+        match = Regex.run(@h1_re, line, capture: :all_but_first) -> {:halt, hd(match)}
+        true -> {:cont, nil}
+      end
+    end)
+  end
+
+  def h1(_body), do: nil
 
   defp humanize(nil), do: "Unknown"
   defp humanize(slug), do: slug |> String.replace(["-", "_"], " ") |> String.trim()
