@@ -21,6 +21,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
+  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+
   @sections [{:live, "Live now"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]
 
   # ── data ───────────────────────────────────────────────────────────────
@@ -274,6 +276,11 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
       "`%{can_cancel, state, audience}` for the selected row (task 01a19e7f); nil draws no control"
   )
 
+  attr(:edit, :map,
+    default: nil,
+    doc: "`%{can_edit}` for the selected row (task 01a1b281); nil draws no Edit"
+  )
+
   def detail(assigns) do
     ~H"""
     <section
@@ -389,8 +396,24 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         <%!-- At the BOTTOM, below everything else and off the action row
            (design direction 01a19e80). Nothing at all for someone who may
            not cancel, or once the meeting is no longer cancellable. --%>
+        <%!-- Edit (task 01a1b281) beside the cancel row, on its rule. --%>
+        <div
+          :if={match?(%{can_edit: true}, @edit)}
+          class="flex items-start gap-2 border-t border-edge pt-3"
+          data-role="meetings-detail-edit-row"
+        >
+          <.edit_button can_edit={true} id="meetings-detail-edit" />
+          <.cancel_meeting
+            :if={@cancel}
+            can_cancel={@cancel.can_cancel}
+            state={@cancel.state}
+            audience={@cancel.audience}
+            id_prefix="meetings-detail"
+            class="min-w-0 flex-1 !border-t-0 !pt-0"
+          />
+        </div>
         <.cancel_meeting
-          :if={@cancel}
+          :if={@cancel && !match?(%{can_edit: true}, @edit)}
           can_cancel={@cancel.can_cancel}
           state={@cancel.state}
           audience={@cancel.audience}

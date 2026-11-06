@@ -2,11 +2,13 @@ defmodule PlatformWeb.CalendarLive do
   use PlatformWeb, :live_view
   import Ecto.Query, only: [from: 2]
   import PlatformWeb.CalendarLive.Components
+  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_meeting: 1]
 
   alias Platform.Calendar, as: Events
   alias Platform.Calendar.Event
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.MeetingLive.LiveInvites
+  alias PlatformWeb.MeetingLive.MeetingEdit
   alias PlatformWeb.TimeEntry
 
   @impl true
@@ -48,7 +50,8 @@ defmodule PlatformWeb.CalendarLive do
      |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
      |> assign(:grant_form, agent_grant_form(nil, nil))
      |> assign(:form, to_form(%{}, as: :event))
-     |> LiveInvites.seed()}
+     |> LiveInvites.seed()
+     |> MeetingEdit.seed()}
   end
 
   @impl true
@@ -276,6 +279,7 @@ defmodule PlatformWeb.CalendarLive do
     socket =
       socket
       |> LiveInvites.seed()
+      |> MeetingEdit.seed()
       |> assign(:meeting_cancel_state, :idle)
       |> select_entry(kind, id, params["start"])
 
@@ -291,6 +295,10 @@ defmodule PlatformWeb.CalendarLive do
   # Escape closes the editor first, then the details (app.js keydown).
   def handle_event("escape", _, %{assigns: %{editing: %Event{}}} = socket),
     do: {:noreply, close_editor(socket)}
+
+  # Escape with the Edit meeting form open shuts the form only.
+  def handle_event("escape", _, %{assigns: %{meeting_edit: %{}}} = socket),
+    do: {:noreply, MeetingEdit.seed(socket)}
 
   # Escape while the Cancel meeting inset is open collapses the inset only,
   # not the details (task 01a19e7f stage 4).
@@ -379,6 +387,29 @@ defmodule PlatformWeb.CalendarLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  # ── Edit meeting in the details (task 01a1b281 stage 3) ──────────────────
+  #
+  # The same form and handlers as /meetings (`MeetingEdit`). It opens on the
+  # entry the open details were built from, never a payload id, and every
+  # later event reloads the meeting through the viewer scope.
+  def handle_event("meeting_edit_open", _params, socket) do
+    meeting_id =
+      case socket.assigns.selected do
+        %{kind: "meeting", entry: %{meeting: %{id: id}}} -> id
+        _ -> nil
+      end
+
+    {:noreply,
+     MeetingEdit.open(socket, meeting_id, socket.assigns.current_user_record, socket.assigns.zone)}
+  end
+
+  def handle_event("meeting_edit_" <> _ = event, params, socket) do
+    case MeetingEdit.handle(socket, event, params, socket.assigns.current_user_record) do
+      {:saved, _meeting, socket} -> {:noreply, reload(socket)}
+      other -> other
     end
   end
 
@@ -708,6 +739,7 @@ defmodule PlatformWeb.CalendarLive do
       |> assign(:selected, nil)
       |> assign(:meeting_cancel_state, :idle)
       |> LiveInvites.seed()
+      |> MeetingEdit.seed()
 
   defp selected_meeting!(%{assigns: %{selected: %{kind: "meeting", entry: %{meeting: meeting}}}}),
     do: meeting
@@ -819,7 +851,13 @@ defmodule PlatformWeb.CalendarLive do
 
     audience = if can_cancel, do: Platform.Meetings.cancellation_audience_count(meeting), else: 0
 
-    %{cancelled?: meeting.status == "cancelled", can_cancel: can_cancel, audience: audience}
+    %{
+      cancelled?: meeting.status == "cancelled",
+      can_cancel: can_cancel,
+      # Edit (task 01a1b281 stage 3): drawn only for this.
+      can_edit: Platform.Meetings.can_edit_meeting?(meeting, user),
+      audience: audience
+    }
   end
 
   defp handle_consent(socket, hold_id, verb) do

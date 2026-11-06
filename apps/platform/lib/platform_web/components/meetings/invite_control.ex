@@ -165,6 +165,14 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       # a lapsed row a new link. Live only: a draft row has no link yet.
       expiry: "meeting_invite_expiry",
       renew: "meeting_invite_renew"
+    },
+    # The Edit meeting form (task 01a1b281 stage 3): additions are STAGED
+    # like the create sheet's and written only on Save, through
+    # `Meetings.update_meeting_for_user/3`, so they get their own events.
+    edit: %{
+      search: "meeting_edit_invite_search",
+      stage: "meeting_edit_invite_stage",
+      commit: "meeting_edit_invite_commit"
     }
   }
 
@@ -251,7 +259,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
   # ── invite_control/1 ───────────────────────────────────────────────────
 
-  attr(:mode, :atom, required: true, values: [:draft, :live])
+  attr(:mode, :atom, required: true, values: [:draft, :live, :edit])
   attr(:query, :string, default: "")
   attr(:candidates, :list, required: true)
   attr(:email_option, :string, default: nil)

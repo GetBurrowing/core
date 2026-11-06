@@ -25,6 +25,8 @@ defmodule PlatformWeb.CalendarLive.Components do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
+  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+
   alias PlatformWeb.CalendarLive, as: Cal
   alias PlatformWeb.Components.NewKindToggle
 
@@ -1034,6 +1036,11 @@ defmodule PlatformWeb.CalendarLive.Components do
     <.link navigate={~p"/meetings?#{%{meeting: @detail.meeting_id}}"} class={ghost_btn()}>
       View in Meetings
     </.link>
+    <.edit_button
+      can_edit={@detail[:can_edit] == true}
+      variant={:text}
+      id="calendar-detail-edit"
+    />
     """
   end
 

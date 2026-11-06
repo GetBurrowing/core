@@ -252,6 +252,8 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meetings.InviteControl,
     only: [invite_control: 1, invite_list: 1]
 
+  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_meeting: 1]
+
   import PlatformWeb.Components.Meetings.MeetingDetail,
     only: [meeting_detail_body: 1, meeting_detail_actions: 1]
 
@@ -283,6 +285,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.ChatLive.MeetingHooks
+  alias PlatformWeb.MeetingLive.MeetingEdit
   alias PlatformWeb.ChatLive.MeetingHumanInvite
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
@@ -1441,6 +1444,7 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:meeting_create_invite_candidates, fn -> [] end)
      |> assign_new(:meeting_create_invite_email, fn -> nil end)
      |> assign_new(:selected_meeting_id, fn -> nil end)
+     |> assign_new(:meeting_edit, fn -> nil end)
      |> assign_new(:invite_ring_states, fn -> %{} end)
      |> assign_new(:ring_topic_meeting_ids, fn -> MapSet.new() end)
      |> seed_live_invites_once()
@@ -2160,6 +2164,17 @@ defmodule PlatformWeb.MeetingLive do
 
   def cancel_attrs(_cancel, _meeting), do: nil
 
+  @doc """
+  The Edit action's attrs for `meeting` (task 01a1b281 stage 3), or nil.
+  `can_edit` is `Meetings.can_edit_meeting?/2` for the selection, computed
+  with the cancel state when the selection changes, and false once the
+  meeting is no longer scheduled.
+  """
+  def edit_attrs(%{meeting_id: id} = cancel, %Meeting{id: id, status: "scheduled"}),
+    do: %{can_edit: Map.get(cancel, :can_edit, false)}
+
+  def edit_attrs(_cancel, _meeting), do: nil
+
   defp sync_meeting_cancel(socket) do
     target = cancel_target_id(socket.assigns)
 
@@ -2170,7 +2185,7 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp build_meeting_cancel(_socket, nil),
-    do: %{meeting_id: nil, can_cancel: false, audience: 0, state: :idle}
+    do: %{meeting_id: nil, can_cancel: false, can_edit: false, audience: 0, state: :idle}
 
   defp build_meeting_cancel(socket, id) do
     meeting =
@@ -2186,12 +2201,13 @@ defmodule PlatformWeb.MeetingLive do
         %{
           meeting_id: id,
           can_cancel: can_cancel,
+          can_edit: can_cancel and Meetings.can_edit_meeting?(meeting, viewer),
           audience: if(can_cancel, do: Meetings.cancellation_audience_count(meeting), else: 0),
           state: :idle
         }
 
       nil ->
-        %{meeting_id: id, can_cancel: false, audience: 0, state: :idle}
+        %{meeting_id: id, can_cancel: false, can_edit: false, audience: 0, state: :idle}
     end
   end
 
@@ -3749,6 +3765,7 @@ defmodule PlatformWeb.MeetingLive do
      |> assign(:selected_meeting_id, meeting_id)
      |> subscribe_ring_reports(meeting_id)
      |> LiveInvites.seed()
+     |> MeetingEdit.seed()
      |> sync_meeting_cancel()}
   end
 
@@ -3757,7 +3774,32 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:selected_meeting_id, nil)
      |> LiveInvites.seed()
+     |> MeetingEdit.seed()
      |> sync_meeting_cancel()}
+  end
+
+  # ── Edit meeting (task 01a1b281 stage 3) ─────────────────────────────────
+  #
+  # `PlatformWeb.Components.Meetings.EditMeeting`'s events. The form opens on
+  # the viewer's own SELECTION (`cancel_target_id/1`), never a payload id,
+  # and `MeetingEdit` reloads the meeting through the viewer scope and
+  # re-checks `Meetings.can_edit_meeting?/2` on every later event. Save is
+  # `Meetings.update_meeting_for_user/3`.
+  def handle_event("meeting_edit_open", _params, socket) do
+    {:noreply,
+     MeetingEdit.open(
+       socket,
+       cancel_target_id(socket.assigns),
+       socket.assigns[:current_user_record],
+       socket.assigns[:calendar_time_zone]
+     )}
+  end
+
+  def handle_event("meeting_edit_" <> _ = event, params, socket) do
+    case MeetingEdit.handle(socket, event, params, socket.assigns[:current_user_record]) do
+      {:saved, _meeting, socket} -> {:noreply, reload_index_meetings(socket)}
+      other -> other
+    end
   end
 
   # ── Cancel meeting (task 01a19e7f stage 3) ──────────────────────────────
@@ -5485,7 +5527,8 @@ defmodule PlatformWeb.MeetingLive do
              :meeting_resumed,
              :meeting_ended,
              :meeting_cancelled,
-             :meeting_rescheduled
+             :meeting_rescheduled,
+             :meeting_deleted
            ] do
     if Map.has_key?(socket.assigns, :meetings) do
       # Scoped with the same viewer as the initial render. A peer's
@@ -5502,6 +5545,22 @@ defmodule PlatformWeb.MeetingLive do
        |> sync_meeting_cancel()}
     else
       {:noreply, socket}
+    end
+  end
+
+  # An in-place edit (task 01a1b281 stage 3) redraws the index the same way:
+  # the row keeps its id and slug, so the re-query moves it on the grid and
+  # renames it in the list. The open meeting page refreshes its own row.
+  def handle_info({:meeting_updated, %Meetings.Meeting{} = meeting, _info}, socket) do
+    case socket.assigns[:meeting] do
+      # Only the edited columns: the page's row carries preloads the
+      # broadcast struct does not.
+      %Meeting{id: id} = current when id == meeting.id ->
+        fields = [:name, :description, :scheduled_start_at, :scheduled_end_at, :ical_sequence]
+        {:noreply, assign(socket, :meeting, Map.merge(current, Map.take(meeting, fields)))}
+
+      _ ->
+        handle_info({:meeting_rescheduled, meeting}, socket)
     end
   end
 

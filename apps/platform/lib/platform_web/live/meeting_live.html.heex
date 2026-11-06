@@ -3690,6 +3690,7 @@
           tab={@list_tab}
           calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
           cancel={cancel_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
+          edit={edit_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
         />
       </div>
       <PlatformWeb.MeetingLive.ListComponents.new_room_modal
@@ -4736,6 +4737,7 @@
             <.meeting_detail_actions
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
+              edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-panel"
             />
           </div>
@@ -4825,6 +4827,7 @@
             <.meeting_detail_actions
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
+              edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-sheet"
             />
           </div>
@@ -4895,6 +4898,11 @@
       >
         <span class="hero-video-camera size-6"></span>
       </button>
+
+      <%!-- ── Edit meeting (task 01a1b281 stage 3) ─────────────────────────
+         One form for the list view, the calendar view's panel and its
+         sheet; it opens on the selection. --%>
+      <.edit_meeting :if={assigns[:meeting_edit]} edit={@meeting_edit} />
 
       <%!-- ── New-meeting create sheet ────────────────────────────────────
          Task 019fb955-1d7b stage 4. The sheet CHROME is unchanged from
