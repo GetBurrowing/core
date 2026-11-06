@@ -533,7 +533,7 @@ defmodule Platform.Feedback.Submission do
 
     actor_count =
       Repo.aggregate(
-        from(r in SubmissionRecord, where: ^actor_filter(actor) and r.inserted_at > ^since),
+        from(r in SubmissionRecord, where: r.inserted_at > ^since, where: ^actor_filter(actor)),
         :count
       )
 
