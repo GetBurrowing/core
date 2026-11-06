@@ -54,7 +54,7 @@ vi.mock("livekit-client", async (importOriginal) => {
   return { ...actual, Room }
 })
 
-import VoiceTab, { HOLD_MS, CAPTION_EVENT } from "../../js/hooks/voice_tab.js"
+import VoiceTab, { HOLD_MS, CAPTION_EVENT, MIC_TIMEOUT_MS } from "../../js/hooks/voice_tab.js"
 import Sheet from "../../js/hooks/sheet.js"
 
 // ── fakes ────────────────────────────────────────────────────────────────
@@ -78,7 +78,15 @@ function fakeMic() {
 
 const body = { id: "", closest: () => null }
 
-function mount({ permission = "granted", userId = "u1", partnerId = "a1", reply } = {}) {
+function mount({
+  permission = "granted",
+  userId = "u1",
+  partnerId = "a1",
+  reply,
+  noReply = false,
+  gum: gumImpl,
+  mediaDevices,
+} = {}) {
   const mic = fakeMic()
   const listeners = {}
   const pushed = []
@@ -100,19 +108,24 @@ function mount({ permission = "granted", userId = "u1", partnerId = "a1", reply 
     },
   }
 
-  const gum = vi.fn(() =>
-    permission === "granted"
-      ? Promise.resolve({ getTracks: () => [{ stop() {} }] })
-      : Promise.reject(Object.assign(new Error("denied"), { name: "NotAllowedError" })),
+  const gum = vi.fn(
+    gumImpl ||
+      (() =>
+        permission === "granted"
+          ? Promise.resolve({ getTracks: () => [{ stop() {} }] })
+          : Promise.reject(Object.assign(new Error("denied"), { name: "NotAllowedError" }))),
   )
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: gum } })
+  vi.stubGlobal(
+    "navigator",
+    mediaDevices !== undefined ? { mediaDevices } : { mediaDevices: { getUserMedia: gum } },
+  )
 
   const hook = Object.create(VoiceTab)
   hook.el = el
   hook.pushEvent = (event, payload, cb) => {
     pushed.push(event)
     payloads.push([event, payload])
-    if (event === "voice_start" && cb) {
+    if (event === "voice_start" && cb && !noReply) {
       cb(reply || { ok: true, token: "tok", url: "ws://lk.test", room: "space-dm" })
     }
   }
@@ -334,13 +347,15 @@ describe("the microphone", () => {
     expect(t.hook.inTurn()).toBe(false)
   })
 
-  it("no voice_press while the local track is not live", async () => {
+  it("no voice_press while the local track is not live: it pushes voice_mic_failed not_live", async () => {
     lk.trackState = "ended"
     const t = mount()
     t.down(0)
     await settle()
     t.up(1_000)
-    expect(t.pushed).toEqual(["voice_start"])
+    expect(t.pushed).toEqual(["voice_start", "voice_mic_failed"])
+    expect(t.payloads).toContainEqual(["voice_mic_failed", { reason: "not_live" }])
+    expect(t.hook.inTurn()).toBe(false)
   })
 
   it("a failed voice_start reply connects nothing and presses nothing", async () => {
@@ -521,5 +536,127 @@ describe("the Voice pickers: Escape and focus (stage 4)", () => {
     p.doc.activeElement = p.nodes.last
     p.tab()
     expect(p.doc.activeElement).toBe(p.nodes.handle)
+  })
+})
+
+// ── a press never fails silently ─────────────────────────────────────────
+
+describe("voice_mic_failed: no press ends with nothing on screen", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const failures = (t) => t.payloads.filter(([e]) => e === "voice_mic_failed").map(([, p]) => p)
+
+  it("MIC_TIMEOUT_MS is 10 seconds", () => {
+    expect(MIC_TIMEOUT_MS).toBe(10000)
+  })
+
+  it("missing mediaDevices pushes voice_mic_failed no_api, not voice_mic_blocked", async () => {
+    const t = mount({ mediaDevices: null })
+    t.down(0)
+    await vi.advanceTimersByTimeAsync(0)
+    t.up(1_000)
+    expect(t.pushed).toEqual(["voice_mic_failed"])
+    expect(failures(t)).toEqual([{ reason: "no_api" }])
+    expect(t.hook.inTurn()).toBe(false)
+  })
+
+  it("a mediaDevices without getUserMedia is no_api too", async () => {
+    const t = mount({ mediaDevices: {} })
+    t.down(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(failures(t)).toEqual([{ reason: "no_api" }])
+  })
+
+  it("a getUserMedia that never settles pushes timeout at MIC_TIMEOUT_MS and not before", async () => {
+    const t = mount({ gum: () => new Promise(() => {}) })
+    t.down(0)
+    t.up(1_000)
+    // Literal 9,999ms, not MIC_TIMEOUT_MS - 1: the bound itself is under test.
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(t.pushed).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.pushed).toEqual(["voice_mic_failed"])
+    expect(failures(t)).toEqual([{ reason: "timeout" }])
+    expect(t.hook.inTurn()).toBe(false)
+  })
+
+  it("a stream that arrives after the timeout is stopped, and the next press reaches voice_start", async () => {
+    const track = { stop: vi.fn() }
+    let deliver
+    let calls = 0
+    const t = mount({
+      gum: () => {
+        calls++
+        return calls === 1
+          ? new Promise((resolve) => (deliver = resolve))
+          : Promise.resolve({ getTracks: () => [{ stop() {} }] })
+      },
+    })
+    t.down(0)
+    t.up(1_000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(failures(t)).toEqual([{ reason: "timeout" }])
+
+    deliver({ getTracks: () => [track] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(track.stop).toHaveBeenCalledTimes(1)
+
+    t.down(20_000)
+    await vi.advanceTimersByTimeAsync(0)
+    t.up(21_000)
+    expect(t.pushed).toEqual(["voice_mic_failed", "voice_start", "voice_press", "voice_release"])
+    // The late grant was recorded: the second press did not ask again.
+    expect(calls).toBe(1)
+  })
+
+  it("a timeout never caches a refusal: the next press asks again and reaches voice_start", async () => {
+    let calls = 0
+    const t = mount({
+      gum: () => {
+        calls++
+        return calls === 1
+          ? new Promise(() => {})
+          : Promise.resolve({ getTracks: () => [{ stop() {} }] })
+      },
+    })
+    t.down(0)
+    t.up(1_000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    t.down(20_000)
+    await vi.advanceTimersByTimeAsync(0)
+    t.up(21_000)
+    expect(calls).toBe(2)
+    expect(t.pushed).toEqual(["voice_mic_failed", "voice_start", "voice_press", "voice_release"])
+    expect(t.pushed).not.toContain("voice_mic_blocked")
+  })
+
+  it("a rejection still pushes voice_mic_blocked only", async () => {
+    const t = mount({ permission: "denied" })
+    t.down(0)
+    await vi.advanceTimersByTimeAsync(0)
+    t.up(1_000)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(t.pushed).toEqual(["voice_mic_blocked"])
+  })
+
+  it("a voice_start reply that never arrives pushes reply_timeout, and no voice_press", async () => {
+    const t = mount({ noReply: true })
+    // Held through the wait: a release before the reply abandons the press.
+    t.down(0)
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(t.pushed).toEqual(["voice_start"])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.pushed).toEqual(["voice_start", "voice_mic_failed"])
+    t.up(11_000)
+    expect(t.pushed).toEqual(["voice_start", "voice_mic_failed"])
+    expect(failures(t)).toEqual([{ reason: "reply_timeout" }])
+    expect(lk.rooms).toHaveLength(0)
+    expect(t.hook.inTurn()).toBe(false)
   })
 })

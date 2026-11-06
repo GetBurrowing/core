@@ -22,6 +22,24 @@
 //   3. A turn: unmute, check the track is live, push `voice_press`; at the end
 //      mute and push `voice_release` {duration_ms}.
 //
+// ## A press never fails silently
+//
+// Every way a press can end before `voice_press` that is not a refusal pushes
+// `voice_mic_failed` {reason}, and the server renders "Couldn't start the
+// microphone. Hold to try again.":
+//
+//   * no_api: navigator.mediaDevices or getUserMedia is missing (settings
+//     cannot fix that, so it is not the blocked line);
+//   * timeout: getUserMedia did not settle within MIC_TIMEOUT_MS (seen in
+//     WKWebView). A stream that arrives later has its tracks stopped and
+//     records permission as granted; a timeout never records a refusal;
+//   * not_live: the published track is not live after unmute;
+//   * reply_timeout: no voice_start reply within MIC_TIMEOUT_MS.
+//
+// None of them pushes voice_press, and the next press starts a fresh attempt.
+// MIC_TIMEOUT_MS is 10s: a granted getUserMedia resolves well under a second,
+// but the first iOS microphone prompt holds the promise until it is answered.
+//
 // ## Hold vs tap (master-mobile.html :1074-1169)
 //
 // pointerdown starts the turn. At pointerup, a press of HOLD_MS or longer
@@ -45,6 +63,8 @@ import { paintBars } from "./lib/ptt_waveform"
 
 export const HOLD_MS = 280
 export const CAPTION_EVENT = "voice:caption"
+export const MIC_TIMEOUT_MS = 10000
+const TIMED_OUT = Symbol("timed out")
 const METER_MS = 90
 const SILENCE = 128
 
@@ -62,6 +82,21 @@ function localClock() {
   }
 }
 
+// Settles with the promise, or with TIMED_OUT after `ms`, whichever is first.
+function withTimeout(promise, ms) {
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+function stopTracks(stream) {
+  if (stream && typeof stream.getTracks === "function") {
+    stream.getTracks().forEach((t) => t.stop())
+  }
+}
+
 function micOf(event) {
   const t = event && event.target
   if (!t) return null
@@ -73,6 +108,7 @@ const VoiceTab = {
   mounted() {
     this._phase = "idle" // idle | arming | live
     this._seq = 0
+    this._attempt = 0
     this._toggled = false
     this._downInTurn = false
     this._spaceHeld = false
@@ -230,25 +266,45 @@ const VoiceTab = {
 
   async _begin() {
     const seq = ++this._seq
+    const attempt = ++this._attempt
     this._phase = "arming"
     const stale = () => seq !== this._seq || this._phase !== "arming"
+    // A failure is reported even after the release (a hold that let go
+    // while getUserMedia hung still gets a line), but not once a newer
+    // press has started its own attempt.
+    const fail = (reason) => {
+      if (seq === this._seq) this._reset()
+      if (attempt === this._attempt) this.pushEvent("voice_mic_failed", { reason })
+    }
 
-    if (!(await this._ensurePermission())) {
+    const permission = await this._ensurePermission()
+    if (permission === "denied") {
       if (seq === this._seq) this._reset()
       this.pushEvent("voice_mic_blocked", {})
       return
     }
+    if (permission !== "granted") {
+      fail(permission)
+      return
+    }
     if (stale()) return
 
-    if (!this._room && !(await this._connect())) {
-      if (seq === this._seq) this._reset()
-      return
+    if (!this._room) {
+      const connected = await this._connect()
+      if (connected === "reply_timeout") {
+        fail("reply_timeout")
+        return
+      }
+      if (connected !== true) {
+        if (seq === this._seq) this._reset()
+        return
+      }
     }
     if (stale()) return
 
     const live = await this._unmute()
     if (!live) {
-      if (seq === this._seq) this._reset()
+      fail("not_live")
       await this._mute()
       return
     }
@@ -292,34 +348,54 @@ const VoiceTab = {
 
   // ── microphone + room ────────────────────────────────────────────────
 
+  // "granted" | "denied" (a real refusal) | "no_api" | "timeout".
   async _ensurePermission() {
-    if (this._permission === "granted") return true
+    if (this._permission === "granted") return "granted"
     const md = typeof navigator !== "undefined" ? navigator.mediaDevices : null
-    if (!md || typeof md.getUserMedia !== "function") {
-      this._permission = "denied"
-      return false
-    }
+    if (!md || typeof md.getUserMedia !== "function") return "no_api"
+
+    let request
     try {
-      const stream = await md.getUserMedia({ audio: true })
-      if (stream && typeof stream.getTracks === "function") {
-        stream.getTracks().forEach((t) => t.stop())
-      }
-      this._permission = "granted"
-      return true
+      request = Promise.resolve(md.getUserMedia({ audio: true }))
     } catch (_err) {
       this._permission = "denied"
-      return false
+      return "denied"
+    }
+    try {
+      const stream = await withTimeout(request, MIC_TIMEOUT_MS)
+      if (stream === TIMED_OUT) {
+        // The stream may still come: release it, and let the next press
+        // skip the prompt. A late refusal records nothing.
+        request.then(
+          (late) => {
+            stopTracks(late)
+            this._permission = "granted"
+          },
+          () => {},
+        )
+        return "timeout"
+      }
+      stopTracks(stream)
+      this._permission = "granted"
+      return "granted"
+    } catch (_err) {
+      this._permission = "denied"
+      return "denied"
     }
   },
 
+  // The voice_start reply, or TIMED_OUT after MIC_TIMEOUT_MS.
   _start() {
-    return new Promise((resolve) => {
-      this.pushEvent("voice_start", {}, (reply) => resolve(reply))
+    const reply = new Promise((resolve) => {
+      this.pushEvent("voice_start", {}, (r) => resolve(r))
     })
+    return withTimeout(reply, MIC_TIMEOUT_MS)
   },
 
+  // true | false | "reply_timeout"
   async _connect() {
     const reply = await this._start()
+    if (reply === TIMED_OUT) return "reply_timeout"
     if (!reply || reply.ok !== true || !reply.token || !reply.url) return false
 
     const room = new Room({ adaptiveStream: true, dynacast: true })
