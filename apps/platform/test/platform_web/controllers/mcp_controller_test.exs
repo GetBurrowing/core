@@ -1065,6 +1065,100 @@ defmodule PlatformWeb.MCPControllerTest do
     end
   end
 
+  describe "feedback_submit on the MCP wire (task 01a1a6a5 stage 6)" do
+    setup do
+      saved = Application.fetch_env(:platform, :feedback_policy)
+
+      on_exit(fn ->
+        case saved do
+          {:ok, v} -> Application.put_env(:platform, :feedback_policy, v)
+          :error -> Application.delete_env(:platform, :feedback_policy)
+        end
+      end)
+
+      test_pid = self()
+
+      Req.Test.stub(Platform.Feedback.GithubPublisher.Broker, fn conn ->
+        send(test_pid, :broker_called)
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{})
+      end)
+
+      :ok
+    end
+
+    defp tool_names(conn, token) do
+      %{"result" => %{"tools" => tools}} =
+        conn |> mcp_post(token, rpc("tools/list")) |> json_response(200)
+
+      tools
+    end
+
+    defp feedback_args do
+      %{
+        "category" => "bug",
+        "title" => "Calendar drops the reminder",
+        "expected_behavior" => "The reminder fires.",
+        "observed_behavior" => "Nothing happens."
+      }
+    end
+
+    test "policy off: absent from tools/list, and a direct call answers feedback_disabled",
+         %{conn: conn} do
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      {_runtime, token} = create_runtime()
+
+      refute "feedback_submit" in Enum.map(tool_names(conn, token), & &1["name"])
+
+      body =
+        build_conn()
+        |> mcp_post(
+          token,
+          rpc("tools/call", %{"name" => "feedback_submit", "arguments" => feedback_args()})
+        )
+        |> json_response(200)
+
+      refute Map.has_key?(body, "error"), "answered #{inspect(body["error"])}"
+
+      assert %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} = body
+      envelope = Jason.decode!(text)
+      assert envelope["code"] == "feedback_disabled"
+      assert envelope["recoverable"] == false
+      refute_received :broker_called
+    end
+
+    test "policy off: the special case is this one name; a near miss is still unknown",
+         %{conn: conn} do
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      {_runtime, token} = create_runtime()
+
+      body =
+        conn
+        |> mcp_post(
+          token,
+          rpc("tools/call", %{"name" => "feedback_submitx", "arguments" => %{}})
+        )
+        |> json_response(200)
+
+      assert %{"error" => %{"code" => -32001, "message" => message}} = body
+      assert message =~ "unknown tool"
+    end
+
+    test "policy on: tools/list carries the area enum on the wire", %{conn: conn} do
+      Application.put_env(:platform, :feedback_policy, "quarantined")
+      {_runtime, token} = create_runtime()
+
+      tool =
+        Enum.find(tool_names(conn, token), &(&1["name"] == "feedback_submit")) ||
+          flunk("feedback_submit is not listed with the policy quarantined")
+
+      area = tool["inputSchema"]["properties"]["area"]
+      assert area["type"] == "string"
+      assert area["enum"] == Platform.Feedback.Submission.areas()
+      refute "area" in tool["inputSchema"]["required"]
+      refute Map.has_key?(tool["inputSchema"]["properties"], "source")
+    end
+  end
+
   describe "unknown methods" do
     test "returns -32601 method not found", %{conn: conn} do
       {_runtime, token} = create_runtime()

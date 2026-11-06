@@ -24,7 +24,7 @@ defmodule Platform.Feedback.IntakeTest do
   alias Platform.Tasks.Task
   alias Platform.Test.FeedbackIntakeStub, as: Stub
 
-  @feedback_repo "Startup-Suite/core"
+  @feedback_repo "GetBurrowing/core"
 
   setup do
     {:ok, project} =
@@ -112,6 +112,29 @@ defmodule Platform.Feedback.IntakeTest do
       assert drain_classifier_calls() == 0
     end
 
+    test "an unset policy keeps intake off (task 01a1a6a5 stage 1: opt-in)" do
+      Application.delete_env(:platform, :feedback_policy)
+      refute Platform.Feedback.Policy.enabled?()
+      issue = issue()
+
+      assert {:ignored, :feedback_disabled} = Intake.process(issue)
+      assert records(issue.repository, issue.issue_number) == []
+      assert Stub.external_tasks(issue.repository, issue.issue_number) == []
+      assert drain_classifier_calls() == 0
+      assert drain_dispositions() == []
+    end
+
+    test "a quarantined policy files one quarantined external_feedback task" do
+      Application.put_env(:platform, :feedback_policy, "quarantined")
+      issue = issue()
+
+      assert {:ok, %{outcome: :task_filed, task_id: task_id}} = Intake.process(issue)
+      task = Repo.get!(Task, task_id)
+      assert task.trust == "quarantined"
+      assert task.origin == "external_feedback"
+      assert [_] = Stub.external_tasks(issue.repository, issue.issue_number)
+    end
+
     test "a repository that is neither the feedback repository nor connected is out of scope" do
       issue = issue(%{repository: "someone-else/random-repo"})
 
@@ -138,7 +161,7 @@ defmodule Platform.Feedback.IntakeTest do
     test "the feedback repository and connected repositories are in scope, case-insensitively",
          %{project: project} do
       assert {:ok, %{kind: :feedback_repository, project_id: id}} =
-               Intake.scope("startup-suite/CORE")
+               Intake.scope("getburrowing/CORE")
 
       assert id == project.id
 

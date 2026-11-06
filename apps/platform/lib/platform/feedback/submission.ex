@@ -9,11 +9,17 @@ defmodule Platform.Feedback.Submission do
 
     1. Capability. `Platform.Feedback.Policy.enabled?/0`; disabled refuses
        before anything is read.
-    2. Actor. An identified agent is required; anonymous calls are refused.
+    2. Actor. An identified agent (`%{agent_id: id}`) or a signed-in person
+       (`%{user_id: id}`, task 01a1a6a5 stage 2) is required; anonymous calls
+       are refused. `source` (`agent` | `person`) is OVERWRITTEN from the
+       actor kind, so a caller cannot choose it.
     3. Shape. Only the allowlisted keys are read: `category`, `title`,
        `expected_behavior`, `observed_behavior`, `reproduction_steps`,
-       `version_environment`, `diagnostics`. Every other key is ignored and
-       named (by key only, never value) in `ignored_fields`.
+       `version_environment`, `diagnostics`, `area` (plus the internal
+       `source`). Every other key is ignored and named (by key only, never
+       value) in `ignored_fields`. An agent needs title, expected and
+       observed; a person needs title plus at least one of expected or
+       observed.
     4. Redaction (`Platform.Feedback.Redaction`), then per-field and
        aggregate length limits on the redacted text, then the category enum.
     5. Fingerprint: sha256 over the normalized allowlisted text, so a retry
@@ -36,7 +42,7 @@ defmodule Platform.Feedback.Submission do
   environment, no other tool's output is ever read.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, dynamic: 2]
 
   alias Platform.Feedback.GithubPublisher
   alias Platform.Feedback.Policy
@@ -55,6 +61,10 @@ defmodule Platform.Feedback.Submission do
     :version_environment
   ]
   @required [:title, :expected_behavior, :observed_behavior]
+  @person_required [:title]
+  @person_one_of [:expected_behavior, :observed_behavior]
+  @areas ~w(chat tasks calendar meetings inbox voice canvases agents settings other)
+  @sources ~w(agent person)
 
   @limits %{
     title: 200,
@@ -66,7 +76,10 @@ defmodule Platform.Feedback.Submission do
   }
   @aggregate_limit 12_000
 
-  @allowed_keys ~w(category title expected_behavior observed_behavior reproduction_steps version_environment diagnostics)
+  @allowed_keys ~w(category title expected_behavior observed_behavior reproduction_steps version_environment diagnostics area)
+  # `source` is read but never advertised: `submit/2` overwrites it from the
+  # actor kind before `normalize/1` runs.
+  @internal_keys ~w(source)
   @max_ignored_reported 20
 
   @default_per_actor 5
@@ -80,6 +93,9 @@ defmodule Platform.Feedback.Submission do
   @doc "The accepted `diagnostics.scope` values."
   def diagnostic_scopes, do: @diagnostic_scopes
 
+  @doc "The accepted optional `area` values."
+  def areas, do: @areas
+
   @doc "The allowlisted argument keys."
   def allowed_keys, do: @allowed_keys
 
@@ -90,16 +106,29 @@ defmodule Platform.Feedback.Submission do
   def aggregate_limit, do: @aggregate_limit
 
   @doc """
-  Submit feedback. `actor` is `%{agent_id: binary, slug: binary | nil}`.
+  Submit feedback. `actor` is `%{agent_id: binary, slug: binary | nil}` (an
+  agent) or `%{user_id: binary}` (a signed-in person). The person's identity
+  is used ONLY for rate accounting; it never reaches the issue.
+
+  `opts` exist for `Platform.Feedback.BrokerServer` only (task 01a1a6a5
+  stage 3):
+
+    * `:source` — the wire's `agent` | `person` display hint, used in place
+      of the actor kind for `source` (the required-field rule and the issue
+      footer). Any other value is ignored.
+    * `:installation` — the calling installation's label (or nil) for the
+      issue attribution, in place of this node's own label.
 
   Returns `{:ok, result}` where `result.status` is `"created"` or
   `"duplicate"`, or `{:error, %{code: atom, message: binary}}` (plus
   `:field` / `:retry_after_seconds` where they apply).
   """
-  @spec submit(map(), map() | nil) :: {:ok, map()} | {:error, map()}
-  def submit(args, actor) do
+  @spec submit(map(), map() | nil, keyword()) :: {:ok, map()} | {:error, map()}
+  def submit(args, actor, opts \\ []) do
     with :ok <- capability(),
          {:ok, actor} <- actor(actor),
+         actor = apply_opts(actor, opts),
+         {:ok, args} <- with_source(args, actor),
          {:ok, sanitized, report} <- normalize(args) do
       fingerprint = fingerprint(sanitized)
       publish_once(sanitized, report, fingerprint, actor)
@@ -115,15 +144,25 @@ defmodule Platform.Feedback.Submission do
   @spec normalize(map()) :: {:ok, map(), map()} | {:error, map()}
   def normalize(args) when is_map(args) do
     args = stringify_keys(args)
-    ignored = args |> Map.keys() |> Enum.reject(&(&1 in @allowed_keys)) |> Enum.sort()
+
+    ignored =
+      args
+      |> Map.keys()
+      |> Enum.reject(&(&1 in @allowed_keys or &1 in @internal_keys))
+      |> Enum.sort()
+
+    source = source(args["source"])
 
     with {:ok, category} <- category(args["category"]),
-         {:ok, fields, redactions} <- text_fields(args),
+         {:ok, area} <- area(args["area"]),
+         {:ok, fields, redactions} <- text_fields(args, source),
          {:ok, diagnostics, diag_redactions, dropped?} <- diagnostics(args["diagnostics"]),
          :ok <- aggregate(fields, diagnostics) do
       sanitized =
         fields
         |> Map.put(:category, category)
+        |> Map.put(:source, source)
+        |> maybe_put(:area, area)
         |> maybe_put(:diagnostics, diagnostics)
 
       {:ok, sanitized,
@@ -142,14 +181,54 @@ defmodule Platform.Feedback.Submission do
   The duplicate fingerprint: sha256 (lowercase hex) of the category and the
   allowlisted text fields, each trimmed, whitespace-collapsed and downcased.
   Diagnostics are excluded, so a retry that attaches different diagnostics is
-  still the same report.
+  still the same report. `source` is excluded, so identical text from a
+  person and from an agent is one report. `area` is appended ONLY when
+  present, so every fingerprint of an area-less submission is byte-identical
+  to the one main computed before areas existed (task 01a1a6a5 stage 2).
   """
   @spec fingerprint(map()) :: String.t()
   def fingerprint(sanitized) do
     parts =
-      [sanitized.category | Enum.map(@text_fields, &canonical(Map.get(sanitized, &1)))]
+      [sanitized.category | Enum.map(@text_fields, &canonical(Map.get(sanitized, &1)))] ++
+        case Map.get(sanitized, :area) do
+          area when is_binary(area) -> [area]
+          _ -> []
+        end
 
     :crypto.hash(:sha256, Enum.join(parts, <<0>>)) |> Base.encode16(case: :lower)
+  end
+
+  @doc """
+  Re-emit a sanitized structure in the raw-argument shape `normalize/1`
+  accepts: string keys, only the allowlisted fields that are present, and
+  diagnostics as `%{"include" => true, "scope", "content"}`.
+
+  This is what an installation sends over the broker wire (task 01a1a6a5
+  stage 1). The broker runs `normalize/1` on it again, so redaction, bounds
+  and the fenced issue build happen ON THE BROKER and a caller cannot hand it
+  prebuilt markdown. `normalize(wire_fields(s))` yields `s` again, and so the
+  same fingerprint.
+  """
+  @spec wire_fields(map()) :: %{optional(String.t()) => term()}
+  def wire_fields(sanitized) when is_map(sanitized) do
+    fields =
+      for field <- [:category, :source, :area | @text_fields],
+          value = Map.get(sanitized, field),
+          is_binary(value),
+          into: %{},
+          do: {Atom.to_string(field), value}
+
+    case Map.get(sanitized, :diagnostics) do
+      %{scope: scope, content: content} when is_binary(scope) and is_binary(content) ->
+        Map.put(fields, "diagnostics", %{
+          "include" => true,
+          "scope" => scope,
+          "content" => content
+        })
+
+      _ ->
+        fields
+    end
   end
 
   # ── checks ─────────────────────────────────────────────────────────────
@@ -161,9 +240,61 @@ defmodule Platform.Feedback.Submission do
   end
 
   defp actor(%{agent_id: id} = actor) when is_binary(id) and id != "",
-    do: {:ok, %{agent_id: id, slug: Map.get(actor, :slug)}}
+    do: {:ok, %{kind: :agent, agent_id: id, user_id: nil, slug: Map.get(actor, :slug)}}
 
-  defp actor(_), do: error(:unauthorized, "feedback_submit requires an identified agent caller")
+  defp actor(%{user_id: id}) when is_binary(id) and id != "",
+    do: {:ok, %{kind: :person, agent_id: nil, user_id: id, slug: nil}}
+
+  defp actor(_),
+    do: error(:unauthorized, "feedback_submit requires an identified agent or person caller")
+
+  defp apply_opts(actor, opts) do
+    source =
+      case Keyword.get(opts, :source) do
+        hint when hint in @sources -> hint
+        _ -> Atom.to_string(actor.kind)
+      end
+
+    actor = Map.put(actor, :source, source)
+
+    case Keyword.fetch(opts, :installation) do
+      {:ok, label} -> Map.put(actor, :installation, label)
+      :error -> actor
+    end
+  end
+
+  # The caller never chooses `source`: it is overwritten from the actor kind
+  # (or the broker's validated hint, see `submit/3`).
+  defp with_source(args, actor) when is_map(args),
+    do: {:ok, args |> stringify_keys() |> Map.put("source", actor.source)}
+
+  defp with_source(_args, _actor), do: error(:invalid_arguments, "arguments must be an object")
+
+  defp source(value) when is_binary(value) do
+    normalized = value |> String.trim() |> String.downcase()
+    if normalized in @sources, do: normalized, else: "agent"
+  end
+
+  defp source(_), do: "agent"
+
+  defp area(nil), do: {:ok, nil}
+
+  defp area(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" ->
+        {:ok, nil}
+
+      normalized ->
+        if normalized in @areas,
+          do: {:ok, normalized},
+          else: area_error()
+    end
+  end
+
+  defp area(_), do: area_error()
+
+  defp area_error,
+    do: error(:invalid_area, "area must be one of: #{Enum.join(@areas, ", ")}", field: "area")
 
   defp category(value) when is_binary(value) do
     normalized = value |> String.trim() |> String.downcase()
@@ -182,28 +313,40 @@ defmodule Platform.Feedback.Submission do
         field: "category"
       )
 
-  defp text_fields(args) do
-    Enum.reduce_while(@text_fields, {:ok, %{}, 0}, fn field, {:ok, acc, count} ->
-      key = Atom.to_string(field)
+  defp text_fields(args, source) do
+    required = if source == "person", do: @person_required, else: @required
 
-      case text_field(field, Map.get(args, key)) do
-        {:ok, nil, 0} -> {:cont, {:ok, acc, count}}
-        {:ok, text, n} -> {:cont, {:ok, Map.put(acc, field, text), count + n}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    result =
+      Enum.reduce_while(@text_fields, {:ok, %{}, 0}, fn field, {:ok, acc, count} ->
+        key = Atom.to_string(field)
+
+        case text_field(field, Map.get(args, key), required) do
+          {:ok, nil, 0} -> {:cont, {:ok, acc, count}}
+          {:ok, text, n} -> {:cont, {:ok, Map.put(acc, field, text), count + n}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+
+    with {:ok, fields, _count} <- result do
+      if source == "person" and not Enum.any?(@person_one_of, &Map.has_key?(fields, &1)),
+        do:
+          error(:missing_field, "`expected_behavior` or `observed_behavior` is required",
+            field: "observed_behavior"
+          ),
+        else: result
+    end
   end
 
-  defp text_field(field, nil) do
-    if field in @required,
+  defp text_field(field, nil, required) do
+    if field in required,
       do: error(:missing_field, "`#{field}` is required", field: Atom.to_string(field)),
       else: {:ok, nil, 0}
   end
 
-  defp text_field(field, value) when is_binary(value) do
+  defp text_field(field, value, required) when is_binary(value) do
     case String.trim(value) do
       "" ->
-        text_field(field, nil)
+        text_field(field, nil, required)
 
       trimmed ->
         {redacted, n} = Redaction.redact(trimmed)
@@ -218,7 +361,7 @@ defmodule Platform.Feedback.Submission do
     end
   end
 
-  defp text_field(field, _value),
+  defp text_field(field, _value, _required),
     do: error(:invalid_field, "`#{field}` must be a string", field: Atom.to_string(field))
 
   defp diagnostics(nil), do: {:ok, nil, 0, false}
@@ -317,10 +460,14 @@ defmodule Platform.Feedback.Submission do
       GithubPublisher.build_issue(sanitized, %{
         fingerprint: fingerprint,
         actor: actor.slug,
-        installation: GithubPublisher.config(:installation_label)
+        source: sanitized.source,
+        installation: Map.get(actor, :installation, GithubPublisher.config(:installation_label))
       })
 
-    case GithubPublisher.publish(issue, fingerprint: fingerprint) do
+    case GithubPublisher.publish(issue,
+           fingerprint: fingerprint,
+           submission: wire_fields(sanitized)
+         ) do
       {:ok, identity} ->
         {:ok, _} = mark_published(record, identity)
         {:ok, result("created", identity, fingerprint, report)}
@@ -345,6 +492,7 @@ defmodule Platform.Feedback.Submission do
       fingerprint: fingerprint,
       category: category,
       actor_agent_id: actor.agent_id,
+      actor_user_id: actor.user_id,
       attempted_at: DateTime.utc_now()
     }
 
@@ -375,6 +523,7 @@ defmodule Platform.Feedback.Submission do
           attempted_at: now,
           error_code: nil,
           actor_agent_id: actor.agent_id,
+          actor_user_id: actor.user_id,
           updated_at: now
         ]
       )
@@ -410,9 +559,7 @@ defmodule Platform.Feedback.Submission do
 
     actor_count =
       Repo.aggregate(
-        from(r in SubmissionRecord,
-          where: r.actor_agent_id == ^actor.agent_id and r.inserted_at > ^since
-        ),
+        from(r in SubmissionRecord, where: r.inserted_at > ^since, where: ^actor_filter(actor)),
         :count
       )
 
@@ -421,7 +568,7 @@ defmodule Platform.Feedback.Submission do
 
     cond do
       actor_count >= per_actor ->
-        rate_limited("this agent has reached its feedback limit", window)
+        rate_limited("this #{actor_noun(actor)} has reached its feedback limit", window)
 
       installation_count >= per_installation ->
         rate_limited("this installation has reached its feedback limit", window)
@@ -430,6 +577,14 @@ defmodule Platform.Feedback.Submission do
         :ok
     end
   end
+
+  # The per-actor cap counts the column for the actor's kind only, so a
+  # person's rows and an agent's rows never share a bucket.
+  defp actor_filter(%{kind: :person, user_id: id}), do: dynamic([r], r.actor_user_id == ^id)
+  defp actor_filter(%{kind: :agent, agent_id: id}), do: dynamic([r], r.actor_agent_id == ^id)
+
+  defp actor_noun(%{kind: :person}), do: "person"
+  defp actor_noun(_actor), do: "agent"
 
   defp rate_config(key, default) do
     case Application.get_env(:platform, :feedback_rate_limits, []) |> Keyword.get(key) do

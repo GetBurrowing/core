@@ -17,7 +17,22 @@ defmodule PlatformWeb.SettingsLive do
       stored preset and mode, read from `:current_user_record`, which
       ShellLive's `set_theme` replaces, so the value follows a change without
       a reload.
-    * Account: Notifications, Mask names, Usage, Admin. Then Sign out, last.
+    * Account: Notifications, Mask names, Usage, Admin.
+    * Help: Send feedback (task 01a1a6a5 stage 5), only while feedback is
+      enabled (see Gating). Then Sign out, last.
+
+  ## Send feedback
+
+  The row opens a sheet holding one form: a two-option kind radiogroup
+  ("Something's not working" = problem, "Something would help" = idea), the
+  text, and an optional area (`Platform.Feedback.Submission.areas/0`).
+  `submit_feedback` calls `Platform.Feedback.PersonForm.submit/2` and
+  nothing else: redaction, dedupe, the per-person cap and the broker all run
+  behind it, and this LiveView holds no credential and makes no GitHub call.
+  A created or duplicate answer replaces the form with a confirmation and a
+  link to the issue; rate limited and every other error show a fixed
+  sentence and keep the typed text. A raw error code, the redaction report
+  or any server text is never rendered.
 
   ## Notifications (task 01a1557a-e538 stage 4)
 
@@ -48,7 +63,11 @@ defmodule PlatformWeb.SettingsLive do
   mount for this actor: the same mapping and the same
   `Platform.Access.module_access?/3` call the mount gate runs, so the row and
   the page cannot disagree (the one pinned exception is 01a15be9, a
-  project-scoped prompts.manage holder). Users also needs the sign-in admin
+  project-scoped prompts.manage holder). The Help section, its Send feedback
+  row, the feedback sheet and `?sheet=feedback` exist only while
+  `Platform.Feedback.Policy.enabled?/0` holds, read in `mount/3`; the
+  `submit_feedback` handler asks the policy again, so a forged event on a
+  disabled install does nothing. Users also needs the sign-in admin
   switch (`Platform.SignInAdmin.Config.enabled?/0`), without which its route
   answers 404. The Admin row is absent when no sheet row is visible.
 
@@ -60,8 +79,9 @@ defmodule PlatformWeb.SettingsLive do
 
   ## Sheet state
 
-  One `@sheet` assign (`nil | :notifications | :admin | :sign_out`), set to
-  nil in `mount/3` unless `?sheet=notifications` or `?sheet=admin` names one;
+  One `@sheet` assign (`nil | :notifications | :admin | :sign_out |
+  :feedback`), set to nil in `mount/3` unless `?sheet=notifications`,
+  `?sheet=admin` or (while feedback is enabled) `?sheet=feedback` names one;
   `?sheet=appearance` opens the theme picker instead. Any other value is
   ignored.
   Every link here carries NO phx-click (a bare-string phx-click on a
@@ -74,6 +94,9 @@ defmodule PlatformWeb.SettingsLive do
 
   alias Platform.Accounts
   alias Platform.Accounts.ThemePreference
+  alias Platform.Feedback.PersonForm
+  alias Platform.Feedback.Policy
+  alias Platform.Feedback.Submission
   alias PlatformWeb.Components.NotificationState
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.ModuleGate
@@ -130,6 +153,10 @@ defmodule PlatformWeb.SettingsLive do
     %{label: "Vault", path: "/admin/vault", view: PlatformWeb.AdminVaultLive}
   ]
 
+  # The one sentence for every feedback error other than rate limited. No
+  # error code, redaction report or server text is ever rendered.
+  @feedback_failed "Couldn't send your feedback right now. Try again later."
+
   @impl true
   def mount(params, _session, socket) do
     scope = socket.assigns[:access_scope]
@@ -154,6 +181,8 @@ defmodule PlatformWeb.SettingsLive do
      )
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
+     |> assign(:feedback_enabled, Policy.enabled?())
+     |> reset_feedback()
      |> open_from_params(params)}
   end
 
@@ -163,6 +192,9 @@ defmodule PlatformWeb.SettingsLive do
     do: assign(socket, :sheet, :notifications)
 
   defp open_from_params(socket, %{"sheet" => "admin"}), do: assign(socket, :sheet, :admin)
+
+  defp open_from_params(%{assigns: %{feedback_enabled: true}} = socket, %{"sheet" => "feedback"}),
+    do: assign(socket, :sheet, :feedback)
 
   defp open_from_params(socket, %{"sheet" => "appearance"}),
     do: assign(socket, :theme_picker_open, true)
@@ -299,6 +331,55 @@ defmodule PlatformWeb.SettingsLive do
 
   def handle_event("close_settings_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, nil)}
+
+  def handle_event(
+        "open_feedback_sheet",
+        _params,
+        %{assigns: %{feedback_enabled: true}} = socket
+      ),
+      do: {:noreply, socket |> reset_feedback() |> assign(:sheet, :feedback)}
+
+  def handle_event("open_feedback_sheet", _params, socket), do: {:noreply, socket}
+
+  def handle_event("validate_feedback", %{"feedback" => params}, socket),
+    do: {:noreply, assign(socket, :feedback_form, feedback_form(params))}
+
+  def handle_event("validate_feedback", _params, socket), do: {:noreply, socket}
+
+  def handle_event("submit_feedback", params, socket) do
+    form_params = feedback_params(params)
+    user = socket.assigns[:current_user_record]
+
+    # Re-checked here, not trusted from mount: a forged event on a disabled
+    # install (or one disabled since this page mounted) does nothing.
+    cond do
+      not Policy.enabled?() ->
+        {:noreply, socket}
+
+      not match?(%{id: id} when is_binary(id), user) ->
+        {:noreply, socket}
+
+      String.trim(form_params["text"]) == "" ->
+        {:noreply, assign(socket, :feedback_form, feedback_form(form_params))}
+
+      true ->
+        socket = assign(socket, :feedback_form, feedback_form(form_params))
+
+        case PersonForm.submit(user, form_params) do
+          {:ok, %{status: status, issue: %{url: url}}} when status in ["created", "duplicate"] ->
+            {:noreply,
+             socket
+             |> assign(:feedback_result, %{status: status, url: url})
+             |> assign(:feedback_error, nil)}
+
+          {:error, %{code: :rate_limited} = error} ->
+            {:noreply, assign(socket, :feedback_error, rate_limited_copy(error))}
+
+          _other ->
+            {:noreply, assign(socket, :feedback_error, @feedback_failed)}
+        end
+    end
+  end
 
   @impl true
   def render(assigns) do
@@ -464,6 +545,24 @@ defmodule PlatformWeb.SettingsLive do
           </span>
         </button>
 
+        <%= if @feedback_enabled do %>
+          <p class={section_label_class()} data-role="settings-help-label">Help</p>
+          <button
+            type="button"
+            phx-click="open_feedback_sheet"
+            data-role="settings-feedback"
+            class={row_class()}
+          >
+            <span class="min-w-0">
+              <span class="block">Send feedback</span>
+              <span class="block text-xs text-subtle">
+                Tell the Burrow team what's not working or what would help.
+              </span>
+            </span>
+            <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+          </button>
+        <% end %>
+
         <button
           type="button"
           phx-click="open_sign_out_sheet"
@@ -548,6 +647,135 @@ defmodule PlatformWeb.SettingsLive do
       </.sheet>
 
       <.sheet
+        :if={@feedback_enabled}
+        id="settings-feedback-sheet"
+        open={@sheet == :feedback}
+        placement={:bottom}
+        on_close="close_settings_sheet"
+        swipe_dismiss
+        handle_close
+      >
+        <:title>Send feedback</:title>
+        <p class={sheet_title_class()} aria-hidden="true">Send feedback</p>
+        <div
+          :if={@feedback_result}
+          data-role="feedback-confirmation"
+          data-status={@feedback_result.status}
+          class="px-[18px] pb-4 text-[15px] text-base-content"
+        >
+          <p :if={@feedback_result.status == "created"}>Thanks, it's been sent.</p>
+          <p :if={@feedback_result.status == "duplicate"}>
+            Thanks. Someone already reported this, so we've linked you to it.
+          </p>
+          <a
+            href={@feedback_result.url}
+            target="_blank"
+            rel="noopener"
+            data-role="feedback-issue-link"
+            class="mt-3 inline-flex items-center gap-1 font-semibold text-base-content underline underline-offset-2 focus-visible-ring"
+          >
+            View it on GitHub
+            <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
+          </a>
+        </div>
+        <.form
+          :if={is_nil(@feedback_result)}
+          for={@feedback_form}
+          id="settings-feedback-form"
+          phx-change="validate_feedback"
+          phx-submit="submit_feedback"
+          class="flex flex-col gap-4 px-[18px] pb-4"
+        >
+          <fieldset>
+            <legend id="feedback-kind-label" class="pb-2 text-[13px] font-semibold text-base-content">
+              What kind of feedback?
+            </legend>
+            <div
+              role="radiogroup"
+              aria-labelledby="feedback-kind-label"
+              data-role="feedback-kind"
+              class="flex flex-col gap-2"
+            >
+              <label
+                :for={opt <- feedback_kinds()}
+                class="flex min-h-11 cursor-pointer items-center gap-3 rounded-[var(--radius-field)] text-[15px] text-base-content"
+              >
+                <input
+                  type="radio"
+                  name={@feedback_form[:kind].name}
+                  value={opt.value}
+                  checked={@feedback_form[:kind].value == opt.value}
+                  data-kind={opt.value}
+                  class="radio radio-primary radio-sm focus-visible-ring"
+                />
+                <span>{opt.label}</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="flex flex-col gap-1">
+            <label for="feedback-text" class="text-[13px] font-semibold text-base-content">
+              What happened, or what would help?
+            </label>
+            <textarea
+              id="feedback-text"
+              name={@feedback_form[:text].name}
+              required
+              maxlength="2000"
+              rows="5"
+              data-role="feedback-text"
+              aria-describedby="feedback-text-help"
+              class="textarea w-full rounded-[var(--radius-field)] bg-base-100 text-[15px] text-base-content placeholder:text-subtle focus-visible-ring"
+            >{@feedback_form[:text].value}</textarea>
+            <p id="feedback-text-help" class="text-xs text-subtle">
+              Don't include passwords or keys. Anything that looks like one is removed before sending.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-1">
+            <label for="feedback-area" class="text-[13px] font-semibold text-base-content">
+              Which area? (optional)
+            </label>
+            <select
+              id="feedback-area"
+              name={@feedback_form[:area].name}
+              data-role="feedback-area"
+              class="select w-full rounded-[var(--radius-field)] bg-base-100 text-[15px] text-base-content focus-visible-ring"
+            >
+              <option value="" selected={@feedback_form[:area].value in [nil, ""]}>Not sure</option>
+              <option
+                :for={area <- Submission.areas()}
+                value={area}
+                selected={@feedback_form[:area].value == area}
+              >
+                {area_label(area)}
+              </option>
+            </select>
+          </div>
+
+          <p
+            :if={@feedback_error}
+            data-role="feedback-error"
+            role="alert"
+            class="flex items-start gap-2 text-[13px] text-base-content"
+          >
+            <span class="hero-exclamation-circle size-4 mt-0.5 shrink-0" aria-hidden="true"></span>
+            <span>{@feedback_error}</span>
+          </p>
+
+          <button
+            type="submit"
+            data-role="feedback-submit"
+            disabled={blank?(@feedback_form[:text].value)}
+            phx-disable-with="Sending…"
+            class="btn btn-primary min-h-11 w-full rounded-[var(--radius-field)] focus-visible-ring"
+          >
+            Send
+          </button>
+        </.form>
+      </.sheet>
+
+      <.sheet
         id="settings-sign-out-sheet"
         open={@sheet == :sign_out}
         placement={:bottom}
@@ -578,6 +806,68 @@ defmodule PlatformWeb.SettingsLive do
     </div>
     """
   end
+
+  @feedback_kinds [
+    %{value: "problem", label: "Something's not working"},
+    %{value: "idea", label: "Something would help"}
+  ]
+
+  @area_labels %{
+    "chat" => "Chat",
+    "tasks" => "Tasks",
+    "calendar" => "Calendar",
+    "meetings" => "Meetings",
+    "inbox" => "Inbox",
+    "voice" => "Voice",
+    "canvases" => "Canvases",
+    "agents" => "Agents",
+    "settings" => "Settings",
+    "other" => "Something else"
+  }
+
+  @doc false
+  def feedback_kinds, do: @feedback_kinds
+
+  @doc false
+  def area_label(area), do: Map.get(@area_labels, area, String.capitalize(area))
+
+  @doc """
+  The rate-limited sentence, with the wait rounded up to whole minutes (at
+  least 1).
+  """
+  @spec rate_limited_copy(map()) :: String.t()
+  def rate_limited_copy(error) do
+    minutes =
+      case Map.get(error, :retry_after_seconds) do
+        s when is_integer(s) and s > 0 -> max(1, div(s + 59, 60))
+        _ -> 60
+      end
+
+    "You've sent a lot of feedback recently. Try again in about #{minutes} minutes."
+  end
+
+  defp reset_feedback(socket) do
+    socket
+    |> assign(:feedback_form, feedback_form(%{}))
+    |> assign(:feedback_result, nil)
+    |> assign(:feedback_error, nil)
+  end
+
+  defp feedback_params(%{"feedback" => params}) when is_map(params),
+    do: normalize_feedback(params)
+
+  defp feedback_params(_params), do: normalize_feedback(%{})
+
+  defp normalize_feedback(params) do
+    kind = if params["kind"] == "idea", do: "idea", else: "problem"
+    text = if is_binary(params["text"]), do: params["text"], else: ""
+    area = if params["area"] in Submission.areas(), do: params["area"], else: ""
+    %{"kind" => kind, "text" => text, "area" => area}
+  end
+
+  defp feedback_form(params), do: to_form(normalize_feedback(params), as: :feedback)
+
+  defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 
   @levels [
     %{

@@ -6,7 +6,9 @@ defmodule Platform.Feedback.SubmissionRecord do
 
   The row deliberately stores NO submission text. The sanitized fields exist
   only long enough to build the issue; what persists is the fingerprint, the
-  category, which agent submitted it, the publication status, and the
+  category, which agent (`actor_agent_id`) or signed-in person
+  (`actor_user_id`, task 01a1a6a5 stage 2; at most one of the two is set)
+  submitted it, the publication status, and the
   repository + issue number the publisher returned. A leak of this table
   discloses that a submission happened, not what it said.
 
@@ -35,6 +37,7 @@ defmodule Platform.Feedback.SubmissionRecord do
     field(:fingerprint, :string)
     field(:category, :string)
     field(:actor_agent_id, :binary_id)
+    field(:actor_user_id, :binary_id)
     field(:status, :string, default: "pending")
     field(:external_repository, :string)
     field(:external_issue_number, :integer)
@@ -51,10 +54,11 @@ defmodule Platform.Feedback.SubmissionRecord do
   @doc false
   def reserve_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:fingerprint, :category, :actor_agent_id, :attempted_at])
+    |> cast(attrs, [:fingerprint, :category, :actor_agent_id, :actor_user_id, :attempted_at])
     |> validate_required([:fingerprint, :category, :attempted_at])
     |> put_change(:status, "pending")
     |> unique_constraint(:fingerprint)
+    |> check_constraint(:actor_user_id, name: :feedback_submissions_one_actor_check)
   end
 
   @doc false
@@ -67,7 +71,8 @@ defmodule Platform.Feedback.SubmissionRecord do
       :error_code,
       :published_at,
       :attempted_at,
-      :actor_agent_id
+      :actor_agent_id,
+      :actor_user_id
     ])
     |> validate_inclusion(:status, @statuses)
   end

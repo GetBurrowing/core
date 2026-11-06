@@ -343,7 +343,7 @@ config :platform, :feedback_policy, "disabled"
 
 config :platform, Platform.Feedback.GithubPublisher,
   adapter: Platform.Feedback.GithubPublisher.Broker,
-  repository: "Startup-Suite/core",
+  repository: "GetBurrowing/core",
   broker_url: "https://feedback-broker.test",
   github_api_url: "https://github-api.test"
 

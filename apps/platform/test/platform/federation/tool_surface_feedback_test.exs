@@ -47,7 +47,7 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       send(test_pid, {:broker, conn.method})
 
       Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-        "repository" => "Startup-Suite/core",
+        "repository" => "GetBurrowing/core",
         "issue_number" => 7
       })
     end)
@@ -115,11 +115,49 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       refute_received {:broker, _}
     end
 
-    test "no value outside the policy names turns it on", %{runtime: runtime} do
-      for value <- [nil, "", "on", "true", "enabled", "QUARANTINE", "trust"] do
+    test "no explicit value outside the policy names turns it on", %{runtime: runtime} do
+      for value <- ["enabeld", "on", "true", "enabled", "QUARANTINE", "trust"] do
         set_policy(value)
         refute @tool in ToolAuthorization.tool_names(runtime), "#{inspect(value)} enabled it"
       end
+    end
+  end
+
+  describe "unset policy (task 01a1a6a5 stage 1: opt-in)" do
+    test "an unset or blank policy keeps the tool out of tools/list", %{runtime: runtime} do
+      Application.delete_env(:platform, :feedback_policy)
+
+      refute @tool in names(ToolSurface.list_tools(["federation"]))
+      refute @tool in ToolAuthorization.tool_names(runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize(@tool, runtime)
+
+      for value <- [nil, "", "  "] do
+        set_policy(value)
+        refute @tool in ToolAuthorization.tool_names(runtime), "#{inspect(value)} listed it"
+      end
+    end
+
+    test "a direct call with the policy unset is refused feedback_disabled", %{agent: agent} do
+      Application.delete_env(:platform, :feedback_policy)
+
+      for call <- [
+            fn -> ToolArguments.dispatch(@tool, args(), %{agent_id: agent.id}) end,
+            fn -> ToolSurface.execute(@tool, args(), %{agent_id: agent.id}) end
+          ] do
+        assert {:error, %{code: :feedback_disabled, recoverable: false}} = call.()
+      end
+
+      refute_received {:broker, _}
+    end
+
+    test "the description names the GetBurrowing/core repository" do
+      set_policy("quarantined")
+
+      assert %{description: description} =
+               Enum.find(ToolSurface.list_tools(["federation"]), &(&1.name == @tool)) ||
+                 flunk("feedback_submit is not listed with the policy quarantined")
+
+      assert description =~ "GetBurrowing/core"
     end
   end
 
@@ -163,9 +201,9 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       assert first.status == "created"
 
       assert first.issue == %{
-               repository: "Startup-Suite/core",
+               repository: "GetBurrowing/core",
                issue_number: 7,
-               url: "https://github.com/Startup-Suite/core/issues/7"
+               url: "https://github.com/GetBurrowing/core/issues/7"
              }
 
       assert first.ignored_fields == ["space_id"]

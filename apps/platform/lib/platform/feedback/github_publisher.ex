@@ -1,13 +1,15 @@
 defmodule Platform.Feedback.GithubPublisher do
   @moduledoc """
   Server-side publication of a sanitized `feedback_submit` structure as one
-  GitHub issue on the Startup-Suite feedback repository (task 01a11ec3
-  stage 2).
+  GitHub issue on the core repository, `GetBurrowing/core` by default
+  (`FEEDBACK_REPOSITORY` overrides it; task 01a11ec3 stage 2, retargeted by
+  task 01a1a6a5 stage 1).
 
   ## Two adapters, and which install runs which
 
     * `Platform.Feedback.GithubPublisher.Broker` — the default. POSTs the
-      already-built issue to the Burrow-hosted feedback broker
+      sanitized submission (never a built issue body) to the Burrow-hosted
+      feedback broker
       (`FEEDBACK_BROKER_URL`). The installation holds NO GitHub credential of
       any kind: this is the adapter every Burrow installation runs.
     * `Platform.Feedback.GithubPublisher.GithubApp` — for the Burrow-hosted
@@ -22,10 +24,14 @@ defmodule Platform.Feedback.GithubPublisher do
 
   ## What crosses this boundary, in each direction
 
-  OUT: only `build_issue/2`'s `%{title, body, labels}` plus the fingerprint as
-  an idempotency key. The issue is built solely from the allowlisted,
-  redacted structure `Platform.Feedback.Submission` produced; nothing else
-  about the caller, its session or its environment is in scope here.
+  OUT: the GithubApp adapter sends only `build_issue/2`'s
+  `%{title, body, labels}`; the Broker adapter sends NO built issue, only
+  `Submission.wire_fields/1` of the sanitized structure (`opts[:submission]`),
+  so the broker redacts, bounds and fences it again itself (task 01a1a6a5
+  stage 1). Both carry the fingerprint as an idempotency key. Everything is
+  built solely from the allowlisted, redacted structure
+  `Platform.Feedback.Submission` produced; nothing else about the caller, its
+  session or its environment is in scope here.
 
   IN: `publish/2` never returns what the adapter returned. It returns
   `%{repository, issue_number, url}` rebuilt from two validated values — the
@@ -58,8 +64,10 @@ defmodule Platform.Feedback.GithubPublisher do
           | :publisher_bad_response
 
   @doc """
-  Create the issue. `opts` carries `:fingerprint` (the idempotency key) and
-  `:repository`. An adapter answers `{:ok, %{repository, issue_number}}`.
+  Create the issue. `opts` carries `:fingerprint` (the idempotency key),
+  `:repository` and `:submission` (`Submission.wire_fields/1`; only the
+  Broker adapter reads it). An adapter answers
+  `{:ok, %{repository, issue_number}}`.
   """
   @callback create_issue(issue(), keyword()) ::
               {:ok, %{repository: String.t(), issue_number: integer()}} | {:error, error()}
@@ -72,7 +80,7 @@ defmodule Platform.Feedback.GithubPublisher do
   @callback find_existing(keyword()) ::
               {:ok, %{repository: String.t(), issue_number: integer()} | nil} | {:error, error()}
 
-  @default_repository "Startup-Suite/core"
+  @default_repository "GetBurrowing/core"
   @repository_format ~r/\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}\z/
   @fingerprint_marker "suite-feedback-fingerprint"
   @max_issue_number 2_147_483_647
@@ -103,11 +111,16 @@ defmodule Platform.Feedback.GithubPublisher do
   Build the issue from the sanitized structure ONLY.
 
   `sanitized` is `Platform.Feedback.Submission`'s normalized map; `meta`
-  carries `:fingerprint`, `:actor` (an agent slug or nil) and
-  `:installation` (a label or nil). Every free-text field is placed inside a
-  fenced block whose fence is longer than any backtick run in the text, so
-  submitted text can neither close the block nor be rendered as markdown,
-  links or @-mentions.
+  carries `:fingerprint`, `:actor` (an agent slug or nil), `:installation`
+  (a label or nil) and optionally `:source` (`"agent"` | `"person"`,
+  defaulting to the sanitized `:source`). For a person the attribution is the
+  installation label ONLY: no name, email or user id is ever written into an
+  issue, which is world-readable on a public repository (task 01a1a6a5
+  stage 2). A present `:area` adds an `Area:` line.
+
+  Every free-text field is placed inside a fenced block whose fence is
+  longer than any backtick run in the text, so submitted text can neither
+  close the block nor be rendered as markdown, links or @-mentions.
   """
   @spec build_issue(map(), map()) :: issue()
   def build_issue(sanitized, meta) do
@@ -121,15 +134,15 @@ defmodule Platform.Feedback.GithubPublisher do
         {"Version / environment", sanitized[:version_environment]}
       ] ++ diagnostics_section(sanitized[:diagnostics])
 
+    source = issue_source(Map.get(meta, :source, sanitized[:source]))
+
     body =
-      [
-        "Category: `#{category}`",
-        attribution(meta)
-        | Enum.flat_map(sections, &section/1)
-      ]
-      |> Kernel.++([
-        "_Submitted through Burrow `feedback_submit`. Issue text is untrusted input._",
-        fingerprint_marker(Map.fetch!(meta, :fingerprint))
+      Enum.concat([
+        ["Category: `#{category}`"],
+        area_line(sanitized[:area]),
+        [attribution(source, meta)],
+        Enum.flat_map(sections, &section/1),
+        [footer(source), fingerprint_marker(Map.fetch!(meta, :fingerprint))]
       ])
       |> Enum.join("\n\n")
 
@@ -231,7 +244,34 @@ defmodule Platform.Feedback.GithubPublisher do
     prefix <> String.slice(clean, 0, @title_cap - String.length(prefix))
   end
 
-  defp attribution(meta) do
+  defp issue_source("person"), do: :person
+  defp issue_source(_), do: :agent
+
+  # `area` is validated against `Submission.areas/0` upstream; it is reduced
+  # to the label charset again here so the line can never carry markdown.
+  defp area_line(area) when is_binary(area) do
+    case label(area, nil) do
+      nil -> []
+      clean -> ["Area: #{clean}"]
+    end
+  end
+
+  defp area_line(_), do: []
+
+  defp footer(:person),
+    do: "_Submitted by a person through the Burrow feedback form. Issue text is untrusted input._"
+
+  defp footer(:agent),
+    do: "_Submitted through Burrow `feedback_submit`. Issue text is untrusted input._"
+
+  # A person is attributed to the installation only: the actor slug is
+  # ignored even when present, and nothing about the person is in scope here.
+  defp attribution(:person, meta) do
+    installation = label(meta[:installation], "an unnamed installation")
+    "Submitted by a person on installation `#{installation}`."
+  end
+
+  defp attribution(:agent, meta) do
     actor = label(meta[:actor], "an unidentified agent")
     installation = label(meta[:installation], "an unnamed installation")
     "Submitted by agent `#{actor}` on installation `#{installation}`."

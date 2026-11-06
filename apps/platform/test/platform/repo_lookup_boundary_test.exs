@@ -1206,6 +1206,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # (`fingerprint/1`) from the normalized submission; no caller-supplied id
     # reaches it, and a string column cannot raise Ecto.Query.CastError.
     "platform/feedback/submission.ex" => 1,
+    # Task 01a1a6a5 stage 3: 0 -> 1, `Feedback.BrokerServer.find/1`.
+    # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint` (a
+    # `:string` column) and a literal status. The fingerprint arrives from the
+    # broker's URL path, but find/1 only queries after it matches
+    # `~r/\A[0-9a-f]{64}\z/`, and a string column cannot raise
+    # Ecto.Query.CastError.
+    "platform/feedback/broker_server.ex" => 1,
     # Task 01a11ec3 stage 3: 0 -> 1, `Feedback.Intake.existing_task/2`.
     # Triaged by hand: the `where:` pins `lower(external_repository_identity)`
     # (a string normalized by Tasks.RepoRef) and `external_issue_number` (an

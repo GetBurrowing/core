@@ -550,3 +550,32 @@ class ModulesFieldTest(PositiveControlMixin, unittest.TestCase):
 
     def test_a_non_string_entry_is_an_invalid_type(self):
         self.assertEqual(self.errors_for(["play", 1]), [("invalid_type", "install.modules")])
+
+
+class FeedbackSchemaTest(unittest.TestCase):
+    """[feedback] enabled (core task 01a1a6a5 stage 4): a boolean with no
+    default, so an unset value can follow install.hosted."""
+
+    def test_unset_has_no_default(self):
+        errors, normalized = validate(load(GOOD))
+        self.assertEqual(errors, [])
+        self.assertIsNone(normalized["feedback"]["enabled"])
+
+    def test_booleans_are_accepted(self):
+        for value in (True, False):
+            raw = load(GOOD)
+            raw["feedback"] = {"enabled": value}
+            errors, normalized = validate(raw)
+            self.assertEqual(errors, [])
+            self.assertIs(normalized["feedback"]["enabled"], value)
+
+    def test_a_string_is_invalid_type(self):
+        raw = load(GOOD)
+        raw["feedback"] = {"enabled": "yes"}
+        errors, _ = validate(raw)
+        self.assertEqual([(e.code, e.path) for e in errors], [("invalid_type", "feedback.enabled")])
+
+    def test_an_unknown_feedback_key_is_refused(self):
+        raw = load(GOOD)
+        raw["feedback"] = {"broker_url": "https://example.test"}
+        self.assertEqual(codes(raw), ["unknown_key"])

@@ -18,27 +18,31 @@ defmodule Platform.Feedback.Policy do
   authoritative, so changing this value later never rewrites an existing row.
   Nothing here reads a task.
 
-  ## Fail closed
+  ## Opt-in, and fail closed
 
-  Unset, blank, and every value other than the three names above (compared
-  after trimming and downcasing) mean `:disabled`. A typo turns the feature
-  off; it never turns it on.
+  Feedback is OPT-IN (task 01a1a6a5). Unset, blank, and every value other
+  than the three names above (compared after trimming and downcasing) mean
+  `:disabled`. An operator turns the capability on with an explicit
+  `FEEDBACK_POLICY=quarantined` or `FEEDBACK_POLICY=trusted`. A typo such as
+  `enabeld` turns the feature off; it never turns it on.
 
   ## The one predicate
 
   `enabled?/0` is THE capability predicate. `Platform.Federation.ToolSurface`
   (listing and execution), `Platform.Orchestration.PromptTemplates`
-  (guidance text) and `Platform.Orchestration.HeartbeatScheduler` (the assigns
-  every task dispatch and nudge render) all ask it and nothing else, so the
-  advertised set and the callable set cannot disagree.
+  (guidance text), `Platform.Orchestration.HeartbeatScheduler` (the assigns
+  every task dispatch and nudge render) and `Platform.Feedback.Intake` all
+  ask it and nothing else, so the advertised set and the callable set cannot
+  disagree.
 
   ## Injection
 
   `config/runtime.exs` writes `config :platform, :feedback_policy` from
-  `FEEDBACK_POLICY` outside the test environment; `config/config.exs`
-  defaults it to `"disabled"` and `config/test.exs` pins it there, so the
-  suite is not a function of the host's environment. A test that needs the
-  capability flips it with `Application.put_env/3` and restores it on exit.
+  `FEEDBACK_POLICY` outside the test environment, defaulting to
+  `"disabled"` when the variable is unset. `config/config.exs` sets no value
+  (an absent key is `:disabled` too); `config/test.exs` pins it to
+  `"disabled"`, so the suite is not a function of the host's environment. A
+  test that needs another mode changes it and restores it on exit.
   """
 
   @modes ~w(disabled quarantined trusted)
@@ -49,7 +53,10 @@ defmodule Platform.Feedback.Policy do
   @spec modes() :: [String.t()]
   def modes, do: @modes
 
-  @doc "The installation's normalised feedback mode."
+  @doc """
+  The installation's normalised feedback mode. Unset, blank and unknown
+  values are `:disabled`.
+  """
   @spec mode() :: mode()
   def mode, do: normalize(Application.get_env(:platform, :feedback_policy))
 
@@ -74,9 +81,9 @@ defmodule Platform.Feedback.Policy do
   end
 
   @doc """
-  Normalise a raw policy value. Atoms and strings are accepted; anything that
-  is not exactly one of the three names (after trim + downcase) is
-  `:disabled`.
+  Normalise a raw policy value. Atoms and strings are accepted; `nil`, blank
+  and anything that is not exactly one of the three names (after trim +
+  downcase) is `:disabled`.
   """
   @spec normalize(term()) :: mode()
   def normalize(value) when is_atom(value) and not is_nil(value),

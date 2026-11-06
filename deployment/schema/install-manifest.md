@@ -221,6 +221,25 @@ the whole install: other agents' homes, env files and tokens, and core-platform'
 and Postgres through docker. On `contained` an agent is root over the agent container (every
 agent's home), not over the host or Postgres.
 
+## `[feedback]` (external feedback)
+
+Burrow's feedback (an agent's `feedback_submit` tool and a signed-in person's Send feedback
+form, filed as GitHub issues on the core repository) is OPT-IN in core: it is off unless
+core's environment sets `FEEDBACK_POLICY` (core task 01a1a6a5). This table is the opt-in.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | none: follows `install.hosted` | `true` renders exactly one line, `FEEDBACK_POLICY: "quarantined"`, into core-platform's environment in `compose.yaml` (not `secrets.env`: it is not a secret). `false` renders nothing. Unset: a hosted install (`install.hosted = true`) renders the line and a self-hosted one renders nothing. |
+
+- A self-hosted manifest without `[feedback]` renders byte-identically to one rendered before
+  the table existed. A hosted one gains exactly the one line.
+- A hosted install opts out with `enabled = false`.
+- Nothing else is rendered. The broker URL and the repository come from core's defaults, and
+  an install never holds a GitHub or broker credential: no `FEEDBACK_GITHUB_APP_*`,
+  `FEEDBACK_BROKER_SERVER` or broker URL is ever written to an install.
+- **Without the installer:** a self-hoster who runs core some other way opts in by setting
+  `FEEDBACK_POLICY=quarantined` in core's environment. See `docs/runbooks/feedback-broker.md`.
+
 ## `[push]` (Web Push)
 
 | Key | Type | Default | Notes |

@@ -39,7 +39,7 @@ defmodule Platform.Feedback.SubmissionTest do
       number = 1000 + :counters.get(counter, 1)
 
       Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-        "repository" => "Startup-Suite/core",
+        "repository" => "GetBurrowing/core",
         "issue_number" => number,
         "url" => "https://evil.example/phish",
         "token" => "ghs_leakedTokenFromBrokerShouldNeverSurface0000"
@@ -128,9 +128,9 @@ defmodule Platform.Feedback.SubmissionTest do
       assert first.status == "created"
 
       assert first.issue == %{
-               repository: "Startup-Suite/core",
+               repository: "GetBurrowing/core",
                issue_number: 1001,
-               url: "https://github.com/Startup-Suite/core/issues/1001"
+               url: "https://github.com/GetBurrowing/core/issues/1001"
              }
 
       assert {:ok, second} = Submission.submit(valid(), actor(agent))
@@ -193,11 +193,11 @@ defmodule Platform.Feedback.SubmissionTest do
       Req.Test.stub(@broker, fn conn ->
         case conn.method do
           "GET" ->
-            Req.Test.json(conn, %{"repository" => "Startup-Suite/core", "issue_number" => 77})
+            Req.Test.json(conn, %{"repository" => "GetBurrowing/core", "issue_number" => 77})
 
           "POST" ->
             Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-              "repository" => "Startup-Suite/core",
+              "repository" => "GetBurrowing/core",
               "issue_number" => 78
             })
         end
@@ -249,7 +249,12 @@ defmodule Platform.Feedback.SubmissionTest do
       refute raw =~ "LOG-SENTINEL"
       refute raw =~ "SESSION-SENTINEL"
       refute raw =~ "ENV-SENTINEL"
-      assert body["labels"] == ["feedback", "feedback:bug"]
+
+      assert Map.keys(body) |> Enum.sort() ==
+               ~w(fingerprint installation repository submission)
+
+      assert Map.keys(body["submission"]) |> Enum.sort() ==
+               ~w(category expected_behavior observed_behavior reproduction_steps source title version_environment)
     end
 
     test "diagnostics are absent unless explicitly opted in and scoped", %{agent: agent} do
@@ -278,7 +283,10 @@ defmodule Platform.Feedback.SubmissionTest do
 
       assert {:ok, %{diagnostics_included: false}} = Submission.submit(bad_scope, actor(agent))
 
-      for body <- broker_bodies(), do: refute(body["body"] =~ "DIAG-SENTINEL")
+      for body <- broker_bodies() do
+        refute Jason.encode!(body) =~ "DIAG-SENTINEL"
+        refute Map.has_key?(body["submission"], "diagnostics")
+      end
     end
 
     test "opted-in, scoped diagnostics are included and labelled with their scope",
@@ -294,8 +302,12 @@ defmodule Platform.Feedback.SubmissionTest do
 
       assert {:ok, %{diagnostics_included: true}} = Submission.submit(args, actor(agent))
       [body] = broker_bodies()
-      assert body["body"] =~ "Diagnostics (scope: error_message)"
-      assert body["body"] =~ "SCOPED-DIAG"
+
+      assert body["submission"]["diagnostics"] == %{
+               "include" => true,
+               "scope" => "error_message",
+               "content" => "SCOPED-DIAG ** (ArgumentError) bad argument"
+             }
     end
 
     test "secrets and credentials are redacted before the external call", %{agent: agent} do
@@ -328,7 +340,8 @@ defmodule Platform.Feedback.SubmissionTest do
         refute raw =~ secret, "#{secret} reached the broker"
       end
 
-      assert body["body"] =~ "[REDACTED]"
+      assert body["submission"]["observed_behavior"] =~ "[REDACTED]"
+      assert body["submission"]["version_environment"] =~ "[REDACTED]"
     end
 
     test "the result carries no broker-supplied text", %{agent: agent} do
@@ -336,6 +349,255 @@ defmodule Platform.Feedback.SubmissionTest do
       encoded = inspect(result)
       refute encoded =~ "evil.example"
       refute encoded =~ "ghs_leakedTokenFromBroker"
+    end
+  end
+
+  describe "broker wire (task 01a1a6a5 stage 1)" do
+    # `ghp_` + 36 alphanumerics: a GitHub personal-token shape.
+    @canary "ghp_" <> "Zq7Lm2Xc9Vb4Nn1Kk8Jj3Hh6Gg5Ff0Dd2Ss4Aa"
+
+    test "sends only repository, fingerprint, installation and the sanitized submission",
+         %{agent: agent} do
+      args = valid(%{"observed_behavior" => "Push failed with #{@canary} in the output."})
+
+      assert {:ok, %{status: "created", fingerprint: fingerprint}} =
+               Submission.submit(args, actor(agent))
+
+      assert_received {:broker, "POST", "/issues", headers, raw}
+      body = Jason.decode!(raw)
+
+      assert body |> Map.keys() |> Enum.sort() ==
+               ~w(fingerprint installation repository submission)
+
+      refute Map.has_key?(body, "body")
+      refute Map.has_key?(body, "title")
+      refute Map.has_key?(body, "labels")
+      assert body["repository"] == "GetBurrowing/core"
+      assert body["fingerprint"] == fingerprint
+      assert body["installation"] == nil
+      assert {"idempotency-key", fingerprint} in headers
+      refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
+
+      refute raw =~ @canary
+      assert body["submission"]["observed_behavior"] =~ Platform.Feedback.Redaction.marker()
+
+      {:ok, sanitized, _report} = Submission.normalize(args)
+      assert body["submission"] == Submission.wire_fields(sanitized)
+    end
+
+    test "carries the configured installation label", %{agent: agent} do
+      publisher = Platform.Feedback.GithubPublisher
+      saved = Application.get_env(:platform, publisher, [])
+      on_exit(fn -> Application.put_env(:platform, publisher, saved) end)
+
+      Application.put_env(
+        :platform,
+        publisher,
+        Keyword.put(saved, :installation_label, "burrow-7")
+      )
+
+      assert {:ok, _} = Submission.submit(valid(), actor(agent))
+      assert [%{"installation" => "burrow-7"}] = broker_bodies()
+    end
+
+    test "wire_fields/1 round-trips through normalize/1 to the same map and fingerprint" do
+      args =
+        valid(%{
+          "observed_behavior" => "  Token #{@canary} leaked;\nsee ```fence```  ",
+          "diagnostics" => %{
+            "include" => true,
+            "scope" => "Stack_Trace",
+            "content" => "** (RuntimeError) password=hunter2-sentinel"
+          },
+          "unknown" => "dropped"
+        })
+
+      {:ok, sanitized, _} = Submission.normalize(args)
+      assert %{scope: "stack_trace"} = sanitized.diagnostics
+
+      wire = Submission.wire_fields(sanitized)
+
+      assert wire["diagnostics"] == %{
+               "include" => true,
+               "scope" => "stack_trace",
+               "content" => sanitized.diagnostics.content
+             }
+
+      refute Map.has_key?(wire, "unknown")
+
+      assert {:ok, ^sanitized, report} = Submission.normalize(wire)
+      assert report.ignored_fields == []
+      assert report.diagnostics_included
+
+      {:ok, again, _} = Submission.normalize(wire)
+      assert Submission.fingerprint(again) == Submission.fingerprint(sanitized)
+    end
+
+    test "wire_fields/1 omits absent optional fields" do
+      {:ok, sanitized, _} =
+        Submission.normalize(Map.drop(valid(), ["reproduction_steps", "version_environment"]))
+
+      assert sanitized |> Submission.wire_fields() |> Map.keys() |> Enum.sort() ==
+               ~w(category expected_behavior observed_behavior source title)
+    end
+  end
+
+  describe "person actors, area and source (task 01a1a6a5 stage 2)" do
+    # sha256 of main 056de28f8's fingerprint/1 over `valid/0` (no area):
+    # "bug" and the five canonical text fields joined by NUL.
+    @main_era_fingerprint "6709c2fc69d3098514b19a954b6a26dd292ae8b279bd92a40cac54841ce6a944"
+
+    defp person!(label) do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Platform.Accounts.User{
+        email: "#{label}-#{n}@example.com",
+        name: "Person #{label}",
+        oidc_sub: "oidc-#{label}-#{n}"
+      })
+    end
+
+    defp person(user), do: %{user_id: user.id}
+
+    defp rows, do: Repo.all(Platform.Feedback.SubmissionRecord)
+
+    test "an area-less fingerprint is byte-identical to main's" do
+      {:ok, sanitized, _} = Submission.normalize(valid())
+      refute Map.has_key?(sanitized, :area)
+      assert Submission.fingerprint(sanitized) == @main_era_fingerprint
+    end
+
+    test "area joins the fingerprint only when present, and is an enum" do
+      {:ok, with_area, _} = Submission.normalize(valid(%{"area" => " Meetings "}))
+      assert with_area.area == "meetings"
+      refute Submission.fingerprint(with_area) == @main_era_fingerprint
+
+      {:ok, blank_area, _} = Submission.normalize(valid(%{"area" => "  "}))
+      assert Submission.fingerprint(blank_area) == @main_era_fingerprint
+
+      assert {:error, %{code: :invalid_area, field: "area"}} =
+               Submission.normalize(valid(%{"area" => "billing"}))
+
+      assert "meetings" in Submission.areas()
+      refute "source" in Submission.allowed_keys()
+      assert "area" in Submission.allowed_keys()
+    end
+
+    test "a person submit with the policy disabled is refused before any call" do
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      user = person!("disabled")
+
+      assert {:error, %{code: :feedback_disabled}} = Submission.submit(valid(), person(user))
+      refute_received {:broker, _, _, _, _}
+      assert submission_count() == 0
+    end
+
+    test "a person submit records actor_user_id only and sends source person", ctx do
+      user = person!("recorded")
+
+      assert {:ok, %{status: "created"}} =
+               Submission.submit(Map.delete(valid(), "expected_behavior"), person(user))
+
+      assert [%{actor_user_id: user_id, actor_agent_id: nil}] = rows()
+      assert user_id == user.id
+
+      assert [%{"submission" => submission} = body] = broker_bodies()
+      assert submission["source"] == "person"
+      raw = Jason.encode!(body)
+      refute raw =~ user.id
+      refute raw =~ user.email
+      refute raw =~ user.name
+
+      assert {:ok, _} =
+               Submission.submit(valid(%{"title" => "agent row"}), actor(ctx.agent))
+
+      assert Enum.any?(rows(), &(&1.actor_agent_id == ctx.agent.id and is_nil(&1.actor_user_id)))
+    end
+
+    test "a person needs a title and at least one of expected or observed" do
+      user = person!("fields")
+      bare = Map.drop(valid(), ["expected_behavior", "observed_behavior"])
+
+      assert {:error, %{code: :missing_field}} = Submission.submit(bare, person(user))
+
+      assert {:error, %{code: :missing_field, field: "title"}} =
+               Submission.submit(Map.delete(valid(), "title"), person(user))
+
+      assert {:ok, _} =
+               Submission.submit(Map.delete(valid(), "observed_behavior"), person(user))
+    end
+
+    test "an agent still needs title, expected and observed", %{agent: agent} do
+      for field <- ~w(expected_behavior observed_behavior) do
+        assert {:error, %{code: :missing_field, field: ^field}} =
+                 Submission.submit(Map.delete(valid(), field), actor(agent))
+      end
+    end
+
+    test "a caller-supplied source is overwritten from the actor kind", %{agent: agent} do
+      assert {:ok, _} = Submission.submit(valid(%{"source" => "person"}), actor(agent))
+      assert [%{"submission" => %{"source" => "agent"}}] = broker_bodies()
+
+      user = person!("source")
+
+      assert {:ok, _} =
+               Submission.submit(valid(%{"title" => "x2", "source" => "agent"}), person(user))
+
+      assert [%{"submission" => %{"source" => "person"}}] = broker_bodies()
+    end
+
+    test "identical text from a person and from an agent is one report", %{agent: agent} do
+      user = person!("dedupe")
+
+      assert {:ok, %{status: "created", issue: issue}} = Submission.submit(valid(), actor(agent))
+
+      assert {:ok, %{status: "duplicate", issue: ^issue}} =
+               Submission.submit(valid(), person(user))
+
+      assert submission_count() == 1
+    end
+
+    test "the per-person cap allows N, refuses N+1, and ignores agent rows", ctx do
+      user = person!("capped")
+      Application.put_env(:platform, :feedback_rate_limits, per_actor: 2, per_installation: 50)
+
+      # Agent rows in the window must not count against the person.
+      for n <- 1..2 do
+        assert {:ok, _} = Submission.submit(valid(%{"title" => "agent #{n}"}), actor(ctx.agent))
+      end
+
+      for n <- 1..2 do
+        assert {:ok, %{status: "created"}} =
+                 Submission.submit(valid(%{"title" => "person #{n}"}), person(user))
+      end
+
+      assert {:error, %{code: :rate_limited}} =
+               Submission.submit(valid(%{"title" => "person 3"}), person(user))
+
+      other = person!("uncapped")
+
+      assert {:ok, %{status: "created"}} =
+               Submission.submit(valid(%{"title" => "other person"}), person(other))
+    end
+
+    test "a row with both actor columns is refused by the database", %{agent: agent} do
+      user = person!("both")
+
+      assert_raise Postgrex.Error, ~r/feedback_submissions_one_actor_check/, fn ->
+        Repo.insert_all("feedback_submissions", [
+          %{
+            id: Ecto.UUID.bingenerate(),
+            fingerprint: String.duplicate("c", 64),
+            category: "bug",
+            status: "pending",
+            actor_agent_id: Ecto.UUID.dump!(agent.id),
+            actor_user_id: Ecto.UUID.dump!(user.id),
+            attempted_at: DateTime.utc_now(),
+            inserted_at: DateTime.utc_now(),
+            updated_at: DateTime.utc_now()
+          }
+        ])
+      end
     end
   end
 
@@ -443,7 +705,7 @@ defmodule Platform.Feedback.SubmissionTest do
         send(test_pid, {:broker_retry, conn.method})
 
         Req.Test.json(Plug.Conn.put_status(conn, 201), %{
-          "repository" => "Startup-Suite/core",
+          "repository" => "GetBurrowing/core",
           "issue_number" => 42
         })
       end)

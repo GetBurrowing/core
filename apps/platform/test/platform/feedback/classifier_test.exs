@@ -14,7 +14,7 @@ defmodule Platform.Feedback.ClassifierTest do
   alias Platform.Test.FeedbackIntakeStub, as: Stub
 
   @issue %{
-    repository: "Startup-Suite/core",
+    repository: "GetBurrowing/core",
     issue_number: 12,
     title: "Search ignores the archived filter",
     body: "Expected archived tasks hidden. Observed they show. CLASSIFIER-BODY-CANARY"

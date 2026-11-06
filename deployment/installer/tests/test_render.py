@@ -1281,3 +1281,111 @@ class ModuleProjectTest(unittest.TestCase):
         for name, project in registry.MODULES.items():
             with self.subTest(module=name):
                 self.assertTrue(os.path.isfile(os.path.join(REPO, project, "mix.exs")))
+
+
+# ---------------------------------------------------------------------------
+# [feedback] enabled (core task 01a1a6a5 stage 4)
+
+
+def _compose_services(compose):
+    """{service: block text} from compose.yaml (services at two-space indent)."""
+    body = compose.split("\nservices:\n", 1)[1]
+    body = re.split(r"^\S", body, maxsplit=1, flags=re.MULTILINE)[0]
+    blocks = re.split(r"^  (?=[a-z][a-z0-9-]*:$)", body, flags=re.MULTILINE)
+    return {b.split(":", 1)[0]: b for b in blocks if b.strip()}
+
+
+class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
+    """Feedback is opt-in in core: a hosted install renders exactly one line,
+    FEEDBACK_POLICY=quarantined, into core-platform's (non-secret) environment;
+    a self-hosted install renders nothing unless its manifest says so, and an
+    explicit value wins either way. No install is ever rendered a GitHub App
+    or broker-server name."""
+
+    LINE = 'FEEDBACK_POLICY: "quarantined"'
+    NEVER = ("FEEDBACK_GITHUB_APP", "FEEDBACK_BROKER_SERVER", "FEEDBACK_BROKER_URL")
+
+    def render(self, hosted, feedback=None, path=EXAMPLE):
+        raw = copy.deepcopy(load(path))
+        raw["install"]["hosted"] = hosted
+        if hosted and raw.get("backup", {}).get("target", "none") == "none":
+            # A hosted install needs a backup target or the explicit opt-out
+            # (backup_required_hosted); the opt-out keeps the backup render
+            # identical, so the hosted/self-host diff is only the feedback line.
+            raw.setdefault("backup", {})["hosted_opt_out"] = True
+        if feedback is not None:
+            raw["feedback"] = feedback
+        return build(valid(raw), **self.build_kwargs(path))
+
+    def build_kwargs(self, path):
+        for case, fixture in GOLDEN_CASES.items():
+            if fixture == path and case in GOLDEN_REGISTRY_AUTH:
+                return {"registry_auth": GOLDEN_REGISTRY_AUTH[case]}
+        return {}
+
+    def core_block(self, rendered):
+        return _compose_services(rendered.files["compose.yaml"][0])["core-platform"]
+
+    def test_positive_control_hosted_renders_the_line_in_core_platform(self):
+        rendered = self.render(hosted=True)
+        self.assertIn(self.LINE, self.core_block(rendered))
+        # The location the existing non-secret core env uses (PHX_HOST).
+        self.assertIn("PHX_HOST:", self.core_block(rendered))
+
+    def test_self_host_without_feedback_renders_no_feedback_name(self):
+        rendered = self.render(hosted=False)
+        self.assertNotIn("FEEDBACK_", all_text(rendered))
+
+    def test_the_default_render_is_byte_identical_to_the_shipped_golden(self):
+        # The shipped example is self-hosted with no [feedback]: its render
+        # must not have changed (the golden test pins the bytes; this pins
+        # that the golden is the self-hosted case).
+        self.assertIs(load(EXAMPLE)["install"].get("hosted", False), False)
+        self.assertNotIn("feedback", load(EXAMPLE))
+
+    def test_hosted_with_enabled_false_renders_none(self):
+        rendered = self.render(hosted=True, feedback={"enabled": False})
+        self.assertNotIn("FEEDBACK_", all_text(rendered))
+
+    def test_self_host_with_enabled_true_renders_it(self):
+        rendered = self.render(hosted=False, feedback={"enabled": True})
+        self.assertIn(self.LINE, self.core_block(rendered))
+
+    def test_it_lands_in_core_platform_env_and_never_in_secrets(self):
+        from test_agents_render import write_files
+
+        rendered = self.render(hosted=True)
+        compose = rendered.files["compose.yaml"][0]
+        self.assertEqual(compose.count("FEEDBACK_POLICY"), 1)
+        self.assertNotIn("FEEDBACK_", rendered.files["secrets.env"][0])
+        # user-data carries the host's copies of compose.yaml and secrets.env.
+        on_host = write_files(rendered.files["user-data"][0])
+        self.assertIn(self.LINE, on_host["/opt/burrow/compose.yaml"][1])
+        self.assertNotIn("FEEDBACK_", on_host["/opt/burrow/secrets.env"][1])
+        for path, (_perms, body) in on_host.items():
+            if path != "/opt/burrow/compose.yaml":
+                self.assertNotIn("FEEDBACK_POLICY", body, f"{path} carries FEEDBACK_POLICY")
+        for name, (text, _mode) in rendered.files.items():
+            if name not in ("compose.yaml", "user-data"):
+                self.assertNotIn("FEEDBACK_POLICY", text, f"{name} carries FEEDBACK_POLICY")
+        services = _compose_services(compose)
+        for service, block in services.items():
+            if service != "core-platform":
+                self.assertNotIn("FEEDBACK_", block, f"{service} carries a FEEDBACK_ name")
+
+    def test_a_hosted_render_differs_from_self_host_by_exactly_that_line(self):
+        hosted = self.render(hosted=True).files["compose.yaml"][0].splitlines()
+        self_host = self.render(hosted=False).files["compose.yaml"][0].splitlines()
+        added = [line for line in hosted if line not in self_host]
+        removed = [line for line in self_host if line not in hosted]
+        self.assertEqual([line.strip() for line in added], [self.LINE])
+        self.assertEqual(removed, [])
+
+    def test_no_fixture_ever_renders_a_broker_credential_or_server_name(self):
+        for case, path in GOLDEN_CASES.items():
+            for hosted in (False, True):
+                for feedback in (None, {"enabled": True}, {"enabled": False}):
+                    with self.subTest(case=case, hosted=hosted, feedback=feedback):
+                        text = all_text(self.render(hosted, feedback, path))
+                        for name in self.NEVER:
+                            self.assertNotIn(name, text)

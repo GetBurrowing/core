@@ -86,7 +86,7 @@ defmodule PlatformWeb.GithubWebhookFeedbackIntakeTest do
     conn: conn,
     project: project
   } do
-    p = payload("Startup-Suite/core")
+    p = payload("GetBurrowing/core")
 
     body = conn |> deliver(p) |> json_response(200)
     assert %{"status" => "processed", "outcome" => "task_filed", "task_id" => id} = body
@@ -94,7 +94,7 @@ defmodule PlatformWeb.GithubWebhookFeedbackIntakeTest do
     task = Repo.get!(Task, id)
     assert task.project_id == project.id
     assert {task.kind, task.origin, task.trust} == {"bug", "external_feedback", "quarantined"}
-    assert task.external_repository_identity == "Startup-Suite/core"
+    assert task.external_repository_identity == "GetBurrowing/core"
     assert task.external_issue_number == p["issue"]["number"]
   end
 
