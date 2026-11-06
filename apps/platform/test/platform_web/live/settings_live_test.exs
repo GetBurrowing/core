@@ -997,4 +997,235 @@ defmodule PlatformWeb.SettingsLiveTest do
     assert :sys.get_state(view.pid).socket.assigns.active_module == "Settings"
     assert page_title(view) =~ "Settings"
   end
+
+  describe "Send feedback (task 01a1a6a5 stage 5)" do
+    @broker Platform.Feedback.GithubPublisher.Broker
+
+    setup do
+      saved =
+        Enum.map([:feedback_policy, :feedback_rate_limits], fn key ->
+          {key, Application.fetch_env(:platform, key)}
+        end)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {key, {:ok, value}} -> Application.put_env(:platform, key, value)
+          {key, :error} -> Application.delete_env(:platform, key)
+        end)
+      end)
+
+      Application.put_env(:platform, :feedback_rate_limits, per_actor: 5, per_installation: 30)
+      test_pid = self()
+      counter = :counters.new(1, [])
+
+      Req.Test.stub(@broker, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:broker, conn.method, raw})
+        :counters.add(counter, 1, 1)
+
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+          "repository" => "GetBurrowing/core",
+          "issue_number" => 900 + :counters.get(counter, 1)
+        })
+      end)
+
+      :ok
+    end
+
+    defp enable_feedback!, do: Application.put_env(:platform, :feedback_policy, "quarantined")
+
+    defp broker_posts(acc \\ []) do
+      receive do
+        {:broker, "POST", raw} -> broker_posts([raw | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    defp feedback_rows, do: Repo.all(Platform.Feedback.SubmissionRecord)
+
+    defp open_feedback(view),
+      do: view |> element("[data-role=settings-feedback]") |> render_click()
+
+    defp submit_feedback(view, params) do
+      view
+      |> form("#settings-feedback-form", feedback: params)
+      |> render_submit()
+    end
+
+    defp problem(text, area \\ "meetings"),
+      do: %{"kind" => "problem", "text" => text, "area" => area}
+
+    test "disabled: no row, ?sheet=feedback opens nothing, a forged submit does nothing" do
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      user = member!()
+
+      {:ok, view, html} = live(authed(user), "/settings")
+      refute html =~ "Send feedback"
+      refute has_element?(view, "[data-role=settings-feedback]")
+      refute has_element?(view, "[data-role=settings-help-label]")
+      refute has_element?(view, "#settings-feedback-sheet")
+
+      {:ok, view2, _} = live(authed(user), "/settings?sheet=feedback")
+      refute has_element?(view2, "#settings-feedback-sheet")
+
+      render_click(view, "open_feedback_sheet", %{})
+      refute has_element?(view, "#settings-feedback-sheet")
+
+      html = render_submit(view, "submit_feedback", %{"feedback" => problem("Forged report")})
+      refute html =~ "Thanks"
+      assert broker_posts() == []
+      assert feedback_rows() == []
+    end
+
+    test "enabled: the Help row opens the sheet, and ?sheet=feedback opens it too" do
+      enable_feedback!()
+      user = member!()
+
+      {:ok, view, html} = live(authed(user), "/settings")
+      assert html =~ "Tell the Burrow team what's not working or what would help."
+      assert has_element?(view, "[data-role=settings-help-label]", "Help")
+      refute has_element?(view, "#settings-feedback-sheet[data-open=true]")
+
+      open_feedback(view)
+      assert has_element?(view, "#settings-feedback-sheet[data-open=true]")
+      assert has_element?(view, "[data-role=feedback-kind] input[value=problem][checked]")
+      assert has_element?(view, "[data-role=feedback-kind] input[value=idea]")
+      assert has_element?(view, "textarea[data-role=feedback-text][maxlength='2000'][required]")
+      assert has_element?(view, "select[data-role=feedback-area] option[value=meetings]")
+      assert has_element?(view, "button[data-role=feedback-submit][disabled]")
+
+      {:ok, view2, _} = live(authed(user), "/settings?sheet=feedback")
+      assert has_element?(view2, "#settings-feedback-sheet[data-open=true]")
+    end
+
+    test "a blank submit is refused with no call" do
+      enable_feedback!()
+      {:ok, view, _} = live(authed(member!()), "/settings")
+      open_feedback(view)
+
+      html = submit_feedback(view, problem("   "))
+      refute html =~ "Thanks"
+      refute has_element?(view, "[data-role=feedback-confirmation]")
+      assert broker_posts() == []
+    end
+
+    test "a valid submit makes one call and shows the confirmation link; a repeat is a duplicate" do
+      enable_feedback!()
+      user = member!()
+      {:ok, view, _} = live(authed(user), "/settings")
+      open_feedback(view)
+
+      view
+      |> form("#settings-feedback-form",
+        feedback: problem("There is no way to cancel a meeting.")
+      )
+      |> render_change()
+
+      refute has_element?(view, "button[data-role=feedback-submit][disabled]")
+
+      submit_feedback(view, problem("There is no way to cancel a meeting."))
+
+      assert has_element?(view, "[data-role=feedback-confirmation]", "Thanks, it's been sent.")
+
+      assert has_element?(
+               view,
+               ~s([data-role=feedback-issue-link][href="https://github.com/GetBurrowing/core/issues/901"][target=_blank][rel=noopener]),
+               "View it on GitHub"
+             )
+
+      assert [raw] = broker_posts()
+      refute raw =~ user.email
+      refute raw =~ user.name
+      refute raw =~ user.id
+
+      assert [%{actor_user_id: actor, actor_agent_id: nil}] = feedback_rows()
+      assert actor == user.id
+
+      # Reopen: a fresh form; the identical text is a duplicate, with no call.
+      open_feedback(view)
+      refute has_element?(view, "[data-role=feedback-confirmation]")
+      submit_feedback(view, problem("There is no way to cancel a meeting."))
+
+      assert has_element?(
+               view,
+               "[data-role=feedback-confirmation]",
+               "Thanks. Someone already reported this, so we've linked you to it."
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role=feedback-issue-link][href="https://github.com/GetBurrowing/core/issues/901"])
+             )
+
+      assert broker_posts() == []
+      assert length(feedback_rows()) == 1
+    end
+
+    test "rate limited shows the rate copy and keeps the typed text" do
+      enable_feedback!()
+      Application.put_env(:platform, :feedback_rate_limits, per_actor: 1, per_installation: 30)
+      {:ok, view, _} = live(authed(member!()), "/settings")
+
+      open_feedback(view)
+      submit_feedback(view, problem("First report."))
+      assert [_] = broker_posts()
+
+      open_feedback(view)
+      submit_feedback(view, problem("Second report, keep me."))
+
+      assert has_element?(
+               view,
+               "[data-role=feedback-error]",
+               "You've sent a lot of feedback recently. Try again in about 60 minutes."
+             )
+
+      assert has_element?(view, "textarea[data-role=feedback-text]", "Second report, keep me.")
+      refute has_element?(view, "[data-role=feedback-confirmation]")
+      assert broker_posts() == []
+    end
+
+    test "any other error shows the fixed sentence, never the code or server text" do
+      enable_feedback!()
+
+      Req.Test.stub(@broker, fn conn ->
+        Plug.Conn.send_resp(conn, 503, "BROKER-SENTINEL publisher_unavailable")
+      end)
+
+      {:ok, view, _} = live(authed(member!()), "/settings")
+      open_feedback(view)
+      html = submit_feedback(view, problem("The broker is down."))
+
+      assert has_element?(
+               view,
+               "[data-role=feedback-error]",
+               "Couldn't send your feedback right now. Try again later."
+             )
+
+      refute html =~ "publisher_unavailable"
+      refute html =~ "BROKER-SENTINEL"
+      assert has_element?(view, "textarea[data-role=feedback-text]", "The broker is down.")
+    end
+
+    test "the handler re-checks the policy: disabled after mount, a submit does nothing" do
+      enable_feedback!()
+      {:ok, view, _} = live(authed(member!()), "/settings")
+      open_feedback(view)
+
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      submit_feedback(view, problem("Sent after the policy was switched off."))
+
+      refute has_element?(view, "[data-role=feedback-confirmation]")
+      refute has_element?(view, "[data-role=feedback-error]")
+      assert broker_posts() == []
+      assert feedback_rows() == []
+    end
+
+    test "the LiveView's only feedback call is PersonForm.submit/2" do
+      source = File.read!(@settings_path)
+      assert source =~ "PersonForm.submit("
+      refute source =~ "GithubPublisher"
+      refute source =~ "Submission.submit("
+    end
+  end
 end
