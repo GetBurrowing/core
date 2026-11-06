@@ -49,6 +49,13 @@ defmodule Platform.People.Pages do
           legacy: boolean()
         }
 
+  @doc """
+  The relation keys in index order mapped to their index section titles
+  (`"client" => "Clients"`, ..., `"unknown" => "Unknown relation"`).
+  """
+  @spec relation_titles() :: [{String.t(), String.t()}]
+  def relation_titles, do: Enum.map(@relations, &{&1, Map.fetch!(@relation_titles, &1)})
+
   @doc "The person cards under the people prefix. Private pages and the index are skipped."
   @spec roster(binary() | nil) :: [roster_entry()]
   def roster(workspace_id) do
@@ -292,7 +299,12 @@ defmodule Platform.People.Pages do
 
   @h1_re ~r/\A#\s+(.+?)\s*\z/
 
-  defp h1(body) when is_binary(body) do
+  @doc """
+  The card body's `# ` H1 text, or `nil`. Only lines before the first `##`
+  heading are considered.
+  """
+  @spec h1(String.t() | nil) :: String.t() | nil
+  def h1(body) when is_binary(body) do
     body
     |> String.split(["\r\n", "\n"])
     |> Enum.reduce_while(nil, fn line, nil ->
@@ -306,7 +318,7 @@ defmodule Platform.People.Pages do
     end)
   end
 
-  defp h1(_body), do: nil
+  def h1(_body), do: nil
 
   defp humanize(nil), do: "Unknown"
   defp humanize(slug), do: slug |> String.replace(["-", "_"], " ") |> String.trim()
