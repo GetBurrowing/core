@@ -32,7 +32,7 @@ final class WebMediaCaptureTraceTests: XCTestCase {
     private var lines: [String] = []
     private var target = FakeTarget()
 
-    private func makeTrace(installHost: String? = "suite.example.test") -> WebMediaCaptureTrace {
+    private func makeTrace(installHost: String? = "app.example.test") -> WebMediaCaptureTrace {
         lines = []
         target = FakeTarget()
         return WebMediaCaptureTrace(target: target, installHost: { installHost }, log: { self.lines.append($0) })
@@ -58,7 +58,7 @@ final class WebMediaCaptureTraceTests: XCTestCase {
 
     func testGrantsForTheInstallHostWithoutAskingTheTarget() {
         let trace = makeTrace()
-        let result = request(trace, host: "Suite.Example.Test")
+        let result = request(trace, host: "App.Example.Test")
         XCTAssertEqual(result.decision, .grant)
         XCTAssertEqual(result.asked, 0)
         XCTAssertEqual(lines, ["media-capture origin=install scheme=https type=microphone mainFrame=true decision=grant by=shell"])
@@ -82,7 +82,7 @@ final class WebMediaCaptureTraceTests: XCTestCase {
 
     func testOneLogLinePerRequestAndNoHostInTheLog() {
         let trace = makeTrace()
-        _ = request(trace, host: "suite.example.test")
+        _ = request(trace, host: "app.example.test")
         _ = request(trace, host: "localhost", scheme: "capacitor")
         _ = request(trace, host: "elsewhere.example.test", type: .camera)
         XCTAssertEqual(lines.count, 3)
