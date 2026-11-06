@@ -1212,7 +1212,9 @@ defmodule Platform.Federation.ToolSurface do
         area: %{
           type: "string",
           required: false,
-          enum: Platform.Feedback.Submission.areas(),
+          # `schema:` is what MCPController.property_schema/1 emits verbatim;
+          # a bare `enum:` key is dropped on the wire (task 01a1a6a5 stage 6).
+          schema: %{type: "string", enum: Platform.Feedback.Submission.areas()},
           description:
             "Optional: the part of Burrow this is about, one of: #{Enum.join(Platform.Feedback.Submission.areas(), ", ")}"
         },
@@ -13889,6 +13891,16 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # ── External feedback helpers (task 01a11ec3 stage 2) ──────────────────
+
+  @doc """
+  The bounded refusal a `feedback_submit` call gets while
+  `Platform.Feedback.Policy.enabled?/0` is false: `code: :feedback_disabled`,
+  `recoverable: false`. `Platform.Federation.ToolCall` answers a direct call
+  with it (task 01a1a6a5 stage 6), so the tool can stay absent from
+  tools/list without a caller reading the refusal as an unknown tool.
+  """
+  @spec feedback_disabled_error() :: map()
+  def feedback_disabled_error, do: feedback_error_envelope(:feedback_disabled, %{})
 
   defp feedback_enabled do
     if Platform.Feedback.Policy.enabled?() do

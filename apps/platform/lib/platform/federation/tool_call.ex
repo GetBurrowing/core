@@ -85,7 +85,11 @@ defmodule Platform.Federation.ToolCall do
     call_id = Platform.Types.UUIDv7.generate()
     canonical = canonical_name(name, runtime)
 
-    case ToolAuthorization.authorize(canonical, runtime) do
+    case authorize(canonical, runtime) do
+      {:error, %{code: :feedback_disabled}} = disabled ->
+        record(call_id, name, args, runtime, opts, started, disabled)
+        disabled
+
       :ok ->
         context = args |> build_context(runtime) |> Map.put(:tool_call_id, call_id)
         result = canonical |> ToolArguments.dispatch(args, context) |> normalize()
@@ -97,6 +101,22 @@ defmodule Platform.Federation.ToolCall do
         {:error, :forbidden}
     end
   end
+
+  # `feedback_submit` while feedback is off (task 01a1a6a5 stage 6): the tool
+  # stays ABSENT from tools/list, but a direct call answers the bounded
+  # `feedback_disabled` refusal instead of the generic unknown-tool deny, so a
+  # caller learns the install has the capability switched off. Scoped to
+  # exactly this one name; every other unlisted name keeps the unknown-tool
+  # path.
+  @feedback_tool "feedback_submit"
+
+  defp authorize(@feedback_tool, runtime) do
+    if Platform.Feedback.Policy.enabled?(),
+      do: ToolAuthorization.authorize(@feedback_tool, runtime),
+      else: {:error, Platform.Federation.ToolSurface.feedback_disabled_error()}
+  end
+
+  defp authorize(name, runtime), do: ToolAuthorization.authorize(name, runtime)
 
   # A legacy dotted name (task 01a14a7f stage 3) resolves to its underscore
   # name BEFORE authorization, so it needs exactly its canonical name's grant.
