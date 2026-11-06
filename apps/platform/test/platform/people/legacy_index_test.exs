@@ -179,6 +179,28 @@ defmodule Platform.People.LegacyIndexTest do
                )
     end
 
+    test "a body role is cut to its label and never carries a redaction marker" do
+      body = "# Avery Example\n\n## Role\nBuyer. Reach them on [REDACTED: phone].\n"
+      assert %{"role" => "Buyer"} = LegacyIndex.derive_frontmatter(body, %{}, nil)
+
+      for line <- ["Buyer; reach them weekly", "Buyer - reach them weekly"] do
+        assert %{"role" => "Buyer"} =
+                 LegacyIndex.derive_frontmatter("## Role\n#{line}\n", %{}, nil)
+      end
+
+      # a label that is still a redaction, or too long to be a label, falls
+      # back to the index row role
+      for line <- ["[REDACTED: phone] is the way to reach them", String.duplicate("x", 81)] do
+        assert %{"role" => "Index role"} =
+                 LegacyIndex.derive_frontmatter("## Role\n#{line}\n", %{}, @row)
+
+        refute Map.has_key?(
+                 LegacyIndex.derive_frontmatter("## Role\n#{line}\n", %{}, nil),
+                 "role"
+               )
+      end
+    end
+
     test "an empty Role section does not borrow the next section's line" do
       body = "## Role\n\n## Current projects\n- Pilot\n"
       assert LegacyIndex.derive_frontmatter(body, %{}, nil) == %{}

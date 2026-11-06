@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
   ---
 
   ## Role
-  Buyer. Reach him on 904-555-0100.
+  Buyer. Reach them on 904-555-0100.
 
   ## Interactions
   - 2026-09-30 call: Pricing [cite: msg-9]
@@ -111,7 +111,8 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
     assert marisol.content =~ "## Role\nLead.\n"
 
     # the legacy card's role comes from its scrubbed body, never the phone column
-    assert card.frontmatter["role"] == "Buyer. Reach him on [REDACTED: phone]."
+    assert card.frontmatter["role"] == "Buyer"
+    refute card.frontmatter["role"] =~ "REDACTED"
 
     assert Enum.sort_by(report.enriched, & &1.path) == [
              %{path: Visibility.card_path("marisol-tennebrook"), added: ["role"]},

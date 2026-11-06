@@ -26,7 +26,9 @@ defmodule Platform.People.LegacyIndex do
   ## `derive_frontmatter/3`
 
   Returns ONLY the keys to add to a card. Precedence: existing frontmatter >
-  card body > index row. A value that cannot be sourced is omitted, so an
+  card body > index row. A body role is the first line of `## Role` cut to its
+  label at the first sentence end; one that still carries a redaction marker
+  or is longer than 80 characters is not used. A value that cannot be sourced is omitted, so an
   unknown relation stays unknown.
   """
 
@@ -80,7 +82,7 @@ defmodule Platform.People.LegacyIndex do
     candidates = %{
       "name" => first_present([Pages.h1(body), Map.get(row, :name)]),
       "relation" => row_relation(row),
-      "role" => first_present([section_line(body, "role", true), Map.get(row, :role)]),
+      "role" => first_present([body_role(body), Map.get(row, :role)]),
       "last_seen" =>
         first_present([section_line(body, "last seen", false), Map.get(row, :last_seen)])
     }
@@ -205,6 +207,30 @@ defmodule Platform.People.LegacyIndex do
     case Map.get(row, :relation) do
       relation when is_binary(relation) and relation != "unknown" -> relation
       _ -> nil
+    end
+  end
+
+  # The `## Role` section's first line cut to a short label: up to the first
+  # sentence end (". ", ";" or " - "). A candidate that still carries a
+  # redaction marker or runs past 80 characters is dropped, so the index row
+  # role is used instead and free text never lands in `role:`.
+  @role_cut_re ~r/\.\s|;|\s-\s/u
+  @role_max_length 80
+
+  defp body_role(body) do
+    case section_line(body, "role", true) do
+      nil ->
+        nil
+
+      line ->
+        label = @role_cut_re |> Regex.split(line, parts: 2) |> hd() |> String.trim()
+
+        cond do
+          label == "" -> nil
+          String.contains?(label, "[REDACTED") -> nil
+          String.length(label) > @role_max_length -> nil
+          true -> label
+        end
     end
   end
 
