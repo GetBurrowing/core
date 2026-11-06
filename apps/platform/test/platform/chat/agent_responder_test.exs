@@ -1118,7 +1118,7 @@ defmodule Platform.Chat.AgentResponderTest do
 
       stub_completion(200, "Endpoint says hello")
 
-      message = create_message(space.id, user.id, %{content: "@relay are you there?"})
+      _ = create_message(space.id, user.id, %{content: "@relay are you there?"})
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
 
       assert_receive {:external_http_request, "POST", "api.example.test", "/v1/chat/completions",
@@ -1199,7 +1199,7 @@ defmodule Platform.Chat.AgentResponderTest do
       # Built-in path: what QuickAgent receives.
       built_in = create_agent(%{slug: "history-builtin-#{System.unique_integer([:positive])}"})
       {space_a, user_a} = seed.(built_in, "Zip")
-      mention_a = create_message(space_a.id, user_a.id, %{content: "@zip summarise"})
+      _ = create_message(space_a.id, user_a.id, %{content: "@zip summarise"})
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
       assert_receive {:agent_chat_called, "@zip summarise", opts}, 1500
 
@@ -1209,7 +1209,7 @@ defmodule Platform.Chat.AgentResponderTest do
       external = create_external_http_agent()
       {space_b, user_b} = seed.(external, "Relay")
       stub_completion(200, "summary")
-      mention_b = create_message(space_b.id, user_b.id, %{content: "@relay summarise"})
+      _ = create_message(space_b.id, user_b.id, %{content: "@relay summarise"})
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
 
       assert_receive {:external_http_request, "POST", _, _, _, %{"messages" => sent}}, 1500
@@ -1233,7 +1233,7 @@ defmodule Platform.Chat.AgentResponderTest do
       {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       stub_completion(200, "must not be called")
-      message = create_message(space.id, user.id, %{content: "@zip ping"})
+      _ = create_message(space.id, user.id, %{content: "@zip ping"})
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
 
       assert_receive {:agent_chat_called, "@zip ping", _opts}, 1500
@@ -1248,7 +1248,7 @@ defmodule Platform.Chat.AgentResponderTest do
       {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Envoy")
 
       stub_completion(200, "must not be called")
-      message = create_message(space.id, user.id, %{content: "@envoy ping"})
+      _ = create_message(space.id, user.id, %{content: "@envoy ping"})
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
 
       assert_receive %Phoenix.Socket.Broadcast{
