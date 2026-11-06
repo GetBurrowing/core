@@ -1,0 +1,83 @@
+# Feedback broker
+
+Task 01a1a6a5. Burrow installs can file feedback (an agent's `feedback_submit`
+tool, and a signed-in person's Send feedback form) as GitHub issues on the
+core repository. Installs hold **no GitHub credential and no broker
+credential**. They send the sanitized submission to a broker, and the broker
+creates the issue with its own GitHub App.
+
+This runbook names environment variables by **key only**. Never paste a
+value into a ticket, a chat or a log.
+
+## On an install: opt in
+
+Feedback is **opt-in**. It is off unless the install sets:
+
+| Key | Value | Effect |
+| --- | --- | --- |
+| `FEEDBACK_POLICY` | `quarantined` (or `trusted`) | Turns on the agent tool, the person form, and intake. Unset, blank, `disabled` or any other value means off. |
+
+A self-hoster who does not use the installer opts in by setting
+`FEEDBACK_POLICY=quarantined` in core's environment.
+
+### Defaults
+
+Once `FEEDBACK_POLICY` is set, an install needs nothing else:
+
+* Repository: `GetBurrowing/core` (`Platform.Feedback.GithubPublisher`).
+* Broker: `https://burrow.kobo-ai.com/api/feedback-broker/v1`, the Kobo prod
+  broker (`Platform.Feedback.GithubPublisher.Broker.default_broker_url/0`,
+  the one place it is written).
+
+### Overrides
+
+| Key | Effect |
+| --- | --- |
+| `FEEDBACK_BROKER_URL` | Use another broker. An explicit value that is not an `http(s)://host/...` URL makes feedback answer `publisher_not_configured`; it does **not** fall back to the default. |
+| `FEEDBACK_REPOSITORY` | Target another `owner/name` repository. The broker must be configured for the same one, or it answers `repository_mismatch`. |
+| `FEEDBACK_INSTALLATION_LABEL` | The install's label, shown in the issue's attribution (reduced to `A-Za-z0-9._-`). |
+
+## On the broker host (Kobo prod, burrow.kobo-ai.com)
+
+The broker runs **in core**, behind a flag, on Kobo prod. Set these keys in
+Kobo prod's core environment:
+
+| Key | Purpose |
+| --- | --- |
+| `FEEDBACK_BROKER_SERVER` | `true` turns on `POST /api/feedback-broker/v1/issues` and `GET /api/feedback-broker/v1/issues/:fingerprint`. Unset, both routes are 404. |
+| `FEEDBACK_PUBLISHER` | `github_app`. The broker refuses to run on the `broker` adapter, so it can never forward to another broker. |
+| `FEEDBACK_GITHUB_APP_ID` | The GitHub App's id. |
+| `FEEDBACK_GITHUB_APP_INSTALLATION_ID` | The App's installation id on `GetBurrowing/core`. |
+| `FEEDBACK_GITHUB_APP_PRIVATE_KEY` | The App's private key (PEM). Read from the process environment at call time; never copied into application config. |
+| `FEEDBACK_POLICY` | `quarantined`. The broker runs the same `Submission.submit` as an install, which refuses when the policy is off. |
+| `FEEDBACK_BROKER_RATE_PER_HOUR` | Optional. Requests per client IP per hour (default 30). |
+| `TRUST_PROXY_HEADERS` | Must be `true` behind Cloudflare and Caddy. The per-IP limit keys on `conn.remote_ip` after `PlatformWeb.Plugs.RewriteRemoteIp`. Without it every request carries the proxy's address and all callers share one bucket. Check it by confirming that two clients get separate 429 budgets. |
+
+What the broker does with every request, all of which are unauthenticated
+and treated as hostile:
+
+* It ignores any top-level `title`, `body` or `labels` and rebuilds the issue
+  from `submission` alone: allowlist, redaction, bounds, fenced markdown,
+  dedupe by fingerprint, per-IP and installation-wide caps.
+* It answers `{repository, issue_number}` (201 created, 200 duplicate) or
+  `{"error": <code>}` (422, 429, 502, 503). It never echoes request text,
+  headers, GitHub's response or an exception, and both routes are mounted
+  with `log: false`.
+* On Kobo prod the broker shares the `feedback_submissions` table, and so
+  the installation-wide cap, with Kobo's own agents and people. This is
+  accepted and documented in `Platform.Feedback.BrokerServer`.
+
+## The one infra precondition outside the code
+
+A GitHub App with **issues: write** on `GetBurrowing/core`, installed for Kobo
+prod, whose id, installation id and private key are set as the three
+`FEEDBACK_GITHUB_APP_*` keys above. Until it exists the broker answers
+`publisher_not_configured` (502) and installs see the same code.
+
+## Moving the broker later
+
+The broker URL is a compile-time default in one place. To move the broker
+(for example to `cloud.getburrow.ing`), either change
+`@default_broker_url` in `Platform.Feedback.GithubPublisher.Broker` and ship
+a release, or set `FEEDBACK_BROKER_URL` on each install. Installs on an older
+release keep calling the old default until they upgrade.

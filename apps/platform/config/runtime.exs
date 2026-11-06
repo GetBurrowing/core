@@ -423,7 +423,9 @@ end
 #
 # Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
 # adapter: `broker` (default; every Burrow installation) posts to
-# FEEDBACK_BROKER_URL and holds no GitHub secret at all; `github_app` is for
+# FEEDBACK_BROKER_URL (unset: the Kobo prod broker,
+# `Platform.Feedback.GithubPublisher.Broker.default_broker_url/0`) and holds
+# no GitHub secret at all; `github_app` is for
 # the Burrow-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,
 # FEEDBACK_GITHUB_APP_INSTALLATION_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY from
 # the process environment at call time — they are deliberately NOT copied
@@ -757,6 +759,27 @@ if System.get_env("PUSH_RELAY_SERVER") in ["true", "1"] do
   config :platform, :push_relay_server,
     enabled: true,
     rate_per_minute: relay_rate
+end
+
+# ── Feedback broker server mode (task 01a1a6a5 stage 3) ──────────────────────
+# FEEDBACK_BROKER_SERVER=true turns this install into the Burrow feedback
+# broker: it accepts `POST /api/feedback-broker/v1/issues` from installs and
+# runs `Platform.Feedback.Submission.submit/2` itself (redaction, bounds,
+# fencing, dedupe, caps) before creating the issue with its own GitHub App
+# (FEEDBACK_PUBLISHER=github_app and FEEDBACK_GITHUB_APP_*). Unset (every
+# normal install), every broker route is a 404. FEEDBACK_BROKER_RATE_PER_HOUR
+# overrides the per-client-IP request budget. See
+# docs/runbooks/feedback-broker.md.
+if System.get_env("FEEDBACK_BROKER_SERVER") in ["true", "1"] do
+  broker_rate =
+    case Integer.parse(System.get_env("FEEDBACK_BROKER_RATE_PER_HOUR") || "") do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+
+  config :platform, :feedback_broker_server,
+    enabled: true,
+    rate_per_hour: broker_rate
 end
 
 # ── WebMCP tool surface (BACKLOG #14) ─────────────────────────────────────────

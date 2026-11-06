@@ -198,6 +198,9 @@ defmodule Platform.Application do
          # Endpoint takes a relay POST. Idle on installs not in relay mode.
          Platform.Push.RelayRateLimit,
          Platform.Calendar.BookingRateLimit,
+         # Feedback broker per-IP counters (task 01a1a6a5 stage 3). Idle on
+         # installs that do not run FEEDBACK_BROKER_SERVER.
+         Platform.Feedback.BrokerRateLimit,
          # Dedicated HTTP/2 pool for APNs (task 01a10882 stage 2). Apple
          # requires HTTP/2 and multiplexes every push for one provider
          # over a connection, so the pool is its own and HTTP/2 only.

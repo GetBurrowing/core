@@ -110,14 +110,24 @@ defmodule Platform.Feedback.Submission do
   agent) or `%{user_id: binary}` (a signed-in person). The person's identity
   is used ONLY for rate accounting; it never reaches the issue.
 
+  `opts` exist for `Platform.Feedback.BrokerServer` only (task 01a1a6a5
+  stage 3):
+
+    * `:source` — the wire's `agent` | `person` display hint, used in place
+      of the actor kind for `source` (the required-field rule and the issue
+      footer). Any other value is ignored.
+    * `:installation` — the calling installation's label (or nil) for the
+      issue attribution, in place of this node's own label.
+
   Returns `{:ok, result}` where `result.status` is `"created"` or
   `"duplicate"`, or `{:error, %{code: atom, message: binary}}` (plus
   `:field` / `:retry_after_seconds` where they apply).
   """
-  @spec submit(map(), map() | nil) :: {:ok, map()} | {:error, map()}
-  def submit(args, actor) do
+  @spec submit(map(), map() | nil, keyword()) :: {:ok, map()} | {:error, map()}
+  def submit(args, actor, opts \\ []) do
     with :ok <- capability(),
          {:ok, actor} <- actor(actor),
+         actor = apply_opts(actor, opts),
          {:ok, args} <- with_source(args, actor),
          {:ok, sanitized, report} <- normalize(args) do
       fingerprint = fingerprint(sanitized)
@@ -238,9 +248,25 @@ defmodule Platform.Feedback.Submission do
   defp actor(_),
     do: error(:unauthorized, "feedback_submit requires an identified agent or person caller")
 
-  # The caller never chooses `source`: it is overwritten from the actor kind.
+  defp apply_opts(actor, opts) do
+    source =
+      case Keyword.get(opts, :source) do
+        hint when hint in @sources -> hint
+        _ -> Atom.to_string(actor.kind)
+      end
+
+    actor = Map.put(actor, :source, source)
+
+    case Keyword.fetch(opts, :installation) do
+      {:ok, label} -> Map.put(actor, :installation, label)
+      :error -> actor
+    end
+  end
+
+  # The caller never chooses `source`: it is overwritten from the actor kind
+  # (or the broker's validated hint, see `submit/3`).
   defp with_source(args, actor) when is_map(args),
-    do: {:ok, args |> stringify_keys() |> Map.put("source", Atom.to_string(actor.kind))}
+    do: {:ok, args |> stringify_keys() |> Map.put("source", actor.source)}
 
   defp with_source(_args, _actor), do: error(:invalid_arguments, "arguments must be an object")
 
@@ -435,7 +461,7 @@ defmodule Platform.Feedback.Submission do
         fingerprint: fingerprint,
         actor: actor.slug,
         source: sanitized.source,
-        installation: GithubPublisher.config(:installation_label)
+        installation: Map.get(actor, :installation, GithubPublisher.config(:installation_label))
       })
 
     case GithubPublisher.publish(issue,

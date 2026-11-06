@@ -179,6 +179,13 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.PushRelayAuth)
   end
 
+  # Feedback broker (task 01a1a6a5 stage 3): unauthenticated by design; the
+  # gate answers 404 unless FEEDBACK_BROKER_SERVER and limits per client IP.
+  pipeline :feedback_broker do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.FeedbackBrokerGate)
+  end
+
   pipeline :require_auth do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
@@ -302,6 +309,15 @@ defmodule PlatformWeb.Router do
 
   # HOST-AGNOSTIC, like the browser avatar scope above and every other
   # `/api/app` route.
+  scope "/api/feedback-broker/v1", PlatformWeb do
+    pipe_through(:feedback_broker)
+
+    # `log: false`: Phoenix's request log prints parameters, and nothing an
+    # install (or a hostile caller) sends may reach the broker's log.
+    post("/issues", FeedbackBrokerController, :create, log: false)
+    get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
+  end
+
   scope "/api/app", PlatformWeb do
     pipe_through(:app_avatar)
 

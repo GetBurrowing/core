@@ -256,13 +256,60 @@ defmodule Platform.Feedback.GithubPublisherTest do
       end
     end
 
-    test "a missing broker url is not configured, and nothing is sent" do
-      put_publisher(broker_url: nil)
+    test "an unset or blank broker url uses the Kobo prod default (task 01a1a6a5 stage 3)" do
+      test_pid = self()
+
+      # Req.Test intercepts the request: nothing leaves the test.
+      Req.Test.stub(Broker, fn conn ->
+        send(test_pid, {:url, conn.scheme, conn.host, conn.request_path})
+
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+          "repository" => "GetBurrowing/core",
+          "issue_number" => 3
+        })
+      end)
+
+      for value <- [nil, "", "   "] do
+        put_publisher(broker_url: value)
+        assert {:ok, %{issue_number: 3}} = publish(issue())
+        assert_received {:url, :https, "burrow.kobo-ai.com", "/api/feedback-broker/v1/issues"}
+      end
+
+      current = Application.get_env(:platform, GithubPublisher)
+      Application.put_env(:platform, GithubPublisher, Keyword.delete(current, :broker_url))
+      assert {:ok, "https://burrow.kobo-ai.com/api/feedback-broker/v1"} = Broker.base_url()
+      assert Broker.default_broker_url() == "https://burrow.kobo-ai.com/api/feedback-broker/v1"
+      refute Broker.default_broker_url() =~ "feedback.getburrow.ing"
+    end
+
+    test "an explicit broker url wins" do
+      test_pid = self()
+
+      Req.Test.stub(Broker, fn conn ->
+        send(test_pid, {:url, conn.host, conn.request_path})
+
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+          "repository" => "GetBurrowing/core",
+          "issue_number" => 4
+        })
+      end)
+
+      put_publisher(broker_url: "https://broker.example.test/base/")
+      assert {:ok, %{issue_number: 4}} = publish(issue())
+      assert_received {:url, "broker.example.test", "/base/issues"}
+    end
+
+    test "an explicit unparsable broker url is not configured, with no fallback and no request" do
       test_pid = self()
       Req.Test.stub(Broker, fn conn -> send(test_pid, :called) && Req.Test.json(conn, %{}) end)
 
-      assert {:error, :publisher_not_configured} =
-               publish(issue())
+      for value <- ["not a url", "ftp://broker.example.test", "https://", 42] do
+        put_publisher(broker_url: value)
+        assert {:error, :publisher_not_configured} = publish(issue())
+
+        assert {:error, :publisher_not_configured} =
+                 GithubPublisher.find_existing(fingerprint: @fp)
+      end
 
       refute_received :called
     end

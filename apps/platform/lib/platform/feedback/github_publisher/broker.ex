@@ -8,7 +8,9 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
   ## Wire contract
 
-    * `POST <FEEDBACK_BROKER_URL>/issues` with JSON
+    * The base URL is `FEEDBACK_BROKER_URL`, or `default_broker_url/0`
+      (Kobo prod) when it is unset or blank (task 01a1a6a5 stage 3).
+    * `POST <base>/issues` with JSON
       `%{repository, fingerprint, installation, submission}` and the
       fingerprint as the `idempotency-key` header. `installation` is the
       configured installation label or `null`. `submission` is
@@ -23,7 +25,7 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       this adapter receives is deliberately ignored.
     * The broker must answer a repeated key with the issue it already
       created.
-    * `GET <FEEDBACK_BROKER_URL>/issues/<fingerprint>` answers the issue a
+    * `GET <base>/issues/<fingerprint>` answers the issue a
       fingerprint produced (200) or 404.
     * A 200/201 body must carry `repository` and `issue_number`; everything
       else in it is ignored. `GithubPublisher.publish/2` rebuilds the
@@ -35,6 +37,8 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
   """
 
   @behaviour Platform.Feedback.GithubPublisher
+
+  @default_broker_url "https://burrow.kobo-ai.com/api/feedback-broker/v1"
 
   alias Platform.Feedback.GithubPublisher
 
@@ -90,10 +94,41 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
     end
   end
 
-  defp base_url do
-    case GithubPublisher.config(:broker_url) do
+  @doc """
+  The broker every install uses unless `FEEDBACK_BROKER_URL` overrides it:
+  Kobo prod (task 01a1a6a5 stage 3). This is the ONE place it is written.
+  Moving the broker means changing this value in a release, or setting
+  `FEEDBACK_BROKER_URL` on each install.
+  """
+  @spec default_broker_url() :: String.t()
+  def default_broker_url, do: @default_broker_url
+
+  @doc """
+  The resolved broker base URL. Unset or blank uses `default_broker_url/0`;
+  an explicit value wins; an explicit value that is not an http(s) URL with
+  a host is `:publisher_not_configured` and does NOT fall back to the
+  default.
+  """
+  @spec base_url() :: {:ok, String.t()} | {:error, :publisher_not_configured}
+  def base_url do
+    configured =
+      case GithubPublisher.config(:broker_url) do
+        url when is_binary(url) ->
+          case String.trim(url) do
+            "" -> @default_broker_url
+            trimmed -> trimmed
+          end
+
+        nil ->
+          @default_broker_url
+
+        other ->
+          other
+      end
+
+    case configured do
       url when is_binary(url) ->
-        case URI.parse(String.trim(url)) do
+        case URI.parse(url) do
           %URI{scheme: scheme, host: host} = uri
           when scheme in ["https", "http"] and is_binary(host) and host != "" ->
             {:ok, uri |> URI.to_string() |> String.trim_trailing("/")}
