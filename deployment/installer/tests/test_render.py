@@ -1352,11 +1352,21 @@ class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
         self.assertIn(self.LINE, self.core_block(rendered))
 
     def test_it_lands_in_core_platform_env_and_never_in_secrets(self):
+        from test_agents_render import write_files
+
         rendered = self.render(hosted=True)
         compose = rendered.files["compose.yaml"][0]
         self.assertEqual(compose.count("FEEDBACK_POLICY"), 1)
+        self.assertNotIn("FEEDBACK_", rendered.files["secrets.env"][0])
+        # user-data carries the host's copies of compose.yaml and secrets.env.
+        on_host = write_files(rendered.files["user-data"][0])
+        self.assertIn(self.LINE, on_host["/opt/burrow/compose.yaml"][1])
+        self.assertNotIn("FEEDBACK_", on_host["/opt/burrow/secrets.env"][1])
+        for path, (_perms, body) in on_host.items():
+            if path != "/opt/burrow/compose.yaml":
+                self.assertNotIn("FEEDBACK_POLICY", body, f"{path} carries FEEDBACK_POLICY")
         for name, (text, _mode) in rendered.files.items():
-            if name != "compose.yaml":
+            if name not in ("compose.yaml", "user-data"):
                 self.assertNotIn("FEEDBACK_POLICY", text, f"{name} carries FEEDBACK_POLICY")
         services = _compose_services(compose)
         for service, block in services.items():
