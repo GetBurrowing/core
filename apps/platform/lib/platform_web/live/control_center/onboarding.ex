@@ -6,6 +6,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   use Phoenix.Component
 
   import PlatformWeb.ControlCenter.Helpers
+  import PlatformWeb.CoreComponents, only: [input: 1]
 
   attr :show, :boolean, required: true
   attr :onboarding_flow, :atom, default: nil
@@ -789,6 +790,21 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           </div>
           <span class="mt-1 text-xs text-subtle">
             {behavior_description(@default_behavior)}
+          </span>
+        </div>
+
+        <%!-- Chat opt-out (task 01a1b20f stage 3): operator choice, default on.
+             The checkbox component carries its own hidden "false" input, so an
+             unchecked box still submits accepts_chat=false. --%>
+        <div class="form-control" id="external-agent-accepts-chat">
+          <.input
+            field={@external_agent_form[:accepts_chat]}
+            type="checkbox"
+            label="Answers chat messages"
+            class="checkbox checkbox-primary checkbox-sm mr-2"
+          />
+          <span class="mt-1 text-xs text-subtle">
+            Uncheck for single-purpose agents (classifiers, summarisers). Mentions get a one-line notice instead of a reply.
           </span>
         </div>
 

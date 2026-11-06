@@ -10,12 +10,50 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   use PlatformWeb, :verified_routes
 
   import PlatformWeb.ControlCenter.Helpers
+  import PlatformWeb.CoreComponents, only: [input: 1]
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.NativeStatus
   alias PlatformWeb.ControlCenter.RuntimePanel
   alias PlatformWeb.ControlCenter.VaultEvents
+
+  # ── Chat opt-out toggle (task 01a1b20f stage 3) ────────────────────
+
+  @doc """
+  "Answers chat messages" toggle for the selected agent, any kind. The
+  caller renders it only for a viewer who may manage the agent; the
+  `set_accepts_chat` event is gated server-side the same way.
+  """
+  attr(:agent, :map, required: true)
+
+  def chat_toggle(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :form,
+        to_form(%{"accepts_chat" => assigns.agent.accepts_chat}, as: :agent_chat)
+      )
+
+    ~H"""
+    <section
+      id="agent-accepts-chat"
+      class="rounded-3xl border border-edge bg-base-100 px-5 py-4 shadow-sm"
+    >
+      <.form for={@form} id="agent-accepts-chat-form" phx-change="set_accepts_chat">
+        <.input
+          field={@form[:accepts_chat]}
+          type="checkbox"
+          label="Answers chat messages"
+          class="toggle toggle-primary toggle-sm mr-2"
+        />
+        <p class="mt-1 text-xs text-subtle">
+          Off for single-purpose agents (classifiers, summarisers). Mentions get a one-line notice instead of a reply.
+        </p>
+      </.form>
+    </section>
+    """
+  end
 
   # ── Header ────────────────────────────────────────────────────────
 

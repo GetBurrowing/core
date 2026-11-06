@@ -11,6 +11,7 @@ defmodule PlatformWeb.ControlCenterLive do
   }
 
   alias Platform.AgentHost
+  alias Platform.ExternalAgents
   alias Platform.Agents.NativeAgents
   alias Platform.Agents.NativeLogin
   alias Platform.Federation
@@ -305,6 +306,7 @@ defmodule PlatformWeb.ControlCenterLive do
     "dismiss_regenerated_token" => :ui,
     "save_tool_profile" => :manage_selected,
     "save_agent_restrictions" => :manage_selected,
+    "set_accepts_chat" => :manage_selected,
     # Grant panel (task 01a1a2e4-9265 stage 3): org admin of the selected
     # agent's owner org, never :manage_selected (a member owner manages
     # their own agent but must not grant themselves a role).
@@ -777,6 +779,16 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("save_agent_restrictions", params, socket),
     do: RuntimeEvents.handle("save_agent_restrictions", params, socket)
 
+  defp handle_control_event(
+         "set_accepts_chat",
+         %{"agent_chat" => %{"accepts_chat" => value}},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
+    with_native_manager(socket, agent, fn -> set_accepts_chat(socket, agent, value == "true") end)
+  end
+
+  defp handle_control_event("set_accepts_chat", _params, socket), do: {:noreply, socket}
+
   defp handle_control_event("open_grant_panel", params, socket),
     do: GrantEvents.handle("open_grant_panel", params, socket)
 
@@ -1005,6 +1017,11 @@ defmodule PlatformWeb.ControlCenterLive do
               selected_agent_directory_entry={@selected_agent_directory_entry}
               pending_delete_slug={@pending_delete_slug}
               native={@native_header}
+            />
+
+            <AgentDetail.chat_toggle
+              :if={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
+              agent={@selected_agent}
             />
 
             <AgentDetail.stats
@@ -1491,6 +1508,44 @@ defmodule PlatformWeb.ControlCenterLive do
     else
       fun.()
     end
+  end
+
+  # External agents go through their own context (which keeps kind and
+  # runtime_type pinned); every other kind takes the same changeset path as
+  # the identity form.
+  defp set_accepts_chat(socket, %Agent{kind: "external"} = agent, accepts_chat?) do
+    agent
+    |> ExternalAgents.update_external_agent(%{accepts_chat: accepts_chat?})
+    |> accepts_chat_saved(socket)
+  end
+
+  defp set_accepts_chat(socket, %Agent{} = agent, accepts_chat?) do
+    agent
+    |> Agent.changeset(%{accepts_chat: accepts_chat?})
+    |> Repo.update()
+    |> accepts_chat_saved(socket)
+  end
+
+  defp accepts_chat_saved({:ok, %Agent{} = agent}, socket) do
+    message =
+      if agent.accepts_chat,
+        do: "#{agent.name} answers chat messages.",
+        else: "#{agent.name} no longer answers chat messages."
+
+    {:noreply,
+     socket
+     |> put_flash(:info, message)
+     |> reload_selected_agent(
+       selected_file_key: socket.assigns.selected_file_key,
+       memory_filters: socket.assigns.memory_filters,
+       # The toggle is its own control, not a save: keep any unsaved edit in
+       # the identity form instead of reverting it on the panel rebuild.
+       config_params: (socket.assigns[:config_form] && socket.assigns.config_form.params) || %{}
+     )}
+  end
+
+  defp accepts_chat_saved({:error, %Ecto.Changeset{} = changeset}, socket) do
+    {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
   end
 
   defp remove_avatar(socket, agent, _params) do
