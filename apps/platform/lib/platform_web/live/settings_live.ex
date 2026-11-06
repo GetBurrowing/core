@@ -296,8 +296,12 @@ defmodule PlatformWeb.SettingsLive do
   def handle_event("close_settings_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, nil)}
 
-  def handle_event("open_feedback_sheet", _params, %{assigns: %{feedback_enabled: true}} = socket),
-    do: {:noreply, socket |> reset_feedback() |> assign(:sheet, :feedback)}
+  def handle_event(
+        "open_feedback_sheet",
+        _params,
+        %{assigns: %{feedback_enabled: true}} = socket
+      ),
+      do: {:noreply, socket |> reset_feedback() |> assign(:sheet, :feedback)}
 
   def handle_event("open_feedback_sheet", _params, socket), do: {:noreply, socket}
 
@@ -787,7 +791,9 @@ defmodule PlatformWeb.SettingsLive do
     |> assign(:feedback_error, nil)
   end
 
-  defp feedback_params(%{"feedback" => params}) when is_map(params), do: normalize_feedback(params)
+  defp feedback_params(%{"feedback" => params}) when is_map(params),
+    do: normalize_feedback(params)
+
   defp feedback_params(_params), do: normalize_feedback(%{})
 
   defp normalize_feedback(params) do

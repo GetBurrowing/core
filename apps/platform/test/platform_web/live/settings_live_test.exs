@@ -1082,8 +1082,14 @@ defmodule PlatformWeb.SettingsLiveTest do
       enable_feedback!()
       user = member!()
 
-      {:ok, view, html} = live(authed(user), "/settings")
-      assert html =~ "Tell the Burrow team what's not working or what would help."
+      {:ok, view, _html} = live(authed(user), "/settings")
+
+      assert has_element?(
+               view,
+               "[data-role=settings-feedback]",
+               "Tell the Burrow team what's not working or what would help."
+             )
+
       assert has_element?(view, "[data-role=settings-help-label]", "Help")
       refute has_element?(view, "#settings-feedback-sheet[data-open=true]")
 
