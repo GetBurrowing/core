@@ -835,6 +835,68 @@ defmodule PlatformWeb.VoiceLiveTest do
     end
   end
 
+  describe "the microphone could not start (voice_mic_failed)" do
+    setup do
+      livekit_stub!()
+      %{burrow: burrow!()}
+    end
+
+    @mic_failed_line "Couldn't start the microphone. Hold to try again."
+
+    for reason <- ~w(no_api timeout not_live reply_timeout) do
+      test "#{reason}: the mic-failed line in text-error, data-mic-failure, mic still enabled", %{
+        conn: conn
+      } do
+        reason = unquote(reason)
+        {:ok, view, _html} = live(conn, ~p"/voice")
+        refute has_element?(view, "#listen-text[data-mic-failure]")
+
+        hook(view, "voice_mic_failed", %{"reason" => reason})
+
+        assert text(doc(view), "#listen-text") == @mic_failed_line
+        assert has_element?(view, "#listen-text.text-error[data-mic-failure=#{reason}]")
+        assert has_element?(view, "#voice-area[data-state=mic_failed]")
+        refute has_element?(view, "#mic[disabled]")
+        refute has_element?(view, "#mic.on")
+        # Not the blocked line's Type instead, and never the partner's fault.
+        refute has_element?(view, "#voice-type-instead")
+        refute text(doc(view), "#listen-line") =~ "can't talk right now"
+      end
+    end
+
+    test "an unknown reason still renders the line, as data-mic-failure=unknown", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      hook(view, "voice_mic_failed", %{"reason" => "something-else"})
+
+      assert text(doc(view), "#listen-text") == @mic_failed_line
+      assert has_element?(view, "#listen-text[data-mic-failure=unknown]")
+    end
+
+    test "a half-open session is dropped; the next press starts a fresh session", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      room = started!(view)
+
+      hook(view, "voice_mic_failed", %{"reason" => "not_live"})
+      assert_push_event(view, "voice_disconnect", %{})
+      assert :sys.get_state(view.pid).socket.assigns.session == nil
+      assert has_element?(view, "#listen-text[data-mic-failure=not_live]")
+
+      # The retry: a new voice_start, then a turn that reaches listening.
+      assert started!(view) == room
+      hook(view, "voice_press")
+      assert text(doc(view), "#listen-text") == "listening…"
+      refute has_element?(view, "#listen-text[data-mic-failure]")
+    end
+
+    test "the blocked line carries no data-mic-failure", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      hook(view, "voice_mic_blocked")
+
+      assert has_element?(view, "#voice-type-instead")
+      refute has_element?(view, "#listen-text[data-mic-failure]")
+    end
+  end
+
   describe "a partner change mid-session" do
     setup do
       livekit_stub!()

@@ -13,7 +13,9 @@ defmodule PlatformWeb.Components.Voice do
     * `pending_turn/1`: the live bubble while you talk (`.bubble.me.live`),
       the thinking dots and the failed reply (stage 3);
     * `voice_area/1`: #listen-line, #meter and #mic, in every
-      talk state (idle, listening, toggled, thinking, blocked, unavailable).
+      talk state (idle, listening, toggled, thinking, blocked, unavailable,
+      mic_failed). For mic_failed, #listen-text carries the hook's reason in
+      `data-mic-failure`.
       It carries the `VoiceTab` hook (stage 3);
     * `partner_sheet/1` (#partner-sheet) and `context_sheet/1` (#ctx-sheet).
       `variant: :sheet` (the default) is a bottom sheet at every width;
@@ -242,6 +244,7 @@ defmodule PlatformWeb.Components.Voice do
   attr :partner, :map, default: nil
   attr :toast, :string, default: nil
   attr :state, :atom, default: :idle
+  attr :mic_failure, :string, default: nil
   attr :typing?, :boolean, default: false
   attr :type_form, :any, default: nil
   attr :user_id, :string, default: nil
@@ -274,7 +277,7 @@ defmodule PlatformWeb.Components.Voice do
         aria-live="polite"
       >
         <span
-          :if={@state not in [:blocked, :unavailable]}
+          :if={@state not in [:blocked, :unavailable, :mic_failed]}
           class={[
             "size-[7px] flex-none rounded-full",
             if(live?(@state), do: "bg-primary", else: "bg-edge")
@@ -282,7 +285,11 @@ defmodule PlatformWeb.Components.Voice do
           aria-hidden="true"
         >
         </span>
-        <span id="listen-text" class={listen_class(@partner, @state)}>
+        <span
+          id="listen-text"
+          class={listen_class(@partner, @state)}
+          data-mic-failure={@state == :mic_failed && (@mic_failure || "unknown")}
+        >
           {listen_text(@partner, @state)}
         </span>
         <button
@@ -532,11 +539,15 @@ defmodule PlatformWeb.Components.Voice do
 
   @blocked_line "Microphone is blocked. Allow it in your browser or app settings."
 
+  # A local failure: never the partner's fault, so never cant_talk/1.
+  @mic_failed_line "Couldn't start the microphone. Hold to try again."
+
   @doc "The listen line's copy for a partner in a talk state."
   def listen_text(nil, _state), do: "No voice partner"
   def listen_text(%{reachable?: false, agent: agent}, _state), do: cant_talk(agent)
   def listen_text(%{agent: agent}, :unavailable), do: cant_talk(agent)
   def listen_text(_partner, :blocked), do: @blocked_line
+  def listen_text(_partner, :mic_failed), do: @mic_failed_line
   def listen_text(_partner, :listening), do: "listening…"
   def listen_text(_partner, :toggled), do: "listening… tap again to stop"
   def listen_text(%{agent: agent}, :thinking), do: "#{agent.name} is thinking…"
@@ -545,7 +556,10 @@ defmodule PlatformWeb.Components.Voice do
   defp cant_talk(agent), do: "#{agent.name} can't talk right now."
 
   defp listen_class(%{reachable?: false}, _state), do: "text-error"
-  defp listen_class(_partner, state) when state in [:unavailable, :blocked], do: "text-error"
+
+  defp listen_class(_partner, state) when state in [:unavailable, :blocked, :mic_failed],
+    do: "text-error"
+
   defp listen_class(_partner, _state), do: nil
 
   defp partner_subtitle(%{agent: %{slug: slug}}, slug), do: "your default · knows every space"

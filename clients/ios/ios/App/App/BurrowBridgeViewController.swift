@@ -34,6 +34,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var webStatusBarStyle: UIStatusBarStyle?
     private var didStart = false
     private var navTrace: WebLoadTracingDelegate?
+    /// Held here because `WKWebView.uiDelegate` is weak (task 01a1ad86).
+    private(set) var mediaCaptureTrace: WebMediaCaptureTrace?
     private var webRecovery: WebLoadRecovery?
     /// Kept across a new controller so recreating cannot reset the retry budget.
     private var recoveryRequest: URLRequest?
@@ -171,6 +173,14 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             navTrace = trace
             webView.navigationDelegate = trace
             WebLoadLog.logger.notice("trace-installed isLoading=\(webView.isLoading) current=\(WebLoadLog.describe(webView.url), privacy: .public)")
+        }
+        // Trace media-capture requests (task 01a1ad86); Capacitor's UI delegate
+        // still answers everything else. A recreated shell runs this again.
+        if !(webView.uiDelegate is WebMediaCaptureTrace) {
+            let capture = WebMediaCaptureTrace(target: webView.uiDelegate) { [weak self] in self?.currentInstall?.host }
+            mediaCaptureTrace = capture
+            webView.uiDelegate = capture
+            WebLoadLog.event("media-capture-trace-installed target=\(capture.target != nil)")
         }
 
         #if DEBUG

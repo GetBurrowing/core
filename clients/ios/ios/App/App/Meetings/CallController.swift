@@ -456,8 +456,13 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
         let session = self.session
         let host = self.host
         let api = self.api
+        // connectWithoutCallKit (and a ring answered without CallKit) set the
+        // audio session active itself; CallKit deactivates its own. Read this
+        // before callUUID is cleared below (task 01a1ad86).
+        let ranWithoutCallKit = callUUID == nil
         Task {
             await session?.disconnect()
+            if ranWithoutCallKit { self.releaseAudioSessionAfterCall() }
             if callLeave, let host, meetingID != "probe" { try? await api.leave(host: host, meetingID: meetingID) }
         }
         ticker?.invalidate()
@@ -473,6 +478,21 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
         if let next = pendingSwitch {
             pendingSwitch = nil
             start(host: next.host, meetingID: next.meetingID)
+        }
+    }
+
+    /// Lets other audio resume once a non-CallKit call has disconnected,
+    /// unless a newer call (a pending switch) has started in the meantime.
+    private func releaseAudioSessionAfterCall() {
+        guard meetingID == nil else {
+            MeetingTrace.append("audio session kept active: another call started")
+            return
+        }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            MeetingTrace.append("audio session deactivated after non-callkit call")
+        } catch {
+            Self.log.error("audio session deactivate failed code=\((error as NSError).code)")
         }
     }
 

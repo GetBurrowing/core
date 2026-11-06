@@ -28,6 +28,12 @@ defmodule PlatformWeb.VoiceLive do
     * `voice_mic_blocked`: the browser refused the microphone. The line reads
       "Microphone is blocked. Allow it in your browser or app settings." with "Type
       instead", whose input submits through the same path as `who: "me"`.
+    * `voice_mic_failed` `%{reason}`: the press ended before `voice_press`
+      for a reason that is not a refusal (`no_api`, `timeout`, `not_live`,
+      `reply_timeout`). `:mic_state` becomes `:mic_failed`, the reason is kept
+      in `:mic_failure`, any half-open session is dropped (`voice_disconnect`)
+      and the line reads "Couldn't start the microphone. Hold to try again.".
+      The mic stays enabled; the next press starts a fresh attempt.
     * A context change calls `VoiceSession.set_context/2`; a partner change
       releases the floor if a turn is live and disconnects the old session
       (`voice_disconnect`) before the next press starts a new one.
@@ -124,6 +130,7 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:turn_seq, 0)
       |> assign(:session, nil)
       |> assign(:mic_state, :idle)
+      |> assign(:mic_failure, nil)
       |> assign(:heard?, false)
       |> assign(:answer_ref, nil)
       |> assign(:typing?, false)
@@ -183,6 +190,7 @@ defmodule PlatformWeb.VoiceLive do
           partner={@partner}
           toast={@toast}
           state={@mic_state}
+          mic_failure={@mic_failure}
           typing?={@typing?}
           type_form={@type_form}
           user_id={@current_user_record && @current_user_record.id}
@@ -363,6 +371,10 @@ defmodule PlatformWeb.VoiceLive do
   def handle_event("voice_mic_blocked", _params, socket),
     do: {:noreply, assign(socket, :mic_state, :blocked)}
 
+  def handle_event("voice_mic_failed", params, socket) do
+    {:noreply, mic_failed(socket, mic_failure(params))}
+  end
+
   def handle_event("voice_connect_failed", _params, socket) do
     {:noreply, socket |> assign(:session, nil) |> assign(:mic_state, :unavailable)}
   end
@@ -442,6 +454,25 @@ defmodule PlatformWeb.VoiceLive do
     |> assign(:session, nil)
     |> assign(:mic_state, :idle)
     |> push_event("voice_disconnect", %{})
+  end
+
+  @mic_failures ~w(no_api timeout not_live reply_timeout)
+
+  defp mic_failure(%{"reason" => reason}) when reason in @mic_failures, do: reason
+  defp mic_failure(_params), do: "unknown"
+
+  # A local mic failure: no turn ever started, so there is no floor to
+  # release; drop a half-open session so the next press starts fresh.
+  defp mic_failed(socket, reason) do
+    socket =
+      if socket.assigns.session,
+        do: socket |> assign(:session, nil) |> push_event("voice_disconnect", %{}),
+        else: socket
+
+    socket
+    |> cancel_answer_timer()
+    |> assign(:mic_state, :mic_failed)
+    |> assign(:mic_failure, reason)
   end
 
   defp start_answer_timer(socket) do
