@@ -85,7 +85,7 @@ defmodule Mix.Tasks.Platform.HrBackfill do
 
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
-  alias Platform.People.{LegacyIndex, PageGuard, Pages, Visibility}
+  alias Platform.People.{LegacyIndex, PageGuard, Pages, Privacy, Visibility}
 
   @shortdoc "Rewrite legacy people cards through the page guard and regenerate the index"
 
@@ -393,23 +393,29 @@ defmodule Mix.Tasks.Platform.HrBackfill do
     name |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-") |> String.trim("-")
   end
 
-  # Only the Person name, the relation from the section heading and the Role
-  # column: no other column, no free text.
+  # Only the Person name, the relation from the section heading, the Role
+  # column and the Last seen column: no other column, no free text. Carrying
+  # last seen here keeps a second run with the same previous index from
+  # enriching the card it just created.
   defp minimal_card([first | _] = group) do
     relation =
       Enum.find_value(group, fn row -> if row.relation != "unknown", do: row.relation end)
 
     role = Enum.find_value(group, & &1.role)
+    last_seen = Enum.find_value(group, & &1.last_seen)
 
     frontmatter =
       ["tier: card", "name: #{yaml_string(first.name)}"] ++
         if(relation, do: ["relation: #{relation}"], else: []) ++
-        if(role, do: ["role: #{yaml_string(role)}"], else: [])
+        if(role, do: ["role: #{yaml_string(role)}"], else: []) ++
+        if(last_seen, do: ["last_seen: #{yaml_string(last_seen)}"], else: [])
 
     Enum.join(["---"] ++ frontmatter ++ ["---", "", "# #{first.name}", ""], "\n")
   end
 
   # Lines only in the stored index ("- ") then lines only in the new one ("+ ").
+  # A removed line echoes the stored (possibly hand-written) index, so it is
+  # scrubbed before it reaches the operator's terminal.
   defp index_diff(old, new) do
     old_lines = String.split(old, "\n")
     new_lines = String.split(new, "\n")
@@ -420,7 +426,7 @@ defmodule Mix.Tasks.Platform.HrBackfill do
       for line <- Enum.uniq(old_lines),
           line != "",
           not MapSet.member?(new_set, line),
-          do: "- " <> line
+          do: "- " <> (line |> Privacy.scrub() |> elem(0))
 
     added =
       for line <- Enum.uniq(new_lines),

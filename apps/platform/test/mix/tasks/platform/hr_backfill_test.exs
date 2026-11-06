@@ -248,13 +248,13 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
              Visibility.card_path("robin-sample")
            ]
 
-    # only the Person name, the heading's relation and the Role column: no
-    # phone, no last-seen, no other section
+    # only the Person name, the heading's relation, the Role column and the
+    # Last seen column: no phone, no other section
     assert Wiki.get_page(Visibility.card_path("avery-example")).content ==
-             "---\ntier: card\nname: \"Avery Example\"\nrelation: team\nrole: \"Index role\"\n---\n\n# Avery Example\n"
+             "---\ntier: card\nname: \"Avery Example\"\nrelation: team\nrole: \"Index role\"\nlast_seen: \"2026-10-02\"\n---\n\n# Avery Example\n"
 
     assert Wiki.get_page(Visibility.card_path("casey-placeholder")).content ==
-             "---\ntier: card\nname: \"CASEY PLACEHOLDER\"\nrelation: client\nrole: \"Buyer / Example Freight\"\n---\n\n# CASEY PLACEHOLDER\n"
+             "---\ntier: card\nname: \"CASEY PLACEHOLDER\"\nrelation: client\nrole: \"Buyer / Example Freight\"\nlast_seen: \"2026-09-21\"\n---\n\n# CASEY PLACEHOLDER\n"
 
     # a heading that is not a relation leaves the relation key out entirely
     assert Wiki.get_page(Visibility.card_path("robin-sample")).content ==
@@ -268,7 +268,7 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
     index = Wiki.get_page(Visibility.index_path())
 
     assert index.content =~
-             "| **Avery Example** [[org/page/people/avery-example.md]] | Index role |  |"
+             "| **Avery Example** [[org/page/people/avery-example.md]] | Index role | 2026-10-02 |"
 
     assert index.content =~ "**CASEY PLACEHOLDER** [[org/page/people/casey-placeholder.md]]"
     assert index.content =~ "**Robin Sample** [[org/page/people/robin-sample.md]]"
@@ -342,10 +342,12 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
     assert Enum.map(report.rewritten, & &1.path) == [Visibility.card_path("oskar-vellinghausen")]
     assert Enum.any?(report.enriched, &(&1.path == Visibility.card_path("marisol-tennebrook")))
 
-    assert "- | **Priya Kalloway** | 904-555-0199 |" in report.index_diff
+    # a removed line echoes the stored index, scrubbed: no phone digits
+    assert "- | **Priya Kalloway** | [REDACTED: phone] |" in report.index_diff
+    refute Enum.any?(report.index_diff, &(&1 =~ "904-555"))
     assert "- Some free text about who to call when the pager goes off." in report.index_diff
 
-    assert "+ | **Avery Example** [[org/page/people/avery-example.md]] | Index role |  |" in report.index_diff
+    assert "+ | **Avery Example** [[org/page/people/avery-example.md]] | Index role | 2026-10-02 |" in report.index_diff
 
     assert "+ | **Marisol Tennebrook** [[org/page/people/marisol-tennebrook.md]] | Lead. |  |" in report.index_diff
 
@@ -365,7 +367,7 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
     lines = HrBackfill.lines(report)
     assert "Index diff:" in lines
 
-    assert "  + | **Avery Example** [[org/page/people/avery-example.md]] | Index role |  |" in lines
+    assert "  + | **Avery Example** [[org/page/people/avery-example.md]] | Index role | 2026-10-02 |" in lines
 
     assert "  created org/page/people/robin-sample.md" in lines
     assert List.last(lines) == "Dry run: nothing written."
@@ -389,8 +391,12 @@ defmodule Mix.Tasks.Platform.HrBackfillTest do
     assert card_paths() == cards
     assert [_] = Journal.get_for_date(Date.utc_today())
 
-    # handing the same previous index in again creates no duplicate card
-    assert HrBackfill.backfill(previous_index: @previous_index).created == []
+    # handing the same previous index in again creates no duplicate card and
+    # enriches nothing: the minimal cards already carry the row's last seen
+    same = HrBackfill.backfill(previous_index: @previous_index)
+    assert same.created == []
+    assert same.enriched == []
+    assert snapshot() == before
     assert card_paths() == cards
   end
 end
