@@ -8,7 +8,8 @@ defmodule Platform.Feedback.GithubPublisher do
   ## Two adapters, and which install runs which
 
     * `Platform.Feedback.GithubPublisher.Broker` — the default. POSTs the
-      already-built issue to the Burrow-hosted feedback broker
+      sanitized submission (never a built issue body) to the Burrow-hosted
+      feedback broker
       (`FEEDBACK_BROKER_URL`). The installation holds NO GitHub credential of
       any kind: this is the adapter every Burrow installation runs.
     * `Platform.Feedback.GithubPublisher.GithubApp` — for the Burrow-hosted
@@ -23,10 +24,14 @@ defmodule Platform.Feedback.GithubPublisher do
 
   ## What crosses this boundary, in each direction
 
-  OUT: only `build_issue/2`'s `%{title, body, labels}` plus the fingerprint as
-  an idempotency key. The issue is built solely from the allowlisted,
-  redacted structure `Platform.Feedback.Submission` produced; nothing else
-  about the caller, its session or its environment is in scope here.
+  OUT: the GithubApp adapter sends only `build_issue/2`'s
+  `%{title, body, labels}`; the Broker adapter sends NO built issue, only
+  `Submission.wire_fields/1` of the sanitized structure (`opts[:submission]`),
+  so the broker redacts, bounds and fences it again itself (task 01a1a6a5
+  stage 1). Both carry the fingerprint as an idempotency key. Everything is
+  built solely from the allowlisted, redacted structure
+  `Platform.Feedback.Submission` produced; nothing else about the caller, its
+  session or its environment is in scope here.
 
   IN: `publish/2` never returns what the adapter returned. It returns
   `%{repository, issue_number, url}` rebuilt from two validated values — the
@@ -59,8 +64,10 @@ defmodule Platform.Feedback.GithubPublisher do
           | :publisher_bad_response
 
   @doc """
-  Create the issue. `opts` carries `:fingerprint` (the idempotency key) and
-  `:repository`. An adapter answers `{:ok, %{repository, issue_number}}`.
+  Create the issue. `opts` carries `:fingerprint` (the idempotency key),
+  `:repository` and `:submission` (`Submission.wire_fields/1`; only the
+  Broker adapter reads it). An adapter answers
+  `{:ok, %{repository, issue_number}}`.
   """
   @callback create_issue(issue(), keyword()) ::
               {:ok, %{repository: String.t(), issue_number: integer()}} | {:error, error()}

@@ -1,17 +1,28 @@
 defmodule Platform.Feedback.GithubPublisher.Broker do
   @moduledoc """
-  The installation-side publisher (task 01a11ec3 stage 2): hands the built
-  issue to the Burrow-hosted feedback broker, which holds the GitHub
-  credentials. This adapter carries NO credential — not a GitHub token, not
-  an App key, not a broker secret — so there is nothing on a Burrow
-  installation for a submission, a log or an error to leak.
+  The installation-side publisher (task 01a11ec3 stage 2): hands the
+  sanitized submission to the Burrow-hosted feedback broker, which holds the
+  GitHub credentials. This adapter carries NO credential — not a GitHub
+  token, not an App key, not a broker secret — so there is nothing on a
+  Burrow installation for a submission, a log or an error to leak.
 
   ## Wire contract
 
     * `POST <FEEDBACK_BROKER_URL>/issues` with JSON
-      `%{repository, title, body, labels, fingerprint}` and the fingerprint
-      as the `idempotency-key` header. The broker must answer a repeated key
-      with the issue it already created.
+      `%{repository, fingerprint, installation, submission}` and the
+      fingerprint as the `idempotency-key` header. `installation` is the
+      configured installation label or `null`. `submission` is
+      `Platform.Feedback.Submission.wire_fields/1` of the sanitized
+      structure: the allowlisted fields in the raw-argument shape.
+    * NO `title`, `body` or `labels` are sent (task 01a1a6a5 stage 1). The
+      feedback repository is public, so anyone can call a broker; a broker
+      that forwarded a client-built markdown body would let any caller post
+      arbitrary markdown, links and mentions. The broker therefore re-runs
+      `Submission.normalize/1` (redaction, bounds) and
+      `GithubPublisher.build_issue/2` (fencing) itself. The `issue` argument
+      this adapter receives is deliberately ignored.
+    * The broker must answer a repeated key with the issue it already
+      created.
     * `GET <FEEDBACK_BROKER_URL>/issues/<fingerprint>` answers the issue a
       fingerprint produced (200) or 404.
     * A 200/201 body must carry `repository` and `issue_number`; everything
@@ -28,15 +39,14 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
   alias Platform.Feedback.GithubPublisher
 
   @impl true
-  def create_issue(issue, opts) do
+  def create_issue(_issue, opts) do
     fingerprint = Keyword.fetch!(opts, :fingerprint)
 
     body = %{
       repository: Keyword.fetch!(opts, :repository),
-      title: issue.title,
-      body: issue.body,
-      labels: issue.labels,
-      fingerprint: fingerprint
+      fingerprint: fingerprint,
+      installation: installation_label(),
+      submission: Keyword.fetch!(opts, :submission)
     }
 
     with {:ok, base} <- base_url(),
@@ -64,6 +74,19 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
         404 -> {:ok, nil}
         status -> GithubPublisher.http_error(status)
       end
+    end
+  end
+
+  defp installation_label do
+    case GithubPublisher.config(:installation_label) do
+      label when is_binary(label) ->
+        case String.trim(label) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
     end
   end
 

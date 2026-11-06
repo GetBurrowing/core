@@ -112,9 +112,9 @@ defmodule Platform.Feedback.IntakeTest do
       assert drain_classifier_calls() == 0
     end
 
-    test "an unset policy keeps intake off even though submission is on" do
+    test "an unset policy keeps intake off (task 01a1a6a5 stage 1: opt-in)" do
       Application.delete_env(:platform, :feedback_policy)
-      assert Platform.Feedback.Policy.enabled?()
+      refute Platform.Feedback.Policy.enabled?()
       issue = issue()
 
       assert {:ignored, :feedback_disabled} = Intake.process(issue)
@@ -124,12 +124,14 @@ defmodule Platform.Feedback.IntakeTest do
       assert drain_dispositions() == []
     end
 
-    test "an explicitly quarantined policy files the accepted issue" do
+    test "a quarantined policy files one quarantined external_feedback task" do
       Application.put_env(:platform, :feedback_policy, "quarantined")
       issue = issue()
 
       assert {:ok, %{outcome: :task_filed, task_id: task_id}} = Intake.process(issue)
-      assert Repo.get!(Task, task_id).trust == "quarantined"
+      task = Repo.get!(Task, task_id)
+      assert task.trust == "quarantined"
+      assert task.origin == "external_feedback"
       assert [_] = Stub.external_tasks(issue.repository, issue.issue_number)
     end
 

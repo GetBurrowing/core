@@ -66,6 +66,15 @@ defmodule Platform.Feedback.GithubPublisherTest do
     })
   end
 
+  @wire %{
+    "category" => "bug",
+    "title" => "Board loses the badge",
+    "expected_behavior" => "Badge stays.",
+    "observed_behavior" => "Badge vanishes."
+  }
+
+  defp publish(built), do: GithubPublisher.publish(built, fingerprint: @fp, submission: @wire)
+
   defp put_publisher(kw) do
     current = Application.get_env(:platform, GithubPublisher, [])
     Application.put_env(:platform, GithubPublisher, Keyword.merge(current, kw))
@@ -149,7 +158,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       :ok
     end
 
-    test "posts the built issue with the fingerprint as idempotency key and no credential" do
+    test "posts the sanitized submission, never the built issue, and no credential" do
       test_pid = self()
 
       Req.Test.stub(Broker, fn conn ->
@@ -164,9 +173,10 @@ defmodule Platform.Feedback.GithubPublisherTest do
         })
       end)
 
+      put_publisher(installation_label: "  burrow-7  ")
       built = issue()
 
-      assert {:ok, identity} = GithubPublisher.publish(built, fingerprint: @fp)
+      assert {:ok, identity} = publish(built)
 
       assert identity == %{
                repository: "GetBurrowing/core",
@@ -180,11 +190,32 @@ defmodule Platform.Feedback.GithubPublisherTest do
 
       assert body == %{
                "repository" => "GetBurrowing/core",
-               "title" => built.title,
-               "body" => built.body,
-               "labels" => built.labels,
-               "fingerprint" => @fp
+               "fingerprint" => @fp,
+               "installation" => "burrow-7",
+               "submission" => @wire
              }
+
+      refute Jason.encode!(body) =~ "Submitted by agent"
+    end
+
+    test "an unset or blank installation label is sent as null" do
+      test_pid = self()
+
+      Req.Test.stub(Broker, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:broker_body, Jason.decode!(raw)})
+
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+          "repository" => "GetBurrowing/core",
+          "issue_number" => 1
+        })
+      end)
+
+      for label <- [nil, "", "   "] do
+        put_publisher(installation_label: label)
+        assert {:ok, _} = publish(issue())
+        assert_received {:broker_body, %{"installation" => nil}}
+      end
     end
 
     test "maps failures to bounded atoms without echoing the response" do
@@ -202,7 +233,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
 
         log =
           capture_log(fn ->
-            assert {:error, ^expected} = GithubPublisher.publish(issue(), fingerprint: @fp)
+            assert {:error, ^expected} = publish(issue())
           end)
 
         refute log =~ "RESPONSE-BODY-SENTINEL"
@@ -221,7 +252,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
         end)
 
         assert {:error, :publisher_bad_response} =
-                 GithubPublisher.publish(issue(), fingerprint: @fp)
+                 publish(issue())
       end
     end
 
@@ -231,7 +262,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
       Req.Test.stub(Broker, fn conn -> send(test_pid, :called) && Req.Test.json(conn, %{}) end)
 
       assert {:error, :publisher_not_configured} =
-               GithubPublisher.publish(issue(), fingerprint: @fp)
+               publish(issue())
 
       refute_received :called
     end
@@ -288,7 +319,9 @@ defmodule Platform.Feedback.GithubPublisherTest do
 
       log =
         capture_log(fn ->
-          assert {:ok, identity} = GithubPublisher.publish(built, fingerprint: @fp)
+          # `submission:` is the Broker wire; GithubApp ignores it and sends the
+          # built issue (asserted below).
+          assert {:ok, identity} = publish(built)
 
           assert identity == %{
                    repository: "GetBurrowing/core",

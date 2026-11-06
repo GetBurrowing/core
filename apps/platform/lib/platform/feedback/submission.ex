@@ -152,6 +152,39 @@ defmodule Platform.Feedback.Submission do
     :crypto.hash(:sha256, Enum.join(parts, <<0>>)) |> Base.encode16(case: :lower)
   end
 
+  @doc """
+  Re-emit a sanitized structure in the raw-argument shape `normalize/1`
+  accepts: string keys, only the allowlisted fields that are present, and
+  diagnostics as `%{"include" => true, "scope", "content"}`.
+
+  This is what an installation sends over the broker wire (task 01a1a6a5
+  stage 1). The broker runs `normalize/1` on it again, so redaction, bounds
+  and the fenced issue build happen ON THE BROKER and a caller cannot hand it
+  prebuilt markdown. `normalize(wire_fields(s))` yields `s` again, and so the
+  same fingerprint.
+  """
+  @spec wire_fields(map()) :: %{optional(String.t()) => term()}
+  def wire_fields(sanitized) when is_map(sanitized) do
+    fields =
+      for field <- [:category | @text_fields],
+          value = Map.get(sanitized, field),
+          is_binary(value),
+          into: %{},
+          do: {Atom.to_string(field), value}
+
+    case Map.get(sanitized, :diagnostics) do
+      %{scope: scope, content: content} when is_binary(scope) and is_binary(content) ->
+        Map.put(fields, "diagnostics", %{
+          "include" => true,
+          "scope" => scope,
+          "content" => content
+        })
+
+      _ ->
+        fields
+    end
+  end
+
   # ── checks ─────────────────────────────────────────────────────────────
 
   defp capability do
@@ -320,7 +353,10 @@ defmodule Platform.Feedback.Submission do
         installation: GithubPublisher.config(:installation_label)
       })
 
-    case GithubPublisher.publish(issue, fingerprint: fingerprint) do
+    case GithubPublisher.publish(issue,
+           fingerprint: fingerprint,
+           submission: wire_fields(sanitized)
+         ) do
       {:ok, identity} ->
         {:ok, _} = mark_published(record, identity)
         {:ok, result("created", identity, fingerprint, report)}

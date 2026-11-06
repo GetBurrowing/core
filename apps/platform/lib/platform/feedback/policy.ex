@@ -18,39 +18,31 @@ defmodule Platform.Feedback.Policy do
   authoritative, so changing this value later never rewrites an existing row.
   Nothing here reads a task.
 
-  ## Unset means on; an explicit typo means off
+  ## Opt-in, and fail closed
 
-  Unset or blank (after trimming) means `:quarantined`: a fresh install has
-  the capability on, so its agents can report defects without an operator
-  setting anything (task 01a1a6a5 stage 1). The opt-out is an explicit
-  `FEEDBACK_POLICY=disabled`.
-
-  An EXPLICIT value is still fail-closed: every value other than the three
-  names above (compared after trimming and downcasing) means `:disabled`, so a
-  typo such as `enabeld` turns the feature off; it never turns it on.
+  Feedback is OPT-IN (task 01a1a6a5). Unset, blank, and every value other
+  than the three names above (compared after trimming and downcasing) mean
+  `:disabled`. An operator turns the capability on with an explicit
+  `FEEDBACK_POLICY=quarantined` or `FEEDBACK_POLICY=trusted`. A typo such as
+  `enabeld` turns the feature off; it never turns it on.
 
   ## The one predicate
 
   `enabled?/0` is THE capability predicate. `Platform.Federation.ToolSurface`
   (listing and execution), `Platform.Orchestration.PromptTemplates`
-  (guidance text) and `Platform.Orchestration.HeartbeatScheduler` (the assigns
-  every task dispatch and nudge render) all ask it and nothing else, so the
-  advertised set and the callable set cannot disagree.
-
-  `explicit?/0` is the narrower predicate for `Platform.Feedback.Intake` only:
-  true when an operator EXPLICITLY set `quarantined` or `trusted`. Intake
-  files tasks and writes dispositions back to the feedback repository, so the
-  unset default must not switch it on for every install whose project is
-  connected to that repository.
+  (guidance text), `Platform.Orchestration.HeartbeatScheduler` (the assigns
+  every task dispatch and nudge render) and `Platform.Feedback.Intake` all
+  ask it and nothing else, so the advertised set and the callable set cannot
+  disagree.
 
   ## Injection
 
   `config/runtime.exs` writes `config :platform, :feedback_policy` from
-  `FEEDBACK_POLICY` outside the test environment, passing `nil` when the
-  variable is unset. `config/config.exs` sets no value; `config/test.exs`
-  pins it to `"disabled"`, so the suite is not a function of the host's
-  environment. A test that needs another mode (or the unset default, via
-  `Application.delete_env/2`) changes it and restores it on exit.
+  `FEEDBACK_POLICY` outside the test environment, defaulting to
+  `"disabled"` when the variable is unset. `config/config.exs` sets no value
+  (an absent key is `:disabled` too); `config/test.exs` pins it to
+  `"disabled"`, so the suite is not a function of the host's environment. A
+  test that needs another mode changes it and restores it on exit.
   """
 
   @modes ~w(disabled quarantined trusted)
@@ -62,26 +54,11 @@ defmodule Platform.Feedback.Policy do
   def modes, do: @modes
 
   @doc """
-  The installation's normalised feedback mode. An unset or blank value is
-  `:quarantined` (the default-on capability); any explicit value goes through
-  `normalize/1`, which is fail-closed.
+  The installation's normalised feedback mode. Unset, blank and unknown
+  values are `:disabled`.
   """
   @spec mode() :: mode()
-  def mode do
-    value = configured()
-    if unset?(value), do: :quarantined, else: normalize(value)
-  end
-
-  @doc """
-  True only when an operator explicitly set `quarantined` or `trusted`. The
-  unset default is NOT explicit. `Platform.Feedback.Intake` gates on this,
-  not on `enabled?/0`.
-  """
-  @spec explicit?() :: boolean()
-  def explicit? do
-    value = configured()
-    not unset?(value) and normalize(value) != :disabled
-  end
+  def mode, do: normalize(Application.get_env(:platform, :feedback_policy))
 
   @doc """
   The capability predicate: true exactly when the mode is `:quarantined` or
@@ -104,9 +81,9 @@ defmodule Platform.Feedback.Policy do
   end
 
   @doc """
-  Normalise an explicit raw policy value. Atoms and strings are accepted;
-  anything that is not exactly one of the three names (after trim + downcase)
-  is `:disabled`. The unset default is applied by `mode/0`, not here.
+  Normalise a raw policy value. Atoms and strings are accepted; `nil`, blank
+  and anything that is not exactly one of the three names (after trim +
+  downcase) is `:disabled`.
   """
   @spec normalize(term()) :: mode()
   def normalize(value) when is_atom(value) and not is_nil(value),
@@ -121,10 +98,4 @@ defmodule Platform.Feedback.Policy do
   end
 
   def normalize(_value), do: :disabled
-
-  defp configured, do: Application.get_env(:platform, :feedback_policy)
-
-  defp unset?(nil), do: true
-  defp unset?(value) when is_binary(value), do: String.trim(value) == ""
-  defp unset?(_value), do: false
 end

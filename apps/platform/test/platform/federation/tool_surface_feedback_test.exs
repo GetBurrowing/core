@@ -123,31 +123,39 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
     end
   end
 
-  describe "unset policy (task 01a1a6a5 stage 1)" do
-    test "an unset or blank policy lists the tool in tools/list", %{runtime: runtime} do
+  describe "unset policy (task 01a1a6a5 stage 1: opt-in)" do
+    test "an unset or blank policy keeps the tool out of tools/list", %{runtime: runtime} do
       Application.delete_env(:platform, :feedback_policy)
-
-      assert @tool in names(ToolSurface.list_tools(["federation"]))
-      assert @tool in ToolAuthorization.tool_names(runtime)
-      assert :ok = ToolAuthorization.authorize(@tool, runtime)
-
-      for value <- [nil, "", "  "] do
-        set_policy(value)
-        assert @tool in ToolAuthorization.tool_names(runtime), "#{inspect(value)} hid it"
-      end
-    end
-
-    test "an explicit disabled policy keeps it out of tools/list", %{runtime: runtime} do
-      set_policy("disabled")
 
       refute @tool in names(ToolSurface.list_tools(["federation"]))
       refute @tool in ToolAuthorization.tool_names(runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize(@tool, runtime)
+
+      for value <- [nil, "", "  "] do
+        set_policy(value)
+        refute @tool in ToolAuthorization.tool_names(runtime), "#{inspect(value)} listed it"
+      end
+    end
+
+    test "a direct call with the policy unset is refused feedback_disabled", %{agent: agent} do
+      Application.delete_env(:platform, :feedback_policy)
+
+      for call <- [
+            fn -> ToolArguments.dispatch(@tool, args(), %{agent_id: agent.id}) end,
+            fn -> ToolSurface.execute(@tool, args(), %{agent_id: agent.id}) end
+          ] do
+        assert {:error, %{code: :feedback_disabled, recoverable: false}} = call.()
+      end
+
+      refute_received {:broker, _}
     end
 
     test "the description names the GetBurrowing/core repository" do
+      set_policy("quarantined")
+
       assert %{description: description} =
                Enum.find(ToolSurface.list_tools(["federation"]), &(&1.name == @tool)) ||
-                 flunk("feedback_submit is not listed with the policy unset")
+                 flunk("feedback_submit is not listed with the policy quarantined")
 
       assert description =~ "GetBurrowing/core"
     end

@@ -249,7 +249,12 @@ defmodule Platform.Feedback.SubmissionTest do
       refute raw =~ "LOG-SENTINEL"
       refute raw =~ "SESSION-SENTINEL"
       refute raw =~ "ENV-SENTINEL"
-      assert body["labels"] == ["feedback", "feedback:bug"]
+
+      assert Map.keys(body) |> Enum.sort() ==
+               ~w(fingerprint installation repository submission)
+
+      assert Map.keys(body["submission"]) |> Enum.sort() ==
+               ~w(category expected_behavior observed_behavior reproduction_steps title version_environment)
     end
 
     test "diagnostics are absent unless explicitly opted in and scoped", %{agent: agent} do
@@ -278,7 +283,10 @@ defmodule Platform.Feedback.SubmissionTest do
 
       assert {:ok, %{diagnostics_included: false}} = Submission.submit(bad_scope, actor(agent))
 
-      for body <- broker_bodies(), do: refute(body["body"] =~ "DIAG-SENTINEL")
+      for body <- broker_bodies() do
+        refute Jason.encode!(body) =~ "DIAG-SENTINEL"
+        refute Map.has_key?(body["submission"], "diagnostics")
+      end
     end
 
     test "opted-in, scoped diagnostics are included and labelled with their scope",
@@ -294,8 +302,12 @@ defmodule Platform.Feedback.SubmissionTest do
 
       assert {:ok, %{diagnostics_included: true}} = Submission.submit(args, actor(agent))
       [body] = broker_bodies()
-      assert body["body"] =~ "Diagnostics (scope: error_message)"
-      assert body["body"] =~ "SCOPED-DIAG"
+
+      assert body["submission"]["diagnostics"] == %{
+               "include" => true,
+               "scope" => "error_message",
+               "content" => "SCOPED-DIAG ** (ArgumentError) bad argument"
+             }
     end
 
     test "secrets and credentials are redacted before the external call", %{agent: agent} do
@@ -328,7 +340,8 @@ defmodule Platform.Feedback.SubmissionTest do
         refute raw =~ secret, "#{secret} reached the broker"
       end
 
-      assert body["body"] =~ "[REDACTED]"
+      assert body["submission"]["observed_behavior"] =~ "[REDACTED]"
+      assert body["submission"]["version_environment"] =~ "[REDACTED]"
     end
 
     test "the result carries no broker-supplied text", %{agent: agent} do
@@ -336,6 +349,96 @@ defmodule Platform.Feedback.SubmissionTest do
       encoded = inspect(result)
       refute encoded =~ "evil.example"
       refute encoded =~ "ghs_leakedTokenFromBroker"
+    end
+  end
+
+  describe "broker wire (task 01a1a6a5 stage 1)" do
+    # `ghp_` + 36 alphanumerics: a GitHub personal-token shape.
+    @canary "ghp_" <> "Zq7Lm2Xc9Vb4Nn1Kk8Jj3Hh6Gg5Ff0Dd2Ss4Aa"
+
+    test "sends only repository, fingerprint, installation and the sanitized submission",
+         %{agent: agent} do
+      args = valid(%{"observed_behavior" => "Push failed with #{@canary} in the output."})
+
+      assert {:ok, %{status: "created", fingerprint: fingerprint}} =
+               Submission.submit(args, actor(agent))
+
+      assert_received {:broker, "POST", "/issues", headers, raw}
+      body = Jason.decode!(raw)
+
+      assert body |> Map.keys() |> Enum.sort() ==
+               ~w(fingerprint installation repository submission)
+
+      refute Map.has_key?(body, "body")
+      refute Map.has_key?(body, "title")
+      refute Map.has_key?(body, "labels")
+      assert body["repository"] == "GetBurrowing/core"
+      assert body["fingerprint"] == fingerprint
+      assert body["installation"] == nil
+      assert {"idempotency-key", fingerprint} in headers
+      refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
+
+      refute raw =~ @canary
+      assert body["submission"]["observed_behavior"] =~ Platform.Feedback.Redaction.marker()
+
+      {:ok, sanitized, _report} = Submission.normalize(args)
+      assert body["submission"] == Submission.wire_fields(sanitized)
+    end
+
+    test "carries the configured installation label", %{agent: agent} do
+      publisher = Platform.Feedback.GithubPublisher
+      saved = Application.get_env(:platform, publisher, [])
+      on_exit(fn -> Application.put_env(:platform, publisher, saved) end)
+
+      Application.put_env(
+        :platform,
+        publisher,
+        Keyword.put(saved, :installation_label, "burrow-7")
+      )
+
+      assert {:ok, _} = Submission.submit(valid(), actor(agent))
+      assert [%{"installation" => "burrow-7"}] = broker_bodies()
+    end
+
+    test "wire_fields/1 round-trips through normalize/1 to the same map and fingerprint" do
+      args =
+        valid(%{
+          "observed_behavior" => "  Token #{@canary} leaked;\nsee ```fence```  ",
+          "diagnostics" => %{
+            "include" => true,
+            "scope" => "Stack_Trace",
+            "content" => "** (RuntimeError) password=hunter2-sentinel"
+          },
+          "unknown" => "dropped"
+        })
+
+      {:ok, sanitized, _} = Submission.normalize(args)
+      assert %{scope: "stack_trace"} = sanitized.diagnostics
+
+      wire = Submission.wire_fields(sanitized)
+
+      assert wire["diagnostics"] == %{
+               "include" => true,
+               "scope" => "stack_trace",
+               "content" => sanitized.diagnostics.content
+             }
+
+      refute Map.has_key?(wire, "unknown")
+
+      assert {:ok, ^sanitized, report} = Submission.normalize(wire)
+      assert report.ignored_fields == []
+      assert report.diagnostics_included
+
+      {:ok, again, _} = Submission.normalize(wire)
+      assert Submission.fingerprint(again) == Submission.fingerprint(sanitized)
+    end
+
+    test "wire_fields/1 omits absent optional fields" do
+      {:ok, sanitized, _} =
+        Submission.normalize(Map.drop(valid(), ["reproduction_steps", "version_environment"]))
+
+      assert sanitized |> Submission.wire_fields() |> Map.keys() |> Enum.sort() ==
+               ~w(category expected_behavior observed_behavior title)
     end
   end
 

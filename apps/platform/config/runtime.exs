@@ -414,13 +414,12 @@ end
 
 # ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────
 # FEEDBACK_POLICY is the ONE capability value: disabled | quarantined | trusted.
-# Unset or blank means quarantined: feedback is ON by default and files to
-# GetBurrowing/core (task 01a1a6a5). Opt out with FEEDBACK_POLICY=disabled.
-# Any other explicit value is disabled, so a typo turns the capability off,
-# never on. Intake (filing tasks from feedback issues) runs only when
-# FEEDBACK_POLICY is explicitly quarantined or trusted
-# (`Platform.Feedback.Policy.explicit?/0`), never on the unset default.
-# FEEDBACK_REPOSITORY overrides the target repository.
+# Feedback is OPT-IN (task 01a1a6a5): FEEDBACK_POLICY=quarantined|trusted
+# turns on the agent `feedback_submit` tool AND the human feedback button.
+# Unset, blank and every other value mean disabled
+# (`Platform.Feedback.Policy.normalize/1`), so a typo turns the capability
+# off, never on. FEEDBACK_REPOSITORY overrides the target repository
+# (GetBurrowing/core by default).
 #
 # Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
 # adapter: `broker` (default; every Burrow installation) posts to
@@ -433,7 +432,7 @@ end
 # Skipped under :test, which pins the policy to disabled and routes both
 # adapters to Req.Test stubs; tests flip keys per-test and restore them.
 if config_env() != :test do
-  config :platform, :feedback_policy, System.get_env("FEEDBACK_POLICY")
+  config :platform, :feedback_policy, System.get_env("FEEDBACK_POLICY", "disabled")
 
   feedback_adapter =
     case System.get_env("FEEDBACK_PUBLISHER", "broker") |> String.trim() |> String.downcase() do
