@@ -500,6 +500,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
       base_url: String.trim(Map.get(params, "base_url", "")),
       model: String.trim(Map.get(params, "model", "")),
       vault_key: vault_key_for_attrs(params),
+      accepts_chat: truthy?(Map.get(params, "accepts_chat", true)),
       metadata: %{"default_behavior" => behavior}
     }
   end

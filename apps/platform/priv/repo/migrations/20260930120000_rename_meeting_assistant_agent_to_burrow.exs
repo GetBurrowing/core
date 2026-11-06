@@ -35,11 +35,48 @@ defmodule Platform.Repo.Migrations.RenameMeetingAssistantAgentToBurrow do
   alias Platform.Agents.Agent
   alias Platform.Repo
 
+  # Load only the columns that existed when this migration was written. A bare
+  # `from(a in Agent)` selects every CURRENT schema field, so a column added by
+  # a later migration (e.g. `accepts_chat`, 20261106182005) does not exist yet
+  # when a fresh database replays this one, and the SELECT fails.
+  @agent_fields [
+    :id,
+    :workspace_id,
+    :slug,
+    :name,
+    :status,
+    :model_config,
+    :tools_config,
+    :thinking_default,
+    :heartbeat_config,
+    :max_concurrent,
+    :sandbox_mode,
+    :parent_agent_id,
+    :metadata,
+    :runtime_type,
+    :runtime_id,
+    :color,
+    :kind,
+    :endpoint_kind,
+    :base_url,
+    :model,
+    :vault_key,
+    :last_probe_at,
+    :last_probe_status,
+    :last_probe_latency_ms,
+    :last_successful_fire_at,
+    :avatar_url,
+    :avatar_storage_key,
+    :voice_config,
+    :inserted_at,
+    :updated_at
+  ]
+
   @old_name "Meeting Assistant"
   @new_name "Burrow"
 
   def up do
-    Repo.all(from(a in Agent, where: a.name == ^@old_name))
+    Repo.all(from(a in Agent, where: a.name == ^@old_name, select: struct(a, ^@agent_fields)))
     |> Enum.each(fn agent ->
       {:ok, _updated} =
         agent

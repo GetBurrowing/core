@@ -749,6 +749,138 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     refute Repo.get_by(Agent, slug: "bad-submit")
   end
 
+  # ── Chat opt-out (task 01a1b20f stage 3) ─────────────────────────────
+
+  defp submit_external_agent!(view, name, overrides) do
+    view
+    |> form(
+      "#external-agent-form",
+      external_agent:
+        Map.merge(
+          %{
+            name: name,
+            slug: "",
+            endpoint_kind: "openai_compat",
+            base_url: "https://api.example.test/v1",
+            model: "model-a",
+            default_behavior: "chat",
+            vault_mode: "paste",
+            vault_key: "",
+            secret: "",
+            save_to_vault: "false"
+          },
+          overrides
+        )
+    )
+    |> render_submit()
+  end
+
+  test "external form shows the chat checkbox checked by default", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    assert has_element?(
+             view,
+             ~s(#external-agent-form input[type="checkbox"][name="external_agent[accepts_chat]"][checked])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#external-agent-form input[type="hidden"][name="external_agent[accepts_chat]"][value="false"])
+           )
+
+    assert has_element?(view, "#external-agent-accepts-chat", "Answers chat messages")
+    assert has_element?(view, "#external-agent-accepts-chat", "Uncheck for single-purpose agents")
+  end
+
+  test "submitting the external form with defaults saves an http agent that accepts chat",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{"data" => [%{"id" => "model-a"}]})
+    end)
+
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    submit_external_agent!(view, "Quill Default", %{})
+
+    created = Repo.get_by!(Agent, slug: "quill-default")
+    assert created.kind == "external"
+    assert created.runtime_type == "http"
+    assert created.accepts_chat == true
+  end
+
+  test "submitting the external form with the chat box unchecked saves accepts_chat false",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{"data" => [%{"id" => "model-a"}]})
+    end)
+
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    submit_external_agent!(view, "Quill Sorter", %{accepts_chat: "false"})
+
+    created = Repo.get_by!(Agent, slug: "quill-sorter")
+    assert created.kind == "external"
+    assert created.accepts_chat == false
+  end
+
+  test "detail toggle flips accepts_chat on a built-in agent", %{conn: conn} do
+    agent = create_agent(%{name: "Toggle Built In"})
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control/#{agent.slug}")
+
+    assert has_element?(
+             view,
+             ~s(#agent-accepts-chat-form input[type="checkbox"][name="agent_chat[accepts_chat]"][checked])
+           )
+
+    view
+    |> form("#agent-accepts-chat-form", agent_chat: %{accepts_chat: "false"})
+    |> render_change()
+
+    assert Repo.get!(Agent, agent.id).accepts_chat == false
+
+    refute has_element?(
+             view,
+             ~s(#agent-accepts-chat-form input[type="checkbox"][name="agent_chat[accepts_chat]"][checked])
+           )
+
+    view
+    |> form("#agent-accepts-chat-form", agent_chat: %{accepts_chat: "true"})
+    |> render_change()
+
+    assert Repo.get!(Agent, agent.id).accepts_chat == true
+  end
+
+  test "detail toggle flips accepts_chat on an external agent and keeps it http",
+       %{conn: conn} do
+    {:ok, agent} =
+      Platform.ExternalAgents.create_external_agent(%{
+        name: "Toggle External",
+        slug: "toggle-external-#{System.unique_integer([:positive])}",
+        status: "active",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.example.test/v1",
+        model: "model-a"
+      })
+
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control/#{agent.slug}")
+    assert has_element?(view, "#agent-accepts-chat", "Answers chat messages")
+
+    view
+    |> form("#agent-accepts-chat-form", agent_chat: %{accepts_chat: "false"})
+    |> render_change()
+
+    reloaded = Repo.get!(Agent, agent.id)
+    assert reloaded.accepts_chat == false
+    assert reloaded.kind == "external"
+    assert reloaded.runtime_type == "http"
+  end
+
   # ── Stage 3: Vault sub-form ─────────────────────────────────────────
 
   test "external agent form renders Vault sub-form with tab toggle", %{conn: conn} do

@@ -125,6 +125,31 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
     end
   end
 
+  # Task 01a1b20f: an agent with accepts_chat false. The fallback copy
+  # ("couldn't reply" / "Something went wrong") would misreport a choice as a
+  # failure, and an action would offer a fix for nothing broken.
+  test "a declined-chat notice is one line with no action and no hand-off", %{
+    owner: owner,
+    agent: agent
+  } do
+    msg =
+      agent
+      |> notice("unknown")
+      |> Map.put(:content, ReplyFailure.chat_declined_line(agent.name))
+      |> put_in([:metadata, "cause"], "chat_declined")
+
+    for viewer <- [owner, user!("bystander", "member"), nil] do
+      doc = msg |> row_html(viewer) |> LazyHTML.from_fragment()
+      text = LazyHTML.text(doc)
+
+      assert text =~ "Ada doesn't take chat messages."
+      refute text =~ "couldn't reply"
+      refute text =~ "Something went wrong"
+      assert doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.empty?()
+      assert doc |> LazyHTML.query(~s([data-role="reply-failure-handoff"])) |> Enum.empty?()
+    end
+  end
+
   test "the row is the canvas's system row: dimmed avatar, error icon, error tint", %{
     owner: owner,
     agent: agent

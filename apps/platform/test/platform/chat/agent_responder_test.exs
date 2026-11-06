@@ -1146,6 +1146,58 @@ defmodule Platform.Chat.AgentResponderTest do
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
     end
 
+    test "an agent saved through ExternalAgents (runtime_type http) still POSTs to its endpoint" do
+      # Task 01a1b20f: the Add Agent > External form now saves runtime_type
+      # "http". That value is neither "external" (websocket runtime) nor the
+      # default, so the `kind == "external"` clause must still catch it.
+      unique = System.unique_integer([:positive])
+      vault_key = "agent-responder-http-#{unique}"
+
+      {:ok, agent} =
+        Platform.ExternalAgents.create_external_agent(%{
+          slug: "courier-#{unique}",
+          name: "Courier",
+          status: "active",
+          endpoint_kind: "openai_compat",
+          base_url: @base_url,
+          model: "Example/Model",
+          vault_key: vault_key
+        })
+
+      assert agent.runtime_type == "http"
+      assert agent.accepts_chat == true
+
+      {:ok, _} =
+        Platform.Vault.put(vault_key, :api_key, @api_secret, scope: {:agent, agent.id})
+
+      space = create_space()
+      user = create_participant(space.id)
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Courier")
+
+      stub_completion(200, "Courier reply")
+
+      _ = create_message(space.id, user.id, %{content: "@courier hello"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:external_http_request, "POST", "api.example.test", "/v1/chat/completions",
+                      ["Bearer " <> secret], _body},
+                     1500
+
+      assert secret == @api_secret
+      refute_received {:agent_chat_called, _, _}
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      reply =
+        space.id
+        |> Chat.list_messages(limit: 10)
+        |> Enum.find(&(&1.participant_id == agent_participant.id))
+
+      assert reply && reply.content == "Courier reply"
+    end
+
     test "a 500 from the endpoint persists no reply and posts the couldn't-reply notice" do
       space = create_space()
       user = create_participant(space.id)
@@ -1261,6 +1313,239 @@ defmodule Platform.Chat.AgentResponderTest do
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
       refute_received {:external_http_request, _, _, _, _, _}
       refute_received {:agent_chat_called, _, _}
+    end
+  end
+
+  describe "an agent that does not take chat (accepts_chat false)" do
+    # Task 01a1b20f stage 2. Same HTTP stub as the block above: every request
+    # the endpoint receives is sent to the test process, so "zero requests"
+    # is a refute on a message that would otherwise arrive.
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+      previous_client = Application.get_env(:platform, :external_agents_dispatcher_req_client)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, @req_stub})
+      )
+
+      on_exit(fn ->
+        if previous_client,
+          do:
+            Application.put_env(
+              :platform,
+              :external_agents_dispatcher_req_client,
+              previous_client
+            ),
+          else: Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      Req.Test.allow(@req_stub, self(), Process.whereis(AttentionRouter))
+      stub_completion(200, "an opted-out agent must never be asked")
+      :ok
+    end
+
+    # An HTTP agent saved the way the Add Agent > External form saves one
+    # (runtime_type "http"), opted out of chat.
+    defp declining_http_agent(name) do
+      unique = System.unique_integer([:positive])
+      vault_key = "agent-responder-decline-#{unique}"
+
+      {:ok, agent} =
+        Platform.ExternalAgents.create_external_agent(%{
+          slug: "#{String.downcase(name)}-#{unique}",
+          name: name,
+          status: "active",
+          endpoint_kind: "openai_compat",
+          base_url: @base_url,
+          model: "Example/Model",
+          vault_key: vault_key,
+          accepts_chat: false
+        })
+
+      assert agent.kind == "external"
+      assert agent.runtime_type == "http"
+      assert agent.accepts_chat == false
+
+      {:ok, _} =
+        Platform.Vault.put(vault_key, :api_key, @api_secret, scope: {:agent, agent.id})
+
+      agent
+    end
+
+    defp declined_notices(space_id) do
+      space_id
+      |> Chat.list_messages(limit: 50)
+      |> Enum.filter(&Platform.Chat.ReplyFailure.chat_declined?/1)
+    end
+
+    test "a mention gets one notice, and the endpoint is never called" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = declining_http_agent("Sorter")
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Sorter")
+
+      :ok = Platform.Chat.PubSub.subscribe(space.id)
+
+      message = create_message(space.id, user.id, %{content: "@sorter can you help?"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      refute_receive {:external_http_request, _, _, _, _, _}, 300
+      refute_received {:agent_chat_called, _, _}
+
+      assert [notice] = declined_notices(space.id)
+      assert notice.content == "Sorter doesn't take chat messages."
+      assert notice.content_type == "system"
+      assert Platform.Chat.ReplyFailure.notice?(notice)
+
+      assert notice.metadata == %{
+               "kind" => "reply_failure",
+               "agent_id" => agent.id,
+               "message_id" => message.id,
+               "cause" => "chat_declined"
+             }
+
+      messages = Chat.list_messages(space.id, limit: 50)
+      refute Enum.any?(messages, &(&1.participant_id == agent_participant.id))
+
+      # Typing: never turned on for this agent, and the notice clears it.
+      agent_pid = agent_participant.id
+
+      refute_received {:agent_typing, %{participant_id: ^agent_pid, typing: true}}
+      assert_received {:agent_typing, %{participant_id: ^agent_pid, typing: false}}
+
+      # The notice routes to no agent.
+      assert {:ok, []} = AttentionRouter.route(notice)
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+      refute_received {:external_http_request, _, _, _, _, _}
+    end
+
+    test "each new mention gets its own notice; a replay of one gets none" do
+      space = create_space()
+      first_user = create_participant(space.id)
+      second_user = create_participant(space.id, %{display_name: "Bea"})
+      agent = declining_http_agent("Tagger")
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Tagger")
+
+      first = create_message(space.id, first_user.id, %{content: "@tagger hello"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+      assert length(declined_notices(space.id)) == 1
+
+      # A different person a moment later: inside the 300 s failure window,
+      # which must not apply here.
+      second = create_message(space.id, second_user.id, %{content: "@tagger you there?"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert [_, _] = notices = declined_notices(space.id)
+
+      assert notices |> Enum.map(& &1.metadata["message_id"]) |> Enum.sort() ==
+               Enum.sort([first.id, second.id])
+
+      replay = %{
+        reason: :mention,
+        participant_id: agent_participant.id,
+        message_id: first.id,
+        space_id: space.id
+      }
+
+      assert :ok = AgentResponder.respond(replay)
+      assert length(declined_notices(space.id)) == 2
+
+      # The ETS claim is gone after a restart; the notice row is not.
+      :ok = Platform.Chat.ReplyFailure.Dedupe.reset()
+      assert :ok = AgentResponder.respond(replay)
+      assert length(declined_notices(space.id)) == 2
+
+      refute_receive {:external_http_request, _, _, _, _, _}, 200
+    end
+
+    test "ambient reasons are skipped silently; a system event still dispatches" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = declining_http_agent("Indexer")
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Indexer")
+
+      # Seed a message without routing it: the router would otherwise decline
+      # it as a mention before the ambient signals below run.
+      message = create_message(space.id, user.id, %{content: "just chatting"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      for reason <- [:active_agent, :watch] do
+        assert :ok =
+                 AgentResponder.respond(%{
+                   reason: reason,
+                   participant_id: agent_participant.id,
+                   message_id: message.id,
+                   space_id: space.id
+                 })
+      end
+
+      assert declined_notices(space.id) == []
+      refute_receive {:external_http_request, _, _, _, _, _}, 200
+
+      # Not chat from a person: these reach the endpoint as before.
+      for reason <- [:system_event, :role_scoped] do
+        assert :ok =
+                 AgentResponder.respond(%{
+                   reason: reason,
+                   participant_id: agent_participant.id,
+                   message_id: message.id,
+                   space_id: space.id
+                 })
+
+        assert_receive {:external_http_request, "POST", _, "/v1/chat/completions", _, _}, 1500
+      end
+
+      assert declined_notices(space.id) == []
+    end
+
+    test "a native built-in agent that opts out gets the notice and QuickAgent is not called" do
+      space = create_space()
+      user = create_participant(space.id)
+
+      agent =
+        create_agent(%{
+          slug: "quiet-#{System.unique_integer([:positive])}",
+          name: "Quiet",
+          accepts_chat: false
+        })
+
+      assert agent.kind == "native"
+      assert agent.runtime_type == "built_in"
+
+      {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Quiet")
+
+      _ = create_message(space.id, user.id, %{content: "@quiet ping"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      refute_received {:agent_chat_called, _, _}
+      assert [notice] = declined_notices(space.id)
+      assert notice.content == "Quiet doesn't take chat messages."
+    end
+
+    test "a federated agent that opts out gets the notice and no runtime broadcast" do
+      {agent, topic} = federated_runtime("quiet-runtime")
+
+      {:ok, agent} =
+        agent |> Agent.changeset(%{accepts_chat: false}) |> Repo.update()
+
+      space = create_space()
+      user = create_participant(space.id)
+      {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Envoy")
+
+      _ = create_message(space.id, user.id, %{content: "@envoy ping"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "attention"}, 300
+      assert [notice] = declined_notices(space.id)
+      assert notice.content == "Envelope Agent doesn't take chat messages."
     end
   end
 end

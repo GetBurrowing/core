@@ -399,6 +399,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "base_url" => "",
       "model" => "",
       "default_behavior" => "chat",
+      "accepts_chat" => true,
       "vault_mode" => "paste",
       "vault_key" => "",
       "secret" => "",

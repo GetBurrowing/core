@@ -180,6 +180,38 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
     refute has_element?(refreshed, ~s(button[phx-click="unsuspend_federated_runtime"]))
   end
 
+  test "owner flips the chat toggle on their own agent", %{conn: conn} do
+    user = member!()
+    {agent, _runtime} = federated_agent!(user)
+    {:ok, view, _} = live(as_user(conn, user), ~p"/control/#{agent.slug}")
+
+    assert has_element?(view, "#agent-accepts-chat-form")
+
+    view
+    |> form("#agent-accepts-chat-form", agent_chat: %{accepts_chat: "false"})
+    |> render_change()
+
+    assert Repo.get!(Agent, agent.id).accepts_chat == false
+  end
+
+  test "a member without manage rights sees no chat toggle and a forged event is refused",
+       %{conn: conn} do
+    owner = member!()
+    other = member!()
+    {agent, _runtime} = federated_agent!(owner)
+    {:ok, view, _} = live(as_user(conn, other), ~p"/control/#{agent.slug}")
+
+    assert has_element?(view, "h1", agent.name)
+    refute has_element?(view, "#agent-accepts-chat")
+    refute has_element?(view, "#agent-accepts-chat-form")
+
+    assert render_click(view, "set_accepts_chat", %{
+             "agent_chat" => %{"accepts_chat" => "false"}
+           }) =~ "You can only manage your own agents."
+
+    assert Repo.get!(Agent, agent.id).accepts_chat == true
+  end
+
   test "unknown event is refused", %{conn: conn} do
     user = member!()
     {:ok, view, _} = live(as_user(conn, user), ~p"/control")

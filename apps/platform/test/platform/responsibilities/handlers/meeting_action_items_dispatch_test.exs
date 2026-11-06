@@ -89,7 +89,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
     row
   end
 
-  defp seed_action_items_agent! do
+  defp seed_action_items_agent!(overrides \\ %{}) do
     role_key = "meeting_scribe"
 
     Repo.insert!(
@@ -114,16 +114,19 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
 
     agent =
       %Agent{}
-      |> Agent.changeset(%{
-        slug: "seam-scribe-#{System.unique_integer([:positive])}",
-        name: "Seam Scribe",
-        status: "active",
-        kind: "external",
-        endpoint_kind: "openai_compat",
-        base_url: "https://api.example.test",
-        model: "test-model",
-        workspace_id: nil
-      })
+      |> Agent.changeset(
+        %{
+          slug: "seam-scribe-#{System.unique_integer([:positive])}",
+          name: "Seam Scribe",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        }
+        |> Map.merge(overrides)
+      )
       |> Repo.insert!()
 
     :ok = EphemeralCredentials.put(agent.id, "sk-seam-test")
@@ -482,6 +485,34 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
   # on the others; running the three shapes that used to take three
   # different code paths is what makes the absence mean "the reconciler is
   # gone" rather than "this particular string did not parse".
+
+  # Task 01a1b20f stage 2: `accepts_chat: false` opts an agent out of CHAT
+  # only. The meeting intent path (IntentDispatcher's broadcast → Router →
+  # Dispatcher) is the work such an agent exists for, and must still POST.
+  describe "an assignee that does not take chat" do
+    for runtime_type <- ["http", "built_in"] do
+      test "runtime_type #{runtime_type}, accepts_chat false: the intent still dispatches" do
+        _ = seed_action_items_row!()
+
+        agent =
+          seed_action_items_agent!(%{runtime_type: unquote(runtime_type), accepts_chat: false})
+
+        assert agent.accepts_chat == false
+        _registry = start_registry!()
+
+        space = create_space!()
+
+        transcript =
+          create_transcript!(%{space_id: space.id, segments: dialogue_segments()})
+
+        stub_ok(~s({"action_items": ["Revert onboarding by Friday"]}))
+
+        assert {:ok, :dispatched} = fire!(transcript.id, space.id)
+        assert_receive {:dispatch_body, raw_body}, 5_000
+        assert %{"messages" => [_ | _]} = Jason.decode!(raw_body)
+      end
+    end
+  end
 
   describe "output handling — the platform applies nothing" do
     for {label, answer} <- [

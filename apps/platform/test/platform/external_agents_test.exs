@@ -4,7 +4,9 @@ defmodule Platform.ExternalAgentsTest do
 
   Covers the kind-gating invariants:
     * `create_external_agent/1` forces `kind: "external"`
-    * `update_external_agent/2` strips `:kind` and raises on non-external rows
+    * `create_external_agent/1` forces `runtime_type: "http"`
+    * `update_external_agent/2` strips `:kind` and `:runtime_type`, and raises
+      on non-external rows
     * `get_external_agent/1` and `list_external_agents/1` filter by kind
     * `delete_external_agent/1` works on external rows
   """
@@ -77,6 +79,32 @@ defmodule Platform.ExternalAgentsTest do
       assert agent.kind == "external"
     end
 
+    test "saves runtime_type=http when the caller passes none" do
+      assert {:ok, %Agent{} = agent} = ExternalAgents.create_external_agent(unique_attrs())
+      assert agent.runtime_type == "http"
+      assert Repo.get!(Agent, agent.id).runtime_type == "http"
+    end
+
+    test "forces runtime_type=http even when caller passes built_in or external" do
+      for value <- ["built_in", "external"] do
+        assert {:ok, %Agent{} = atom_keyed} =
+                 ExternalAgents.create_external_agent(unique_attrs(%{runtime_type: value}))
+
+        assert atom_keyed.runtime_type == "http"
+
+        string_keyed = Map.put(unique_attrs(), "runtime_type", value)
+        assert {:ok, %Agent{} = agent} = ExternalAgents.create_external_agent(string_keyed)
+        assert agent.runtime_type == "http"
+      end
+    end
+
+    test "accepts_chat defaults to true" do
+      assert {:ok, %Agent{} = agent} = ExternalAgents.create_external_agent(unique_attrs())
+      assert agent.accepts_chat == true
+      assert Repo.get!(Agent, agent.id).accepts_chat == true
+      assert insert_native_agent!().accepts_chat == true
+    end
+
     test "returns changeset error when required external fields are missing" do
       attrs = unique_attrs() |> Map.delete(:endpoint_kind)
       assert {:error, %Ecto.Changeset{} = cs} = ExternalAgents.create_external_agent(attrs)
@@ -112,6 +140,23 @@ defmodule Platform.ExternalAgentsTest do
                ExternalAgents.update_external_agent(agent, %{"kind" => "native", "name" => "X"})
 
       assert updated.kind == "external"
+    end
+
+    test "cannot change runtime_type (atom or string key)" do
+      {:ok, agent} = ExternalAgents.create_external_agent(unique_attrs())
+
+      for attrs <- [%{runtime_type: "external"}, %{"runtime_type" => "built_in"}] do
+        assert {:ok, %Agent{} = updated} = ExternalAgents.update_external_agent(agent, attrs)
+        assert updated.runtime_type == "http"
+        assert Repo.get!(Agent, agent.id).runtime_type == "http"
+      end
+    end
+
+    test "can set accepts_chat to false" do
+      {:ok, agent} = ExternalAgents.create_external_agent(unique_attrs())
+
+      assert {:ok, %Agent{accepts_chat: false}} =
+               ExternalAgents.update_external_agent(agent, %{accepts_chat: false})
     end
 
     test "raises ArgumentError when called on a kind=native agent" do
