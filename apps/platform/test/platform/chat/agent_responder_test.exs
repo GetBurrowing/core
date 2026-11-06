@@ -1024,4 +1024,243 @@ defmodule Platform.Chat.AgentResponderTest do
       assert thread_payload.message.reply_to == nil
     end
   end
+
+  # Task 01a1b1ae: a `kind: "external"` agent (Agents > Add > External Agent)
+  # keeps `runtime_type: "built_in"`, so its chat used to reach QuickAgent
+  # (the `:chat_agent_module` stub here) and never its own endpoint.
+  describe "kind external agents reply through their HTTP endpoint" do
+    @req_stub :agent_responder_external_http_test
+    @base_url "https://api.example.test/v1"
+    @api_secret "sk-agent-responder-external-test"
+
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+      previous_client = Application.get_env(:platform, :external_agents_dispatcher_req_client)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, @req_stub})
+      )
+
+      on_exit(fn ->
+        if previous_client,
+          do:
+            Application.put_env(
+              :platform,
+              :external_agents_dispatcher_req_client,
+              previous_client
+            ),
+          else: Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      # Posting a message routes it through the AttentionRouter's telemetry
+      # handler (the production path), and dispatch mode is :sync, so the
+      # router process makes the HTTP call and must be allowed onto the stub.
+      # These tests post and drain rather than also calling
+      # `AttentionRouter.route/1`, which would dispatch the message a second
+      # time and make "exactly one POST" unassertable.
+      Req.Test.allow(@req_stub, self(), Process.whereis(AttentionRouter))
+
+      :ok
+    end
+
+    defp create_external_http_agent do
+      unique = System.unique_integer([:positive])
+      vault_key = "agent-responder-ext-#{unique}"
+
+      agent =
+        create_agent(%{
+          slug: "relay-#{unique}",
+          name: "Relay",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: @base_url,
+          model: "Example/Model",
+          vault_key: vault_key
+        })
+
+      assert agent.runtime_type == "built_in"
+
+      {:ok, _} =
+        Platform.Vault.put(vault_key, :api_key, @api_secret, scope: {:agent, agent.id})
+
+      agent
+    end
+
+    defp stub_completion(status, content) do
+      test_pid = self()
+
+      Req.Test.stub(@req_stub, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          test_pid,
+          {:external_http_request, conn.method, conn.host, conn.request_path,
+           Plug.Conn.get_req_header(conn, "authorization"), Jason.decode!(raw)}
+        )
+
+        conn
+        |> Plug.Conn.put_status(status)
+        |> Req.Test.json(%{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => content}}]
+        })
+      end)
+    end
+
+    test "a chat mention POSTs once to <base_url>/chat/completions and persists the reply" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_external_http_agent()
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Relay")
+
+      stub_completion(200, "Endpoint says hello")
+
+      _ = create_message(space.id, user.id, %{content: "@relay are you there?"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:external_http_request, "POST", "api.example.test", "/v1/chat/completions",
+                      ["Bearer " <> secret], body},
+                     1500
+
+      assert secret == @api_secret
+      assert body["model"] == "Example/Model"
+
+      assert %{"role" => "user", "content" => "@relay are you there?"} =
+               List.last(body["messages"])
+
+      refute_receive {:external_http_request, _, _, _, _, _}, 200
+      refute_received {:agent_chat_called, _, _}
+
+      reply =
+        space.id
+        |> Chat.list_messages(limit: 10)
+        |> Enum.find(&(&1.participant_id == agent_participant.id))
+
+      assert reply
+      assert reply.content == "Endpoint says hello"
+      assert reply.metadata["trigger"] == "mention"
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+    end
+
+    test "a 500 from the endpoint persists no reply and posts the couldn't-reply notice" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_external_http_agent()
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Relay")
+
+      stub_completion(500, "should never be persisted")
+
+      message = create_message(space.id, user.id, %{content: "@relay status?"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:external_http_request, "POST", _, "/v1/chat/completions", _, _}, 1500
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      messages = Chat.list_messages(space.id, limit: 20)
+      refute Enum.any?(messages, &(&1.participant_id == agent_participant.id))
+      refute Enum.any?(messages, &(&1.content =~ "should never be persisted"))
+      refute_received {:agent_chat_called, _, _}
+
+      notice = Enum.find(messages, &Platform.Chat.ReplyFailure.notice?/1)
+      assert notice, "no couldn't-reply notice was posted"
+      assert notice.content =~ Platform.Chat.ReplyFailure.headline("Relay")
+      assert notice.metadata["agent_id"] == agent.id
+      assert notice.metadata["message_id"] == message.id
+    end
+
+    test "the request carries the same prior turns the built-in path sends" do
+      # More prior turns than the history window holds, so the cap is part of
+      # what must match.
+      prior = for n <- 1..14, do: "prior turn #{n}"
+
+      seed = fn agent, display_name ->
+        space = create_space()
+        user = create_participant(space.id)
+
+        {:ok, agent_participant} =
+          Chat.add_agent_participant(space.id, agent, display_name: display_name)
+
+        prior
+        |> Enum.with_index()
+        |> Enum.each(fn {text, i} ->
+          author = if rem(i, 3) == 2, do: agent_participant.id, else: user.id
+          create_message(space.id, author, %{content: text})
+        end)
+
+        {space, user}
+      end
+
+      # Built-in path: what QuickAgent receives.
+      built_in = create_agent(%{slug: "history-builtin-#{System.unique_integer([:positive])}"})
+      {space_a, user_a} = seed.(built_in, "Zip")
+      _ = create_message(space_a.id, user_a.id, %{content: "@zip summarise"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+      assert_receive {:agent_chat_called, "@zip summarise", opts}, 1500
+
+      expected_prior = Enum.map(opts[:history], &%{"role" => &1.role, "content" => &1.content})
+
+      # External path, same fixture.
+      external = create_external_http_agent()
+      {space_b, user_b} = seed.(external, "Relay")
+      stub_completion(200, "summary")
+      _ = create_message(space_b.id, user_b.id, %{content: "@relay summarise"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:external_http_request, "POST", _, _, _, %{"messages" => sent}}, 1500
+      {sent_prior, [last]} = Enum.split(sent, -1)
+
+      assert last == %{"role" => "user", "content" => "@relay summarise"}
+      # 12-message window minus the triggering message itself.
+      assert length(expected_prior) == 11
+      assert sent_prior == expected_prior
+      # Role + content only: attachment metadata never reaches the endpoint.
+      assert Enum.all?(sent, &(Map.keys(&1) |> Enum.sort() == ["content", "role"]))
+      refute Enum.any?(sent, &(&1["content"] =~ "prior turn 1\n"))
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+    end
+
+    test "regression: a built_in agent still calls the chat agent module, not HTTP" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_agent(%{slug: "regress-builtin-#{System.unique_integer([:positive])}"})
+      {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      stub_completion(200, "must not be called")
+      _ = create_message(space.id, user.id, %{content: "@zip ping"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:agent_chat_called, "@zip ping", _opts}, 1500
+      refute_received {:external_http_request, _, _, _, _, _}
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+    end
+
+    test "regression: runtime_type external still goes to the runtime channel, not HTTP" do
+      {agent, topic} = federated_runtime("regress-runtime")
+      space = create_space()
+      user = create_participant(space.id)
+      {:ok, _} = Chat.add_agent_participant(space.id, agent, display_name: "Envoy")
+
+      stub_completion(200, "must not be called")
+      _ = create_message(space.id, user.id, %{content: "@envoy ping"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: %{message: %{content: "@envoy ping"}}
+                     },
+                     1500
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+      refute_received {:external_http_request, _, _, _, _, _}
+      refute_received {:agent_chat_called, _, _}
+    end
+  end
 end

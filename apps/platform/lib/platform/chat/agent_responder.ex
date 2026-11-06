@@ -22,11 +22,24 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat
   alias Platform.Chat.{ContextPlane, Message, Participant, ReplyContext, ReplyFailure}
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
   alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
   alias Platform.Repo
+  alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks.Task, as: TaskRecord
 
   @history_limit 12
+
+  # Chat replies from a `kind: "external"` agent (an HTTP endpoint added via
+  # Agents > Add > External Agent) go through `ExternalAgents.Dispatcher`.
+  # Not a registered responsibility row: the dispatcher only reads `key`
+  # (telemetry), `output_contract` and `metadata["max_tokens"]`. A chat reply
+  # is plain text, which `ContractValidator.classify/1` reads as `:freeform`.
+  @chat_reply %Responsibility{
+    key: "chat.reply",
+    output_contract: %{"type" => "freeform"},
+    metadata: %{}
+  }
 
   @spec maybe_dispatch(map()) :: :ok
   def maybe_dispatch(signal) when is_map(signal) do
@@ -149,6 +162,15 @@ defmodule Platform.Chat.AgentResponder do
           Logger.info("[AgentResponder] dispatching to external runtime")
           dispatch_to_external(signal, context)
 
+        # An external HTTP agent keeps `runtime_type: "built_in"` (the schema
+        # default), so without this clause its chat went to QuickAgent and
+        # never reached its `base_url`. Same reply/notice handling as the
+        # built-in path; only the model call differs.
+        context.agent.kind == "external" ->
+          Logger.info("[AgentResponder] dispatching to external http agent=#{context.agent.slug}")
+
+          dispatch_to_built_in(signal, context, &external_http_chat/2)
+
         true ->
           dispatch_to_built_in(signal, context)
       end
@@ -174,7 +196,7 @@ defmodule Platform.Chat.AgentResponder do
 
   # ── Built-in agent dispatch (original behavior) ─────────────────────
 
-  defp dispatch_to_built_in(signal, context) do
+  defp dispatch_to_built_in(signal, context, chat_fun \\ &built_in_chat/2) do
     space_id = context.message.space_id
     agent_participant_id = context.agent_participant.id
 
@@ -187,12 +209,7 @@ defmodule Platform.Chat.AgentResponder do
       |> attention_preamble(signal)
 
     result =
-      with {:ok, response} <-
-             chat_module().chat(body,
-               history: Enum.map(context.history, &built_in_history_entry/1),
-               space_id: context.message.space_id,
-               participant_id: context.agent_participant.id
-             ),
+      with {:ok, response} <- chat_fun.(body, context),
            reply when is_binary(reply) <- Map.get(response, :content),
            trimmed_reply when trimmed_reply != "" <- String.trim(reply),
            {:ok, _message} <- persist_reply(context, trimmed_reply) do
@@ -217,6 +234,38 @@ defmodule Platform.Chat.AgentResponder do
     ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
 
     result
+  end
+
+  defp built_in_chat(body, context) do
+    chat_module().chat(body,
+      history: Enum.map(context.history, &built_in_history_entry/1),
+      space_id: context.message.space_id,
+      participant_id: context.agent_participant.id
+    )
+  end
+
+  # The same history window QuickAgent gets (`context.history`, built and
+  # capped by `build_history/3`; QuickAgent applies no further cap), reduced
+  # to the OpenAI `role` + `content` pair: attachment metadata stays out of
+  # the request body, and a history turn's attachments already appear in its
+  # `content` as a manifest when it has no text. A transport raise becomes an
+  # error so `dispatch_to_built_in/3` posts the couldn't-reply notice,
+  # mirroring `Platform.Design.Critique`.
+  defp external_http_chat(body, context) do
+    messages =
+      context.history
+      |> Enum.map(&built_in_history_entry/1)
+      |> Enum.map(&%{role: &1.role, content: &1.content})
+      |> Kernel.++([%{role: "user", content: body}])
+
+    case ExternalDispatcher.dispatch(@chat_reply, context.agent, %{}, messages: messages) do
+      {:ok, content} when is_binary(content) -> {:ok, %{content: content}}
+      other -> other
+    end
+  rescue
+    error -> {:error, {:dispatch_raised, Exception.message(error)}}
+  catch
+    :exit, reason -> {:error, {:dispatch_exited, reason}}
   end
 
   # ── External runtime dispatch ───────────────────────────────────────
