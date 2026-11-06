@@ -101,6 +101,8 @@
     cancel={%{state: @meeting_cancel_state}}
   />
 
+  <.edit_meeting :if={@meeting_edit} edit={@meeting_edit} escape={false} />
+
   <.event_editor
     :if={@editing}
     form={@form}
