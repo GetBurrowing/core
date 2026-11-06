@@ -1209,6 +1209,13 @@ defmodule Platform.Federation.ToolSurface do
           description:
             "Burrow version / build and runtime, at most #{Platform.Feedback.Submission.limits().version_environment} characters"
         },
+        area: %{
+          type: "string",
+          required: false,
+          enum: Platform.Feedback.Submission.areas(),
+          description:
+            "Optional: the part of Burrow this is about, one of: #{Enum.join(Platform.Feedback.Submission.areas(), ", ")}"
+        },
         diagnostics: %{
           type: "object",
           required: false,

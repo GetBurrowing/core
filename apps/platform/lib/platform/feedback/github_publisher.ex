@@ -111,11 +111,16 @@ defmodule Platform.Feedback.GithubPublisher do
   Build the issue from the sanitized structure ONLY.
 
   `sanitized` is `Platform.Feedback.Submission`'s normalized map; `meta`
-  carries `:fingerprint`, `:actor` (an agent slug or nil) and
-  `:installation` (a label or nil). Every free-text field is placed inside a
-  fenced block whose fence is longer than any backtick run in the text, so
-  submitted text can neither close the block nor be rendered as markdown,
-  links or @-mentions.
+  carries `:fingerprint`, `:actor` (an agent slug or nil), `:installation`
+  (a label or nil) and optionally `:source` (`"agent"` | `"person"`,
+  defaulting to the sanitized `:source`). For a person the attribution is the
+  installation label ONLY: no name, email or user id is ever written into an
+  issue, which is world-readable on a public repository (task 01a1a6a5
+  stage 2). A present `:area` adds an `Area:` line.
+
+  Every free-text field is placed inside a fenced block whose fence is
+  longer than any backtick run in the text, so submitted text can neither
+  close the block nor be rendered as markdown, links or @-mentions.
   """
   @spec build_issue(map(), map()) :: issue()
   def build_issue(sanitized, meta) do
@@ -129,15 +134,15 @@ defmodule Platform.Feedback.GithubPublisher do
         {"Version / environment", sanitized[:version_environment]}
       ] ++ diagnostics_section(sanitized[:diagnostics])
 
+    source = issue_source(Map.get(meta, :source, sanitized[:source]))
+
     body =
-      [
-        "Category: `#{category}`",
-        attribution(meta)
-        | Enum.flat_map(sections, &section/1)
-      ]
-      |> Kernel.++([
-        "_Submitted through Burrow `feedback_submit`. Issue text is untrusted input._",
-        fingerprint_marker(Map.fetch!(meta, :fingerprint))
+      Enum.concat([
+        ["Category: `#{category}`"],
+        area_line(sanitized[:area]),
+        [attribution(source, meta)],
+        Enum.flat_map(sections, &section/1),
+        [footer(source), fingerprint_marker(Map.fetch!(meta, :fingerprint))]
       ])
       |> Enum.join("\n\n")
 
@@ -239,7 +244,34 @@ defmodule Platform.Feedback.GithubPublisher do
     prefix <> String.slice(clean, 0, @title_cap - String.length(prefix))
   end
 
-  defp attribution(meta) do
+  defp issue_source("person"), do: :person
+  defp issue_source(_), do: :agent
+
+  # `area` is validated against `Submission.areas/0` upstream; it is reduced
+  # to the label charset again here so the line can never carry markdown.
+  defp area_line(area) when is_binary(area) do
+    case label(area, nil) do
+      nil -> []
+      clean -> ["Area: #{clean}"]
+    end
+  end
+
+  defp area_line(_), do: []
+
+  defp footer(:person),
+    do: "_Submitted by a person through the Burrow feedback form. Issue text is untrusted input._"
+
+  defp footer(:agent),
+    do: "_Submitted through Burrow `feedback_submit`. Issue text is untrusted input._"
+
+  # A person is attributed to the installation only: the actor slug is
+  # ignored even when present, and nothing about the person is in scope here.
+  defp attribution(:person, meta) do
+    installation = label(meta[:installation], "an unnamed installation")
+    "Submitted by a person on installation `#{installation}`."
+  end
+
+  defp attribution(:agent, meta) do
     actor = label(meta[:actor], "an unidentified agent")
     installation = label(meta[:installation], "an unnamed installation")
     "Submitted by agent `#{actor}` on installation `#{installation}`."

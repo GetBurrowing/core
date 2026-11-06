@@ -254,7 +254,7 @@ defmodule Platform.Feedback.SubmissionTest do
                ~w(fingerprint installation repository submission)
 
       assert Map.keys(body["submission"]) |> Enum.sort() ==
-               ~w(category expected_behavior observed_behavior reproduction_steps title version_environment)
+               ~w(category expected_behavior observed_behavior reproduction_steps source title version_environment)
     end
 
     test "diagnostics are absent unless explicitly opted in and scoped", %{agent: agent} do
@@ -438,7 +438,166 @@ defmodule Platform.Feedback.SubmissionTest do
         Submission.normalize(Map.drop(valid(), ["reproduction_steps", "version_environment"]))
 
       assert sanitized |> Submission.wire_fields() |> Map.keys() |> Enum.sort() ==
-               ~w(category expected_behavior observed_behavior title)
+               ~w(category expected_behavior observed_behavior source title)
+    end
+  end
+
+  describe "person actors, area and source (task 01a1a6a5 stage 2)" do
+    # sha256 of main 056de28f8's fingerprint/1 over `valid/0` (no area):
+    # "bug" and the five canonical text fields joined by NUL.
+    @main_era_fingerprint "6709c2fc69d3098514b19a954b6a26dd292ae8b279bd92a40cac54841ce6a944"
+
+    defp person!(label) do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Platform.Accounts.User{
+        email: "#{label}-#{n}@example.com",
+        name: "Person #{label}",
+        oidc_sub: "oidc-#{label}-#{n}"
+      })
+    end
+
+    defp person(user), do: %{user_id: user.id}
+
+    defp rows, do: Repo.all(Platform.Feedback.SubmissionRecord)
+
+    test "an area-less fingerprint is byte-identical to main's" do
+      {:ok, sanitized, _} = Submission.normalize(valid())
+      refute Map.has_key?(sanitized, :area)
+      assert Submission.fingerprint(sanitized) == @main_era_fingerprint
+    end
+
+    test "area joins the fingerprint only when present, and is an enum" do
+      {:ok, with_area, _} = Submission.normalize(valid(%{"area" => " Meetings "}))
+      assert with_area.area == "meetings"
+      refute Submission.fingerprint(with_area) == @main_era_fingerprint
+
+      {:ok, blank_area, _} = Submission.normalize(valid(%{"area" => "  "}))
+      assert Submission.fingerprint(blank_area) == @main_era_fingerprint
+
+      assert {:error, %{code: :invalid_area, field: "area"}} =
+               Submission.normalize(valid(%{"area" => "billing"}))
+
+      assert "meetings" in Submission.areas()
+      refute "source" in Submission.allowed_keys()
+      assert "area" in Submission.allowed_keys()
+    end
+
+    test "a person submit with the policy disabled is refused before any call" do
+      Application.put_env(:platform, :feedback_policy, "disabled")
+      user = person!("disabled")
+
+      assert {:error, %{code: :feedback_disabled}} = Submission.submit(valid(), person(user))
+      refute_received {:broker, _, _, _, _}
+      assert submission_count() == 0
+    end
+
+    test "a person submit records actor_user_id only and sends source person", ctx do
+      user = person!("recorded")
+
+      assert {:ok, %{status: "created"}} =
+               Submission.submit(Map.delete(valid(), "expected_behavior"), person(user))
+
+      assert [%{actor_user_id: user_id, actor_agent_id: nil}] = rows()
+      assert user_id == user.id
+
+      assert [%{"submission" => submission} = body] = broker_bodies()
+      assert submission["source"] == "person"
+      raw = Jason.encode!(body)
+      refute raw =~ user.id
+      refute raw =~ user.email
+      refute raw =~ user.name
+
+      assert {:ok, _} =
+               Submission.submit(valid(%{"title" => "agent row"}), actor(ctx.agent))
+
+      assert Enum.any?(rows(), &(&1.actor_agent_id == ctx.agent.id and is_nil(&1.actor_user_id)))
+    end
+
+    test "a person needs a title and at least one of expected or observed" do
+      user = person!("fields")
+      bare = Map.drop(valid(), ["expected_behavior", "observed_behavior"])
+
+      assert {:error, %{code: :missing_field}} = Submission.submit(bare, person(user))
+
+      assert {:error, %{code: :missing_field, field: "title"}} =
+               Submission.submit(Map.delete(valid(), "title"), person(user))
+
+      assert {:ok, _} =
+               Submission.submit(Map.delete(valid(), "observed_behavior"), person(user))
+    end
+
+    test "an agent still needs title, expected and observed", %{agent: agent} do
+      for field <- ~w(expected_behavior observed_behavior) do
+        assert {:error, %{code: :missing_field, field: ^field}} =
+                 Submission.submit(Map.delete(valid(), field), actor(agent))
+      end
+    end
+
+    test "a caller-supplied source is overwritten from the actor kind", %{agent: agent} do
+      assert {:ok, _} = Submission.submit(valid(%{"source" => "person"}), actor(agent))
+      assert [%{"submission" => %{"source" => "agent"}}] = broker_bodies()
+
+      user = person!("source")
+
+      assert {:ok, _} =
+               Submission.submit(valid(%{"title" => "x2", "source" => "agent"}), person(user))
+
+      assert [%{"submission" => %{"source" => "person"}}] = broker_bodies()
+    end
+
+    test "identical text from a person and from an agent is one report", %{agent: agent} do
+      user = person!("dedupe")
+
+      assert {:ok, %{status: "created", issue: issue}} = Submission.submit(valid(), actor(agent))
+
+      assert {:ok, %{status: "duplicate", issue: ^issue}} =
+               Submission.submit(valid(), person(user))
+
+      assert submission_count() == 1
+    end
+
+    test "the per-person cap allows N, refuses N+1, and ignores agent rows", ctx do
+      user = person!("capped")
+      Application.put_env(:platform, :feedback_rate_limits, per_actor: 2, per_installation: 50)
+
+      # Agent rows in the window must not count against the person.
+      for n <- 1..2 do
+        assert {:ok, _} = Submission.submit(valid(%{"title" => "agent #{n}"}), actor(ctx.agent))
+      end
+
+      for n <- 1..2 do
+        assert {:ok, %{status: "created"}} =
+                 Submission.submit(valid(%{"title" => "person #{n}"}), person(user))
+      end
+
+      assert {:error, %{code: :rate_limited}} =
+               Submission.submit(valid(%{"title" => "person 3"}), person(user))
+
+      other = person!("uncapped")
+
+      assert {:ok, %{status: "created"}} =
+               Submission.submit(valid(%{"title" => "other person"}), person(other))
+    end
+
+    test "a row with both actor columns is refused by the database", %{agent: agent} do
+      user = person!("both")
+
+      assert_raise Postgrex.Error, ~r/feedback_submissions_one_actor_check/, fn ->
+        Repo.insert_all("feedback_submissions", [
+          %{
+            id: Ecto.UUID.bingenerate(),
+            fingerprint: String.duplicate("c", 64),
+            category: "bug",
+            status: "pending",
+            actor_agent_id: Ecto.UUID.dump!(agent.id),
+            actor_user_id: Ecto.UUID.dump!(user.id),
+            attempted_at: DateTime.utc_now(),
+            inserted_at: DateTime.utc_now(),
+            updated_at: DateTime.utc_now()
+          }
+        ])
+      end
     end
   end
 
