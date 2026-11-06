@@ -409,6 +409,13 @@ defmodule Platform.Role do
       class: :request,
       note: "Critique.request/1 from the design critique MCP tool, synchronous in the caller"
     },
+    %{
+      kind: :agent_dispatch,
+      file: "lib/platform/chat/agent_responder.ex",
+      class: :background,
+      note:
+        "chat replies from a kind external agent; dispatched by AttentionRouter, which is full only"
+    },
     # :http. Req and Finch.
     %{
       kind: :http,
