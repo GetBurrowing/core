@@ -78,6 +78,10 @@ defmodule Platform.Repo.Migrations.BackfillExternalAgentHttpRuntimeTypeTest do
 
   test "up: native built_in and runtime_type external rows are untouched" do
     native = agent!("native", "built_in")
+    # The changeset forbids endpoint fields on a native row, but the table has
+    # no CHECK, so a hand-written row can carry one. Only `kind = 'external'`
+    # keeps this row out of the backfill; `endpoint_kind IS NOT NULL` does not.
+    native_with_endpoint = agent!("native", "built_in", "openai_compat")
     federated = agent!("native", "external")
     external_ws = agent!("external", "external", "openai_compat")
     no_endpoint = agent!("external", "built_in")
@@ -85,6 +89,7 @@ defmodule Platform.Repo.Migrations.BackfillExternalAgentHttpRuntimeTypeTest do
     run_migration!(:up)
 
     assert runtime_type(native) == "built_in"
+    assert runtime_type(native_with_endpoint) == "built_in"
     assert runtime_type(federated) == "external"
     assert runtime_type(external_ws) == "external"
     assert runtime_type(no_endpoint) == "built_in"
