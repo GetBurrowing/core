@@ -162,7 +162,7 @@ def apply_notes(api: Api, build_id: str, notes: str) -> None:
 def ensure_group(api: Api, app_id: str) -> str:
     resp = api("GET", f"/v1/apps/{app_id}/betaGroups?limit=200")
     for group in resp.get("data", []):
-        if group["attributes"].get("name") == GROUP_NAME:
+        if (group["attributes"].get("name") or "").casefold() == GROUP_NAME.casefold():
             return group["id"]
     resp = api("POST", "/v1/betaGroups", {"data": {
         "type": "betaGroups",

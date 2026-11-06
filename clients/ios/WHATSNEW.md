@@ -4,6 +4,16 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.2: voice tab microphone fix
+New in this build: the app now records every microphone permission request and releases the phone's audio when a call ends. Together with the web update already on your install, the Voice tab can no longer fail silently. If it can't get the microphone, it says "Couldn't start the microphone. Hold to try again."
+
+Please try:
+1. Open the Voice tab, hold the button and speak. Tell us whether it works, or the exact line it shows if it doesn't.
+2. Join a meeting or call, hang up, then use the Voice tab again. The microphone should still work.
+3. Play music or a video, then use the Voice tab. Audio should come back afterwards.
+
+Also in this build: the rebuilt Calendar with a four-item phone tab bar, links to your own install stay inside the app, fixes for the tab bar sometimes disappearing, and recovery when the app hangs on load.
+
 ## v1.2: native tab bar
 New in this build: the tabs at the bottom of the app (Chat, Voice, Tasks, Meetings, More) are now the system's own tab bar, so on iOS 26 and later they are drawn in Liquid Glass and feel like the rest of the phone. The tabs still come from your install: the app only draws them.
 
