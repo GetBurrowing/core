@@ -56,6 +56,12 @@ defmodule Platform.Agents.Agent do
   list that module owns, so adding a second TTS provider is one entry there
   rather than a migration here. See that module for why the personality
   markdown is a workspace file rather than a column alongside this one.
+
+  ## Chat opt-out
+
+  `accepts_chat` (NOT NULL, default `true`) lets a single-purpose agent of
+  any kind opt out of conversational chat replies. It is a flag only; the
+  schema does not decide who reads it.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -97,6 +103,7 @@ defmodule Platform.Agents.Agent do
     field(:avatar_url, :string)
     field(:avatar_storage_key, :string)
     field(:voice_config, :map, default: %{})
+    field(:accepts_chat, :boolean, default: true)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -133,7 +140,8 @@ defmodule Platform.Agents.Agent do
       :last_successful_fire_at,
       :avatar_url,
       :avatar_storage_key,
-      :voice_config
+      :voice_config,
+      :accepts_chat
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)

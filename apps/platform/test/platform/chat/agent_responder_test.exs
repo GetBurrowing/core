@@ -1146,6 +1146,57 @@ defmodule Platform.Chat.AgentResponderTest do
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
     end
 
+    test "an agent saved through ExternalAgents (runtime_type http) still POSTs to its endpoint" do
+      # Task 01a1b20f: the Add Agent > External form now saves runtime_type
+      # "http". That value is neither "external" (websocket runtime) nor the
+      # default, so the `kind == "external"` clause must still catch it.
+      unique = System.unique_integer([:positive])
+      vault_key = "agent-responder-http-#{unique}"
+
+      {:ok, agent} =
+        Platform.ExternalAgents.create_external_agent(%{
+          slug: "courier-#{unique}",
+          name: "Courier",
+          status: "active",
+          endpoint_kind: "openai_compat",
+          base_url: @base_url,
+          model: "Example/Model",
+          vault_key: vault_key
+        })
+
+      assert agent.runtime_type == "http"
+
+      {:ok, _} =
+        Platform.Vault.put(vault_key, :api_key, @api_secret, scope: {:agent, agent.id})
+
+      space = create_space()
+      user = create_participant(space.id)
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Courier")
+
+      stub_completion(200, "Courier reply")
+
+      _ = create_message(space.id, user.id, %{content: "@courier hello"})
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      assert_receive {:external_http_request, "POST", "api.example.test", "/v1/chat/completions",
+                      ["Bearer " <> secret], _body},
+                     1500
+
+      assert secret == @api_secret
+      refute_received {:agent_chat_called, _, _}
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      reply =
+        space.id
+        |> Chat.list_messages(limit: 10)
+        |> Enum.find(&(&1.participant_id == agent_participant.id))
+
+      assert reply && reply.content == "Courier reply"
+    end
+
     test "a 500 from the endpoint persists no reply and posts the couldn't-reply notice" do
       space = create_space()
       user = create_participant(space.id)

@@ -12,7 +12,9 @@ defmodule Platform.Agents.NativeAgents do
   is the whole difference. Everything that reads an agent through its runtime
   (`Platform.Orchestration.PhaseRuntime.resolve/1`, `AgentResponder`'s
   external dispatch, `Platform.Agents.Kind.classify/1`, the Access-owned runtime profile and owner cap) treats it exactly as a federated agent,
-  because it is one. A new `runtime_type` value is ruled out.
+  because it is one. A native agent therefore gets no `runtime_type` value of
+  its own; it is `"external"` like any federated agent. (External HTTP agents
+  carry `"http"`, which is a different row shape, not a native-agent variant.)
 
   ## Tokens
 

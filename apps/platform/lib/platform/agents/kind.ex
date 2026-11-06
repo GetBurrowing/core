@@ -14,7 +14,10 @@ defmodule Platform.Agents.Kind do
       responsibility narrow agent. Hermione's shape:
       `%Agent{kind: "external"}` (llama.cpp / OpenAI-compat / Ollama).
       These agents don't accept templated meta-instructions; they run
-      the exact prompt they're handed.
+      the exact prompt they're handed. They carry `runtime_type: "http"`
+      (forced by `Platform.ExternalAgents.create_external_agent/1`);
+      classification keys on `kind`, so the runtime_type value does not
+      change the result.
 
     * `:fed_conversational` — federated conversational Claude runtime.
       Dalton's shape: `%Agent{kind: "native", runtime_type: "external"}`

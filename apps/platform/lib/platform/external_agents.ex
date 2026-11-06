@@ -14,11 +14,14 @@ defmodule Platform.ExternalAgents do
 
     * `create_external_agent/1` **forces** `kind: "external"` into attrs,
       overriding any caller value — the context cannot be used to mint
-      native agents.
+      native agents. It likewise **forces** `runtime_type: "http"` — an
+      HTTP-delegated agent is neither the built-in BEAM runtime
+      (`"built_in"`) nor a federated websocket runtime (`"external"`).
     * `update_external_agent/2` raises `ArgumentError` when handed an
       agent whose `kind != "external"` (programmer error, not a runtime
       condition) and **strips** `:kind` from attrs to prevent
-      kind-flipping. An external agent stays external.
+      kind-flipping. An external agent stays external. `:runtime_type`
+      is stripped the same way, so it stays `"http"`.
     * `get_external_agent/1`, `get_external_agent!/1`, and
       `list_external_agents/1` all filter on `kind == "external"`; rows
       with any other kind are invisible through this context.
@@ -80,12 +83,15 @@ defmodule Platform.ExternalAgents do
   alias Platform.Repo
 
   @external_kind "external"
+  @http_runtime_type "http"
 
   @doc """
   Create an external agent.
 
-  `kind` is forced to `"external"` regardless of the caller-supplied
-  value — this context cannot be used to mint native agents. All other
+  `kind` is forced to `"external"` and `runtime_type` to `"http"`
+  regardless of the caller-supplied values — this context cannot be used
+  to mint native agents, and an HTTP-delegated agent is never mistaken for
+  the built-in runtime or a federated (websocket) runtime. All other
   fields are validated by `Platform.Agents.Agent.changeset/2`, including
   the `endpoint_kind` / `base_url` / `model` requirements that kick in
   for external agents.
@@ -102,14 +108,15 @@ defmodule Platform.ExternalAgents do
 
   Raises `ArgumentError` if `agent.kind != "external"` — using this
   context on a native agent is a programmer error, not a runtime
-  condition. The `:kind` key is stripped from `attrs` before the
-  changeset runs, so an external agent stays external.
+  condition. The `:kind` and `:runtime_type` keys are stripped from
+  `attrs` before the changeset runs, so an external agent stays external
+  and keeps `runtime_type: "http"`.
   """
   @spec update_external_agent(Agent.t(), map()) ::
           {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def update_external_agent(%Agent{kind: @external_kind} = agent, attrs) when is_map(attrs) do
     agent
-    |> Agent.changeset(strip_kind(attrs))
+    |> Agent.changeset(strip_forced_fields(attrs))
     |> Repo.update()
   end
 
@@ -370,14 +377,17 @@ defmodule Platform.ExternalAgents do
 
   defp force_external_kind(attrs) do
     attrs
-    |> strip_kind()
+    |> strip_forced_fields()
     |> Map.put(:kind, @external_kind)
+    |> Map.put(:runtime_type, @http_runtime_type)
   end
 
-  defp strip_kind(attrs) do
+  defp strip_forced_fields(attrs) do
     attrs
     |> Map.delete(:kind)
     |> Map.delete("kind")
+    |> Map.delete(:runtime_type)
+    |> Map.delete("runtime_type")
   end
 
   defp maybe_filter(query, _field, nil), do: query
