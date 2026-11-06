@@ -6,7 +6,6 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   use Phoenix.Component
 
   import PlatformWeb.ControlCenter.Helpers
-  import PlatformWeb.CoreComponents, only: [input: 1]
 
   attr :show, :boolean, required: true
   attr :onboarding_flow, :atom, default: nil
@@ -635,6 +634,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     default_behavior = assigns.external_agent_form[:default_behavior].value || "chat"
     vault_mode = assigns.external_agent_form[:vault_mode].value || "paste"
     save_to_vault? = checkbox_truthy?(assigns.external_agent_form[:save_to_vault].value)
+    accepts_chat? = checkbox_truthy?(assigns.external_agent_form[:accepts_chat].value)
     selected_role_key = assigns.external_agent_form[:role_key].value || ""
 
     vault_options =
@@ -653,6 +653,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       |> Phoenix.Component.assign(:default_behavior, default_behavior)
       |> Phoenix.Component.assign(:vault_mode, vault_mode)
       |> Phoenix.Component.assign(:save_to_vault, save_to_vault?)
+      |> Phoenix.Component.assign(:accepts_chat, accepts_chat?)
       |> Phoenix.Component.assign(:vault_options, vault_options)
       |> Phoenix.Component.assign(:selected_role_key, selected_role_key)
 
@@ -794,15 +795,20 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
 
         <%!-- Chat opt-out (task 01a1b20f stage 3): operator choice, default on.
-             The checkbox component carries its own hidden "false" input, so an
-             unchecked box still submits accepts_chat=false. --%>
+             Same markup as "Save to vault on submit" below. --%>
         <div class="form-control" id="external-agent-accepts-chat">
-          <.input
-            field={@external_agent_form[:accepts_chat]}
-            type="checkbox"
-            label="Answers chat messages"
-            class="checkbox checkbox-primary checkbox-sm mr-2"
-          />
+          <label class="flex items-center gap-2 text-sm">
+            <%!-- Hidden predecessor so an unchecked box submits "false" --%>
+            <input type="hidden" name="external_agent[accepts_chat]" value="false" />
+            <input
+              type="checkbox"
+              name="external_agent[accepts_chat]"
+              value="true"
+              class="checkbox checkbox-primary checkbox-sm"
+              checked={@accepts_chat}
+            />
+            <span>Answers chat messages</span>
+          </label>
           <span class="mt-1 text-xs text-subtle">
             Uncheck for single-purpose agents (classifiers, summarisers). Mentions get a one-line notice instead of a reply.
           </span>

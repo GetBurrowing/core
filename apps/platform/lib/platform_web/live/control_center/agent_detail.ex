@@ -10,7 +10,6 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   use PlatformWeb, :verified_routes
 
   import PlatformWeb.ControlCenter.Helpers
-  import PlatformWeb.CoreComponents, only: [input: 1]
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
   alias PlatformWeb.ControlCenter.AgentCard
@@ -41,12 +40,19 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       class="rounded-3xl border border-edge bg-base-100 px-5 py-4 shadow-sm"
     >
       <.form for={@form} id="agent-accepts-chat-form" phx-change="set_accepts_chat">
-        <.input
-          field={@form[:accepts_chat]}
-          type="checkbox"
-          label="Answers chat messages"
-          class="toggle toggle-primary toggle-sm mr-2"
-        />
+        <label class="flex cursor-pointer items-center gap-3">
+          <%!-- Hidden predecessor so switching off submits "false" --%>
+          <input type="hidden" name={@form[:accepts_chat].name} value="false" />
+          <input
+            type="checkbox"
+            id={@form[:accepts_chat].id}
+            name={@form[:accepts_chat].name}
+            value="true"
+            checked={@form[:accepts_chat].value == true}
+            class="toggle toggle-primary toggle-sm"
+          />
+          <span class="text-sm font-medium text-base-content">Answers chat messages</span>
+        </label>
         <p class="mt-1 text-xs text-subtle">
           Off for single-purpose agents (classifiers, summarisers). Mentions get a one-line notice instead of a reply.
         </p>
