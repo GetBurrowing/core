@@ -106,7 +106,7 @@ defmodule PlatformWeb.Components.SharingCard do
               data-role="sharing-exactly-link"
               phx-click={open_panel(@id)}
               aria-controls={"#{@id}-exactly"}
-              class="mt-1 min-h-11 cursor-pointer text-[13px] text-base-content underline underline-offset-2 active:no-underline focus-visible-ring sm:min-h-0"
+              class="-mb-3 inline-flex min-h-11 cursor-pointer items-center text-[13px] text-base-content underline underline-offset-2 active:no-underline focus-visible-ring"
             >
               Exactly what's sent
             </button>
@@ -163,13 +163,13 @@ defmodule PlatformWeb.Components.SharingCard do
         <div data-role="sharing-exactly-panel" class="space-y-3 rounded-box bg-base-200 p-3.5">
           <div>
             <p class="text-xs font-semibold text-base-content">Sent</p>
-            <ul data-role="sharing-events" class="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+            <ul data-role="sharing-events" class="mt-1 flex flex-wrap gap-x-1.5 gap-y-1">
               <li
-                :for={event <- @events}
-                data-role="sharing-event"
-                class="font-mono text-xs text-base-content"
+                :for={{event, i} <- Enum.with_index(@events)}
+                class="flex items-baseline gap-x-1.5 text-xs text-base-content"
               >
-                {event}
+                <span data-role="sharing-event" class="font-mono">{event}</span>
+                <span :if={i < length(@events) - 1} class="text-subtle" aria-hidden="true">·</span>
               </li>
             </ul>
             <dl class="mt-2 space-y-2">

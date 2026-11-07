@@ -188,6 +188,26 @@ defmodule PlatformWeb.SharingCardTest do
       assert has_element?(view, "[data-role=settings-feedback]")
     end
 
+    test "a page mounted with Feedback you send off can turn it back on" do
+      Application.put_env(:platform, :feedback_policy, "quarantined")
+      all_on!()
+      {:ok, _} = Sharing.set(:feedback, false, :system)
+      {:ok, view, _html} = live(authed(VaultFixtures.admin!()), "/settings")
+      refute has_element?(view, "[data-role=settings-feedback]")
+
+      view
+      |> element("#settings-sharing [data-role=sharing-switch][data-key=feedback]")
+      |> render_click()
+
+      assert Sharing.enabled?(:feedback)
+      assert has_element?(view, "[data-role=settings-feedback]")
+
+      assert has_element?(
+               view,
+               "#settings-sharing [data-role=sharing-switch][data-key=feedback][aria-checked=true]"
+             )
+    end
+
     test "a member sees every switch read-only" do
       all_on!()
       {:ok, view, _html} = live(authed(VaultFixtures.non_admin!()), "/settings")
