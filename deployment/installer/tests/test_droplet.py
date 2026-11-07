@@ -18,6 +18,7 @@ No test prints a key, a link or a code.
 
 import base64
 import contextlib
+import gzip
 import hashlib
 import io
 import json
@@ -956,6 +957,12 @@ def _write_files(user_data):
     parts = user_data.split('\n  - path: "')[1:]
     for part in parts:
         path = part.split('"', 1)[0]
+        head = part.split("\n  - ", 1)[0]
+        if '    encoding: "gz+b64"' in head:
+            # A compressed entry (templates.COMPRESSED_FILES): one quoted base64 line.
+            b64 = head.split('    content: "', 1)[1].split('"', 1)[0]
+            out[path] = gzip.decompress(base64.b64decode(b64)).decode("utf-8")
+            continue
         body = part.split("content: |\n", 1)[1]
         lines = []
         for line in body.split("\n"):

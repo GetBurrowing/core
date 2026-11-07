@@ -43,7 +43,7 @@ sys.path.insert(0, INSTALLER)
 from identity_terms import identity_hits, planted_term
 from migrate_embed import cut_migrate_script
 
-from burrow_install import registry
+from burrow_install import registry, templates
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
@@ -973,7 +973,13 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
                     removed = core[rel].splitlines()[i1:i2]
                     added = play[rel].splitlines()[j1:j2]
                     self.assertEqual(
-                        [line.replace("/core:core", "/core:play") for line in removed],
+                        [
+                            # updater.env names the flavour the channel tag carries.
+                            line.replace("/core:core", "/core:play").replace(
+                                "FLAVOUR=core", "FLAVOUR=play"
+                            )
+                            for line in removed
+                        ],
                         [line for line in added if "GAME_STREAM_ENABLED" not in line],
                         f"{rel}: selecting play changed more than the image and its gate",
                     )
@@ -1281,6 +1287,16 @@ class FreshRenderNamesTest(TempDirMixin, unittest.TestCase):
             )
             for k in registry.REGISTRY_IMAGES
         }
+        # The updater (task 01a1b7b6) moves a legacy install to the published
+        # core repo and keeps its frozen Docker Hub repo as a rollback target.
+        legacy_updater = (
+            f"CORE_REPO={templates.PUBLISHED_CORE_REPO}\n"
+            f"      ROLLBACK_REPOS=docker.io/example/{registry.LEGACY_HUB_IMAGES['core']}\n"
+        )
+        self.assertIn(legacy_updater, legacy["user-data"])
+        legacy["user-data"] = legacy["user-data"].replace(
+            legacy_updater, "CORE_REPO=ghcr.io/example/core\n      ROLLBACK_REPOS=\n"
+        )
         changed = 0
         for rel in fresh:
             mapped = fresh[rel]
