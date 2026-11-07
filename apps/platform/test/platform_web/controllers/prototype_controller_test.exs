@@ -316,4 +316,152 @@ defmodule PlatformWeb.PrototypeControllerTest do
       assert serve(ctx.prototype.id, 1, "garbage") |> response(404)
     end
   end
+
+  # Task 01a1b70c stage 2: a prototype in a tenant org with ZERO membership
+  # rows follows its space, and every refusal is the unknown-id 404.
+  describe "a space-bound prototype in a tenant org with no members" do
+    setup ctx do
+      tenant_id = tenant_org_id("proto-tenant-#{System.unique_integer([:positive])}")
+      other_id = tenant_org_id("proto-sibling-#{System.unique_integer([:positive])}")
+
+      space = Platform.ExternalUserFixtures.channel!(%{name: "Tenant room", org_id: tenant_id})
+
+      {:ok, %{prototype: p}} =
+        Prototypes.publish(
+          agent_publisher(ctx.agent),
+          %{org_id: tenant_id, name: "Tenant"},
+          {:files, bundle_files("tenant-marker")}
+        )
+
+      p = p |> Ecto.Changeset.change(space_id: space.id) |> Repo.update!()
+      assert p.canvas_id == nil
+
+      participant = user!("Participant")
+      member!(participant, other_id, "admin")
+      Platform.ExternalUserFixtures.add_user!(space.id, participant.id)
+
+      assert tenant_memberships(tenant_id) == 0
+
+      {:ok,
+       tenant_id: tenant_id,
+       other_id: other_id,
+       space: space,
+       prototype: p,
+       participant: participant}
+    end
+
+    defp tenant_memberships(org_id),
+      do: Repo.aggregate(from(m in OrgMembership, where: m.org_id == ^org_id), :count)
+
+    # status, body and content-type: what a reader can observe of a 404.
+    defp observed(conn), do: {conn.status, conn.resp_body, get_resp_header(conn, "content-type")}
+
+    defp entry_as(user, id, path \\ "1/"),
+      do: build_conn() |> authed(user) |> get("/proto/#{id}/#{path}")
+
+    # The 404s of a reader refused on `id`, next to the same routes for an
+    # unknown id, so the two lists must be identical.
+    defp refusals(user, id) do
+      [
+        entry_as(user, id),
+        entry_as(user, id, "latest/"),
+        serve(id, 1, PrototypeGrant.sign(user.id, id, 1))
+      ]
+      |> Enum.map(&observed/1)
+    end
+
+    defp unknown_404s(user), do: refusals(user, Ecto.UUID.generate())
+
+    test "1: a participant from another org gets the entry, the bytes and latest", ctx do
+      id = ctx.prototype.id
+      conn = entry_as(ctx.participant, id)
+      assert [url] = get_resp_header(conn, "location")
+      assert conn.status == 302
+      assert url =~ ~r{^/proto/#{id}/1/g/[^/]+/index\.html$}
+
+      conn = get(build_conn(), url)
+      assert response(conn, 200) =~ "tenant-marker"
+      assert [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "sandbox allow-scripts;"
+
+      assert redirected_to(entry_as(ctx.participant, id, "latest/"), 302) == "/proto/#{id}/1/"
+      assert tenant_memberships(ctx.tenant_id) == 0
+    end
+
+    test "2: a non-participant from another org gets the unknown-id 404 everywhere", ctx do
+      outsider = user!("Outsider")
+      member!(outsider, ctx.other_id)
+
+      # The narrowing step alone would admit this reader: no grant covers the
+      # tenant space for them. Only the participation rule refuses, so this
+      # test fails if the space branch falls back to Access.check alone.
+      root_member = user!("Root member")
+      member!(root_member, acme_org_id())
+      unattached = user!("Unattached")
+
+      for user <- [outsider, root_member, unattached] do
+        refute Platform.Tenancy.root_admin?(Platform.Accounts.get_user(user.id))
+        expected = unknown_404s(user)
+        assert [{404, "Not found", ["text/plain; charset=utf-8"]} | _] = expected
+        assert refusals(user, ctx.prototype.id) == expected
+      end
+
+      for user <- [root_member, unattached] do
+        scope = Platform.Access.Scope.for_user(Platform.Accounts.get_user(user.id))
+        assert Platform.Access.check(scope, "chat.read", {:space, ctx.space.id}) == :ok
+      end
+    end
+
+    # An entry or latest request by an external user never reaches the
+    # controller: `PlatformWeb.Plugs.ExternalUserScope` denies the path first,
+    # and its 403 render raises on `:proto_browser` (no `:accepts`). That is
+    # path-based, so it cannot leak existence: the outcome for the real id is
+    # compared with the outcome for an unknown id, whatever it is.
+    defp outcome(fun) do
+      observed(fun.())
+    rescue
+      e -> {:raised, e.__struct__, Exception.message(e)}
+    end
+
+    test "3: an external non-participant gets that same 404 on the grant route", ctx do
+      external =
+        Platform.ExternalUserFixtures.external_user!(Platform.Tenancy.get_org!(ctx.other_id))
+
+      assert Platform.Tenancy.external_user?(Platform.Accounts.get_user(external.id))
+      id = ctx.prototype.id
+      unknown = Ecto.UUID.generate()
+
+      expected = observed(serve(unknown, 1, PrototypeGrant.sign(external.id, unknown, 1)))
+      assert {404, "Not found", ["text/plain; charset=utf-8"]} = expected
+      assert observed(serve(id, 1, PrototypeGrant.sign(external.id, id, 1))) == expected
+
+      for path <- ["1/", "latest/"] do
+        assert outcome(fn -> entry_as(external, id, path) end) ==
+                 outcome(fn -> entry_as(external, unknown, path) end)
+      end
+
+      # :member is the one path external users keep.
+      Platform.ExternalUserFixtures.add_user!(ctx.space.id, external.id)
+      grant = PrototypeGrant.sign(external.id, id, 1)
+      assert serve(id, 1, grant) |> response(200) =~ "tenant-marker"
+    end
+
+    test "4: removing the participant revokes their grant on the next request", ctx do
+      id = ctx.prototype.id
+      grant = PrototypeGrant.sign(ctx.participant.id, id, 1)
+      assert serve(id, 1, grant) |> response(200) =~ "tenant-marker"
+
+      {1, _} =
+        Repo.delete_all(
+          from(p in Platform.Chat.Participant,
+            where: p.space_id == ^ctx.space.id and p.participant_id == ^ctx.participant.id
+          )
+        )
+
+      assert observed(serve(id, 1, grant)) ==
+               observed(serve(Ecto.UUID.generate(), 1, grant))
+
+      assert observed(serve(id, 1, grant)) |> elem(0) == 404
+    end
+  end
 end

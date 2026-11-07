@@ -5,6 +5,8 @@ defmodule Platform.Chat.LinkCardsTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   import Platform.PrototypeFixtures
   import Platform.TenancyFixtures
 
@@ -282,6 +284,81 @@ defmodule Platform.Chat.LinkCardsTest do
       assert %{display: :card, preview: %{title: "Pull request #7", site: :github}} = pr
       assert %{display: :card, preview: %{video?: true}} = yt
       assert %{display: :chip, preview: %{title: "Office orders", site: nil}} = other
+    end
+  end
+
+  # Task 01a1b70c stage 2: the card and the serve route agree for a prototype
+  # that follows its space in a tenant org with zero membership rows.
+  describe "a space-bound prototype in a tenant org with no members" do
+    setup do
+      tenant_id = tenant_org_id("cards-tenant-#{System.unique_integer([:positive])}")
+      other_id = tenant_org_id("cards-sibling-#{System.unique_integer([:positive])}")
+
+      space = Platform.ExternalUserFixtures.channel!(%{name: "Tenant room", org_id: tenant_id})
+
+      {:ok, %{prototype: p}} =
+        Prototypes.publish(
+          agent_publisher(agent!()),
+          %{org_id: tenant_id, name: "Tenant proto"},
+          {:files, bundle_files("tenant-marker")}
+        )
+
+      p = p |> Ecto.Changeset.change(space_id: space.id) |> Repo.update!()
+
+      participant = user!("Participant")
+      member!(participant, other_id, "admin")
+      seat!(space, participant)
+
+      # Neither has a grant covering the tenant space, so only the
+      # participation rule tells them apart.
+      outsider = user!("Outsider")
+      member!(outsider, other_id)
+      unattached = user!("Unattached")
+
+      assert Repo.aggregate(
+               from(m in Platform.Tenancy.OrgMembership, where: m.org_id == ^tenant_id),
+               :count
+             ) == 0
+
+      %{proto: p, participant: participant, outsider: outsider, unattached: unattached}
+    end
+
+    # What the route does for this user: 302 then the grant URL's status.
+    defp route_status(user, id) do
+      conn = build_conn() |> init_test_session(current_user_id: user.id)
+      conn = get(conn, "/proto/#{id}/1/")
+
+      case conn.status do
+        302 ->
+          [url] = get_resp_header(conn, "location")
+          build_conn() |> get(url) |> Map.fetch!(:status)
+
+        status ->
+          status
+      end
+    end
+
+    defp prototype_card?(user, id) do
+      case cards_for("see #{origin()}/proto/#{id}/1/", user) do
+        [%{kind: :prototype, name: "Tenant proto", version: 1}] -> true
+        [%{kind: :locked, type: :prototype}] -> false
+      end
+    end
+
+    test "5: the participant gets a card, outsiders do not, and the route agrees", ctx do
+      id = ctx.proto.id
+
+      assert prototype_card?(ctx.participant, id)
+      assert route_status(ctx.participant, id) == 200
+
+      for user <- [ctx.outsider, ctx.unattached] do
+        refute prototype_card?(user, id)
+        assert route_status(user, id) == 404
+      end
+
+      for user <- [ctx.participant, ctx.outsider, ctx.unattached] do
+        assert prototype_card?(user, id) == (route_status(user, id) == 200)
+      end
     end
   end
 end
