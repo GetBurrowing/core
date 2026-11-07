@@ -346,7 +346,10 @@ defmodule Platform.Design.ChatListContrastGuardTest do
         ~s(.chat-list-search-sheet input[type="search"]::-webkit-search-cancel-button),
         # The pending current bar (task 01a166be-b5b9 stage 2, nav_pending.js).
         ".chat-list-row[data-nav-pending]",
-        ".chat-list-row[data-nav-pending]::before"
+        ".chat-list-row[data-nav-pending]::before",
+        # While the soft keyboard is up (phone only), the search panel's
+        # full-height floor gives way to the visible height (task 01a1b69e).
+        ":root[data-keyboard-open] .chat-list-search-sheet .sheet-panel"
       ])
 
     # Sliced and non-empty before any body is read.
@@ -363,6 +366,15 @@ defmodule Platform.Design.ChatListContrastGuardTest do
 
     [panel] = Enum.filter(rules, &(&1.selector == ".chat-list-search-sheet .sheet-panel"))
     assert panel.body =~ ~r/min-height:\s*85dvh;/
+
+    [kb] =
+      Enum.filter(
+        rules,
+        &(&1.selector == ":root[data-keyboard-open] .chat-list-search-sheet .sheet-panel")
+      )
+
+    assert Enum.any?(kb.at, &(&1 =~ "max-width: 767.98px"))
+    assert kb.body =~ "var(--visual-viewport-h"
   end
 
   test "no chat-list selector is qualified by data-theme", %{all_rules: all} do
