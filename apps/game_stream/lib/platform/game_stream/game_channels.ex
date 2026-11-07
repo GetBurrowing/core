@@ -73,6 +73,8 @@ defmodule Platform.GameStream.GameChannels do
         )
       )
 
-    if member?, do: Access.authorize(user, "tasks.read", project), else: {:error, :unauthorized}
+    if member?,
+      do: Access.authorize(user, "tasks.read", {:project, project.id}),
+      else: {:error, :unauthorized}
   end
 end

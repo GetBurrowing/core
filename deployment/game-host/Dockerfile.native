@@ -1,0 +1,6 @@
+# Build outside Play, then register and allowlist the resulting image digest.
+# Supply a vetted Godot runtime image digest; never use a moving tag.
+ARG GODOT_RUNTIME_IMAGE
+FROM ${GODOT_RUNTIME_IMAGE}
+COPY voltron.pck /game/voltron.pck
+ENTRYPOINT ["godot", "--headless", "--main-pack", "/game/voltron.pck", "--script", "res://deploy/native/launch_dedicated.gd", "--", "--dedicated", "--game-pack-path=/game/voltron.pck"]
