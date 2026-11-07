@@ -1068,6 +1068,10 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.ConnectAiLive ->
         "Connect your AI"
 
+      # Task 01a1b6de stage 1: the setup goal question.
+      PlatformWeb.SetupGoalsLive ->
+        "Your goals"
+
       # Task 01a19554-fd07 stage 2: the first-run goal box at /start; the
       # fallback below would print "FirstRun" in the mobile header.
       PlatformWeb.FirstRunLive ->

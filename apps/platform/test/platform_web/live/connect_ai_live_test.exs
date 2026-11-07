@@ -149,12 +149,14 @@ defmodule PlatformWeb.ConnectAiLiveTest do
              "Connected to ChatGPT"
            )
 
-    space = GettingStarted.getting_started_space(agent)
+    # The space is opened; Continue goes to the setup goal question first
+    # (task 01a1b6de), which goes on to it.
+    assert GettingStarted.getting_started_space(agent)
 
     assert has_element?(
              view,
-             ~s(a#connect-ai-getting-started[href="/chat/#{space.slug}"]),
-             "Go to Getting started"
+             ~s(a#connect-ai-getting-started[href="/setup/goals"]),
+             "Continue"
            )
 
     refute render(view) =~ "<iframe"
