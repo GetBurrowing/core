@@ -36,12 +36,20 @@ defmodule Platform.GameStream.NativeAPI do
       _ -> reply(conn, 401, %{error: "unauthorized"})
     end
   end
+
   defp dispatch(conn), do: reply(conn, 404, %{error: "not_found"})
 
   defp publisher?(id, credential) do
     expected = Application.get_env(:game_stream, :native_publishers, %{})[id]
+
     is_binary(expected) and byte_size(expected) == 64 and
       Plug.Crypto.secure_compare(expected, JoinToken.hash(credential))
   end
-  defp reply(conn, status, body), do: conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body)) |> halt()
+
+  defp reply(conn, status, body),
+    do:
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(status, Jason.encode!(body))
+      |> halt()
 end

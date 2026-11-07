@@ -56,7 +56,8 @@ defmodule Platform.GameStream do
   alias Platform.Types.UUIDv7
 
   @doc "Native mode uses channel bindings; streamed review mode remains unchanged."
-  def start_native_session(user, channel_id), do: Platform.GameStream.NativeSessions.play(user, channel_id)
+  def start_native_session(user, channel_id),
+    do: Platform.GameStream.NativeSessions.play(user, channel_id)
 
   @host_feature "game_stream_host"
   @encoder_surface "game_stream.encoder_preset"

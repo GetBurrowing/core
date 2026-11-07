@@ -4,5 +4,6 @@ defmodule Platform.GameStream.Provider do
   @callback status(map()) :: :ok | {:error, term()}
   @callback stop(map(), String.t()) :: :ok | {:error, term()}
   @callback reconcile(String.t()) :: :ok | {:error, term()}
-  def native, do: Application.get_env(:game_stream, :native_provider, Platform.GameStream.Providers.Native)
+  def native,
+    do: Application.get_env(:game_stream, :native_provider, Platform.GameStream.Providers.Native)
 end

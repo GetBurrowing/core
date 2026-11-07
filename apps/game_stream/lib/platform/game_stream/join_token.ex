@@ -3,16 +3,16 @@ defmodule Platform.GameStream.JoinToken do
   use Ecto.Schema
   @primary_key {:id, :binary_id, autogenerate: false}
   schema "native_join_tokens" do
-    field :session_id, :binary_id
-    field :user_id, :binary_id
-    field :channel_id, :binary_id
-    field :build_id, :string
-    field :generation, :integer
-    field :digest, :string, redact: true
-    field :slot, :integer
-    field :expires_at, :utc_datetime_usec
-    field :consumed_at, :utc_datetime_usec
-    field :connected, :boolean, default: false
+    field(:session_id, :binary_id)
+    field(:user_id, :binary_id)
+    field(:channel_id, :binary_id)
+    field(:build_id, :string)
+    field(:generation, :integer)
+    field(:digest, :string, redact: true)
+    field(:slot, :integer)
+    field(:expires_at, :utc_datetime_usec)
+    field(:consumed_at, :utc_datetime_usec)
+    field(:connected, :boolean, default: false)
     timestamps(type: :utc_datetime_usec)
   end
 

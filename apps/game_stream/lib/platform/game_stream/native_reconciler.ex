@@ -6,8 +6,12 @@ defmodule Platform.GameStream.NativeReconciler do
   def init(_), do: {:ok, schedule()}
   @impl true
   def handle_info(:tick, _) do
-    if Platform.GameStream.enabled?() and Application.get_env(:game_stream, :native_reconcile, true), do: Platform.GameStream.NativeSessions.tick()
+    if Platform.GameStream.enabled?() and
+         Application.get_env(:game_stream, :native_reconcile, true),
+       do: Platform.GameStream.NativeSessions.tick()
+
     {:noreply, schedule()}
   end
+
   defp schedule, do: Process.send_after(self(), :tick, 10_000)
 end

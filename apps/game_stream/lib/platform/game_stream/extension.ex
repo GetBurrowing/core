@@ -139,12 +139,16 @@ defmodule Platform.GameStream.Extension do
     %{
       # Task 01a0db5f: the `game_stream.encoder_preset` surface's metric.
       "native_idle_server_seconds_per_player_minute" => %{
-        module: Platform.Experiments.Metrics.NativeIdleCost, label: "Native idle cost",
-        description: "Idle server-seconds per connected player-minute", direction: :lower_is_better
+        module: Platform.Experiments.Metrics.NativeIdleCost,
+        label: "Native idle cost",
+        description: "Idle server-seconds per connected player-minute",
+        direction: :lower_is_better
       },
       "native_reconnect_success" => %{
-        module: Platform.Experiments.Metrics.NativeReconnectSuccess, label: "Native reconnect success",
-        description: "Successful re-admissions per reconnect reservation", direction: :higher_is_better
+        module: Platform.Experiments.Metrics.NativeReconnectSuccess,
+        label: "Native reconnect success",
+        description: "Successful re-admissions per reconnect reservation",
+        direction: :higher_is_better
       },
       "game_stream_input_to_photon" => %{
         module: Platform.Experiments.Metrics.GameStreamInputToPhoton,
