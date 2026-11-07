@@ -185,6 +185,53 @@ defmodule Platform.Sharing.HelpChannelTest do
 
       refute code == :help_channel_reports_off
     end
+
+    # Stage 4 (from the stage 3 audit): the originating space is derived
+    # server-side, so leaving `space_id` out cannot skip the gate.
+    test "with Help channel bug reports off, a call that originates in the channel WITHOUT space_id files nothing",
+         %{agent: agent, help: help} do
+      :ok = HelpChannel.ensure_agent(agent)
+      {:ok, _} = Sharing.set(:help_channel_reports, false, :system)
+      test_pid = self()
+
+      Req.Test.stub(@broker, fn conn ->
+        send(test_pid, :broker_called)
+
+        Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+          "repository" => "x/y",
+          "issue_number" => 1
+        })
+      end)
+
+      runtime = Repo.get!(AgentRuntime, agent.runtime_id)
+
+      :ok =
+        Platform.Federation.AttentionDispatch.broadcast(
+          runtime.runtime_id,
+          %{
+            message: %{author_type: "user", author_user_id: Ecto.UUID.generate(), content: "bug"}
+          },
+          space_id: help.id,
+          agent_id: agent,
+          source: :agent_responder
+        )
+
+      ctx = Platform.Federation.ToolCall.build_context(%{}, runtime)
+      assert ctx.space_id == nil
+
+      args = %{
+        "category" => "bug",
+        "title" => "Something",
+        "expected_behavior" => "It works.",
+        "observed_behavior" => "It does not."
+      }
+
+      assert {:error, %{code: :help_channel_reports_off}} =
+               ToolArguments.dispatch("feedback_submit", args, ctx)
+
+      refute_received :broker_called
+      assert Repo.aggregate(Platform.Feedback.SubmissionRecord, :count) == 0
+    end
   end
 
   defp admin_user! do

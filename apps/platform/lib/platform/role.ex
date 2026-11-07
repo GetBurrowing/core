@@ -216,6 +216,7 @@ defmodule Platform.Role do
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
+    Platform.Federation.DispatchOrigin,
     Platform.Chat.ActiveAgentStore,
     Platform.ExternalAgents.EphemeralCredentials,
     Platform.Chat.Presence,

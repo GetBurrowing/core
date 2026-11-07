@@ -221,6 +221,9 @@ defmodule Platform.Application do
          # :chat_reply_failure_notices table. ETS lifecycle owner only
          # (NonceCache shape); lost on restart by design.
          Platform.Chat.ReplyFailure.Dedupe,
+         # Where each runtime's recent dispatches came from (task 01a1b678
+         # stage 4). ETS lifecycle owner only; lost on restart by design.
+         Platform.Federation.DispatchOrigin,
          # No-reply watchdog for native agents (task 01a10322 stage 7) —
          # timers only; its verdicts run under Platform.TaskSupervisor.
          # Off in the test env (`:native_reply_watchdog_ms` false).

@@ -1266,7 +1266,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "sharing_set",
         description:
-          "Turn one part of what this install shares with Burrow on or off. Every change is audited with you as the actor. Only for an install admin.",
+          "Turn one part of what this install shares with Burrow on or off, when the install admin who messaged you asks. Every change is audited with that admin as the actor and you as the agent. Only for an install admin.",
         parameters: %{
           key: %{
             type: "string",
@@ -1283,7 +1283,7 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "{key, on, previous}",
         limitations:
-          "Refused unless your runtime's owner is an admin of the root org. Takes effect on the next use; no restart.",
+          "Refused unless the one person whose message reached you in the last few minutes is an admin of the root org; the server decides who asked, not your arguments. Two different people messaging you in that window is also a refusal. Takes effect on the next use; no restart.",
         when_to_use: "Only when an install admin asks you to change what the install shares."
       }
     ]
@@ -8366,7 +8366,9 @@ defmodule Platform.Federation.ToolSurface do
           nil -> nil
         end
 
-      case Platform.Feedback.Submission.submit(Map.delete(args, "space_id"), actor) do
+      case Platform.Feedback.Submission.submit(Map.delete(args, "space_id"), actor,
+             notice_space_id: feedback_origin_space(context, args)
+           ) do
         {:ok, result} -> {:ok, result}
         {:error, %{code: code} = err} -> {:error, feedback_error_envelope(code, err)}
       end
@@ -8390,12 +8392,13 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("sharing_set", args, context) do
-    with {:ok, agent} <- sharing_admin(context, "sharing_set"),
+    with {:ok, agent} <- sharing_agent(context, "sharing_set"),
+         {:ok, requester} <- sharing_requester(context, "sharing_set"),
          {:ok, key} <- sharing_key(Map.get(args, "key")),
          {:ok, on} <- sharing_value(Map.get(args, "on")) do
       previous = Platform.Sharing.enabled?(key)
 
-      case Platform.Sharing.set(key, on, {:agent, agent.id}) do
+      case Platform.Sharing.set(key, on, {:user, requester.id}, via_agent_id: agent.id) do
         {:ok, _row} ->
           {:ok, %{key: Atom.to_string(key), on: on, previous: previous}}
 
@@ -14037,10 +14040,17 @@ defmodule Platform.Federation.ToolSurface do
   # A report filed from the Help & feedback channel also needs the owner's
   # "Help channel bug reports" switch (task 01a1b678 stage 3). Calls from any
   # other space, or none, are unaffected.
+  #
+  # The originating space is derived SERVER-SIDE (task 01a1b678 stage 4):
+  # every space a dispatch to this runtime named recently
+  # (`Platform.Federation.DispatchOrigin`), plus the optional `space_id`.
+  # Omitting `space_id` therefore cannot skip the gate.
   defp help_channel_reports_enabled(context, args) do
-    space_id = Map.get(context, :space_id) || Map.get(args, "space_id")
+    candidates =
+      [Map.get(context, :space_id), Map.get(args, "space_id")] ++
+        List.wrap(Map.get(context, :origin_space_ids))
 
-    if Platform.Sharing.HelpChannel.help_space?(space_id) and
+    if Enum.any?(candidates, &Platform.Sharing.HelpChannel.help_space?/1) and
          not Platform.Sharing.enabled?(:help_channel_reports) do
       {:error,
        %{
@@ -14055,7 +14065,58 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  # sharing_list / sharing_set: the runtime's owner must be an admin of the
+  # Where the shipped notice for a filed report goes (task 01a1b678 stage 4):
+  # the call's space, else the newest space a dispatch to this runtime named.
+  defp feedback_origin_space(context, args) do
+    Map.get(context, :space_id) || Map.get(args, "space_id") ||
+      List.first(List.wrap(Map.get(context, :origin_space_ids)))
+  end
+
+  # sharing_set: the agent the call came from. Who may CHANGE a switch is the
+  # requester's question (`sharing_requester/2`), not the agent owner's.
+  defp sharing_agent(context, tool) do
+    case load_agent(context) || sharing_runtime_agent(context) do
+      %Agent{} = agent -> {:ok, agent}
+      nil -> sharing_forbidden(tool)
+    end
+  end
+
+  # sharing_set (task 01a1b678 stage 4, from the stage 3 audit): the PERSON
+  # who asked must be an admin of the root org. The requester is the one
+  # person whose message reached this runtime recently, as the server saw it
+  # (`Platform.Federation.DispatchOrigin`), never a value from the wire. No
+  # requester, or two different people, is a refusal. A member asking an
+  # admin-owned agent is refused.
+  defp sharing_requester(context, tool) do
+    with user_id when is_binary(user_id) <- Map.get(context, :requester_user_id),
+         %{} = user <- Platform.Accounts.get_user(user_id),
+         %{id: root_id} <- Tenancy.get_root_org(),
+         true <- Tenancy.org_admin?(user, root_id) do
+      {:ok, user}
+    else
+      _ ->
+        {:error,
+         %{
+           error: "#{tool}: only an install admin may change what this install shares",
+           code: :forbidden,
+           recoverable: false,
+           suggestion:
+             "Tell the person only an install admin can change this, and ask an admin to ask you directly. Do not retry."
+         }}
+    end
+  end
+
+  defp sharing_forbidden(tool) do
+    {:error,
+     %{
+       error: "#{tool}: only an install admin's agent may use this tool",
+       code: :forbidden,
+       recoverable: false,
+       suggestion: "Tell the person to ask an install admin. Do not retry."
+     }}
+  end
+
+  # sharing_list: the runtime's owner must be an admin of the
   # root org (`Tenancy.org_admin?/2`). The owner is read off the runtime row,
   # never trusted from the wire.
   defp sharing_admin(context, tool) do

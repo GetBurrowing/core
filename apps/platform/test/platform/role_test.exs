@@ -160,6 +160,7 @@ defmodule Platform.RoleTest do
                Platform.Chat.ContextPlane,
                Platform.Chat.ContextSummaryCache,
                Platform.Chat.ReplyFailure.Dedupe,
+               Platform.Federation.DispatchOrigin,
                Platform.Chat.ReplyFailure.Watchdog,
                Platform.AgentHost.Reconciler,
                Platform.AgentHost.FakeHost,

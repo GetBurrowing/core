@@ -175,10 +175,12 @@ defmodule Platform.Sharing do
 
   @doc """
   Turn the switch for `key` on or off and record an audit row naming
-  `actor` (`:system`, `{:user, id}` or `{:agent, id}`).
+  `actor` (`:system`, `{:user, id}` or `{:agent, id}`). `opts[:via_agent_id]`
+  adds the agent a person asked (`sharing_set`, task 01a1b678 stage 4) to
+  the row's metadata.
   """
-  @spec set(key(), boolean(), actor()) :: {:ok, InstallSharing.t()} | {:error, term()}
-  def set(key, value, actor) when is_boolean(value) do
+  @spec set(key(), boolean(), actor(), keyword()) :: {:ok, InstallSharing.t()} | {:error, term()}
+  def set(key, value, actor, opts \\ []) when is_boolean(value) do
     ensure_key!(key)
     {actor_type, actor_id} = actor_fields(actor)
     row = get()
@@ -195,11 +197,15 @@ defmodule Platform.Sharing do
                  resource_type: "install_sharing",
                  resource_id: to_string(updated.id),
                  action: "switch_set",
-                 metadata: %{
-                   "key" => Atom.to_string(key),
-                   "value" => value,
-                   "previous" => previous
-                 }
+                 metadata:
+                   maybe_via_agent(
+                     %{
+                       "key" => Atom.to_string(key),
+                       "value" => value,
+                       "previous" => previous
+                     },
+                     Keyword.get(opts, :via_agent_id)
+                   )
                }) do
           updated
         else
@@ -267,6 +273,11 @@ defmodule Platform.Sharing do
   end
 
   defp read, do: Repo.one(from(s in InstallSharing, limit: 1))
+
+  defp maybe_via_agent(metadata, agent_id) when is_binary(agent_id),
+    do: Map.put(metadata, "via_agent_id", agent_id)
+
+  defp maybe_via_agent(metadata, _agent_id), do: metadata
 
   defp ensure_key!(key) do
     unless key in InstallSharing.switches() do
