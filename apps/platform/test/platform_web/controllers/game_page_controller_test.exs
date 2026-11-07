@@ -448,6 +448,12 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute page =~ user.name
     refute page =~ user.email
     assert Games.player_display_name(user) == "StarPilot"
+    {:ok, view, _} = live_isolated(conn, PlatformWeb.GameCommunityLive,
+      session: %{"game_slug" => "voltron", "current_user_id" => user.id})
+    html = render_submit(view, "send_message", %{"compose" => %{"text" => "Hello crew"}})
+    assert html =~ "StarPilot"
+    refute html =~ user.name
+    refute html =~ user.email
   end
 
 end

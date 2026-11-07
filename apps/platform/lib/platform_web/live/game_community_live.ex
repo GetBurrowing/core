@@ -74,7 +74,7 @@ defmodule PlatformWeb.GameCommunityLive do
   def handle_info({event, message}, socket) when event in [:new_message, :message_updated] do
     case authorized(socket.assigns.game_slug, socket.assigns.player_id) do
       {:ok, _, _, _, _} ->
-        if message.space_id == socket.assigns.space_id and message.content_type == "text" do
+        if message.space_id == socket.assigns.space_id and message.content_type == "text" and is_nil(message.thread_id) do
           {:noreply, stream_insert(socket, :messages, public_message(message))}
         else
           {:noreply, socket}
@@ -108,7 +108,7 @@ defmodule PlatformWeb.GameCommunityLive do
   defp public_messages(space_id) do
     labels = labels_for_space(space_id)
     Chat.list_messages(space_id, order: :asc, limit: 50)
-    |> Enum.filter(&(&1.content_type == "text"))
+    |> Enum.filter(&(&1.content_type == "text" and is_nil(&1.thread_id)))
     |> Enum.map(&public_message(&1, labels))
   end
 
