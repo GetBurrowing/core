@@ -107,6 +107,8 @@ defmodule Platform.GameStream.ModuleInventoryTest do
      "Native Play task 01a1b287: request UUIDs are guarded before querying; persisted foreign keys and runtime session IDs originate from durable records."},
     {"platform/game_stream/game_channels.ex", :get, "__MODULE__", 1, :safe_internal,
      "Native Play task 01a1b287: request UUIDs are guarded before querying; persisted foreign keys and runtime session IDs originate from durable records."},
+    {"platform/game_stream/native_assets.ex", :get, "NativeBuild", 1, :safe_internal,
+     "Native artifact task 01a1b287: build IDs are string primary keys, not UUIDs; channel/repository authorization precedes lookup and the loaded build's project must equal the authorized binding."},
     {"platform/game_stream/native_build.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Native Play task 01a1b287: request UUIDs are guarded before querying; persisted foreign keys and runtime session IDs originate from durable records."},
     {"platform/game_stream/native_build.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,

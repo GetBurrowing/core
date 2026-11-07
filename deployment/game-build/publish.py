@@ -24,6 +24,7 @@ def safe_path(value):
 
 def validate(manifest, directory=None):
     require(manifest['schema_version'] == 1, 'invalid native package')
+    require(isinstance(manifest['id'], str) and 1 <= len(manifest['id']) <= 128)
     require(re.fullmatch('[0-9a-f]{40}', manifest['source_sha']), 'invalid native package')
     require(re.fullmatch('[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', manifest['repository']), 'invalid native package')
     require(manifest['repo_url'] == 'https://github.com/' + manifest['repository'], 'invalid native package')
@@ -50,6 +51,7 @@ def validate(manifest, directory=None):
                     require(all((safe_path(i.filename.rstrip('/')) for i in z.infolist())), 'invalid native package')
                     require(a['executable'] in z.namelist(), 'invalid native package')
                     require(z.getinfo(a['executable']).file_size > 0, 'invalid native package')
+                    require(all((i.external_attr >> 16) & 0o170000 != 0o120000 for i in z.infolist()), 'symlink in archive')
                     require(any((i.filename.endswith('.pck') and i.file_size > 0 for i in z.infolist())), 'missing game resources')
             else:
                 with tarfile.open(path, 'r:gz') as t:
@@ -81,13 +83,15 @@ def main():
     parser.add_argument('--endpoint')
     parser.add_argument('--project')
     parser.add_argument('--verify-attestations', action='store_true')
+    parser.add_argument('--bundle')
     args = parser.parse_args()
     manifest = validate(json.loads(Path(args.manifest).read_text()), args.directory)
     if args.verify_attestations:
+        require(args.bundle, 'a retained keyless provenance bundle is required')
         workflow, signer_sha = manifest['publisher_workflow'].rsplit('@', 1)
         require(re.fullmatch('[0-9a-f]{40}', signer_sha), 'invalid native package')
         for a in manifest['artifacts']:
-            subprocess.run(['gh', 'attestation', 'verify', str(Path(args.directory) / a['filename']), '--repo', manifest['repository'], '--signer-workflow', workflow, '--signer-digest', signer_sha, '--deny-self-hosted-runners', '--source-ref', 'refs/heads/main', '--source-digest', manifest['source_sha']], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(['gh', 'attestation', 'verify', str(Path(args.directory) / a['filename']), '--bundle', args.bundle, '--custom-trusted-root', str(Path(__file__).with_name('trusted_root.jsonl')), '--repo', manifest['repository'], '--signer-workflow', workflow, '--signer-digest', signer_sha, '--deny-self-hosted-runners', '--source-ref', 'refs/heads/main', '--source-digest', manifest['source_sha']], check=True, stdout=subprocess.DEVNULL)
     if args.endpoint:
         require(args.verify_attestations, 'publication requires verified provenance')
         require(args.project, 'invalid native package')

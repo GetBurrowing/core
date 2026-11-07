@@ -98,7 +98,7 @@ jobs:
           mkdir player
           if [[ "$PACKAGE" == *.zip ]]; then unzip -q "packages/$PACKAGE" -d player; else tar xzf "packages/$PACKAGE" -C player; fi
           chmod +x "player/$EXECUTABLE"
-          if [[ "$PLATFORM" == macos ]]; then lipo -verify_arch x86_64 arm64 "player/$EXECUTABLE"; fi
+          if [[ "$PLATFORM" == macos ]]; then lipo "player/$EXECUTABLE" -verify_arch x86_64 arm64; fi
           if [[ "$PLATFORM" == server ]]; then
             VOLTRON_ROOM_CODE=ci-smoke "player/$EXECUTABLE" --headless --quit-after 120 -- --dedicated --port=24974 > player.log 2>&1
           else
@@ -118,13 +118,46 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      attestations: write
     steps:
+      - name: Resolve the immutable reusable workflow source from GitHub workload identity
+        id: workflow
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, json, os, urllib.request
+          request = urllib.request.Request(os.environ['ACTIONS_ID_TOKEN_REQUEST_URL'] + '&audience=burrow-native-builds', headers={'Authorization': 'Bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              token = json.load(response)['value']
+          payload = token.split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+          sha = claims['job_workflow_sha']
+          assert len(sha) == 40 and all(c in '0123456789abcdef' for c in sha)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha=' + sha + '\n')
+          PYTHON
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: GetBurrowing/core
+          ref: ${{ steps.workflow.outputs.sha }}
+          path: .native-tools
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: {name: native-packages, path: packages}
-      - name: Attest immutable archives using GitHub workload identity
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with: {subject-path: 'packages/*'}
+      - name: Create private GitHub keyless provenance without the unavailable index API
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          npm ci --ignore-scripts --prefix .native-tools/deployment/game-build
+          node .native-tools/deployment/game-build/attest.mjs "$PWD/packages"
+      - name: Verify the actual bundle, pinned trust roots, signer and source before publication
+        env:
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for archive in packages/*.zip packages/*.tar.gz; do
+            gh attestation verify "$archive" --bundle packages/provenance.json --custom-trusted-root .native-tools/deployment/game-build/trusted_root.jsonl --repo "$GITHUB_REPOSITORY" --signer-workflow GetBurrowing/core/.github/workflows/game-native-build.yml --signer-digest "$WORKFLOW_SHA" --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: {name: native-provenance, path: packages/provenance.json, if-no-files-found: error}
   publish:
     needs: [export, player-smoke, attest]
     if: inputs.publish && github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -161,6 +194,8 @@ jobs:
         with: {path: game, persist-credentials: false}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: {name: native-packages, path: packages}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: {name: native-provenance, path: packages}
       - name: Publish immutable release assets and dedicated image
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,7 +224,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BURROW_URL: ${{ inputs.burrow_url }}
           PROJECT_ID: ${{ inputs.project_id }}
-        run: python3 .native-tools/deployment/game-build/publish.py packages/manifest.json --directory packages --verify-attestations --endpoint "$BURROW_URL" --project "$PROJECT_ID"
+        run: python3 .native-tools/deployment/game-build/publish.py packages/manifest.json --directory packages --verify-attestations --bundle packages/provenance.json --endpoint "$BURROW_URL" --project "$PROJECT_ID"
       - name: Retain manifest beside immutable packages
         env: {GH_TOKEN: '${{ github.token }}'}
         run: gh release upload "native-$GITHUB_SHA" packages/manifest.json --repo "$GITHUB_REPOSITORY"

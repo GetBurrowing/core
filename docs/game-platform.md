@@ -117,9 +117,26 @@ digest. An open engine field proves metadata extensibility, not Unreal packaging
 macOS packages use ad-hoc signing provided by Godot, with no generated signing key.
 Public distribution without Gatekeeper friction requires the existing organization's
 Developer ID Application identity and notarization credentials, held by its Apple Developer
-account custodian (Ryan must identify the custodian); no agent creates a signing key.
+account custodian (the organization must identify the custodian); no agent creates a signing key.
 
 The reusable workflow source checkout is resolved from GitHub's `job_workflow_sha` claim,
 not a caller-supplied tools branch. Attestation verification separately pins signer workflow
 path AND signer commit digest and rejects self-hosted attestations; archives also require
 nonempty PCK resources. The publisher does not accept traversal paths or symbolic links.
+
+GitHub's attestation *index* rejects user-owned private repositories. The workflow therefore
+uses the official `@actions/attest` library with `skipWrite: true`, signs using GitHub's
+private Sigstore service, and retains `provenance.json` beside the private archives. It does
+not make the repository public or skip signature verification. `gh attestation verify`
+checks that bundle against the versioned `trusted_root.jsonl` (SHA256
+`65ca537f6ed8a47fd0e560c421baa1f6c1efb8b25fc200d8c5c02c0e92eb2b9c`), retrieved with the
+official CLI's TUF verification on 2026-11-07. Root rotation requires an explicit reviewed
+update. The library and transitive security patch overrides are integrity-locked; no install
+scripts run. Signing is ephemeral GitHub workload identity, not a new launcher signing key.
+
+Before enabling main publication, the deployment operator configures repository variables
+`BURROW_GAME_PROJECT_ID` and `BURROW_GAME_URL`, the corresponding core workload policy,
+read-only private asset credentials, and host registry access for immutable server digests.
+An unset destination fails publication; validation branches export and test but never alter
+latest. This task does not infer a game project's cross-organization permission from the
+Burrow task's project UUID or reuse a throwaway test project in production.

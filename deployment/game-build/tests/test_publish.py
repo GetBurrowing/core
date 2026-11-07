@@ -73,6 +73,29 @@ class Packages(unittest.TestCase):
         with self.assertRaises(ValueError):
             publish.validate(self.manifest, self.directory)
 
+    def test_resource_free_archive_rejected_even_when_digest_matches(self):
+        artifact = next(a for a in self.manifest['artifacts'] if a['os'] == 'windows')
+        path = self.directory / artifact['filename']
+        with zipfile.ZipFile(path, 'w') as z:
+            z.writestr('game', b'native executable')
+        artifact['size'] = path.stat().st_size
+        artifact['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'missing game resources'):
+            publish.validate(self.manifest, self.directory)
+
+    def test_symlink_zip_rejected_even_when_digest_matches(self):
+        artifact = next(a for a in self.manifest['artifacts'] if a['os'] == 'windows')
+        path = self.directory / artifact['filename']
+        with zipfile.ZipFile(path, 'a') as z:
+            link = zipfile.ZipInfo('link')
+            link.create_system = 3
+            link.external_attr = 0o120777 << 16
+            z.writestr(link, '/outside')
+        artifact['size'] = path.stat().st_size
+        artifact['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            publish.validate(self.manifest, self.directory)
+
     def test_no_engine_build_or_unreal_pipeline(self):
         self.assertNotIn('RunUAT', Path(publish.__file__).read_text())
         self.assertFalse((Path(publish.__file__).parent / 'unreal.sh').exists())
