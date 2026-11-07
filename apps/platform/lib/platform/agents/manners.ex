@@ -67,7 +67,7 @@ defmodule Platform.Agents.Manners do
     * `:burrow_seed` - the Burrow agent's seed, which inherits `:native_seed`;
     * `:built_in_chat` - the fixed frame of the built-in chat agent;
     * `:federation_preamble` - the preamble every `dispatch.*` template
-      substitutes through `{{federation_preamble}}`.
+      substitutes through its `federation_preamble` placeholder.
   """
   @spec prompt_paths() :: [{atom(), module(), atom()}]
   def prompt_paths do

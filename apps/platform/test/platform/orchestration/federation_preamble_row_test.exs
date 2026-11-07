@@ -142,7 +142,8 @@ defmodule Platform.Orchestration.FederationPreambleRowTest do
     test "row present: its content wins, and reaches the rendered dispatch" do
       set_row_content!(@sentinel)
 
-      assert PromptTemplates.federation_preamble() == @sentinel
+      # The row wins; the handoff rule is ensured on top of it (task 01a1b733).
+      assert PromptTemplates.federation_preamble() == Platform.Agents.Manners.ensure(@sentinel)
       assert planning_dispatch() =~ @sentinel
     end
 
@@ -250,7 +251,10 @@ defmodule Platform.Orchestration.FederationPreambleRowTest do
       # Exact `==`, both directions. Asserting only that the variant marker is
       # present would pass for an implementation that concatenated the variant
       # onto the row body; the row's own sentinel has to be ABSENT.
-      assert PromptTemplates.federation_preamble(%{task_id: task_id}) == @variant_preamble
+      # The handoff rule is ensured on top of the variant (task 01a1b733).
+      assert PromptTemplates.federation_preamble(%{task_id: task_id}) ==
+               Platform.Agents.Manners.ensure(@variant_preamble)
+
       refute PromptTemplates.federation_preamble(%{task_id: task_id}) =~ @sentinel
 
       assert %Platform.Experiments.Assignment{variant_slug: @variant_slug} =
@@ -261,7 +265,8 @@ defmodule Platform.Orchestration.FederationPreambleRowTest do
       _row = set_row_content!(@sentinel)
       task_id = Ecto.UUID.generate()
 
-      assert PromptTemplates.federation_preamble(%{task_id: task_id}) == @sentinel
+      assert PromptTemplates.federation_preamble(%{task_id: task_id}) ==
+               Platform.Agents.Manners.ensure(@sentinel)
 
       # Byte-identity between the arities, not merely "both non-empty": the
       # zero-arity call is the one ~15 dispatch bodies went through before
@@ -281,7 +286,9 @@ defmodule Platform.Orchestration.FederationPreambleRowTest do
       row = set_row_content!(@sentinel)
       _experiment = running_experiment_on_preamble!(row)
 
-      assert PromptTemplates.federation_preamble(%{task_id: ""}) == @sentinel
+      assert PromptTemplates.federation_preamble(%{task_id: ""}) ==
+               Platform.Agents.Manners.ensure(@sentinel)
+
       refute PromptTemplates.federation_preamble(%{task_id: ""}) =~ @variant_preamble
 
       assert Repo.aggregate(Platform.Experiments.Assignment, :count) == 0
