@@ -79,8 +79,9 @@ defmodule Platform.Habits.LearnedDefaultsRungPinTest do
     end)
   end
 
+  # `:now` is read right after the picks, so every signal is milliseconds old.
   defp open(actor, room) do
-    Habits.suggest(actor.id, room.id, @action, now: DateTime.add(DateTime.utc_now(), 1, :second))
+    Habits.suggest(actor.id, room.id, @action, now: DateTime.utc_now())
   end
 
   defp ranked_ids(%{ranked: ranked}), do: Enum.map(ranked, & &1.target_id)
@@ -132,6 +133,11 @@ defmodule Platform.Habits.LearnedDefaultsRungPinTest do
     assert Enum.all?(rows, &(&1.outcome == "chosen")), "no overridden rows at rung rank"
   end
 
+  # Caveat found on the dev server (task 01a1b814): the count is a DECAYED
+  # weight compared with a 1.0e-6 tolerance. Three picks spread over more than
+  # about a second weigh just under 3.0 (2.99998 after a minute at a 30-day
+  # half-life), so through the real picker the rung 2 pre-fill needs a 4th
+  # pick. These cases hold only because the picks here are milliseconds apart.
   describe "c. contrast (anti-vacuity): the gate does fire at min_signals 3 with conf >= 0.6" do
     test "B,B,B then open: conf 1.0, count 3 = min_signals -> prefill B",
          %{actor: actor, b: b, room: room} do
