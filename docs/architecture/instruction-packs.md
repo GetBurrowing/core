@@ -88,7 +88,7 @@ is not a claim that every target runs that version.
 Existing content is local, even if it is byte-identical to a seeded default.
 Owners explicitly accept incoming conflicts before those targets become
 vendor-owned. Subsequent updates compare the live bytes with the last value
-actually applied; edits and deletions stay local. Missing/ambiguous mappings
+actually applied on the same physical row; edits and deletions stay local. A recreated row remains local even when its slug and text match the deleted vendor row. Null legacy row provenance is conservative and requires owner adoption. Missing/ambiguous mappings
 reject a whole release. Retired vendor targets clear only their text in place,
 preserving skill ids and attachments; locally edited targets are never cleared.
 Text templates continue to use the existing Mustache renderer, never EEx.
@@ -105,7 +105,7 @@ Rollback requires owner authorization and a retained, previously applied release
 re-verifies its signature against current trust roots, preserves edits since
 application and pins the rolled-back version. Unpinning allows sequential
 advancement again. Conflict resolution is owner-only, audited and refuses a
-stale local snapshot rather than overwriting edits made after a conflict appeared.
+stale row/text/version snapshot rather than overwriting edits made after review. Owner UI obtains fresh snapshots through Installer.conflicts/2; the token includes physical row identity as well as base/local/incoming text and incoming version.
 
 The BEAM poller requests the next sequential version of each trusted-config pack
 id through the existing broker. It does not follow a pack-supplied URL or change

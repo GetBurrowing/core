@@ -97,6 +97,57 @@ defmodule Platform.InstructionPacks.InstallerTest do
     assert PromptTemplates.get_template_by_slug("pack.test").content == "local prompt"
   end
 
+  test "recreated row with identical bytes stays locally owned", %{owner: owner, skill: skill} do
+    {one, roots} = release(1)
+    assert {:ok, _} = install(one, roots)
+    adopt(owner)
+    {:ok, _} = Skills.delete_skill(Repo.reload!(skill))
+    {:ok, replacement} = Skills.create_skill(%{name: "Pack fixture", content: "vendor skill"})
+    refute replacement.id == skill.id
+    {two, _} = release(2, Manifest.digest(one["manifest"]), "skill two", "prompt two")
+    assert {:ok, _} = install(two, roots)
+    assert Skills.get_skill(replacement.id).content == "vendor skill"
+    entry = Repo.get_by!(Entry, type: "skill_markdown")
+    assert entry.effective_version == nil
+    assert entry.conflict["incoming"] == "skill two"
+  end
+
+  test "owner token rejects identical-text replacement and refreshed review can accept it", %{
+    owner: owner,
+    skill: skill
+  } do
+    {one, roots} = release(1)
+    assert {:ok, _} = install(one, roots)
+    token = Repo.get_by!(Entry, type: "skill_markdown") |> Entry.conflict_token()
+    {:ok, _} = Skills.delete_skill(skill)
+    {:ok, replacement} = Skills.create_skill(%{name: "Pack fixture", content: "local skill"})
+
+    assert {:error, :stale_conflict} =
+             Installer.resolve_conflict(
+               "setup-guide",
+               "skill_markdown",
+               "pack-fixture",
+               :incoming,
+               token,
+               owner
+             )
+
+    assert {:ok, conflicts} = Installer.conflicts("setup-guide", owner)
+    fresh = Enum.find(conflicts, &(&1.type == "skill_markdown")) |> Entry.conflict_token()
+
+    assert {:ok, _} =
+             Installer.resolve_conflict(
+               "setup-guide",
+               "skill_markdown",
+               "pack-fixture",
+               :incoming,
+               fresh,
+               owner
+             )
+
+    assert Skills.get_skill(replacement.id).content == "vendor skill"
+  end
+
   test "two stores advance atomically and identical replay preserves history", %{
     owner: owner,
     skill: skill

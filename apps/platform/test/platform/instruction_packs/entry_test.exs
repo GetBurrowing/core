@@ -13,7 +13,7 @@ defmodule Platform.InstructionPacks.EntryTest do
     }
 
     assert Entry.conflict_token(entry) ==
-             "7f08758ac14aa2582716bcefd26aeb23c5d72ee087987a1b81a448eda83a8278"
+             "ff146a6975c2662c4064f90bf401d5ba1f769b122079c916140f907f22965ea0"
 
     changed = %{entry | conflict: Map.put(entry.conflict, "incoming", "unseen")}
     refute Entry.conflict_token(changed) == Entry.conflict_token(entry)

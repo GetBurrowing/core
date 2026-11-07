@@ -94,6 +94,21 @@ defmodule Platform.InstructionPacks.Installer do
     end
   end
 
+  @doc "Owner review snapshots bind current physical rows and text to each conflict token."
+  def conflicts(pack_id, actor) do
+    with :ok <- authorize_owner(actor) do
+      Repo.transaction(fn ->
+        _state = locked_state(pack_id)
+
+        Repo.all(from(e in Entry, where: e.pack_id == ^pack_id and not is_nil(e.conflict)))
+        |> Enum.map(fn entry ->
+          mapped = conflict_target!(entry)
+          conflict_snapshot(entry, mapped)
+        end)
+      end)
+    end
+  end
+
   def resolve_conflict(pack_id, type, target, choice, expected_token, actor)
       when choice in [:local, :incoming] do
     with :ok <- authorize_owner(actor), {:ok, consent} <- consent_snapshot() do
@@ -106,11 +121,11 @@ defmodule Platform.InstructionPacks.Installer do
             Repo.rollback(:not_found)
 
         unless entry.conflict, do: Repo.rollback(:no_conflict)
-        unless expected_token == Entry.conflict_token(entry), do: Repo.rollback(:stale_conflict)
-        mapped = resolve!(type, target)
+        mapped = conflict_target!(entry)
+        snapshot = conflict_snapshot(entry, mapped)
 
-        unless Targets.content(mapped) == entry.conflict["local"],
-          do: Repo.rollback(:local_changed)
+        unless expected_token == Entry.conflict_token(snapshot),
+          do: Repo.rollback(:stale_conflict)
 
         attrs =
           if choice == :incoming do
@@ -126,6 +141,7 @@ defmodule Platform.InstructionPacks.Installer do
             %{applied_hash: nil, effective_version: nil, conflict: nil}
           end
 
+        attrs = Map.put(attrs, :record_id, Targets.record_id(mapped))
         updated = Repo.update!(Ecto.Changeset.change(entry, attrs))
 
         audit!(pack_id, "resolve_conflict", actor, %{
@@ -215,8 +231,16 @@ defmodule Platform.InstructionPacks.Installer do
         if foreign && foreign.pack_id != state.pack_id,
           do: Repo.rollback(:target_owned_by_another_pack)
 
+        # A replacement row is local even when its bytes equal the old vendor value.
+        comparison =
+          if old && old.record_id != Targets.record_id(mapped),
+            do: %{old | applied_hash: nil, effective_version: nil},
+            else: old
+
         {decision, value, attrs} =
-          Entry.reconcile(old, Targets.content(mapped), Map.get(incoming, key), version)
+          Entry.reconcile(comparison, Targets.content(mapped), Map.get(incoming, key), version)
+
+        attrs = Map.put(attrs, :record_id, Targets.record_id(mapped))
 
         if decision == :write, do: write!(mapped, value)
         row = old || %Entry{pack_id: state.pack_id, type: type, target: target}
@@ -278,12 +302,23 @@ defmodule Platform.InstructionPacks.Installer do
       else: {:error, :incompatible_client}
   end
 
-  defp resolve!(type, target) do
-    case Targets.resolve(type, target) do
+  defp conflict_target!(entry) do
+    case Targets.resolve(entry.type, entry.target) do
       {:ok, mapped} -> mapped
+      {:error, :missing_target} -> {:deleted, entry.type, entry.target}
       {:error, reason} -> Repo.rollback(reason)
     end
   end
+
+  defp conflict_snapshot(entry, mapped) do
+    %{
+      entry
+      | record_id: Targets.record_id(mapped),
+        conflict: Map.put(entry.conflict, "local", Targets.content(mapped))
+    }
+  end
+
+  defp write!({:deleted, _, _}, _value), do: Repo.rollback(:missing_target)
 
   defp write!(mapped, value) do
     case Targets.write(mapped, value) do

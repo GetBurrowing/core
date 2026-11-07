@@ -38,6 +38,8 @@ defmodule Platform.InstructionPacks.Targets do
 
   def content({_, row}), do: row.content
   def content({:deleted, _, _}), do: nil
+  def record_id({:deleted, _, _}), do: nil
+  def record_id({_, row}), do: row.id
   def identity({:skill, row}), do: {"skills", row.id}
   def identity({:template, row}), do: {"prompt_templates", row.id}
   def identity({:deleted, type, target}), do: {type, target}

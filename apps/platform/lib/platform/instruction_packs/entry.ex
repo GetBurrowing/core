@@ -15,6 +15,7 @@ defmodule Platform.InstructionPacks.Entry do
     field(:vendor_hash, :string)
     field(:effective_version, :integer)
     field(:applied_hash, :string)
+    field(:record_id, Ecto.UUID)
     field(:conflict, :map)
     field(:retired, :boolean, default: false)
     timestamps(type: :utc_datetime_usec)
@@ -23,8 +24,15 @@ defmodule Platform.InstructionPacks.Entry do
   def hash(nil), do: nil
   def hash(text), do: :crypto.hash(:sha256, text) |> Base.encode16(case: :lower)
 
-  def conflict_token(%__MODULE__{conflict: conflict}) when is_map(conflict) do
-    [conflict["base"], conflict["local"], conflict["incoming"], conflict["incoming_version"]]
+  def conflict_token(%__MODULE__{record_id: record_id, conflict: conflict})
+      when is_map(conflict) do
+    [
+      record_id,
+      conflict["base"],
+      conflict["local"],
+      conflict["incoming"],
+      conflict["incoming_version"]
+    ]
     |> Jason.encode!()
     |> hash()
   end
