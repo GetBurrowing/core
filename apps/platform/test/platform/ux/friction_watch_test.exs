@@ -293,12 +293,20 @@ defmodule Platform.Ux.FrictionWatchTest do
 
     test "with no readable friction there is no model call" do
       agent = assign_designer!()
+
+      # The agent IS in a channel (so its roster is not empty and the reader
+      # really queries), but nothing there reads as friction.
+      calm = space!("calm")
+      join!(calm, "agent", agent.id)
+      post!(calm, join!(calm, "user", user!().id), "shipped the release, thanks all")
+
       outside = space!("elsewhere")
       outsider = join!(outside, "user", user!().id)
       for i <- 1..4, do: post!(outside, outsider, "I can't find the inbox #{i}")
-      _ = agent
 
+      # No `expect`: the pre-filter found nothing readable, so no model call.
       assert Router.fire("ux.friction_watch", %{}) == {:ok, :handled}
+      assert {:ok, %{status: :no_signals, signals: 0}} = FrictionWatch.run(agent)
       assert findings() == []
     end
 
