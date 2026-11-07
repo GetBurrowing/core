@@ -205,6 +205,14 @@
         />
       </div>
     </header>
+    <%!-- Vendor support banner (task 01a1b362 stage 2): above the content,
+         below the top bar, on every shell page while a session is live. Not
+         dismissible. --%>
+    <.support_banner
+      sessions={assigns[:support_sessions] || []}
+      zone={assigns[:mask_zone]}
+      details?={assigns[:support_details?] == true}
+    />
     <%!-- Flash messages --%>
     <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside

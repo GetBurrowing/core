@@ -111,6 +111,7 @@ defmodule Platform.SupportAccess.Settings do
         {:ok, {_updated, ended}} ->
           SupportAccess.after_sessions_ended(ended)
           SupportAccess.StateFile.write()
+          if ended == [], do: SupportAccess.broadcast_changed()
           {:ok, get()}
 
         {:error, _} = error ->

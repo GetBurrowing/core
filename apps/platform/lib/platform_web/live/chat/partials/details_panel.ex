@@ -172,6 +172,7 @@ defmodule PlatformWeb.ChatLive.Partials.DetailsPanel do
               }
               current_user_id={@user_id}
               viewer={@current_user_record}
+              zone={@goal_time_zone}
             />
           </:members_popover>
           <:agents_popover>

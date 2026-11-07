@@ -13,6 +13,7 @@ defmodule PlatformWeb.Layouts do
   import PlatformWeb.Components.MoreSheet
   import PlatformWeb.Components.ThemePicker
   import PlatformWeb.Components.MaskNamesChip
+  import PlatformWeb.Components.SupportAccessComponents, only: [support_banner: 1]
 
   # Server-rendered <style> block carrying each active org's scope colour as
   # CSS custom properties — the runtime replacement for build-time per-slug

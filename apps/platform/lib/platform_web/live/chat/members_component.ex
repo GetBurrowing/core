@@ -102,6 +102,9 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
+  import PlatformWeb.Components.SupportAccessComponents,
+    only: [support_marker: 1, support_leaves_at: 1]
+
   alias Platform.Agents.ColorPalette
   alias Platform.Chat
 
@@ -146,7 +149,11 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     freshly_opened? = open && socket.assigns[:open] != true
     space_changed? = space_id(space) != space_id(socket.assigns[:space])
 
-    socket = socket |> assign(assigns) |> assign_new(:space_name, fn -> nil end)
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign_new(:space_name, fn -> nil end)
+      |> assign_new(:zone, fn -> nil end)
 
     socket =
       if open && space && (freshly_opened? || space_changed?) do
@@ -195,6 +202,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
       |> Chat.list_participants(participant_type: "user")
       |> Enum.map(&Chat.member_row(&1, viewer_id))
       |> Chat.sort_members()
+      |> put_support_marks()
 
     available = if socket.assigns[:can_manage?], do: Chat.list_addable_agents(space), else: []
 
@@ -210,6 +218,18 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   end
 
   defp load_members(socket), do: socket
+
+  # Vendor support users (task 01a1b362 stage 2): `support?` draws the marker
+  # after the name and `support_leaves_at` the "leaves at" line.
+  defp put_support_marks(people) do
+    marks = Platform.SupportAccess.support_marks(Enum.map(people, & &1.user_id))
+
+    Enum.map(people, fn person ->
+      person
+      |> Map.put(:support?, Map.has_key?(marks, person.user_id))
+      |> Map.put(:support_leaves_at, Map.get(marks, person.user_id))
+    end)
+  end
 
   @impl true
   def handle_event("members_close", _params, socket) do
@@ -398,6 +418,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
             can_manage_roles?={@can_manage_roles?}
             available_agents={@available_agents}
             available_people={@available_people}
+            zone={@zone}
           />
         </div>
       </.sheet>
@@ -433,6 +454,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           can_manage_roles?={@can_manage_roles?}
           available_agents={@available_agents}
           available_people={@available_people}
+          zone={@zone}
         />
       </div>
     </div>
@@ -450,10 +472,18 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   attr(:available_agents, :list, required: true)
   attr(:available_people, :list, required: true)
 
+  attr(:zone, :string,
+    default: nil,
+    doc: "the viewer's IANA zone, for a support user's leave time"
+  )
+
   defp body(assigns) do
     assigns =
       assigns
-      |> assign(:rows, person_rows(assigns.presence, assigns.people))
+      |> assign(
+        :rows,
+        assigns.presence |> person_rows(assigns.people) |> mark_rows(assigns.people)
+      )
       |> assign(:admin_count, Enum.count(assigns.people, & &1.admin?))
 
     ~H"""
@@ -482,13 +512,21 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           >
           </span>
           <span class="flex min-w-0 flex-1 flex-col">
-            <span class="truncate text-[15px] text-base-content">{person.name}</span>
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span class="min-w-0 truncate text-[15px] text-base-content">{person.name}</span>
+              <.support_marker :if={person[:support?]} />
+            </span>
             <%!-- The words ride the meta line, not the row's trailing edge: in the
                  narrow desktop popover a trailing "you · admin · Last admin" plus
                  the toggle squeezed the name to nothing (task 01a19355 stage 3). --%>
             <span class="flex flex-wrap gap-x-2 text-[13px] text-subtle">
               <span :if={state != "unknown"}>{state}</span>
               <span :if={person.you?} data-role="members-you">you</span>
+              <.support_leaves_at
+                :if={person[:support?]}
+                at={person[:support_leaves_at]}
+                zone={@zone}
+              />
               <span :if={person.admin?} data-role="members-admin-badge">admin</span>
               <span
                 :if={@can_manage_roles? and person.admin? and @admin_count <= 1}
@@ -682,6 +720,20 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     do: Enum.map(online, &{&1, "online"}) ++ Enum.map(away, &{&1, "away"})
 
   defp person_rows(_failed, people), do: Enum.map(people, &{&1, "unknown"})
+
+  # The presence rows are built from their own read, so the support marks
+  # `load_members/1` put on `@people` are carried over by user id.
+  defp mark_rows(rows, people) do
+    marks = Map.new(people, &{&1.user_id, &1})
+
+    Enum.map(rows, fn {person, state} ->
+      marked = Map.get(marks, person.user_id, %{})
+
+      {person
+       |> Map.put(:support?, Map.get(marked, :support?, false))
+       |> Map.put(:support_leaves_at, Map.get(marked, :support_leaves_at)), state}
+    end)
+  end
 
   defp dot_class("online"), do: "bg-success"
   defp dot_class("away"), do: "bg-subtle"

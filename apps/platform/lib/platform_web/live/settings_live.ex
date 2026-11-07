@@ -91,12 +91,16 @@ defmodule PlatformWeb.SettingsLive do
   use PlatformWeb, :live_view
 
   import PlatformWeb.Components.Sheet
+  import PlatformWeb.Components.SupportAccessComponents
 
   alias Platform.Accounts
   alias Platform.Accounts.ThemePreference
   alias Platform.Feedback.PersonForm
   alias Platform.Feedback.Policy
   alias Platform.Feedback.Submission
+  alias Platform.SupportAccess
+  alias Platform.SupportAccess.Settings, as: SupportSettings
+  alias PlatformWeb.SupportAccessCopy
   alias PlatformWeb.Components.NotificationState
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.ModuleGate
@@ -183,7 +187,61 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> assign(:feedback_enabled, Policy.enabled?())
      |> reset_feedback()
+     |> assign(:support_error, nil)
+     |> assign(:support_activity, [])
+     |> assign_support()
      |> open_from_params(params)}
+  end
+
+  # ── Support (task 01a1b362 stage 2) ─────────────────────────────────
+
+  @doc false
+  # Who sees and flips the Support card: an install admin who is not a vendor
+  # support user, on an install with a vendor key configured (without one,
+  # nothing can get in and the card would describe a door that isn't there).
+  # `SupportSettings.update/2` and `SupportAccess.end_session/2` re-check
+  # the first two, so a forged event from anyone else changes nothing.
+  def support_admin?(%Accounts.User{support_vendor: true}), do: false
+
+  def support_admin?(%Accounts.User{} = user),
+    do:
+      Platform.SupportAccess.Config.configured?() and
+        Platform.Access.authorize_install(user) == :ok
+
+  def support_admin?(_), do: false
+
+  defp assign_support(socket) do
+    if support_admin?(socket.assigns[:current_user_record]) do
+      now = DateTime.utc_now()
+      settings = SupportSettings.get()
+      active = SupportAccess.active_sessions_all(now)
+
+      socket
+      |> assign(:support_admin?, true)
+      |> assign(:support_settings, settings)
+      |> assign(:support_active, active)
+      |> assign(
+        :support_visits,
+        visits(SupportAccess.recent_sessions(5), SupportAccess.recent_refusals(5), now)
+      )
+    else
+      socket
+      |> assign(:support_admin?, false)
+      |> assign(:support_settings, nil)
+      |> assign(:support_active, [])
+      |> assign(:support_visits, [])
+    end
+  end
+
+  @doc false
+  # Called by ShellLive's `:support_access` hook on `{:support_access_changed,
+  # _}`: a session started or ended, or the switch changed in another tab.
+  def on_support_access_changed(socket) do
+    socket = assign_support(socket)
+
+    if socket.assigns.sheet == :support_activity and socket.assigns.support_admin?,
+      do: assign(socket, :support_activity, SupportAccess.activity()),
+      else: socket
   end
 
   # `?sheet=` (the command palette's Settings items, Burrow redesign 23):
@@ -317,6 +375,57 @@ defmodule PlatformWeb.SettingsLive do
       {:error, _reason} ->
         # Revert: the radios keep showing what is stored.
         {:noreply, assign(socket, :level_error, "Couldn't save. Your setting hasn't changed.")}
+    end
+  end
+
+  # One click, no confirm: the switch is undoable, and turning it off is the
+  # safe direction. Settings.update/2 re-checks the actor.
+  def handle_event("set_support_access", params, socket) do
+    enabled? = params["enabled"] in ["true", true]
+    user = socket.assigns[:current_user_record]
+
+    if support_admin?(user) do
+      case SupportSettings.update(user, %{enabled: enabled?}) do
+        {:ok, _settings} ->
+          {:noreply, socket |> assign(:support_error, nil) |> assign_support()}
+
+        {:error, _} ->
+          {:noreply,
+           socket |> assign(:support_error, SupportAccessCopy.save_failed()) |> assign_support()}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Ends every live session (an admin sign-in and a repair session can run
+  # at once; the sentence names them together, so the one button ends both).
+  def handle_event("end_support_session", _params, socket) do
+    user = socket.assigns[:current_user_record]
+
+    if support_admin?(user) do
+      results =
+        Enum.map(SupportAccess.active_sessions_all(), &SupportAccess.end_session(user, &1.id))
+
+      error =
+        if Enum.all?(results, &(match?({:ok, _}, &1) or &1 == {:error, :already_ended})),
+          do: nil,
+          else: SupportAccessCopy.end_failed()
+
+      {:noreply, socket |> assign(:support_error, error) |> assign_support()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_support_activity", _params, socket) do
+    if support_admin?(socket.assigns[:current_user_record]) do
+      {:noreply,
+       socket
+       |> assign(:support_activity, SupportAccess.activity())
+       |> assign(:sheet, :support_activity)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -545,6 +654,15 @@ defmodule PlatformWeb.SettingsLive do
           </span>
         </button>
 
+        <.support_card
+          :if={@support_admin?}
+          settings={@support_settings}
+          active={@support_active}
+          visits={@support_visits}
+          zone={@time_zone}
+          error={@support_error}
+        />
+
         <%= if @feedback_enabled do %>
           <p class={section_label_class()} data-role="settings-help-label">Help</p>
           <button
@@ -572,6 +690,29 @@ defmodule PlatformWeb.SettingsLive do
           <span class="shrink-0">Sign out</span>
         </button>
       </div>
+
+      <.sheet
+        :if={@support_admin?}
+        id="settings-support-activity-sheet"
+        open={@sheet == :support_activity}
+        placement={:bottom}
+        on_close="close_settings_sheet"
+        swipe_dismiss
+        handle_close
+      >
+        <:title>{SupportAccessCopy.activity_title()}</:title>
+        <p class={sheet_title_class()} aria-hidden="true">{SupportAccessCopy.activity_title()}</p>
+        <ul data-role="support-activity-list" class="pb-4">
+          <.activity_row :for={event <- @support_activity} event={event} zone={@time_zone} />
+        </ul>
+        <p
+          :if={@support_activity == []}
+          data-role="support-activity-empty"
+          class="px-[18px] pb-4 text-[13px] text-subtle"
+        >
+          {SupportAccessCopy.activity_empty()}
+        </p>
+      </.sheet>
 
       <.sheet
         id="settings-notifications-sheet"
@@ -980,6 +1121,122 @@ defmodule PlatformWeb.SettingsLive do
       "flex size-5 shrink-0 items-center justify-center rounded-full border-2",
       if(selected?, do: "border-primary", else: "border-subtle")
     ]
+  end
+
+  # Settings → Support (task 01a1b362 stage 2; canvas 01a1b362-e9b9 node
+  # layout): the switch, ONE sentence that is true right now, and the recent
+  # visits. The switch is the page's existing toggle (primary when on); the
+  # End session button is secondary; nothing else here is primary.
+  attr(:settings, :map, required: true)
+  attr(:active, :list, required: true)
+  attr(:visits, :list, required: true)
+  attr(:zone, :string, default: nil)
+  attr(:error, :string, default: nil)
+
+  defp support_card(assigns) do
+    enabled? = assigns.settings.enabled
+
+    state =
+      cond do
+        not enabled? -> :off
+        assigns.active != [] -> :active
+        true -> :idle
+      end
+
+    assigns =
+      assigns
+      |> assign(:enabled?, enabled?)
+      |> assign(:state, state)
+      |> assign(:operators, assigns.active |> Enum.map(& &1.operator_name) |> Enum.uniq())
+      |> assign(
+        :until,
+        if(assigns.active != [],
+          do: assigns.active |> Enum.map(& &1.not_after) |> Enum.max(DateTime)
+        )
+      )
+
+    ~H"""
+    <section id="support" data-role="settings-support" data-state={@state}>
+      <p class={section_label_class()} data-role="settings-support-label">
+        {SupportAccessCopy.section_label()}
+      </p>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={to_string(@enabled?)}
+        phx-click="set_support_access"
+        phx-value-enabled={to_string(!@enabled?)}
+        data-role="settings-support-switch"
+        class={row_class()}
+      >
+        <span class="min-w-0 font-semibold" data-role="settings-support-title">
+          {SupportAccessCopy.card_title()}
+        </span>
+        <span class={track_class(@enabled?)} aria-hidden="true">
+          <span class={knob_class(@enabled?)}></span>
+        </span>
+      </button>
+      <div class="px-[18px] pb-2 text-[15px] text-base-content">
+        <p :if={@state == :idle} data-role="settings-support-sentence">
+          {SupportAccessCopy.idle_sentence()}
+        </p>
+        <div
+          :if={@state == :active}
+          class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2"
+        >
+          <p class="min-w-0" data-role="settings-support-sentence">
+            {elem(SupportAccessCopy.active_sentence(@operators), 0)}<span
+              class="font-mono"
+              data-role="settings-support-until"
+            >{clock(@until, @zone)}</span>{elem(SupportAccessCopy.active_sentence(@operators), 1)}
+          </p>
+          <button
+            type="button"
+            phx-click="end_support_session"
+            data-role="settings-support-end"
+            class="min-h-11 shrink-0 rounded-full border border-edge px-4 text-[13px] font-semibold text-base-content active:bg-base-100 focus-visible-ring"
+          >
+            {SupportAccessCopy.end_session()}
+          </button>
+        </div>
+        <p :if={@state == :off} data-role="settings-support-sentence">
+          {SupportAccessCopy.off_sentence()}
+        </p>
+        <p :if={@error} data-role="settings-support-error" class="pt-1 text-xs text-subtle">
+          {@error}
+        </p>
+        <p
+          :if={@settings.state_file_error}
+          data-role="settings-support-pending"
+          class="pt-1 text-xs text-subtle"
+        >
+          {SupportAccessCopy.state_file_pending()}
+        </p>
+      </div>
+
+      <p class={section_label_class()} data-role="settings-support-history-label">
+        {SupportAccessCopy.history_heading()}
+      </p>
+      <ul class="px-[18px]" data-role="settings-support-history">
+        <.visit_row :for={visit <- @visits} visit={visit} zone={@zone} />
+      </ul>
+      <p
+        :if={@visits == []}
+        data-role="settings-support-history-empty"
+        class="px-[18px] py-1.5 text-[13px] text-subtle"
+      >
+        {SupportAccessCopy.history_empty()}
+      </p>
+      <button
+        type="button"
+        phx-click="open_support_activity"
+        data-role="settings-support-all"
+        class={row_class()}
+      >
+        <span class="min-w-0">{SupportAccessCopy.view_all()}</span>
+      </button>
+    </section>
+    """
   end
 
   # "Push on this device": one switch whose state, line and action follow the

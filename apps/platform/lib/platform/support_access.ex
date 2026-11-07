@@ -191,6 +191,7 @@ defmodule Platform.SupportAccess do
             })
 
             StateFile.write(now)
+            broadcast_changed()
             {:ok, response}
 
           {:error, reason} ->
@@ -558,8 +559,11 @@ defmodule Platform.SupportAccess do
   defp retire_support_user(_session, _now), do: :ok
 
   @doc false
-  # After the commit: disconnect every LiveView of each ended admin session.
+  # After the commit: tell subscribers (the owner's Support card and the
+  # shell banner) and disconnect every LiveView of each ended admin session.
   def after_sessions_ended(sessions) do
+    if sessions != [], do: broadcast_changed()
+
     Enum.each(sessions, fn
       %Session{kind: "admin", id: id} ->
         PlatformWeb.Endpoint.broadcast(live_socket_id(id), "disconnect", %{})
@@ -571,6 +575,91 @@ defmodule Platform.SupportAccess do
 
   defp actor_id(%{id: id}) when is_binary(id), do: id
   defp actor_id(_), do: nil
+
+  # ── Owner-facing reads and change notices (stage 2) ─────────────────
+
+  @topic "support_access"
+
+  @doc """
+  Subscribes the caller to `{:support_access_changed, %{}}`, sent after a
+  session starts, after sessions end (owner, toggle-off or expiry) and after
+  the switch changes. The message carries no data: a subscriber re-reads.
+  """
+  @spec subscribe() :: :ok | {:error, term()}
+  def subscribe, do: Phoenix.PubSub.subscribe(Platform.PubSub, @topic)
+
+  @doc false
+  def broadcast_changed do
+    Phoenix.PubSub.broadcast(Platform.PubSub, @topic, {:support_access_changed, %{}})
+  end
+
+  @doc "Every active session at `now`, either kind, soonest end first."
+  @spec active_sessions_all(DateTime.t()) :: [Session.t()]
+  def active_sessions_all(now \\ DateTime.utc_now()) do
+    from(s in Session,
+      where: is_nil(s.ended_at) and s.not_after > ^now,
+      order_by: [asc: s.not_after]
+    )
+    |> Repo.all()
+  end
+
+  @doc "The `limit` most recent sessions, any state, newest start first."
+  @spec recent_sessions(pos_integer()) :: [Session.t()]
+  def recent_sessions(limit \\ 5) do
+    from(s in Session, order_by: [desc: s.not_before, desc: s.id], limit: ^limit)
+    |> Repo.all()
+  end
+
+  @doc """
+  The `limit` most recent refused requests that were validly signed
+  (`support.grant_refused`), newest first.
+  """
+  @spec recent_refusals(pos_integer()) :: [Event.t()]
+  def recent_refusals(limit \\ 5) do
+    from(e in Event,
+      where: e.event_type == "support.grant_refused",
+      order_by: [desc: e.id],
+      limit: ^limit
+    )
+    |> Repo.all()
+  end
+
+  @doc "Every `support.*` audit row, newest first, at most `limit`."
+  @spec activity(pos_integer()) :: [Event.t()]
+  def activity(limit \\ 200) do
+    from(e in Event,
+      where: like(e.event_type, "support.%"),
+      order_by: [desc: e.id],
+      limit: ^limit
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Which of `user_ids` are vendor support users: `%{user_id => leaves_at}`,
+  where `leaves_at` is the end of the user's latest active admin session, or
+  nil when it has none. Users that are not support users are absent.
+  """
+  @spec support_marks([term()], DateTime.t()) :: %{String.t() => DateTime.t() | nil}
+  def support_marks(user_ids, now \\ DateTime.utc_now()) do
+    ids = user_ids |> Enum.filter(&Platform.UUID.valid?/1) |> Enum.uniq()
+
+    if ids == [] do
+      %{}
+    else
+      from(u in User,
+        where: u.id in ^ids and u.support_vendor == true,
+        left_join: s in Session,
+        on:
+          s.user_id == u.id and s.kind == "admin" and is_nil(s.ended_at) and
+            s.not_after > ^now,
+        group_by: u.id,
+        select: {u.id, max(s.not_after)}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
 
   # ── Per-action audit ─────────────────────────────────────────────────
 
