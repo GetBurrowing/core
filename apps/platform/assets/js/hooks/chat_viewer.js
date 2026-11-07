@@ -87,6 +87,15 @@ const ChatViewer = {
         } else if (e.target.closest("[data-role=viewer-share]")) {
           e.preventDefault()
           this.share()
+        } else if (e.target.closest("[data-role=viewer-download]") && this.phoneShare()) {
+          // The iOS shell has no download handling (no WKDownload, and the
+          // shell allows every same-host main-frame load), so a download
+          // anchor there either does nothing or navigates the whole web view
+          // to the raw file with no way back. On a phone hand the file to
+          // the share sheet ("Save Image", "Save to Files") instead.
+          e.preventDefault()
+          e.stopPropagation()
+          this.shareDownload(e.target.closest("[data-role=viewer-download]"))
         }
       },
       true,
@@ -278,12 +287,40 @@ const ChatViewer = {
 
   // ── Share ─────────────────────────────────────────────────────────────
 
+  phoneShare() {
+    return !!(
+      typeof navigator !== "undefined" &&
+      navigator.share &&
+      window.matchMedia &&
+      window.matchMedia("(pointer: coarse)").matches
+    )
+  },
+
+  shareDownload(anchor) {
+    const href = anchor.getAttribute("href")
+    if (!href) return
+    const url = /^https?:\/\//i.test(href) ? href : window.location.origin + href
+    const name = anchor.getAttribute("download") || "attachment"
+    const byUrl = () => navigator.share({ url, title: name }).catch(() => {})
+    if (typeof fetch !== "function" || typeof File !== "function" || !navigator.canShare) return byUrl()
+    fetch(url, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
+      .then((blob) => {
+        const file = new File([blob], name, { type: blob.type })
+        return navigator.canShare({ files: [file] }) ? navigator.share({ files: [file], title: name }) : byUrl()
+      })
+      .catch((err) => {
+        // A dismissed sheet is AbortError; only a failed fetch falls back.
+        if (!err || err.name !== "AbortError") byUrl()
+      })
+  },
+
   share() {
     const path = this.el.dataset.sharePath
     if (!path) return
     const url = /^https?:\/\//i.test(path) ? path : window.location.origin + path
     const title = (this.el.querySelector("[data-role=viewer-filename]") || {}).textContent
-    if (navigator.share && window.matchMedia("(pointer: coarse)").matches) {
+    if (this.phoneShare()) {
       navigator.share({ url, title: title ? title.trim() : undefined }).catch(() => {})
       return
     }

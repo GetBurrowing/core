@@ -130,6 +130,38 @@ describe("ChatViewer hook on the shared overlay module", () => {
     expect(openLayerCount()).toBe(0)
   })
 
+  it("in the shell (share + coarse pointer) Download goes to the share sheet, never a navigation", async () => {
+    const share = vi.fn(() => Promise.resolve())
+    const prevNav = globalThis.navigator
+    Object.defineProperty(globalThis, "navigator", { value: { share }, configurable: true })
+    try {
+      const { hook, root } = mount()
+      openViewer(document, root)
+      const dl = document.createElement("a")
+      dl.setAttribute("data-role", "viewer-download")
+      dl.setAttribute("href", "/chat/attachments/a1")
+      dl.setAttribute("download", "shot.png")
+      root.appendChild(dl)
+      hook.updated()
+      const click = (coarse) => {
+        window.matchMedia = () => ({ matches: coarse })
+        const e = { target: dl, preventDefault: vi.fn(), stopPropagation: vi.fn() }
+        root.fire("click", e)
+        return e
+      }
+      const desktop = click(false)
+      expect(desktop.preventDefault).not.toHaveBeenCalled()
+      expect(share).not.toHaveBeenCalled()
+
+      const phone = click(true)
+      expect(phone.preventDefault).toHaveBeenCalled()
+      await flush()
+      expect(share).toHaveBeenCalledWith({ url: "https://app.test/chat/attachments/a1", title: "shot.png" })
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { value: prevNav, configurable: true })
+    }
+  })
+
   it("Escape is the module's, and ArrowLeft no longer closes", async () => {
     const { hook, root } = mount()
     openViewer(document, root)
