@@ -91,11 +91,13 @@ defmodule Platform.Secretary.Todos do
             })
           )
 
+        # The id is generated client-side, so a skipped insert still returns
+        # a struct carrying one: the stored row is read back by its key.
         case Repo.insert(changeset,
                on_conflict: :nothing,
                conflict_target: [:user_id, :dedupe_key]
              ) do
-          {:ok, %Todo{id: nil}} ->
+          {:ok, %Todo{}} ->
             {:ok,
              Repo.one!(from(t in Todo, where: t.user_id == ^user_id and t.dedupe_key == ^key))}
 

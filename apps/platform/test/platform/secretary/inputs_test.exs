@@ -122,11 +122,10 @@ defmodule Platform.Secretary.InputsTest do
     say!(denied, a, "denied-xyz")
 
     {:ok, _} =
-      Grants.grant(%{
+      Grants.deny(%{
         principal: {:user, c.id},
         permission: "chat.read",
-        resource: {:space, denied.id},
-        effect: "deny"
+        resource: {:space, denied.id}
       })
 
     allowed = space!("dm", s1.id)
@@ -137,8 +136,7 @@ defmodule Platform.Secretary.InputsTest do
       Grants.grant(%{
         principal: {:user, c.id},
         permission: "chat.read",
-        resource: {:space, allowed.id},
-        effect: "allow"
+        resource: {:space, allowed.id}
       })
 
     %{s1: s1, a: a, b: b, c: c, dm: dm, open: open, exec: exec}
@@ -232,7 +230,17 @@ defmodule Platform.Secretary.InputsTest do
           org_id: ctx.s1.id
         })
 
-      hidden = Repo.insert!(%Task{project_id: project.id, title: "hidden", status: "backlog"})
+      # Grants name projects, not tasks: the hidden task lives in a project
+      # C is denied.
+      {:ok, hidden_project} =
+        Tasks.create_project(%{
+          name: "sec-hidden-#{System.unique_integer([:positive])}",
+          org_id: ctx.s1.id
+        })
+
+      hidden =
+        Repo.insert!(%Task{project_id: hidden_project.id, title: "hidden", status: "backlog"})
+
       shown = Repo.insert!(%Task{project_id: project.id, title: "shown", status: "backlog"})
 
       for {task, body} <- [{hidden, "inbox-hidden-xyz"}, {shown, "inbox-shown-xyz"}] do
@@ -248,11 +256,10 @@ defmodule Platform.Secretary.InputsTest do
       end
 
       {:ok, _} =
-        Grants.grant(%{
+        Grants.deny(%{
           principal: {:user, ctx.c.id},
           permission: "tasks.read",
-          resource: {:task, hidden.id},
-          effect: "deny"
+          resource: {:project, hidden_project.id}
         })
 
       texts = ctx.c |> reload() |> Inputs.gather(@since, sources: [:inbox]) |> Enum.map(& &1.text)

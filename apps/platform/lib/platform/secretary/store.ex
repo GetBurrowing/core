@@ -217,9 +217,22 @@ defmodule Platform.Secretary.Store do
              on_conflict: :nothing,
              conflict_target: [:user_id, :evaluation_id, :kind]
            ) do
-        {:ok, %Reachout{id: nil}} -> {:ok, :duplicate}
-        {:ok, %Reachout{} = row} -> {:ok, row}
-        {:error, changeset} -> {:error, changeset}
+        # The id is generated client-side, so a skipped insert still carries
+        # one: the stored row decides whether this call wrote it.
+        {:ok, %Reachout{id: id}} ->
+          stored =
+            Repo.one!(
+              from(r in Reachout,
+                where:
+                  r.user_id == ^user_id and r.evaluation_id == ^evaluation_id and
+                    r.kind == ^kind
+              )
+            )
+
+          if stored.id == id, do: {:ok, stored}, else: {:ok, :duplicate}
+
+        {:error, changeset} ->
+          {:error, changeset}
       end
     else
       {:error, :not_found}
