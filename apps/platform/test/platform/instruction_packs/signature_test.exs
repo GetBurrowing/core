@@ -30,5 +30,8 @@ defmodule Platform.InstructionPacks.SignatureTest do
     public = Base.decode64!(fixture["public_key"])
     assert {:ok, m} = Signature.verify(fixture["envelope"], %{"vector-root" => public})
     assert Platform.InstructionPacks.Manifest.canonical(m) == fixture["canonical"]
+    {^public, private} = keys()
+    assert {:ok, signed} = Signature.sign(m, "vector-root", private)
+    assert signed == fixture["envelope"]
   end
 end
