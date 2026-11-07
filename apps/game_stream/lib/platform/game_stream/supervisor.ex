@@ -8,7 +8,7 @@ defmodule Platform.GameStream.Supervisor do
   Started unconditionally: with `GAME_STREAM_ENABLED` unset it holds no
   children and nothing ever asks it to start one, because every entry point
   in `Platform.GameStream` checks the flag first. Live state is ephemeral by
-  design — a core restart ends every session, and the host idles its own
+  design — a core restart ends every streamed session, and the host idles its own
   process out.
   """
 
@@ -29,8 +29,7 @@ defmodule Platform.GameStream.Supervisor do
   def init(_opts) do
     children = [
       {Registry, keys: :unique, name: @registry},
-      {DynamicSupervisor, strategy: :one_for_one, name: @sessions},
-      {Platform.GameStream.NativeReconciler, []}
+      {DynamicSupervisor, strategy: :one_for_one, name: @sessions}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

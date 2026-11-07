@@ -29,7 +29,9 @@ defmodule Platform.GameStream.Application do
   # play request starts a session, and has no timer, DB access or
   # subscription of its own.
   @web [Platform.GameStream.Supervisor]
-  @background []
+  # Native reconciliation writes durable rows and dispatches without a request.
+  # Platform.Role classifies this as background, so previews never run it.
+  @background [Platform.GameStream.NativeReconciler]
 
   @impl true
   def start(_type, _args) do
@@ -53,6 +55,10 @@ defmodule Platform.GameStream.Application do
   """
   @spec children(Platform.Role.t()) :: list()
   def children(role) do
-    Platform.Role.select([Platform.GameStream.Supervisor], role, @web)
+    Platform.Role.select(
+      [Platform.GameStream.Supervisor, Platform.GameStream.NativeReconciler],
+      role,
+      @web
+    )
   end
 end
