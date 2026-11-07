@@ -34,10 +34,13 @@ defmodule Platform.GameStream.ApplicationTest do
     app_sup = Platform.GameStream.Application.Supervisor
 
     children = Supervisor.which_children(app_sup)
+
     assert Enum.sort(Enum.map(children, &elem(&1, 0))) ==
              Enum.sort([Platform.GameStream.Supervisor, Platform.GameStream.NativeReconciler])
+
     assert {Platform.GameStream.Supervisor, pid, :supervisor, _} =
              List.keyfind(children, Platform.GameStream.Supervisor, 0)
+
     assert {Platform.GameStream.NativeReconciler, reconciler, :worker, _} =
              List.keyfind(children, Platform.GameStream.NativeReconciler, 0)
 
@@ -107,7 +110,11 @@ defmodule Platform.GameStream.ApplicationTest do
 
     test "the web role starts Play's inert supervisor, and :full keeps today's list" do
       assert App.children(:web) == [Platform.GameStream.Supervisor]
-      assert App.children(:full) == [Platform.GameStream.Supervisor, Platform.GameStream.NativeReconciler]
+
+      assert App.children(:full) == [
+               Platform.GameStream.Supervisor,
+               Platform.GameStream.NativeReconciler
+             ]
     end
   end
 end
