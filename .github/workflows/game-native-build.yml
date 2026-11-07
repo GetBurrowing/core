@@ -63,6 +63,19 @@ jobs:
           GAME_SOURCE: ${{ github.workspace }}
           GAME_OUTPUT: ${{ runner.temp }}/native
         run: bash .native-tools/deployment/game-build/godot.sh
+      - name: Build and execute the packaged dedicated image without an editor or GPU
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GAME_OUTPUT: ${{ runner.temp }}/native
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cp deploy/native/Dockerfile "$GAME_OUTPUT/server/Dockerfile"
+          docker build --tag localhost/voltron-native-ci:task "$GAME_OUTPUT/server"
+          docker run --rm --pull=never --network=none --read-only --cap-drop=ALL --tmpfs /tmp:rw,size=128m --env HOME=/tmp --env XDG_DATA_HOME=/tmp --env VOLTRON_ROOM_CODE=ci-smoke --entrypoint /game/voltron-server.x86_64 localhost/voltron-native-ci:task --headless --quit-after 120 -- --dedicated > native-image.log 2>&1
+          cat native-image.log
+          grep -F "NATIVE_PACKAGE ready role=server" native-image.log
+          ! grep -E 'SCRIPT ERROR:|ERROR:' native-image.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-packages
