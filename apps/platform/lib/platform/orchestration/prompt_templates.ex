@@ -854,7 +854,11 @@ defmodule Platform.Orchestration.PromptTemplates do
   # ticket (`01a04aec`) that did. An existence proof, not a rate. No artifact
   # in this task may assert more.
   #
-  @federation_preamble """
+  # The handoff rule (`Platform.Agents.Manners`, task 01a1b733) is appended
+  # to the constant below, so the default and every freshly seeded row carry
+  # it; `federation_preamble/1` also ensures it on a stored row that predates
+  # it or was edited without it.
+  @federation_preamble_body """
   ## Execution posture — close the ticket
 
   Close the ticket. Do not dither, do not equivocate, and do not fear breaking something: a healthy pipeline fixes what gets broken, and what goes down comes back up. Confidence in execution is expected of every agent here, not only of the orchestrator.
@@ -957,6 +961,8 @@ defmodule Platform.Orchestration.PromptTemplates do
   The Burrow MCP HTTP endpoint registers tools with dots (`attachment.upload_start`, `canvas.create`, `review_request.create`); the Claude Code MCP wrapper exposes them with underscores (`attachment_upload_start`, `canvas_create`, `review_request_create`). If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss). When calling via the Claude Code Agent tool's MCP surface, use the underscore form.\
   """
 
+  @federation_preamble Platform.Agents.Manners.ensure(@federation_preamble_body)
+
   @doc """
   Return the canonical federation preamble string.
 
@@ -1023,6 +1029,13 @@ defmodule Platform.Orchestration.PromptTemplates do
   """
   @spec federation_preamble(map()) :: String.t()
   def federation_preamble(assigns) do
+    # The handoff rule rides on whatever the ladder below returns (default,
+    # seeded row, operator edit or variant), added only if absent, so every
+    # dispatch carries it with no migration (task 01a1b733).
+    assigns |> resolve_federation_preamble() |> Platform.Agents.Manners.ensure()
+  end
+
+  defp resolve_federation_preamble(assigns) do
     # The rescue mirrors the posture documented on `resolve_content/3`:
     # observational/config machinery must not hold the dispatch lifecycle
     # hostage. A DB hiccup costs an editable preamble, never a dispatch.

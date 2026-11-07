@@ -239,7 +239,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateFederationPreambleFalsifierSection
 
       rendered = PromptTemplates.federation_preamble()
 
-      assert rendered == @sentinel
+      # The row wins; the handoff rule is ensured on top of it (task 01a1b733).
+      assert rendered == Platform.Agents.Manners.ensure(@sentinel)
       refute rendered == constant
       refute rendered =~ @falsifier_heading
 
