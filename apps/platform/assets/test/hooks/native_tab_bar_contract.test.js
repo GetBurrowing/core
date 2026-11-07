@@ -65,7 +65,7 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     const doc = { documentElement: { matches: () => false }, querySelector: () => null }
     const sent = Object.keys(stateOf(span, win, doc)).sort()
     const read = [...tabBarSwift.matchAll(/payload\["(\w+)"\]/g)].map((m) => m[1])
-    expect(sent).toEqual(["inbox_dot", "ink", "items", "scheme", "selected", "visible"])
+    expect(sent).toEqual(["inbox_badge", "inbox_dot", "ink", "items", "scheme", "selected", "visible"])
     expect([...new Set(read)].sort()).toEqual(sent)
   })
 
@@ -88,6 +88,17 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     expect(bridge[0]).not.toMatch(/data-native-ink[^>]*bottom-nav-tab/)
     expect(appCss).toContain('.bottom-nav [data-native-ink="selected"] {\n  color: var(--native-tab-selected, var(--color-primary));\n}')
     expect(appCss).toContain('.bottom-nav [data-native-ink="unselected"] {\n  color: var(--native-tab-unselected, var(--tab-ink));\n}')
+  })
+
+  // Task 01a1b673 stage 3: the bridge span carries badge_text/1 of the count,
+  // the hook sends it as inbox_badge, and native reads it as a String.
+  it("data-inbox-badge is badge_text/1 on the bridge, sent as inbox_badge, read as a String", () => {
+    const bridge = iconRail.match(/<span\s+id="native-tab-bridge"[\s\S]*?<\/span>\s*<\/span>/)
+    expect(bridge).not.toBeNull()
+    expect(bridge[0]).toContain("data-inbox-badge={badge_text(@inbox_unread_count)}")
+    expect(bridge[0]).toContain("data-inbox-unread={to_string(@inbox_unread?)}")
+    expect(hookJs).toContain('el.getAttribute("data-inbox-badge")')
+    expect(tabBarSwift).toMatch(/payload\["inbox_badge"\] as\? String/)
   })
 
   it("the tap detail native sends carries the key and reselect the hook reads", () => {

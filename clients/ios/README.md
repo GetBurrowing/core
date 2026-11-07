@@ -69,15 +69,20 @@ window event `burrowNativeTab`.
 
 **Contract (stage 2).**
 
-- Web to native: `SuiteNative.tabBarState({items, selected, inbox_dot, visible})`.
+- Web to native: `SuiteNative.tabBarState({items, selected, inbox_dot, inbox_badge, visible, ink, scheme})`.
   `items` is the list of tab keys in the web bar's order. Native holds only
   a key to {label, glyph} map for `chat`, `calendar`, `meetings`,
   `inbox` and `more` (since task 01a18d9f stage 5). It draws exactly the keys sent, in order, drops
   unknown or repeated keys, and keeps the first five (logging the cut), so
   iOS never adds its own More. A missing or empty `items`, or one with no
   known key, keeps the previous items. Native never invents a tab: with no
-  items yet, the bar stays hidden. `selected` is a key or `null`; `inbox_dot`
-  shows the system red dot (badge `""`) on Inbox; `visible` slides the bar
+  items yet, the bar stays hidden. `selected` is a key or `null`;
+  `inbox_badge` (task 01a1b673 stage 3) is the Inbox count label the web
+  badge shows (`"1"` to `"9"`, then `"9+"`), or `null` at 0, and becomes the
+  Inbox tab's badge value in the system badge colours (red, white text);
+  `inbox_dot` is true exactly when the count is above 0 and stays for older
+  web builds: sent alone it shows the system red dot (badge `""`). At 0 the
+  Inbox tab has no badge; `visible` slides the bar
   out and back. A missing or wrong-typed field leaves that field as it was.
   The method's existence is the web's feature test; old builds keep the web bar.
 - Native to web: window event `burrowNativeTab`, `detail: {key, reselect}`.
@@ -98,7 +103,8 @@ window event `burrowNativeTab`.
 the web bar (`IconRail.bottom_rail/1`). The items are
 `IconRail.mobile_tab_keys/0 ++ [:more]` (`chat,calendar,meetings,inbox,more`),
 sent from the span's `data-items`; `data-active-key` and
-`data-inbox-unread` give `selected` and `inbox_dot`. A tap clicks the
+`data-inbox-unread` give `selected` and `inbox_dot`, and `data-inbox-badge`
+(`IconRail.badge_text/1` of the count, absent at 0) gives `inbox_badge`. A tap clicks the
 matching `#bottom-nav [data-destination]` element, so it reuses the web
 bar's links and the More button. A reselect scrolls the page to the top,
 or at the top goes to the tab's root; More always toggles its sheet.

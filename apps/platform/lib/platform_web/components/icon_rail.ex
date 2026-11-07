@@ -177,7 +177,11 @@ defmodule PlatformWeb.Components.IconRail do
            draws exactly what this bar draws. The two ink probes (task
            01a174e8 stage 1) resolve the bar's selected and unselected inks
            through app.css, so the hook can send them as plain colours. They
-           are NOT .bottom-nav-tab: tab_pill.js and other selectors match that. --%>
+           are NOT .bottom-nav-tab: tab_pill.js and other selectors match that.
+           data-inbox-badge (task 01a1b673 stage 3) is badge_text/1 of the
+           count ("1".."9", then "9+"), so the native bar shows the same label
+           as the web badge; at 0 it is nil and the attribute is absent.
+           data-inbox-unread stays for app builds that only read the dot. --%>
       <span
         id="native-tab-bridge"
         phx-hook="NativeTabBar"
@@ -185,6 +189,7 @@ defmodule PlatformWeb.Components.IconRail do
         data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
         data-active-key={@active_key}
         data-inbox-unread={to_string(@inbox_unread?)}
+        data-inbox-badge={badge_text(@inbox_unread_count)}
         data-more-open={to_string(@more_open)}
       >
         <span data-native-ink="selected"></span>
