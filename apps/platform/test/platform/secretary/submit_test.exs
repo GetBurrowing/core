@@ -21,10 +21,22 @@ defmodule Platform.Secretary.SubmitTest do
     b = Ecto.UUID.generate()
 
     refs = [
-      %{"ref_type" => "inbox_item", "ref_id" => a, "kind" => "inbox:task_plan_review",
-        "kind_key" => "inbox:task_plan_review", "space_id" => nil, "mentioned" => false},
-      %{"ref_type" => "inbox_item", "ref_id" => b, "kind" => "inbox:briefing",
-        "kind_key" => "inbox:briefing", "space_id" => nil, "mentioned" => false}
+      %{
+        "ref_type" => "inbox_item",
+        "ref_id" => a,
+        "kind" => "inbox:task_plan_review",
+        "kind_key" => "inbox:task_plan_review",
+        "space_id" => nil,
+        "mentioned" => false
+      },
+      %{
+        "ref_type" => "inbox_item",
+        "ref_id" => b,
+        "kind" => "inbox:briefing",
+        "kind_key" => "inbox:briefing",
+        "space_id" => nil,
+        "mentioned" => false
+      }
     ]
 
     {:ok, batch} = Store.create_batch(user.id, %{item_refs: refs, reserved_tokens: 10})
@@ -34,17 +46,31 @@ defmodule Platform.Secretary.SubmitTest do
 
   defp eval(ref_id, tag, rank, extra \\ %{}) do
     Map.merge(
-      %{"ref_type" => "inbox_item", "ref_id" => ref_id, "tag" => tag, "group_key" => "none",
-        "reason" => "because #{tag}", "rank" => rank},
+      %{
+        "ref_type" => "inbox_item",
+        "ref_id" => ref_id,
+        "tag" => tag,
+        "group_key" => "none",
+        "reason" => "because #{tag}",
+        "rank" => rank
+      },
       extra
     )
   end
 
   defp apply!(batch, answer),
-    do: Submit.apply(batch, answer, model_version: "host:test:claude_code", goal_keys: [], brief_max_lines: 3)
+    do:
+      Submit.apply(batch, answer,
+        model_version: "host:test:claude_code",
+        goal_keys: [],
+        brief_max_lines: 3
+      )
 
   defp model_rows(user_id),
-    do: Repo.all(from(e in Evaluation, where: e.user_id == ^user_id and e.model_version != "fallback"))
+    do:
+      Repo.all(
+        from(e in Evaluation, where: e.user_id == ^user_id and e.model_version != "fallback")
+      )
 
   test "a ref outside the batch rejects the whole answer", ctx do
     outside = Ecto.UUID.generate()
@@ -67,10 +93,16 @@ defmodule Platform.Secretary.SubmitTest do
     outside = Ecto.UUID.generate()
 
     for answer <- [
-          %{"evaluations" => [eval(ctx.a, "decide", 1)],
-            "brief" => [%{"ref_type" => "inbox_item", "ref_id" => outside, "line" => "x"}]},
-          %{"evaluations" => [eval(ctx.a, "decide", 1)],
-            "todos_suggested" => [%{"ref_type" => "inbox_item", "ref_id" => outside, "title" => "x"}]},
+          %{
+            "evaluations" => [eval(ctx.a, "decide", 1)],
+            "brief" => [%{"ref_type" => "inbox_item", "ref_id" => outside, "line" => "x"}]
+          },
+          %{
+            "evaluations" => [eval(ctx.a, "decide", 1)],
+            "todos_suggested" => [
+              %{"ref_type" => "inbox_item", "ref_id" => outside, "title" => "x"}
+            ]
+          },
           %{"evaluations" => [eval(ctx.a, "decide", 1)], "todos_done" => [%{"id" => outside}]}
         ] do
       assert {:error, {:rejected, _}} = apply!(ctx.batch, answer)
@@ -80,7 +112,9 @@ defmodule Platform.Secretary.SubmitTest do
   end
 
   test "schema violations reject: bad tag, unknown goal, too long a brief, not an object", ctx do
-    lines = for id <- [ctx.a, ctx.b, ctx.a, ctx.b], do: %{"ref_type" => "inbox_item", "ref_id" => id, "line" => "l"}
+    lines =
+      for id <- [ctx.a, ctx.b, ctx.a, ctx.b],
+          do: %{"ref_type" => "inbox_item", "ref_id" => id, "line" => "l"}
 
     for answer <- [
           %{"evaluations" => [eval(ctx.a, "urgent", 1)]},
@@ -98,12 +132,20 @@ defmodule Platform.Secretary.SubmitTest do
   test "a valid answer is written, the brief replaced, and the view told", ctx do
     answer = %{
       "evaluations" => [
-        eval(ctx.a, "decide", 1, %{"needs_you_now" => true, "reason" => String.duplicate("r", 400)}),
+        eval(ctx.a, "decide", 1, %{
+          "needs_you_now" => true,
+          "reason" => String.duplicate("r", 400)
+        }),
         eval(ctx.b, "fyi", 2)
       ],
       "brief" => [
-        %{"ref_type" => "inbox_item", "ref_id" => ctx.a, "line" => "Say yes to the plan",
-          "action_label" => "Review", "tag" => "risk"}
+        %{
+          "ref_type" => "inbox_item",
+          "ref_id" => ctx.a,
+          "line" => "Say yes to the plan",
+          "action_label" => "Review",
+          "tag" => "risk"
+        }
       ]
     }
 
@@ -112,8 +154,16 @@ defmodule Platform.Secretary.SubmitTest do
     assert_receive {:secretary_updated, ^user_id}
 
     a = Store.get_evaluation(user_id, "inbox_item", ctx.a)
-    assert %{tag: "decide", brief_rank: 1, brief_line: "Say yes to the plan", brief_tag: "risk",
-             needs_you_now: true, model_version: "host:test:claude_code"} = a
+
+    assert %{
+             tag: "decide",
+             brief_rank: 1,
+             brief_line: "Say yes to the plan",
+             brief_tag: "risk",
+             needs_you_now: true,
+             model_version: "host:test:claude_code"
+           } = a
+
     assert String.length(a.reason) == 200
     assert %{tag: "fyi", brief_rank: nil} = Store.get_evaluation(user_id, "inbox_item", ctx.b)
     assert %{status: "submitted"} = Store.get_batch(user_id, ctx.batch.id)
@@ -133,8 +183,14 @@ defmodule Platform.Secretary.SubmitTest do
 
   test "feedback is applied after the model: hide_kind -> quiet, this_matters -> waiting above FYI",
        ctx do
-    {:ok, _} = Store.record_feedback(ctx.user.id, %{kind_key: "inbox:task_plan_review", action: "hide_kind"})
-    {:ok, _} = Store.record_feedback(ctx.user.id, %{kind_key: "inbox:briefing", action: "this_matters"})
+    {:ok, _} =
+      Store.record_feedback(ctx.user.id, %{
+        kind_key: "inbox:task_plan_review",
+        action: "hide_kind"
+      })
+
+    {:ok, _} =
+      Store.record_feedback(ctx.user.id, %{kind_key: "inbox:briefing", action: "this_matters"})
 
     answer = %{
       "evaluations" => [eval(ctx.a, "decide", 1), eval(ctx.b, "fyi", 2)],
@@ -142,21 +198,35 @@ defmodule Platform.Secretary.SubmitTest do
     }
 
     assert {:ok, _} = apply!(ctx.batch, answer)
-    assert %{tag: "quiet", brief_rank: nil} = Store.get_evaluation(ctx.user.id, "inbox_item", ctx.a)
+
+    assert %{tag: "quiet", brief_rank: nil} =
+             Store.get_evaluation(ctx.user.id, "inbox_item", ctx.a)
+
     assert %{tag: "waiting", rank: 1} = Store.get_evaluation(ctx.user.id, "inbox_item", ctx.b)
   end
 
   test "todos_done must name the person's own to-do in the batch", ctx do
     {:ok, todo} = Todos.add_own(ctx.user.id, "Send the deck")
-    ref = %{"ref_type" => "todo", "ref_id" => todo.id, "kind" => "todo:kept", "kind_key" => "todo:kept"}
+
+    ref = %{
+      "ref_type" => "todo",
+      "ref_id" => todo.id,
+      "kind" => "todo:kept",
+      "kind_key" => "todo:kept"
+    }
+
     {:ok, batch} = Store.create_batch(ctx.user.id, %{item_refs: [ref]})
 
     answer = %{
-      "evaluations" => [%{"ref_type" => "todo", "ref_id" => todo.id, "tag" => "todo", "group_key" => "none"}],
+      "evaluations" => [
+        %{"ref_type" => "todo", "ref_id" => todo.id, "tag" => "todo", "group_key" => "none"}
+      ],
       "todos_done" => [%{"id" => todo.id, "reason" => "the deck went out on Tuesday"}]
     }
 
     assert {:ok, %{todos_done: 1}} = apply!(batch, answer)
-    assert %{status: "done", done_reason: "the deck went out on Tuesday"} = Todos.get(ctx.user.id, todo.id)
+
+    assert %{status: "done", done_reason: "the deck went out on Tuesday"} =
+             Todos.get(ctx.user.id, todo.id)
   end
 end

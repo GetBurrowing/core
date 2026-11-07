@@ -24,7 +24,9 @@ defmodule Platform.Secretary.PassTest do
     :telemetry.attach(
       handler,
       Pass.event(),
-      fn _event, measurements, metadata, _ -> send(test_pid, {:batch, measurements, metadata}) end,
+      fn _event, measurements, metadata, _ ->
+        send(test_pid, {:batch, measurements, metadata})
+      end,
       nil
     )
 
@@ -97,12 +99,15 @@ defmodule Platform.Secretary.PassTest do
     inbox_item!(user)
 
     assert {:ok, :submitted} = run(user, [])
+
     assert [%{status: "submitted", actual_tokens: 23, reserved_tokens: reserved}] =
              Store.list_batches(user.id)
 
     assert reserved > 23
     assert Budget.spent_today(user.id) == reserved
-    assert_received {:batch, %{actual_tokens: 23, reserved_tokens: ^reserved}, %{outcome: :submitted}}
+
+    assert_received {:batch, %{actual_tokens: 23, reserved_tokens: ^reserved},
+                     %{outcome: :submitted}}
   end
 
   test "a timeout keeps its reservation and falls back with a failed attempt" do
@@ -160,7 +165,9 @@ defmodule Platform.Secretary.PassTest do
     assert {:ok, :submitted} = run(user, [])
     assert_received {:oneshot_called, _, prompt}
     assert prompt =~ "the morning briefing"
-    assert %{model_version: "host:test:claude_code"} = Store.get_evaluation(user.id, "inbox_item", item.id)
+
+    assert %{model_version: "host:test:claude_code"} =
+             Store.get_evaluation(user.id, "inbox_item", item.id)
   end
 
   describe "Fallback.classify/2" do

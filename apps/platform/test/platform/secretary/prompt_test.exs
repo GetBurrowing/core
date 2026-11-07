@@ -19,7 +19,12 @@ defmodule Platform.Secretary.PromptTest do
   @since ~U[2000-01-01 00:00:00Z]
 
   defp prompt_for(user) do
-    Prompt.build(user, Inputs.gather(user, @since), Context.for_user(user), SecretaryPolicy.control())
+    Prompt.build(
+      user,
+      Inputs.gather(user, @since),
+      Context.for_user(user),
+      SecretaryPolicy.control()
+    )
   end
 
   setup do
@@ -48,7 +53,9 @@ defmodule Platform.Secretary.PromptTest do
     [_, rest] = String.split(prompt, Host.inputs_open() <> "\n", parts: 2)
     [json, _] = String.split(rest, "\n" <> Host.inputs_close(), parts: 2)
 
-    assert %{"today" => _, "brief_max_lines" => 5, "items" => [_ | _] = items} = Jason.decode!(json)
+    assert %{"today" => _, "brief_max_lines" => 5, "items" => [_ | _] = items} =
+             Jason.decode!(json)
+
     assert Enum.all?(items, &Map.has_key?(&1, "ref_id"))
     assert prompt =~ "untrusted data"
     assert prompt =~ "\"evaluations\""

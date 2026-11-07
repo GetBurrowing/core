@@ -18,7 +18,9 @@ defmodule Platform.SecretaryFixtures do
 
   @doc "A plain member of a fresh tenant org."
   def person!(label \\ "p") do
-    org = Tenancy.get_org!(tenant_org_id("secretary_#{label}_#{System.unique_integer([:positive])}"))
+    org =
+      Tenancy.get_org!(tenant_org_id("secretary_#{label}_#{System.unique_integer([:positive])}"))
+
     user = create_user!()
     plain_member!(user, org)
     Accounts.get_user(user.id)
@@ -56,7 +58,12 @@ defmodule Platform.SecretaryFixtures do
           {:ok,
            %{
              text: text,
-             usage: %{input_tokens: 11, output_tokens: 7, cache_read_tokens: 3, cache_creation_tokens: 2},
+             usage: %{
+               input_tokens: 11,
+               output_tokens: 7,
+               cache_read_tokens: 3,
+               cache_creation_tokens: 2
+             },
              model_version: "host:test:claude_code"
            }}
 
@@ -108,14 +115,22 @@ defmodule Platform.SecretaryFixtures do
     say!(denied, a, "denied-xyz")
 
     {:ok, _} =
-      Grants.deny(%{principal: {:user, c.id}, permission: "chat.read", resource: {:space, denied.id}})
+      Grants.deny(%{
+        principal: {:user, c.id},
+        permission: "chat.read",
+        resource: {:space, denied.id}
+      })
 
     allowed = space!("dm", s1.id)
     say!(allowed, a, "allowed-xyz")
     add_user!(allowed.id, d.id)
 
     {:ok, _} =
-      Grants.grant(%{principal: {:user, c.id}, permission: "chat.read", resource: {:space, allowed.id}})
+      Grants.grant(%{
+        principal: {:user, c.id},
+        permission: "chat.read",
+        resource: {:space, allowed.id}
+      })
 
     %{
       a: Accounts.get_user(a.id),
@@ -134,7 +149,13 @@ defmodule Platform.SecretaryFixtures do
   @doc "A space of `kind`."
   def space!(kind, org_id) do
     n = System.unique_integer([:positive])
-    Repo.insert!(%Space{kind: kind, name: "#{kind} #{n}", slug: "sec3-#{kind}-#{n}", org_id: org_id})
+
+    Repo.insert!(%Space{
+      kind: kind,
+      name: "#{kind} #{n}",
+      slug: "sec3-#{kind}-#{n}",
+      org_id: org_id
+    })
   end
 
   @doc "`user` joins `space` and says `text`. Options: `:metadata`."

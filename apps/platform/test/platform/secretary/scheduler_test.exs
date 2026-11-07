@@ -79,7 +79,12 @@ defmodule Platform.Secretary.SchedulerTest do
     payload = SecretaryPolicy.control()
 
     start!(
-      pass_opts: [eligible: eligible(), request: request(self(), slow), payload: payload, install_payload: payload]
+      pass_opts: [
+        eligible: eligible(),
+        request: request(self(), slow),
+        payload: payload,
+        install_payload: payload
+      ]
     )
 
     uid = user.id
@@ -146,6 +151,7 @@ defmodule Platform.Secretary.SchedulerTest do
         ] do
       assert Scheduler.handle_message_posted(@event, %{}, metadata, nil) == :ok
     end
+
     _ = :sys.get_state(pid)
 
     assert Process.alive?(pid)
