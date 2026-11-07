@@ -30,14 +30,16 @@ defmodule Platform.Agents.Burrow do
 
   ## Default roles
 
-  `ensure/2` pins Burrow to each of `default_roles/0` (`historian`,
-  `meeting_scribe`, `meeting_producer`, `triage_officer`) that NO agent holds,
-  through `Platform.Roles.assign_role/2`, so historian curation (org-page
-  writes, starting with `org/page/identity.md` in the setup guide) and the
-  meeting roles work from the first run (task 01a19aa4 stage 2). A role
-  another agent already holds is never taken; `assign_role/2` does not
-  replace a pinned role either. Re-running `ensure/2` changes nothing. The
-  owner can change the roles later in the Control Center.
+  Burrow holds every role in `Platform.Roles.Role.valid_keys/0` that no other
+  agent holds (`default_roles/0` is that roster, derived, never a second
+  list), so all of the install's role work, from historian curation and the
+  meeting roles to the architect gate and the scheduled sweeps, runs from the
+  first run. `ensure/2` fills them through `fill_unheld_roles/1`, and existing
+  installs got the same fill once from the data migration
+  `burrow_holds_unheld_roles`. A role another agent holds is never taken;
+  `Platform.Roles.assign_role/2` does not replace a pinned role either.
+  Re-running `ensure/2` changes nothing. The owner can hand any role to a
+  specialist in the Control Center.
 
   ## Owner and admins
 
@@ -57,11 +59,13 @@ defmodule Platform.Agents.Burrow do
 
   @name "Burrow"
   @slug "burrow"
-  @default_roles ~w(historian meeting_scribe meeting_producer triage_officer)
 
-  @doc "The roles `ensure/2` gives Burrow when no agent holds them."
+  @doc """
+  The roles `ensure/2` gives Burrow when no agent holds them: the whole
+  roster, `Platform.Roles.Role.valid_keys/0`.
+  """
   @spec default_roles() :: [String.t()]
-  def default_roles, do: @default_roles
+  def default_roles, do: Platform.Roles.Role.valid_keys()
 
   @doc "The agent's display name."
   def name, do: @name
@@ -102,7 +106,7 @@ defmodule Platform.Agents.Burrow do
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
     owner_id
     |> ensure_agent(harness)
-    |> assign_default_roles()
+    |> fill_after_ensure()
   end
 
   defp ensure_agent(owner_id, harness) do
@@ -138,23 +142,40 @@ defmodule Platform.Agents.Burrow do
     end
   end
 
-  # Only roles no agent holds: never take a role from another agent.
-  defp assign_default_roles({:ok, %Agent{id: agent_id}} = ok) do
-    for role <- @default_roles, is_nil(Roles.agent_id_for_role(role)) do
-      case Roles.assign_role(role, agent_id) do
-        {:ok, _assignment} ->
-          :ok
-
-        {:error, reason} ->
-          # Lost a race for the role: whoever holds it now keeps it.
-          Logger.warning("[Burrow] role #{role} not assigned: #{inspect(reason)}")
-      end
-    end
-
+  defp fill_after_ensure({:ok, %Agent{} = agent} = ok) do
+    _taken = fill_unheld_roles(agent)
     ok
   end
 
-  defp assign_default_roles(other), do: other
+  defp fill_after_ensure(other), do: other
+
+  @doc """
+  Give `agent` every role in `default_roles/0` that no agent holds, through
+  `Platform.Roles.assign_role/2`. Returns the role keys it took.
+
+  It never takes a role another agent holds (one agent per role), and a role
+  lost to a concurrent insert is logged and left with its winner. A second
+  run takes nothing and writes nothing.
+  """
+  @spec fill_unheld_roles(Agent.t()) :: [String.t()]
+  def fill_unheld_roles(%Agent{id: agent_id}) do
+    for role <- default_roles(),
+        is_nil(Roles.agent_id_for_role(role)),
+        taken?(role, agent_id),
+        do: role
+  end
+
+  defp taken?(role, agent_id) do
+    case Roles.assign_role(role, agent_id) do
+      {:ok, _assignment} ->
+        true
+
+      {:error, reason} ->
+        # Lost a race for the role: whoever holds it now keeps it.
+        Logger.warning("[Burrow] role #{role} not assigned: #{inspect(reason)}")
+        false
+    end
+  end
 
   defp harness_or(agent, fallback), do: harness(agent) || fallback
 

@@ -7,6 +7,7 @@ defmodule Platform.Agents.BurrowTest do
   alias Platform.Accounts.User
   alias Platform.Agents.{AgentRuntime, Burrow, NativeAgents, NativeLogin}
   alias Platform.Repo
+  alias Platform.Roles.{Role, RoleAssignment}
   alias Platform.Tenancy.OrgMembership
 
   setup do
@@ -289,7 +290,7 @@ defmodule Platform.Agents.BurrowTest do
 
   describe "ensure/2 default roles" do
     setup do
-      for role <- Burrow.default_roles(), do: :ok = Platform.Roles.unassign_role(role)
+      for role <- Role.valid_keys(), do: :ok = Platform.Roles.unassign_role(role)
       :ok
     end
 
@@ -305,18 +306,49 @@ defmodule Platform.Agents.BurrowTest do
       |> Repo.insert!()
     end
 
-    test "the four default roles are historian and the meeting roles" do
-      assert Burrow.default_roles() ==
-               ~w(historian meeting_scribe meeting_producer triage_officer)
+    # A literal floor, so a mutant that shrinks `Role.valid_keys/0` cannot make
+    # the guards below vacuous.
+    @roster ~w(designer historian meeting_scribe meeting_producer triage_officer
+               security_guard architect agents_leader scientist janitor)
+
+    test "the default roles are the whole roster" do
+      assert Burrow.default_roles() == Role.valid_keys()
+      assert Enum.sort(Role.valid_keys()) == Enum.sort(@roster)
     end
 
-    for role <- ~w(historian meeting_scribe meeting_producer triage_officer) do
-      test "an unassigned #{role} goes to Burrow" do
-        owner = admin!()
-        assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
-        assert Platform.Roles.agent_id_for_role(unquote(role)) == agent.id
-      end
+    test "GUARD: on a fresh install Burrow holds every role" do
+      assert Repo.aggregate(RoleAssignment, :count) == 0
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
 
+      for key <- Role.valid_keys(),
+          do: assert(Platform.Roles.agent_id_for_role(key) == agent.id, key)
+
+      roles = Repo.all(Role)
+      assert Enum.sort(Enum.map(roles, & &1.key)) == Enum.sort(@roster)
+
+      for role <- roles,
+          do: assert(Platform.Roles.agent_id_for_role(role.key) == agent.id, role.key)
+    end
+
+    test "roles another agent holds stay with it; Burrow takes the rest" do
+      other = other_agent!()
+      {:ok, _} = Platform.Roles.assign_role("designer", other.id)
+      {:ok, _} = Platform.Roles.assign_role("architect", other.id)
+      owner = admin!()
+
+      assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+
+      assert Platform.Roles.agent_id_for_role("designer") == other.id
+      assert Platform.Roles.agent_id_for_role("architect") == other.id
+
+      rest = @roster -- ~w(designer architect)
+      assert length(rest) == 8
+      for key <- rest, do: assert(Platform.Roles.agent_id_for_role(key) == agent.id, key)
+    end
+
+    for role <- ~w(designer historian meeting_scribe meeting_producer triage_officer
+                   security_guard architect agents_leader scientist janitor) do
       test "a #{role} held by another agent is untouched" do
         other = other_agent!()
         {:ok, _} = Platform.Roles.assign_role(unquote(role), other.id)
@@ -331,16 +363,32 @@ defmodule Platform.Agents.BurrowTest do
       end
     end
 
+    test "fill_unheld_roles/1 returns the keys it took, then [] with no writes" do
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "codex")
+      before = Repo.all(from(ra in RoleAssignment, order_by: ra.role_key))
+      assert length(before) == length(@roster)
+
+      assert Burrow.fill_unheld_roles(agent) == []
+      assert Repo.all(from(ra in RoleAssignment, order_by: ra.role_key)) == before
+
+      :ok = Platform.Roles.unassign_role("janitor")
+      assert Burrow.fill_unheld_roles(agent) == ["janitor"]
+      assert Platform.Roles.agent_id_for_role("janitor") == agent.id
+    end
+
     test "re-running ensure/2 changes no assignment and raises nothing" do
       owner = admin!()
       assert {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
-      before = Repo.all(from(ra in Platform.Roles.RoleAssignment, order_by: ra.role_key))
+      before = Repo.all(from(ra in RoleAssignment, order_by: ra.role_key))
 
       assert {:ok, ^agent} = Burrow.ensure(owner.id, "claude_code")
       assert {:ok, again} = Burrow.ensure(owner.id, "codex")
       assert again.id == agent.id
 
-      assert Repo.all(from(ra in Platform.Roles.RoleAssignment, order_by: ra.role_key)) == before
+      # Same rows: ids and inserted_at included.
+      assert Repo.all(from(ra in RoleAssignment, order_by: ra.role_key)) == before
+      assert Burrow.fill_unheld_roles(agent) == []
 
       for role <- Burrow.default_roles(),
           do: assert(Platform.Roles.agent_id_for_role(role) == agent.id)
