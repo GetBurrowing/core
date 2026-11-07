@@ -10,6 +10,13 @@ env_or = fn name, default ->
   end
 end
 
+# Host updater mounts (task 01a1b7b6 stage 3): the inbox core writes requests
+# into and the status file the updater publishes. Defaults are the paths the
+# installer's compose.override.yaml mounts; `Platform.Updates` documents both.
+config :platform, Platform.Updates,
+  core_dir: env_or.("BURROW_UPDATER_CORE_DIR", "/run/burrow/updater/core"),
+  status_path: env_or.("BURROW_UPDATER_STATUS", "/run/burrow/updater/status/status.json")
+
 # Ensure Erlang's :ssl uses CAStore for outbound HTTPS (web push, etc.)
 # hackney (used by WebPushEncryption/HTTPoison) needs cacertfile explicitly
 Application.ensure_all_started(:castore)
