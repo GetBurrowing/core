@@ -11,7 +11,7 @@ defmodule Platform.GameStream.NativeSessions do
 
   def play(user, channel_id) do
     with true <- Platform.GameStream.enabled?(),
-         {:ok, binding} <- GameChannels.authorize(user, channel_id),
+         {:ok, _binding} <- GameChannels.authorize(user, channel_id),
          {:ok, row} <- transaction(fn ->
            Repo.one!(from s in Space, where: s.id == ^channel_id, lock: "FOR UPDATE")
            # Recheck authorization after waiting for a channel configuration change.
@@ -22,7 +22,7 @@ defmodule Platform.GameStream.NativeSessions do
            else
              build = NativeBuild.latest(current.project_id) || Repo.rollback(:no_build)
              host = pick_host() || Repo.rollback(:no_native_host)
-             {experiment, variant, timeout} = resolve_idle(channel_id, binding.project_id)
+             {experiment, variant, timeout} = resolve_idle(channel_id, current.project_id)
              now = DateTime.utc_now()
              Repo.insert!(%NativeSessionRecord{id: UUIDv7.generate(), channel_id: channel_id,
                project_id: current.project_id, build_id: build.id, immutable_build: build.manifest,
@@ -61,6 +61,8 @@ defmodule Platform.GameStream.NativeSessions do
       taken = MapSet.new(held, & &1.slot)
       slot = Enum.find(0..(row.capacity - 1), &(not MapSet.member?(taken, &1)))
       if is_nil(slot), do: Repo.rollback(:full)
+      reconnect? = Repo.exists?(from t in JoinToken, where: t.session_id == ^row.id and t.user_id == ^user.id and not is_nil(t.consumed_at))
+      if reconnect?, do: Repo.update!(Ecto.Changeset.change(row, reconnect_attempts: row.reconnect_attempts + 1))
       raw = JoinToken.mint()
       token = Repo.insert!(%JoinToken{id: UUIDv7.generate(), session_id: row.id, user_id: user.id,
         channel_id: row.channel_id, build_id: row.build_id, generation: row.generation,
@@ -127,11 +129,17 @@ defmodule Platform.GameStream.NativeSessions do
                  Enum.all?(admissions, &(is_binary(&1) and Platform.UUID.valid?(&1))),
                  do: Repo.rollback(:invalid_status)
                # Only already consumed reservations may be reported as connected.
+               elapsed = max(0, min(30, DateTime.diff(DateTime.utc_now(), row.heartbeat_at || row.started_at)))
+               connected_count = Repo.aggregate(from(t in JoinToken, where: t.session_id == ^row.id and t.connected), :count)
+               # Give an admitted peer time to appear in the game's next roster file.
+               cutoff = DateTime.add(DateTime.utc_now(), -15)
                Repo.update_all(from(t in JoinToken, where: t.session_id == ^row.id and
-                 t.connected and t.id not in ^admissions), set: [connected: false])
+                 t.connected and t.id not in ^admissions and t.consumed_at < ^cutoff), set: [connected: false])
                active? = reservations(row.id, DateTime.utc_now()) != []
                Repo.update!(Ecto.Changeset.change(row, state: "running", endpoint: endpoint,
                  host_handle: row.id, host_credential_hash: hash, heartbeat_at: DateTime.utc_now(),
+                 player_seconds: row.player_seconds + elapsed * connected_count,
+                 idle_seconds: row.idle_seconds + if(connected_count == 0, do: elapsed, else: 0),
                  idle_since: if(active?, do: nil, else: row.idle_since || DateTime.utc_now())))
            end
          end) do
@@ -206,7 +214,7 @@ defmodule Platform.GameStream.NativeSessions do
     Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}:[0-9]{1,5}\z/, endpoint) and
     (endpoint |> String.split(":") |> List.last() |> String.to_integer()) in 1..65535
   defp stopping(row, reason, now), do: Repo.update!(Ecto.Changeset.change(row, state: "stopping",
-    reason: reason, idle_seconds: if(row.idle_since, do: max(0, DateTime.diff(now, row.idle_since)), else: 0)))
+    reason: reason, idle_seconds: row.idle_seconds + if(row.idle_since, do: max(0, min(30, DateTime.diff(now, row.heartbeat_at || row.started_at))), else: 0)))
   defp finish(row, state, reason) do
     Repo.update_all(from(t in JoinToken, where: t.session_id == ^row.id), set: [connected: false])
     Repo.update!(Ecto.Changeset.change(row, state: state, reason: reason, ended_at: DateTime.utc_now(),

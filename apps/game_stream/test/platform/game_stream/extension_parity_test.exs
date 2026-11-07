@@ -576,8 +576,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
         Application.put_env(:game_stream, :enabled, flag)
         assert ToolSurface.all_bundles() == @main_bundles
         assert RuntimeProfiles.valid_modules() == @main_valid_bundles
-        assert Metrics.known_metrics() == @main_metrics
-        assert digest(Metrics.catalog()) == @main_metrics_catalog_digest
+        assert Metrics.known_metrics() == Enum.sort(@main_metrics ++ ["native_idle_server_seconds_per_player_minute", "native_reconnect_success"])
+        assert digest(Enum.reject(Metrics.catalog(), &(&1.slug in ["native_idle_server_seconds_per_player_minute", "native_reconnect_success"]))) == @main_metrics_catalog_digest
         assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == rail_for(flag)
       end
 

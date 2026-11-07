@@ -42,8 +42,9 @@ defmodule Platform.GameStream.NativeSessionsTest do
     manifest = %{"id" => "native-#{n}", "repo_url" => project.repo_url, "engine" => "godot", "protocol_version" => 1, "capacity" => 4,
       "server_image" => "registry.example/voltron@sha256:" <> String.duplicate("a", 64)}
     {:ok, build} = NativeBuild.register(project.id, manifest)
+    agent = Platform.PrototypeFixtures.agent!()
     {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: "native-test-#{n}", tool_profile: [],
-      agent_id: Platform.PrototypeFixtures.agent!().id})
+      agent_id: agent.id})
     {:ok, runtime, _token} = Federation.activate_runtime(runtime)
     Platform.Federation.RuntimePresence.track(runtime.runtime_id)
     # Discovery reads persisted client_info, not only Presence metadata.
@@ -56,6 +57,7 @@ defmodule Platform.GameStream.NativeSessionsTest do
         Repo.delete_all(from b in NativeBuild, where: b.project_id == ^project.id)
         Repo.delete_all(from s in Space, where: s.id == ^channel.id)
         Repo.delete_all(from r in Platform.Agents.AgentRuntime, where: r.id == ^runtime.id)
+        Repo.delete_all(from a in Platform.Agents.Agent, where: a.id == ^agent.id)
         Repo.delete_all(from p in Platform.Tasks.Project, where: p.id == ^project.id)
         Repo.delete_all(from m in OrgMembership, where: m.id == ^membership.id)
         Repo.delete_all(from u in User, where: u.id == ^user.id)
@@ -143,11 +145,13 @@ defmodule Platform.GameStream.NativeSessionsTest do
   end
 
   test "cross-org channel linking does not infer game access or change channel kind", ctx do
-    other = Platform.TenancyFixtures.tenant_org_id("native-other-#{System.unique_integer([:positive])}")
+    other_org = Repo.insert!(Platform.Tenancy.Org.changeset(%Platform.Tenancy.Org{}, %{name: "Native Other", slug: "native-other-#{System.unique_integer([:positive])}", parent_org_id: Platform.TenancyFixtures.acme_org_id()}))
+    other = other_org.id
     {:ok, project} = Tasks.create_project(%{name: "Other", org_id: other, repo_url: "https://github.com/private/game"})
     assert {:error, :unauthorized} = GameChannels.configure(ctx.user, ctx.channel.id, project.id)
     assert Repo.get!(GameChannels, ctx.channel.id).project_id == ctx.project.id
     Repo.delete!(project)
+    Repo.delete!(other_org)
     assert {:error, :unauthorized} = GameChannels.authorize(ctx.user, "sixteen-char-xxx")
   end
 end

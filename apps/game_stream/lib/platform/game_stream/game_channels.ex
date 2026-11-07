@@ -20,8 +20,17 @@ defmodule Platform.GameStream.GameChannels do
          true <- is_binary(repo) and String.starts_with?(repo, "https://github.com/"),
          :ok <- Access.authorize(user, "chat.write", space),
          :ok <- repository_access(user, project) do
-      Repo.insert(%__MODULE__{id: channel_id, project_id: project_id, repo_url: repo},
-        on_conflict: {:replace, [:project_id, :repo_url, :updated_at]}, conflict_target: [:id])
+      Repo.transaction(fn ->
+        Repo.one!(from s in Space, where: s.id == ^channel_id, lock: "FOR UPDATE")
+        active? = Repo.exists?(from s in Platform.GameStream.NativeSessionRecord,
+          where: s.channel_id == ^channel_id and s.state in ["starting", "running", "stopping"])
+        if active?, do: Repo.rollback(:active_session)
+        case Repo.insert(%__MODULE__{id: channel_id, project_id: project_id, repo_url: repo},
+          on_conflict: {:replace, [:project_id, :repo_url, :updated_at]}, conflict_target: [:id]) do
+          {:ok, binding} -> binding
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
     else
       _ -> {:error, :unauthorized}
     end

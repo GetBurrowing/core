@@ -26,6 +26,8 @@ defmodule Platform.GameStream.NativeSessionRecord do
     field :ended_at, :utc_datetime_usec
     field :duration_s, :integer, default: 0
     field :idle_seconds, :integer, default: 0
+    field :player_seconds, :integer, default: 0
+    field :reconnect_attempts, :integer, default: 0
     field :connect_count, :integer, default: 0
     field :reconnect_count, :integer, default: 0
     timestamps(type: :utc_datetime_usec)

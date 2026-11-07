@@ -43,6 +43,8 @@ defmodule Platform.Repo.Migrations.CreateNativePlaySessions do
       add :ended_at, :utc_datetime_usec
       add :duration_s, :integer, default: 0, null: false
       add :idle_seconds, :integer, default: 0, null: false
+      add :player_seconds, :integer, default: 0, null: false
+      add :reconnect_attempts, :integer, default: 0, null: false
       add :connect_count, :integer, default: 0, null: false
       add :reconnect_count, :integer, default: 0, null: false
       timestamps(type: :utc_datetime_usec)
