@@ -1,0 +1,24 @@
+{
+  "canonical": "[\"burrow-instruction-pack-v1\",[\"setup-guide\",1,1,\"1.0.0\",\"2026-11-07T16:00:00Z\",null,\"Clearer welcome guidance\"],[[\"setup_dialogue\",\"welcome.v1\",\"Welcome. What would you like help with?\"]]]",
+  "public_key": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "envelope": {
+    "manifest": {
+      "pack_id": "setup-guide",
+      "version": 1,
+      "schema_version": 1,
+      "minimum_client_version": "1.0.0",
+      "published_at": "2026-11-07T16:00:00Z",
+      "previous_digest": null,
+      "changelog": "Clearer welcome guidance",
+      "entries": [
+        {
+          "type": "setup_dialogue",
+          "target": "welcome.v1",
+          "content": "Welcome. What would you like help with?"
+        }
+      ]
+    },
+    "key_id": "vector-root",
+    "signature": "WRXpq4+d3YYrYsr1FuMGeUiNrA3Xe6FZhB5QURCx90gzoofQ3DmZhe7hjsf9XK7owkHZRl/pzIxfsc/gXzXSDQ=="
+  }
+}
