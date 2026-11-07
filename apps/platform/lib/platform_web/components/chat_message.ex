@@ -390,7 +390,9 @@ defmodule PlatformWeb.Components.ChatMessage do
             own?={!!(@current_participant && @msg.participant_id == @current_participant.id)}
           />
 
-          <%!-- Image gallery --%>
+          <%!-- Image gallery. Each item is the viewer's opener, so it is a
+               focusable button (Enter/Space open it via chat_viewer.js) and
+               the viewer can return focus to it on close. --%>
           <% images = Enum.filter(Map.get(@attachments_map, @msg.id, []), &image_attachment?/1) %>
           <% non_images =
             Enum.reject(Map.get(@attachments_map, @msg.id, []), &image_attachment?/1) %>
@@ -403,10 +405,16 @@ defmodule PlatformWeb.Components.ChatMessage do
               id={"gallery-#{@msg.id}-#{attachment.id}"}
               data-role="gallery-item"
               data-viewer-open
+              role="button"
+              tabindex="0"
+              aria-label={"Open image #{idx + 1} of #{length(images)}: #{attachment.filename}"}
               phx-click="viewer_open"
               phx-value-message_id={@msg.id}
               phx-value-attachment_id={attachment.id}
-              class={"gallery-item cursor-pointer#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
+              class={[
+                "gallery-item cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100",
+                (length(images) == 3 and idx == 0) && "span-2"
+              ]}
             >
               <img
                 src={attachment_url(attachment)}

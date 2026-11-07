@@ -200,6 +200,8 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                     <a
                       href={~p"/chat/attachments/#{att.id}"}
                       {Platform.Chat.LinkTargets.open_attrs(~p"/chat/attachments/#{att.id}")}
+                      data-image-viewer
+                      data-filename={att.filename}
                       class="block"
                     >
                       <img
@@ -213,6 +215,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                     <a
                       href={~p"/chat/attachments/#{att.id}"}
                       {Platform.Chat.LinkTargets.open_attrs(~p"/chat/attachments/#{att.id}")}
+                      data-filename={att.filename}
                       class="inline-flex items-center gap-1 rounded-lg border border-edge bg-base-200 px-2 py-1 text-xs hover:border-primary transition-colors"
                     >
                       <span class="hero-document size-3.5 text-subtle"></span>

@@ -939,6 +939,11 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   defp video?(%{content_type: "video/" <> _}), do: true
   defp video?(_file), do: false
 
+  # An image row opens the in-app image layer; every other file row opens the
+  # same layer in file mode (in_app_links.js never navigates to a raw asset).
+  defp image?(%{content_type: "image/" <> _}), do: true
+  defp image?(_file), do: false
+
   attr(:surface, :atom, required: true)
   attr(:prefix, :string, required: true)
   attr(:item, :any, required: true)
@@ -981,6 +986,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       {Platform.Chat.LinkTargets.open_attrs(attachment_url(@file))}
       data-role={@prefix <> "-link-row"}
       data-kind={if video?(@file), do: "video", else: "file"}
+      data-image-viewer={image?(@file)}
+      data-filename={@file.filename}
       class={row_class(@surface)}
     >
       <span class={[file_icon(@file), "size-5 shrink-0"]} aria-hidden="true"></span>
