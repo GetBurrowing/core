@@ -2035,4 +2035,144 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "already filled"
     end
   end
+
+  # ── External-agent role select with Burrow holding roles (task 01a1b741 stage 2)
+  #
+  # Once Burrow holds every unheld role, a select that disabled every
+  # taken role would offer nothing at all. A role Burrow holds is
+  # offered and handed over in one step; a role another agent holds is
+  # still refused.
+  describe "external-agent role select when Burrow holds roles (task 01a1b741 stage 2)" do
+    setup do
+      previous_token = Application.get_env(:platform, :agent_host_token)
+      Application.put_env(:platform, :agent_host_token, "test-host-token")
+
+      on_exit(fn ->
+        if previous_token,
+          do: Application.put_env(:platform, :agent_host_token, previous_token),
+          else: Application.delete_env(:platform, :agent_host_token)
+      end)
+
+      for key <- Platform.Roles.Role.valid_keys(), do: :ok = Platform.Roles.unassign_role(key)
+
+      {:ok, burrow} =
+        Platform.Agents.Burrow.ensure(Platform.TenancyFixtures.root_admin!().id, "claude_code")
+
+      for key <- Platform.Roles.Role.valid_keys(),
+          do: assert(Platform.Roles.agent_id_for_role(key) == burrow.id)
+
+      %{burrow: burrow}
+    end
+
+    defp open_external_form(conn) do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "open_onboarding_chooser", %{})
+      html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+      {view, html}
+    end
+
+    defp role_option(html, key) do
+      [option] =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s(#external-agent-role option[value="#{key}"]))
+        |> Enum.to_list()
+
+      option
+    end
+
+    defp option_disabled?(option), do: LazyHTML.attribute(option, "disabled") != []
+
+    defp option_text(option),
+      do: option |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+    defp submit_external(view, name, role_key) do
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: name,
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "",
+          secret: "",
+          save_to_vault: "false",
+          role_key: role_key
+        }
+      )
+      |> render_submit()
+    end
+
+    test "every role Burrow holds is enabled and reads (from Burrow)", %{conn: conn} do
+      {_view, html} = open_external_form(conn)
+
+      roles = Platform.Roles.list_roles()
+      assert length(roles) == length(Platform.Roles.Role.valid_keys())
+
+      for role <- roles do
+        option = role_option(html, role.key)
+        refute option_disabled?(option), "#{role.key} should be selectable"
+        assert option_text(option) == "#{role.name} (from Burrow)"
+      end
+    end
+
+    test "a role another agent holds stays disabled and reads (taken by <name>)", %{conn: conn} do
+      sam = create_agent(%{name: "Sam-agent"})
+      {:ok, _} = Platform.Roles.reassign_role("designer", sam.id)
+
+      {_view, html} = open_external_form(conn)
+
+      designer = role_option(html, "designer")
+      assert option_disabled?(designer)
+      assert option_text(designer) =~ "(taken by Sam-agent)"
+      refute option_text(designer) =~ "from Burrow"
+
+      historian = role_option(html, "historian")
+      refute option_disabled?(historian)
+      assert option_text(historian) =~ "(from Burrow)"
+    end
+
+    test "creating an agent for a role Burrow holds takes it over in one step", %{
+      conn: conn,
+      burrow: burrow
+    } do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "gpt-4o-mini"}]})
+      end)
+
+      {view, _html} = open_external_form(conn)
+      html = submit_external(view, "Designer Specialist", "designer")
+
+      created = Repo.get_by!(Agent, slug: "designer-specialist")
+      assert Platform.Roles.agent_id_for_role("designer") == created.id
+      refute "designer" in Enum.map(Platform.Roles.roles_for(burrow.id), & &1.key)
+
+      assert [_one] =
+               Repo.all(
+                 from(ra in Platform.Roles.RoleAssignment, where: ra.role_key == "designer")
+               )
+
+      assert html =~ "Pinned to role designer."
+      refute html =~ "already filled"
+    end
+
+    test "creating an agent for a role another agent holds is still refused", %{conn: conn} do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => []})
+      end)
+
+      sam = create_agent(%{name: "Sam-agent"})
+      {:ok, _} = Platform.Roles.reassign_role("designer", sam.id)
+
+      {view, _html} = open_external_form(conn)
+      html = submit_external(view, "Second Designer", "designer")
+
+      assert Repo.get_by!(Agent, slug: "second-designer")
+      assert Platform.Roles.agent_id_for_role("designer") == sam.id
+      assert html =~ "already filled"
+    end
+  end
 end

@@ -1922,7 +1922,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # (this file's platform_uuid_guard entry) has already refused if
     # malformed.
     "platform/responsibilities/janitor.ex" => 1,
-    "platform/roles.ex" => 2,
+    # 2 -> 3 with task 01a1b741 stage 2: `do_reassign/3` locks the current
+    # assignment with `where: ra.role_key == ^role_key`, a string natural
+    # key, never a UUID, so it cannot raise a cast error.
+    "platform/roles.ex" => 3,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
     # TaskRouter's `{:stage_transitioned, stage}` clause (`stage.plan_id`, an

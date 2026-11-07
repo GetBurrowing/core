@@ -9,7 +9,8 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   import Phoenix.LiveView, only: [put_flash: 3, push_patch: 2]
   import PlatformWeb.ControlCenter.Helpers, only: [slugify: 1, changeset_error_summary: 1]
 
-  alias Platform.Agents.{Agent, RoleTemplates, WorkspaceBootstrap}
+  alias Platform.Access.Scope
+  alias Platform.Agents.{Agent, Burrow, RoleTemplates, WorkspaceBootstrap}
   alias Platform.ExternalAgents
   alias Platform.ExternalAgents.EphemeralCredentials
   alias Platform.Federation
@@ -303,7 +304,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
         :ok = persist_credential(agent, params)
         probe_outcome = ExternalAgents.probe(agent)
         probe_assigns = probe_outcome_to_assigns(probe_outcome)
-        role_flash = maybe_assign_role(params, agent)
+        role_flash = maybe_assign_role(params, agent, socket.assigns[:access_scope])
 
         socket =
           socket
@@ -472,19 +473,49 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   # carried a value. Returns one of `:noop`, `{:ok, role_key}`, or
   # `{:error, role_key, reason}` so the caller can surface a flash
   # without nesting more conditionals.
-  defp maybe_assign_role(params, %Agent{} = agent) do
+  #
+  # A role Burrow holds is handed over in one step through the actor
+  # clause of `Roles.reassign_role/3`, so `may_release?` on Burrow is
+  # checked. A role held by any other agent keeps today's refusal
+  # (Decision 1): handing it on is a Roles-tab decision, not a side
+  # effect of creating an agent.
+  defp maybe_assign_role(params, %Agent{} = agent, scope) do
     case params |> Map.get("role_key", "") |> to_string() |> String.trim() do
       "" ->
         :noop
 
       role_key ->
-        case Roles.assign_role(role_key, agent.id) do
-          {:ok, _assignment} ->
-            {:ok, role_key}
+        if held_by_burrow?(role_key),
+          do: hand_over_from_burrow(role_key, agent, scope),
+          else: assign_unheld_role(role_key, agent)
+    end
+  end
 
-          {:error, _changeset} ->
-            {:error, role_key, :already_assigned}
-        end
+  # Same holder map the role select renders from, so the handover path
+  # and the "(from Burrow)" label agree on who holds the role.
+  defp held_by_burrow?(role_key) do
+    AgentData.role_assignments_by_key()
+    |> Map.get(role_key)
+    |> Burrow.burrow?()
+  end
+
+  defp hand_over_from_burrow(role_key, agent, %Scope{} = scope) do
+    case Roles.reassign_role(role_key, agent.id, actor: scope) do
+      {:ok, _assignment} -> {:ok, role_key}
+      {:error, :unauthorized} -> {:error, role_key, :unauthorized}
+      {:error, _changeset} -> {:error, role_key, :already_assigned}
+    end
+  end
+
+  defp hand_over_from_burrow(role_key, _agent, _scope), do: {:error, role_key, :unauthorized}
+
+  defp assign_unheld_role(role_key, agent) do
+    case Roles.assign_role(role_key, agent.id) do
+      {:ok, _assignment} ->
+        {:ok, role_key}
+
+      {:error, _changeset} ->
+        {:error, role_key, :already_assigned}
     end
   end
 
@@ -500,6 +531,10 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
       :error,
       "Role #{role_key} is already filled — unassign the current agent in the Roles tab first."
     )
+  end
+
+  defp apply_role_flash(socket, {:error, role_key, :unauthorized}) do
+    put_flash(socket, :error, "You are not allowed to move role #{role_key} from Burrow.")
   end
 
   defp truthy?(true), do: true

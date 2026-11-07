@@ -10769,6 +10769,44 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-intent-id="#{row.id}")
     end
 
+    test "reassigning the producer mid-meeting keeps the strip, with no nil frame between", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Task 01a1b741 stage 2: a handover goes through one transaction and
+      # one post-state broadcast. A clear-then-assign would send a nil
+      # frame first, and the strip would flash away and back.
+      _first = assign_producer!()
+      {:ok, row} = enqueue_intent(meeting, %{classified_intent: "book_followup"})
+
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      html = render_hook(view, "meeting_viewport", %{"below" => true})
+      assert html =~ ~s(data-role="intents-collapse")
+
+      second =
+        Repo.insert!(%Platform.Agents.Agent{
+          slug: "producer-next-#{System.unique_integer([:positive])}",
+          name: "Next Producer",
+          status: "active"
+        })
+
+      second_id = second.id
+      :ok = Platform.Roles.subscribe_assignments()
+      on_exit(&Platform.Roles.unsubscribe_assignments/0)
+
+      assert {:ok, _} = Platform.Roles.reassign_role("meeting_producer", second.id)
+
+      assert_receive {:role_assignment_changed,
+                      %{role_key: "meeting_producer", agent_id: ^second_id}}
+
+      refute_receive {:role_assignment_changed, %{role_key: "meeting_producer"}}, 100
+      assert Platform.Roles.agent_id_for_role("meeting_producer") == second_id
+
+      html = render(view)
+      assert html =~ ~s(data-role="intents-collapse")
+      assert html =~ ~s(data-intent-id="#{row.id}")
+    end
+
     test "a non-producer cannot drive a removal by replaying the event", %{
       conn: conn,
       meeting: meeting

@@ -184,7 +184,9 @@ defmodule Platform.Roles do
   any other DB-level rejection.
 
   **Does NOT replace** an existing assignment — Decision 1. Callers
-  must `unassign_role/1` first if they intend to re-pin.
+  must `unassign_role/1` first if they intend to re-pin, or use
+  `reassign_role/2` (`reassign_role/3` with an actor) to hand a held
+  role to another agent in one transactional step.
 
   ## Examples
 
@@ -205,6 +207,99 @@ defmodule Platform.Roles do
     if AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
       do: assign_role(role_key, agent_id),
       else: {:error, :unauthorized}
+  end
+
+  @doc """
+  Hand `role_key` to `agent_id` in one step: lock the current
+  assignment row (`FOR UPDATE`), delete it and insert the new one in a
+  single transaction. A failed insert rolls the delete back, so the old
+  holder keeps the role.
+
+  Exactly ONE `{:role_assignment_changed, ...}` broadcast is sent after
+  commit, carrying the post-state, so subscribers never see an
+  intermediate `agent_id: nil`. Nothing is broadcast on error.
+
+  When `agent_id` already holds the role, nothing is written or
+  broadcast and the existing row is returned. An unheld role behaves
+  like `assign_role/2`.
+
+  `assign_role/2` keeps refusing a held role (Decision 1); this is the
+  explicit handover.
+  """
+  @spec reassign_role(String.t(), binary()) ::
+          {:ok, RoleAssignment.t()} | {:error, Ecto.Changeset.t()}
+  def reassign_role(role_key, agent_id) when is_binary(role_key) and is_binary(agent_id) do
+    do_reassign(role_key, agent_id, fn _current -> :ok end)
+  end
+
+  @doc """
+  Actor-checked `reassign_role/2`. The scope must be allowed to assign
+  the new agent (`may_assign?`) and to release the current holder
+  (`may_release?`), checked inside the same transaction after the
+  current row is locked. Otherwise `{:error, :unauthorized}` and nothing
+  changes.
+  """
+  @spec reassign_role(String.t(), binary(), keyword()) ::
+          {:ok, RoleAssignment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def reassign_role(role_key, agent_id, actor: %Scope{} = scope)
+      when is_binary(role_key) and is_binary(agent_id) do
+    do_reassign(role_key, agent_id, fn current ->
+      may_release? =
+        case current do
+          nil -> true
+          %RoleAssignment{agent_id: holder_id} -> may_release_holder?(scope, holder_id)
+        end
+
+      if may_release? and AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
+        do: :ok,
+        else: {:error, :unauthorized}
+    end)
+  end
+
+  defp may_release_holder?(scope, holder_id),
+    do: AgentAccess.may_release?(scope, get_agent_if_valid(holder_id))
+
+  defp do_reassign(role_key, agent_id, authorize) do
+    result =
+      Repo.transaction(fn ->
+        current =
+          RoleAssignment
+          |> where([ra], ra.role_key == ^role_key)
+          |> lock("FOR UPDATE")
+          |> Repo.one()
+
+        with :ok <- authorize.(current) do
+          case current do
+            %RoleAssignment{agent_id: ^agent_id} = existing ->
+              {:unchanged, existing}
+
+            _ ->
+              if current, do: Repo.delete!(current)
+
+              %RoleAssignment{}
+              |> RoleAssignment.changeset(%{role_key: role_key, agent_id: agent_id})
+              |> Repo.insert()
+              |> case do
+                {:ok, assignment} -> {:changed, assignment}
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, {:unchanged, existing}} ->
+        {:ok, existing}
+
+      {:ok, {:changed, assignment}} ->
+        broadcast_assignment_change(role_key)
+        {:ok, assignment}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   @doc """
