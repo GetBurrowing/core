@@ -584,7 +584,7 @@ def _embeddings_mem_limit(ctx):
 #   livekit-agents' default (min(cpu_count, 4); 4 on the test host, 2 on a
 #   2-vCPU droplet) it idled at 712 MiB and peaked at 789 MiB.
 #   TRANSCRIBER_MEASURED_PEAKS records each setting. Small runs 0 (option
-#   E1, Dalton 2026-11-01): idle drops from 491 to 180 MiB and the meeting
+#   E1, ops call 2026-11-01): idle drops from 491 to 180 MiB and the meeting
 #   peak does not move (596 vs 592: the job process is the peak either way).
 #   The cost is a cold job process per meeting: dispatch to first audio frame
 #   1.9 s vs 0.5 s with one warm process; dispatch to the first transcript
@@ -594,7 +594,7 @@ def _embeddings_mem_limit(ctx):
 # 3915 MiB, both checked:
 #   LIMITS: siblings_peak_mb + embeddings mem_limit + livekit + transcriber
 #     limits <= MEETINGS_LIMITS_LINE x 3915. That line is 0.90 (3524), not
-#     0.85, by Dalton's call of 2026-11-01: the last step (E3, the hosted
+#     0.85, by the ops call of 2026-11-01: the last step (E3, the hosted
 #     siblings without the 425 MiB contained agent-host allowance in
 #     siblings_peak_mb; hosted droplets run full_machine) can only be measured
 #     on a droplet. The meetings review droplet re-measures the siblings; if

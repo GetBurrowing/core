@@ -117,7 +117,7 @@ class MeetingsProfileTest(unittest.TestCase):
         limit_sum, peak_sum, host = budget("small")
         limits_line = registry.MEETINGS_LIMITS_LINE * host
         peaks_line = registry.MEETINGS_PEAKS_LINE * host
-        # Both recorded, both checked: the LIMITS at Dalton's 90% line (3524 of
+        # Both recorded, both checked: the LIMITS at the ops 90% line (3524 of
         # 3915, until the review droplet measures the hosted siblings), the
         # measured PEAKS under the 85% line (3327).
         self.assertLessEqual(
