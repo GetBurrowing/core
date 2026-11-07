@@ -52,10 +52,12 @@
 // ## Captions: the `voice:caption` seam
 //
 // LiveKit TranscriptionReceived is re-dispatched as a DOM CustomEvent
-// `voice:caption` {identity, text, final}. The hook listens for that event
+// `voice:caption` {identity, text, final, id}. The hook listens for that event
 // whether or not a room is connected and pushes FINAL segments only, as
-// `voice_turn` {who, text, at}: who "me" for identity "user:<self>", "agent"
-// for "agent:<partner id>"; anything else is ignored. The seam is deliberate,
+// `voice_turn` {who, text, at, final: true, segment_id}: who "me" for identity
+// "user:<self>", "agent" for "agent:<partner id>"; anything else is ignored.
+// `segment_id` is the LiveKit segment id (null when the caption has none); the
+// server posts each turn into the DM and dedupes a re-delivered segment id. The seam is deliberate,
 // so a browser test can inject captions without a worker.
 
 import { Room, RoomEvent, Track } from "livekit-client"
@@ -484,7 +486,12 @@ const VoiceTab = {
     for (const seg of segments) {
       document.dispatchEvent(
         new CustomEvent(CAPTION_EVENT, {
-          detail: { identity, text: seg.text || "", final: seg.final === true },
+          detail: {
+            identity,
+            text: seg.text || "",
+            final: seg.final === true,
+            id: typeof seg.id === "string" ? seg.id : null,
+          },
         }),
       )
     }
@@ -500,7 +507,8 @@ const VoiceTab = {
     if (userId && d.identity === `user:${userId}`) who = "me"
     else if (partnerId && d.identity === `agent:${partnerId}`) who = "agent"
     if (!who) return
-    this.pushEvent("voice_turn", { who, text, at: localClock() })
+    const segment_id = typeof d.id === "string" && d.id !== "" ? d.id : null
+    this.pushEvent("voice_turn", { who, text, at: localClock(), final: true, segment_id })
   },
 
   // ── meter ─────────────────────────────────────────────────────────────

@@ -309,6 +309,32 @@ describe("the voice:caption seam", () => {
     ])
   })
 
+  it("a non-final caption pushes nothing at all", () => {
+    const t = mount({ userId: "u1", partnerId: "a1" })
+    const pushed = []
+    t.hook.pushEvent = (event, payload) => pushed.push([event, payload])
+
+    caption({ identity: "user:u1", text: "half a thought", final: false, id: "seg-1" })
+    caption({ identity: "agent:a1", text: "Two", final: false, id: "seg-2" })
+    caption({ identity: "agent:a1", text: "Two", id: "seg-3" })
+
+    expect(pushed).toEqual([])
+  })
+
+  it("a final caption pushes final: true and its segment id", () => {
+    const t = mount({ userId: "u1", partnerId: "a1" })
+    const pushed = []
+    t.hook.pushEvent = (event, payload) => pushed.push([event, payload])
+
+    caption({ identity: "user:u1", text: "ship it", final: true, id: "seg-9" })
+    caption({ identity: "agent:a1", text: "Done.", final: true })
+
+    expect(pushed.map(([e, p]) => [e, p.who, p.final, p.segment_id])).toEqual([
+      ["voice_turn", "me", true, "seg-9"],
+      ["voice_turn", "agent", true, null],
+    ])
+  })
+
   it("LiveKit TranscriptionReceived becomes voice:caption with the segment's final flag", async () => {
     const t = mount({ userId: "u1", partnerId: "a1" })
     const seen = []
@@ -322,15 +348,17 @@ describe("the voice:caption seam", () => {
     )[1]
     onTranscription(
       [
-        { text: "half", final: false },
-        { text: "whole thought", final: true },
+        { id: "SG_1", text: "half", final: false },
+        { id: "SG_2", text: "whole thought", final: true },
+        { text: "no id", final: true },
       ],
       { identity: "agent:a1" },
     )
 
     expect(seen).toEqual([
-      { identity: "agent:a1", text: "half", final: false },
-      { identity: "agent:a1", text: "whole thought", final: true },
+      { identity: "agent:a1", text: "half", final: false, id: "SG_1" },
+      { identity: "agent:a1", text: "whole thought", final: true, id: "SG_2" },
+      { identity: "agent:a1", text: "no id", final: true, id: null },
     ])
   })
 })

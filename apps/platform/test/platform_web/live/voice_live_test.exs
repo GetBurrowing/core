@@ -739,7 +739,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       %{burrow: burrow!(), space: channel!("Alpha", [viewer])}
     end
 
-    test "no context: your turn renders without posted to, and nothing is posted anywhere", %{
+    test "no session, no context: your turn renders without posted to, and posts nothing", %{
       conn: conn
     } do
       {:ok, view, _html} = live(conn, ~p"/voice")
@@ -770,7 +770,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       assert {participant.participant_type, participant.participant_id} == {"user", viewer.id}
     end
 
-    test "an agent turn never posts, context or not", %{conn: conn, space: space} do
+    test "with no session an agent turn posts nothing", %{conn: conn, space: space} do
       {:ok, view, _html} = live(conn, ~p"/voice")
       pick_context!(view, space)
       before = message_count()
@@ -798,6 +798,174 @@ defmodule PlatformWeb.VoiceLiveTest do
 
       assert [{^room, "mva.context", payload}] = signals()
       assert Jason.decode!(payload) == %{"kind" => "space", "id" => space.id, "name" => "Alpha"}
+    end
+  end
+
+  describe "both sides land in the DM (task 01a1b6c3)" do
+    setup %{viewer: viewer} do
+      livekit_stub!()
+      %{burrow: burrow!(), space: channel!("Alpha", [viewer])}
+    end
+
+    defp dm_rows(viewer, agent) do
+      dm = dm_id(viewer, agent)
+
+      from(m in Platform.Chat.Message, where: m.space_id == ^dm, order_by: [asc: m.id])
+      |> Repo.all()
+    end
+
+    defp session_id(view), do: :sys.get_state(view.pid).socket.assigns.session.id
+
+    test "no context: your turn and the agent's land in the DM, tagged, in order", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      id = session_id(view)
+
+      hook(view, "voice_turn", %{
+        "who" => "me",
+        "text" => "note one",
+        "at" => "9:41 AM",
+        "final" => true,
+        "segment_id" => "SG_me_1"
+      })
+
+      hook(view, "voice_turn", %{"who" => "agent", "text" => "reply one", "final" => true})
+
+      assert text(doc(view), ".bubble.me .meta") == "🎙️ transcribed · 9:41 AM"
+
+      assert [mine, theirs] = dm_rows(viewer, burrow)
+      assert {mine.content, theirs.content} == {"note one", "reply one"}
+
+      assert mine.metadata == %{
+               "source" => "voice",
+               "voice_session_id" => id,
+               "voice_turn" => 1,
+               "input" => "voice"
+             }
+
+      assert theirs.metadata["voice_turn"] == 2
+
+      assert Repo.get!(Platform.Chat.Participant, theirs.participant_id).participant_id ==
+               burrow.id
+    end
+
+    test "final false and a repeated segment id insert and post nothing", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      before = turn_texts(view)
+
+      hook(view, "voice_turn", %{"who" => "me", "text" => "half", "final" => false})
+      hook(view, "voice_turn", %{"who" => "agent", "text" => "half", "final" => false})
+      assert turn_texts(view) == before
+      assert dm_rows(viewer, burrow) == []
+
+      for _ <- 1..2,
+          do:
+            hook(view, "voice_turn", %{
+              "who" => "agent",
+              "text" => "Once.",
+              "segment_id" => "SG_1"
+            })
+
+      assert length(turn_texts(view)) == length(before) + 1
+      assert [%{content: "Once."}] = dm_rows(viewer, burrow)
+    end
+
+    test "with a context: your turn posts there only, the DM gets one pointer", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow,
+      space: space
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      pick_context!(view, space)
+
+      hook(view, "voice_turn", %{"who" => "me", "text" => "ctx one", "at" => "9:42 AM"})
+      hook(view, "voice_turn", %{"who" => "agent", "text" => "ctx reply"})
+      hook(view, "voice_turn", %{"who" => "me", "text" => "ctx two", "at" => "9:43 AM"})
+
+      assert view |> doc() |> q(".bubble.me .meta") |> Enum.map(&LazyHTML.text/1) == [
+               "🎙️ transcribed · 9:42 AM · posted to Alpha",
+               "🎙️ transcribed · 9:43 AM · posted to Alpha"
+             ]
+
+      assert space.id |> Chat.list_messages() |> Enum.map(& &1.content) |> Enum.sort() ==
+               ["ctx one", "ctx two"]
+
+      assert Enum.map(dm_rows(viewer, burrow), & &1.content) ==
+               ["Your side was posted to #Alpha", "ctx reply"]
+    end
+
+    test "a typed turn is recorded with input typed", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      hook(view, "voice_mic_blocked")
+      view |> element("#voice-type-instead") |> render_click()
+      view |> form("#voice-type-form", type: %{text: "typed note"}) |> render_submit()
+
+      assert [%{content: "typed note", metadata: %{"input" => "typed"}}] =
+               dm_rows(viewer, burrow)
+    end
+
+    test "end of session posts one summary; the room_finished fallback adds none", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow
+    } do
+      pixel = agent!("pixel-#{System.unique_integer([:positive])}", "Pixel", color: "teal")
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      id = session_id(view)
+      hook(view, "voice_turn", %{"who" => "me", "text" => "q"})
+      hook(view, "voice_turn", %{"who" => "agent", "text" => "a"})
+
+      view |> element("#partner") |> render_click()
+      view |> element("#partner-opt-#{pixel.id}") |> render_click()
+
+      summary = fn ->
+        viewer |> dm_rows(burrow) |> Enum.filter(&(&1.metadata["voice_kind"] == "summary"))
+      end
+
+      assert [%{content: "Voice chat · 2 turns · 1 min"} = row] = summary.()
+      assert row.metadata["voice_session_id"] == id
+
+      assert {:ok, 0} =
+               Platform.Meetings.VoiceSession.finish_unfinished(dm_id(viewer, burrow))
+
+      assert length(summary.()) == 1
+    end
+
+    test "terminate/2 posts the summary when the screen goes away", %{
+      conn: conn,
+      viewer: viewer,
+      burrow: burrow
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      started!(view)
+      hook(view, "voice_turn", %{"who" => "agent", "text" => "bye"})
+
+      Process.flag(:trap_exit, true)
+      ref = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^ref, :process, _, _}
+
+      assert [%{content: "Voice chat · 1 turn · 1 min"}] =
+               viewer
+               |> dm_rows(burrow)
+               |> Enum.filter(&(&1.metadata["voice_kind"] == "summary"))
     end
   end
 
