@@ -19,9 +19,11 @@ Regenerate golden files after an intended change with
 and review the diff.
 """
 
+import base64
 import contextlib
 import copy
 import difflib
+import gzip
 import io
 import os
 import re
@@ -75,11 +77,15 @@ GOLDEN_CASES = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
     # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
+    # do-droplet plus a [support] block (task 01a1b362 stage 3); test_support.py
+    # covers the rest.
+    "do-droplet-support": os.path.join(RENDER_FIXTURES, "do-droplet-support.toml"),
 }
 # images.source = "registry" cases need a (fake) pull credential to render.
 GOLDEN_REGISTRY_AUTH = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
+    "do-droplet-support": os.path.join(RENDER_FIXTURES, "do-droplet-registry-auth.json"),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -168,11 +174,33 @@ class PositiveControlMixin:
 # ---------------------------------------------------------------------------
 
 
+_GZ_ENTRY = re.compile(
+    r'^(    encoding: "gz\+b64"\n)    content: "([A-Za-z0-9+/=]+)"$', re.MULTILINE
+)
+
+
+def decode_gz_entries(text):
+    """user-data with every gz+b64 write_files content shown decoded.
+
+    Golden files keep the scripts readable and do not depend on one zlib's
+    exact deflate stream; test_support.py checks the encoded bytes decode to
+    the shipped scripts exactly.
+    """
+
+    def show(match):
+        body = gzip.decompress(base64.b64decode(match.group(2))).decode("utf-8")
+        lines = ["      " + line if line else "" for line in body[:-1].split("\n")]
+        return match.group(1) + "    content (gz+b64, shown decoded): |\n" + "\n".join(lines)
+
+    return _GZ_ENTRY.sub(show, text)
+
+
 class GoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
         redacted = build(
             manifest_from(GOLDEN_CASES[case]), registry_auth=GOLDEN_REGISTRY_AUTH.get(case)
         ).redacted()
+        redacted = {rel: decode_gz_entries(text) for rel, text in redacted.items()}
         golden_dir = os.path.join(GOLDEN, case)
         if os.environ.get("BURROW_INSTALL_UPDATE_GOLDEN") == "1":
             shutil.rmtree(golden_dir, ignore_errors=True)
@@ -217,6 +245,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_do_droplet_8gb(self):
         self.check_golden("do-droplet-8gb")
+
+    def test_golden_do_droplet_support(self):
+        self.check_golden("do-droplet-support")
 
     def test_do_droplet_8gb_fixture_differs_only_in_size_tier(self):
         small, medium = load(GOLDEN_CASES["do-droplet"]), load(GOLDEN_CASES["do-droplet-8gb"])

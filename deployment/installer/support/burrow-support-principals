@@ -1,0 +1,110 @@
+#!/usr/bin/python3 -I
+"""sshd AuthorizedPrincipalsCommand for vendor support repair logins.
+
+Core task 01a1b362 stage 3 (ADR 0059). Rendered into an install as
+/opt/burrow/bin/burrow-support-principals (root-owned, 0755) and run by sshd,
+as the unprivileged burrow-support-check user, on EVERY certificate login of
+the burrow-support user:
+
+    AuthorizedPrincipalsCommand /opt/burrow/bin/burrow-support-principals %u %i
+
+%u is the user name and %i the certificate's key id, which the vendor's
+support system sets to the support session id core issued.
+
+It reads core's state file, /var/lib/burrow-support/state.json:
+
+    {"version": 1, "enabled": true, "principal": "support-<INSTALL_ID>",
+     "repair_sessions": [{"id": "...", "not_after": "2026-11-07T01:00:00Z"}]}
+
+and prints the principal ONLY IF version is exactly 1, enabled is exactly
+true, the key id equals one repair_sessions[].id, and that session's
+not_after is later than this host's clock. In every other case (missing,
+unreadable or unparsable file, another version, enabled false, unknown key
+id, an expired or unparsable not_after) it prints nothing and exits 0: sshd
+then admits no principal and refuses the certificate. Fail closed.
+
+Because sshd runs it on every authentication, the owner turning the switch
+off takes effect at the next login attempt, with no sshd reload.
+
+Python standard library only. A third argument (a state file path) exists
+for the installer's tests; sshd never passes one.
+"""
+
+import datetime
+import json
+import re
+import sys
+
+STATE_PATH = "/var/lib/burrow-support/state.json"
+SUPPORT_USER = "burrow-support"
+STATE_VERSION = 1
+MAX_STATE_BYTES = 1024 * 1024
+_PRINCIPAL = re.compile(r"support-[A-Za-z0-9._-]{1,64}")
+
+
+def _not_after(value):
+    """An aware datetime, or None for anything that is not ISO 8601 with a zone."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def principal_for(user, key_id, state_path=STATE_PATH, now=None):
+    """The principal to admit, or None."""
+    if user != SUPPORT_USER or not key_id:
+        return None
+    try:
+        with open(state_path, "rb") as handle:
+            raw = handle.read(MAX_STATE_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > MAX_STATE_BYTES:
+        return None
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    version = doc.get("version")
+    if type(version) is not int or version != STATE_VERSION:
+        return None
+    if doc.get("enabled") is not True:
+        return None
+    principal = doc.get("principal")
+    if not isinstance(principal, str) or not _PRINCIPAL.fullmatch(principal):
+        return None
+    sessions = doc.get("repair_sessions")
+    if not isinstance(sessions, list):
+        return None
+    now = now or datetime.datetime.now(datetime.UTC)
+    for session in sessions:
+        if not isinstance(session, dict) or session.get("id") != key_id:
+            continue
+        not_after = _not_after(session.get("not_after"))
+        if not_after is not None and not_after > now:
+            return principal
+    return None
+
+
+def main(argv):
+    if len(argv) < 3:
+        return 0
+    state_path = argv[3] if len(argv) > 3 else STATE_PATH
+    try:
+        principal = principal_for(argv[1], argv[2], state_path)
+    except Exception:  # noqa: BLE001 -- fail closed on anything unforeseen
+        principal = None
+    if principal is not None:
+        sys.stdout.write(principal + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

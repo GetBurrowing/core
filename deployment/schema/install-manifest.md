@@ -256,6 +256,57 @@ passes through whoever rendered the install: no render, golden or provisioner ho
 
 ---
 
+## `[support]` (vendor support access, ADR 0059)
+
+Optional. The vendor's support system passes this block for a hosted install (core task
+01a1b362 stage 3); nothing in the installer renders it by default. **Absent, nothing below is
+rendered** (a manifest without it renders byte-identical to before the block existed), and core
+refuses every support grant (no vendor key: the grant route is a 404).
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `access_default` | `on` \| `off` | `off` | Core's `SUPPORT_ACCESS_DEFAULT`, read once, by the migration that seeds the owner's switch. |
+| `vendor_name` | string | none | Core's `SUPPORT_VENDOR_NAME`, display only. Same character rules as `install.org_name`. |
+| `[[support.vendor_grant_keys]]` | `kid` (`[A-Za-z0-9._-]{1,64}`, unique), `public_key` (32-byte Ed25519 public key, base64 or base64url) | none | Rendered as core's `SUPPORT_VENDOR_KEYS`, `kid:base64` pairs joined by commas. PUBLIC halves only. More than one for rotation. |
+| `ssh_user_ca` | string | none | The vendor SSH user CA's PUBLIC key: one `ssh-ed25519 <base64> [comment]` line, or two newline-separated lines during a CA rollover. Any other key type is `invalid_ssh_user_ca`. `target = "single-host"` only. |
+| `install_id` | string (`[A-Za-z0-9._-]{1,64}`) | `install.name` | Core's `INSTALL_ID`, the install's id as the vendor knows it; the repair principal is `support-<INSTALL_ID>`. |
+
+With the block present, core-platform's env gets `INSTALL_ID`, `SUPPORT_ACCESS_DEFAULT` and, when
+set, `SUPPORT_VENDOR_KEYS` and `SUPPORT_VENDOR_NAME` (none is a secret, so none is in
+`secrets.env`). With `ssh_user_ca` also set, the host gets:
+
+- `/etc/ssh/burrow-support-ca.pub` (0644), the CA public line(s) only;
+- `/opt/burrow/support/60-burrow-support.conf`, installed as
+  `/etc/ssh/sshd_config.d/60-burrow-support.conf` only after `sshd -t` passes. Every directive,
+  `TrustedUserCAKeys` included, is inside `Match User burrow-support`: trusted globally, the CA
+  would admit a certificate naming any other user (root included) as a principal, past the
+  principals command and the owner's switch;
+- `bin/burrow-support-principals` (the `AuthorizedPrincipalsCommand`, run as
+  `burrow-support-check`), which prints `support-<INSTALL_ID>` only while core's
+  `/var/lib/burrow-support/state.json` has `version` 1, `enabled` true, and a repair session whose
+  `id` is the certificate key id and whose `not_after` is in the future; otherwise nothing (fail
+  closed);
+- `bin/burrow-support-shell` (the `ForceCommand`): the shell events JSONL core ingests, a
+  `script` transcript under `/var/log/burrow-support/` (root, 0600), and a 15 s re-check that
+  ends the shell once its session is gone. Tamper-evident, not tamper-proof against root;
+- `bin/burrow-support-setup`, run by cloud-init before the stack starts: the `burrow-support`
+  user (bash, NOPASSWD sudo in `/etc/sudoers.d/60-burrow-support`, `visudo -c` checked), the
+  `burrow-support-check` user (no login), `/var/lib/burrow-support` (uid/gid 1000, core's app
+  user, 0755; `events.jsonl` root:1000 0640), and the drop-in, then
+  `systemctl try-reload-or-restart ssh.service`;
+- `/var/lib/burrow-support` bind-mounted read-write into core-platform at the same path.
+
+The three scripts are written `encoding: gz+b64` in `user-data`, so a hosted install with
+backups and support access stays under DigitalOcean's 64 KiB `user_data` cap. No vendor key ever
+goes into `ssh_authorized_keys`, and `host.ssh_authorized_key` is unaffected.
+
+An install that already runs gets the same pieces with
+`python3 -m burrow_install support enable-host --manifest <m> --reuse-secrets /opt/burrow/secrets.env`
+(as root on the host; `--dry-run` prints the changes). It writes only the files above and
+core-platform's support env lines and mount in the live `compose.yaml`, runs
+`bin/burrow-support-setup`, then `docker compose up -d --no-deps core-platform`. It never reruns
+cloud-init and is idempotent.
+
 ## Secret refs
 
 A field ending in `_ref` holds the **name** of a secret, never its value. The name is
@@ -297,6 +348,8 @@ A valid manifest prints `ok` and exits `0`.
 | `meetings_media_reach_required` | meetings on without `meetings.media_reach` |
 | `invalid_org_name` | `install.org_name` is empty, longer than 80, not printable, padded, or has `"`, `$` or a backtick |
 | `invalid_ssh_authorized_key` | `host.ssh_authorized_key` is not one `ssh-ed25519` / `ecdsa-sha2-nistp256` public key |
+| `invalid_ssh_user_ca` | `support.ssh_user_ca` is not one or two distinct `ssh-ed25519` public key lines |
+| `invalid_support_key` | a `support.vendor_grant_keys[]` `kid` is malformed or repeated, or its `public_key` is not a 32-byte Ed25519 key in base64 / base64url |
 | `vapid_requires_single_host` | `push.vapid = "generate-on-host"` with `target = "mac"` |
 | `stt_endpoint_unknown` | transcription on and `meetings.stt_endpoint` names no `[[models.endpoints]]` entry |
 | `invalid_toml` | the file does not parse as TOML (loader) |

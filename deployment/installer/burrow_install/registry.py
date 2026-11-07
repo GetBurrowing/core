@@ -46,6 +46,8 @@ import shutil
 import socket
 import subprocess
 
+from . import support
+
 # ---------------------------------------------------------------------------
 # Service set (stage 1). `services` prints exactly this set.
 # ---------------------------------------------------------------------------
@@ -823,6 +825,8 @@ def _core_env(ctx):
         # and an install never holds a GitHub or broker credential, so this
         # is the ONE feedback variable an install is ever rendered.
         env["FEEDBACK_POLICY"] = "quarantined"
+    # Vendor support access (core task 01a1b362 stage 3): {} without [support].
+    env.update(support.core_env(ctx.m))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]
@@ -878,9 +882,15 @@ def _agent_host_mounts(ctx):
 
 
 def _core_mounts(ctx):
-    if not ctx.tls_internal:
-        return []
-    return [("tls/ca-bundle.pem", CASTORE_PATH, True)]
+    mounts = []
+    if ctx.tls_internal:
+        mounts.append(("tls/ca-bundle.pem", CASTORE_PATH, True))
+    if support.host_enabled(ctx.m):
+        # Vendor support access (core task 01a1b362 stage 3): core writes the
+        # state file the host's principals command reads, and reads the
+        # repair shell's event file, both under this host directory.
+        mounts.append(support.CORE_MOUNT)
+    return mounts
 
 
 def _postgres_injects(ctx):
