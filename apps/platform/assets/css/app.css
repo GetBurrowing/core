@@ -10860,3 +10860,26 @@ textarea.cal-input {
 .cal-mono {
   font-family: var(--font-mono-system);
 }
+
+/* ── Agent portraits (task 01a1b6ad stage 1) ─────────────────────── */
+/* PlatformWeb.AgentPortrait: the comp's eight glyph faces (burrow-agents.js
+   POR) as inline SVG, painted from --ag, which the portrait's own
+   data-agent-slot (or its container's) points at a slot token. The comp's
+   theme vars map onto the app's: --surface is --color-base-100, --ground is
+   --color-base-200 (declared locally because the fox's markup names it
+   inline). An uploaded image fills the same circle. */
+.ba-por { --ground: var(--color-base-200); display: inline-flex; border-radius: 50%; overflow: hidden; flex: 0 0 auto; position: relative; background: color-mix(in srgb, var(--ag) 18%, var(--color-base-100)); }
+.ba-por svg { width: 100%; height: 100%; display: block; }
+.ba-por img { width: 100%; height: 100%; object-fit: cover; }
+.ba-por .bg { fill: color-mix(in srgb, var(--ag) 18%, var(--color-base-100)); }
+.ba-por .a { fill: var(--ag); }
+.ba-por .c { fill: color-mix(in srgb, var(--ag) 55%, var(--color-base-100)); }
+.ba-por .d { fill: color-mix(in srgb, var(--ag) 70%, var(--color-base-200)); }
+.ba-por .k { fill: var(--color-base-200); }
+.ba-por .w { fill: var(--color-base-100); }
+.ba-por .s { fill: none; stroke: var(--color-base-200); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.ba-por .sa { fill: none; stroke: var(--ag); stroke-width: 3; stroke-linecap: round; }
+.ba-por .eye { transform-box: fill-box; transform-origin: center; }
+.ba-alive .ba-por .eye { animation: ba-blink 5.5s infinite; }
+@keyframes ba-blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+@media (prefers-reduced-motion: reduce) { .ba-alive .ba-por .eye { animation: none; } }
