@@ -63,6 +63,8 @@ SSH_KEY = (
 VAPID_PRE = "ExecStartPre=/opt/burrow/bin/burrow-vapid"
 # DigitalOcean caps a droplet's user_data at 64 KiB.
 DO_USER_DATA_MAX = 65536
+# 512 B under the cap: room for per-install values longer than a fixture's.
+DO_USER_DATA_GUARD = 65024
 
 
 def valid(raw):
@@ -385,6 +387,39 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         size = len(self.files["user-data"].encode("utf-8"))
         self.assertGreater(size, len(self.base["user-data"].encode("utf-8")))
         self.assertLess(size, DO_USER_DATA_MAX)
+
+    def test_worst_hosted_meetings_plan_fits_under_the_guard(self):
+        # The largest hosted meetings plan: hosted, the medium tier and an
+        # s3-compatible backup (its two scripts ride in user_data too). Kept
+        # under DO_USER_DATA_GUARD, not just the cap, so a sibling change that
+        # adds to user_data fails here before DigitalOcean refuses a droplet.
+        raw = load(DO_MEETINGS)
+        raw["install"]["hosted"] = True
+        raw["install"]["size_tier"] = "medium"
+        raw["backup"] = {
+            "target": "s3-compatible",
+            "bucket": "example-bucket-for-the-largest-hosted-meetings-plan",
+            "endpoint": "https://s3.example-region.example.test",
+            "region": "r1",
+            "access_key_ref": "BACKUP_ACCESS_KEY",
+            "secret_key_ref": "BACKUP_SECRET_KEY",
+        }
+        with open(DO_MEETINGS_CUSTOMER, encoding="utf-8") as handle:
+            supplied = handle.read()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "customer.env")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(supplied.rstrip("\n") + "\n")
+                handle.write("BACKUP_ACCESS_KEY=" + "a" * 40 + "\n")
+                handle.write("BACKUP_SECRET_KEY=" + "b" * 60 + "\n")
+            worst = build(valid(raw), registry_auth=DO_AUTH, customer_secrets=path)
+        user_data = worst.files["user-data"][0]
+        self.assertIn(
+            "s3-compatible", worst.files["compose.yaml"][0] + user_data
+        )  # positive control
+        size = len(user_data.encode("utf-8"))
+        self.assertGreater(size, len(self.files["user-data"].encode("utf-8")))
+        self.assertLess(size, DO_USER_DATA_GUARD)
 
     def test_fixture_and_render_carry_no_install_identity(self):
         with open(DO_MEETINGS, encoding="utf-8") as handle:
