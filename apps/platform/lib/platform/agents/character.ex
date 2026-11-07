@@ -541,7 +541,9 @@ defmodule Platform.Agents.Character do
   def update(%Agent{} = agent, changes, opts \\ []) do
     with %{} = b0 <- from_agent(agent) || {:error, :not_a_character},
          {:ok, b} <- validate(Map.merge(b0, Map.take(changes, editable_keys()))) do
-      b = %{b | n: clean_name(b.n)}
+      # Only a rename is cleaned: a dial change must not rewrite a name the
+      # Advanced settings form saved with characters the builder drops.
+      b = if Map.has_key?(changes, :n), do: %{b | n: clean_name(b.n)}, else: b
       expected = Keyword.get(opts, :expected_versions, %{})
       contents = file_contents(b)
 
@@ -587,6 +589,37 @@ defmodule Platform.Agents.Character do
         {:ok, r} -> {:ok, %{agent: r.agent, files: r.files}}
         {:error, _step, reason, _} -> {:error, reason}
       end
+    end
+  end
+
+  @doc "Whether `agent` was built as a character (it carries `metadata[\"character\"]`)."
+  def character?(%Agent{metadata: %{"character" => c}}) when is_map(c), do: true
+  def character?(_), do: false
+
+  @doc """
+  Set an agent's toolkit, `tools_config["toolkit"]` (the agent page's
+  Abilities switches, task 01a1b6ad stage 3). A character goes through
+  `update/3`, so `TOOLS.md` follows. Any other agent gets only the row
+  change: its workspace files were not written by the builder and stay its
+  own. Unknown or repeated ids are refused and nothing is written.
+  """
+  def put_toolkit(%Agent{} = agent, ids, opts \\ []) do
+    if is_list(ids) and Enum.all?(ids, &(&1 in Archetypes.toolkit_ids())) and
+         Enum.uniq(ids) == ids do
+      ordered = Enum.filter(Archetypes.toolkit_ids(), &(&1 in ids))
+
+      if character?(agent) do
+        update(agent, %{toolkit: ordered}, opts)
+      else
+        tools = Map.put(agent.tools_config || %{}, "toolkit", ordered)
+
+        case agent |> Agent.changeset(%{tools_config: tools}) |> Repo.update() do
+          {:ok, updated} -> {:ok, %{agent: updated, files: %{}}}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    else
+      {:error, {:invalid, :toolkit}}
     end
   end
 

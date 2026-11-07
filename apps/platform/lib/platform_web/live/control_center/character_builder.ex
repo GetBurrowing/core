@@ -748,6 +748,50 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   end
 
   defp step_body(%{step_id: "voice"} = assigns) do
+    ~H"""
+    <h1 class="ba-h1">How does {@b.n} talk?</h1>
+    <p class="ba-sub">From a quick text to a full formal brief. Slide it, then try it on below.</p>
+    <div style="margin-top:16px">
+      <.voice_block b={@b} viewer={@viewer} typing={@typing} entry={@entry} target={@myself} />
+    </div>
+    """
+  end
+
+  defp step_body(%{step_id: "reveal"} = assigns) do
+    assigns = assign(assigns, :voice_key, Archetypes.voice(assigns.b.vc.p).key)
+
+    ~H"""
+    <div class="ba-revwrap">
+      <.card b={@b} number={@number} viewer={@viewer} entry={@entry} reveal prefix="reveal" />
+      <div class="ba-writes">
+        Creates <code>IDENTITY.md</code>
+        · <code>SOUL.md</code>
+        · <code>TOOLS.md</code>
+        · colour <code>{@b.color}</code>
+        · voice <code>{@voice_key}</code>
+        · joins a DM with you as <b>works with you</b>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  The voice block (the comp's `voiceHTML`): the preset dial, Fine-tune, Try
+  it and What it gets. The builder's voice step and the agent page's Voice
+  tab both render it; `target` is the builder component, or nil for the
+  page's LiveView. With `cols`, Try it sits in a second column at desktop
+  width, as the comp's page does.
+  """
+  attr :b, :map, required: true
+  attr :viewer, :string, default: nil
+  attr :typing, :boolean, default: false
+  attr :entry, :any, default: nil
+  attr :agent, :any, default: nil
+  attr :target, :any, default: nil
+  attr :cols, :boolean, default: false
+  attr :idp, :string, default: "ba-"
+
+  def voice_block(assigns) do
     vc = assigns.b.vc
     e = Character.v_eff(vc)
     sample = if vc.free, do: nil, else: Enum.find(Archetypes.samples(), &(&1.id == vc.q))
@@ -765,17 +809,15 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
       |> assign(:tweaks, tweaks(vc))
 
     ~H"""
-    <h1 class="ba-h1">How does {@b.n} talk?</h1>
-    <p class="ba-sub">From a quick text to a full formal brief. Slide it, then try it on below.</p>
-    <div style="margin-top:16px">
-      <div class="ba-voice">
+    <div class={["ba-voice", @cols && "ba-cols"]}>
+      <div class="ba-vc">
         <div class="ba-vdial">
           <div class="ba-vnow">
             <span class="ic">{@v.ic}</span>
             <span class="tx"><b>{@v.n}</b><small>{@v.blurb}</small></span>
           </div>
           <div class="ends"><span>Texting</span><span>Exhaustive &amp; formal</span></div>
-          <form id="ba-vdial-form" phx-change="voice_preset" phx-target={@myself}>
+          <form id={@idp <> "vdial-form"} phx-change="voice_preset" phx-target={@target}>
             <input
               type="range"
               class="ba-vrange"
@@ -798,13 +840,13 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
               aria-label={x.n}
               phx-click="voice_preset"
               phx-value-p={i}
-              phx-target={@myself}
+              phx-target={@target}
             >
               <span>{x.ic}</span><em>{x.s}</em>
             </button>
           </div>
         </div>
-        <details id="ba-vft" class="ba-vft" phx-mounted={JS.ignore_attributes(["open"])}>
+        <details id={@idp <> "vft"} class="ba-vft" phx-mounted={JS.ignore_attributes(["open"])}>
           <summary>Fine-tune <small class="ba-vtw">{@tweaks}</small></summary>
           <div :for={knob <- Archetypes.knobs()} class="r">
             <b>{knob.label}</b>
@@ -818,7 +860,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
                 phx-click="voice_knob"
                 phx-value-k={knob.k}
                 phx-value-v={i}
-                phx-target={@myself}
+                phx-target={@target}
               >
                 {o}
               </button>
@@ -829,11 +871,20 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
             class="ba-link"
             data-vreset
             phx-click="voice_reset"
-            phx-target={@myself}
+            phx-target={@target}
           >
             Reset to preset
           </button>
         </details>
+        <details id={@idp <> "vread"} class="ba-vread" phx-mounted={JS.ignore_attributes(["open"])}>
+          <summary>What {@b.n} gets <small>· style block in its system prompt</small></summary>
+          <pre class="ba-vprompt"><span class="k">{@prompt_head}</span>{@prompt_rest}</pre>
+          <p>
+            Injected into {@b.n}'s system prompt (<code>SOUL.md</code> · Voice). Applies to every reply from now on — in chat, email and meetings.
+          </p>
+        </details>
+      </div>
+      <div class="ba-vc">
         <div class="ba-vtry">
           <div class="hd"><b>Try it</b><span>tap a prompt or type your own</span></div>
           <div class="ba-chips">
@@ -845,7 +896,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
               aria-pressed={to_string(is_nil(@vc.free) and @vc.q == s.id)}
               phx-click="voice_sample"
               phx-value-q={s.id}
-              phx-target={@myself}
+              phx-target={@target}
             >
               {s.q}
             </button>
@@ -853,7 +904,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
           <div class="ba-vchat" aria-live="polite">
             <div class="ba-vb me">{@asked}</div>
             <div class="ba-vrow">
-              <.face b={@b} entry={@entry} size={28} prefix="vrow" />
+              <.face b={@b} entry={@entry} size={28} prefix="vrow" agent={@agent} />
               <div :if={@typing} class="ba-vb ag">
                 <span class="from">{@b.n}</span><span class="ba-typing"><i></i><i></i><i></i></span>
               </div>
@@ -864,7 +915,12 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
               </div>
             </div>
           </div>
-          <form id="ba-vfree-form" class="ba-addnote" phx-submit="voice_free" phx-target={@myself}>
+          <form
+            id={@idp <> "vfree-form"}
+            class="ba-addnote"
+            phx-submit="voice_free"
+            phx-target={@target}
+          >
             <input
               class="ba-vin"
               name="q"
@@ -875,31 +931,6 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
             <button type="submit" class="ba-btn sm ag" data-vsend>Send</button>
           </form>
         </div>
-        <details id="ba-vread" class="ba-vread" phx-mounted={JS.ignore_attributes(["open"])}>
-          <summary>What {@b.n} gets <small>· style block in its system prompt</small></summary>
-          <pre class="ba-vprompt"><span class="k">{@prompt_head}</span>{@prompt_rest}</pre>
-          <p>
-            Injected into {@b.n}'s system prompt (<code>SOUL.md</code> · Voice). Applies to every reply from now on — in chat, email and meetings.
-          </p>
-        </details>
-      </div>
-    </div>
-    """
-  end
-
-  defp step_body(%{step_id: "reveal"} = assigns) do
-    assigns = assign(assigns, :voice_key, Archetypes.voice(assigns.b.vc.p).key)
-
-    ~H"""
-    <div class="ba-revwrap">
-      <.card b={@b} number={@number} viewer={@viewer} entry={@entry} reveal prefix="reveal" />
-      <div class="ba-writes">
-        Creates <code>IDENTITY.md</code>
-        · <code>SOUL.md</code>
-        · <code>TOOLS.md</code>
-        · colour <code>{@b.color}</code>
-        · voice <code>{@voice_key}</code>
-        · joins a DM with you as <b>works with you</b>
       </div>
     </div>
     """
@@ -927,16 +958,19 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
 
   attr :b, :map, required: true
   attr :entry, :any, default: nil
+  attr :agent, :any, default: nil
   attr :size, :integer, required: true
   attr :prefix, :string, required: true
 
-  # The face: the uploaded image while one is picked, else the portrait.
+  # The face: the uploaded image while one is picked, else the portrait (an
+  # existing agent's own upload wins over it, on the agent page).
   defp face(assigns) do
     ~H"""
     <span :if={@entry} class="ba-por" style={"width:#{@size}px;height:#{@size}px"}>
       <.live_img_preview entry={@entry} id={"ba-#{@prefix}-" <> @entry.ref} />
     </span>
-    <.agent_portrait :if={!@entry} portrait={@b.portrait} size={@size} />
+    <.agent_portrait :if={!@entry && @agent} agent={@agent} portrait={@b.portrait} size={@size} />
+    <.agent_portrait :if={!@entry && !@agent} portrait={@b.portrait} size={@size} />
     """
   end
 
@@ -951,6 +985,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   attr :reveal, :boolean, default: false
   attr :w, :integer, default: nil
   attr :prefix, :string, default: "card"
+  attr :agent, :any, default: nil
 
   def card(assigns) do
     assigns =
@@ -968,7 +1003,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
       <div class="in">
         <div class="ctop"><b>{@c.name}</b><span>{@c.class}</span></div>
         <div class="art">
-          <.face b={@b} entry={@entry} size={118} prefix={@prefix} />
+          <.face b={@b} entry={@entry} size={118} prefix={@prefix} agent={@agent} />
           <span class="hue">{@c.colour}</span><span class="tpl">{@c.template}</span>
         </div>
         <div class="typ"><span>Agent · <i>{@a.n}</i></span><span>{@c.vibe}</span></div>

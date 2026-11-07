@@ -115,15 +115,21 @@ defmodule PlatformWeb.VoiceLive do
   @answer_timeout_ms 20_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     user = socket.assigns[:current_user_record]
     partners = user |> VoiceSession.partners() |> Enum.map(&partner_entry/1)
 
+    # `?partner=<agent id>` (the agent page's 🎙 Talk, task 01a1b6ad stage 3)
+    # picks that partner when the user may talk to it; anything else falls
+    # back to the default.
+    requested = is_map(params) && Enum.find(partners, &(&1.agent.id == params["partner"]))
+
     partner =
-      case VoiceSession.default_partner(user) do
-        nil -> nil
-        agent -> Enum.find(partners, &(&1.agent.id == agent.id))
-      end
+      requested ||
+        case VoiceSession.default_partner(user) do
+          nil -> nil
+          agent -> Enum.find(partners, &(&1.agent.id == agent.id))
+        end
 
     spaces = context_spaces(user, socket.assigns[:access_scope])
 

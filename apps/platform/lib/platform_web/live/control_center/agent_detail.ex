@@ -581,7 +581,24 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         <span class="hero-plus size-4" /> Add to Space
       </button>
     </section>
+    """
+  end
 
+  # ── Add to Space modal ────────────────────────────────────────────
+
+  @doc """
+  The Add to Space modal. It renders at the page root (task 01a1b6ad stage
+  3) rather than inside the federation panels: the agent page's "＋ Add to a
+  channel" opens it for every agent, and the panels now sit under Advanced
+  settings, whose hidden container would hide a modal nested in it.
+  """
+  attr(:show_add_space_modal, :boolean, default: false)
+  attr(:available_spaces, :list, default: [])
+  attr(:available_meeting_spaces, :list, default: [])
+  attr(:sheet_refusal, :string, default: nil)
+
+  def add_space_modal(assigns) do
+    ~H"""
     <%!-- Only the :manage_selected-gated show_add_space_modal handler opens
          this, and selecting another agent closes it. It is deliberately not
          also conditioned on @can_manage? (task 01a1ae4b stage 2): when the

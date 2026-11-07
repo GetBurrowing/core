@@ -6,6 +6,8 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Agents.{
     Agent,
     AgentServer,
+    Archetypes,
+    Character,
     Config,
     MemoryContext
   }
@@ -24,6 +26,8 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.AgentCrudEvents
   alias PlatformWeb.ControlCenter.AgentData
   alias PlatformWeb.ControlCenter.AgentDetail
+  alias PlatformWeb.ControlCenter.AgentPage
+  alias PlatformWeb.ControlCenter.AgentPageData
   alias PlatformWeb.ControlCenter.GrantEvents
   alias PlatformWeb.ControlCenter.MemoryEvents
   alias PlatformWeb.ControlCenter.NativeAgentEvents
@@ -97,6 +101,14 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:selected_agent_directory_entry, nil)
      # Character builder (task 01a1b6ad stage 2): nil, or how it was opened.
      |> assign(:builder, nil)
+     # The living agent page (task 01a1b6ad stage 3).
+     |> assign(:page, nil)
+     |> assign(:page_tab, "overview")
+     |> assign(:show_advanced, false)
+     |> assign(:page_try, %{})
+     |> assign(:page_saved, nil)
+     |> assign(:show_card, false)
+     |> assign(:viewer_name, viewer_name(current_user_id))
      # Onboarding flow assigns
      |> assign(:show_onboarding_chooser, false)
      |> assign(:onboarding_flow, nil)
@@ -148,6 +160,8 @@ defmodule PlatformWeb.ControlCenterLive do
     socket =
       socket
       |> close_add_space_modal_on_switch(selected_agent)
+      |> reset_page_on_switch(selected_agent)
+      |> assign(:page_tab, AgentPage.normalize_tab(params["tab"]))
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
@@ -201,6 +215,13 @@ defmodule PlatformWeb.ControlCenterLive do
        :error,
        "Could not bring it to life (#{inspect(reason)}). Nothing was saved."
      )}
+  end
+
+  # "✓ Saved · applies to new replies" shows for 2.2s, as in the comp.
+  def handle_info({:page_saved_clear, ref}, socket) do
+    if socket.assigns[:page_saved_ref] == ref,
+      do: {:noreply, assign(socket, :page_saved, nil)},
+      else: {:noreply, socket}
   end
 
   def handle_info(msg, socket) do
@@ -349,6 +370,22 @@ defmodule PlatformWeb.ControlCenterLive do
     "save_tool_profile" => :manage_selected,
     "save_agent_restrictions" => :manage_selected,
     "set_accepts_chat" => :manage_selected,
+    # The living agent page (task 01a1b6ad stage 3). Reads and previews are
+    # :ui; every write is :manage_selected, the same gate as the config form.
+    "page_tab" => :ui,
+    "toggle_advanced" => :ui,
+    "page_dm" => :ui,
+    "page_hear" => :ui,
+    "page_card" => :ui,
+    "voice_sample" => :ui,
+    "voice_free" => :ui,
+    "page_dials" => :manage_selected,
+    "page_trait" => :manage_selected,
+    "voice_preset" => :manage_selected,
+    "voice_knob" => :manage_selected,
+    "voice_reset" => :manage_selected,
+    "page_toolkit" => :manage_selected,
+    "page_mode" => :manage_selected,
     # Grant panel (task 01a1a2e4-9265 stage 3): org admin of the selected
     # agent's owner org, never :manage_selected (a member owner manages
     # their own agent but must not grant themselves a role).
@@ -870,7 +907,59 @@ defmodule PlatformWeb.ControlCenterLive do
     with_native_manager(socket, agent, fn -> set_accepts_chat(socket, agent, value == "true") end)
   end
 
+  # The page's Awake switch (task 01a1b6ad stage 3): the same write as the
+  # "Answers chat messages" checkbox, from a button.
+  defp handle_control_event(
+         "set_accepts_chat",
+         %{"awake" => value},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       )
+       when value in ["true", "false"] do
+    with_native_manager(socket, agent, fn -> set_accepts_chat(socket, agent, value == "true") end)
+  end
+
   defp handle_control_event("set_accepts_chat", _params, socket), do: {:noreply, socket}
+
+  defp handle_control_event("page_tab", params, socket),
+    do: page_event("page_tab", params, socket)
+
+  defp handle_control_event("toggle_advanced", params, socket),
+    do: page_event("toggle_advanced", params, socket)
+
+  defp handle_control_event("page_dm", params, socket), do: page_event("page_dm", params, socket)
+
+  defp handle_control_event("page_hear", params, socket),
+    do: page_event("page_hear", params, socket)
+
+  defp handle_control_event("page_card", params, socket),
+    do: page_event("page_card", params, socket)
+
+  defp handle_control_event("voice_sample", params, socket),
+    do: page_event("voice_sample", params, socket)
+
+  defp handle_control_event("voice_free", params, socket),
+    do: page_event("voice_free", params, socket)
+
+  defp handle_control_event("page_dials", params, socket),
+    do: page_event("page_dials", params, socket)
+
+  defp handle_control_event("page_trait", params, socket),
+    do: page_event("page_trait", params, socket)
+
+  defp handle_control_event("voice_preset", params, socket),
+    do: page_event("voice_preset", params, socket)
+
+  defp handle_control_event("voice_knob", params, socket),
+    do: page_event("voice_knob", params, socket)
+
+  defp handle_control_event("voice_reset", params, socket),
+    do: page_event("voice_reset", params, socket)
+
+  defp handle_control_event("page_toolkit", params, socket),
+    do: page_event("page_toolkit", params, socket)
+
+  defp handle_control_event("page_mode", params, socket),
+    do: page_event("page_mode", params, socket)
 
   defp handle_control_event("open_grant_panel", params, socket),
     do: GrantEvents.handle("open_grant_panel", params, socket)
@@ -918,6 +1007,7 @@ defmodule PlatformWeb.ControlCenterLive do
              socket
              |> assign(:federation_spaces, spaces)
              |> assign(:show_add_space_modal, false)
+             |> assign_page()
              |> put_flash(:info, "Agent added to space.")}
 
           {:error, reason} ->
@@ -1001,7 +1091,7 @@ defmodule PlatformWeb.ControlCenterLive do
         <aside
           id="agent-directory"
           class={[
-            "flex min-h-0 w-full flex-col overflow-hidden border-edge bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
+            "flex min-h-0 w-full flex-col overflow-hidden border-edge bg-base-200/60 lg:w-[280px] lg:flex-shrink-0 lg:border-r",
             @selected_agent && "hidden lg:flex"
           ]}
         >
@@ -1119,167 +1209,197 @@ defmodule PlatformWeb.ControlCenterLive do
 
         <%!-- ── Main panel ─────────────────────────────────────────── --%>
         <main class={[
-          "min-h-0 flex-1 overflow-y-auto",
-          is_nil(@selected_agent) && "hidden lg:block"
+          "min-h-0 flex-1",
+          is_nil(@selected_agent) && "hidden overflow-y-auto lg:block",
+          @selected_agent && "flex flex-col overflow-hidden"
         ]}>
-          <%!-- Agent detail view --%>
-          <div
-            :if={@selected_agent}
-            class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
+          <%!-- The living agent page (task 01a1b6ad stage 3). Every control
+               the old detail panel held is in its Advanced settings slot. --%>
+          <AgentPage.page
+            :if={@selected_agent && @page}
+            agent={@selected_agent}
+            page={@page}
+            tab={@page_tab}
+            advanced={@show_advanced}
+            can_manage?={
+              Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
+                (is_nil(@native_header) or @native_header.can_manage?)
+            }
+            mine?={page_mine?(assigns)}
+            viewer={@viewer_name}
+            try={@page_try}
+            saved={@page_saved}
+            show_card={@show_card}
+            vault={@overview_counts.vault}
           >
-            <AgentDetail.header
-              agent={@selected_agent}
-              can_manage?={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
-              runtime={@runtime}
-              federation_online?={@federation_online?}
-              selected_agent_directory_entry={@selected_agent_directory_entry}
-              pending_delete_slug={@pending_delete_slug}
-              pending_delete_runtimes={@pending_delete_runtimes}
-              native={@native_header}
-            />
-
-            <AgentDetail.chat_toggle
-              :if={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
-              agent={@selected_agent}
-            />
-
-            <AgentDetail.stats
-              agent={@selected_agent}
-              runtime={@runtime}
-              federation_online?={@federation_online?}
-              federation_runtime={@federation_runtime}
-              federation_spaces={@federation_spaces}
-              overview_counts={@overview_counts}
-            />
-
-            <div :if={@selected_agent.runtime_type == "external"} class="flex flex-col gap-6">
-              <section
-                :if={@config_entry?}
-                id="agent-session"
-                class="overflow-hidden rounded-3xl border border-edge bg-base-100"
+            <:settings>
+              <div
+                :if={@selected_agent}
+                class="flex flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
               >
-                <SessionStrip.strip :if={@session} id="agent-session-strip" session={@session} />
-                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                  <span class="text-sm text-base-content">
-                    Instructions, skills, settings and MCP servers
-                  </span>
-                  <.link
-                    id="open-agent-config"
-                    navigate={~p"/control/#{@selected_agent.slug}/config"}
-                    class="btn btn-sm btn-ghost border border-subtle"
-                  >
-                    Configuration
-                  </.link>
-                </div>
-              </section>
-
-              <AgentDetail.federation_panels
-                agent={@selected_agent}
-                federation_runtime={@federation_runtime}
-                config_form={@config_form}
-                uploads={@uploads}
-                regenerated_token={@regenerated_token}
-                federation_online?={@federation_online?}
-                federation_spaces={@federation_spaces}
-                show_add_space_modal={@show_add_space_modal}
-                available_spaces={@available_spaces}
-                available_meeting_spaces={@available_meeting_spaces}
-                current_user_id={@current_user_id}
-                managed?={not is_nil(@native_header)}
-                can_grant?={@can_grant?}
-                grant_panel={@grant_panel}
-                sheet_refusal={@sheet_refusal}
-                can_manage?={
-                  Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
-                    (is_nil(@native_header) or @native_header.can_manage?)
-                }
-              />
-
-              <%!-- Login steps (stage 6) replace the files area while the agent
-                   waits for a login. --%>
-              <NativeLoginPanel.panel
-                :if={@native_header && @native_header.view.state == :needs_login}
-                agent={@selected_agent}
-                can_manage?={@native_header.can_manage?}
-                key_set?={@native_header.key_set?}
-                step={@native_header.login_step}
-                mode={@native_header.login_mode}
-              />
-
-              <NativeFiles.summary
-                :if={@native_header && @native_header.view.state != :needs_login}
-                agent={@selected_agent}
-                can_manage?={@native_header.can_manage?}
-                workspace_files={@workspace_files}
-              />
-
-              <NativeLoginPanel.summary
-                :if={
-                  @native_header && @native_header.view.state != :needs_login &&
-                    @native_header.harness == "claude_code"
-                }
-                agent={@selected_agent}
-                can_manage?={@native_header.can_manage?}
-                key_set?={@native_header.key_set?}
-                step={@native_header.login_step}
-                mode={@native_header.login_mode}
-              />
-
-              <NativeLoginPanel.logs
-                :if={@native_header && @native_header.can_manage?}
-                agent={@selected_agent}
-                output={recent_output_for(@native_recent_output, @selected_agent)}
-              />
-            </div>
-
-            <%!-- Config + model routing (built-in agents only) --%>
-            <div
-              :if={
-                @selected_agent.runtime_type != "external" and
-                  Platform.Access.Agents.manage?(@access_scope, @selected_agent)
-              }
-              class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]"
-            >
-              <div class="flex min-w-0 flex-col gap-6">
-                <AgentDetail.config_form
+                <AgentDetail.header
                   agent={@selected_agent}
-                  config_form={@config_form}
-                  uploads={@uploads}
-                  model_chain_result={@model_chain_result}
-                  selected_agent_directory_entry={@selected_agent_directory_entry}
-                />
-
-                <AgentDetail.workspace_editor
-                  workspace_files={@workspace_files}
-                  selected_file_key={@selected_file_key}
-                  selected_workspace_file={@selected_workspace_file}
-                  workspace_form={@workspace_form}
-                />
-
-                <AgentDetail.memory_browser
-                  memory_filter_form={@memory_filter_form}
-                  recent_memories={@recent_memories}
-                  memory_form={@memory_form}
-                />
-              </div>
-
-              <div class="flex min-w-0 flex-col gap-6">
-                <AgentDetail.runtime_monitor
+                  can_manage?={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
                   runtime={@runtime}
-                  recent_sessions={@recent_sessions}
+                  federation_online?={@federation_online?}
+                  selected_agent_directory_entry={@selected_agent_directory_entry}
+                  pending_delete_slug={@pending_delete_slug}
+                  pending_delete_runtimes={@pending_delete_runtimes}
+                  native={@native_header}
                 />
 
-                <AgentDetail.vault_panel
-                  agent_credentials={@agent_credentials}
-                  platform_credentials={@platform_credentials}
-                  all_platform_credentials={@all_platform_credentials}
-                  root_admin?={@root_admin?}
-                  show_credential_form={@show_credential_form}
-                  credential_form={@credential_form}
+                <AgentDetail.chat_toggle
+                  :if={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
+                  agent={@selected_agent}
                 />
+
+                <AgentDetail.stats
+                  agent={@selected_agent}
+                  runtime={@runtime}
+                  federation_online?={@federation_online?}
+                  federation_runtime={@federation_runtime}
+                  federation_spaces={@federation_spaces}
+                  overview_counts={@overview_counts}
+                />
+
+                <div :if={@selected_agent.runtime_type == "external"} class="flex flex-col gap-6">
+                  <section
+                    :if={@config_entry?}
+                    id="agent-session"
+                    class="overflow-hidden rounded-3xl border border-edge bg-base-100"
+                  >
+                    <SessionStrip.strip :if={@session} id="agent-session-strip" session={@session} />
+                    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                      <span class="text-sm text-base-content">
+                        Instructions, skills, settings and MCP servers
+                      </span>
+                      <.link
+                        id="open-agent-config"
+                        navigate={~p"/control/#{@selected_agent.slug}/config"}
+                        class="btn btn-sm btn-ghost border border-subtle"
+                      >
+                        Configuration
+                      </.link>
+                    </div>
+                  </section>
+
+                  <AgentDetail.federation_panels
+                    agent={@selected_agent}
+                    federation_runtime={@federation_runtime}
+                    config_form={@config_form}
+                    uploads={@uploads}
+                    regenerated_token={@regenerated_token}
+                    federation_online?={@federation_online?}
+                    federation_spaces={@federation_spaces}
+                    show_add_space_modal={@show_add_space_modal}
+                    available_spaces={@available_spaces}
+                    available_meeting_spaces={@available_meeting_spaces}
+                    current_user_id={@current_user_id}
+                    managed?={not is_nil(@native_header)}
+                    can_grant?={@can_grant?}
+                    grant_panel={@grant_panel}
+                    sheet_refusal={@sheet_refusal}
+                    can_manage?={
+                      Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
+                        (is_nil(@native_header) or @native_header.can_manage?)
+                    }
+                  />
+
+                  <%!-- Login steps (stage 6) replace the files area while the agent
+                   waits for a login. --%>
+                  <NativeLoginPanel.panel
+                    :if={@native_header && @native_header.view.state == :needs_login}
+                    agent={@selected_agent}
+                    can_manage?={@native_header.can_manage?}
+                    key_set?={@native_header.key_set?}
+                    step={@native_header.login_step}
+                    mode={@native_header.login_mode}
+                  />
+
+                  <NativeFiles.summary
+                    :if={@native_header && @native_header.view.state != :needs_login}
+                    agent={@selected_agent}
+                    can_manage?={@native_header.can_manage?}
+                    workspace_files={@workspace_files}
+                  />
+
+                  <NativeLoginPanel.summary
+                    :if={
+                      @native_header && @native_header.view.state != :needs_login &&
+                        @native_header.harness == "claude_code"
+                    }
+                    agent={@selected_agent}
+                    can_manage?={@native_header.can_manage?}
+                    key_set?={@native_header.key_set?}
+                    step={@native_header.login_step}
+                    mode={@native_header.login_mode}
+                  />
+
+                  <NativeLoginPanel.logs
+                    :if={@native_header && @native_header.can_manage?}
+                    agent={@selected_agent}
+                    output={recent_output_for(@native_recent_output, @selected_agent)}
+                  />
+                </div>
+
+                <%!-- Config + model routing (built-in agents only) --%>
+                <div
+                  :if={
+                    @selected_agent.runtime_type != "external" and
+                      Platform.Access.Agents.manage?(@access_scope, @selected_agent)
+                  }
+                  class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]"
+                >
+                  <div class="flex min-w-0 flex-col gap-6">
+                    <AgentDetail.config_form
+                      agent={@selected_agent}
+                      config_form={@config_form}
+                      uploads={@uploads}
+                      model_chain_result={@model_chain_result}
+                      selected_agent_directory_entry={@selected_agent_directory_entry}
+                    />
+
+                    <AgentDetail.workspace_editor
+                      workspace_files={@workspace_files}
+                      selected_file_key={@selected_file_key}
+                      selected_workspace_file={@selected_workspace_file}
+                      workspace_form={@workspace_form}
+                    />
+
+                    <AgentDetail.memory_browser
+                      memory_filter_form={@memory_filter_form}
+                      recent_memories={@recent_memories}
+                      memory_form={@memory_form}
+                    />
+                  </div>
+
+                  <div class="flex min-w-0 flex-col gap-6">
+                    <AgentDetail.runtime_monitor
+                      runtime={@runtime}
+                      recent_sessions={@recent_sessions}
+                    />
+
+                    <AgentDetail.vault_panel
+                      agent_credentials={@agent_credentials}
+                      platform_credentials={@platform_credentials}
+                      all_platform_credentials={@all_platform_credentials}
+                      root_admin?={@root_admin?}
+                      show_credential_form={@show_credential_form}
+                      credential_form={@credential_form}
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </:settings>
+          </AgentPage.page>
+
+          <AgentDetail.add_space_modal
+            :if={@selected_agent}
+            show_add_space_modal={@show_add_space_modal}
+            available_spaces={@available_spaces}
+            available_meeting_spaces={@available_meeting_spaces}
+            sheet_refusal={@sheet_refusal}
+          />
 
           <%!-- No agent selected → Roles panel (M7 stage 5 + 6 advanced) --%>
           <RolesPanel.panel
@@ -1316,6 +1436,230 @@ defmodule PlatformWeb.ControlCenterLive do
     </div>
     """
   end
+
+  # ── The living agent page (task 01a1b6ad stage 3) ─────────────────
+
+  defp page_event("page_tab", %{"tab" => tab}, %{assigns: %{selected_agent: %Agent{}}} = socket) do
+    agent = socket.assigns.selected_agent
+
+    {:noreply,
+     socket
+     |> assign(:show_advanced, false)
+     |> push_patch(to: ~p"/control/#{agent.slug}?#{[tab: AgentPage.normalize_tab(tab)]}")}
+  end
+
+  defp page_event("toggle_advanced", _params, socket),
+    do: {:noreply, assign(socket, :show_advanced, !socket.assigns.show_advanced)}
+
+  # 💬 Message: the viewer's DM with the agent, opened or reused.
+  defp page_event("page_dm", _params, %{assigns: %{selected_agent: %Agent{} = agent}} = socket) do
+    case Platform.Chat.find_or_create_dm(socket.assigns.current_user_id, "agent", agent.id) do
+      {:ok, space} ->
+        {:noreply, push_navigate(socket, to: ~p"/chat/#{space.slug || space.id}")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not open a DM with #{agent.name}.")}
+    end
+  end
+
+  defp page_event("page_hear", _params, %{assigns: %{page: %{hear: provider}}} = socket)
+       when is_binary(provider) do
+    agent = socket.assigns.selected_agent
+    {:noreply, put_flash(socket, :info, "▶ #{agent.name} · voice_config #{provider}")}
+  end
+
+  defp page_event("page_card", _params, socket),
+    do: {:noreply, assign(socket, :show_card, true)}
+
+  # Try it: a preview of the reply, nothing written.
+  defp page_event("voice_sample", %{"q" => q}, socket) do
+    if Enum.any?(Archetypes.samples(), &(&1.id == q)),
+      do: {:noreply, assign(socket, :page_try, %{q: q, free: nil})},
+      else: {:noreply, socket}
+  end
+
+  defp page_event("voice_free", %{"q" => q}, socket) when is_binary(q) do
+    case String.trim(q) do
+      "" -> {:noreply, socket}
+      text -> {:noreply, assign(socket, :page_try, %{free: String.slice(text, 0, 500)})}
+    end
+  end
+
+  defp page_event("page_dials", %{"sl" => sl}, socket) when is_map(sl) do
+    with_character(socket, fn b ->
+      new_sl =
+        Enum.reduce(Archetypes.sliders(), b.sl, fn s, acc ->
+          case Integer.parse(to_string(Map.get(sl, s.k, ""))) do
+            {v, ""} when v >= 0 and v <= 100 -> Map.put(acc, s.k, v)
+            _ -> acc
+          end
+        end)
+
+      if new_sl == b.sl, do: :unchanged, else: {:personality, %{sl: new_sl}}
+    end)
+  end
+
+  defp page_event("page_trait", %{"tr" => tr}, socket) do
+    with_character(socket, fn b ->
+      cond do
+        tr not in Archetypes.traits() -> :unchanged
+        tr in b.traits -> {:personality, %{traits: List.delete(b.traits, tr)}}
+        length(b.traits) >= 3 -> {:personality, %{traits: tl(b.traits) ++ [tr]}}
+        true -> {:personality, %{traits: b.traits ++ [tr]}}
+      end
+    end)
+  end
+
+  defp page_event("voice_preset", %{"p" => p}, socket) do
+    with_character(socket, fn b ->
+      case Integer.parse(to_string(p)) do
+        {p, ""} when p >= 0 and p <= 4 and p != b.vc.p -> {:voice, %{vc: %{b.vc | p: p}}}
+        _ -> :unchanged
+      end
+    end)
+  end
+
+  defp page_event("voice_knob", %{"k" => k, "v" => v}, socket) do
+    with_character(socket, fn b ->
+      with %{options: options} <- Enum.find(Archetypes.knobs(), &(&1.k == k)),
+           {v, ""} when v >= 0 <- Integer.parse(to_string(v)),
+           true <- v < length(options) do
+        default = Enum.at(Archetypes.vdef(), b.vc.p)[k]
+        ov = if default == v, do: Map.delete(b.vc.ov, k), else: Map.put(b.vc.ov, k, v)
+        if ov == b.vc.ov, do: :unchanged, else: {:voice, %{vc: %{b.vc | ov: ov}}}
+      else
+        _ -> :unchanged
+      end
+    end)
+  end
+
+  defp page_event("voice_reset", _params, socket) do
+    with_character(socket, fn b ->
+      if b.vc.ov == %{}, do: :unchanged, else: {:voice, %{vc: %{b.vc | ov: %{}}}}
+    end)
+  end
+
+  defp page_event(
+         "page_toolkit",
+         %{"tk" => tk},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
+    current = (agent.tools_config || %{})["toolkit"] || []
+
+    ids =
+      cond do
+        tk not in Archetypes.toolkit_ids() -> nil
+        tk in current -> List.delete(current, tk)
+        true -> current ++ [tk]
+      end
+
+    with ids when is_list(ids) <- ids,
+         {:ok, _} <-
+           Character.put_toolkit(agent, Enum.filter(ids, &(&1 in Archetypes.toolkit_ids()))) do
+      {:noreply, reload_selected_agent(socket)}
+    else
+      nil ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not save the toolkit (#{inspect(reason)}).")}
+    end
+  end
+
+  # Mode, per channel: the agent's own participant row in that space, so a
+  # space id it is not in finds no row and writes nothing.
+  defp page_event(
+         "page_mode",
+         %{"space" => space, "mode" => mode},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       )
+       when is_binary(space) do
+    with true <- mode in AgentPageData.mode_ids(),
+         %{} = participant <- Platform.Chat.get_agent_participant(space, agent.id),
+         {:ok, _} <- Platform.Chat.update_participant(participant, %{attention_mode: mode}) do
+      {:noreply, assign_page(socket)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  defp page_event(_event, _params, socket), do: {:noreply, socket}
+
+  # A dial, trait or voice change goes through Character.update/3, which
+  # rewrites SOUL.md (version + 1) and the agent row. `fun` gets the stored
+  # character and returns `{kind, changes}` or `:unchanged`. An agent built
+  # before characters has none, and nothing is written.
+  defp with_character(%{assigns: %{selected_agent: %Agent{} = agent}} = socket, fun) do
+    with %{} = b <- Character.from_agent(agent),
+         {kind, changes} <- fun.(b),
+         {:ok, _} <- Character.update(agent, changes) do
+      socket = reload_selected_agent(socket)
+      {:noreply, if(kind == :voice, do: flash_saved(socket), else: socket)}
+    else
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not save (#{inspect(reason)}). Nothing changed.")}
+
+      _unchanged ->
+        {:noreply, socket}
+    end
+  end
+
+  defp with_character(socket, _fun), do: {:noreply, socket}
+
+  defp flash_saved(socket) do
+    ref = make_ref()
+    Process.send_after(self(), {:page_saved_clear, ref}, 2200)
+    socket |> assign(:page_saved, :voice) |> assign(:page_saved_ref, ref)
+  end
+
+  defp assign_page(%{assigns: %{selected_agent: %Agent{} = agent}} = socket) do
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
+
+    page =
+      AgentPageData.build(agent,
+        viewer_id: socket.assigns.current_user_id,
+        scope: scope,
+        runtime: socket.assigns[:runtime],
+        federation_online?: socket.assigns[:federation_online?],
+        native: socket.assigns[:native_header],
+        agents: socket.assigns[:agents] || []
+      )
+
+    assign(socket, :page, page)
+  end
+
+  defp assign_page(socket), do: assign(socket, :page, nil)
+
+  # Opening another agent starts on its own page, not the last one's sheet.
+  defp reset_page_on_switch(socket, selected_agent) do
+    case {socket.assigns[:selected_agent], selected_agent} do
+      {%Agent{id: id}, %Agent{id: id}} ->
+        socket
+
+      _switched ->
+        socket
+        |> assign(:show_advanced, false)
+        |> assign(:show_card, false)
+        |> assign(:page_try, %{})
+        |> assign(:page_saved, nil)
+    end
+  end
+
+  defp viewer_name(user_id) when is_binary(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      _ -> nil
+    end
+  end
+
+  defp viewer_name(_), do: nil
+
+  defp page_mine?(%{federation_runtime: %{owner_user_id: owner}, current_user_id: me})
+       when is_binary(owner),
+       do: owner == me
+
+  defp page_mine?(_assigns), do: false
 
   # ── Private: character builder (task 01a1b6ad stage 2) ────────────
 
@@ -1522,6 +1866,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign_federation_data(agent)
     |> assign_native()
     |> assign_session_strip(agent)
+    |> assign_page()
   end
 
   # The standalone Restart session strip and the Configuration entry (task

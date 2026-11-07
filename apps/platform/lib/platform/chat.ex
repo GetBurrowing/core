@@ -3503,6 +3503,58 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  What an agent said lately, for its agent page (task 01a1b6ad stage 3):
+  the messages `agent_id` authored at or after `since`, newest first, each
+  with its space's name, kind and slug.
+
+  Only messages in `visible_space_ids` are returned: the page passes the
+  viewer's own spaces, so a message in a space the viewer is not in (a DM
+  with someone else, a private channel) never reaches them. Deleted and
+  log-only messages are excluded. `:limit` defaults to 20.
+  """
+  @spec list_agent_messages_since(binary(), [binary()], DateTime.t(), keyword()) :: [map()]
+  def list_agent_messages_since(agent_id, visible_space_ids, %DateTime{} = since, opts \\ [])
+      when is_binary(agent_id) and is_list(visible_space_ids) do
+    if Platform.UUID.valid?(agent_id) do
+      limit = Keyword.get(opts, :limit, 20)
+
+      from(m in Message,
+        join: s in Space,
+        on: s.id == m.space_id,
+        where:
+          m.author_agent_id == ^agent_id and m.space_id in ^visible_space_ids and
+            is_nil(m.deleted_at) and m.log_only == false and m.inserted_at >= ^since,
+        order_by: [desc: m.inserted_at, desc: m.id],
+        limit: ^limit,
+        select: %{
+          id: m.id,
+          content: m.content,
+          inserted_at: m.inserted_at,
+          space_id: s.id,
+          space_name: s.name,
+          space_slug: s.slug,
+          space_kind: s.kind
+        }
+      )
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  @doc """
+  The newest message `agent_id` authored in one of `visible_space_ids`, as
+  `list_agent_messages_since/4` shapes it, or nil when it has said nothing
+  there.
+  """
+  @spec latest_agent_message(binary(), [binary()]) :: map() | nil
+  def latest_agent_message(agent_id, visible_space_ids) do
+    agent_id
+    |> list_agent_messages_since(visible_space_ids, ~U[1970-01-01 00:00:00Z], limit: 1)
+    |> List.first()
+  end
+
+  @doc """
   The unbounded digest-eligibility predicate for the `messages` corpus —
   every filter that decides whether a `chat_messages` row can ever reach a
   Historian digest, and nothing else. No time bound, no ordering, no select.

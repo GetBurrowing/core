@@ -18,7 +18,6 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     AgentServer,
     Config,
     ContextShare,
-    Memory,
     MemoryContext,
     Session,
     WorkspaceBootstrap,
@@ -248,10 +247,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     end
   end
 
-  def count_memories(agent_id) do
-    from(m in Memory, where: m.agent_id == ^agent_id)
-    |> Repo.aggregate(:count, :id)
-  end
+  def count_memories(agent_id), do: MemoryContext.count_memories(agent_id)
 
   def count_sessions(agent_id) do
     from(s in Session, where: s.agent_id == ^agent_id)

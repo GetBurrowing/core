@@ -274,6 +274,21 @@ defmodule PlatformWeb.VoiceLiveTest do
              ]
     end
 
+    # Task 01a1b6ad stage 3: the agent page's 🎙 Talk links here with ?partner=.
+    test "?partner= opens with that agent current; an unknown id keeps the default", %{
+      conn: conn,
+      burrow: burrow,
+      pixel: pixel
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice?#{[partner: pixel.id]}")
+      d = doc(view)
+      assert attr(d, "#partner-opt-#{pixel.id}", "data-current") == ["true"]
+      refute LazyHTML.text(q(d, "#partner-opt-#{burrow.id}")) =~ "current"
+
+      {:ok, view, _html} = live(conn, ~p"/voice?#{[partner: "not-an-agent"]}")
+      assert attr(doc(view), "#partner-opt-#{burrow.id}", "data-current") == ["true"]
+    end
+
     test "picking a partner resets the stream to that partner's greeting; Burrow says Back with you",
          %{conn: conn, burrow: burrow, pixel: pixel} do
       {:ok, view, _html} = live(conn, ~p"/voice")

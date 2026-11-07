@@ -162,6 +162,14 @@ defmodule Platform.Agents.MemoryContext do
     |> Repo.all()
   end
 
+  @doc "How many memories the agent has, of every type."
+  @spec count_memories(Ecto.UUID.t()) :: non_neg_integer()
+  def count_memories(agent_id) do
+    Memory
+    |> where([m], m.agent_id == ^agent_id)
+    |> Repo.aggregate(:count, :id)
+  end
+
   @doc """
   Recall memories with a keyword query.
 
