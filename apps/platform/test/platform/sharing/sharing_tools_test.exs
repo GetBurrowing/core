@@ -91,10 +91,15 @@ defmodule Platform.Sharing.SharingToolsTest do
       owner = user!("admin")
       member!(owner, "admin")
       {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
-      %{agent: agent, owner: owner, ctx: asked_by(agent, owner)}
+      # No dispatch is recorded here: each test records exactly the people
+      # who asked, so a member's request is never mixed with the owner's
+      # (an ambiguous requester is refused on its own, which would let a
+      # broken admin check pass the member test).
+      %{agent: agent, owner: owner}
     end
 
-    test "lists every registry entry with its state", %{ctx: ctx} do
+    test "lists every registry entry with its state", %{agent: agent} do
+      ctx = ctx(agent)
       {:ok, _} = Sharing.set(:friction_reports, true, :system)
 
       assert {:ok, %{entries: entries, never_sent: never}} =
@@ -107,7 +112,9 @@ defmodule Platform.Sharing.SharingToolsTest do
     end
 
     test "an admin asks: sharing_set changes the switch and writes one audit row naming them",
-         %{agent: agent, owner: owner, ctx: ctx} do
+         %{agent: agent, owner: owner} do
+      ctx = asked_by(agent, owner)
+
       assert {:ok, %{key: "help_channel_reports", on: true, previous: false}} =
                ToolArguments.dispatch(
                  "sharing_set",
@@ -130,12 +137,16 @@ defmodule Platform.Sharing.SharingToolsTest do
          %{agent: agent} do
       member = user!("asker")
       member!(member, "member")
+      ctx = asked_by(agent, member)
+      # The server resolved the member as the one requester, so the refusal
+      # below is about their role, not an ambiguous requester.
+      assert ctx.requester_user_id == member.id
 
       assert {:error, %{code: :forbidden}} =
                ToolArguments.dispatch(
                  "sharing_set",
                  %{"key" => "help_channel_reports", "on" => true},
-                 asked_by(agent, member)
+                 ctx
                )
 
       refute Sharing.enabled?(:help_channel_reports)
@@ -161,6 +172,7 @@ defmodule Platform.Sharing.SharingToolsTest do
       member!(member, "member")
 
       ctx = asked_by(agent, member)
+      assert ctx.requester_user_id == member.id
 
       assert {:error, %{code: :forbidden}} =
                ToolArguments.dispatch(
@@ -176,7 +188,9 @@ defmodule Platform.Sharing.SharingToolsTest do
       assert audit_rows() == []
     end
 
-    test "an unknown key is refused and changes nothing", %{ctx: ctx} do
+    test "an unknown key is refused and changes nothing", %{agent: agent, owner: owner} do
+      ctx = asked_by(agent, owner)
+
       assert {:error, %{code: :invalid_argument}} =
                ToolArguments.dispatch("sharing_set", %{"key" => "everything", "on" => true}, ctx)
 
