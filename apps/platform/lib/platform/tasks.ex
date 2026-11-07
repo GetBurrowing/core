@@ -1016,7 +1016,77 @@ defmodule Platform.Tasks do
     # before struct, `updated` the after — emit only on a genuine
     # change to a NEW user. Side-effect only — {:ok, updated} preserved.
     _ = maybe_emit_sponsor_assigned(task.sponsor_user_id, updated, opts)
+    capture_agent_assignment(task, updated, opts)
     {:ok, updated}
+  end
+
+  # Learned defaults broad capture (task 01a1b6a1 stage 3): one `chosen`
+  # `tasks.assign_agent` signal per agent newly assigned (the current-phase
+  # assignee or any phase's), recorded for the USER who assigned it. The
+  # actor is `opts[:actor_user_id]`, else the `:access_scope` user, else the
+  # ambient `TransitionActor` user; with no user actor nothing is captured.
+  # `space_id` is the task's execution space when one exists. Never fails the
+  # update (`Platform.Habits.Capture`).
+  defp capture_agent_assignment(%Task{} = before, %Task{} = updated, opts) do
+    Platform.Habits.Capture.safely("tasks.assign_agent", fn ->
+      new_agents = assigned_agent_ids(updated) -- assigned_agent_ids(before)
+
+      with [_ | _] <- new_agents,
+           actor when is_binary(actor) <- assignment_actor_user_id(opts) do
+        space_id = execution_space_id_for(updated.id)
+
+        Enum.each(new_agents, fn agent_id ->
+          Platform.Habits.Capture.chosen(%{
+            actor_user_id: actor,
+            space_id: space_id,
+            action: "tasks.assign_agent",
+            target_type: "agent",
+            target_id: agent_id
+          })
+        end)
+      end
+    end)
+  end
+
+  defp assigned_agent_ids(%Task{} = task) do
+    phase_agents =
+      for {_phase, %{"assignee_type" => "agent", "assignee_id" => id}} <-
+            task.phase_assignees || %{},
+          is_binary(id),
+          do: id
+
+    current =
+      if task.assignee_type == "agent" and is_binary(task.assignee_id),
+        do: [task.assignee_id],
+        else: []
+
+    Enum.uniq(current ++ phase_agents)
+  end
+
+  defp assignment_actor_user_id(opts) do
+    case Keyword.get(opts, :actor_user_id) do
+      id when is_binary(id) ->
+        id
+
+      _ ->
+        case Keyword.get(opts, :access_scope) do
+          %Platform.Access.Scope{actor: %Platform.Accounts.User{id: id}} when is_binary(id) ->
+            id
+
+          _ ->
+            case TransitionActor.current() do
+              %{actor_kind: "user", actor_id: id} when is_binary(id) -> id
+              _ -> nil
+            end
+        end
+    end
+  end
+
+  defp execution_space_id_for(task_id) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      %{id: id} -> id
+      _ -> nil
+    end
   end
 
   # ── ADR-0046 planning sub-phase writers (member 4, stage 2) ─────────────
@@ -7251,10 +7321,16 @@ defmodule Platform.Tasks do
   paths (TaskRouter dispatch, kanban thumbnail, etc.) pick up the right
   agent for the phase the task is currently in.
 
+  `opts`: `:actor_user_id`, the user making the assignment, for learned
+  defaults capture (`tasks.assign_agent`, task 01a1b6a1 stage 3; see
+  `capture_agent_assignment/3`).
+
   Returns `{:ok, task}` or `{:error, changeset}`.
   """
-  @spec set_phase_assignees(%Task{}, map()) :: {:ok, %Task{}} | {:error, Ecto.Changeset.t()}
-  def set_phase_assignees(%Task{} = task, attrs_by_phase) when is_map(attrs_by_phase) do
+  @spec set_phase_assignees(%Task{}, map(), keyword()) ::
+          {:ok, %Task{}} | {:error, Ecto.Changeset.t()}
+  def set_phase_assignees(%Task{} = task, attrs_by_phase, opts \\ [])
+      when is_map(attrs_by_phase) do
     merged = merged_phase_assignees(task, attrs_by_phase)
 
     {derived_id, derived_type} =
@@ -7273,6 +7349,7 @@ defmodule Platform.Tasks do
           {:task_updated, Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])}
         )
 
+        capture_agent_assignment(task, updated, opts)
         {:ok, updated}
 
       error ->

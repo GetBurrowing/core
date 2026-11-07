@@ -783,6 +783,14 @@ defmodule PlatformWeb.Components.ChatMessage do
               msg={@msg}
               current_participant={@current_participant}
             />
+            <%!-- Learned defaults rung 3 (task 01a1b6a1 stage 4): the
+                 viewer's own acted-for-you notice, persistent, never a toast. --%>
+            <PlatformWeb.Components.LearnedNotice.learned_notice
+              :if={Map.get(@msg, :learned_notice)}
+              message_id={@msg.id}
+              notice={@msg.learned_notice}
+              read_only={@read_only}
+            />
           </div>
           <%!-- "+@ add someone" (masters `.addat`, mobile 386-388/929-930,
                desktop 202-203/783): rendered on every own message, SHOWN only

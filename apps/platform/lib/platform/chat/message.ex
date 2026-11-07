@@ -61,6 +61,12 @@ defmodule Platform.Chat.Message do
     # Never stored on the message row, so it never makes a message version.
     field(:attention, {:array, :map}, virtual: true, default: [])
 
+    # The viewer's own acted-for-you notice (learned defaults, task 01a1b6a1
+    # stage 4): nil, or `Platform.Habits.act_notices/2`'s notice for this
+    # message plus the target's `:name`, attached at stream-insert time for
+    # the VIEWER (only the author's habits act, so only the author sees it).
+    field(:learned_notice, :map, virtual: true, default: nil)
+
     # Day-bucket label (YYYY-MM-DD) attached at stream-insert time when
     # this message is the first of its calendar day in the visible list
     # (task 019e21c7 Stage 5). Render the date separator inline above the

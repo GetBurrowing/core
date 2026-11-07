@@ -83,7 +83,12 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a1af00 stage 1: the UX friction watch's detection directive,
     # grouping threshold and minimum occurrences. Nothing is seeded; the
     # control is the handler's defaults.
-    Platform.Experiments.Surfaces.UxFrictionDetection
+    Platform.Experiments.Surfaces.UxFrictionDetection,
+    # Task 01a1b6a1 stage 1: the learned-defaults trust-ladder thresholds
+    # and decay (0061-learned-defaults.md). Nothing is seeded; the control
+    # is prefill_threshold 0.6, min_signals 3, act_after_accepts 5,
+    # half_life_days 30.
+    Platform.Experiments.Surfaces.LearnedDefaults
   ]
 
   @prompt_surface "dispatch.prompt"

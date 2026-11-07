@@ -18,7 +18,10 @@ defmodule PlatformWeb.SettingsLive do
       ShellLive's `set_theme` replaces, so the value follows a change without
       a reload.
     * Chat: Move new messages to the top (task 01a1b6fd stage 2).
-    * Account: Notifications, Mask names, Usage, Admin.
+    * Account: Notifications, Mask names, Learned defaults (task 01a1b6a1
+      stage 4: a sheet, `PlatformWeb.SettingsLive.LearnedDefaultsComponent`,
+      also opened by `?sheet=learned_defaults`, where every ✦ "Why this?"
+      line links), Usage, Admin.
     * Help: Send feedback (task 01a1a6a5 stage 5), only while feedback is
       enabled (see Gating). Then Sign out, last.
 
@@ -209,6 +212,9 @@ defmodule PlatformWeb.SettingsLive do
 
   defp open_from_params(socket, %{"sheet" => "admin"}), do: assign(socket, :sheet, :admin)
 
+  defp open_from_params(socket, %{"sheet" => "learned_defaults"}),
+    do: assign(socket, :sheet, :learned_defaults)
+
   defp open_from_params(%{assigns: %{feedback_enabled: true}} = socket, %{"sheet" => "feedback"}),
     do: assign(socket, :sheet, :feedback)
 
@@ -359,6 +365,9 @@ defmodule PlatformWeb.SettingsLive do
   def handle_event("open_admin_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :admin)}
 
+  def handle_event("open_learned_defaults_sheet", _params, socket),
+    do: {:noreply, assign(socket, :sheet, :learned_defaults)}
+
   def handle_event("open_sign_out_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :sign_out)}
 
@@ -424,6 +433,7 @@ defmodule PlatformWeb.SettingsLive do
       |> assign(:email, Map.get(record, :email))
       |> assign(:avatar_url, Map.get(record, :avatar_url))
       |> assign(:avatar_seed, Map.get(record, :id) || assigns[:current_user])
+      |> assign(:viewer_user_id, Map.get(record, :id))
       |> assign(:theme_value, theme_row_value(assigns))
       |> assign(:level, Accounts.notification_level(assigns[:current_user_record]))
       |> assign(:push_state, push_state(assigns))
@@ -580,6 +590,16 @@ defmodule PlatformWeb.SettingsLive do
           {@email_error}
         </p>
 
+        <button
+          type="button"
+          phx-click="open_learned_defaults_sheet"
+          data-role="settings-learned-defaults"
+          class={row_class()}
+        >
+          <span class="shrink-0">Learned defaults</span>
+          <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+        </button>
+
         <.link
           :if={@usage_row}
           navigate={@usage_row.path}
@@ -679,6 +699,26 @@ defmodule PlatformWeb.SettingsLive do
         >
           {@level_error}
         </p>
+      </.sheet>
+
+      <.sheet
+        id="settings-learned-defaults-sheet"
+        open={@sheet == :learned_defaults}
+        placement={:bottom}
+        on_close="close_settings_sheet"
+        swipe_dismiss
+        handle_close
+      >
+        <:title>Learned defaults</:title>
+        <p class={sheet_title_class()} aria-hidden="true" data-role="learned-defaults-title">
+          Learned defaults
+        </p>
+        <.live_component
+          :if={@sheet == :learned_defaults and is_binary(@viewer_user_id)}
+          module={PlatformWeb.SettingsLive.LearnedDefaultsComponent}
+          id="learned-defaults"
+          user_id={@viewer_user_id}
+        />
       </.sheet>
 
       <.sheet

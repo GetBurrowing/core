@@ -87,6 +87,8 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",
                  "dispatch.prompt",
+                 # Task 01a1b6a1 stage 1: the learned-defaults surface, a draft path.
+                 "habits.learned_defaults",
                  # Task 01a1aa47 stage 4: the HR surface, a dispatch path.
                  "hr.profile",
                  "mail.draft.generator",

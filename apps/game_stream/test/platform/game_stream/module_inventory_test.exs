@@ -30,6 +30,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
   # Task 01a13867 added the core surface memory.insight_synthesis.
   # Task 01a1aa47 added the core surface hr.profile.
   # Task 01a1af00 stage 1 added the core surface ux.friction_detection.
+  # Task 01a1b6a1 added the core surface habits.learned_defaults.
   test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
@@ -43,6 +44,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "habits.learned_defaults",
                "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",
@@ -68,6 +70,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "habits.learned_defaults",
                "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",

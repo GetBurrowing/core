@@ -1096,11 +1096,27 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def find_or_create_dm(user_id, target_type, target_id, _opts \\ []) do
     if external_dm_permitted?(user_id, target_type, target_id) do
-      do_find_or_create_dm(user_id, target_type, target_id)
+      user_id
+      |> do_find_or_create_dm(target_type, target_id)
+      |> tap(&capture_dm_target(&1, user_id, target_type, target_id))
     else
       {:error, :dm_not_allowed}
     end
   end
+
+  # Learned defaults broad capture (task 01a1b6a1 stage 3): who a person
+  # opens DMs with, org-level (`space_id` nil). Never fails the open.
+  defp capture_dm_target({:ok, %Space{}}, user_id, target_type, target_id) do
+    Platform.Habits.Capture.chosen(%{
+      actor_user_id: user_id,
+      space_id: nil,
+      action: "chat.dm_target",
+      target_type: target_type,
+      target_id: target_id
+    })
+  end
+
+  defp capture_dm_target(_result, _user_id, _target_type, _target_id), do: :ok
 
   defp do_find_or_create_dm(user_id, target_type, target_id) do
     # Look for an existing DM space where both participants are active
@@ -2441,6 +2457,7 @@ defmodule Platform.Chat do
         msg |> reinvite_and_pin_mentioned() |> notify_refused_summons(msg, opts)
         emit_inbox_for_mentions(msg)
         publish_message_posted(msg, opts)
+        learned_after_post(msg)
         {:ok, msg}
 
       {:error, changeset} ->
@@ -2512,6 +2529,7 @@ defmodule Platform.Chat do
         message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
         emit_inbox_for_mentions(message)
         publish_message_posted(message, opts)
+        learned_after_post(message)
         {:ok, message, attachments}
 
       {:error, _operation, reason, _changes_so_far} ->
@@ -2699,6 +2717,7 @@ defmodule Platform.Chat do
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
+          learned_after_post(message)
           {:ok, message, [linked]}
 
         {:error, _operation, reason, _changes_so_far} ->
@@ -2793,6 +2812,7 @@ defmodule Platform.Chat do
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
+          learned_after_post(message)
           {:ok, message, linked}
 
         {:error, _operation, reason, _changes_so_far} ->
@@ -6584,6 +6604,12 @@ defmodule Platform.Chat do
 
   defp emit_inbox_for_mentions(_), do: :ok
 
+  # Learned defaults (task 01a1b6a1 stage 3): mention capture and the
+  # attention ask on the act rung. Post-commit; never fails the post (see
+  # `Platform.Habits.Capture`).
+  defp learned_after_post(%Message{} = msg),
+    do: Platform.Habits.LearnedAttention.after_message_posted(msg)
+
   # One `chat_mention` Inbox row per USER participant in `participants` who
   # may read the space. Shared by the post path's mentions and added
   # attention (task 01a1557a-a30a stage 1), so the `chat.read` check, the body
@@ -7557,6 +7583,90 @@ defmodule Platform.Chat do
 
   def add_message_attention(_actor, _space_id, _message_id, _principal_ids),
     do: {:error, :invalid}
+
+  @doc """
+  Take back an attention ask (learned defaults, `0061-learned-defaults.md`
+  § 5, task 01a1b6a1 stage 3): the undo of an ask made by hand or by the
+  habits engine acting for the user.
+
+  `principal_id` is the asked principal (a user id), as
+  `add_message_attention/4` takes it. Only the user who added the row may
+  remove it; the habits engine acts with that user as `actor`, so the same
+  rule covers it. On success the attention row is deleted, that human's
+  `chat_mention` Inbox row for the ask is deleted (`Platform.Inbox.delete_by_source/4`,
+  only rows written at or after the ask, so a mention from the message's own
+  text survives), and `{:message_attention_changed, message}` is broadcast on
+  the space topic. Returns `{:ok, %MessageAttention{}}`.
+
+  Refused, changing nothing:
+
+    * a non-member, nil or agent actor, or a row someone else added:
+      `{:error, :forbidden}`
+    * an agent's row: `{:error, :not_reversible}`. Asking an agent wakes it,
+      and a wake cannot be recalled.
+    * an archived space: `{:error, :space_archived}`
+    * a missing message, or no such row: `{:error, :not_found}`
+  """
+  @spec remove_message_attention(SpaceAccess.actor(), binary(), binary(), binary()) ::
+          {:ok, MessageAttention.t()}
+          | {:error, :forbidden | :not_reversible | :space_archived | :not_found}
+  def remove_message_attention(actor, space_id, message_id, principal_id)
+      when is_binary(space_id) and is_binary(message_id) and is_binary(principal_id) do
+    with true <- Enum.all?([space_id, message_id, principal_id], &Platform.UUID.valid?/1),
+         {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Message{} = message <- attention_target_message(space_id, message_id),
+         %MessageAttention{} = row <- attention_row_for(message, principal_id),
+         :ok <- ensure_reversible_attention(row),
+         :ok <- ensure_added_by(row, writer) do
+      Repo.delete!(row)
+      after_attention_removed(message, row, principal_id)
+      {:ok, row}
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  def remove_message_attention(_actor, _space_id, _message_id, _principal_id),
+    do: {:error, :not_found}
+
+  defp attention_row_for(%Message{} = message, principal_id) do
+    from(a in MessageAttention,
+      join: p in Participant,
+      on: p.id == a.participant_id,
+      where: a.message_id == ^message.id and p.participant_id == ^principal_id,
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  defp ensure_reversible_attention(%MessageAttention{participant_type: "user"}), do: :ok
+  defp ensure_reversible_attention(_row), do: {:error, :not_reversible}
+
+  defp ensure_added_by(%MessageAttention{added_by_participant_id: id}, %Participant{id: id}),
+    do: :ok
+
+  defp ensure_added_by(_row, _writer), do: {:error, :forbidden}
+
+  # The row is gone; like the add path, the side effects may not fail the call.
+  defp after_attention_removed(%Message{} = message, %MessageAttention{} = row, user_id) do
+    attention_side_effect(message, [row.participant_id], "inbox retract", fn ->
+      Platform.Inbox.delete_by_source(user_id, "chat_message", message.id,
+        kind: "chat_mention",
+        inserted_since: row.inserted_at
+      )
+    end)
+
+    attention_side_effect(message, [row.participant_id], "broadcast", fn ->
+      message = %{message | attention: list_message_attention(message.id)}
+      ChatPubSub.broadcast(message.space_id, {:message_attention_changed, message})
+    end)
+
+    :ok
+  end
 
   @doc "The attention rows on one message, oldest first, as `MessageAttention.to_view/1`."
   @spec list_message_attention(binary()) :: [map()]

@@ -1081,6 +1081,47 @@ defmodule Platform.Inbox do
   end
 
   @doc """
+  DELETE `user_id`'s rows for a source triple: the notification itself is
+  withdrawn, not dealt with (task 01a1b6a1 stage 3, the undo of an attention
+  ask in `Platform.Chat.remove_message_attention/4`). A dismissal would leave
+  the row in history as if the person had seen to it; an undone ask never
+  happened.
+
+  Options:
+
+    * `kind:` — only rows of this kind (see `dismiss_by_source/4` on why a
+      source triple is not unique per kind).
+    * `inserted_since:` — only rows inserted at or after this `DateTime`, so
+      an older row for the same source (the message's own @mention) survives.
+
+  Broadcasts `{:inbox_changed, user_id}` when it deleted anything, so a
+  mounted shell recomputes the badge; a no-op stays quiet. Returns
+  `{:ok, deleted_count}`.
+  """
+  @spec delete_by_source(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, non_neg_integer()}
+  def delete_by_source(user_id, source_type, source_id, opts \\ []) do
+    {count, _} =
+      Item
+      |> where(
+        [i],
+        i.user_id == ^user_id and i.source_type == ^source_type and i.source_id == ^source_id
+      )
+      |> filter_kind(Keyword.get(opts, :kind))
+      |> filter_inserted_since(Keyword.get(opts, :inserted_since))
+      |> Repo.delete_all()
+
+    if count > 0, do: broadcast_changed(user_id)
+
+    {:ok, count}
+  end
+
+  defp filter_inserted_since(query, nil), do: query
+
+  defp filter_inserted_since(query, %DateTime{} = since),
+    do: where(query, [i], i.inserted_at >= ^since)
+
+  @doc """
   Dismiss `user_id`'s live `task_sponsor_assigned` row for `task_id`: the
   sponsor opened the task (task `01a116ff`).
 
