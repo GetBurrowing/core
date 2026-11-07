@@ -1,4 +1,4 @@
-# Reference only: Dalton installs/adapts this on moon. The provider creates
+# Reference only: the designated operator installs/adapts this. The provider creates
 # per-session units with exact digest/UDP mapping; never reuse stream ports.
 [Unit]
 Description=Burrow native game server (session-specific reference)

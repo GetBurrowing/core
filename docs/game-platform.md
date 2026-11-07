@@ -19,7 +19,7 @@ HTTPS POST `/api/ext/play/admit/:session_id`, Authorization bearer credential, J
 `admission_id` and slot. Never construct a body or seat before success. The host credential
 is unrelated to any player token and scoped to one session; only its digest reaches core.
 
-## Runtime setup (Dalton / Ryan-owned operators)
+## Runtime setup (designated infrastructure operators)
 
 Use a dedicated native play-host runtime credential, provisioned through existing federation
 onboarding. Keep its token in the ordinary `token_file`. Native `serve -config` example:
@@ -27,7 +27,7 @@ onboarding. Keep its token in the ordinary `token_file`. Native `serve -config` 
 ```json
 {
   "burrow_url": "wss://BURROW/runtime/ws",
-  "runtime_id": "moon-native",
+  "runtime_id": "native-host",
   "token_file": "/private/runtime-token",
   "logs_dir": "/var/log/burrow-native",
   "native": {
@@ -57,10 +57,10 @@ admission and is stopped at 90 seconds. Idle teardown uses a session-pinned 300/
 experiment value (control 600) only with no connected players or unexpired reservations.
 Late publishing never changes the running build. Restart reconciliation never grants slots.
 
-Only Dalton changes moon container/UDP/DNS/firewall setup, on a separate port pool from stream
+Only the designated infrastructure operator changes container/UDP/DNS/firewall setup, on a separate port pool from stream
 WebRTC. Record actual mapping and demonstrate ENet from a second network; DNS alone is not
 reachability evidence. Existing public Voltron 24972 must remain untouched. Stage 1 proved
-DO :24973 plus Windows LEFT and moon RIGHT; that is not proof of this provider's container.
+a remote :24973 server plus native clients on two independent networks; that is not proof of this provider's container.
 Stage 2 deployment/test evidence must identify its own image digest and native host revision.
 
 ## Build publisher identity

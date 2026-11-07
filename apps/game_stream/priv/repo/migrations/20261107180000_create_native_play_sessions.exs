@@ -1,4 +1,9 @@
 defmodule Platform.Repo.Migrations.CreateNativePlaySessions do
+  @moduledoc """
+  Task 01a1b287: persists native Play channel bindings, immutable build
+  manifests, session lifecycle and hashed one-use reservations so host/core
+  restarts cannot duplicate a channel session or replay a player's admission.
+  """
   use Ecto.Migration
 
   def change do
