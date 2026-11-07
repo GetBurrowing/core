@@ -49,6 +49,52 @@ People are named by role here because the tree carries no person names
 7. **Friction knobs are data** (`config :platform, :friction_reports`: threshold 3, window 7
    days, a per-install weekly cap), so they can be tuned without a code change.
 
+## Exactly what is sent
+
+### Anonymous usage counts (stage 2)
+
+When `usage_counts` is on, the install sends one batch per window (hourly by default,
+`config :platform, Platform.Sharing.UsageBatcher, interval_ms`) to `<broker base>/usage`, the same
+broker base every feedback submission uses. The body is:
+
+```json
+{"sharing_install_id": "<random uuid>", "window": {"start": 1762531200, "seconds": 3600},
+ "counts": {"message.posted": 41, "meeting.started": 2}}
+```
+
+`counts` holds only names from this pinned list (`Platform.Sharing.UsageEvents.events/0`), each a
+non-negative integer:
+
+| Sent as | Counted from (`:telemetry`) |
+|---|---|
+| `message.posted` | `[:platform, :chat, :message_posted]`, posts by people and agents |
+| `message.edited` | `[:platform, :chat, :message_edited]` |
+| `message.deleted` | `[:platform, :chat, :message_deleted]` |
+| `thread.created` | `[:platform, :chat, :thread_created]` |
+| `reaction.added` | `[:platform, :chat, :reaction_added]` |
+| `pin.added` | `[:platform, :chat, :pin_added]` |
+| `canvas.created` | `[:platform, :chat, :canvas_created]` |
+| `space.created` | `[:platform, :chat, :space_created]` |
+| `meeting.started` | `[:burrow, :interaction, :meeting_started]` |
+| `meeting.transcription_failed` | `[:platform, :meetings, :transcription_failed]` (a drop-off point) |
+| `access.blocked` | `[:platform, :auth, :access_blocked]` (a drop-off point) |
+
+Never sent: message content, names, emails, space or agent names, ids of people, spaces or agents,
+or any free text. The collector reads the event name only, never its metadata. Before a batch
+leaves, the scrubber drops any unpinned name and any value that is not a non-negative integer,
+runs `Platform.Feedback.Redaction.redact/1` over the encoded body, and refuses the batch if it
+finds email-shaped text or any string other than the install id, the pinned names and the body's
+own keys. Turning the switch off drops every pending count; nothing counted before is sent.
+
+The broker host stores the counts per window in `sharing_usage_counts`, keyed by the sharing
+install id, and refuses any body with an unpinned name, a non-integer, or an extra key.
+
+**One emission family.** User-choice interactions emit ONE `:telemetry` family,
+`[:burrow, :interaction, ...]`, which both these counts and the learned-defaults work (task
+01a1b6a1) consume; there is no second emission framework. `meeting.started` is the first event
+in that family. A new pinned event means one entry in `UsageEvents`, one literal in
+`Platform.Sharing.UsageEventsTest` and one row in this table.
+
 ## Revisit trigger
 
 When the install count reaches 20, revisit every sharing and access default. This trigger lives

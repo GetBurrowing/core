@@ -1055,6 +1055,15 @@ defmodule Platform.Meetings do
           {:meeting_started, updated}
         )
 
+        # The one user-choice interaction family (`[:burrow, :interaction, ...]`)
+        # that usage counts and learned defaults both consume (task 01a1b678
+        # stage 2). Usage counts read only the event name.
+        :telemetry.execute(
+          [:burrow, :interaction, :meeting_started],
+          %{count: 1},
+          %{meeting_id: updated.id, user_id: Keyword.get(opts, :started_by_user_id)}
+        )
+
         ok
 
       error ->
