@@ -7,7 +7,9 @@
     <!-- DEBUG fixture (task 01a1557b): a fake web side for the native tab
          bar, loaded only by a Debug build launched with -BurrowTabBarFixture.
          Buttons send SuiteNative.tabBarState ({items, selected, inbox_dot,
-         visible, ink, scheme}); every burrowNativeTab event is written into
+         inbox_badge, visible, ink, scheme}); the Badge buttons send the
+         count label the web badge shows (task 01a1b673 stage 3), and the
+         Dot buttons send inbox_dot alone, as an older web build does; every burrowNativeTab event is written into
          #events. A button marked data-ink="auto" adds the Burrow preset's
          inks for the page's own colour scheme (BURROW_INK, pinned to
          app.css by native_tab_bar_contract.test.js, task 01a174e8).
@@ -57,6 +59,9 @@
         <button data-state='{"selected":null}'>Select none</button>
         <button data-state='{"inbox_dot":true}'>Dot on</button>
         <button data-state='{"inbox_dot":false}'>Dot off</button>
+        <button data-state='{"inbox_dot":true,"inbox_badge":"7"}'>Badge 7</button>
+        <button data-state='{"inbox_dot":true,"inbox_badge":"9+"}'>Badge 9+</button>
+        <button data-state='{"inbox_dot":false,"inbox_badge":null}'>Badge off</button>
         <button data-state='{"visible":false}'>Hide bar</button>
         <button data-state='{"visible":true}'>Show bar</button>
         <button id="interrupt-visibility">Hide then show</button>

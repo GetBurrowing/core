@@ -13,6 +13,7 @@ import NativeTabBar, {
   barVisible,
   mainScroller,
   stateOf,
+  inboxBadgeOf,
   inksOf,
   schemeOf,
   parseSerialisedColour,
@@ -220,7 +221,7 @@ describe("feature test", () => {
 })
 
 describe("state payload", () => {
-  it("sends items, selected, inbox_dot, visible, ink and scheme on mount", () => {
+  it("sends items, selected, inbox_dot, inbox_badge, visible, ink and scheme on mount", () => {
     const e = env()
     mount(e)
     expect(calls(e)).toEqual([
@@ -228,6 +229,7 @@ describe("state payload", () => {
         items: ["chat", "calendar", "meetings", "inbox", "more"],
         selected: "chat",
         inbox_dot: false,
+        inbox_badge: null,
         visible: true,
         ink: { selected: "#ad4b07ff", unselected: "#0000008c" },
         scheme: "light",
@@ -267,6 +269,45 @@ describe("state payload", () => {
     span.a["data-items"] = "chat,inbox,more"
     hook.updated()
     expect(last(e).items).toEqual(["chat", "inbox", "more"])
+  })
+
+  // Task 01a1b673 stage 3: the native bar shows the web badge's label.
+  it("inbox_badge carries the data-inbox-badge label, null when absent or empty", () => {
+    const e = env()
+    const span = fakeSpan()
+    const hook = mount(e, span)
+    expect(last(e).inbox_badge).toBe(null)
+
+    for (const label of ["1", "7", "9", "9+"]) {
+      span.a["data-inbox-unread"] = "true"
+      span.a["data-inbox-badge"] = label
+      hook.updated()
+      expect(last(e).inbox_badge).toBe(label)
+      expect(last(e).inbox_dot).toBe(true)
+    }
+
+    span.a["data-inbox-unread"] = "false"
+    span.a["data-inbox-badge"] = ""
+    hook.updated()
+    expect(last(e).inbox_badge).toBe(null)
+    expect(last(e).inbox_dot).toBe(false)
+
+    span.a["data-inbox-badge"] = "3"
+    hook.updated()
+    span.a["data-inbox-badge"] = null
+    hook.updated()
+    expect(last(e).inbox_badge).toBe(null)
+
+    span.a["data-inbox-badge"] = "  "
+    hook.updated()
+    expect(last(e).inbox_badge).toBe(null)
+  })
+
+  it("inbox_badge is always a string or null, never a number", () => {
+    expect(inboxBadgeOf(fakeSpan({ "data-inbox-badge": "9+" }))).toBe("9+")
+    expect(inboxBadgeOf(fakeSpan({ "data-inbox-badge": "4" }))).toBe("4")
+    expect(inboxBadgeOf(fakeSpan())).toBe(null)
+    expect(inboxBadgeOf(fakeSpan({ "data-inbox-badge": "" }))).toBe(null)
   })
 
   it("does not resend an unchanged state", () => {
@@ -617,6 +658,7 @@ describe("destroyed", () => {
       items: ["chat", "calendar", "meetings", "inbox", "more"],
       selected: "chat",
       inbox_dot: false,
+      inbox_badge: null,
       visible: false,
       ink: { selected: "#ad4b07ff", unselected: "#0000008c" },
       scheme: "light",
