@@ -48,7 +48,7 @@ defmodule Platform.Agents.NativeAgents do
 
   import Ecto.Query
 
-  alias Platform.Agents.{Agent, AgentRuntime, MemoryContext, WorkspaceFile}
+  alias Platform.Agents.{Agent, AgentRuntime, Manners, MemoryContext, WorkspaceFile}
   alias Platform.Federation
   alias Platform.Repo
   alias Platform.Tenancy
@@ -296,6 +296,7 @@ defmodule Platform.Agents.NativeAgents do
     from crossing into each other by accident; they are not a wall. Leave other
     agents' files alone.
 
+    #{Manners.handoff_rule()}
     ## This file
 
     This file is managed from Agents in Burrow and is rewritten every time you
@@ -402,28 +403,34 @@ defmodule Platform.Agents.NativeAgents do
 
   @doc """
   The files `agent.start` carries: every file with a valid key, as
-  `%{"key", "content", "version"}`. For the Burrow agent
-  (`Platform.Agents.Burrow`) the instructions file also carries a generated
-  owner / admins section, read from the database on every call.
+  `%{"key", "content", "version"}`. Every agent's instructions file carries
+  the handoff rule (`Platform.Agents.Manners.ensure/1`, added only if
+  absent). For the Burrow agent (`Platform.Agents.Burrow`) it also carries a
+  generated owner / admins section, read from the database on every call.
   """
   @spec start_files(Agent.t()) :: [map()]
   def start_files(%Agent{} = agent) do
     burrow? = Platform.Agents.Burrow.burrow?(agent)
     section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
-    # The instructions file of the harness Burrow actually runs (task 01a19505).
-    key = if burrow?, do: burrow_instructions_key(agent)
+    # The instructions file of the harness the agent actually runs (task 01a19505).
+    key = runtime_instructions_key(agent)
 
     for %WorkspaceFile{} = f <- list_files(agent), valid_file_key?(f.file_key) do
+      # Every native agent's instructions file carries the handoff rule, so an
+      # agent whose stored file predates it picks it up at its next start
+      # (task 01a1b733). Not stored: versions and drift are unaffected.
       content =
-        if burrow? and f.file_key == key,
-          do: f.content <> section,
-          else: f.content
+        cond do
+          f.file_key != key -> f.content
+          burrow? -> Manners.ensure(f.content) <> section
+          true -> Manners.ensure(f.content)
+        end
 
       %{"key" => f.file_key, "content" => content, "version" => f.version}
     end
   end
 
-  defp burrow_instructions_key(agent) do
+  defp runtime_instructions_key(agent) do
     case get_managed_runtime(agent) do
       %AgentRuntime{harness: harness} -> instructions_key(harness)
       nil -> nil

@@ -195,13 +195,18 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       refute has_element?(view, "#chat-list[class*='lg:hidden']")
     end
 
-    test "each section orders by latest message, newest first; Pinned keeps the saved order",
+    test "unread rows order by latest message, newest first; Pinned keeps the saved order",
          %{conn: conn} do
       w = world(conn)
       globex = Tenancy.get_org_by_slug!("globex")
       plain_member!(w.user, globex)
       gamma = channel_in(globex, "Gamma")
       delta = channel_in(globex, "Delta")
+
+      # Unread first (task 01a1b6fd): only a row with unread sorts by recency,
+      # and a channel carries a persisted unread count only for a participant,
+      # so the viewer joins every channel that gets a message.
+      for c <- [w.alpha, gamma, delta], do: join!(c, w.user.id, w.user.name)
       {dm2, _me, nash} = dm!(w.user, "Nash")
       pin_one = channel_in(acme(), "PinOne")
       pin_two = channel_in(acme(), "PinTwo")
@@ -2479,6 +2484,165 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       render_patch(view, ~p"/chat/#{w.alpha.slug}")
       assert lv_assigns(view).list_order_hold == nil
       assert lv_assigns(view).list_hold_ref == nil
+    end
+  end
+
+  # ── unread first (task 01a1b6fd stage 1) ────────────────────────────────
+
+  @direct_rows "[data-role='chat-list-direct'] [data-role='chat-list-row']"
+  @pinned_rows "[data-role='chat-list-pinned'] [data-role='chat-list-row']"
+
+  defp direct_ids(view), do: view |> list_html() |> ids_in(@direct_rows)
+
+  describe "unread first" do
+    test "another participant's message lifts a quiet channel to the top of Spaces, no reload",
+         %{conn: conn} do
+      w = world(conn)
+      gamma = channel_in(acme(), "Gamma")
+      mine = [w.alpha.id, w.beta.id, gamma.id]
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      # All three are quiet: the manual (name) order, Gamma last.
+      manual = spaces_order(view, mine)
+      assert List.last(manual) == gamma.id
+
+      other = join!(gamma, Ecto.UUID.generate(), "Riley")
+      say!(gamma, other, "gamma wakes up")
+
+      assert hd(view |> list_html() |> ids_in(@spaces_rows)) == gamma.id
+      # The other quiet rows keep their manual order beneath it.
+      assert spaces_order(view, mine) == [gamma.id | manual -- [gamma.id]]
+    end
+
+    test "a pinned conversation stays in Pinned, above the floated row", %{conn: conn} do
+      w = world(conn)
+      pinned = channel_in(acme(), "Pinned One")
+      _ = Sidebar.set_space_pinned(w.user.id, pinned.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      other = join!(w.beta, Ecto.UUID.generate(), "Riley")
+      say!(w.beta, other, "beta wakes up")
+      # A message in the pinned one too: it still does not leave Pinned.
+      say!(pinned, join!(pinned, Ecto.UUID.generate(), "Quinn"), "pinned news")
+
+      html = render(view) && list_html(view)
+      assert ids_in(html, @pinned_rows) == [pinned.id]
+      assert hd(ids_in(html, @spaces_rows)) == w.beta.id
+      refute pinned.id in ids_in(html, @spaces_rows)
+
+      {pinned_at, _} = :binary.match(html, ~s(data-role="chat-list-pinned"))
+      {spaces_at, _} = :binary.match(html, ~s(data-role="chat-list-spaces"))
+      assert pinned_at < spaces_at
+    end
+
+    test "a DM with a new message becomes the first row of Direct", %{conn: conn} do
+      w = world(conn)
+      {dm2, _me, nash} = dm!(w.user, "Nash")
+      {dm3, _me, _ola} = dm!(w.user, "Ola")
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      ids = direct_ids(view)
+      assert dm2.id in ids and dm3.id in ids
+      # world/1's DM has unread, so it leads before Nash writes.
+      assert hd(ids) == w.dm.id
+
+      say!(dm2, nash, "hi from nash")
+      assert hd(direct_ids(view)) == dm2.id
+    end
+
+    test "with the setting off, the manual order holds", %{conn: conn} do
+      w = world(conn)
+      {:ok, _} = Platform.Accounts.put_float_new_messages(w.user.id, false)
+      gamma = channel_in(acme(), "Gamma")
+      mine = [w.alpha.id, w.beta.id, gamma.id]
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      refute lv_assigns(view).float_new_messages?
+
+      manual = spaces_order(view, mine)
+      assert List.last(manual) == gamma.id
+
+      say!(gamma, join!(gamma, Ecto.UUID.generate(), "Riley"), "gamma wakes up")
+      _ = render(view)
+      # The message did land (the unread moved), and the order did not.
+      assert Map.get(lv_assigns(view).unread_counts, gamma.id, 0) > 0
+      assert spaces_order(view, mine) == manual
+    end
+
+    test "put_float_new_messages from outside reorders an open session", %{conn: conn} do
+      w = world(conn)
+      gamma = channel_in(acme(), "Gamma")
+      mine = [w.alpha.id, w.beta.id, gamma.id]
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      manual = spaces_order(view, mine)
+
+      say!(gamma, join!(gamma, Ecto.UUID.generate(), "Riley"), "gamma wakes up")
+      assert hd(spaces_order(view, mine)) == gamma.id
+
+      {:ok, _} = Platform.Accounts.put_float_new_messages(w.user.id, false)
+      assert spaces_order(view, mine) == manual
+      refute lv_assigns(view).float_new_messages?
+
+      {:ok, _} = Platform.Accounts.put_float_new_messages(w.user.id, true)
+      assert hd(spaces_order(view, mine)) == gamma.id
+    end
+
+    test "an open floated conversation keeps its place, then settles when left", %{conn: conn} do
+      w = world(conn)
+      gamma = channel_in(acme(), "Gamma")
+      mine = [w.alpha.id, w.beta.id, gamma.id]
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      manual = spaces_order(view, mine)
+
+      say!(gamma, join!(gamma, Ecto.UUID.generate(), "Riley"), "gamma wakes up")
+      assert hd(spaces_order(view, mine)) == gamma.id
+
+      # Opening it reads it (unread 0), and it keeps the floated place.
+      render_patch(view, ~p"/chat/#{gamma.slug}")
+      assert Map.get(lv_assigns(view).unread_counts, gamma.id, 0) == 0
+      assert lv_assigns(view).list_floated == MapSet.new([gamma.id])
+      assert hd(spaces_order(view, mine)) == gamma.id
+
+      # Opening a quiet space drops it: it settles into its manual place.
+      render_patch(view, ~p"/chat/#{w.beta.slug}")
+      assert lv_assigns(view).list_floated == MapSet.new()
+      assert spaces_order(view, mine) == manual
+
+      # Back to the list: nothing floated either.
+      render_patch(view, ~p"/chat")
+      assert lv_assigns(view).list_floated == MapSet.new()
+      assert spaces_order(view, mine) == manual
+    end
+
+    # Task 01a1b6fd stage 2: the marker `ChatListSettle` reads for the
+    # desktop float highlight.
+    test "the floated row carries data-floated and quiet rows do not", %{conn: conn} do
+      w = world(conn)
+      gamma = channel_in(acme(), "Gamma")
+      pinned = channel_in(acme(), "Pinned One")
+      _ = Sidebar.set_space_pinned(w.user.id, pinned.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      wrap = fn id -> "[data-role='chat-list-row-wrap'][data-space-id='#{id}']" end
+      floated = fn id -> wrap.(id) <> "[data-floated='true']" end
+
+      for id <- [w.alpha.id, w.beta.id, gamma.id] do
+        assert has_element?(view, wrap.(id))
+        refute has_element?(view, floated.(id))
+      end
+
+      say!(gamma, join!(gamma, Ecto.UUID.generate(), "Riley"), "gamma wakes up")
+      say!(pinned, join!(pinned, Ecto.UUID.generate(), "Quinn"), "pinned news")
+
+      assert has_element?(view, floated.(gamma.id))
+      refute has_element?(view, floated.(w.alpha.id))
+      refute has_element?(view, floated.(w.beta.id))
+      # Pinned never carries it: a pin does not float.
+      refute has_element?(view, floated.(pinned.id))
+
+      # Setting off: no row is in an active run, so none is marked.
+      {:ok, _} = Platform.Accounts.put_float_new_messages(w.user.id, false)
+      _ = render(view)
+      refute has_element?(view, "[data-role='chat-list-row-wrap'][data-floated]")
     end
   end
 end

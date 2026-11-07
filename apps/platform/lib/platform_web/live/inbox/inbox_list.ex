@@ -86,6 +86,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   alias Phoenix.LiveView.JS
   alias Platform.Inbox.Item
   alias PlatformWeb.Components.InboxItem
+  alias PlatformWeb.Components.UxDecisionRow
   alias PlatformWeb.InboxLive
 
   attr :rows, :any, required: true, doc: "the `@streams.inbox_rows` stream"
@@ -95,6 +96,10 @@ defmodule PlatformWeb.Inbox.InboxList do
   attr :mention_space_labels, :map, default: %{}
   attr :source_titles, :map, default: %{}
   attr :row_sheet, :any, default: nil, doc: "the item id the long-press sheet is open for"
+
+  attr :ux_rows, :map,
+    default: %{},
+    doc: "`ux_decision` row slots by item id (`UxDecisionRow.assigns_for/3`)"
 
   def inbox_list(assigns) do
     ~H"""
@@ -168,6 +173,7 @@ defmodule PlatformWeb.Inbox.InboxList do
           >
             <.row
               item={item}
+              ux_row={Map.get(@ux_rows, item.id)}
               author={Map.get(@mention_authors, item.id)}
               source_title={Map.get(@source_titles, item.id)}
               space_label={space_label(item, @mention_space_labels)}
@@ -194,6 +200,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   end
 
   attr :item, Item, required: true
+  attr :ux_row, :map, default: nil
   attr :author, :map, default: nil
   attr :source_title, :string, default: nil
   attr :space_label, :string, default: nil
@@ -220,8 +227,13 @@ defmodule PlatformWeb.Inbox.InboxList do
       data-long-press-id={@item.id}
       class="flex min-h-14 select-none items-center gap-3 rounded-box px-[18px] py-3 [-webkit-touch-callout:none] active:bg-base-100 focus-visible-ring"
     >
-      <.avatar item={@item} author={@author} />
-      <span class="min-w-0 flex-1">
+      <%!-- The UX role's question (task 01a1af00 stage 3, design canvas
+           01a1b684-c1dd): the same link, its own body (chip, the question
+           as the title, the evidence line). No avatar: the chip is the
+           source mark. --%>
+      <UxDecisionRow.ux_phone_row_body :if={@ux_row} row={@ux_row} />
+      <.avatar :if={!@ux_row} item={@item} author={@author} />
+      <span :if={!@ux_row} class="min-w-0 flex-1">
         <span class="flex items-baseline gap-2">
           <b
             data-role="inbox-row-author"

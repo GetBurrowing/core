@@ -17,7 +17,11 @@ defmodule PlatformWeb.SettingsLive do
       stored preset and mode, read from `:current_user_record`, which
       ShellLive's `set_theme` replaces, so the value follows a change without
       a reload.
-    * Account: Notifications, Mask names, Usage, Admin.
+    * Chat: Move new messages to the top (task 01a1b6fd stage 2).
+    * Account: Notifications, Mask names, Learned defaults (task 01a1b6a1
+      stage 4: a sheet, `PlatformWeb.SettingsLive.LearnedDefaultsComponent`,
+      also opened by `?sheet=learned_defaults`, where every ✦ "Why this?"
+      line links), Usage, Admin.
     * Help: Send feedback (task 01a1a6a5 stage 5), only while feedback is
       enabled (see Gating). Then Sign out, last.
 
@@ -54,6 +58,16 @@ defmodule PlatformWeb.SettingsLive do
   write path for that key. While it is on, the helper also says when it ends,
   in the viewer's own zone (the socket's `timezone` connect param), for
   example "On until 9:41 pm".
+
+  ## Chat: Move new messages to the top (task 01a1b6fd stage 2)
+
+  One `role="switch"` row. Its state is `Accounts.float_new_messages?/1`
+  (default on), the setting the chat list's unread-first order reads
+  (`PlatformWeb.ChatLive.Partials.ChatList`, `## Order`).
+  `set_float_new_messages` writes it through
+  `Accounts.put_float_new_messages/2`, which broadcasts `:sidebar_changed` so
+  every open chat session re-reads it. Same read-back as Email: the switch
+  shows what is STORED, and a failed write reverts it and says so.
 
   ## Gating
 
@@ -175,6 +189,11 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:level_error, nil)
      |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
      |> assign(:email_error, nil)
+     |> assign(:float_error, nil)
+     |> assign(
+       :float_new_messages?,
+       Accounts.float_new_messages?(socket.assigns[:current_user_record])
+     )
      |> assign(
        :email_notifications?,
        Accounts.email_notifications?(socket.assigns[:current_user_record])
@@ -196,6 +215,9 @@ defmodule PlatformWeb.SettingsLive do
     do: assign(socket, :sheet, :notifications)
 
   defp open_from_params(socket, %{"sheet" => "admin"}), do: assign(socket, :sheet, :admin)
+
+  defp open_from_params(socket, %{"sheet" => "learned_defaults"}),
+    do: assign(socket, :sheet, :learned_defaults)
 
   defp open_from_params(%{assigns: %{feedback_enabled: true}} = socket, %{"sheet" => "feedback"}),
     do: assign(socket, :sheet, :feedback)
@@ -316,6 +338,23 @@ defmodule PlatformWeb.SettingsLive do
     end
   end
 
+  # Chat: move new messages to the top (task 01a1b6fd stage 2). The same
+  # read-back as Email: the switch shows what is STORED.
+  def handle_event("set_float_new_messages", params, socket) do
+    enabled? = params["enabled"] in ["true", true]
+
+    with %Accounts.User{id: user_id} <- socket.assigns[:current_user_record],
+         {:ok, user} <- Accounts.put_float_new_messages(user_id, enabled?) do
+      {:noreply,
+       socket
+       |> assign(:current_user_record, user)
+       |> assign(:float_new_messages?, Accounts.float_new_messages?(user))
+       |> assign(:float_error, nil)}
+    else
+      _ -> {:noreply, assign(socket, :float_error, "Couldn't save. Your setting hasn't changed.")}
+    end
+  end
+
   def handle_event("set_notification_level", %{"level" => level}, socket) do
     case Accounts.put_notification_level(socket.assigns[:current_user_record], level) do
       {:ok, %Accounts.User{} = updated} ->
@@ -338,6 +377,9 @@ defmodule PlatformWeb.SettingsLive do
       do: {:noreply, assign(socket, :sheet, :sharing)},
       else: {:noreply, socket}
   end
+
+  def handle_event("open_learned_defaults_sheet", _params, socket),
+    do: {:noreply, assign(socket, :sheet, :learned_defaults)}
 
   def handle_event("open_sign_out_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :sign_out)}
@@ -404,6 +446,7 @@ defmodule PlatformWeb.SettingsLive do
       |> assign(:email, Map.get(record, :email))
       |> assign(:avatar_url, Map.get(record, :avatar_url))
       |> assign(:avatar_seed, Map.get(record, :id) || assigns[:current_user])
+      |> assign(:viewer_user_id, Map.get(record, :id))
       |> assign(:theme_value, theme_row_value(assigns))
       |> assign(:level, Accounts.notification_level(assigns[:current_user_record]))
       |> assign(:push_state, push_state(assigns))
@@ -462,6 +505,32 @@ defmodule PlatformWeb.SettingsLive do
             <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
           </span>
         </button>
+
+        <p class={section_label_class()} data-role="settings-chat-label">Chat</p>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={to_string(@float_new_messages?)}
+          phx-click="set_float_new_messages"
+          phx-value-enabled={to_string(!@float_new_messages?)}
+          data-role="settings-float-new-messages"
+          class={row_class()}
+        >
+          <span class="min-w-0">
+            <span class="block">Move new messages to the top</span>
+            <span class="block text-xs text-subtle">Off keeps your own order.</span>
+          </span>
+          <span class={track_class(@float_new_messages?)} aria-hidden="true">
+            <span class={knob_class(@float_new_messages?)}></span>
+          </span>
+        </button>
+        <p
+          :if={@float_error}
+          data-role="settings-float-new-messages-error"
+          class="px-[18px] pb-2 text-xs text-subtle"
+        >
+          {@float_error}
+        </p>
 
         <p class={section_label_class()}>Account</p>
         <button
@@ -533,6 +602,16 @@ defmodule PlatformWeb.SettingsLive do
         >
           {@email_error}
         </p>
+
+        <button
+          type="button"
+          phx-click="open_learned_defaults_sheet"
+          data-role="settings-learned-defaults"
+          class={row_class()}
+        >
+          <span class="shrink-0">Learned defaults</span>
+          <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+        </button>
 
         <.link
           :if={@usage_row}
@@ -646,6 +725,26 @@ defmodule PlatformWeb.SettingsLive do
         >
           {@level_error}
         </p>
+      </.sheet>
+
+      <.sheet
+        id="settings-learned-defaults-sheet"
+        open={@sheet == :learned_defaults}
+        placement={:bottom}
+        on_close="close_settings_sheet"
+        swipe_dismiss
+        handle_close
+      >
+        <:title>Learned defaults</:title>
+        <p class={sheet_title_class()} aria-hidden="true" data-role="learned-defaults-title">
+          Learned defaults
+        </p>
+        <.live_component
+          :if={@sheet == :learned_defaults and is_binary(@viewer_user_id)}
+          module={PlatformWeb.SettingsLive.LearnedDefaultsComponent}
+          id="learned-defaults"
+          user_id={@viewer_user_id}
+        />
       </.sheet>
 
       <.sheet

@@ -43,6 +43,10 @@ defmodule Platform.Application do
     # notification + live-append broadcast on every ungranted (holding)
     # external login.
     Platform.Accounts.ExternalAdmissionNotifier.attach()
+    # Task 01a1b6a1 stage 2: records every `[:platform, :interaction, :choice]`
+    # event as a habit signal. See
+    # 0061-learned-defaults.md § 7. One emission seam: a telemetry event per interaction
+    Platform.Habits.TelemetryHandler.attach()
 
     # ADR 0055: refuse to boot when a build-time module reuses a name core
     # (or another module) already owns, rather than letting one silently
@@ -335,6 +339,7 @@ defmodule Platform.Application do
     |> maybe_add_file_purger(flag)
     |> maybe_add_prototype_purger(flag)
     |> maybe_add_insight_purger(flag)
+    |> maybe_add_habits_pruner(flag)
     |> maybe_add_insight_disseminator(flag)
     |> maybe_add_catalog_emitter(flag)
     |> maybe_add_deploy_merge_reconciler(flag)
@@ -685,6 +690,20 @@ defmodule Platform.Application do
     if flag.(:platform, :start_insight_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Memory.Insights.Purger)
+    else
+      children
+    end
+  end
+
+  # HabitsPruner (task 01a1b6a1 stage 2): daily delete of habit_signals older
+  # than 6 half-lives. See
+  # 0061-learned-defaults.md § 8. Retention: signals are pruned past a horizon tied to decay
+  # Needs Repo. Disabled in
+  # config/test.exs — tests call `Platform.Habits.prune_signals/1` directly.
+  defp maybe_add_habits_pruner(children, flag) do
+    if flag.(:platform, :start_habits_pruner, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Habits.Pruner)
     else
       children
     end

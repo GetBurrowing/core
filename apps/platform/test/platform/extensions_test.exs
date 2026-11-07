@@ -360,9 +360,11 @@ defmodule Platform.ExtensionsTest do
       assert Platform.Inbox.Item.kinds() == Platform.Inbox.Item.core_kinds()
       # Core's non-approval `briefing` and `meeting_briefing` stay listed on
       # open but are never core (Mobile approval) action kinds (tasks 01a15ee1
-      # stage 1 and 01a1694a stage 2).
+      # stage 1 and 01a1694a stage 2), and neither is the UX role's
+      # `ux_decision` (task 01a1af00 stage 3).
       assert Platform.Inbox.action_kinds() ==
-               Platform.Inbox.core_action_kinds() ++ ["briefing", "meeting_briefing"]
+               Platform.Inbox.core_action_kinds() ++
+                 ["briefing", "meeting_briefing", "ux_decision"]
 
       assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
       assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
@@ -971,8 +973,8 @@ defmodule Platform.ExtensionsTest do
     ]
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
-    @core_metrics ~w(cycle_time insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile)
+    @core_metrics ~w(cycle_time habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate validation_failure_rate)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

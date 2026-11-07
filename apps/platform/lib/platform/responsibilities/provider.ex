@@ -109,11 +109,20 @@ defmodule Platform.Responsibilities.Provider do
 
   Set today by the six `meetings.*` mid-meeting intent handlers, from
   `Platform.Meetings.IntentContext.space_id/1`.
+
+  ## `{:handled, summary}` — the work already ran server-side
+
+  A provider whose whole job is server code with at most a TOOL-LESS model
+  call (today only `Handlers.UxFrictionWatch`, task 01a1af00 stage 2) does
+  the work inside this callback and returns `{:handled, summary}`. The
+  Router then builds no prompt, dispatches nothing to the assignee, and
+  returns `{:ok, :handled}` (ADR-0046 `complete`). It is reached only after
+  the Router resolved an assignee, so the role gate still applies.
   """
   @callback gather_context(
               responsibility :: Platform.Responsibilities.Responsibility.t(),
               ctx :: map()
-            ) :: {:ok, map()} | {:error, term()}
+            ) :: {:ok, map()} | {:handled, map()} | {:error, term()}
 
   @doc """
   Validate the LLM's structured output against

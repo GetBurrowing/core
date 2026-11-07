@@ -26,7 +26,9 @@ defmodule PlatformWeb.Components.InboxItemKindLabelTest do
     # Main's briefing kind (task 01a15ee1), humanized there: "Briefing".
     "briefing" => "Briefing",
     # Main's meeting briefing kind (task 01a1694a), humanized there too.
-    "meeting_briefing" => "Meeting briefing"
+    "meeting_briefing" => "Meeting briefing",
+    # Task 01a1af00 stage 3: a new kind, the UX role's question.
+    "ux_decision" => "UX decision"
   }
 
   describe "desktop labels are unchanged" do

@@ -276,6 +276,8 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_prototype_purger,
     # task 01a13867 stage 1: hourly hard-delete of expired memory_insights.
     :start_insight_purger,
+    # task 01a1b6a1 stage 2: daily prune of habit_signals past retention.
+    :start_habits_pruner,
     # task 01a13867 stage 3: daily insight briefing delivery. Tests call
     # `Platform.Memory.Insights.Disseminator.run/1` directly.
     :start_insight_disseminator,

@@ -29,6 +29,8 @@ defmodule Platform.GameStream.ModuleInventoryTest do
   # Task 01a114a8 stage 4 added the core surface dispatch.code_mode.
   # Task 01a13867 added the core surface memory.insight_synthesis.
   # Task 01a1aa47 added the core surface hr.profile.
+  # Task 01a1af00 stage 1 added the core surface ux.friction_detection.
+  # Task 01a1b6a1 added the core surface habits.learned_defaults.
   test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
@@ -42,12 +44,14 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "habits.learned_defaults",
                "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",
                "meetings.open_question_classifier",
                "memory.insight_synthesis",
-               "planner.stage_budget"
+               "planner.stage_budget",
+               "ux.friction_detection"
              ]
 
     assert Guardrails.default_allowed_surfaces() == rails.allowed_surfaces
@@ -66,12 +70,14 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "game_stream.encoder_preset",
                "game_stream.roster",
                "game_stream.touch",
+               "habits.learned_defaults",
                "hr.profile",
                "mail.draft.generator",
                "meetings.brief_synthesis",
                "meetings.open_question_classifier",
                "memory.insight_synthesis",
-               "planner.stage_budget"
+               "planner.stage_budget",
+               "ux.friction_detection"
              ]
   end
 

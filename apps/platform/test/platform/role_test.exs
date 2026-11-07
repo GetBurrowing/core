@@ -198,6 +198,7 @@ defmodule Platform.RoleTest do
                Platform.Files.Purger,
                Platform.Prototypes.Purger,
                Platform.Memory.Insights.Purger,
+               Platform.Habits.Pruner,
                Platform.Memory.Insights.Disseminator,
                Platform.Files.CatalogEmitter,
                Platform.Tasks.DeployMergeReconciler,

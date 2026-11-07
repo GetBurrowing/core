@@ -1096,11 +1096,27 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :dm_not_allowed | term()}
   def find_or_create_dm(user_id, target_type, target_id, _opts \\ []) do
     if external_dm_permitted?(user_id, target_type, target_id) do
-      do_find_or_create_dm(user_id, target_type, target_id)
+      user_id
+      |> do_find_or_create_dm(target_type, target_id)
+      |> tap(&capture_dm_target(&1, user_id, target_type, target_id))
     else
       {:error, :dm_not_allowed}
     end
   end
+
+  # Learned defaults broad capture (task 01a1b6a1 stage 3): who a person
+  # opens DMs with, org-level (`space_id` nil). Never fails the open.
+  defp capture_dm_target({:ok, %Space{}}, user_id, target_type, target_id) do
+    Platform.Habits.Capture.chosen(%{
+      actor_user_id: user_id,
+      space_id: nil,
+      action: "chat.dm_target",
+      target_type: target_type,
+      target_id: target_id
+    })
+  end
+
+  defp capture_dm_target(_result, _user_id, _target_type, _target_id), do: :ok
 
   defp do_find_or_create_dm(user_id, target_type, target_id) do
     # Look for an existing DM space where both participants are active
@@ -2441,6 +2457,7 @@ defmodule Platform.Chat do
         msg |> reinvite_and_pin_mentioned() |> notify_refused_summons(msg, opts)
         emit_inbox_for_mentions(msg)
         publish_message_posted(msg, opts)
+        learned_after_post(msg)
         {:ok, msg}
 
       {:error, changeset} ->
@@ -2512,6 +2529,7 @@ defmodule Platform.Chat do
         message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
         emit_inbox_for_mentions(message)
         publish_message_posted(message, opts)
+        learned_after_post(message)
         {:ok, message, attachments}
 
       {:error, _operation, reason, _changes_so_far} ->
@@ -2699,6 +2717,7 @@ defmodule Platform.Chat do
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
+          learned_after_post(message)
           {:ok, message, [linked]}
 
         {:error, _operation, reason, _changes_so_far} ->
@@ -2793,6 +2812,7 @@ defmodule Platform.Chat do
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
+          learned_after_post(message)
           {:ok, message, linked}
 
         {:error, _operation, reason, _changes_so_far} ->
@@ -3434,6 +3454,62 @@ defmodule Platform.Chat do
     else
       where(query, [m, s], is_nil(s.archived_at))
     end
+  end
+
+  @doc """
+  Human-authored, digest-eligible messages in `[window_start, window_end)`,
+  restricted to `space_ids`. Task 01a1af00 stage 2 (the `ux.friction_watch`
+  responsibility).
+
+  This is `digest_eligible_messages_query/1` (so the same kinds, content
+  types, archive rule and `:scope` partition the Historian digest uses;
+  default `:internal`, which omits external and mixed spaces) INTERSECTED
+  with the caller's space ids. A space must pass both: being in `space_ids`
+  does not let an external or mixed space through, and being internal does
+  not let a space outside `space_ids` through. An empty `space_ids` returns
+  `[]` without querying.
+
+  Agent-authored rows are excluded: the friction watch reads what people
+  said, not what agents said back. Returns maps of
+  `%{id, space_id, content, inserted_at, author_display_name, author_user_id}`,
+  oldest first, at most `:limit` (default 500).
+  """
+  @spec list_human_digest_messages_in_spaces([binary()], DateTime.t(), DateTime.t(), keyword()) ::
+          [map()]
+  def list_human_digest_messages_in_spaces(space_ids, window_start, window_end, opts \\ [])
+
+  def list_human_digest_messages_in_spaces([], _window_start, _window_end, _opts), do: []
+
+  def list_human_digest_messages_in_spaces(
+        space_ids,
+        %DateTime{} = window_start,
+        %DateTime{} = window_end,
+        opts
+      )
+      when is_list(space_ids) do
+    limit = Keyword.get(opts, :limit, 500)
+
+    opts
+    |> Keyword.take([:scope, :include_kinds, :content_types])
+    |> digest_eligible_messages_query()
+    |> where([m, s], s.id in ^space_ids)
+    |> where([m], m.inserted_at >= ^window_start and m.inserted_at < ^window_end)
+    |> where(
+      [m],
+      is_nil(m.author_agent_id) and
+        (is_nil(m.author_participant_type) or m.author_participant_type != "agent")
+    )
+    |> order_by([m], asc: m.inserted_at, asc: m.id)
+    |> limit(^limit)
+    |> select([m, s], %{
+      id: m.id,
+      space_id: m.space_id,
+      content: m.content,
+      inserted_at: m.inserted_at,
+      author_display_name: m.author_display_name,
+      author_user_id: m.author_user_id
+    })
+    |> Repo.all()
   end
 
   # ── External-space digest partition (stack member 12, rbac-external-users) ──
@@ -6528,6 +6604,12 @@ defmodule Platform.Chat do
 
   defp emit_inbox_for_mentions(_), do: :ok
 
+  # Learned defaults (task 01a1b6a1 stage 3): mention capture and the
+  # attention ask on the act rung. Post-commit; never fails the post (see
+  # `Platform.Habits.Capture`).
+  defp learned_after_post(%Message{} = msg),
+    do: Platform.Habits.LearnedAttention.after_message_posted(msg)
+
   # One `chat_mention` Inbox row per USER participant in `participants` who
   # may read the space. Shared by the post path's mentions and added
   # attention (task 01a1557a-a30a stage 1), so the `chat.read` check, the body
@@ -7502,6 +7584,90 @@ defmodule Platform.Chat do
   def add_message_attention(_actor, _space_id, _message_id, _principal_ids),
     do: {:error, :invalid}
 
+  @doc """
+  Take back an attention ask (learned defaults, `0061-learned-defaults.md`
+  § 5, task 01a1b6a1 stage 3): the undo of an ask made by hand or by the
+  habits engine acting for the user.
+
+  `principal_id` is the asked principal (a user id), as
+  `add_message_attention/4` takes it. Only the user who added the row may
+  remove it; the habits engine acts with that user as `actor`, so the same
+  rule covers it. On success the attention row is deleted, that human's
+  `chat_mention` Inbox row for the ask is deleted (`Platform.Inbox.delete_by_source/4`,
+  only rows written at or after the ask, so a mention from the message's own
+  text survives), and `{:message_attention_changed, message}` is broadcast on
+  the space topic. Returns `{:ok, %MessageAttention{}}`.
+
+  Refused, changing nothing:
+
+    * a non-member, nil or agent actor, or a row someone else added:
+      `{:error, :forbidden}`
+    * an agent's row: `{:error, :not_reversible}`. Asking an agent wakes it,
+      and a wake cannot be recalled.
+    * an archived space: `{:error, :space_archived}`
+    * a missing message, or no such row: `{:error, :not_found}`
+  """
+  @spec remove_message_attention(SpaceAccess.actor(), binary(), binary(), binary()) ::
+          {:ok, MessageAttention.t()}
+          | {:error, :forbidden | :not_reversible | :space_archived | :not_found}
+  def remove_message_attention(actor, space_id, message_id, principal_id)
+      when is_binary(space_id) and is_binary(message_id) and is_binary(principal_id) do
+    with true <- Enum.all?([space_id, message_id, principal_id], &Platform.UUID.valid?/1),
+         {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Message{} = message <- attention_target_message(space_id, message_id),
+         %MessageAttention{} = row <- attention_row_for(message, principal_id),
+         :ok <- ensure_reversible_attention(row),
+         :ok <- ensure_added_by(row, writer) do
+      Repo.delete!(row)
+      after_attention_removed(message, row, principal_id)
+      {:ok, row}
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  def remove_message_attention(_actor, _space_id, _message_id, _principal_id),
+    do: {:error, :not_found}
+
+  defp attention_row_for(%Message{} = message, principal_id) do
+    from(a in MessageAttention,
+      join: p in Participant,
+      on: p.id == a.participant_id,
+      where: a.message_id == ^message.id and p.participant_id == ^principal_id,
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  defp ensure_reversible_attention(%MessageAttention{participant_type: "user"}), do: :ok
+  defp ensure_reversible_attention(_row), do: {:error, :not_reversible}
+
+  defp ensure_added_by(%MessageAttention{added_by_participant_id: id}, %Participant{id: id}),
+    do: :ok
+
+  defp ensure_added_by(_row, _writer), do: {:error, :forbidden}
+
+  # The row is gone; like the add path, the side effects may not fail the call.
+  defp after_attention_removed(%Message{} = message, %MessageAttention{} = row, user_id) do
+    attention_side_effect(message, [row.participant_id], "inbox retract", fn ->
+      Platform.Inbox.delete_by_source(user_id, "chat_message", message.id,
+        kind: "chat_mention",
+        inserted_since: row.inserted_at
+      )
+    end)
+
+    attention_side_effect(message, [row.participant_id], "broadcast", fn ->
+      message = %{message | attention: list_message_attention(message.id)}
+      ChatPubSub.broadcast(message.space_id, {:message_attention_changed, message})
+    end)
+
+    :ok
+  end
+
   @doc "The attention rows on one message, oldest first, as `MessageAttention.to_view/1`."
   @spec list_message_attention(binary()) :: [map()]
   def list_message_attention(message_id) when is_binary(message_id) do
@@ -8050,13 +8216,42 @@ defmodule Platform.Chat do
   defdelegate thread_activity_entry(participant, thread_id, opts \\ []),
     to: Platform.Chat.ThreadActivity
 
-  @doc "Persist the last-read cursor for a participant."
+  @doc """
+  Persist the last-read cursor for a participant.
+
+  `participant_id` is the `chat_participants` primary key, not a user id. For a
+  user participant the write is followed by
+  `Platform.Inbox.dismiss_read_mentions/2` for that space (task `01a1b673`), so
+  reading a mention in chat clears its inbox row and the shell badge
+  recomputes live. Agent participants have no inbox and are skipped.
+  """
   @spec mark_space_read(binary(), binary()) :: :ok
   def mark_space_read(participant_id, message_id) do
-    from(p in Participant, where: p.id == ^participant_id)
-    |> Repo.update_all(set: [last_read_message_id: message_id])
+    {_count, rows} =
+      from(p in Participant,
+        where: p.id == ^participant_id,
+        select: {p.participant_type, p.participant_id, p.space_id}
+      )
+      |> Repo.update_all(set: [last_read_message_id: message_id])
+
+    for {"user", user_id, space_id} <- rows, do: dismiss_read_mentions(user_id, [space_id])
 
     :ok
+  end
+
+  # Best-effort, like every other inbox side effect of a chat write: a cursor
+  # write that has already landed must not be undone or crash its caller
+  # because the inbox sweep raised. `Inbox.reachable_unread_count/1` excludes
+  # read mentions on its own, so a failed sweep cannot leave the badge up.
+  defp dismiss_read_mentions(_user_id, []), do: :ok
+
+  defp dismiss_read_mentions(user_id, space_ids) do
+    {:ok, _} = Platform.Inbox.dismiss_read_mentions(user_id, space_ids)
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Chat] read-mention inbox dismissal failed: #{Exception.message(e)}")
+      :ok
   end
 
   @doc """
@@ -8223,15 +8418,17 @@ defmodule Platform.Chat do
     rows = countable_participant_rows(user_id)
     tips = newest_top_level_message_ids(Enum.map(rows, & &1.space_id))
 
-    advanced =
-      Enum.count(rows, fn row ->
-        case Map.get(tips, row.space_id) do
-          nil -> false
-          tip_id -> advance_read_cursor(row, tip_id)
-        end
-      end)
+    advanced_space_ids =
+      for row <- rows,
+          tip_id = Map.get(tips, row.space_id),
+          not is_nil(tip_id),
+          advance_read_cursor(row, tip_id),
+          do: row.space_id
 
-    {:ok, advanced}
+    # One inbox sweep and one broadcast for the whole gesture, not one per space.
+    dismiss_read_mentions(user_id, advanced_space_ids)
+
+    {:ok, length(advanced_space_ids)}
   end
 
   def mark_all_chat_spaces_read(_user), do: {:ok, 0}

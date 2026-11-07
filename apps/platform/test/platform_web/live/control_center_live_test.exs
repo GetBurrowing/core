@@ -332,16 +332,22 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
   # ── Onboarding flows ──────────────────────────────────────────────
 
-  test "opening the onboarding chooser shows 5 flow options including External Agent",
+  test "the Add entry opens the builder; Advanced shows the four flows, no template card",
        %{conn: conn} do
     create_agent()
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/control")
 
-    html = render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "open_onboarding_chooser", %{})
+    assert has_element?(view, "#character-builder")
+    refute has_element?(view, "#add-agent-chooser")
+
+    view |> element("#ba-advanced") |> render_click()
+    refute has_element?(view, "#character-builder")
+    html = render(view)
 
     assert html =~ "Add Agent"
-    assert html =~ "From a Template"
+    refute html =~ "From a Template"
     assert html =~ "Federate"
     assert html =~ "Import"
     assert html =~ "Create Custom"
@@ -1136,12 +1142,13 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/control")
 
-    html = render_click(view, "open_onboarding_chooser", %{})
-    assert html =~ "From a Template"
+    render_click(view, "open_onboarding_chooser", %{})
+    view |> element("#ba-advanced") |> render_click()
+    assert has_element?(view, "#add-agent-chooser")
 
     html = render_click(view, "close_onboarding", %{})
 
-    refute html =~ "From a Template"
+    refute has_element?(view, "#add-agent-chooser")
     refute html =~ "Choose a Template"
   end
 

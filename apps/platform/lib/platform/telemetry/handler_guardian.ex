@@ -124,6 +124,7 @@ defmodule Platform.Telemetry.HandlerGuardian do
       Platform.Meetings.IntentCorrections.TelemetryHandler,
     "platform-memory-telemetry" => Platform.Memory.TelemetryHandler,
     "external-admission-notifier" => Platform.Accounts.ExternalAdmissionNotifier,
+    "platform-habits-telemetry" => Platform.Habits.TelemetryHandler,
     # Web role only (task 01a155a6 stage 3). Its body cannot raise, but if it
     # were ever detached a web node would stop routing messages to agents and
     # nothing would say so.

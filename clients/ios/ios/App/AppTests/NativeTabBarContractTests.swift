@@ -57,13 +57,14 @@ final class NativeTabBarContractTests: XCTestCase {
         XCTAssertTrue(source.contains("cap.Plugins?.SuiteNative"))
     }
 
-    /// The six keys the hook's `stateOf` sends are the ones `applying` reads:
+    /// The seven keys the hook's `stateOf` sends are the ones `applying` reads:
     /// each one, applied alone, changes the state. `ink` carries the two
     /// probe keys the hook reads (`INK_KEYS`).
     func testPayloadKeysMatchTheHook() throws {
         let source = try hook
         for field in [
-            "items: itemsOf(el)", "selected: active ? active : null", "inbox_dot: el.getAttribute(", "visible: barVisible(",
+            "items: itemsOf(el)", "selected: active ? active : null", "inbox_dot: el.getAttribute(", "inbox_badge: inboxBadgeOf(el)",
+            "el.getAttribute(\"data-inbox-badge\")", "visible: barVisible(",
             "ink: inksOf(el, win, normalise)", "scheme: schemeOf(win, doc)",
             "export const INK_KEYS = [\"selected\", \"unselected\"]",
         ] {
@@ -74,6 +75,7 @@ final class NativeTabBarContractTests: XCTestCase {
         XCTAssertEqual(start.applying(["items": ["chat", "more"]], log: quiet).items, ["chat", "more"])
         XCTAssertEqual(start.applying(["selected": "calendar"], log: quiet).selected, "calendar")
         XCTAssertTrue(start.applying(["inbox_dot": true], log: quiet).inboxDot)
+        XCTAssertEqual(start.applying(["inbox_badge": "9+"], log: quiet).inboxBadge, "9+")
         XCTAssertTrue(start.applying(["visible": true], log: quiet).visible)
         let ink = start.applying(["ink": ["selected": "#00000001", "unselected": "#00000002"]], log: quiet).ink
         XCTAssertEqual(ink, NativeTabInk(selected: "#00000001", unselected: "#00000002"))

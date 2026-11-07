@@ -74,6 +74,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/inbox_live/briefing_component.ex",
     # The meeting briefing detail's fields (task 01a1694a), from main.
     "platform_web/live/inbox_live/meeting_briefing_component.ex",
+    # The UX question's optional note (task 01a1af00 stage 3).
+    "platform_web/live/inbox_live/ux_decision_component.ex",
     # The space sheet's Search page field (task 01a1557a-8a6d stage 2).
     "platform_web/live/chat/partials/space_sheet.ex",
     # The "Get someone's attention" picker's search field (task
@@ -102,6 +104,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # The character builder's Try-it field, "Ask <name> anything…" (task
+    # 01a1b6ad stage 2): no placeholder: utility, so the base ::placeholder rule.
+    "platform_web/live/control_center/character_builder.ex" => :global_default,
     # The agent page's Grant panel "Role name" field (task 01a1a2e4-9265
     # stage 3): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/runtime_panel.ex" => :global_default,

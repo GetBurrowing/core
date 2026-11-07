@@ -20,6 +20,11 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
       10s after the latest hold (a stale ref is ignored), and by
       `leave_list/1`.
 
+    * `@float_new_messages?` and `@list_floated` (task 01a1b6fd): the
+      unread-first setting, seeded at attach and re-read by
+      `refresh_float/1`, and the open conversation that keeps its floated
+      place (`float_on_open/2`, `clear_floated/1`).
+
   `reset/1` clears all three; `leave_list/1` (reset plus the hold) is
   called from `handle_params/3` for `:show`. That reset, not a click handler, is what closes the search sheet
   when the reader follows a result: every result is a plain `<.link patch>`
@@ -48,6 +53,7 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
   import PlatformWeb.ChatLive.RenderHelpers,
     only: [list_filter_dms: 3, list_filter_pinned: 3, list_filter_sections: 3]
 
+  alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.Sidebar
   alias Platform.Chat.SidebarMask
@@ -89,6 +95,8 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
     socket
     |> reset()
     |> assign(:list_collapsed, seed_collapsed(socket.assigns))
+    |> assign(:float_new_messages?, seed_float(socket.assigns))
+    |> assign(:list_floated, MapSet.new())
     |> release_hold()
     |> PinnedReorderHooks.attach()
     |> attach_hook(:chat_list_events, :handle_event, &handle_event/3)
@@ -99,6 +107,43 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
     do: Sidebar.collapsed_section_ids(user)
 
   defp seed_collapsed(assigns), do: Sidebar.collapsed_section_ids(assigns[:user_id])
+
+  defp seed_float(%{current_user_record: %{id: id} = user, user_id: id}),
+    do: Accounts.float_new_messages?(user)
+
+  defp seed_float(assigns), do: Accounts.float_new_messages?(assigns[:user_id])
+
+  @doc """
+  Re-read `@float_new_messages?` from the user's preferences (task 01a1b6fd):
+  `ChatLive`'s `:sidebar_changed` handler calls this, which is how
+  `Accounts.put_float_new_messages/2` reaches every open session.
+  """
+  def refresh_float(socket),
+    do:
+      assign(socket, :float_new_messages?, Accounts.float_new_messages?(socket.assigns[:user_id]))
+
+  @doc """
+  `@list_floated` on opening `space_id` (`Partials.ChatList`, `## Order`):
+  the space alone when it is active by unread right now (unread above 0 and
+  not restricted) or already floated, else empty, so the previously open
+  space drops out and settles into its manual place. Call BEFORE the open
+  clears the space's unread.
+  """
+  def float_on_open(socket, space_id) do
+    a = socket.assigns
+    floated = a[:list_floated] || MapSet.new()
+    restricted = a[:restricted_channel_ids] || MapSet.new()
+
+    active? =
+      MapSet.member?(floated, space_id) or
+        (Map.get(a[:unread_counts] || %{}, space_id, 0) > 0 and
+           not MapSet.member?(restricted, space_id))
+
+    assign(socket, :list_floated, if(active?, do: MapSet.new([space_id]), else: MapSet.new()))
+  end
+
+  @doc "Back on the list: nothing is open, so nothing keeps a floated place."
+  def clear_floated(socket), do: assign(socket, :list_floated, MapSet.new())
 
   @doc "Leaving the list for a space: close the sheets and drop any hold."
   def leave_list(socket), do: socket |> reset() |> release_hold()

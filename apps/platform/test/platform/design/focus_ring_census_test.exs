@@ -155,11 +155,12 @@ defmodule Platform.Design.FocusRingCensusTest do
     "lib/platform_web/components/inbox_item.ex" => 1,
     "lib/platform_web/components/sheet.ex" => 1,
     "lib/platform_web/live/chat/partials.ex" => 6,
-    # +1 in rung 12: the attention picker's search field.
-    "lib/platform_web/live/chat/partials/overlays.ex" => 4
+    # +1 in rung 12: the attention picker's search field. +2 in task
+    # 01a1b6a1 stage 4: the learned pre-fill's confirm and its "Not <name>".
+    "lib/platform_web/live/chat/partials/overlays.ex" => 6
   }
 
-  @expected_required_total 29
+  @expected_required_total 31
 
   # ── (a) the scan surface ──────────────────────────────────────────────────
 

@@ -115,6 +115,11 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     doc: "pick mode: principal ids already asked, rendered as 'added' no-ops"
   )
 
+  attr(:why, :string,
+    default: nil,
+    doc: "pick mode: the learned row whose 'Why this?' line is open (a principal id)"
+  )
+
   def mention_list(assigns) do
     suggestions = order(assigns.suggestions)
 
@@ -134,63 +139,69 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
       </p>
       <div :if={@open} class="mention-list-panel">
         <div id={@id} role="listbox" aria-label="Mention suggestions" class="mention-list-box">
-          <div
-            :for={{suggestion, idx} <- @rows}
-            id={"#{@id}-opt-#{idx}"}
-            role="option"
-            aria-selected={to_string(idx == 0 and is_nil(@pick))}
-            aria-disabled={added?(suggestion, @added) && "true"}
-            data-mention-suggestion={if idx == 0, do: "first", else: "row"}
-            data-mention-name={suggestion.name}
-            data-principal-id={@pick && suggestion[:principal_id]}
-            data-added={added?(suggestion, @added) && "true"}
-            data-kind={kind(suggestion)}
-            phx-click={row_click(suggestion, @pick, @field_id, @added)}
-            class="mention-list-row active:bg-base-100"
-          >
-            <%= case kind(suggestion) do %>
-              <% "broadcast" -> %>
-                <span class="mention-list-broadcast" aria-hidden="true">
-                  <span class="hero-megaphone size-4"></span>
-                </span>
-              <% "agent" -> %>
-                <.agent_avatar
-                  name={suggestion.name}
-                  avatar_url={suggestion[:avatar_url]}
-                  size="md"
-                  class="flex-shrink-0"
-                />
-              <% _ -> %>
-                <.human_avatar
-                  name={suggestion.name}
-                  avatar_url={suggestion[:avatar_url]}
-                  seed={suggestion[:avatar_seed]}
-                  size="md"
-                  class="flex-shrink-0"
-                />
-            <% end %>
-            <span class="mention-list-text">
-              <span class="mention-list-line">
-                <span class="mention-list-name">{suggestion.name}</span>
-                <span :if={kind(suggestion) != "broadcast"} class="mention-list-kind">
-                  {kind_label(suggestion)}
-                </span>
-              </span>
-              <span :if={kind(suggestion) == "broadcast"} class="mention-list-note">
-                Notify everyone in the channel
-              </span>
-              <span :if={suggestion[:not_in_space] == true} class="mention-list-note">
-                Not in this space · adds them
-              </span>
-            </span>
-            <span
-              :if={added?(suggestion, @added)}
-              class="mention-list-added"
-              data-role="mention-list-added"
+          <%= for {suggestion, idx} <- @rows do %>
+            <div
+              id={"#{@id}-opt-#{idx}"}
+              role="option"
+              aria-selected={to_string(idx == 0 and is_nil(@pick))}
+              aria-disabled={added?(suggestion, @added) && "true"}
+              data-mention-suggestion={if idx == 0, do: "first", else: "row"}
+              data-mention-name={suggestion.name}
+              data-principal-id={@pick && suggestion[:principal_id]}
+              data-added={added?(suggestion, @added) && "true"}
+              data-kind={kind(suggestion)}
+              phx-click={row_click(suggestion, @pick, @field_id, @added)}
+              class="mention-list-row active:bg-base-100"
             >
-              added
-            </span>
-          </div>
+              <%= case kind(suggestion) do %>
+                <% "broadcast" -> %>
+                  <span class="mention-list-broadcast" aria-hidden="true">
+                    <span class="hero-megaphone size-4"></span>
+                  </span>
+                <% "agent" -> %>
+                  <.agent_avatar
+                    name={suggestion.name}
+                    avatar_url={suggestion[:avatar_url]}
+                    size="md"
+                    class="flex-shrink-0"
+                  />
+                <% _ -> %>
+                  <.human_avatar
+                    name={suggestion.name}
+                    avatar_url={suggestion[:avatar_url]}
+                    seed={suggestion[:avatar_seed]}
+                    size="md"
+                    class="flex-shrink-0"
+                  />
+              <% end %>
+              <span class="mention-list-text">
+                <span class="mention-list-line">
+                  <span class="mention-list-name">{suggestion.name}</span>
+                  <span :if={kind(suggestion) != "broadcast"} class="mention-list-kind">
+                    {kind_label(suggestion)}
+                  </span>
+                </span>
+                <span :if={kind(suggestion) == "broadcast"} class="mention-list-note">
+                  Notify everyone in the channel
+                </span>
+                <span :if={suggestion[:not_in_space] == true} class="mention-list-note">
+                  Not in this space · adds them
+                </span>
+                <.reason_line :if={@pick && suggestion[:learned] == true} suggestion={suggestion} />
+              </span>
+              <span
+                :if={added?(suggestion, @added)}
+                class="mention-list-added"
+                data-role="mention-list-added"
+              >
+                added
+              </span>
+            </div>
+            <.why_line
+              :if={@pick && suggestion[:learned] == true && @why == suggestion[:principal_id]}
+              suggestion={suggestion}
+            />
+          <% end %>
           <div
             :if={@rows == [] and is_binary(@query)}
             role="option"
@@ -206,6 +217,67 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     </div>
     """
   end
+
+  attr(:suggestion, :map, required: true)
+
+  @doc """
+  The learned row's reason line (task 01a1b6a1 stage 4; direction canvas
+  01a1b6a2 nodes `layout` and `type`, mockup 01a1b6ad): the row's second
+  line, `--color-info`, 13px regular with the name semibold, and the ✦ mark
+  at its start. Mark and sentence are one tap target, which opens the row's
+  "Why this?" line (`toggle_attention_why`) and never picks the row.
+  """
+  def reason_line(assigns) do
+    assigns = assign(assigns, :name, reason_name(assigns.suggestion))
+
+    ~H"""
+    <button
+      type="button"
+      data-role="learned-reason"
+      phx-click={
+        JS.push("toggle_attention_why", value: %{"principal-id" => @suggestion[:principal_id]})
+      }
+      class="block self-start rounded text-left text-[13px] font-normal leading-[18px] text-info focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+    >
+      <span data-role="learned-mark" class="mr-1 text-[11px] leading-none" aria-hidden="true">✦</span>
+      <span>
+        You usually ask <span data-role="learned-reason-name" class="font-semibold">{@name}</span>
+        here
+      </span>
+    </button>
+    """
+  end
+
+  attr(:suggestion, :map, required: true)
+
+  @doc """
+  "Why this?" (stage 4): one plain sentence, no count and no percentage, and
+  the way into Settings → Learned defaults.
+  """
+  def why_line(assigns) do
+    assigns = assign(assigns, :name, reason_name(assigns.suggestion))
+
+    ~H"""
+    <div
+      data-role="learned-why"
+      role="note"
+      class="mx-3 mb-1.5 rounded-[var(--radius-field)] bg-base-200 px-2.5 py-2 text-[13px] leading-[18px] text-base-content"
+    >
+      <span class="font-semibold text-info">Why this?</span>
+      You often ask {@name} to look at your messages in this space.
+      <.link
+        navigate="/settings?sheet=learned_defaults"
+        data-role="learned-why-link"
+        class="mt-1 block font-semibold text-base-content underline underline-offset-2"
+      >
+        Learned defaults ›
+      </.link>
+    </div>
+    """
+  end
+
+  defp reason_name(%{reason: {:usually, name}}) when is_binary(name), do: name
+  defp reason_name(suggestion), do: suggestion[:display_name] || suggestion[:name]
 
   # Composer mode inserts a chip into the field; pick mode asks attention for
   # the row's principal, and an already-added row does nothing.
@@ -261,14 +333,17 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   defp count_label(1, one, _many), do: "1 #{one}"
   defp count_label(n, _one, many), do: "#{n} #{many}"
 
-  # Agents, then people, then the `here` broadcast; stable within a group,
-  # so the server's ranking inside each group stands.
+  # Learned rows first (task 01a1b6a1 stage 4: the picker's learned order is
+  # the point, so it is exempt from the kind sort), then agents, then people,
+  # then the `here` broadcast; stable within a group, so the server's ranking
+  # inside each group stands.
   defp order(suggestions) do
     Enum.sort_by(suggestions, fn s ->
-      case kind(s) do
-        "agent" -> 0
-        "broadcast" -> 2
-        _ -> 1
+      cond do
+        s[:learned] == true -> -1
+        kind(s) == "agent" -> 0
+        kind(s) == "broadcast" -> 2
+        true -> 1
       end
     end)
   end

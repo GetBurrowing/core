@@ -249,7 +249,10 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
     # stack-level fan-out — stamp `metadata["assignee_override"] = true`
     # so `Stacks.set_stack_phase_assignees/2` skips it.
     result =
-      with {:ok, updated} <- Tasks.set_phase_assignees(task, attrs_by_phase) do
+      with {:ok, updated} <-
+             Tasks.set_phase_assignees(task, attrs_by_phase,
+               actor_user_id: scope_user_id(socket.assigns[:access_scope])
+             ) do
         Tasks.update_task(updated, %{
           metadata: Map.put(updated.metadata || %{}, "assignee_override", true)
         })
@@ -265,6 +268,10 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
         {:noreply, socket}
     end
   end
+
+  # The assigning user, for learned defaults capture (task 01a1b6a1 stage 3).
+  defp scope_user_id(%Platform.Access.Scope{actor: %{id: id}}) when is_binary(id), do: id
+  defp scope_user_id(_scope), do: nil
 
   defp attrs_by_phase(:simple, params) do
     entry = phase_entry(Map.get(params, "all", ""))

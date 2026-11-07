@@ -9,7 +9,7 @@ defmodule Platform.Agents.QuickAgent do
 
   require Logger
 
-  alias Platform.Agents.{CodexAuth, Providers.Codex, ToolRunner, WorkspaceBootstrap}
+  alias Platform.Agents.{CodexAuth, Manners, Providers.Codex, ToolRunner, WorkspaceBootstrap}
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
   @default_model "gpt-5.4"
@@ -49,7 +49,9 @@ defmodule Platform.Agents.QuickAgent do
     end
   end
 
-  defp build_system_prompt(workspace_path) do
+  @doc false
+  # Public for `Platform.Agents.MannersTest`, which renders the fixed frame.
+  def build_system_prompt(workspace_path) do
     files =
       @workspace_files
       |> Enum.map(fn file ->
@@ -73,6 +75,7 @@ defmodule Platform.Agents.QuickAgent do
     Be yourself — follow SOUL.md and IDENTITY.md for your personality and voice.
     Keep responses concise and helpful.
 
+    #{Manners.handoff_rule()}
     You have access to tools that let you execute shell commands, read/write files,
     fetch web pages, and create/update live canvases in the chat. Use them when
     the user's request requires action beyond just conversation.

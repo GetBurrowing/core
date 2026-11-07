@@ -274,11 +274,13 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
-               "meetings.visual_adjust"
+               "meetings.visual_adjust",
+               # Six → seven, task 01a1af00 stage 2.
+               "ux.friction_watch"
              ]
 
       after_first = Repo.aggregate(RoleResponsibility, :count, :id)
-      assert after_first == before + 6
+      assert after_first == before + 7
 
       assert :ok = Platform.Roles.Seeds.seed_defaults()
       assert Repo.aggregate(RoleResponsibility, :count, :id) == after_first

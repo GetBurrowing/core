@@ -109,7 +109,9 @@ config :platform, Platform.Responsibilities,
     # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain.
     Platform.Responsibilities.Handlers.JanitorCronDrain,
     # Task 01a1aa47 stage 4: HR, the people-profile curator (historian bundle).
-    Platform.Responsibilities.Handlers.Hr
+    Platform.Responsibilities.Handlers.Hr,
+    # Task 01a1af00 stage 2: the UX friction watch (designer bundle).
+    Platform.Responsibilities.Handlers.UxFrictionWatch
   ]
 
 # Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:

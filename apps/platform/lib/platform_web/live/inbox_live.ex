@@ -272,6 +272,24 @@ defmodule PlatformWeb.InboxLive do
   The component loads only through `MeetingBriefings.get_for_attendee/2`.
   Every `{:inbox_changed, _}` `send_update/3`s it with `reload: true`: that
   is how B's open briefing repaints the item A just resolved.
+
+  ## The UX role's question (task 01a1af00 stage 3)
+
+  `ux_decision` rows (`Platform.Ux.Decisions`) are split out of the
+  sections like the briefings, but STREAMED (`:ux_items`, dom ids
+  `inbox-ux-<id>`), and render through `PlatformWeb.Components.UxDecisionRow`
+  above the sections: the teal UX chip, the question as the title, the
+  evidence line. The finding behind each row is read with
+  `Decisions.list_for_recipient/2`, so a row only ever shows its own
+  recipient's question. `:ux_rows` (item id => row slots) feeds the phone
+  list, which renders the same slots in its own row shape.
+
+  `/inbox/ux/:finding_id` (`:ux_decision`) mounts
+  `PlatformWeb.InboxLive.UxDecisionComponent` in the detail pane (full screen
+  below lg, with the "‹ Inbox" back link) and marks the row read; the row
+  stays listed until it is answered. Answering sends
+  `{:ux_answered, %{message: _}}` here: one toast (no Undo: the answer is
+  already in the task log) and a patch back to `/inbox`.
   """
 
   use PlatformWeb, :live_view
@@ -281,6 +299,7 @@ defmodule PlatformWeb.InboxLive do
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
   import PlatformWeb.Components.MeetingBriefingRow, only: [meeting_briefing_row: 1]
   import PlatformWeb.Components.NotificationState, only: [notification_state_row: 1]
+  import PlatformWeb.Components.UxDecisionRow, only: [ux_decision_row: 1]
 
   alias Platform.Chat
   alias Platform.Inbox
@@ -289,8 +308,10 @@ defmodule PlatformWeb.InboxLive do
   alias Platform.Meetings.MeetingBriefings
   alias Platform.Memory.Insights.Briefings
   alias Platform.Repo
+  alias Platform.Ux.Decisions
   alias PlatformWeb.Components.BriefingRow
   alias PlatformWeb.Components.MeetingBriefingRow
+  alias PlatformWeb.Components.UxDecisionRow
   alias PlatformWeb.MeetingLive.CalendarWindow
 
   @sections [:review, :mentions, :meetings]
@@ -351,6 +372,7 @@ defmodule PlatformWeb.InboxLive do
      |> assign(:filters, @filters)
      |> assign(:detail_date, nil)
      |> assign(:meeting_detail_id, nil)
+     |> assign(:ux_detail_id, nil)
      |> assign(:briefing_refresh, 0)
      |> assign(:time_zone, viewer_time_zone(socket))
      |> maybe_toast(open_undo_toast(socket, user_id))}
@@ -379,6 +401,7 @@ defmodule PlatformWeb.InboxLive do
       |> assign(:filter, parse_filter(params["f"]))
       |> assign(:detail_date, detail_date(socket.assigns.live_action, params["date"]))
       |> assign(:meeting_detail_id, meeting_detail_id(socket.assigns.live_action, params))
+      |> assign(:ux_detail_id, ux_detail_id(socket.assigns.live_action, params))
       |> reload_sections()
 
     case params do
@@ -386,7 +409,11 @@ defmodule PlatformWeb.InboxLive do
         {:noreply, open_by_params(socket, id)}
 
       _ ->
-        {:noreply, socket |> maybe_open_briefing() |> maybe_open_meeting_briefing()}
+        {:noreply,
+         socket
+         |> maybe_open_briefing()
+         |> maybe_open_meeting_briefing()
+         |> maybe_open_ux_decision()}
     end
   end
 
@@ -409,6 +436,32 @@ defmodule PlatformWeb.InboxLive do
   defp meeting_detail_id(:meeting_briefing, %{"meeting_id" => id}) when is_binary(id), do: id
   defp meeting_detail_id(:meeting_briefing, _params), do: ""
   defp meeting_detail_id(_action, _params), do: nil
+
+  # The finding id on `/inbox/ux/:finding_id`, as given: the component
+  # answers "There's no question here." for anything it cannot load.
+  defp ux_detail_id(:ux_decision, %{"finding_id" => id}) when is_binary(id), do: id
+  defp ux_detail_id(:ux_decision, _params), do: ""
+  defp ux_detail_id(_action, _params), do: nil
+
+  # Opening the question is reading it: mark its row read (it stays listed,
+  # `ux_decision` being listed on open). Connected only.
+  defp maybe_open_ux_decision(socket) do
+    user_id = socket.assigns.current_user_id
+    finding_id = socket.assigns.ux_detail_id
+
+    case Enum.find(Map.values(socket.assigns.ux_rows), &(&1.finding_id == finding_id)) do
+      %{unread?: true, id: id} when is_binary(user_id) and is_binary(finding_id) ->
+        if connected?(socket) do
+          Inbox.open_item(id, user_id)
+          reload_sections(socket)
+        else
+          socket
+        end
+
+      _ ->
+        socket
+    end
+  end
 
   # Opening a meeting briefing is reading it, exactly as for the daily
   # briefing: mark its row read (it stays listed). Connected only.
@@ -480,8 +533,9 @@ defmodule PlatformWeb.InboxLive do
     # stage 4 of task `01a00108` retired read-as-cleared; it no longer does,
     # because the scope no longer does. Move one, move both.
     cond do
-      item.kind in ["briefing", "meeting_briefing"] ->
-        # Briefing rows are not streamed; their receipt line is derived.
+      item.kind in ["briefing", "meeting_briefing", "ux_decision"] ->
+        # Briefing rows are not streamed; their receipt line is derived. A
+        # UX row needs its finding's evidence, so it re-derives too.
         {:noreply, reload_sections(socket)}
 
       is_nil(item.dismissed_at) ->
@@ -512,7 +566,17 @@ defmodule PlatformWeb.InboxLive do
      socket
      |> update(:briefing_refresh, &(&1 + 1))
      |> reload_sections()
-     |> reload_meeting_briefing()}
+     |> reload_meeting_briefing()
+     |> reload_ux_decision()}
+  end
+
+  # The UX component answered (it runs in this process): one toast, no Undo
+  # (the outcome is already in the task log), and back to the list.
+  def handle_info({:ux_answered, %{message: message}}, socket) do
+    {:noreply,
+     socket
+     |> maybe_toast(%{message: message, variant: :ux, undo?: false}, @briefing_toast_ttl_ms)
+     |> push_patch(to: "/inbox" <> filter_query(socket.assigns.filter))}
   end
 
   # The briefing component's success toast (it runs in this process). The
@@ -606,6 +670,21 @@ defmodule PlatformWeb.InboxLive do
     end
 
     {:noreply, reload_sections(socket)}
+  end
+
+  # A UX row's X: an owner-scoped dismissal of the row only. The finding
+  # stays open (nobody answered it); `dismiss_many/2` returns the ids it
+  # changed, which become the phone Undo.
+  def handle_event("dismiss_ux", %{"id" => id}, socket) do
+    user_id = socket.assigns.current_user_id
+
+    if is_binary(user_id) and Map.has_key?(socket.assigns.ux_rows, id) do
+      {:ok, dismissed_ids} = Inbox.dismiss_many(user_id, [id])
+
+      {:noreply, socket |> reload_sections() |> set_undo(dismissed_ids, "Notification dismissed")}
+    else
+      {:noreply, socket}
+    end
   end
 
   # ── Selection ──────────────────────────────────────────────────────────
@@ -733,7 +812,7 @@ defmodule PlatformWeb.InboxLive do
   # The long-press row sheet (rendered in stage 3). Only a row this LiveView
   # is showing can be the sheet's subject.
   def handle_event("open_row_sheet", %{"id" => id}, socket) do
-    if Map.has_key?(socket.assigns.item_sections, id),
+    if Map.has_key?(socket.assigns.item_sections, id) or Map.has_key?(socket.assigns.ux_rows, id),
       do: {:noreply, assign(socket, :row_sheet, id)},
       else: {:noreply, socket}
   end
@@ -835,7 +914,10 @@ defmodule PlatformWeb.InboxLive do
   # `dismiss_many/2` + `set_undo/3` as any row.
   defp dismiss_briefing_row(socket, id) do
     user_id = socket.assigns.current_user_id
-    rows = socket.assigns.briefing_rows ++ socket.assigns.meeting_briefing_rows
+
+    rows =
+      socket.assigns.briefing_rows ++
+        socket.assigns.meeting_briefing_rows ++ Map.values(socket.assigns.ux_rows)
 
     if is_binary(user_id) and Enum.any?(rows, &(&1.id == id)) do
       {:ok, dismissed_ids} = Inbox.dismiss_many(user_id, [id])
@@ -873,6 +955,7 @@ defmodule PlatformWeb.InboxLive do
     # every kind (rung 14 D1) and whose Clear all count includes them.
     {briefings, sectioned} = Enum.split_with(items, &(&1.kind == "briefing"))
     {meeting_briefings, sectioned} = Enum.split_with(sectioned, &(&1.kind == "meeting_briefing"))
+    {ux_decisions, sectioned} = Enum.split_with(sectioned, &(&1.kind == "ux_decision"))
     grouped = Enum.group_by(sectioned, &section_for(&1.kind))
     review = Map.get(grouped, :review, [])
     mentions = grouped |> Map.get(:mentions, []) |> sort_mentions()
@@ -897,6 +980,7 @@ defmodule PlatformWeb.InboxLive do
     )
     |> assign_briefings(briefings)
     |> assign_meeting_briefings(meeting_briefings)
+    |> assign_ux_decisions(ux_decisions)
     |> prune_selection()
   end
 
@@ -1038,6 +1122,51 @@ defmodule PlatformWeb.InboxLive do
     end
   end
 
+  # ── UX decision rows (task 01a1af00 stage 3) ───────────────────────────
+
+  # One row per undismissed `ux_decision` item, newest first, each built
+  # from its finding (read by id AND recipient). Streamed for the desktop
+  # list; `:ux_rows` keeps the same slots by item id for the phone list.
+  defp assign_ux_decisions(socket, items) do
+    user_id = socket.assigns.current_user_id
+    selected = socket.assigns[:ux_detail_id]
+
+    findings =
+      if is_binary(user_id),
+        do: Decisions.list_for_recipient(Enum.map(items, & &1.source_id), user_id),
+        else: %{}
+
+    rows =
+      for item <- items do
+        UxDecisionRow.assigns_for(item, Map.get(findings, item.source_id),
+          selected: is_binary(selected) and item.source_id == selected
+        )
+      end
+
+    socket
+    |> stream(:ux_items, rows, dom_id: & &1.dom_id, reset: true)
+    |> assign(:ux_count, length(rows))
+    |> assign(:ux_rows, Map.new(rows, &{&1.id, &1}))
+  end
+
+  defp reload_ux_decision(socket) do
+    case socket.assigns.ux_detail_id do
+      id when is_binary(id) ->
+        send_update(PlatformWeb.InboxLive.UxDecisionComponent,
+          id: ux_decision_component_id(id),
+          reload: true
+        )
+
+        socket
+
+      _ ->
+        socket
+    end
+  end
+
+  @doc "The UX detail component's id for `finding_id`."
+  def ux_decision_component_id(finding_id), do: "ux-decision-" <> finding_id
+
   @doc "The detail component's id for `meeting_id`."
   def meeting_briefing_component_id(meeting_id), do: "meeting-briefing-" <> meeting_id
 
@@ -1049,8 +1178,12 @@ defmodule PlatformWeb.InboxLive do
   def filter_query(filter) when is_binary(filter), do: "?f=" <> filter
   def filter_query(_filter), do: ""
 
-  @doc "Whether `filter` shows `section` (`:briefing`, `:review`, `:mentions`, `:meetings`)."
+  @doc """
+  Whether `filter` shows `section` (`:briefing`, `:review`, `:mentions`,
+  `:meetings`, `:ux`). The UX questions show under All only.
+  """
   def shows?("all", _section), do: true
+  def shows?(_filter, :ux), do: false
   def shows?("briefing", section), do: section == :briefing
   def shows?("mentions", section), do: section == :mentions
   def shows?("tasks", section), do: section == :review
@@ -1145,8 +1278,14 @@ defmodule PlatformWeb.InboxLive do
   Takes the counts rather than `assigns` so HEEx change-tracking still
   sees which assigns the label depends on.
   """
-  def clearable_count(review_count, mention_count, meeting_count, briefing_count \\ 0) do
-    review_count + mention_count + meeting_count + briefing_count
+  def clearable_count(
+        review_count,
+        mention_count,
+        meeting_count,
+        briefing_count \\ 0,
+        ux_count \\ 0
+      ) do
+    review_count + mention_count + meeting_count + briefing_count + ux_count
   end
 
   # Mentions are sorted by space then recency so same-space rows sit together

@@ -30,6 +30,34 @@ defmodule Platform.Inbox do
       badge counts what nobody has looked at yet and the list carries what is
       still outstanding. The two are different numbers on purpose.
 
+  ## What the badge counts (task `01a1b673`)
+
+  The badge counts the reachable, undismissed rows the viewer has not yet
+  dealt with:
+
+    * a non-action row counts until it is opened from `/inbox`, dismissed, or,
+      for a `chat_mention`, its message is read in chat;
+    * an action row (`task_plan_review`, `review_request_pending`, and every
+      extension kind declaring `stays_listed_on_open`) counts until it is
+      opened. A read-but-undecided action row is NOT counted: it stays listed
+      with its "Needs your review" chip until it is decided or dismissed
+      (task `01a11703`'s decision, kept).
+
+  Reading a mentioned message in chat is dealing with the mention. Every path
+  that advances a chat read cursor (`Platform.Chat.mark_space_read/2`,
+  `Platform.Chat.mark_all_chat_spaces_read/1`) calls
+  `dismiss_read_mentions/2`, which dismisses the user's `chat_mention` rows at
+  or below the new cursor in one write and broadcasts `{:inbox_changed,
+  user_id}` once, so a mounted shell recomputes the badge without a remount.
+  The badge scope ALSO excludes a `chat_mention` whose message is already at
+  or below the viewer's cursor, so a cursor path that forgets to call the
+  dismissal cannot leave the badge up. Reading in chat is the same rule
+  `reconcile_for_user/1` applies at mount (`Platform.Chat.message_read_by_user?/2`).
+
+  Viewing the `/inbox` list marks nothing. A non-action row seen only in the
+  list keeps its per-row dot and stays counted until it is opened or
+  dismissed.
+
   Opening a task you sponsor from the task pane also DISMISSES your
   `task_sponsor_assigned` row for it (`dismiss_sponsor_row_on_open/2`, called
   from `PlatformWeb.TasksLive.handle_params/3`, task `01a116ff`) — a dismissal,
@@ -41,7 +69,7 @@ defmodule Platform.Inbox do
 
   alias Platform.Access
   alias Platform.Access.{Query, Scope}
-  alias Platform.Chat.{Message, Space}
+  alias Platform.Chat.{Message, Participant, Space}
   alias Platform.Inbox.Item
   alias Platform.Meetings.Meeting
   alias Platform.Push.Notification
@@ -67,7 +95,11 @@ defmodule Platform.Inbox do
   # reason: opening a meeting's after-action briefing is reading it. It is
   # NOT in `@action_kinds` — it is not an approval and Mobile cannot act on
   # it.
-  @listed_on_open ~w(briefing meeting_briefing)
+  # `ux_decision` (task 01a1af00 stage 3) is listed on open too: opening the
+  # question is reading it, and the row stays until it is answered
+  # (`Platform.Ux.Decisions.answer/4` dismisses it) or dismissed. NOT an
+  # approval, so never in `@action_kinds`.
+  @listed_on_open ~w(briefing meeting_briefing ux_decision)
 
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
@@ -149,6 +181,20 @@ defmodule Platform.Inbox do
   def resource_for("task_review", id), do: {:task, id}
   def resource_for("review_request", id), do: resource_id(ReviewRequest, id, :task_id, :task)
   def resource_for("meeting", id), do: resource_id(Meeting, id, :chat_space_id, :space)
+
+  # A UX finding linked to a task is guarded by that task's read permission;
+  # an unlinked finding has no resource (its recipient is the only reader,
+  # enforced by `Platform.Ux.Decisions`' owner-scoped reads).
+  def resource_for("ux_finding", id) do
+    with true <- Platform.UUID.valid?(id),
+         %Platform.Ux.Finding{task_id: task_id} when is_binary(task_id) <-
+           Repo.get(Platform.Ux.Finding, id) do
+      {:task, task_id}
+    else
+      _ -> nil
+    end
+  end
+
   def resource_for(_, _), do: nil
 
   defp resource_id(schema, id, field, type) do
@@ -439,6 +485,7 @@ defmodule Platform.Inbox do
   @spec unread_scope(Ecto.UUID.t()) :: Ecto.Query.t()
   def unread_scope(user_id) do
     from(i in Item,
+      as: :inbox_item,
       where: i.user_id == ^user_id and is_nil(i.dismissed_at)
     )
   end
@@ -452,7 +499,8 @@ defmodule Platform.Inbox do
   VIEWER HAS NO WAY TO ACT ON. If nothing reachable remains the count is 0, and
   the rail's `badge_text/1` already returns nil at 0 — so no badge renders at
   all, not a zero and not a dot. Nothing in the badge's LOOK changes here
-  (same treatment, same `99+` cap); only what the number counts changes.
+  (same treatment, same cap, then `99+`; task 01a1b673 later moved it to
+  `9+`); only what the number counts changes.
 
   * external viewer → `#{inspect(@external_reachable_kinds)}` only. An external
     user is fenced off `/inbox` by `PlatformWeb.Plugs.ExternalUserScope`, so
@@ -637,10 +685,48 @@ defmodule Platform.Inbox do
   read, undismissed rows: an action row (`action_kinds/0`) the user opened and
   has not yet resolved, or any row restored by an undo after it was opened.
   Those are listed and not counted.
+
+  It also drops a `chat_mention` whose message the user has already read in
+  chat (task `01a1b673`): the message id is at or below the user's
+  `last_read_message_id` in that space. `dismiss_read_mentions/2` normally
+  dismisses such a row the moment the cursor moves; this filter is the
+  backstop for any cursor path that does not call it. It only removes rows, so
+  the badge stays a subset of the list.
   """
   @spec badge_scope(Ecto.UUID.t()) :: Ecto.Query.t()
   def badge_scope(user_id) do
-    user_id |> unread_scope() |> where([i], is_nil(i.read_at))
+    user_id |> unread_scope() |> not_yet_dealt_with()
+  end
+
+  # The badge predicate, written once and applied to both badge scopes: not
+  # opened, and not a mention whose message has been read in chat. Requires
+  # the `:inbox_item` root binding `unread_scope/1` declares.
+  defp not_yet_dealt_with(query) do
+    read_in_chat = read_in_chat_subquery()
+
+    query
+    |> where([i], is_nil(i.read_at))
+    |> where(
+      [inbox_item: i],
+      i.kind != "chat_mention" or i.source_type != "chat_message" or
+        not exists(subquery(read_in_chat))
+    )
+  end
+
+  # Correlated on the outer `:inbox_item` row: its source message exists and
+  # sits at or below the row owner's read cursor in the message's space. The
+  # same rule as `Platform.Chat.message_read_by_user?/2`. A primary-key lookup
+  # on the message, then the participant row by (space, user).
+  defp read_in_chat_subquery do
+    from(m in Message,
+      join: p in Participant,
+      on: p.space_id == m.space_id,
+      where: m.id == parent_as(:inbox_item).source_id,
+      where: p.participant_type == "user",
+      where: p.participant_id == parent_as(:inbox_item).user_id,
+      where: m.id <= p.last_read_message_id,
+      select: 1
+    )
   end
 
   @doc """
@@ -674,7 +760,7 @@ defmodule Platform.Inbox do
   def reachable_badge_scope(user_id, external?, %Scope{} = scope) do
     user_id
     |> reachable_unread_scope(external?, scope)
-    |> where([i], is_nil(i.read_at))
+    |> not_yet_dealt_with()
   end
 
   # Restrict source IDs through Access.Query rather than duplicating grant
@@ -736,7 +822,13 @@ defmodule Platform.Inbox do
   the badge node leaves the DOM.
 
   The name is kept because `PlatformWeb.ShellLive` calls it; read "unread" as
-  "not yet opened". It is NOT the length of the `/inbox` list.
+  "not yet dealt with". It is NOT the length of the `/inbox` list.
+
+  What it counts (task `01a1b673`, see the moduledoc): reachable, undismissed
+  rows where a non-action row is counted until it is opened from `/inbox`,
+  dismissed, or (`chat_mention`) its message is read in chat, and an action
+  row is counted until it is opened. A read-but-undecided action row stays
+  listed and is not counted.
   """
   @spec reachable_unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def reachable_unread_count(user_id) do
@@ -989,6 +1081,47 @@ defmodule Platform.Inbox do
   end
 
   @doc """
+  DELETE `user_id`'s rows for a source triple: the notification itself is
+  withdrawn, not dealt with (task 01a1b6a1 stage 3, the undo of an attention
+  ask in `Platform.Chat.remove_message_attention/4`). A dismissal would leave
+  the row in history as if the person had seen to it; an undone ask never
+  happened.
+
+  Options:
+
+    * `kind:` — only rows of this kind (see `dismiss_by_source/4` on why a
+      source triple is not unique per kind).
+    * `inserted_since:` — only rows inserted at or after this `DateTime`, so
+      an older row for the same source (the message's own @mention) survives.
+
+  Broadcasts `{:inbox_changed, user_id}` when it deleted anything, so a
+  mounted shell recomputes the badge; a no-op stays quiet. Returns
+  `{:ok, deleted_count}`.
+  """
+  @spec delete_by_source(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, non_neg_integer()}
+  def delete_by_source(user_id, source_type, source_id, opts \\ []) do
+    {count, _} =
+      Item
+      |> where(
+        [i],
+        i.user_id == ^user_id and i.source_type == ^source_type and i.source_id == ^source_id
+      )
+      |> filter_kind(Keyword.get(opts, :kind))
+      |> filter_inserted_since(Keyword.get(opts, :inserted_since))
+      |> Repo.delete_all()
+
+    if count > 0, do: broadcast_changed(user_id)
+
+    {:ok, count}
+  end
+
+  defp filter_inserted_since(query, nil), do: query
+
+  defp filter_inserted_since(query, %DateTime{} = since),
+    do: where(query, [i], i.inserted_at >= ^since)
+
+  @doc """
   Dismiss `user_id`'s live `task_sponsor_assigned` row for `task_id`: the
   sponsor opened the task (task `01a116ff`).
 
@@ -1054,11 +1187,20 @@ defmodule Platform.Inbox do
   """
   @spec dismiss_many(Ecto.UUID.t(), [Ecto.UUID.t()]) :: {:ok, [Ecto.UUID.t()]}
   def dismiss_many(user_id, ids) do
+    Item
+    |> where([i], i.user_id == ^user_id and i.id in ^ids)
+    |> dismiss_where(user_id)
+  end
+
+  # The shared dismissal write: ONE `update_all` over `query` (narrowed here to
+  # live rows of `user_id`), then ONE coarse broadcast when anything changed.
+  # `dismiss_many/2` and `dismiss_read_mentions/2` both go through it.
+  defp dismiss_where(query, user_id) do
     now = DateTime.utc_now()
 
     {_count, changed_ids} =
-      Item
-      |> where([i], i.user_id == ^user_id and i.id in ^ids and is_nil(i.dismissed_at))
+      query
+      |> where([i], i.user_id == ^user_id and is_nil(i.dismissed_at))
       |> select([i], i.id)
       |> Repo.update_all(set: [dismissed_at: now])
 
@@ -1068,6 +1210,39 @@ defmodule Platform.Inbox do
     if changed_ids != [], do: broadcast_changed(user_id)
 
     {:ok, changed_ids}
+  end
+
+  @doc """
+  Dismiss `user_id`'s live `chat_mention` rows whose message the user has now
+  read in chat, in any of `space_ids` (task `01a1b673`). Returns
+  `{:ok, changed_ids}` under `dismiss_many/2`'s contract.
+
+  Called by every path that advances a chat read cursor:
+  `Platform.Chat.mark_space_read/2` (one space) and
+  `Platform.Chat.mark_all_chat_spaces_read/1` (the spaces it advanced, in one
+  call). "Read" is the reconciler's rule: the message is at or below the
+  user's `last_read_message_id` in its space, so this must run AFTER the
+  cursor write.
+
+  One `update_all` (on the `(user_id, dismissed_at)` index, with a correlated
+  primary-key lookup per candidate row), then one `{:inbox_changed, user_id}`
+  when it dismissed anything. A cursor move that clears nothing writes nothing
+  and broadcasts nothing.
+  """
+  @spec dismiss_read_mentions(Ecto.UUID.t(), [Ecto.UUID.t()]) :: {:ok, [Ecto.UUID.t()]}
+  def dismiss_read_mentions(_user_id, []), do: {:ok, []}
+
+  def dismiss_read_mentions(user_id, space_ids) when is_binary(user_id) and is_list(space_ids) do
+    read_here =
+      read_in_chat_subquery()
+      |> where([m], m.space_id in ^space_ids)
+
+    from(i in Item,
+      as: :inbox_item,
+      where: i.kind == "chat_mention" and i.source_type == "chat_message",
+      where: exists(subquery(read_here))
+    )
+    |> dismiss_where(user_id)
   end
 
   @doc """
@@ -1294,6 +1469,11 @@ defmodule Platform.Inbox do
          source_id: briefing_id
        }) do
     Platform.Meetings.MeetingBriefings.inbox_row_stale?(briefing_id)
+  end
+
+  # Task 01a1af00 stage 3: a UX question answered or dismissed elsewhere.
+  defp row_stale?(%Item{kind: "ux_decision", source_type: "ux_finding", source_id: finding_id}) do
+    Platform.Ux.Decisions.inbox_row_stale?(finding_id)
   end
 
   # DELIBERATE DECISION — do not add a `task_sponsor_assigned` clause without

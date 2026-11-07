@@ -4,8 +4,9 @@
  *
  * Mounts on `#native-tab-bridge`, a hidden span inside `bottom_rail/1`
  * carrying `data-items` (the bar's tab keys, in order, More last),
- * `data-active-key`, `data-inbox-unread` and `data-more-open`. Those change on
- * every re-render, so `updated()` re-sends the state.
+ * `data-active-key`, `data-inbox-unread`, `data-inbox-badge` and
+ * `data-more-open`. Those change on every re-render, so `updated()` re-sends
+ * the state.
  *
  * ACTIVE ONLY IN A NATIVE BUILD THAT HAS THE BAR: `isNativePlatform()`, a
  * plugin (BurrowNative, else SuiteNative) with a `tabBarState` method, and
@@ -14,8 +15,15 @@
  * adds no listener and makes no call, so the web bar behaves as on main.
  *
  * CONTRACT (stage 2, NativeTabBar.swift):
- *   web to native  tabBarState({items, selected, inbox_dot, visible, ink, scheme})
+ *   web to native  tabBarState({items, selected, inbox_dot, inbox_badge, visible, ink, scheme})
  *   native to web  window event `burrowNativeTab`, detail {key, reselect}
+ *
+ * `inbox_badge` (task 01a1b673 stage 3) is the Inbox count label the web
+ * badge shows ("1".."9", then "9+"), read from `data-inbox-badge`, or null
+ * when the count is 0 (the attribute is absent or empty). The native bar
+ * shows it as the Inbox tab's badge value. `inbox_dot` stays, true exactly
+ * when the count is above 0, for app builds that predate `inbox_badge` and
+ * can only draw a bare dot.
  *
  * `ink` (task 01a174e8 stage 1) is `{selected, unselected}`, each a
  * '#rrggbbaa' string: the inks this bar paints, resolved by app.css onto two
@@ -200,12 +208,20 @@ export function schemeOf(win, doc) {
   return win?.matchMedia && win.matchMedia(SCHEME_QUERY).matches ? "dark" : "light"
 }
 
+// The Inbox count label for the native badge, or null at 0 (the attribute
+// is absent or empty). Whitespace-only reads as empty.
+export function inboxBadgeOf(el) {
+  const label = (el.getAttribute("data-inbox-badge") || "").trim()
+  return label === "" ? null : label
+}
+
 export function stateOf(el, win, doc, normalise = null) {
   const active = el.getAttribute("data-active-key")
   return {
     items: itemsOf(el),
     selected: active ? active : null,
     inbox_dot: el.getAttribute("data-inbox-unread") === "true",
+    inbox_badge: inboxBadgeOf(el),
     visible: barVisible(win, doc),
     ink: inksOf(el, win, normalise),
     scheme: schemeOf(win, doc),

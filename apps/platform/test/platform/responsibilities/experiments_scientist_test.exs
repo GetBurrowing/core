@@ -250,13 +250,17 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",
                  "dispatch.prompt",
+                 # Task 01a1b6a1 stage 1: the learned-defaults surface.
+                 "habits.learned_defaults",
                  # Task 01a1aa47 stage 4: the HR surface.
                  "hr.profile",
                  "mail.draft.generator",
                  "meetings.brief_synthesis",
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
-                 "planner.stage_budget"
+                 "planner.stage_budget",
+                 # Task 01a1af00 stage 1: the UX friction surface.
+                 "ux.friction_detection"
                ]
     end
 

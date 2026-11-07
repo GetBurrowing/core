@@ -19,6 +19,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Repo
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
+  alias PlatformWeb.ControlCenter.CharacterBuilder
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.AgentCrudEvents
   alias PlatformWeb.ControlCenter.AgentData
@@ -94,6 +95,8 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:memory_form, to_form(AgentData.default_memory_entry(), as: :memory_entry))
      |> assign(:agent_status, :unknown)
      |> assign(:selected_agent_directory_entry, nil)
+     # Character builder (task 01a1b6ad stage 2): nil, or how it was opened.
+     |> assign(:builder, nil)
      # Onboarding flow assigns
      |> assign(:show_onboarding_chooser, false)
      |> assign(:onboarding_flow, nil)
@@ -148,6 +151,7 @@ defmodule PlatformWeb.ControlCenterLive do
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
+      |> assign_builder_from_params(params)
 
     socket =
       if selected_agent do
@@ -167,6 +171,36 @@ defmodule PlatformWeb.ControlCenterLive do
   @impl true
   def handle_info({:agent_host_status, _event}, socket) do
     {:noreply, refresh_native(socket)}
+  end
+
+  # ── Character builder (task 01a1b6ad stage 2) ─────────────────────
+
+  def handle_info({:character_builder, :closed}, socket) do
+    {:noreply, close_builder(socket)}
+  end
+
+  def handle_info({:character_builder, :advanced}, socket) do
+    {:noreply, socket} =
+      OnboardingEvents.handle("open_onboarding_chooser", %{}, close_builder(socket))
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:character_builder, {:created, %Agent{} = agent}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:builder, nil)
+     |> put_flash(:info, "#{agent.name} is alive")
+     |> push_patch(to: ~p"/control/#{agent.slug}")}
+  end
+
+  def handle_info({:character_builder, {:error, reason}}, socket) do
+    {:noreply,
+     put_flash(
+       socket,
+       :error,
+       "Could not bring it to life (#{inspect(reason)}). Nothing was saved."
+     )}
   end
 
   def handle_info(msg, socket) do
@@ -730,14 +764,16 @@ defmodule PlatformWeb.ControlCenterLive do
 
   # ── Onboarding flow events (delegated) ────────────────────────────
 
-  defp handle_control_event("open_onboarding_chooser", params, socket),
-    do: OnboardingEvents.handle("open_onboarding_chooser", params, socket)
+  # The Add entry opens the character builder (task 01a1b6ad stage 2). The
+  # old chooser is one tap further, behind the builder's Advanced link.
+  defp handle_control_event("open_onboarding_chooser", _params, socket),
+    do: {:noreply, open_builder(socket, %{url?: false})}
 
   defp handle_control_event("close_onboarding", params, socket),
     do: OnboardingEvents.handle("close_onboarding", params, socket)
 
   defp handle_control_event("choose_onboarding", params, socket),
-    do: OnboardingEvents.handle("choose_onboarding", params, socket)
+    do: OnboardingEvents.handle("choose_onboarding", params, assign(socket, :builder, nil))
 
   defp handle_control_event("select_template", params, socket),
     do: OnboardingEvents.handle("select_template", params, socket)
@@ -948,6 +984,17 @@ defmodule PlatformWeb.ControlCenterLive do
         sheet_refusal={@sheet_refusal}
       />
 
+      <.live_component
+        :if={@builder}
+        module={CharacterBuilder}
+        id="character-builder"
+        current_user_id={@current_user_id}
+        agents={@agents}
+        step={@builder.step}
+        cls={@builder.cls}
+        can_create?={@builder.can_create?}
+      />
+
       <%!-- ── Main content ───────────────────────────────────────────── --%>
       <div class="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         <%!-- ── Sidebar / agent list (hidden when agent selected on mobile) --%>
@@ -1002,29 +1049,20 @@ defmodule PlatformWeb.ControlCenterLive do
                 <span class="hero-rectangle-stack mx-auto h-12 w-12 text-subtle" />
                 <p class="mt-3 text-lg font-semibold text-base-content">Add your first agent</p>
                 <p class="mt-1 text-sm text-subtle">
-                  Choose a template, federate from OpenClaw, import from a workspace, or build from scratch.
+                  Create a character, federate from OpenClaw, import from a workspace, or build from scratch.
                 </p>
               </div>
 
               <div id="empty-state-add-grid" class="grid w-full max-w-sm grid-cols-2 gap-3">
                 <button
-                  :if={@can_create_ownerless?}
+                  id="empty-state-create-agent"
                   type="button"
-                  phx-click="choose_onboarding"
-                  phx-value-flow="template"
+                  phx-click="open_onboarding_chooser"
                   class="flex flex-col items-center gap-2 rounded-2xl border border-edge bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
-                  <span class="hero-briefcase h-6 w-6 text-primary" />
-                  <span class="text-xs font-semibold">Template</span>
+                  <span class="hero-sparkles h-6 w-6 text-primary" />
+                  <span class="text-xs font-semibold">Create</span>
                 </button>
-                <Onboarding.locked_card
-                  :if={!@can_create_ownerless?}
-                  id="empty-state-template"
-                  icon="hero-briefcase"
-                  title="Template"
-                  line_id="empty-state-admin-line"
-                  compact
-                />
                 <button
                   type="button"
                   phx-click="choose_onboarding"
@@ -1277,6 +1315,56 @@ defmodule PlatformWeb.ControlCenterLive do
       />
     </div>
     """
+  end
+
+  # ── Private: character builder (task 01a1b6ad stage 2) ────────────
+
+  # ?create=1&step=<id>&cls=<id> opens the builder at that step and class.
+  # A builder the URL opened closes when the URL drops create; one opened
+  # from the Add button is left alone by unrelated patches.
+  defp assign_builder_from_params(socket, %{"create" => "1"} = params) do
+    case socket.assigns.builder do
+      nil -> open_builder(socket, %{url?: true, step: params["step"], cls: params["cls"]})
+      _open -> socket
+    end
+  end
+
+  defp assign_builder_from_params(socket, _params) do
+    case socket.assigns.builder do
+      %{url?: true} -> assign(socket, :builder, nil)
+      _ -> socket
+    end
+  end
+
+  defp open_builder(socket, opts) do
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
+
+    socket
+    |> assign(:show_onboarding_chooser, false)
+    |> assign(:onboarding_flow, nil)
+    |> assign(
+      :builder,
+      Map.merge(%{step: nil, cls: nil}, opts)
+      |> Map.put(:can_create?, Platform.Access.Agents.may_create_ownerless?(scope))
+    )
+  end
+
+  # Closing discards the builder's state with the component. A builder the
+  # URL opened also drops the query, so a reload does not reopen it.
+  defp close_builder(socket) do
+    case socket.assigns.builder do
+      %{url?: true} ->
+        path =
+          case socket.assigns.selected_agent do
+            %Agent{slug: slug} -> ~p"/control/#{slug}"
+            _ -> ~p"/control"
+          end
+
+        socket |> assign(:builder, nil) |> push_patch(to: path)
+
+      _ ->
+        assign(socket, :builder, nil)
+    end
   end
 
   # ── Private: panel assignment ─────────────────────────────────────

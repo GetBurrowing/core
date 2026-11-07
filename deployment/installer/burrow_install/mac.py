@@ -24,7 +24,7 @@ A target class exposes
 ``files(plan, secret_lines, customer_secrets, registry_auth) -> {path: (text, mode)}``.
 """
 
-from . import registry, templates
+from . import templates
 from .templates import FILE_MODE, SECRET_MODE, yaml_doc
 
 HEADER = templates.HEADER
@@ -95,17 +95,7 @@ def caddyfile(plan):
         "}",
     ]
     if "livekit" in plan.services:
-        lines += [
-            "",
-            "# INTERNAL only (no host port): LiveKit's webhook and the transcriber's",
-            "# segment sink reach core here. core forces https (prod.exs force_ssl,",
-            "# rewrite_on x_forwarded_proto), so a plain internal POST would be redirected.",
-            f"http://:{registry.CORE_INTERNAL_PORT} {{",
-            "\treverse_proxy core-platform:4000 {",
-            "\t\theader_up X-Forwarded-Proto https",
-            "\t}",
-            "}",
-        ]
+        lines += [""] + templates.core_internal_listener()
     return "\n".join(lines) + "\n"
 
 

@@ -1123,6 +1123,9 @@ defmodule PlatformWeb.ChatLive do
            )
          end)
        )
+       # Unread first (task 01a1b6fd): read the space's unread BEFORE
+       # `clear_unread/2` zeroes it, so a floated row keeps its place.
+       |> ChatListHooks.float_on_open(space.id)
        |> clear_unread(space.id)
        # The desktop list pane renders beside the conversation (Burrow
        # redesign 22 stage 2): a socket that mounted straight into a space
@@ -1155,6 +1158,7 @@ defmodule PlatformWeb.ChatLive do
       socket
       |> assign(:restricted_channel_ids, restricted_ids)
       |> leave_active_space()
+      |> ChatListHooks.clear_floated()
       |> PlatformWeb.ChatLive.ExecutionActivityHooks.assign_space(nil)
       |> assign(:current_participant, nil)
 
@@ -3150,7 +3154,7 @@ defmodule PlatformWeb.ChatLive do
   # surfaces have no sidebar and never subscribe (see `do_mount/3`), so they
   # keep their empty lists.
   def handle_info(:sidebar_changed, socket) do
-    {:noreply, refresh_rail(socket)}
+    {:noreply, socket |> ChatListHooks.refresh_float() |> refresh_rail()}
   end
 
   # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the

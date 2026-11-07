@@ -1876,6 +1876,55 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       %{msg | reactions: groups, attention: Map.get(attention, msg.id, [])}
     end)
     |> LinkCards.annotate(viewer_user_id(socket))
+    |> annotate_learned_notices(socket)
+  end
+
+  # The acted-for-you notices (learned defaults, task 01a1b6a1 stage 4) for
+  # the viewer, in at most ONE query per window (`Platform.Habits.act_notices/2`),
+  # each with the target's display name from `@participants_map`. Only a
+  # top-level message the viewer authored can carry one
+  # (`Platform.Habits.LearnedAttention` acts only on those), so a window with
+  # none of them runs no query at all. Never fails the render: any error is
+  # "no notice".
+  defp annotate_learned_notices(messages, socket) do
+    case viewer_user_id(socket) do
+      user_id when is_binary(user_id) ->
+        ids =
+          for %{id: id, author_user_id: ^user_id} = msg <- messages,
+              is_binary(id),
+              is_nil(Map.get(msg, :thread_id)),
+              do: id
+
+        notices = learned_notices(user_id, ids)
+        names = principal_names(socket)
+
+        Enum.map(messages, fn msg ->
+          case Map.get(notices, msg.id) do
+            nil ->
+              msg
+
+            notice ->
+              Map.put(msg, :learned_notice, Map.put(notice, :name, names[notice.target_id]))
+          end
+        end)
+
+      _ ->
+        messages
+    end
+  end
+
+  defp learned_notices(_user_id, []), do: %{}
+
+  defp learned_notices(user_id, ids) do
+    Platform.Habits.act_notices(user_id, ids)
+  rescue
+    _ -> %{}
+  end
+
+  defp principal_names(socket) do
+    (socket.assigns[:participants_map] || %{})
+    |> Map.values()
+    |> Map.new(fn p -> {p[:principal_id], p[:display_name] || p[:name] || "someone"} end)
   end
 
   # Single-message enrichment. Used on every stream_insert (new message,
@@ -1920,6 +1969,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     [%{msg | reactions: groups, attention: Chat.list_message_attention(msg.id)}]
     |> LinkCards.annotate(viewer_user_id(socket))
+    |> annotate_learned_notices(socket)
     |> hd()
   end
 

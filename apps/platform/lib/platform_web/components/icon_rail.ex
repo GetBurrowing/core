@@ -10,8 +10,15 @@ defmodule PlatformWeb.Components.IconRail do
                        `phx-click="open_more_sheet"` (`close_more_sheet`
                        while the sheet is open). Voice and Tasks are the
                        More sheet's first rows (task 01a18d9f stage 5,
-                       the product lead's four-tab rule), and Inbox's unread signal is
-                       a dot on the Inbox tab.
+                       the product lead's four-tab rule). The Inbox tab carries
+                       the count badge, `inbox_badge/1`: 1-9, then 9+, and
+                       nothing at 0. The product lead's ask of 2026-11-07
+                       (the dot never cleared and showed no count)
+                       supersedes the no-count part of the four-tab rule;
+                       the four tabs themselves are unchanged.
+    * `inbox_badge/1` — the one Inbox count badge, drawn on the phone tab and
+                       on the desktop sidebar's Inbox row alike (design
+                       canvas 01a1b674).
     * `tab_destinations/1` and `more_sheet_rows/2` — the bar's link tabs and
       the More sheet's rows.
     * `desktop_rail_destinations/1` and `desktop_more_rows/2` — the desktop
@@ -65,9 +72,11 @@ defmodule PlatformWeb.Components.IconRail do
   (the `TabPill` hook, `assets/js/hooks/tab_pill.js`; prototype t1). Its
   layer is `phx-update="ignore"` so a patch keeps the hook's geometry.
 
-  When `inbox_unread_count` is above 0, the Inbox tab carries a dot
-  (`data-role="inbox-unread-dot"`, no count) and its aria-label reads
-  "Inbox, unread". At 0 the dot is absent from the DOM.
+  When `inbox_unread_count` is above 0, the Inbox tab's icon carries the
+  count badge (`inbox_badge/1`, `data-role="inbox-badge"`: "1".."9", then
+  "9+") and the tab's aria-label reads "Inbox, N need you" with the real
+  count. At 0 the badge is absent from the DOM and the label is "Inbox".
+  There is no bare dot: the badge is a count or nothing.
   """
   attr(:current_path, :string, default: "/")
   attr(:root_user, :boolean, default: false)
@@ -84,7 +93,7 @@ defmodule PlatformWeb.Components.IconRail do
 
   attr(:inbox_unread_count, :integer,
     default: 0,
-    doc: "the viewer's unread inbox count; above 0 puts the unread dot on the Inbox tab"
+    doc: "the viewer's unread inbox count; above 0 puts the count badge on the Inbox tab"
   )
 
   def bottom_rail(assigns) do
@@ -132,20 +141,21 @@ defmodule PlatformWeb.Components.IconRail do
         data-destination={dest.key}
         data-module-id={dest.key}
         data-nav-label={dest.label}
-        aria-label={tab_aria_label(dest, @inbox_unread?)}
+        aria-label={tab_aria_label(dest, @inbox_unread_count)}
         aria-current={aria_current_for(dest, @active_key)}
       >
-        <.icon
-          name={tab_icon(dest.key, dest.key == @active_key)}
-          class="bottom-nav-icon size-5"
-        />
-        <span class="bottom-nav-label">{dest.label}</span>
-        <span
-          :if={dest.key == :inbox and @inbox_unread?}
-          class="bottom-nav-dot"
-          data-role="inbox-unread-dot"
-        >
+        <span class="icon-badge-anchor">
+          <.icon
+            name={tab_icon(dest.key, dest.key == @active_key)}
+            class="bottom-nav-icon size-5"
+          />
+          <.inbox_badge
+            :if={dest.key == :inbox}
+            id_prefix="bottom-nav-inbox-badge"
+            count={@inbox_unread_count}
+          />
         </span>
+        <span class="bottom-nav-label">{dest.label}</span>
       </.link>
 
       <button
@@ -167,7 +177,11 @@ defmodule PlatformWeb.Components.IconRail do
            draws exactly what this bar draws. The two ink probes (task
            01a174e8 stage 1) resolve the bar's selected and unselected inks
            through app.css, so the hook can send them as plain colours. They
-           are NOT .bottom-nav-tab: tab_pill.js and other selectors match that. --%>
+           are NOT .bottom-nav-tab: tab_pill.js and other selectors match that.
+           data-inbox-badge (task 01a1b673 stage 3) is badge_text/1 of the
+           count ("1".."9", then "9+"), so the native bar shows the same label
+           as the web badge; at 0 it is nil and the attribute is absent.
+           data-inbox-unread stays for app builds that only read the dot. --%>
       <span
         id="native-tab-bridge"
         phx-hook="NativeTabBar"
@@ -175,6 +189,7 @@ defmodule PlatformWeb.Components.IconRail do
         data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
         data-active-key={@active_key}
         data-inbox-unread={to_string(@inbox_unread?)}
+        data-inbox-badge={badge_text(@inbox_unread_count)}
         data-more-open={to_string(@more_open)}
       >
         <span data-native-ink="selected"></span>
@@ -201,9 +216,55 @@ defmodule PlatformWeb.Components.IconRail do
   @spec desktop_rail_keys() :: [atom()]
   def desktop_rail_keys, do: [:chat, :voice, :tasks, :calendar, :meetings]
 
-  @aria_unread "Inbox, unread"
-  defp tab_aria_label(%{key: :inbox}, true), do: @aria_unread
+  defp tab_aria_label(%{key: :inbox} = dest, count), do: inbox_aria_label(dest.label, count)
   defp tab_aria_label(dest, _), do: dest.label
+
+  @doc """
+  The Inbox destination's accessible name: "Inbox, N need you" with the real
+  count (12 reads "12", not the badge's "9+") when the count is above 0, and
+  the plain label at 0 or for a non-integer. The phone tab and the desktop
+  sidebar row both use it; the badge itself is `aria-hidden`.
+  """
+  @spec inbox_aria_label(String.t(), term()) :: String.t()
+  def inbox_aria_label(label, count) when is_integer(count) and count > 0,
+    do: "#{label}, #{count} need you"
+
+  def inbox_aria_label(label, _), do: label
+
+  @doc """
+  The Inbox count badge (design canvas 01a1b674): one node shape for the
+  phone tab bar and the desktop sidebar's Inbox row.
+
+  Renders `<span class="inbox-badge" data-role="inbox-badge"
+  aria-hidden="true">` holding `badge_text/1` of `count` ("1".."9", then
+  "9+"), and renders nothing at all when `badge_text/1` is nil (0 or less):
+  no dot, no "0". Place it inside an `.icon-badge-anchor` wrapper around the
+  icon; app.css anchors it on the icon's top-right corner and cuts it out of
+  the glyph with a 2px `--color-base-100` ring. Fill and number are the
+  `--color-error` / `--color-error-content` slot pair, never primary or info.
+
+  The id carries the label, so a changed label is a new node and its 120ms
+  scale-in runs again (none under reduced motion); a removed node vanishes
+  with no animation.
+  """
+  attr(:count, :any, default: 0, doc: "the viewer's unread inbox count")
+  attr(:id_prefix, :string, required: true, doc: "unique per surface; the label is appended")
+
+  def inbox_badge(assigns) do
+    assigns = assign(assigns, :label, badge_text(assigns.count))
+
+    ~H"""
+    <span
+      :if={@label}
+      id={"#{@id_prefix}-#{String.replace(@label, "+", "-plus")}"}
+      class="inbox-badge"
+      data-role="inbox-badge"
+      aria-hidden="true"
+    >
+      {@label}
+    </span>
+    """
+  end
 
   # Bar-only icon mapping (task 01a1557a-7a71 stage 2): outline at rest,
   # `-solid` when active (Saru rule 3). Chosen against the masters'
@@ -512,9 +573,10 @@ defmodule PlatformWeb.Components.IconRail do
   @doc """
   Inbox unread-badge label.
 
-  Returns nil at 0 (badge node omitted from the DOM), the integer as a
-  string for 1..99, and "99+" for anything above 99 (ADR-0022 DM-badge
-  overflow grammar). Non-integer inputs are treated as 0.
+  Returns nil at 0 or below (badge node omitted from the DOM), the integer
+  as a string for 1..9, and "9+" for anything above 9 (design canvas
+  01a1b674, the product lead's ask of 2026-11-07; it was "99+" under the
+  ADR-0022 DM-badge grammar until then). Non-integer inputs are treated as 0.
 
   Public because the rail is no longer the only surface showing this count:
   `PlatformWeb.ShellLive` pushes the same label to the `AppBadge` JS hook
@@ -525,7 +587,7 @@ defmodule PlatformWeb.Components.IconRail do
   def badge_text(count) when is_integer(count) do
     cond do
       count <= 0 -> nil
-      count > 99 -> "99+"
+      count > 9 -> "9+"
       true -> Integer.to_string(count)
     end
   end
@@ -536,8 +598,9 @@ defmodule PlatformWeb.Components.IconRail do
   Chat unread-badge label.
 
   Returns nil at or below 0 (badge node omitted from the DOM), the integer as
-  a string for 1..99, and "99+" above 99. Same overflow grammar as
-  `badge_text/1`, which is the point of task 01a02491 stage 2.
+  a string for 1..99, and "99+" above 99. Task 01a02491 stage 2 matched this
+  to `badge_text/1`'s grammar at the time; the Inbox badge moved to "9+" on
+  2026-11-07 (design canvas 01a1b674), and this one deliberately did not.
 
   The cap used to be 9+, matched to `ChatLive`'s `unread_label/1` on the
   reasoning that the rail total and a per-channel pill were one quantity seen
@@ -547,18 +610,21 @@ defmodule PlatformWeb.Components.IconRail do
   those three kinds, which makes the mismatch explicit. The badge's real
   sibling is the Inbox badge in the same sidebar column. Two badges in one
   column with two different overflow grammars read as a rendering fault
-  rather than as a distinction.
+  rather than as a distinction. That held while both were inline pills at the
+  row's right end; since 2026-11-07 the Inbox badge is a cut-out count on the
+  row's icon (canvas 01a1b674), a different shape, so the grammars may differ.
 
   `ChatLive.unread_label/1` deliberately stays at 9+. A per-channel pill
   counts a different thing from the rail total and is allowed its own
   grammar; changing it would be a change to the Chat sidebar, not to this
   rail.
 
-  Kept as its own function rather than delegating to `badge_text/1`, even
-  though the two bodies now agree. `badge_text/1` is public and also feeds
-  ShellLive's `AppBadge` document-title label, so a later change to the Chat
-  cap must not be able to move the Inbox pill and the browser tab with it.
-  The two caps agreeing is a design decision, not a shared implementation.
+  Kept as its own function rather than delegating to `badge_text/1`, which
+  is what let the Inbox cap move to "9+" without moving this one.
+  `badge_text/1` is public and also feeds ShellLive's `AppBadge`
+  document-title label, so a change to either cap must not be able to move
+  the other. The Chat badge is a different quantity (a sum over channels)
+  and keeps its own grammar.
   """
   @spec chat_badge_text(term()) :: String.t() | nil
   def chat_badge_text(count) when is_integer(count) do

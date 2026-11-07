@@ -26,7 +26,13 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
   | inactive icon   | 3              |
   | active label    | 4.5 (HC 7)     |
   | active icon     | 3              |
-  | More dot        | 3              |
+
+  The fixtures also carry a `dot` layer, the bar's bare unread dot. That rule
+  is retired (task 01a1b673 stage 2: the Inbox count badge replaced it, and
+  its fill is the error slot pair on an opaque base-100 ring, measured in
+  error_token_contrast_guard_test.exs rather than on the glass). The guard no
+  longer claims a floor for it, skips its `# paint-input:` line, and asserts
+  app.css declares no `.bottom-nav-dot` rule at all.
 
   A declared alpha may sit ABOVE its measured floor for margin, and must never
   sit below it. Every non-High-contrast alpha is held to its floor exactly (one
@@ -105,9 +111,13 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {"inactive label", :inactive_label, @aa_text, @aaa_text},
     {"inactive icon", :inactive_icon, @non_text, @non_text},
     {"active label", :active_label, @aa_text, @aaa_text},
-    {"active icon", :active_icon, @non_text, @non_text},
-    {"More dot", :dot, @non_text, @non_text}
+    {"active icon", :active_icon, @non_text, @non_text}
   ]
+
+  # Paint inputs the fixtures recorded for rules that no longer ship. They
+  # stay in the fixture headers (the record of what was painted) and are not
+  # asserted against app.css; `retired_paint_inputs_are_gone` holds them absent.
+  @retired_paint_selectors [".bottom-nav-dot"]
 
   # Every `.bottom-nav*` rule app.css declares, by selector and the at-rule
   # it sits in. Stages 2 and 3 add geometry rules; add them here too.
@@ -141,7 +151,6 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {[], ".bottom-nav-tab:active"},
     {[], ".bottom-nav-tab:not(.bottom-nav-tab--active):active"},
     {[], ".bottom-nav-tab--active"},
-    {[], ".bottom-nav-dot"},
     # The native tab bar's ink probes (task 01a174e8 stage 1): token slots
     # with the bar's own inks as fallbacks, read by the NativeTabBar hook.
     {[], ~s(.bottom-nav [data-native-ink="unselected"])},
@@ -225,6 +234,11 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       [inputs | others] = Enum.map(G.builds(), &G.paint_inputs/1)
       assert Enum.all?(others, &(&1 == inputs)), "the two fixtures name different paint inputs"
       assert length(inputs) == 6, inspect(inputs)
+
+      {retired, inputs} =
+        Enum.split_with(inputs, fn {sel, _, _} -> sel in @retired_paint_selectors end)
+
+      assert Enum.map(retired, &elem(&1, 0)) == @retired_paint_selectors
 
       # Every declaration of the property, not the first: a second, later
       # `background` would win the cascade while the first still matched.
@@ -335,8 +349,8 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
         "\nGlass tab bar, painted (min over Chrome 151 + 147, over #000 and #fff, at the " <>
           "declared alpha):\n" <>
           "| Variant | alpha | blur | inactive label | inactive icon | active label | " <>
-          "active icon | More dot | text / non-text floor | verdict |\n" <>
-          "|---|---|---|---|---|---|---|---|---|---|\n" <> Enum.join(lines, "\n")
+          "active icon | text / non-text floor | verdict |\n" <>
+          "|---|---|---|---|---|---|---|---|---|\n" <> Enum.join(lines, "\n")
       )
     end
   end
@@ -355,6 +369,13 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
   # ── rules ────────────────────────────────────────────────────────────────
 
   describe "the .bottom-nav* rules" do
+    test "the retired bare unread dot is gone from app.css", %{rules: rules} do
+      for sel <- @retired_paint_selectors do
+        assert Enum.filter(rules, &String.contains?(&1.selector, sel)) == [],
+               "#{sel} is declared again: the Inbox badge replaced it (task 01a1b673 stage 2)"
+      end
+    end
+
     test "exactly the expected rules exist, each non-empty", %{rules: rules} do
       found = for r <- rules, bottom_nav?(r.selector), do: {r.context, r.selector}
 
