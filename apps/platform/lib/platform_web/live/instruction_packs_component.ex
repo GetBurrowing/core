@@ -173,7 +173,9 @@ defmodule PlatformWeb.InstructionPacksComponent do
             </section>
           </article>
         </section>
-        <section aria-label="Instruction and sharing audit history"><h3 class="font-semibold">Recent history</h3><p class="text-subtle">Latest 100 instruction and sharing changes, newest first.</p><p :if={@data.events == []}>No changes recorded.</p><ol class="space-y-2 mt-2"><li :for={event <- @data.events} class="border-b border-base-300 py-2 break-words"><time>{time(event.inserted_at)}</time><span class="block">{event.action} · {event.metadata["pack_id"] || event.metadata["key"] || "install"} {if event.metadata["version"], do: "· v#{event.metadata["version"]}"}</span></li></ol></section>
+        <section aria-label="Instruction and sharing audit history"><h3 class="font-semibold">Recent history</h3><p class="text-subtle">Latest 100 instruction and sharing changes, newest first.</p><p :if={@data.events == []}>No changes recorded.</p><ol class="space-y-2 mt-2"><li :for={event <- @data.events} class="border-b border-base-300 py-2 break-words"><time>{time(event.inserted_at)}</time><span class="block">{event.action} · {event.metadata["pack_id"] || event.metadata["key"] || "install"} {if event.metadata["version"], do: "· v#{event.metadata["version"]}"}
+                  {if Map.has_key?(event.metadata, "value"), do: "· #{event.metadata["value"]}"}
+                  {event.metadata["choice"]} {event.metadata["target"]}</span></li></ol></section>
       <% end %>
     </div>
     """

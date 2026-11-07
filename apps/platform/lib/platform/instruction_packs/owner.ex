@@ -2,7 +2,7 @@ defmodule Platform.InstructionPacks.Owner do
   @moduledoc "Owner-facing read model. Authorization is checked on every request, never cached from mount."
   import Ecto.Query
   alias Platform.{Access, Repo, Sharing}
-  alias Platform.InstructionPacks.{Entry, Installer, RetainedRelease, State}
+  alias Platform.InstructionPacks.{Entry, Installer, RetainedRelease, State, Targets}
 
   def snapshot(actor) do
     with :ok <- authorize(actor) do
@@ -20,7 +20,7 @@ defmodule Platform.InstructionPacks.Owner do
 
           {:ok, conflicts} = Installer.conflicts(state.pack_id, actor)
           entries = Repo.all(from(e in Entry, where: e.pack_id == ^state.pack_id))
-          versions = entries |> Enum.map(& &1.effective_version) |> Enum.uniq() |> Enum.sort()
+          versions = entries |> Enum.map(&effective_version/1) |> Enum.uniq() |> Enum.sort()
 
           previous =
             state.history
@@ -38,6 +38,7 @@ defmodule Platform.InstructionPacks.Owner do
             conflicts: conflicts,
             releases: releases,
             previous: previous && previous["version"],
+            available: List.first(releases),
             manifest: manifest
           }
         end)
@@ -75,6 +76,21 @@ defmodule Platform.InstructionPacks.Owner do
         else: Installer.rollback(pack, version, roots(), actor)
     else
       _ -> {:error, :not_installed}
+    end
+  end
+
+  # Local edits can occur outside the pack APIs. Never report stored provenance
+  # as current ownership without comparing the physical row and live bytes.
+  defp effective_version(entry) do
+    case Targets.resolve(entry.type, entry.target) do
+      {:ok, mapped} ->
+        if entry.applied_hash && entry.record_id == Targets.record_id(mapped) &&
+             Entry.hash(Targets.content(mapped)) == entry.applied_hash,
+           do: entry.effective_version,
+           else: nil
+
+      _ ->
+        nil
     end
   end
 

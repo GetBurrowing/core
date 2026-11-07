@@ -144,17 +144,53 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
     assert render(view) =~ "resolve_conflict"
   end
 
+  test "live local edits do not falsely retain fully-applied provenance", %{owner: owner} do
+    {skill, _} = fixture()
+    {:ok, view, _} = open(owner)
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    {:ok, _} = Skills.update_skill(Skills.get_skill(skill.id), %{content: "LOCAL after adoption"})
+    view |> element("button[phx-click=refresh]") |> render_click()
+    assert view |> element("[data-role=pack-effective]") |> render() =~ "Local version"
+    assert view |> element("[data-role=pack-status]") |> render() =~ "Local overrides"
+  end
+
   test "verification and network failures display distinct status without false application", %{
     owner: owner
   } do
-    fixture()
-    state = Repo.get!(State, "setup-guide")
-    Repo.update!(Ecto.Changeset.change(state, check_error: "verification"))
+    {_skill, one} = fixture()
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    {two, roots} = pack(2, Manifest.digest(one["manifest"]))
+    tampered = put_in(two, ["manifest", "changelog"], "tampered unsigned text")
+
+    assert {:error, :untrusted_pack} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(tampered)) end
+             )
+
     {:ok, view, html} = open(owner)
     assert html =~ "Verification failure"
     refute html =~ "Up to date with"
-    Repo.update!(Ecto.Changeset.change(Repo.get!(State, "setup-guide"), check_error: "network"))
+    assert Repo.get!(State, "setup-guide").version == 1
+
+    assert {:error, :download_failed} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 503, "unavailable") end
+             )
+
     view |> element("button[phx-click=refresh]") |> render_click()
     assert render(view) =~ "Network failure"
+    assert Repo.get!(State, "setup-guide").version == 1
   end
 end
