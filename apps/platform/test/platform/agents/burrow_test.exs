@@ -347,6 +347,42 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  describe "members section (task 01a1b6de stage 2)" do
+    defp members_section(template) do
+      [_, rest] = String.split(template, "## Helping each new member get set up", parts: 2)
+      rest |> String.split("\n## ", parts: 2) |> hd()
+    end
+
+    test "walks the person setup steps in the checklist's order" do
+      for template <- templates() do
+        section = members_section(template)
+
+        order = [
+          "notifications",
+          "phone and sign in",
+          "own ChatGPT or Claude subscription",
+          "Join a channel",
+          "Know who to ask"
+        ]
+
+        positions = Enum.map(order, &index_of(section, &1))
+        assert positions == Enum.sort(positions)
+        assert section =~ "`member_welcome`"
+        assert section =~ "one at a time"
+      end
+    end
+
+    test "never suggests an API key or a terminal to a member, and answers from the install's pages" do
+      for template <- templates() do
+        section = members_section(template)
+        assert section =~ "Never\n   suggest an API key to a member."
+        assert section =~ "Never ask them to open a\nterminal or run a command."
+        assert section =~ "`org/page/identity.md`"
+        assert section =~ ~s(When they ask "how do I...")
+      end
+    end
+  end
+
   describe "channels started from a first goal (task 01a19948 stage 3)" do
     # Pins that the instruction EXISTS and names the real signals and tool.
     # Burrow is an LLM, so nothing here asserts the wording it produces.

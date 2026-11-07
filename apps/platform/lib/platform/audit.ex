@@ -93,6 +93,36 @@ defmodule Platform.Audit do
     |> Repo.all()
   end
 
+  # -- Read (earliest) --
+
+  @doc """
+  The `inserted_at` of the earliest event matching `filters` (the
+  `stream/1` filters plus `:action`, exact match), or nil when none does.
+
+  An `:actor_id` that is not a UUID matches nothing and returns nil rather
+  than raising: `audit_events.actor_id` is a UUID column.
+  """
+  @spec earliest_at(keyword()) :: DateTime.t() | nil
+  def earliest_at(filters) when is_list(filters) do
+    case Keyword.fetch(filters, :actor_id) do
+      {:ok, id} when not is_binary(id) ->
+        nil
+
+      {:ok, id} ->
+        if Platform.UUID.valid?(id), do: do_earliest_at(filters), else: nil
+
+      :error ->
+        do_earliest_at(filters)
+    end
+  end
+
+  defp do_earliest_at(filters) do
+    filters
+    |> build_query()
+    |> exclude(:order_by)
+    |> Repo.aggregate(:min, :inserted_at)
+  end
+
   # -- Query builder --
 
   defp build_query(filters) do
@@ -108,6 +138,9 @@ defmodule Platform.Audit do
 
       {:resource_id, id}, q ->
         where(q, [e], e.resource_id == ^id)
+
+      {:action, action}, q ->
+        where(q, [e], e.action == ^action)
 
       {:session_id, sid}, q ->
         where(q, [e], e.session_id == ^sid)
