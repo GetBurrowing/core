@@ -936,7 +936,9 @@ defmodule Platform.ExtensionsTest do
     # `space` bundle, and `space_get_context`'s `returns` now names the
     # space map's `origin` field. Measured on the test rig at the stage's
     # branch rebased onto e978e422 (dd4084948).
-    @main_tool_digest_off "6206113144e7e8420d2911610b95cb6f15b4059a4f0c0fad17c6f537185008cc"
+    # Re-pinned by task 01a1b678 stage 3: sharing_list and sharing_set in
+    # `federation` and feedback_submit's `space_id`. Measured locally.
+    @main_tool_digest_off "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
