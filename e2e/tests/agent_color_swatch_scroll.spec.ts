@@ -92,6 +92,10 @@ async function runCase(
     await page.waitForURL((url) => !url.pathname.startsWith("/dev/login"), { timeout: 15_000 })
     await page.goto(`/control/${agent.slug}`)
     await page.waitForFunction(() => (window as any).liveSocket?.isConnected?.() === true)
+    // Settle: on the rig a click in the first moments after connect was seen
+    // reverted by a post-mount re-render of the form (a separate race, not
+    // this defect), which would read as "radio not :checked".
+    await page.waitForTimeout(1_000)
 
     const formSel = (await page.locator("#federated-identity-form").count())
       ? "#federated-identity-form"
