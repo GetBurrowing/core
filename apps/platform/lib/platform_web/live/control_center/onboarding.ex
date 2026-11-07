@@ -142,30 +142,9 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </span>
       </button>
 
-      <button
-        :if={@can_create_ownerless?}
-        id="choose-template"
-        type="button"
-        phx-click="choose_onboarding"
-        phx-value-flow="template"
-        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
-      >
-        <span class="hero-briefcase h-8 w-8 text-primary" />
-        <span class="text-sm font-semibold text-base-content">From a Template</span>
-        <span class="text-xs text-subtle">
-          Designer, Researcher, Architect, and more
-        </span>
-      </button>
-      <.locked_card
-        :if={!@can_create_ownerless?}
-        id="choose-template"
-        icon="hero-briefcase"
-        title="From a Template"
-        subtitle="Designer, Researcher, Architect, and more"
-        line_id="add-chooser-admin-line"
-        show_line
-      />
-
+      <%!-- "From a Template" is gone (task 01a1b6ad stage 2): the character
+           builder's classes replace it, and the builder is the Add entry.
+           These are the cards its Advanced link reveals. --%>
       <button
         id="choose-federate"
         type="button"
@@ -199,6 +178,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         title="Import"
         subtitle="From an OpenClaw or Claude Code workspace"
         line_id="add-chooser-admin-line"
+        show_line
       />
 
       <button

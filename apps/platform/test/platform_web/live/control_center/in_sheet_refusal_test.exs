@@ -26,7 +26,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
     setup %{conn: conn} do
       user = user!("member")
       {:ok, view, _} = live(as_user(conn, user), ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
       %{view: view}
     end
 
@@ -97,7 +97,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
       render_submit(view, "submit_external", %{"external_agent" => external_params("X")})
       assert has_element?(view, "#sheet-refusal")
       render_click(view, "close_onboarding", %{})
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
       assert has_element?(view, "#add-agent-chooser")
       refute has_element?(view, "#sheet-refusal")
     end
@@ -119,7 +119,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
        %{conn: conn} do
     admin = user!("admin")
     {:ok, view, _} = live(as_user(conn, admin), ~p"/control")
-    render_click(view, "open_onboarding_chooser", %{})
+    open_advanced(view)
     render_click(view, "choose_onboarding", %{"flow" => "external"})
 
     view
@@ -224,7 +224,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
 
   test "admin: submit_external creates the agent and shows no refusal", %{conn: conn} do
     {:ok, view, _} = live(as_user(conn, root_admin!()), ~p"/control")
-    render_click(view, "open_onboarding_chooser", %{})
+    open_advanced(view)
     render_click(view, "choose_onboarding", %{"flow" => "external"})
 
     view
@@ -249,6 +249,13 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
       secret: "",
       save_to_vault: "false"
     }
+  end
+
+  # Add opens the character builder (task 01a1b6ad stage 2); the chooser
+  # sheet is behind its Advanced link.
+  defp open_advanced(view) do
+    render_click(view, "open_onboarding_chooser", %{})
+    view |> element("#ba-advanced") |> render_click()
   end
 
   defp count(html, needle), do: html |> String.split(needle) |> length() |> Kernel.-(1)

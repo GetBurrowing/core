@@ -9,7 +9,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   import Phoenix.LiveView, only: [put_flash: 3, push_patch: 2]
   import PlatformWeb.ControlCenter.Helpers, only: [slugify: 1, changeset_error_summary: 1]
 
-  alias Platform.Agents.{Agent, WorkspaceBootstrap}
+  alias Platform.Agents.{Agent, RoleTemplates, WorkspaceBootstrap}
   alias Platform.ExternalAgents
   alias Platform.ExternalAgents.EphemeralCredentials
   alias Platform.Federation
@@ -22,104 +22,10 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   # events on :create_ownerless (task 01a1ae4b).
   @ownerless_flows ~w(external import template create)
 
-  @role_templates [
-    %{
-      id: "designer",
-      name: "Designer",
-      icon: "hero-paint-brush",
-      description: "Visual design, UI/UX, branding",
-      default_name: "Designer",
-      system_prompt: "You are a skilled visual designer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "image", "web_search"]
-    },
-    %{
-      id: "researcher",
-      name: "Researcher",
-      icon: "hero-magnifying-glass",
-      description: "Deep research, analysis, synthesis",
-      default_name: "Researcher",
-      system_prompt: "You are a thorough researcher...",
-      model_tier: "high",
-      suggested_model: "anthropic/claude-opus-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["web_search", "web_fetch", "pdf", "group:fs"]
-    },
-    %{
-      id: "architect",
-      name: "Architect",
-      icon: "hero-cube-transparent",
-      description: "System design, ADRs, code review",
-      default_name: "Architect",
-      system_prompt: "You are a senior software architect...",
-      model_tier: "high",
-      suggested_model: "anthropic/claude-opus-4-6",
-      tool_profile: "full",
-      tools_allow: ["group:fs", "exec", "web_search"]
-    },
-    %{
-      id: "writer",
-      name: "Writer",
-      icon: "hero-pencil-square",
-      description: "Content, docs, copywriting",
-      default_name: "Writer",
-      system_prompt: "You are a skilled writer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["group:fs", "web_search"]
-    },
-    %{
-      id: "analyst",
-      name: "Analyst",
-      icon: "hero-chart-bar",
-      description: "Data analysis, reporting, dashboards",
-      default_name: "Analyst",
-      system_prompt: "You are a data analyst...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "web_fetch", "exec"]
-    },
-    %{
-      id: "devops",
-      name: "DevOps",
-      icon: "hero-server-stack",
-      description: "Infrastructure, CI/CD, monitoring",
-      default_name: "DevOps",
-      system_prompt: "You are a DevOps engineer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "full",
-      tools_allow: ["exec", "group:fs", "web_search"]
-    },
-    %{
-      id: "pm",
-      name: "Project Manager",
-      icon: "hero-clipboard-document-list",
-      description: "Planning, tracking, coordination",
-      default_name: "PM",
-      system_prompt: "You are a project manager...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "web_search"]
-    },
-    %{
-      id: "sales",
-      name: "Sales",
-      icon: "hero-currency-dollar",
-      description: "Outreach, proposals, CRM",
-      default_name: "Sales",
-      system_prompt: "You are a sales professional...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["web_search", "web_fetch", "canvas"]
-    }
-  ]
+  # The role templates live in the Agents context (task 01a1b6ad stage 1) so
+  # `Platform.Agents.Character` can resolve a class's template without
+  # reaching into the web layer.
+  @role_templates RoleTemplates.all()
 
   def role_templates, do: @role_templates
 
