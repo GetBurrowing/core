@@ -192,11 +192,30 @@ defmodule Platform.Sharing do
 
   def admin?(_user), do: false
 
-  @doc "Whether the owner's switch for `key` is on. Reads the row."
+  @doc """
+  Whether the owner's switch for `key` is on. Reads the row.
+
+  Before `Platform.Repo` has started there is no row to read, and the answer
+  is `false`. Boot needs this: `Platform.Extensions.validate!/0` lists every
+  tool name in `Platform.Application.start/2`, ahead of the Repo, and the
+  feedback tool is listed through `Platform.Feedback.Policy.enabled?/0`,
+  which reads this switch. Without the guard, every install with
+  `FEEDBACK_POLICY` on refused to boot.
+  """
   @spec enabled?(key()) :: boolean()
-  def enabled?(key) do
+  def enabled?(key), do: read_switch(key, Platform.Repo)
+
+  @doc false
+  # `enabled?/1` against a named repo process, so the not-started case is
+  # testable without stopping the real Repo.
+  @spec read_switch(key(), atom()) :: boolean()
+  def read_switch(key, repo) do
     ensure_key!(key)
-    Map.fetch!(get(), key) == true
+
+    case Process.whereis(repo) do
+      nil -> false
+      _pid -> Map.fetch!(get(), key) == true
+    end
   end
 
   @doc """

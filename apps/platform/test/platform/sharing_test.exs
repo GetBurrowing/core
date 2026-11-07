@@ -244,6 +244,18 @@ defmodule Platform.SharingTest do
       refute Policy.enabled?()
     end
 
+    # Stage 5: Extensions.validate!/0 lists the feedback tool in
+    # Application.start/2, before the Repo starts. An enabled policy must not
+    # raise there; the switch reads off until the row can be read.
+    test "before the Repo has started the switch reads off and nothing raises" do
+      seed_env([], "quarantined")
+      {:ok, _} = Sharing.set(:feedback, true, :system)
+      assert Sharing.read_switch(:feedback, Platform.Repo)
+
+      refute Sharing.read_switch(:feedback, :"Elixir.Platform.SharingTest.NotStartedRepo")
+      assert_raise ArgumentError, fn -> Sharing.read_switch(:nope, Platform.Repo) end
+    end
+
     test "a disabled policy never reads or seeds the row" do
       seed_env([], "disabled")
       refute Policy.enabled?()
