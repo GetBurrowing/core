@@ -464,8 +464,14 @@ defmodule Platform.Feedback.Submission do
         installation: Map.get(actor, :installation, GithubPublisher.config(:installation_label))
       })
 
+    # The calling agent's slug rides the wire as a display hint only. A
+    # person's submission is attributed to the installation alone, so no
+    # label is offered even when the caller had one; the Broker adapter
+    # sanitizes and re-drops for person sources (defense in depth), which
+    # stays the last point before the wire (task 01a1b2cc stage 2).
     case GithubPublisher.publish(issue,
            fingerprint: fingerprint,
+           agent: if(sanitized.source == "person", do: nil, else: actor.slug),
            submission: wire_fields(sanitized)
          ) do
       {:ok, identity} ->

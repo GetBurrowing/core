@@ -253,7 +253,7 @@ defmodule Platform.Feedback.SubmissionTest do
       assert Map.keys(body) |> Enum.sort() ==
                ~w(agent fingerprint installation repository submission)
 
-      assert body["agent"] == nil
+      assert body["agent"] == agent.slug
 
       assert Map.keys(body["submission"]) |> Enum.sort() ==
                ~w(category expected_behavior observed_behavior reproduction_steps source title version_environment)
@@ -377,8 +377,9 @@ defmodule Platform.Feedback.SubmissionTest do
       assert body["repository"] == "GetBurrowing/core"
       assert body["fingerprint"] == fingerprint
       assert body["installation"] == nil
-      # Stage 2 plumbs the agent label into the opts; until then it is null.
-      assert body["agent"] == nil
+      # The calling agent's slug crosses as a display hint (stage 2); a
+      # person's wire carries null instead (tested in the person describe).
+      assert body["agent"] == agent.slug
       assert {"idempotency-key", fingerprint} in headers
       refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
 
@@ -516,6 +517,24 @@ defmodule Platform.Feedback.SubmissionTest do
                Submission.submit(valid(%{"title" => "agent row"}), actor(ctx.agent))
 
       assert Enum.any?(rows(), &(&1.actor_agent_id == ctx.agent.id and is_nil(&1.actor_user_id)))
+    end
+
+    test "a person's wire carries no agent label and no person data", ctx do
+      user = person!("wire-clean")
+
+      assert {:ok, %{status: "created"}} =
+               Submission.submit(Map.delete(valid(), "expected_behavior"), person(user))
+
+      assert [body] = broker_bodies()
+      # The person-form actor carries no slug, and the wire's agent key is
+      # null regardless: a person is never named on the public issue.
+      assert body["agent"] == nil
+
+      raw = Jason.encode!(body)
+      refute raw =~ user.id
+      refute raw =~ user.email
+      refute raw =~ user.name
+      refute raw =~ ctx.agent.slug
     end
 
     test "a person needs a title and at least one of expected or observed" do
