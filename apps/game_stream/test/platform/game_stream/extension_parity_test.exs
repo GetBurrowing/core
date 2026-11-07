@@ -432,7 +432,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
     # the `federation` bundle, and feedback_submit declares `space_id`. All four
     # values measured locally on the stage's branch.
-    # Task 01a1b6e1: sharing_set gains instruction_updates. Measured on Moon
+    # Task 01a1b6e1: sharing_set gains instruction_updates. Measured on the test rig
     # at 5b1d04b64 / measurement probe 3f0cc6c9b; all names remain strict.
     @previous_tool_digest_off "e0d06a1a374ddc981ac3a68ff397a3a3543310e996f20fd223e0cc58c1f06137"
     @previous_tool_digest_on "21aaf1d9d1992e20dad655aad95f20158e232e9c6afe5b5877e6ba308b49c555"

@@ -128,7 +128,7 @@ defmodule Platform.Sharing do
       key: :instruction_updates,
       title: "Agent instruction updates",
       description:
-        "Receive signed instructions and best practices from Kobo. Your local edits stay yours.",
+        "Receive signed instructions and best practices from the publisher. Your local edits stay yours.",
       exactly_sent: [
         "Instruction pack ids and versions are requested from the existing broker; instruction text is received, not sent"
       ],
