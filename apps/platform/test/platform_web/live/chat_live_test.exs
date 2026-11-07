@@ -356,8 +356,8 @@ defmodule PlatformWeb.ChatLiveTest do
     # the next render's hidden input must be empty. (The message itself
     # appears in the message stream, which may contain the sentinel.)
     html = render(view)
-    assert has_element?(view, ~s(input#compose_text_value[hidden][name="compose[text]"]))
-    refute has_element?(view, ~s(input#compose_text_value[value*="#{sentinel}"]))
+    assert has_element?(view, ~s(textarea#compose_text_value[hidden][name="compose[text]"]))
+    refute view |> element("textarea#compose_text_value") |> render() =~ sentinel
     refute html =~ ~s(value="#{sentinel}")
   end
 

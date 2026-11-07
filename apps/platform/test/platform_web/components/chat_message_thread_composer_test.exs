@@ -164,7 +164,7 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
              "No one matches “zzqx”"
   end
 
-  test "the field is the chip combobox, Enter sends, with its own draft key" do
+  test "the field is the chip combobox, Return key hint, with its own draft key" do
     html = thread_html([])
     field = "#inline-thread-compose-msg-1"
 
@@ -173,17 +173,17 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     assert attr_of(html, field, "phx-update") == "ignore"
     assert attr_of(html, field, "role") == "combobox"
     assert attr_of(html, field, "aria-controls") == "inline-thread-mention-list-msg-1"
-    assert attr_of(html, field, "enterkeyhint") == "send"
+    assert attr_of(html, field, "enterkeyhint") == "enter"
     assert attr_of(html, field, "data-placeholder") == "Reply in thread"
     assert attr_of(html, field, "data-draft-key") == "thread-draft:msg-1"
     refute attr_of(html, field, "data-draft-key") =~ "chat-draft:"
     assert attr_of(html, field, "data-value-input") == "inline-thread-compose-value-msg-1"
     assert count(html, "#{field}[data-clear-on-submit]") == 1
 
-    # The form value: a hidden text input named as the reply handler reads it.
-    value = "#{@form} input#inline-thread-compose-value-msg-1"
+    # The form value: a hidden textarea (keeps line breaks) named as the reply handler reads it.
+    value = "#{@form} textarea#inline-thread-compose-value-msg-1"
     assert attr_of(html, value, "name") == "inline_thread_compose[text]"
-    assert attr_of(html, value, "type") == "text"
+    assert count(html, "#{@form} input#inline-thread-compose-value-msg-1") == 0
     assert count(html, "#{value}[hidden]") == 1
 
     # The old plain text input is gone.

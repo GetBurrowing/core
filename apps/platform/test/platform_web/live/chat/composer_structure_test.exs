@@ -77,6 +77,13 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
 
   defp mention_query(view), do: :sys.get_state(view.pid).socket.assigns.mention_query
 
+  defp value_text(html) do
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query("textarea#compose_text_value")
+    |> LazyHTML.text()
+  end
+
   defp count(html, selector) do
     html |> LazyHTML.from_document() |> LazyHTML.query(selector) |> Enum.count()
   end
@@ -165,7 +172,7 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       # A form test that supplies the param key cannot see the template drop
       # it — so assert the RENDERED form carries the input name, rather than
       # trusting a hand-built param map to round-trip.
-      assert count(html, "form#compose-form input[hidden][name='compose[text]']") == 1
+      assert count(html, "form#compose-form textarea[hidden][name='compose[text]']") == 1
       assert count(html, "form#compose-form input[type=file][name=attachments]") == 1
     end
   end
@@ -188,20 +195,23 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       assert count(html, field <> "[aria-expanded=false][aria-controls=compose-mention-list]") ==
                1
 
-      assert count(html, field <> "[enterkeyhint=send][aria-multiline=true]") == 1
+      assert count(html, field <> "[enterkeyhint=enter][aria-multiline=true]") == 1
       assert count(html, field <> "[data-value-input=compose_text_value]") == 1
       assert count(html, field <> ~s([data-draft-key="chat-draft:#{space.id}"])) == 1
 
-      # The form value is the hidden input the hook serializes into, and it
-      # is the ONLY compose[text] in the form: no textarea is left behind.
+      # The form value is the hidden textarea the hook serializes into, and
+      # it is the ONLY compose[text] in the form. A textarea, not an
+      # `<input type="text">`: a text input strips line breaks from its
+      # value, which lost every Return at send (task 01a1b671).
       assert count(
                html,
-               "form#compose-form input#compose_text_value[hidden][name='compose[text]']"
+               "form#compose-form textarea#compose_text_value[hidden][name='compose[text]']"
              ) ==
                1
 
       assert count(html, "form#compose-form [name='compose[text]']") == 1
-      assert count(html, "form#compose-form textarea") == 0
+      assert count(html, "form#compose-form input#compose_text_value") == 0
+      assert count(html, "form#compose-form textarea:not(#compose_text_value)") == 0
 
       # The @ button sits between the field and Send, and is not a submit.
       assert count(
@@ -249,7 +259,15 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
         |> render_change()
 
       assert count(html, "button[type=submit].compose-pill-send[disabled]") == 0
-      assert count(html, ~s(input#compose_text_value[value="hi @[Someone]"])) == 1
+      assert value_text(html) == "hi @[Someone]"
+
+      # Line breaks survive the round trip (task 01a1b671).
+      html =
+        view
+        |> form("#compose-form", compose: %{text: "line one\nline two\nline three"})
+        |> render_change()
+
+      assert value_text(html) == "line one\nline two\nline three"
 
       html = view |> form("#compose-form", compose: %{text: "   "}) |> render_change()
       assert count(html, "button[type=submit].compose-pill-send[disabled]") == 1

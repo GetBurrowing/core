@@ -231,16 +231,93 @@ describe("ComposeInput chip field: Enter", () => {
   beforeEach(() => store.clear())
   afterEach(() => vi.unstubAllGlobals())
 
+  // Task 01a1b671 supersedes coverage row 115 for touch: Enter sends on a
+  // fine pointer only; on a coarse pointer Return is a new line.
+  it("Enter sends with the list closed on a fine (desktop) pointer", () => {
+    const c = richComposer()
+    type(c, "hello @[Builder]")
+    const e = key(c, "Enter")
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(c.form.requestSubmit).toHaveBeenCalledTimes(1)
+    expect(c.hidden.value).toBe("hello @[Builder]")
+  })
+
+  it("Enter on a coarse (phone) pointer inserts a line break and does not send", () => {
+    const c = richComposer({ coarse: true })
+    type(c, "hello @[Builder]")
+    c.ctx.selection = caret(c.el, c.el.childNodes.length)
+    const e = key(c, "Enter")
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(c.form.requestSubmit).not.toHaveBeenCalled()
+    expect(c.hook.pushEvent).not.toHaveBeenCalledWith("mention_query", expect.anything())
+
+    // The break plus the placeholder that gives the new empty line height.
+    expect(c.el.innerHTML.endsWith("<br><br>")).toBe(true)
+    expect(serialize(c.el)).toBe("hello @[Builder]\n")
+    expect(c.hidden.value).toBe("hello @[Builder]\n")
+    expect(c.form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it("coarse Enter mid-text splits the line at the caret and syncs value, draft and Send", () => {
+    const c = richComposer({ coarse: true })
+    type(c, "helloworld")
+    c.ctx.selection = caret(c.el.firstChild, 5)
+    key(c, "Enter")
+    expect(c.el.innerHTML).toBe("hello<br>world")
+    expect(serialize(c.el)).toBe("hello\nworld")
+    expect(c.hidden.value).toBe("hello\nworld")
+    expect(store.get("compose:chat-draft:space-1")).toBe("hello\nworld")
+    expect(c.send.disabled).toBe(false)
+    expect(c.form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it("coarse Enter uses the browser's insertLineBreak when it has one, and never sends", () => {
+    const c = richComposer({ coarse: true })
+    type(c, "hello")
+    c.doc.execCommand = vi.fn((cmd) => {
+      if (cmd !== "insertLineBreak") return false
+      c.el.appendChild(c.doc.createElement("br"))
+      c.el.appendChild(c.doc.createElement("br"))
+      return true
+    })
+    const e = key(c, "Enter")
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(c.doc.execCommand).toHaveBeenCalledWith("insertLineBreak")
+    // No second, hand-made break on top of the browser's.
+    expect(c.el.innerHTML).toBe("hello<br><br>")
+    expect(c.form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it("Cmd+Enter and Ctrl+Enter still send on a coarse pointer (a tablet's hardware keyboard)", () => {
+    const c = richComposer({ coarse: true })
+    type(c, "hello")
+    key(c, "Enter", { metaKey: true })
+    key(c, "Enter", { ctrlKey: true })
+    expect(c.form.requestSubmit).toHaveBeenCalledTimes(2)
+    expect(serialize(c.el)).toBe("hello")
+  })
+
   for (const coarse of [false, true]) {
     const pointer = coarse ? "coarse (phone)" : "fine (desktop)"
 
-    it(`Enter sends with the list closed on a ${pointer} pointer`, () => {
+    it(`Enter while composing (IME) does nothing on a ${pointer} pointer`, () => {
       const c = richComposer({ coarse })
-      type(c, "hello @[Builder]")
+      type(c, "hello")
+      const e = key(c, "Enter", { isComposing: true })
+      expect(e.preventDefault).not.toHaveBeenCalled()
+      expect(c.form.requestSubmit).not.toHaveBeenCalled()
+      expect(c.el.innerHTML).toBe("hello")
+    })
+
+    it(`Enter picks the open list's row on a ${pointer} pointer, with no send and no break`, () => {
+      const c = richComposer({ coarse })
+      queryAt(c, "ask @Da")
+      const rows = openList(c, ["Planner"])
       const e = key(c, "Enter")
       expect(e.preventDefault).toHaveBeenCalled()
-      expect(c.form.requestSubmit).toHaveBeenCalledTimes(1)
-      expect(c.hidden.value).toBe("hello @[Builder]")
+      expect(rows[0].click).toHaveBeenCalledTimes(1)
+      expect(c.form.requestSubmit).not.toHaveBeenCalled()
+      expect(c.el.innerHTML).toBe("ask @Da")
     })
 
     it(`Shift+Enter does not send on a ${pointer} pointer (the browser breaks the line)`, () => {
