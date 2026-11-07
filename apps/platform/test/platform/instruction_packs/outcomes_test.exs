@@ -46,6 +46,54 @@ defmodule Platform.InstructionPacks.OutcomesTest do
            ] = Outcomes.snapshot()
   end
 
+  test "vendor provenance requires unchanged bytes and the original stored identity" do
+    {:ok, skill} = Platform.Skills.create_skill(%{name: "Outcome vendor", content: "vendor"})
+
+    Repo.insert!(%State{
+      pack_id: "setup-guide",
+      version: 2,
+      highest_version: 9,
+      pinned_version: 2
+    })
+
+    {cached, _roots} =
+      Platform.InstructionPackFixtures.envelope(
+        Platform.InstructionPackFixtures.manifest(%{
+          "version" => 9,
+          "previous_digest" => String.duplicate("a", 64)
+        })
+      )
+
+    Repo.insert!(%Platform.InstructionPacks.RetainedRelease{
+      pack_id: "setup-guide",
+      version: 9,
+      digest: Platform.InstructionPacks.Manifest.digest(cached["manifest"]),
+      envelope: Jason.encode!(cached)
+    })
+
+    Repo.insert!(%Entry{
+      pack_id: "setup-guide",
+      type: "skill_markdown",
+      target: skill.slug,
+      record_id: skill.id,
+      effective_version: 2,
+      applied_hash: Entry.hash("vendor")
+    })
+
+    assert [%{"selected_version" => 2, "effective_versions" => [2], "status" => "vendor"}] =
+             Outcomes.snapshot()
+
+    {:ok, changed} = Platform.Skills.update_skill(skill, %{content: "SENTINEL_PRIVATE_BODY"})
+    assert [%{"effective_versions" => [], "status" => "mixed_or_local"}] = Outcomes.snapshot()
+    {:ok, _} = Platform.Skills.delete_skill(changed)
+
+    {:ok, replacement} =
+      Platform.Skills.create_skill(%{name: "Outcome vendor", content: "vendor"})
+
+    refute replacement.id == skill.id
+    assert [%{"effective_versions" => [], "status" => "mixed_or_local"}] = Outcomes.snapshot()
+  end
+
   test "common broker batch roundtrips and retries dedupe without private sentinels" do
     body =
       UsageEvents.build_body(Ecto.UUID.generate(), DateTime.utc_now(), 60, %{

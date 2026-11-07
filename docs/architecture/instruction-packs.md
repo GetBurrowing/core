@@ -160,3 +160,39 @@ Settings → Sharing with Burrow uses the existing Sharing singleton for every c
 The same gated broker exposes `/instruction-packs/:pack_id/latest`, returning pre-signed release bytes with `Cache-Control: no-store`. Clients verify this head with the configured trust roots and compatibility checks. Availability is fetched while pinned, but it never applies content or appends applied history. Consent is checked again under the install lock before caching. Replayed older heads cannot lower the highest retained verified version.
 
 `instruction_pack_downloads` therefore includes verified **unapplied** availability releases. Running-version feedback must use `State.version` and entry effective provenance, never the largest downloaded version. Rollback and the owner version selector admit only versions in applied history; a cached future release is not rollback eligible. Owners can resume updates to advance through the signed chain, and local edits remain protected.
+
+## Anonymous current inventory and learned outcomes
+
+The existing hourly `Sharing.UsageBatcher` request to the existing broker `/usage`
+route optionally carries `instruction_outcomes`; there is no pack-specific
+background uploader or endpoint. The receiver validates the same literal contract
+and stores one replacement row per random sharing install id and window start.
+Retries replace that window, not increment it. Only pack id, selected applied
+version, effective vendor versions, bounded vendor/mixed status and explicit
+Habits provenance availability are accepted. Target ids, local text and diffs,
+changelogs, names, raw outcomes and arbitrary error messages are not fields.
+Receiver payload validation is independent of the sender. These records describe
+current state, not a historic attribution or a causal experiment result.
+
+Both the usage-counts consent and the install-wide instruction stop are checked
+at the last broker send boundary. Download consent never enables uploads. Turning
+off does not send a farewell request. A current effective version requires the
+same saved target identity and applied hash; replacing a row with identical bytes
+or editing content makes it local. An unapplied cached release is never running.
+
+`Platform.Habits.Shapes.aggregate/0` is the sole allowable source for anonymous
+learned-default rates, with its five-user suppression and bucketed rates. Its
+current contract aggregates historic signals without observation-time instruction
+pack provenance. Pack-attributed rates therefore remain **unavailable**, never
+zero and never labelled with today's pack version. A future provenance-aware
+contract must capture it when observations happen and preserve unknown historical
+observations. Shape transport remains the common-batch task 01a1b6a5; instruction
+updates do not create another raw-signal query or a duplicate shape sender.
+
+A signed adversarial instruction can ask for export or a grant; it remains text.
+The protected sharing, feedback and role-grant APIs enforce their existing owner,
+consent, redaction and scope checks independently of pack contents. Signatures
+prove publisher identity, not that the prose is safe. External runtimes with
+unrestricted shell or network retain those existing capabilities and their tool
+sandbox; this channel grants none and does not claim to prevent arbitrary shell
+exfiltration by a runtime already authorized to perform it.
