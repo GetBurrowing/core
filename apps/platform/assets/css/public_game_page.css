@@ -1,8 +1,8 @@
 
-/* Burrow dark tokens — verbatim from designs/burrow/theme.gp-js BURROW_DARK */
+/* Burrow dark palette, with accessible player-page text and action colors. */
 .public-game{
   --ground:#111214;--surface:#191b20;--raised:#25272b;--edge:#383b42;
-  --ink:#eeeff1;--muted:#a9abb2;--faint:#9397a2;
+  --ink:#eeeff1;--muted:#a9abb2;--player-text-subtle:#9397a2;
   --accent:#f47721;--interactive:#ff9b55;--on-accent:#111214;
   --active:#6bae75;--active-dim:#314936;--info:#22d3ee;--warning:#e5a33d;--warning-dim:#5b4522;
   /* the four pilot seats = the robot's four limb colours, mapped to Burrow palette slots */
@@ -75,7 +75,7 @@
 .gp-then{margin:18px 0 0;padding:14px 0 0;border-top:1px solid var(--edge);font-size:13px;color:var(--muted);display:flex;gap:10px;align-items:center}
 .gp-then ol{margin:0;padding:0;list-style:none;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .gp-then li{display:flex;align-items:center;gap:6px}
-.gp-then li+li::before{content:"→";color:var(--faint)}
+.gp-then li+li::before{content:"→";color:var(--player-text-subtle)}
 .gp-then b{color:var(--ink);font-weight:600}
 .gp-notice{display:flex;gap:12px;align-items:flex-start;background:var(--raised);border:1px solid var(--edge);border-radius:var(--radius);padding:12px 14px;margin:0 0 14px;font-size:14px}
 .gp-notice svg{width:22px;height:22px;flex:none;color:var(--muted);margin-top:1px}
@@ -115,7 +115,7 @@
 .gp-known b{display:block;margin-bottom:3px}
 .gp-known span{color:var(--muted);font-size:13px}
 .gp-known code{font:12px ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all}
-.gp-foot{margin-top:40px;color:var(--faint);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.gp-foot{margin-top:40px;color:var(--player-text-subtle);font-size:12.5px;display:flex;gap:8px;align-items:center}
 .gp-foot img{height:14px;opacity:.7}
 
 /* ── Community tab ── */
@@ -132,11 +132,11 @@
 .gp-msg{display:flex;gap:11px;padding:7px 0}
 .gp-msg .gp-av{width:32px;height:32px;font-size:13px}
 .gp-msg .gp-who{font-size:14px;font-weight:700}
-.gp-msg .gp-who time{font-weight:500;font-size:12px;color:var(--faint);margin-left:6px}
+.gp-msg .gp-who time{font-weight:500;font-size:12px;color:var(--player-text-subtle);margin-left:6px}
 .gp-msg .gp-who .gp-team{font-size:10.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;background:rgba(244,119,33,.16);color:var(--interactive);padding:1px 6px;border-radius:5px;margin-left:6px;vertical-align:1px}
 .gp-msg p{margin:1px 0 0;font-size:14.5px;line-height:1.45}
 .gp-msg .gp-seat{display:inline-block;font-size:11.5px;font-weight:700;padding:0 7px;border-radius:5px;color:#15161a;margin-left:2px}
-.gp-composer{margin:0 14px 14px;display:flex;align-items:center;gap:10px;background:var(--raised);border:1px solid var(--edge);border-radius:var(--radius);padding:8px 8px 8px 16px;color:var(--faint);font-size:14.5px}
+.gp-composer{margin:0 14px 14px;display:flex;align-items:center;gap:10px;background:var(--raised);border:1px solid var(--edge);border-radius:var(--radius);padding:8px 8px 8px 16px;color:var(--player-text-subtle);font-size:14.5px}
 .gp-composer .gp-send{margin-left:auto;width:36px;height:36px;border-radius:var(--r-sm);background:var(--accent);display:grid;place-items:center;color:#fff}
 .gp-composer .gp-send svg{width:17px;height:17px}
 /* not-yet-member: the room is visible, faded; the join bar sits exactly where the composer will be */
