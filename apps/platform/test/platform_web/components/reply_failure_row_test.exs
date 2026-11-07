@@ -9,7 +9,9 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
 
     * render the action for every viewer → the non-manager case fails;
     * route the notice through the ordinary bubble → the dispatch case fails
-      (no `data-role="reply-failure"`, a hover toolbar present).
+      (no `data-role="reply-failure"`, a hover toolbar present);
+    * style the declined cause like a failure → the choice-styling case fails
+      (error tint present, no info icon).
   """
   use Platform.DataCase, async: false
 
@@ -148,6 +150,34 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
       assert doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.empty?()
       assert doc |> LazyHTML.query(~s([data-role="reply-failure-handoff"])) |> Enum.empty?()
     end
+  end
+
+  # Design canvas 01a1b6d9 (task 01a1b25f stage 1): the opt-out is a choice,
+  # not a failure, so the declined row keeps none of the failure styling — no
+  # error tint, no error icon — and states the choice beside the info icon.
+  test "a declined-chat notice is the choice line: info icon, no error tint, no error icon", %{
+    owner: owner,
+    agent: agent
+  } do
+    msg =
+      agent
+      |> notice("unknown")
+      |> Map.put(:content, ReplyFailure.chat_declined_line(agent.name))
+      |> put_in([:metadata, "cause"], "chat_declined")
+
+    doc = msg |> row_html(owner) |> LazyHTML.from_fragment()
+
+    [row] = doc |> LazyHTML.query(~s([data-role="reply-failure"])) |> Enum.to_list()
+    class = row |> LazyHTML.attribute("class") |> hd()
+    refute class =~ "bg-error"
+
+    refute doc
+           |> LazyHTML.query(~s([data-role="reply-failure"] .hero-information-circle.text-info))
+           |> Enum.empty?()
+
+    assert doc
+           |> LazyHTML.query(~s([data-role="reply-failure"] .hero-exclamation-circle))
+           |> Enum.empty?()
   end
 
   test "the row is the canvas's system row: dimmed avatar, error icon, error tint", %{

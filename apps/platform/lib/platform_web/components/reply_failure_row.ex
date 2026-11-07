@@ -22,7 +22,11 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
 
   A declined-chat notice (`cause: "chat_declined"`, task 01a1b20f) is one
   line, "<Name> doesn't take chat messages.", with no action and no
-  hand-off: nothing is broken, so there is nothing to fix.
+  hand-off: nothing is broken, so there is nothing to fix. It keeps none of
+  the failure styling (design canvas 01a1b6d9, task 01a1b25f stage 1) — a
+  bare system line at a normal line's height: the `info` icon in `text-info`
+  and the copy in `text-neutral`, no tint box, no error icon, no dimmed
+  avatar. Declining chat is a choice, not a failure.
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
@@ -62,46 +66,71 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       |> assign(:can_manage?, NativeAgents.can_manage?(assigns.viewer_user_id, agent))
       |> assign(:native?, NativeAgents.managed?(agent))
 
-    ~H"""
-    <div
-      data-role="reply-failure"
-      data-cause={@cause}
-      role="status"
-      class="my-1 flex items-start gap-3 rounded-box bg-error/10 px-3 py-3"
-    >
-      <div class="shrink-0 opacity-50">
-        <.agent_avatar
-          name={@name}
-          avatar_url={@agent && @agent.avatar_url}
-          size="md"
+    if declined? do
+      # Design canvas 01a1b6d9 (task 01a1b25f stage 1): one line — info icon
+      # in text-info, copy in text-neutral — no tint box, no error icon, no
+      # dimmed avatar, no action and no hand-off.
+      ~H"""
+      <div
+        data-role="reply-failure"
+        data-cause={@cause}
+        role="status"
+        class="my-1 flex items-start gap-3"
+      >
+        <span
+          class="hero-information-circle mt-0.5 size-5 shrink-0 text-info"
+          aria-hidden="true"
         />
+        <div class="min-w-0 flex-1 text-sm leading-5 text-neutral">
+          <p>{@line1}</p>
+        </div>
       </div>
-      <span class="hero-exclamation-circle mt-0.5 size-5 shrink-0 text-error" aria-hidden="true" />
-      <div class="min-w-0 flex-1 text-sm leading-5 text-base-content">
-        <p class="font-semibold">{@line1}</p>
-        <p :if={@line2}>{@line2}</p>
-        <.link
-          :if={!@declined? && @can_manage? && @agent}
-          navigate={~p"/control/#{@agent.slug}"}
-          data-role="reply-failure-action"
-          class={[
-            "btn btn-sm mt-2",
-            @cause in ["needs_login", "stopped"] && "btn-primary",
-            @cause not in ["needs_login", "stopped"] && "btn-outline"
-          ]}
-        >
-          {action_label(@cause, @name, @native?)}
-        </.link>
-        <p
-          :if={!@declined? && !@can_manage?}
-          data-role="reply-failure-handoff"
-          class="mt-1 text-xs leading-4 text-subtle"
-        >
-          Someone who manages {@name} can fix this in Agents.
-        </p>
+      """
+    else
+      ~H"""
+      <div
+        data-role="reply-failure"
+        data-cause={@cause}
+        role="status"
+        class="my-1 flex items-start gap-3 rounded-box bg-error/10 px-3 py-3"
+      >
+        <div class="shrink-0 opacity-50">
+          <.agent_avatar
+            name={@name}
+            avatar_url={@agent && @agent.avatar_url}
+            size="md"
+          />
+        </div>
+        <span
+          class="hero-exclamation-circle mt-0.5 size-5 shrink-0 text-error"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1 text-sm leading-5 text-base-content">
+          <p class="font-semibold">{@line1}</p>
+          <p :if={@line2}>{@line2}</p>
+          <.link
+            :if={!@declined? && @can_manage? && @agent}
+            navigate={~p"/control/#{@agent.slug}"}
+            data-role="reply-failure-action"
+            class={[
+              "btn btn-sm mt-2",
+              @cause in ["needs_login", "stopped"] && "btn-primary",
+              @cause not in ["needs_login", "stopped"] && "btn-outline"
+            ]}
+          >
+            {action_label(@cause, @name, @native?)}
+          </.link>
+          <p
+            :if={!@declined? && !@can_manage?}
+            data-role="reply-failure-handoff"
+            class="mt-1 text-xs leading-4 text-subtle"
+          >
+            Someone who manages {@name} can fix this in Agents.
+          </p>
+        </div>
       </div>
-    </div>
-    """
+      """
+    end
   end
 
   @doc "The action a manager sees, by cause. Copy verbatim from the canvas."
