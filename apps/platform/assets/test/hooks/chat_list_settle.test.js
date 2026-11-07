@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import ChatListSettle, { SETTLE_MS, FLIP_MS, REHOLD_MS, ROW_SELECTOR } from "../../js/hooks/chat_list_settle.js"
+import ChatListSettle, {
+  SETTLE_MS,
+  FLIP_MS,
+  HIGHLIGHT_MS,
+  FADE_MS,
+  REHOLD_MS,
+  ROW_SELECTOR,
+} from "../../js/hooks/chat_list_settle.js"
 
 /**
  * `ChatListSettle` (task 01a166bf stage 4): the hold-the-order gesture on the
@@ -24,11 +31,22 @@ function target() {
   }
 }
 
-function fakeRow(spaceId, top) {
+function fakeClassList() {
+  const set = new Set()
   return {
-    dataset: { spaceId },
+    set,
+    add: (...cs) => cs.forEach((c) => set.add(c)),
+    remove: (...cs) => cs.forEach((c) => set.delete(c)),
+    contains: (c) => set.has(c),
+  }
+}
+
+function fakeRow(spaceId, top, floated = false) {
+  return {
+    dataset: floated ? { spaceId, floated: "true" } : { spaceId },
     top,
     style: {},
+    classList: fakeClassList(),
     getBoundingClientRect() {
       return { top: this.top }
     },
@@ -53,10 +71,31 @@ function mount(rows = []) {
 
 const names = (pushes) => pushes.map(([name]) => name)
 
-function stubMotion(reduce) {
+function stubMotion(reduce, desktop = false) {
   vi.stubGlobal("window", {
-    matchMedia: vi.fn((q) => ({ matches: reduce && q === "(prefers-reduced-motion: reduce)" })),
+    matchMedia: vi.fn((q) => ({
+      matches:
+        (reduce && q === "(prefers-reduced-motion: reduce)") ||
+        (desktop && q === "(min-width: 1024px)"),
+    })),
   })
+}
+
+// C (quiet) floats above A and B: the arrival that puts it in the active run.
+function floatC({ reduce = false, desktop = true } = {}) {
+  stubMotion(reduce, desktop)
+  const a = fakeRow("a", 0)
+  const b = fakeRow("b", 60)
+  const c = fakeRow("c", 120)
+  const { hook, el } = mount([a, b, c])
+  hook.beforeUpdate()
+  c.dataset.floated = "true"
+  c.top = 0
+  a.top = 60
+  b.top = 120
+  el.rows = [c, a, b]
+  hook.updated()
+  return { hook, a, b, c }
 }
 
 beforeEach(() => {
@@ -75,7 +114,8 @@ afterEach(() => {
 describe("ChatListSettle", () => {
   it("uses the rule's constants", () => {
     expect(SETTLE_MS).toBe(600)
-    expect(FLIP_MS).toBe(200)
+    expect(FLIP_MS).toBe(150)
+    expect(HIGHLIGHT_MS).toBe(600)
   })
 
   it("pushes hold on pointerdown and release 600ms after pointerup", () => {
@@ -221,7 +261,7 @@ describe("ChatListSettle", () => {
     expect(names(pushes)).toEqual(["chat_list_hold", "chat_list_hold"])
   })
 
-  it("slides a moved row from its old place over 200ms on a re-sort", () => {
+  it("slides a moved row from its old place over 150ms on a re-sort", () => {
     const a = fakeRow("a", 0)
     const b = fakeRow("b", 60)
     const { hook, el } = mount([a, b])
@@ -237,8 +277,91 @@ describe("ChatListSettle", () => {
     expect(a.style.transform).toBe("translateY(-60px)")
 
     vi.advanceTimersByTime(0)
-    expect(b.style.transition).toBe(`transform ${FLIP_MS}ms ease-out`)
+    expect(b.style.transition).toBe("transform 150ms ease-out")
     expect(b.style.transform).toBe("")
+    vi.advanceTimersByTime(150)
+    expect(b.style.transition).toBe("")
+  })
+
+  describe("float highlight (task 01a1b6fd stage 2)", () => {
+    it("at lg, a row that floated up gets bg-base-200 for 600ms, then fades and clears", () => {
+      const { a, b, c } = floatC()
+
+      expect(c.classList.contains("bg-base-200")).toBe(true)
+      expect(a.classList.set.size).toBe(0)
+      expect(b.classList.set.size).toBe(0)
+
+      vi.advanceTimersByTime(HIGHLIGHT_MS - 1)
+      expect(c.classList.contains("bg-base-200")).toBe(true)
+
+      vi.advanceTimersByTime(1)
+      expect(c.classList.contains("bg-base-200")).toBe(false)
+      expect(c.classList.contains("transition-colors")).toBe(true)
+
+      vi.advanceTimersByTime(FADE_MS)
+      expect(c.classList.set.size).toBe(0)
+    })
+
+    it("the slide still runs alongside the highlight", () => {
+      const { c } = floatC()
+      expect(c.style.transform).toBe("translateY(120px)")
+    })
+
+    it("on the phone: the slide, no highlight", () => {
+      const { c } = floatC({ desktop: false })
+      expect(c.style.transform).toBe("translateY(120px)")
+      vi.advanceTimersByTime(0)
+      expect(c.style.transition).toBe("transform 150ms ease-out")
+      expect(c.classList.set.size).toBe(0)
+    })
+
+    it("under reduced motion: no slide and no highlight, at lg too", () => {
+      const { c } = floatC({ reduce: true })
+      vi.advanceTimersByTime(HIGHLIGHT_MS + FADE_MS)
+      expect(c.style.transform).toBeUndefined()
+      expect(c.style.transition).toBeUndefined()
+      expect(c.classList.set.size).toBe(0)
+    })
+
+    it("an unmarked row that moves up is not highlighted", () => {
+      stubMotion(false, true)
+      const a = fakeRow("a", 0)
+      const b = fakeRow("b", 60)
+      const { hook, el } = mount([a, b])
+      hook.beforeUpdate()
+      b.top = 0
+      a.top = 60
+      el.rows = [b, a]
+      hook.updated()
+      expect(b.classList.set.size).toBe(0)
+    })
+
+    it("a marked row that passes another marked row floats; one that rises only because its neighbour left does not", () => {
+      stubMotion(false, true)
+      // Active run [a, b]; a message in b puts it above a: a float.
+      const a = fakeRow("a", 0, true)
+      const b = fakeRow("b", 60, true)
+      const q = fakeRow("q", 120)
+      const { hook, el } = mount([a, b, q])
+      hook.beforeUpdate()
+      b.top = 0
+      a.top = 60
+      el.rows = [b, a, q]
+      hook.updated()
+      expect(b.classList.contains("bg-base-200")).toBe(true)
+      expect(a.classList.set.size).toBe(0)
+
+      // b leaves the run and settles below a: a rises, but floated nothing.
+      vi.advanceTimersByTime(HIGHLIGHT_MS + FADE_MS)
+      hook.beforeUpdate()
+      delete b.dataset.floated
+      a.top = 0
+      b.top = 60
+      el.rows = [a, b, q]
+      hook.updated()
+      expect(a.classList.set.size).toBe(0)
+      expect(b.classList.set.size).toBe(0)
+    })
   })
 
   it("a shift with no re-sort (a fold) animates nothing", () => {

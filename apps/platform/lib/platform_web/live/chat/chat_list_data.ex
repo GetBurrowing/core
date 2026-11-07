@@ -186,17 +186,24 @@ defmodule PlatformWeb.ChatLive.ChatListData do
       unread_counts = unread_counts || %{}
 
       {active, quiet} =
-        Enum.split_with(rows, fn row ->
-          id = row_space(row).id
-
-          (Map.get(unread_counts, id, 0) > 0 and not MapSet.member?(restricted, id)) or
-            MapSet.member?(floated, id)
-        end)
+        Enum.split_with(rows, &active?(row_space(&1).id, unread_counts, floated, restricted))
 
       sort_by_recency(active, excerpts, name_fun) ++ quiet
     else
       rows
     end
+  end
+
+  @doc """
+  Whether space `id` is in the ACTIVE run of `unread_first/6`: unread above 0
+  and not restricted, or in `floated`. Also what puts `data-floated` on a
+  Spaces or Direct row (task 01a1b6fd stage 2), so the marker and the order
+  cannot disagree. Pure.
+  """
+  def active?(id, unread_counts, floated, restricted) do
+    (Map.get(unread_counts || %{}, id, 0) > 0 and
+       not MapSet.member?(restricted || MapSet.new(), id)) or
+      MapSet.member?(floated || MapSet.new(), id)
   end
 
   @doc """

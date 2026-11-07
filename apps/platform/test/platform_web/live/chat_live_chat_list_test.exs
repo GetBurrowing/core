@@ -2612,5 +2612,37 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert lv_assigns(view).list_floated == MapSet.new()
       assert spaces_order(view, mine) == manual
     end
+
+    # Task 01a1b6fd stage 2: the marker `ChatListSettle` reads for the
+    # desktop float highlight.
+    test "the floated row carries data-floated and quiet rows do not", %{conn: conn} do
+      w = world(conn)
+      gamma = channel_in(acme(), "Gamma")
+      pinned = channel_in(acme(), "Pinned One")
+      _ = Sidebar.set_space_pinned(w.user.id, pinned.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      wrap = fn id -> "[data-role='chat-list-row-wrap'][data-space-id='#{id}']" end
+      floated = fn id -> wrap.(id) <> "[data-floated='true']" end
+
+      for id <- [w.alpha.id, w.beta.id, gamma.id] do
+        assert has_element?(view, wrap.(id))
+        refute has_element?(view, floated.(id))
+      end
+
+      say!(gamma, join!(gamma, Ecto.UUID.generate(), "Riley"), "gamma wakes up")
+      say!(pinned, join!(pinned, Ecto.UUID.generate(), "Quinn"), "pinned news")
+
+      assert has_element?(view, floated.(gamma.id))
+      refute has_element?(view, floated.(w.alpha.id))
+      refute has_element?(view, floated.(w.beta.id))
+      # Pinned never carries it: a pin does not float.
+      refute has_element?(view, floated.(pinned.id))
+
+      # Setting off: no row is in an active run, so none is marked.
+      {:ok, _} = Platform.Accounts.put_float_new_messages(w.user.id, false)
+      _ = render(view)
+      refute has_element?(view, "[data-role='chat-list-row-wrap'][data-floated]")
+    end
   end
 end

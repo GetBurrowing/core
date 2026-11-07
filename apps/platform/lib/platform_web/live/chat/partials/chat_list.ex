@@ -72,6 +72,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   its row on the next render, phone and desktop. A change to the setting
   broadcasts `:sidebar_changed`, and every open session re-reads it.
 
+  Motion (task 01a1b6fd stage 2): `ChatListSettle` slides a re-sorted row
+  over 150ms on phone and desktop. A row in the active run carries
+  `data-floated`; at lg only, one that just floated up gets a 600ms base-200
+  highlight that fades to its normal surface. Under prefers-reduced-motion
+  rows jump, with no slide and no highlight. Unread is the semibold name,
+  never a row tint.
+
   Archived sorts by recency (`ChatListData.sort_by_recency/3`, task 01a166bf
   stage 1) in both modes: newest top-level message first, rows with no
   message last by name.
@@ -494,6 +501,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       private?={MapSet.member?(@list_private_ids, space.id)}
                       long_press
                       current={space.id == @active_id}
+                      floated={MapSet.member?(@floated_ids, space.id)}
                     />
                   <% end %>
                 <% end %>
@@ -529,6 +537,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       restricted?={false}
                       long_press
                       current={space.id == @active_id}
+                      floated={MapSet.member?(@floated_ids, space.id)}
                     />
                   <% end %>
                 <% end %>
@@ -1291,6 +1300,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   # index around it.
   attr(:pinned_position, :any, default: nil)
   attr(:pinned_count, :any, default: nil)
+  # In the unread-first active run (`floated_ids/2`): `data-floated` on the
+  # wrap, which `ChatListSettle` reads for the desktop float highlight.
+  attr(:floated, :boolean, default: false)
 
   # One row. The whole row is the link (at least 44px tall), with no
   # phx-click. Name `min-w-0 truncate`; time, dot and count never shrink.
@@ -1336,7 +1348,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           <span class="shrink-0 text-xs text-subtle">Restricted, ask an admin</span>
         </div>
       <% @dense? -> %>
-        <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
+        <div
+          class="flex items-center"
+          data-role="chat-list-row-wrap"
+          data-space-id={@space.id}
+          data-floated={@floated && "true"}
+        >
           <.link
             id={"#{@id_prefix}-row-#{@space.id}"}
             patch={~p"/chat/#{ChatLive.space_nav_target(@space)}"}
@@ -1399,7 +1416,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           </.link>
         </div>
       <% true -> %>
-        <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
+        <div
+          class="flex items-center"
+          data-role="chat-list-row-wrap"
+          data-space-id={@space.id}
+          data-floated={@floated && "true"}
+        >
           <.link
             id={"#{@id_prefix}-row-#{@space.id}"}
             patch={~p"/chat/#{ChatLive.space_nav_target(@space)}"}
@@ -1733,6 +1755,28 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     |> assign(:space_rows, rows.spaces)
     |> assign(:dm_rows, rows.direct)
     |> assign(:archived_rows, rows.archived)
+    |> assign(:floated_ids, floated_ids(assigns, rows.spaces ++ rows.direct))
+  end
+
+  # `data-floated` (task 01a1b6fd stage 2, `## Order`): the Spaces and Direct
+  # rows in the active run while the setting is on. `ChatListSettle` gives a
+  # marked row that just moved up past another marked row (or into the run)
+  # its brief desktop highlight. Pinned and Archived never carry it.
+  defp floated_ids(assigns, rows) do
+    if Map.get(assigns, :float_new_messages?, true) != false do
+      for row <- rows,
+          id = row_id(row),
+          ChatListData.active?(
+            id,
+            assigns[:unread_counts],
+            assigns[:list_floated],
+            assigns[:restricted_channel_ids]
+          ),
+          into: MapSet.new(),
+          do: id
+    else
+      MapSet.new()
+    end
   end
 
   @doc """
