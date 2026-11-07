@@ -48,14 +48,17 @@ defmodule Platform.Agents.TeamCheckTest do
     )
   end
 
+  # `agent_runtimes.owner_user_id` is NOT NULL: every federated agent is
+  # bound to the human who registered its runtime, its sponsor.
   defp federated!(owner \\ nil) do
+    owner = owner || user!("runtime-owner")
     agent = agent!(%{kind: "native", runtime_type: "external"})
 
     runtime =
       Repo.insert!(%AgentRuntime{
         runtime_id: "rt-tc-#{System.unique_integer([:positive])}",
         agent_id: agent.id,
-        owner_user_id: owner && owner.id,
+        owner_user_id: owner.id,
         status: "active"
       })
 
