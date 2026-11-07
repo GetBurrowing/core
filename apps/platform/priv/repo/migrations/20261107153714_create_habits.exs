@@ -16,6 +16,8 @@ defmodule Platform.Repo.Migrations.CreateHabits do
 
   use Ecto.Migration
 
+  # old-code-compatible: creates two new, empty tables the previous release never reads or writes
+
   def up do
     require_pg15!()
 
