@@ -7,7 +7,8 @@ defmodule PlatformWeb.Dev.FakeSecretarySeeds do
   `Platform.Inbox.emit/1`, `Platform.Chat.create_space/1`,
   `add_participant/2`, `update_space/2` (goals) and `post_message/2`,
   `Platform.Calendar.create_event/2`, `Platform.Secretary.Todos`,
-  `Platform.Access.Restrictions` / `Grants`, and
+  `Platform.Access.Restrictions` / `Grants` (as the system actor, named
+  explicitly), and
   `Platform.Inbox.dismiss_all_unread/1`. People are made with
   `Platform.Accounts.find_or_create_from_oidc/1`, as a sign-in would.
 
@@ -192,11 +193,14 @@ defmodule PlatformWeb.Dev.FakeSecretarySeeds do
     say!(denied, a, "denied-xyz")
 
     {:ok, _} =
-      Grants.deny(%{
-        principal: {:user, c.id},
-        permission: "chat.read",
-        resource: {:space, denied.id}
-      })
+      Grants.deny(
+        %{
+          principal: {:user, c.id},
+          permission: "chat.read",
+          resource: {:space, denied.id}
+        },
+        actor: Scope.system()
+      )
 
     allowed = space!("dm", "secretary-allowed")
     join!(allowed, a)
@@ -204,11 +208,14 @@ defmodule PlatformWeb.Dev.FakeSecretarySeeds do
     say!(allowed, a, "allowed-xyz")
 
     {:ok, _} =
-      Grants.grant(%{
-        principal: {:user, c.id},
-        permission: "chat.read",
-        resource: {:space, allowed.id}
-      })
+      Grants.grant(
+        %{
+          principal: {:user, c.id},
+          permission: "chat.read",
+          resource: {:space, allowed.id}
+        },
+        actor: Scope.system()
+      )
 
     %{a: a.email, b: b.email, c: c.email}
   end
