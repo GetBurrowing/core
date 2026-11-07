@@ -42,6 +42,7 @@ defmodule PlatformWeb.CalendarLive do
      |> assign(:view, "week")
      |> assign(:selected, nil)
      |> assign(:meeting_cancel_state, :idle)
+     |> assign(:meeting_delete_state, :idle)
      |> assign(:editing, nil)
      |> assign(:editor_error, nil)
      |> assign(:editor_fields, [])
@@ -281,6 +282,7 @@ defmodule PlatformWeb.CalendarLive do
       |> LiveInvites.seed()
       |> MeetingEdit.seed()
       |> assign(:meeting_cancel_state, :idle)
+      |> assign(:meeting_delete_state, :idle)
       |> select_entry(kind, id, params["start"])
 
     if socket.assigns.selected,
@@ -305,6 +307,11 @@ defmodule PlatformWeb.CalendarLive do
   def handle_event("escape", _, %{assigns: %{meeting_cancel_state: state}} = socket)
       when state in [:confirming, :error],
       do: {:noreply, assign(socket, :meeting_cancel_state, :idle)}
+
+  # Same for the Delete inset (task 01a1b281 stage 4).
+  def handle_event("escape", _, %{assigns: %{meeting_delete_state: state}} = socket)
+      when state in [:confirming, :error],
+      do: {:noreply, assign(socket, :meeting_delete_state, :idle)}
 
   def handle_event("escape", _, socket), do: {:noreply, close_details(socket)}
 
@@ -383,6 +390,49 @@ defmodule PlatformWeb.CalendarLive do
          |> assign(:meeting_cancel_state, :working)
          |> start_async(:cancel_meeting, fn ->
            Platform.Meetings.cancel_meeting_for_user(id, viewer)
+         end)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # ── Delete meeting in the details (task 01a1b281 stage 4) ────────────────
+  #
+  # `PlatformWeb.Components.Meetings.DeleteMeeting`'s events, under the
+  # cancel row's rule: the meeting is the entry the open details were built
+  # from, never a payload value, and `Meetings.delete_meeting_for_user/2`
+  # reloads it through the viewer scope and re-checks the rule.
+  def handle_event("delete_meeting_open", _params, socket) do
+    case socket.assigns.selected do
+      %{kind: "meeting", can_delete: true} ->
+        {:noreply, assign(socket, :meeting_delete_state, :confirming)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("delete_meeting_keep", _params, socket) do
+    case socket.assigns.meeting_delete_state do
+      :working -> {:noreply, socket}
+      _ -> {:noreply, assign(socket, :meeting_delete_state, :idle)}
+    end
+  end
+
+  def handle_event("delete_meeting_confirm", _params, socket) do
+    case {socket.assigns.selected, socket.assigns.meeting_delete_state} do
+      {_selected, :working} ->
+        {:noreply, socket}
+
+      {%{kind: "meeting", can_delete: true, entry: %{meeting: %{id: id}}}, _state} ->
+        viewer = socket.assigns.current_user_record
+
+        {:noreply,
+         socket
+         |> assign(:meeting_delete_state, :working)
+         |> start_async(:delete_meeting, fn ->
+           Platform.Meetings.delete_meeting_for_user(id, viewer)
          end)}
 
       _ ->
@@ -645,6 +695,27 @@ defmodule PlatformWeb.CalendarLive do
   def handle_info(_, socket), do: {:noreply, reload(socket)}
 
   @impl true
+  # A deleted meeting leaves the window, so the details close with it; the
+  # reload redraws the grid for this viewer and the broadcast does it for
+  # every other open calendar.
+  def handle_async(:delete_meeting, result, socket) do
+    socket =
+      case result do
+        {:ok, {:ok, _meeting}} ->
+          socket |> close_details() |> reload()
+
+        {:ok, {:error, reason}} when reason in [:forbidden, :not_found, :not_deletable] ->
+          socket
+          |> assign(:meeting_delete_state, :idle)
+          |> put_flash(:error, "You can't delete this meeting.")
+
+        _other ->
+          assign(socket, :meeting_delete_state, :error)
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_async(:cancel_meeting, result, socket) do
     socket =
       case result do
@@ -738,6 +809,7 @@ defmodule PlatformWeb.CalendarLive do
       socket
       |> assign(:selected, nil)
       |> assign(:meeting_cancel_state, :idle)
+      |> assign(:meeting_delete_state, :idle)
       |> LiveInvites.seed()
       |> MeetingEdit.seed()
 
@@ -856,6 +928,8 @@ defmodule PlatformWeb.CalendarLive do
       can_cancel: can_cancel,
       # Edit (task 01a1b281 stage 3): drawn only for this.
       can_edit: Platform.Meetings.can_edit_meeting?(meeting, user),
+      # Delete (stage 4): cancelled, ended, or scheduled with its time past.
+      can_delete: Platform.Meetings.can_delete_meeting?(meeting, user),
       audience: audience
     }
   end
