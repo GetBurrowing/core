@@ -382,7 +382,10 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
       <.human_avatar :if={@row.user_id} name={row_name(@row)} seed={@row.user_id} size="sm" />
       <span class="min-w-0 flex-1">
         <span class="block truncate text-sm font-medium">{row_name(@row)}</span>
-        <span :if={@row[:subtitle]} class="block truncate text-xs text-subtle">
+        <span
+          :if={@row[:subtitle] && @row[:subtitle] != row_name(@row)}
+          class="block truncate text-xs text-subtle"
+        >
           {@row.subtitle}
         </span>
       </span>

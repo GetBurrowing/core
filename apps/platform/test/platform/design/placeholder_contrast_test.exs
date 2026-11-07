@@ -124,6 +124,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/components/chat_message.ex" => :rule_painted,
     "platform_web/components/meetings/intents_collapse.ex" => :global_default,
     "platform_web/components/meetings/invite_control.ex" => :global_default,
+    # The Edit meeting form's Start field (task 01a1b281 stage 3): no
+    # placeholder: utility, so the base ::placeholder rule.
+    "platform_web/components/meetings/edit_meeting.ex" => :global_default,
     "platform_web/live/admin_branding_live.html.heex" => :global_default,
     "platform_web/live/admin_orgs_live.html.heex" => :global_default,
     "platform_web/live/admin_prompts_live.html.heex" => :global_default,
