@@ -9,9 +9,16 @@ defmodule Platform.Sharing.UsageReceiver do
   `seconds`, both non-negative integers) and `counts`, whose every key must be
   on the SAME pinned list (`UsageEvents.events/0`) with a non-negative integer
   value. Any other key, an unpinned name, or a non-integer refuses the whole
-  body with `:invalid_usage`; nothing partial is stored. Unknown top-level
-  keys are refused too, so a caller cannot smuggle free text in beside the
-  counts.
+  body with `:invalid_usage`; nothing partial is stored. Two optional common
+  batch extensions are allowlisted: instruction_outcomes (effective inventory)
+  and learned_default_shapes (Habits aggregate only). Their validators repeat
+  exact field/bucket/version/variant bounds and the five-user floor. Every
+  other top-level key is refused; free text cannot ride beside the counts.
+
+  Extension payloads replace one row per anonymous install/window in
+  sharing_instruction_outcomes within the same transaction as the counts.
+  Unknown historic pack provenance is unavailable, never assigned today's
+  version or interpreted as a zero rate.
 
   One row per (install, window start, event). A resend replaces its own row,
   so a retry never doubles a count.

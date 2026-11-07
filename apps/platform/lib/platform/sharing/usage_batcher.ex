@@ -1,6 +1,14 @@
 defmodule Platform.Sharing.UsageBatcher do
   @moduledoc """
-  Sends the anonymous usage counts (task 01a1b678 stage 2).
+  Sends anonymous usage counts and optional bounded instruction inventory and
+  learned-default aggregates through one common broker request (tasks
+  01a1b678, 01a1b6e1 and the prerequisite transport from 01a1b6a5).
+
+  Pack inventory requires usage consent. Habits shapes additionally require
+  learned_default_shapes consent and retain unavailable observation-time pack
+  provenance. The instruction-wide stop removes both extensions. The broker
+  repeats current consent and payload validation at the final send boundary;
+  download consent never grants upload consent.
 
   Owns the `Platform.Sharing.UsageEvents` counts table and attaches the
   collector in `init/1`, so the node that counts is the node that sends. Every

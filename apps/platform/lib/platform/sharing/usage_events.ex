@@ -243,7 +243,9 @@ defmodule Platform.Sharing.UsageEvents do
   @doc """
   Why `body` must not be sent, or `nil` when it is safe. Checks the encoded
   JSON: redaction must change nothing, no email-shaped text, and no string
-  outside the allowlist (install id, pinned names, body keys).
+  outside the allowlist (install id, pinned names, body keys). Optional common
+  pack/shape extensions must pass their independent typed validators before
+  being removed from the legacy count-string check.
   """
   @spec refusal(map()) ::
           nil | :redaction_hit | :email_sentinel | :unknown_string | :not_encodable
