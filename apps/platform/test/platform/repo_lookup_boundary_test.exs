@@ -840,6 +840,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/skills.ex", :get_by, "SkillAttachment", 1, :safe_internal,
      "keyed `skill_id:` + `entity_type:` + `entity_id:`; `detach_skill/3` is called with ids the attach path already resolved to rows"},
     # ── Tasks (sibling-owned) ──────────────────────────────────────────
+    {"platform/support_access.ex", :get, "Session", 3, :must_cast,
+     "task 01a1b362 stage 1: `session_allows?/3` reads the `:support_session_id` from the browser session and `get_session/1` takes an id from the host-written shell events JSONL or the owner's End session button; both check Platform.UUID.valid?/1 first and answer false / nil. The third, in `consume_sign_in_code/2`, uses the support_session_id an UPDATE ... RETURNING selected from a `support_sign_in_codes` row (a :binary_id FK)"},
+    {"platform/support_access.ex", :get, "User", 1, :safe_internal,
+     "task 01a1b362 stage 1: `retire_support_user/2` reads `user_id` off a `support_sessions` row the same transaction locked, a :binary_id FK to users"},
+    {"platform/support_access.ex", :get_by, "User", 1, :safe_internal,
+     "task 01a1b362 stage 1: `support_user/1` looks up by `email:`, a :string column (the operator email from a signature-verified grant), so no cast can raise"},
     {"platform/tasks.ex", :get, "Agent", 1, :flagged_sibling_owned,
      "`planner_display_name/1` — sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
     {"platform/tasks.ex", :get, "Epic", 1, :flagged_sibling_owned,
@@ -1073,6 +1079,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "experiment_subject/1 (task 01a10a44 stage 2) reads `task.id` off the `%Task{}` ContextAssembler loaded by primary key; the guard only keeps a hand-built map out of the experiments resolver, and a failing id falls back to the surface's control keys"},
     {"platform/skills.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_skill/1 and resolve_skills/1. get_skill/1's nil is what routes a slug to the get_by(Skill, slug:) branch, which is designed traffic for skill_get"},
+    {"platform/support_access.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a1b362 stage 1: `session_allows?/3` guards the browser session's support_session_id and `get_session/1` guards a host- or owner-supplied id before `Repo.get(Session, _)`; used as booleans, the original string passed on only when valid"},
     {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 7, :safe_internal,
      "ensure_canvas_attachable/1 on the canvas_attach MCP payload's canvas_id, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The second is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Back to 3 at task 01a1559a stage 1: `load_live_task/1` guards the task_id before the gate (the guard had moved to a task-binding module in task 019fb581 stage 3; that module was deleted and the guard came home). 3 -> 7 at task 01a1559a stage 2: `detach_canvas_from_stack/3` guards the raw `stack_detach_canvas` canvas_id before `where: a.canvas_id == ^canvas_id` (a malformed id detaches nothing), `list_stack_canvases/1` and `stack_coverage/2` guard the stack_id a LiveView param will supply (stage 4) before `where: t.stack_id == ^stack_id`, and `stack_coverage/2` guards the canvas_id before its count; each folds a malformed id into the empty answer"},
     {"platform/tasks/context_hydrator.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1219,6 +1227,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # integer guarded positive by `extract_issue/1`); no id is pinned, so
     # nothing boundary-reachable can raise Ecto.Query.CastError there.
     "platform/feedback/intake.ex" => 1,
+    # Task 01a1b362 stage 1: 0 -> 2. Triaged by hand: `audit/2`'s chain-head
+    # read pins no id (`like(event_type, "support.%")`, newest first), and
+    # `end_expired/1`'s `where: s.id == ^id` takes an id its own preceding
+    # query selected from `support_sessions`.
+    "platform/support_access.ex" => 2,
     # Task 01a0cf21 stage 5. drafts.ex: 0 → 2 — `get/2` and `fetch_draft/1`,
     # each pinning an id behind Platform.UUID.valid?/1 in the same
     # expression (recorded in @inventory).

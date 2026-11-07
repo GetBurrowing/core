@@ -580,7 +580,15 @@ defmodule Platform.Access.DelegationTest do
 
       # Positive control: the scan finds the definitions.
       assert "platform/tenancy.ex" in callers
-      assert callers == ["platform/sign_in_admin.ex", "platform/tenancy.ex"]
+      # `platform/support_access.ex` (task 01a1b362, ADR 0059) revokes admin
+      # only from a `support_vendor` user when its last support session ends;
+      # its callers are the sweeper, the owner's install-admin-gated
+      # `end_session/2` and `Settings.update/2`. It never demotes anyone else.
+      assert callers == [
+               "platform/sign_in_admin.ex",
+               "platform/support_access.ex",
+               "platform/tenancy.ex"
+             ]
       refute Enum.any?(callers, &String.starts_with?(&1, "platform_web/"))
 
       # SignInAdmin's only route to it is the private invite helper.

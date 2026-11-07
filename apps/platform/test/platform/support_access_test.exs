@@ -67,7 +67,9 @@ defmodule Platform.SupportAccessTest do
     end
 
     test "update/2 refuses a non-admin and a vendor support user" do
-      member = Platform.Repo.insert!(%Accounts.User{email: "m@acme.test", name: "M", oidc_sub: "m-1"})
+      member =
+        Platform.Repo.insert!(%Accounts.User{email: "m@acme.test", name: "M", oidc_sub: "m-1"})
+
       assert {:error, :unauthorized} = Settings.update(member, %{enabled: false})
       assert {:error, :unauthorized} = Settings.update(nil, %{enabled: false})
 
@@ -120,7 +122,11 @@ defmodule Platform.SupportAccessTest do
       Application.put_env(
         :platform,
         :support_access,
-        Keyword.put(Application.get_env(:platform, :support_access), :state_path, "/nonexistent-dir/x/state.json")
+        Keyword.put(
+          Application.get_env(:platform, :support_access),
+          :state_path,
+          "/nonexistent-dir/x/state.json"
+        )
       )
 
       owner = TenancyFixtures.root_admin!()
@@ -358,11 +364,15 @@ defmodule Platform.SupportAccessTest do
       grant!(ctx)
       assert :ok = SupportAccess.verify_audit_chain()
 
-      [first | _] = Repo.all(from(e in Event, where: like(e.event_type, "support.%"), order_by: [asc: e.id]))
+      [first | _] =
+        Repo.all(from(e in Event, where: like(e.event_type, "support.%"), order_by: [asc: e.id]))
 
-      Repo.query!("UPDATE audit_events SET metadata = jsonb_set(metadata, '{kind}', '\"admin\"') WHERE id = $1", [
-        first.id
-      ])
+      Repo.query!(
+        "UPDATE audit_events SET metadata = jsonb_set(metadata, '{kind}', '\"admin\"') WHERE id = $1",
+        [
+          first.id
+        ]
+      )
 
       assert {:error, {:broken_at, id}} = SupportAccess.verify_audit_chain()
       assert id == first.id

@@ -40,7 +40,10 @@ defmodule Platform.SupportAccess.StateFile do
     sessions =
       if enabled do
         Enum.map(SupportAccess.active_sessions("repair", now), fn s ->
-          %{"id" => s.id, "not_after" => DateTime.to_iso8601(DateTime.truncate(s.not_after, :second))}
+          %{
+            "id" => s.id,
+            "not_after" => DateTime.to_iso8601(DateTime.truncate(s.not_after, :second))
+          }
         end)
       else
         []

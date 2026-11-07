@@ -121,7 +121,9 @@ defmodule Platform.SupportAccess do
     "{" <> inner <> "}"
   end
 
-  defp canonical(list) when is_list(list), do: "[" <> Enum.map_join(list, ",", &canonical/1) <> "]"
+  defp canonical(list) when is_list(list),
+    do: "[" <> Enum.map_join(list, ",", &canonical/1) <> "]"
+
   defp canonical(value), do: Jason.encode!(value)
 
   defp stringify(map) when is_map(map) do
@@ -260,7 +262,8 @@ defmodule Platform.SupportAccess do
     Repo.transaction(fn ->
       with {:ok, user} <- support_user(grant),
            {:ok, _} <- Tenancy.promote_to_admin(user, reason: "support_session"),
-           {:ok, session} <- Repo.insert(Session.create_changeset(session_attrs(grant, now, user.id))),
+           {:ok, session} <-
+             Repo.insert(Session.create_changeset(session_attrs(grant, now, user.id))),
            {:ok, code} <- mint_code(session, now) do
         {%{
            session_id: session.id,
@@ -300,7 +303,8 @@ defmodule Platform.SupportAccess do
         |> User.support_changeset(%{
           email: email,
           name: display,
-          oidc_sub: "support-vendor:" <> (:crypto.hash(:sha256, email) |> Base.encode16(case: :lower))
+          oidc_sub:
+            "support-vendor:" <> (:crypto.hash(:sha256, email) |> Base.encode16(case: :lower))
         })
         |> Repo.insert()
 
@@ -385,15 +389,13 @@ defmodule Platform.SupportAccess do
 
   def session_allows?(%User{support_vendor: true, id: user_id}, session_id, now)
       when is_binary(session_id) do
-    case Ecto.UUID.cast(session_id) do
-      {:ok, id} ->
-        case Repo.get(Session, id) do
-          %Session{kind: "admin", user_id: ^user_id} = session -> Session.active?(session, now)
-          _ -> false
-        end
-
-      :error ->
-        false
+    if Platform.UUID.valid?(session_id) do
+      case Repo.get(Session, session_id) do
+        %Session{kind: "admin", user_id: ^user_id} = session -> Session.active?(session, now)
+        _ -> false
+      end
+    else
+      false
     end
   end
 
@@ -414,12 +416,10 @@ defmodule Platform.SupportAccess do
     |> Repo.all()
   end
 
-  @spec get_session(String.t()) :: Session.t() | nil
+  @doc "A support session by id, or nil (also for a malformed id)."
+  @spec get_session(term()) :: Session.t() | nil
   def get_session(id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, id} -> Repo.get(Session, id)
-      :error -> nil
-    end
+    if Platform.UUID.valid?(id), do: Repo.get(Session, id), else: nil
   end
 
   # ── Ending sessions ──────────────────────────────────────────────────

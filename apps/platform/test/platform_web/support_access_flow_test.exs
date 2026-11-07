@@ -37,7 +37,8 @@ defmodule PlatformWeb.SupportAccessFlowTest do
     post_grant(conn, raw, headers)
   end
 
-  defp code_of(url), do: url |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
+  defp code_of(url),
+    do: url |> URI.parse() |> Map.get(:query) |> URI.decode_query() |> Map.get("code")
 
   defp expire!(session_id) do
     past = DateTime.add(DateTime.utc_now(), -1, :second)
@@ -49,7 +50,9 @@ defmodule PlatformWeb.SupportAccessFlowTest do
       {_pub, other} = :crypto.generate_key(:eddsa, :ed25519)
       now = System.os_time(:second)
 
-      assert json_response(grant(conn, ctx, %{}, key: other), 401) == %{"error" => "bad_signature"}
+      assert json_response(grant(conn, ctx, %{}, key: other), 401) == %{
+               "error" => "bad_signature"
+             }
 
       assert json_response(
                grant(conn, ctx, %{"install_id" => "99999999-2222-4333-8444-555555555555"}),
@@ -91,7 +94,10 @@ defmodule PlatformWeb.SupportAccessFlowTest do
       )
 
       for _ <- 1..2 do
-        assert conn |> put_req_header("content-type", "application/json") |> post(@grants, "{}") |> response(401)
+        assert conn
+               |> put_req_header("content-type", "application/json")
+               |> post(@grants, "{}")
+               |> response(401)
       end
 
       assert json_response(grant(conn, ctx), 429) == %{"error" => "rate_limited"}
@@ -132,7 +138,8 @@ defmodule PlatformWeb.SupportAccessFlowTest do
                view |> element("#admin-link-unfurls-form") |> render_change(%{})
 
       # ...a fresh mount is refused...
-      assert {:error, {:redirect, %{to: "/auth/login"}}} = live(recycle(signed_in), ~p"/admin/link-unfurls")
+      assert {:error, {:redirect, %{to: "/auth/login"}}} =
+               live(recycle(signed_in), ~p"/admin/link-unfurls")
 
       # ...and so is the next HTTP request, which also drops the session.
       bounced = get(recycle(signed_in), ~p"/chat")
@@ -142,7 +149,11 @@ defmodule PlatformWeb.SupportAccessFlowTest do
       [ended] = SupportAccess.end_expired()
       assert ended.id == sid
       assert ended.end_reason == "expired"
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: "support_session:" <> ^sid}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "disconnect",
+        topic: "support_session:" <> ^sid
+      }
 
       user = Repo.get!(User, user.id)
       assert user.archived_at
@@ -179,7 +190,9 @@ defmodule PlatformWeb.SupportAccessFlowTest do
       |> element("#admin-link-unfurls-form")
       |> render_change(%{"settings" => %{"enabled" => "true"}, "note" => "secret-live-value"})
 
-      actions = Repo.all(from(e in Event, where: e.event_type == "support.action", order_by: e.id))
+      actions =
+        Repo.all(from(e in Event, where: e.event_type == "support.action", order_by: e.id))
+
       assert [http, live_event | _] = actions
       assert http.metadata["method"] == "PATCH"
       assert http.metadata["route"] =~ "/api/messages/"
