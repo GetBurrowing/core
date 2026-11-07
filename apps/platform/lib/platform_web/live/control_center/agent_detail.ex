@@ -474,7 +474,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               <div class="flex flex-wrap gap-2">
                 <label
                   :for={color <- Platform.Agents.ColorPalette.all()}
-                  class="cursor-pointer"
+                  class="relative cursor-pointer"
                   title={color.label}
                 >
                   <input
@@ -876,7 +876,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           <div class="flex flex-wrap gap-2">
             <label
               :for={color <- Platform.Agents.ColorPalette.all()}
-              class="cursor-pointer"
+              class="relative cursor-pointer"
               title={color.label}
             >
               <input

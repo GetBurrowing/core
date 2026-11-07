@@ -61,6 +61,25 @@ defmodule PlatformWeb.ChatLive.PrototypeUploadTest do
     assert has_element?(view, @kind_choice)
   end
 
+  # Task 01a1b34f: the Canvas type radios are `sr-only` (position: absolute).
+  # Without a positioned label their containing block is the shell's
+  # overflow-hidden `<main data-scroll-container>`, and focusing one on click
+  # scrolls that main out of view. Every hidden radio needs a `label.relative`.
+  test "Canvas type radios are positioned by their label", ctx do
+    view = open_drawer(ctx.conn, ctx.user, ctx.space)
+    doc = view |> render() |> LazyHTML.from_document()
+
+    all = doc |> LazyHTML.query("#{@kind_choice} input.sr-only[type=radio]") |> Enum.count()
+
+    positioned =
+      doc
+      |> LazyHTML.query("#{@kind_choice} label.relative input.sr-only[type=radio]")
+      |> Enum.count()
+
+    assert all == 2
+    assert positioned == all
+  end
+
   test "Prototype is hidden while publishing is off", ctx do
     set_settings!(%{enabled: false})
     view = open_drawer(ctx.conn, ctx.user, ctx.space)
