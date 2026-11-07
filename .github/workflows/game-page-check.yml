@@ -68,10 +68,21 @@ jobs:
           path: game-page-formatted.tar.gz
       - name: Compile and exercise game and existing auth/attachment boundaries
         run: |
-          mix compile --warnings-as-errors
           mix ecto.create
           mix ecto.migrate
-          mix test test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs
+          mix precommit test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs
+      - name: Prove ordinary account provisioning is rejected for a new game player
+        run: |
+          cp lib/platform/games.ex /tmp/game-page-original.ex
+          trap 'cp /tmp/game-page-original.ex lib/platform/games.ex' EXIT
+          sed -i 's/Accounts.find_or_create_game_player(claims)/Accounts.find_or_create_from_oidc(claims)/' lib/platform/games.ex
+          if mix test test/platform_web/controllers/game_page_controller_test.exs --only game_identity > /tmp/game-identity-mutation.log 2>&1; then
+            cat /tmp/game-identity-mutation.log
+            echo 'Unsafe root-membership mutation survived'
+            exit 1
+          fi
+          cat /tmp/game-identity-mutation.log
+          grep -q 'creates only external game membership' /tmp/game-identity-mutation.log
       - uses: actions/cache/save@v5
         if: always() && steps.cache.outputs.cache-hit != 'true'
         with:

@@ -66,7 +66,7 @@ defmodule PlatformWeb.GamePageController do
          {:ok, space_id} <- Games.join_community(game, user) do
       conn
       |> delete_session(:external_admission)
-      |> redirect(external: PlatformWeb.ExternalRedirect.chat_url("/chat?space=" <> space_id))
+      |> redirect(external: PlatformWeb.ExternalRedirect.chat_url("/chat/" <> space_id))
     else
       nil ->
         redirect(conn, to: "/games/#{slug}/sign-in")

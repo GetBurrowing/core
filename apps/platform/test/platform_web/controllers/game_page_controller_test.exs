@@ -74,8 +74,8 @@ defmodule PlatformWeb.GamePageControllerTest do
     conn: conn
   } do
     html = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
-    assert LazyHTML.query(html, "#game-sign-in") != []
-    assert LazyHTML.query(html, "#game-download") == []
+    assert Enum.count(LazyHTML.query(html, "#game-sign-in")) == 1
+    assert Enum.count(LazyHTML.query(html, "#game-download")) == 0
     assert conn |> get("/games/not-published") |> response(404) == "Game not found"
 
     assert conn |> get("/games/voltron/releases/one/download") |> redirected_to() ==
@@ -119,6 +119,7 @@ defmodule PlatformWeb.GamePageControllerTest do
              "temporarily unavailable"
   end
 
+  @tag :game_identity
   test "game OIDC login returns to its page and creates only external game membership", %{
     conn: conn,
     org: org
@@ -150,6 +151,7 @@ defmodule PlatformWeb.GamePageControllerTest do
              Repo.all(from(m in OrgMembership, where: m.user_id == ^user.id))
 
     assert org_id == org.id
+    refute Tenancy.root_admin?(user)
     assert Repo.all(from(p in Chat.Participant, where: p.participant_id == ^user.id)) == []
     assert get_session(conn, :game_login) == nil
   end
@@ -181,6 +183,8 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert {:error, :unavailable} = Games.join_community(bad, user)
     conn = init_test_session(conn, current_user_id: user.id)
     assert conn |> get("/games/voltron?tab=community") |> html_response(200) =~ "community-join"
+    joined = post(conn, "/games/voltron/community", %{})
+    assert URI.parse(redirected_to(joined)).path == "/chat/" <> community.id
   end
 
   test "unknown games cannot set a login destination; ordinary login clears old game intent", %{
