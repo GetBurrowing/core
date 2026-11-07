@@ -216,6 +216,7 @@ defmodule Platform.GameStream.NativeSessionsTest do
     {:ok, handoff} = NativeSessions.mint(ctx.user, row.id)
     claims = handoff |> Jason.encode!() |> Jason.decode!()
     assert {:error, :unauthorized} = NativeSessions.consume(row.id, "wrong-host", claims)
+    assert {:error, :unauthorized} = NativeSessions.consume(row.id, credential, Map.put(claims, "token", JoinToken.mint()))
 
     for {key, value} <- [
           {"build_id", "wrong"},
