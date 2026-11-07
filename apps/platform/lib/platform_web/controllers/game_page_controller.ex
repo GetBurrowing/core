@@ -10,13 +10,16 @@ defmodule PlatformWeb.GamePageController do
   def show(conn, %{"slug" => slug} = params) do
     with %{} = game <- Games.get(slug),
          %{} = release <- Games.current_release(game) do
+      user = Games.user(get_session(conn, :current_user_id))
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,
         game: game,
         signup?: not is_nil(Games.signup_url(game)),
         release: release,
-        user: Games.user(get_session(conn, :current_user_id)),
+        user: user,
+        community: Games.community(game, user),
+        unsupported?: unsupported_device?(conn),
         community?: params["tab"] == "community",
         csrf_token: Plug.CSRFProtection.get_csrf_token()
       )
@@ -26,8 +29,8 @@ defmodule PlatformWeb.GamePageController do
   end
 
   def sign_in(conn, %{"slug" => slug}) do
-    if Games.get(slug) do
-      redirect(conn, to: "/auth/login?" <> URI.encode_query(%{game: slug}))
+    if game = Games.get(slug) do
+      render(conn, :sign_in, game: game, signup?: not is_nil(Games.signup_url(game)), csrf_token: Plug.CSRFProtection.get_csrf_token())
     else
       send_resp(conn, 404, "Game not found")
     end
@@ -63,10 +66,10 @@ defmodule PlatformWeb.GamePageController do
   def join_community(conn, %{"slug" => slug}) do
     with %{} = game <- Games.get(slug),
          %{} = user <- Games.user(get_session(conn, :current_user_id)),
-         {:ok, space_id} <- Games.join_community(game, user) do
+         {:ok, _space_id} <- Games.join_community(game, user) do
       conn
       |> delete_session(:external_admission)
-      |> redirect(external: PlatformWeb.ExternalRedirect.chat_url("/chat/" <> space_id))
+      |> redirect(to: "/games/#{slug}?tab=community")
     else
       nil ->
         redirect(conn, to: "/games/#{slug}/sign-in")
@@ -86,6 +89,7 @@ defmodule PlatformWeb.GamePageController do
          {:ok, %{size: size}} <- File.stat(path),
          true <- size == attachment.byte_size do
       conn
+      |> download_started_cookie()
       |> put_resp_header("cache-control", "private, no-store")
       |> put_resp_header("x-content-type-options", "nosniff")
       |> put_resp_header("content-security-policy", "sandbox; default-src 'none'")
@@ -102,4 +106,21 @@ defmodule PlatformWeb.GamePageController do
         )
     end
   end
+
+  defp unsupported_device?(conn) do
+    ua = get_req_header(conn, "user-agent") |> Enum.join(" ")
+    not String.contains?(ua, "Windows NT") and
+      String.contains?(ua, ["iPhone", "iPad", "Android", "Macintosh", "Linux"])
+  end
+
+  defp download_started_cookie(conn) do
+    nonce = conn.params["download_request"]
+    if is_binary(nonce) and Regex.match?(~r/^[a-f0-9]{32}$/, nonce) do
+      put_resp_cookie(conn, "burrow_game_download", nonce, http_only: false,
+        secure: conn.scheme == :https, same_site: "Lax", max_age: 60)
+    else
+      conn
+    end
+  end
+
 end

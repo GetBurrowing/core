@@ -182,9 +182,11 @@ defmodule PlatformWeb.GamePageControllerTest do
     bad = Map.put(game, "slug", "other-game")
     assert {:error, :unavailable} = Games.join_community(bad, user)
     conn = init_test_session(conn, current_user_id: user.id)
-    assert conn |> get("/games/voltron?tab=community") |> html_response(200) =~ "community-join"
+    html = conn |> get("/games/voltron?tab=community") |> html_response(200)
+    assert html =~ "game-live-chat"
+    refute html =~ "id=\"community-join\""
     joined = post(conn, "/games/voltron/community", %{})
-    assert URI.parse(redirected_to(joined)).path == "/chat/" <> community.id
+    assert redirected_to(joined) == "/games/voltron?tab=community"
   end
 
   test "unknown games cannot set a login destination; ordinary login clears old game intent", %{
@@ -304,4 +306,33 @@ defmodule PlatformWeb.GamePageControllerTest do
     Application.put_env(:platform, :game_publications, [Map.put(game, "signup_url", signup)])
     assert conn |> get("/games/voltron/create-account") |> redirected_to() == signup
   end
+
+  test "phone visitors see Windows guidance and a real copy-link action", %{conn: conn} do
+    html = conn |> put_req_header("user-agent", "Mozilla iPhone") |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+    assert Enum.count(LazyHTML.query(html, "#game-copy-link")) == 1
+    assert Enum.count(LazyHTML.query(html, "[data-game-action][hidden]")) == 1
+    refute LazyHTML.text(html) =~ "Email me"
+  end
+
+  test "only a successful artifact response acknowledges the exact download request", %{conn: conn, game: game} do
+    user = Repo.insert!(User.changeset(%User{}, %{name: "Player", email: "player@example.net", oidc_sub: "cookie-player"}))
+    conn = init_test_session(conn, current_user_id: user.id)
+    nonce = String.duplicate("a", 32)
+    downloaded = get(conn, "/games/voltron/releases/one/download?download_request=" <> nonce)
+    assert downloaded.resp_cookies["burrow_game_download"].value == nonce
+    bad = put_in(game, ["releases", Access.at(0), "sha256"], String.duplicate("0", 64))
+    Application.put_env(:platform, :game_publications, [bad])
+    failed = get(conn, "/games/voltron/releases/one/download?download_request=" <> nonce)
+    assert failed.status == 503
+    refute Map.has_key?(failed.resp_cookies, "burrow_game_download")
+  end
+
+  test "non-members cannot render private chat messages or room codes", %{conn: conn, game: game} do
+    assert %{joined?: false, member_count: 0} = Games.community(game, nil)
+    html = conn |> get("/games/voltron?tab=community") |> html_response(200)
+    refute html =~ "game-live-chat"
+    assert html =~ "community-sign-in"
+    assert html =~ "after you join"
+  end
+
 end

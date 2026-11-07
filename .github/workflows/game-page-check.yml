@@ -60,8 +60,8 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
       - name: Format changed Elixir and HEEx
         run: |
-          mix format lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs
-          tar -czf "$GITHUB_WORKSPACE/game-page-formatted.tar.gz" lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs
+          mix format lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/game_page_html/sign_in.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs test/platform/repo_lookup_boundary_test.exs
+          tar -czf "$GITHUB_WORKSPACE/game-page-formatted.tar.gz" lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/game_page_html/sign_in.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs test/platform/repo_lookup_boundary_test.exs
       - uses: actions/upload-artifact@v4
         with:
           name: game-page-format
@@ -70,7 +70,7 @@ jobs:
         run: |
           mix ecto.create
           mix ecto.migrate
-          mix precommit test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs
+          mix precommit test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs test/platform/repo_lookup_boundary_test.exs
       - name: Prove ordinary account provisioning is rejected for a new game player
         run: |
           cp lib/platform/games.ex /tmp/game-page-original.ex
