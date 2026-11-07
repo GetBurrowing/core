@@ -133,7 +133,7 @@ defmodule PlatformWeb.Components.ChatMessage do
         data-date={@msg.day_label}
       >
         <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
+        <span class="text-xs uppercase tracking-widest text-subtle font-semibold px-2">
           {format_day_label(@msg.day_label)}
         </span>
         <div class="flex-1 border-t border-edge"></div>

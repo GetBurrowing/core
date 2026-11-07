@@ -330,7 +330,7 @@ defmodule Platform.Access.EquivalenceTest do
               if(user, do: Scope.for_user(loaded(user)), else: Scope.for_meeting_invitee(nil)),
             {session, path} <- routes,
             today = request_outcome(user, path),
-            via_scope = predict_admin(scope, session, user),
+            via_scope = predict_admin(scope, session, user, path),
             today != via_scope,
             do: {row, path, today: today, scope: via_scope}
 
@@ -587,13 +587,30 @@ defmodule Platform.Access.EquivalenceTest do
 
   # `/admin/sign-in-users` 404s for everyone while the feature is off: that
   # gate is a deployment switch, not access, and runs before authentication.
-  defp predict_admin(scope, session, user) do
+  #
+  # `/admin/feedback-inbox` (task 01a1b678 stage 4) is the same kind of
+  # deployment switch, checked in the view after the admin gate: an admin
+  # gets a 404 unless this node runs the feedback broker.
+  defp predict_admin(scope, session, user, path) do
     cond do
-      session == :admin_sign_in and not Platform.SignInAdmin.Config.enabled?() -> :not_found
-      user == nil -> :login
-      Scope.can?(scope, "install.admin") -> :admitted
-      Scope.guest?(scope) -> :forbidden
-      true -> :denied_admin
+      session == :admin_sign_in and not Platform.SignInAdmin.Config.enabled?() ->
+        :not_found
+
+      user == nil ->
+        :login
+
+      path == "/admin/feedback-inbox" and Scope.can?(scope, "install.admin") and
+          not Platform.Feedback.BrokerServer.enabled?() ->
+        :not_found
+
+      Scope.can?(scope, "install.admin") ->
+        :admitted
+
+      Scope.guest?(scope) ->
+        :forbidden
+
+      true ->
+        :denied_admin
     end
   end
 
