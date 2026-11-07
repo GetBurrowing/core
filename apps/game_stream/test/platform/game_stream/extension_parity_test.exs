@@ -437,7 +437,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a13867 adds the core metric insight_acceptance_rate to the catalog.
     # Task 01a16974 stage 3 adds meeting_synthesis_resolution_rate. Removing
     # only that catalog entry recovers the previous 3a5e4c9b... pin exactly.
-    @main_metrics_catalog_digest "1a76c535dbc7fd46727a65d7985a6bfe1507056715c452885666050e604526b7"
+    # Task 01a1af00 stage 1 adds ux_finding_keep_rate, re-pinned from the
+    # previous 1a76c535... value.
+    @main_metrics_catalog_digest "bfd76bb5bec1972c5d7ca311ab6fd0793d5c0a67db782af8fb5ef16644062e87"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
