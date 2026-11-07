@@ -109,10 +109,9 @@ defmodule PlatformWeb.FeedbackInboxLiveTest do
     test "404s on a normal install, even for an org admin", %{conn: conn} do
       Application.put_env(:platform, :feedback_broker_server, enabled: false)
 
-      IO.inspect(conn |> conn_for(root_admin!()) |> live(~p"/admin/feedback-inbox"),
-        label: "DEBUG404",
-        limit: 5
-      )
+      assert_raise NotFoundError, fn ->
+        conn |> conn_for(root_admin!()) |> live(~p"/admin/feedback-inbox")
+      end
 
       assert {404, _, _} =
                assert_error_sent(404, fn ->
@@ -122,7 +121,7 @@ defmodule PlatformWeb.FeedbackInboxLiveTest do
 
     test "is refused for a member on the broker host", %{conn: conn} do
       result = conn |> conn_for(person!("member")) |> live(~p"/admin/feedback-inbox")
-      assert {:error, {:redirect, %{to: "/access-denied"}}} = result
+      assert {:error, {:redirect, %{to: "/access-denied?module=admin"}}} = result
       refute PlatformWeb.FeedbackInboxLive.visible?(person!("member"))
     end
 

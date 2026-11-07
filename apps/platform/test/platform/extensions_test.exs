@@ -946,7 +946,10 @@ defmodule Platform.ExtensionsTest do
     # stage's branch.
     # Re-pinned by task 01a1b678 stage 3: sharing_list and sharing_set in
     # `federation` and feedback_submit's `space_id`. Measured locally.
-    @main_tool_digest_off "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
+    # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
+    # limitations now say the server-side requester is authorized. Measured
+    # locally.
+    @main_tool_digest_off "31537fe4282a55f2f670a802434ca7185a35a000fec4a4139dd99249ba7f6d4a"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

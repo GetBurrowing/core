@@ -437,10 +437,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
     # the `federation` bundle, and feedback_submit declares `space_id`. All four
     # values measured locally on the stage's branch.
-    @previous_tool_digest_off "c6d4294dca77c58531b62ff52bb2b3d3489c11f0367b40a1b5dcc89ccaa60045"
-    @previous_tool_digest_on "5da04ce33d34382712fcd96cabeb75aefff8cd87bbfca1d31f34f8a3954225b2"
-    @main_tool_digest_off "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
-    @main_tool_digest_on "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
+    # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
+    # limitations say the server-side requester is authorized. All four
+    # values measured locally on the stage's branch.
+    @previous_tool_digest_off "b9de2985dea38512d2819d23561b4472a615cd61e2feef2680b27bf4f6e7aacb"
+    @previous_tool_digest_on "2b40a09d0eff350e8474a5106d21735e0015ceb2d900d2f7a9e75e0d8c6bb838"
+    @main_tool_digest_off "722768536ec6e2503251d60dcdd12e86f8ddfeb8c728b6dbd4a7ac75773626af"
+    @main_tool_digest_on "74994e9fb86fbcafdfa39a4ab3c27d6de65cff94be70d7e8c3bd379d5f100ccd"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
