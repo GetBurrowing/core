@@ -43,7 +43,10 @@ defmodule Platform.GameStream.NativeAPITest do
     on_exit(fn -> Application.put_env(:game_stream, :enabled, previous) end)
     user = Platform.PrototypeFixtures.user!()
 
-    unauthenticated = conn(:get, "/browser/csrf") |> NativeAPI.call([])
+    unauthenticated =
+      conn(:get, "/browser/csrf")
+      |> init_test_session(%{})
+      |> NativeAPI.call([])
     assert unauthenticated.status == 401
 
     csrf_conn =

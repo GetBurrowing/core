@@ -225,14 +225,7 @@ defmodule Platform.GameStream.NativeSessions do
                  row
 
                state in ~w(ended failed) ->
-                 finish(
-                   row,
-                   state,
-                   if(state == "failed",
-                     do: "Native host stopped or could not start",
-                     else: "Session ended"
-                   )
-                 )
+                 finish(row, state, host_reason(state, payload, row))
 
                true ->
                  hash = payload["credential_hash"]
@@ -427,6 +420,17 @@ defmodule Platform.GameStream.NativeSessions do
               )
         )
       )
+
+  defp host_reason("failed", %{"reason" => "host_full"}, _row) do
+    "No free slot on the native host. Try again in a minute."
+  end
+
+  defp host_reason("failed", %{"reason" => "image_not_allowed"}, _row) do
+    "This game build is not available on the native host."
+  end
+
+  defp host_reason("failed", _payload, _row), do: "Native host stopped or could not start"
+  defp host_reason(_state, _payload, row), do: row.reason || "Session ended"
 
   defp finish(row, state, reason) do
     Repo.update_all(from(t in JoinToken, where: t.session_id == ^row.id), set: [connected: false])
