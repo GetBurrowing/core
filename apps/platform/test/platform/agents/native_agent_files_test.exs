@@ -304,11 +304,13 @@ defmodule Platform.Agents.NativeAgentFilesTest do
       assert_receive {:agent_host_push, "agent.start", %{"agent_id" => id, "files" => files}}
       assert id == agent.id
 
-      # The saved content, plus the handoff rule added at start (task 01a1b733).
+      # The saved content, plus the handoff rule added at start (task 01a1b733)
+      # and the control voice block (task 01a1b6ff).
       assert %{"content" => content, "version" => 2} =
                Enum.find(files, &(&1["key"] == "CLAUDE.md"))
 
-      assert content == Platform.Agents.Manners.ensure("# Ada v2")
+      assert content ==
+               Platform.Agents.Manners.ensure("# Ada v2", Platform.Agents.Manners.blocks())
     end
   end
 

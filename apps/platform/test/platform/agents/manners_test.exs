@@ -114,7 +114,10 @@ defmodule Platform.Agents.MannersTest do
       stored = MemoryContext.get_workspace_file(agent.id, "CLAUDE.md")
       assert_rule_once(stored.content, "the new seed")
 
-      assert started(agent, "CLAUDE.md")["content"] == stored.content
+      # Task 01a1b6ff: the start also adds the voice block (no experiment
+      # here, so the control); the handoff rule is not added a second time.
+      assert started(agent, "CLAUDE.md")["content"] ==
+               Manners.ensure(stored.content, Manners.blocks())
     end
 
     test "other files are not touched" do
