@@ -84,7 +84,7 @@ defmodule Platform.Sharing.HelpChannel do
   @doc "True when `space_id` is the Help & feedback channel."
   @spec help_space?(term()) :: boolean()
   def help_space?(space_id) when is_binary(space_id) do
-    case Ecto.UUID.cast(space_id) do
+    case Platform.UUID.cast(space_id) do
       {:ok, id} ->
         Repo.exists?(
           from(s in Space, where: s.id == ^id and s.slug == @slug and s.kind == "channel")
