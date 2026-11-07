@@ -25,7 +25,9 @@ defmodule Platform.InstructionPacks.Entry do
 
   @doc "Return a write decision and provenance; never treat equal local/default strings as consent."
   def reconcile(previous, local, incoming, version) do
-    owned = previous && previous.applied_hash != nil && hash(local) == previous.applied_hash
+    owned =
+      not is_nil(previous) and previous.applied_hash != nil and
+        hash(local) == previous.applied_hash
 
     cond do
       owned and is_nil(incoming) ->
