@@ -786,6 +786,17 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10db6: the iOS App Intents API's entity layer. `fetch_own_approval/2` guards the approve/reject `item_id`, `actor_name/1` guards a generic actor string (user id, agent id, or a label such as \"system:auto\"), `authorize_space/2` guards the space id from a URL path / JSON body, `open_agent_dm/2` guards the `agent_id` from the request body, and `cursor/1` guards the `after` message cursor. Each is used as a BOOLEAN; a malformed id folds into the site's existing {:error, :not_found} / {:error, :forbidden} / {:error, :invalid_cursor} / nil instead of raising Ecto.Query.CastError"},
     {"platform/mobile/app_entities.ex", :get, "Agent", 2, :safe_internal,
      "task 01a10db6: (1) `actor_name/1` calls Repo.get(Agent, actor) inside `if Platform.UUID.valid?(actor)`; (2) `open_agent_dm/2` calls Repo.get(Agent, agent_id) after `is_binary(agent_id) and Platform.UUID.valid?(agent_id)` at the head of the same with-chain, so a malformed request-body id answers {:error, :not_found}"},
+    {"platform/experiments/surfaces/secretary_policy.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "task 01a1b721 stage 1: `subject_attributes/1` guards the experiment subject id (a user id the resolver passes, but a policy can be handed any string) with Platform.UUID.valid?/1 before the org-membership Repo.one (this file's `@repo_one_counts` entry); a malformed id answers `%{org_id: nil}`"},
+    {"platform/secretary/batch.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a1b721 stage 1: `valid_ref?/1` checks each `item_refs` element's `ref_id` (string- or atom-keyed) with Platform.UUID.valid?/1 inside the changeset, so a malformed ref is a changeset error, never a stored ref a later `where:` pins"},
+    {"platform/secretary/inputs.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1b721 stage 1: `meetings/1` keeps only unfiled action items whose `id` (read out of a MeetingBriefing's `items` jsonb) is a valid UUID before it becomes an Input `ref_id`, which later stages pin in `where:` clauses"},
+    {"platform/secretary/store.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1b721 stage 1: `ids_valid?/1`, called by every public reader and writer before its query (viewer user id, batch id, evaluation id, ref id, `:evaluation_id` option), so a malformed id reads as missing (`nil`, `[]`, `{:error, :not_found}`) instead of raising Ecto.Query.CastError; pinned by store_test.exs \"malformed ids read as missing\""},
+    {"platform/secretary/todos.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1b721 stage 1: `valid_id?/1` guards the viewer user id, the entry id and `suggest/2`'s `source_space_id` before every query, so a malformed id is `{:error, :not_found}`, `{:error, :not_a_participant}`, nil or []; pinned by store_test.exs \"malformed ids read as missing\""},
     {"platform/people/visibility.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1aa47 stage 5: `space_allows_private?/3` guards the `subject_user_id` it reads out of a private people page's frontmatter (agent-written text, so agent-reachable) with `is_binary/1 and Platform.UUID.valid?/1` before handing it to `Chat.participant?/2`, which is an unguarded `Repo.exists?` on a :binary_id column (see this file's chat.ex authorize_writer note). Used as a BOOLEAN and the string is discarded — a malformed subject answers false, so the private page is refused in that space rather than raising Ecto.Query.CastError out of a memory_view / memory_search read. The space id itself goes through `Chat.get_space/2`, which carries its own guard"},
     {"platform/mobile/app_people.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1130,6 +1141,15 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Task 01a1b721 stage 1: subject_attributes/1's membership lookup, after
+    # its Platform.UUID.valid?/1 guard.
+    "platform/experiments/surfaces/secretary_policy.ex" => 1,
+    # Task 01a1b721 stage 1: get_batch/2, the evaluation lookup in
+    # upsert_evaluation/2, get_evaluation/3 and hidden_kind?/2, each behind
+    # ids_valid?/1.
+    "platform/secretary/store.ex" => 4,
+    # Task 01a1b721 stage 1: get/2, behind valid_id?/1.
+    "platform/secretary/todos.ex" => 1,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
