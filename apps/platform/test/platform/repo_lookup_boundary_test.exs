@@ -159,6 +159,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10315 stage 5 (moved here by task 01a19505): getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/burrow/getting_started.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5 (moved here by task 01a19505): system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    {"platform/sharing/usage_receiver.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 2: validate/1 casts sharing_install_id from an unauthenticated broker POST body with Platform.UUID.cast/1; a malformed id refuses the batch as :invalid_usage before insert_all"},
     {"platform_web/live/meeting_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a18d9f stage 4: assign_list_selection/2 guards the ?meeting= URL param with Platform.UUID.valid?/1; a malformed id selects nothing, and the id is only compared against already-loaded meeting rows, never passed to Repo"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,

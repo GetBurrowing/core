@@ -243,6 +243,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # which touch Repo from its own process and Task children. Tests
     # start_supervised/1 it inside their sandbox.
     :start_experiments_mail_subscriber,
+    :start_usage_batcher,
     # Task 01a07402 stage 3 — the canvas body search backfill's boot-time
     # one-shot. A `Task`, not a ticker, but the same hazard: left on it would
     # run `CanvasSearchBackfill.run/1` from its own process at suite boot,
