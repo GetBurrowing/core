@@ -4,7 +4,9 @@
 //
 // Two shapes. The chat composer and the inline thread reply are a
 // contenteditable chip field (redesign rung 10, `_mountRich` below; the chip
-// DOM lives in lib/mention_field.js) where Enter sends on every pointer type.
+// DOM lives in lib/mention_field.js). There Enter sends on a fine pointer
+// (desktop); on a coarse pointer (touch) Return inserts a line break and only
+// the Send button sends (task 01a1b671). Cmd/Ctrl+Enter sends on both.
 // The task steering composer is a textarea and keeps the original path
 // unchanged.
 //
@@ -401,8 +403,11 @@ const ComposeInput = {
     this._suppress = null;
     this._draftKey = null;
     this._form = el.closest("form");
-    // Only the touch placeholder reads this now: Enter sends on every
-    // pointer type (coverage row 115), so nothing else branches on it.
+    // A coarse pointer (touch): the touch placeholder reads this, and so
+    // does Enter, which inserts a line break here instead of sending; only
+    // the Send button (or Cmd/Ctrl+Enter from a hardware keyboard) sends.
+    // Task 01a1b671 supersedes coverage row 115 ("Enter sends on every
+    // pointer type") for touch.
     this._isMobile = window.matchMedia("(pointer: coarse)").matches;
 
     this._syncDraftState = () => {
@@ -465,7 +470,20 @@ const ComposeInput = {
           return;
         }
 
-        // Enter and Cmd/Ctrl+Enter send, on every pointer type.
+        // Touch (task 01a1b671): plain Return is a new line, never a send.
+        // It inserts the same <br> Shift+Enter makes rather than leaving it
+        // to the browser, whose default in a contenteditable (iOS Safari) is
+        // a <div>. Cmd/Ctrl+Enter from a tablet's hardware keyboard still
+        // sends, as on desktop.
+        if (this._isMobile && !e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          this._insertLineBreak();
+          this._emit();
+          this._detectMentionRich();
+          return;
+        }
+
+        // Fine pointer: Enter and Cmd/Ctrl+Enter send.
         e.preventDefault();
         this._sendRich();
         return;
@@ -931,6 +949,47 @@ const ComposeInput = {
     const input = this._valueInput();
     if (input) input.value = text;
     if (this._form) this._form.requestSubmit();
+  },
+
+  // A line break at the caret, the same <br> Shift+Enter produces. The
+  // browser's own command when it has one (it keeps undo and places the
+  // caret); otherwise a <br> by hand, plus a trailing placeholder <br> when
+  // the break ends the field, since `serialize` reads a lone trailing <br>
+  // as the empty last line's height and not as a newline.
+  _insertLineBreak() {
+    const el = this.el;
+    let done = false;
+    try {
+      done = typeof document.execCommand === "function" && document.execCommand("insertLineBreak") === true;
+    } catch (_e) {
+      done = false;
+    }
+    if (done) return;
+
+    const doc = el.ownerDocument || document;
+    const sel = window.getSelection && window.getSelection();
+    let node = el;
+    let offset = el.childNodes.length;
+    if (sel && sel.anchorNode && el.contains(sel.anchorNode)) {
+      if (!sel.isCollapsed && sel.rangeCount > 0) sel.getRangeAt(0).deleteContents();
+      node = sel.anchorNode;
+      offset = sel.anchorOffset;
+    }
+
+    const br = doc.createElement("br");
+    if (node.nodeType === 3) {
+      const after = node.data.slice(offset);
+      node.data = node.data.slice(0, offset);
+      node.parentNode.insertBefore(br, node.nextSibling);
+      if (after !== "") br.parentNode.insertBefore(doc.createTextNode(after), br.nextSibling);
+      if (node.data === "") node.parentNode.removeChild(node);
+    } else {
+      node.insertBefore(br, node.childNodes[offset] || null);
+    }
+
+    if (!br.nextSibling) br.parentNode.insertBefore(doc.createElement("br"), null);
+    const parent = br.parentNode;
+    this._placeCaret({ node: parent, offset: Array.prototype.indexOf.call(parent.childNodes, br) + 1 });
   },
 
   _placeCaret(pos) {
