@@ -333,8 +333,8 @@ defmodule PlatformWeb.AdminUpdatesLive do
       <div class="space-y-3 p-4">
         <p class="font-mono text-sm tabular-nums text-base-content" data-role="updates-meta">
           <span data-role="updates-channel">{@status.channel || "unknown"}</span>
-          <span :if={@running}> · running     {@running}</span>
-          <span :if={@checked}> · checked     {@checked}</span>
+          <span :if={@running}>{" · running " <> @running}</span>
+          <span :if={@checked}>{" · checked " <> @checked}</span>
         </p>
 
         <p :if={@headline} class="text-sm text-base-content" data-role="updates-headline">
