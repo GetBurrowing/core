@@ -95,7 +95,7 @@ defmodule Platform.Responsibilities.Router do
   ## Fire outcomes (ADR-0046)
 
   `fire_trigger/2,3` returns `t:fire_outcome/0` —
-  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:ok, :no_measurement} | {:error, term()}`
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:ok, :no_measurement} | {:ok, :handled} | {:error, term()}`
   — so a caller can tell "nobody holds this responsibility" apart from
   "the dispatch died". ADR-0046 requires a per-step
   `not_applicable | complete | failed` and those two states used to be the
@@ -152,6 +152,10 @@ defmodule Platform.Responsibilities.Router do
       statement than the `:no_work` envelopes `@no_work_refusals`
       dispatches. Native-only: `dispatch_external/5` already aborts on
       any `{:error, _}` refusal, `:no_measurement` included.
+    * `{:ok, :handled}` — an assignee was resolved and the provider's
+      `gather_context/2` did the whole job server-side, returning
+      `{:handled, summary}` (today only `Handlers.UxFrictionWatch`). No
+      prompt was built and nothing was dispatched. Maps to `complete`.
     * `{:error, term()}` — an assignee existed and the dispatch died.
       Maps to the ADR's `failed`.
 
@@ -165,6 +169,7 @@ defmodule Platform.Responsibilities.Router do
           | {:ok, :unfilled}
           | {:ok, :placeholder}
           | {:ok, :no_measurement}
+          | {:ok, :handled}
           | {:error, term()}
 
   @default_check_interval_ms :timer.seconds(60)
@@ -1323,6 +1328,18 @@ defmodule Platform.Responsibilities.Router do
       {:refused, reason} ->
         refuse_dispatch(responsibility, agent, kind, reason, trigger_meta)
 
+      # The provider did the work in server code (task 01a1af00 stage 2,
+      # `Handlers.UxFrictionWatch`): nothing to render, nothing to send.
+      {:handled, _summary} ->
+        Logger.info(
+          "[ResponsibilityRouter] handled server-side key=#{responsibility.key} " <>
+            "agent=#{agent_slug(agent)}"
+        )
+
+        safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
+        emit_fired_telemetry(responsibility, agent, :server_side)
+        {:ok, :handled}
+
       {:ok, ctx} ->
         context = Map.put(ctx, :__responsibility__, responsibility)
         rendered = build_prompt_via_provider(provider_module, context)
@@ -1557,6 +1574,7 @@ defmodule Platform.Responsibilities.Router do
          function_exported?(provider_module, :gather_context, 2) do
       case safe_provider_gather(provider_module, responsibility, meta) do
         {:ok, ctx} when is_map(ctx) -> {:ok, ctx}
+        {:handled, summary} when is_map(summary) -> {:handled, summary}
         {:error, reason} -> {:refused, reason}
         other -> {:refused, {:unexpected_gather_shape, other}}
       end

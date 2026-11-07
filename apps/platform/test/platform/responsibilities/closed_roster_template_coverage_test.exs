@@ -145,7 +145,11 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "security.secret_leak.v1",
     "tasks.triage.v1",
     "tasks.unblock.v1",
-    "tasks.weekly_review.v1"
+    "tasks.weekly_review.v1",
+    # Task 01a1af00 stage 2: `ux.friction_watch` (designer bundle) points at
+    # this slug; descriptor in `default_templates/0`, row seeded by
+    # `20261107180000_seed_ux_friction_watch_template_and_bundle.exs`.
+    "ux.friction_watch.v1"
   ]
 
   # The roster slugs NO seeder owns today. Measured, not assumed: it is
