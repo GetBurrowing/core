@@ -135,6 +135,17 @@ defmodule Platform.Experiments.Metrics do
           "(accepted / (accepted + rejected + flagged)), over a variant's dreaming runs.",
       direction: :higher_is_better
     },
+    # Task 01a1b6a1 stage 1, for the `habits.learned_defaults` surface
+    # (0061-learned-defaults.md). Counts judged pre-fills of assigned users;
+    # ignored pre-fills are in neither side (see the module).
+    "habits.prefill_accept_rate" => %{
+      module: Platform.Experiments.Metrics.PrefillAcceptRate,
+      label: "Pre-fill accept rate",
+      description:
+        "Share of judged pre-fills accepted rather than overridden " <>
+          "(accepted / (accepted + overridden)), over a variant's assigned users.",
+      direction: :higher_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

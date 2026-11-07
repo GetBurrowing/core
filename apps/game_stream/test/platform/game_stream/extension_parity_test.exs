@@ -463,7 +463,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :changelog,
       :admin
     ]
-    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
+    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
     # main's ORDER: dispatch.prompt, mail.draft.generator, planner.stage_budget,
     # chat.context_summary, game_stream.encoder_preset, game_stream.roster,
     # meetings.open_question_classifier. The stage appends extension surfaces
@@ -483,8 +483,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1aa47 stage 4 adds hr.profile, a core surface appended after
     # memory.insight_synthesis, so it precedes the Play keys as well; stage 5
     # re-pins it here (the tool-definition digests did not move).
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a1b6a1 stage 1 adds habits.learned_defaults, a core surface
+    # appended after hr.profile, so it precedes the Play keys as well; it
+    # also adds the core metric habits.prefill_accept_rate.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile habits.learned_defaults)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile habits.learned_defaults game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp without_triage_item_schema(definitions) do
       Enum.map(definitions, fn

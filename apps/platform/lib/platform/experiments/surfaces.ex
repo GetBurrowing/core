@@ -79,7 +79,12 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a1aa47 stage 4: the HR responsibility's directive, lookback and
     # name-resolution threshold. Nothing is seeded; the control is the
     # handler's defaults.
-    Platform.Experiments.Surfaces.HrProfile
+    Platform.Experiments.Surfaces.HrProfile,
+    # Task 01a1b6a1 stage 1: the learned-defaults trust-ladder thresholds
+    # and decay (0061-learned-defaults.md). Nothing is seeded; the control
+    # is prefill_threshold 0.6, min_signals 3, act_after_accepts 5,
+    # half_life_days 30.
+    Platform.Experiments.Surfaces.LearnedDefaults
   ]
 
   @prompt_surface "dispatch.prompt"
