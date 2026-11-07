@@ -9,17 +9,25 @@ defmodule PlatformWeb.PrototypeController do
       numbered version, so the version is always visible in the URL.
     * `GET /proto/:id/:version/*path` — the ENTRY. Session-authenticated: it
       is a navigation the Burrow page starts (an iframe `src` or the Open
-      button), so the session cookie is sent. After the membership check it
+      button), so the session cookie is sent. After the read check it
       302s to the grant URL below. With no path it lands on the version's
       `entry_path`.
     * `GET /proto/:id/:version/g/:grant/*path` — every bundle file. Carries
       no session (see `PlatformWeb.PrototypeGrant` for why and for the
       measurement): the grant is verified, must be bound to THIS prototype
-      and version, and the grant's user must still be a member of the
-      prototype's org (`Tenancy.member_of?/2`), so removing a member revokes
+      and version, and the grant's user must still pass
+      `Platform.Prototypes.readable_by?/2`, so losing read access revokes
       their grants on the next request.
 
-  Non-members, unknown ids, unknown versions, removed versions and unknown
+  The read check (`Platform.Prototypes.readable_by?/2`, task 01a1b70c stage
+  1) follows where the prototype lives: a canvas-owned prototype follows
+  `Platform.Chat.CanvasAccess`, a space-bound one follows its space
+  (participants, plus a non-external root admin or member of the space's org
+  on an accessible org channel; a root admin gets no other bypass), and one
+  with neither needs membership of the prototype's org. Removing a
+  participant from the space, or a member from the org, revokes accordingly.
+
+  Readers refused by that check, unknown ids, unknown versions, removed versions and unknown
   paths all get the same 404: existence is never confirmed. Query strings
   are ignored by the server and carried through every redirect, so a
   `?screen=2` deep link reaches the bundle's own script unchanged. A
@@ -42,9 +50,9 @@ defmodule PlatformWeb.PrototypeController do
     * `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` (so a
       grant never leaks through `Referer`), and `Cache-Control: private,
       no-cache`. A version's bytes never change, but the grant is revocable:
-      the membership check above only runs if the request reaches the
+      the read check above only runs if the request reaches the
       server. With `max-age` a browser served a re-navigated grant URL from
-      its disk cache for up to an hour after the minting user left the org
+      its disk cache for up to an hour after the minting user lost access
       (member 2's review). `no-cache` makes every use revalidate, so
       revocation shows on the next navigation.
 
@@ -68,8 +76,8 @@ defmodule PlatformWeb.PrototypeController do
       `navigate-to`, so script in the frame can navigate its own frame to an
       outside URL carrying whatever the user typed into the bundle.
     * A grant URL is a bearer capability for one version until it expires or
-      its minting user leaves the org. A non-member without a grant always
-      gets 404.
+      its minting user loses read access. A refused reader without a grant
+      always gets 404.
     * A bundle path beginning `g/<segment>/` is shadowed at the entry route by
       the grant route; it is still served normally under a grant.
   """
