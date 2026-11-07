@@ -7,6 +7,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
   import PlatformWeb.ControlCenter.Helpers
 
+  alias PlatformWeb.ControlCenter.SheetRefusal
+
   attr :show, :boolean, required: true
   attr :onboarding_flow, :atom, default: nil
   attr :selected_template, :map, default: nil
@@ -26,6 +28,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   attr :agent_host_connected?, :boolean, default: false
   # Fail closed: without the flag the create paths render locked (task 01a1ae4b).
   attr :can_create_ownerless?, :boolean, default: false
+  # A policy refusal raised while this overlay is open (task 01a1ae4b stage 2).
+  attr :sheet_refusal, :string, default: nil
 
   def overlay(assigns) do
     ~H"""
@@ -57,6 +61,10 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             >
               <span class="hero-x-mark h-5 w-5" />
             </button>
+          </div>
+
+          <div :if={@sheet_refusal} class="mt-4">
+            <SheetRefusal.alert message={@sheet_refusal} />
           </div>
 
           <.chooser_cards

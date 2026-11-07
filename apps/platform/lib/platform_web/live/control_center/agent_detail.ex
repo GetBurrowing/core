@@ -15,6 +15,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.NativeStatus
   alias PlatformWeb.ControlCenter.RuntimePanel
+  alias PlatformWeb.ControlCenter.SheetRefusal
   alias PlatformWeb.ControlCenter.VaultEvents
 
   # ── Chat opt-out toggle (task 01a1b20f stage 3) ────────────────────
@@ -404,6 +405,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:current_user_id, :string, default: nil)
   attr(:can_grant?, :boolean, default: false)
   attr(:grant_panel, :map, default: nil)
+  attr(:sheet_refusal, :string, default: nil)
 
   def federation_panels(assigns) do
     ~H"""
@@ -580,11 +582,19 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       </button>
     </section>
 
+    <%!-- Only the :manage_selected-gated show_add_space_modal handler opens
+         this, and selecting another agent closes it. It is deliberately not
+         also conditioned on @can_manage? (task 01a1ae4b stage 2): when the
+         agent stops being this user's while the modal is open, the refusal
+         renders in the modal (ControlCenterLive.refuse/2 suppresses the page
+         flash while it is open), so hiding the modal would hide the refusal. --%>
     <div
-      :if={@can_manage? and @show_add_space_modal}
+      :if={@show_add_space_modal}
+      id="add-space-modal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60"
     >
       <div class="w-full max-w-md rounded-2xl border border-edge bg-base-100 p-6 shadow-xl">
+        <SheetRefusal.alert message={@sheet_refusal} />
         <h3 class="mb-4 text-base font-semibold">Add Agent to Space</h3>
         <form phx-submit="add_agent_to_space">
           <div class="form-control mb-4">

@@ -112,6 +112,8 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:show_add_space_modal, false)
      |> assign(:available_spaces, [])
      |> assign(:available_meeting_spaces, [])
+     # A policy refusal raised while a sheet is open (task 01a1ae4b stage 2).
+     |> assign(:sheet_refusal, nil)
      # Roles panel assigns (M7 stage 5)
      |> assign(:active_tab, :roles)
      |> assign(:show_role_advanced, false)
@@ -142,6 +144,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
     socket =
       socket
+      |> close_add_space_modal_on_switch(selected_agent)
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
@@ -334,6 +337,8 @@ defmodule PlatformWeb.ControlCenterLive do
     "session_restart_cancel" => :ui
   }
 
+  @create_refused_message "You don't have permission to add agents to this org."
+
   @impl true
   def handle_event(name, params, socket) do
     scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
@@ -373,22 +378,44 @@ defmodule PlatformWeb.ControlCenterLive do
       end
 
     if permitted? do
-      handle_control_event(name, params, socket)
+      handle_control_event(name, params, assign(socket, :sheet_refusal, nil))
     else
       message =
-        cond do
-          Map.get(@event_policy, name) == :access_admin ->
+        case Map.get(@event_policy, name) do
+          :access_admin ->
             GrantEvents.forbidden_message()
 
-          NativeAgents.managed?(socket.assigns[:selected_agent]) ->
-            NativeAgentEvents.refused_message()
+          :create_ownerless ->
+            @create_refused_message
 
-          true ->
-            "You can only manage your own agents."
+          _ownership ->
+            if NativeAgents.managed?(socket.assigns[:selected_agent]),
+              do: NativeAgentEvents.refused_message(),
+              else: "You can only manage your own agents."
         end
 
-      {:noreply, put_flash(socket, :error, message)}
+      {:noreply, refuse(socket, message)}
     end
+  end
+
+  # Every policy refusal goes through here (task 01a1ae4b stage 2). The
+  # sheets on this page (the onboarding overlay, the Add-to-Space modal and
+  # the grant panel) are full-screen overlays above the layout's flash toast,
+  # so a flash raised while one is open would land behind it, unread. While a
+  # sheet is open the message goes to `:sheet_refusal`, which the sheet
+  # renders at the top of its body; the form assigns are left alone, so what
+  # was typed stays. With no sheet open it is the page flash, as before.
+  defp refuse(socket, message) do
+    if sheet_open?(socket.assigns) do
+      assign(socket, :sheet_refusal, message)
+    else
+      put_flash(socket, :error, message)
+    end
+  end
+
+  defp sheet_open?(assigns) do
+    assigns[:show_onboarding_chooser] == true or assigns[:show_add_space_modal] == true or
+      not is_nil(assigns[:grant_panel])
   end
 
   # ── Roles panel events (M7 stage 5) ───────────────────────────────
@@ -918,6 +945,7 @@ defmodule PlatformWeb.ControlCenterLive do
         role_assignments_by_key={@role_assignments_by_key}
         agent_host_connected?={@agent_host_connected?}
         can_create_ownerless?={@can_create_ownerless?}
+        sheet_refusal={@sheet_refusal}
       />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
@@ -1122,6 +1150,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 managed?={not is_nil(@native_header)}
                 can_grant?={@can_grant?}
                 grant_panel={@grant_panel}
+                sheet_refusal={@sheet_refusal}
                 can_manage?={
                   Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
                     (is_nil(@native_header) or @native_header.can_manage?)
@@ -1239,9 +1268,12 @@ defmodule PlatformWeb.ControlCenterLive do
         <span class="hero-plus h-6 w-6" />
       </button>
 
+      <%!-- Kept open while it holds a refusal, so the refusal is read where
+           the person is looking (task 01a1ae4b stage 2). --%>
       <PlatformWeb.ControlCenter.RuntimePanel.grant_panel
-        :if={@grant_panel && @can_grant?}
+        :if={@grant_panel && (@can_grant? or not is_nil(@sheet_refusal))}
         panel={@grant_panel}
+        sheet_refusal={@sheet_refusal}
       />
     </div>
     """
@@ -1317,6 +1349,18 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:available_meeting_spaces, [])
     |> assign_roles_panel()
     |> assign_native()
+  end
+
+  # The Add-to-Space modal belongs to the agent it was opened for. Its render
+  # condition is only `@show_add_space_modal` (so a refusal can render in it),
+  # so it is closed when another agent is selected (task 01a1ae4b stage 2).
+  # Called before `:selected_agent` is reassigned; a refresh of the same agent
+  # leaves it open.
+  defp close_add_space_modal_on_switch(socket, selected_agent) do
+    case {socket.assigns[:selected_agent], selected_agent} do
+      {%Agent{id: id}, %Agent{id: id}} -> socket
+      _switched -> assign(socket, :show_add_space_modal, false)
+    end
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do

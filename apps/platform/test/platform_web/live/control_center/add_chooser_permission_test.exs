@@ -132,7 +132,9 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
           "external_agent" => external_params("Member Forged")
         })
 
-      assert html =~ "You can only manage your own agents."
+      # Stage 2: the create refusal has its own message.
+      assert html =~ "You don&#39;t have permission to add agents to this org."
+      refute html =~ "You can only manage your own agents."
       refute Repo.get_by(Agent, slug: "member-forged")
     end
   end
