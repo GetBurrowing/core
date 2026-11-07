@@ -136,16 +136,32 @@ defmodule Platform.Games do
   def community(game, user) do
     with id when is_binary(id) <- game["community_space_id"],
          true <- Platform.UUID.valid?(id),
-         %Platform.Chat.Space{kind: "channel", archived_at: nil} = space <- Platform.Chat.get_space(id),
+         %Platform.Chat.Space{kind: "channel", archived_at: nil} = space <-
+           Platform.Chat.get_space(id),
          true <- space.org_id == game["org_id"],
          true <- space.metadata["public_game_slug"] == game["slug"] do
-      member_count = Repo.aggregate(from(p in Platform.Chat.Participant,
-        join: u in Platform.Accounts.User, on: p.participant_id == u.id,
-        where: p.space_id == ^id and p.participant_type == "user" and is_nil(u.archived_at)), :count)
-      joined? = not is_nil(user) and
-        Repo.exists?(from p in Platform.Chat.Participant,
-          where: p.space_id == ^id and p.participant_type == "user" and p.participant_id == ^user.id) and
-        Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.read", {:space, id}) == :ok
+      member_count =
+        Repo.aggregate(
+          from(p in Platform.Chat.Participant,
+            join: u in Platform.Accounts.User,
+            on: p.participant_id == u.id,
+            where: p.space_id == ^id and p.participant_type == "user" and is_nil(u.archived_at)
+          ),
+          :count
+        )
+
+      joined? =
+        not is_nil(user) and
+          Repo.exists?(
+            from(p in Platform.Chat.Participant,
+              where:
+                p.space_id == ^id and p.participant_type == "user" and
+                  p.participant_id == ^user.id
+            )
+          ) and
+          Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.read", {:space, id}) ==
+            :ok
+
       %{space: space, member_count: member_count, joined?: joined?}
     else
       _ -> nil

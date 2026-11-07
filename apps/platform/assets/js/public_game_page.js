@@ -36,6 +36,7 @@ export function installPublicGamePage(doc = document, win = window) {
     unsupported.hidden = !nonWindows
     action.hidden = nonWindows
   }
+  root.dataset.gamePageReady = "true"
   let stop = null, frame = null
   root.addEventListener("click", async event => {
     const button = event.target.closest("[data-game-copy], [data-game-download], [data-game-windows-override]")

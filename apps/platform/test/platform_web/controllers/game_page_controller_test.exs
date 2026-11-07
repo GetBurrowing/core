@@ -45,6 +45,7 @@ defmodule PlatformWeb.GamePageControllerTest do
       "published" => true,
       "org_id" => org.id,
       "title" => "Voltron",
+      "image_path" => "/images/voltron-game.png",
       "summary" => "Four pilots. One robot.",
       "community_space_id" => community.id,
       "current_version" => "one",
@@ -73,7 +74,9 @@ defmodule PlatformWeb.GamePageControllerTest do
   test "anonymous visitor sees the game and sign-in; no chat membership is required", %{
     conn: conn
   } do
-    html = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+    page = conn |> get("/games/voltron") |> html_response(200)
+    browser_evidence("visitor", page)
+    html = LazyHTML.from_document(page)
     assert Enum.count(LazyHTML.query(html, "#game-sign-in")) == 1
     assert Enum.count(LazyHTML.query(html, "#game-download")) == 0
     assert conn |> get("/games/not-published") |> response(404) == "Game not found"
@@ -183,6 +186,7 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert {:error, :unavailable} = Games.join_community(bad, user)
     conn = init_test_session(conn, current_user_id: user.id)
     html = conn |> get("/games/voltron?tab=community") |> html_response(200)
+    browser_evidence("community", html)
     assert html =~ "game-live-chat"
     refute html =~ "id=\"community-join\""
     joined = post(conn, "/games/voltron/community", %{})
@@ -308,14 +312,31 @@ defmodule PlatformWeb.GamePageControllerTest do
   end
 
   test "phone visitors see Windows guidance and a real copy-link action", %{conn: conn} do
-    html = conn |> put_req_header("user-agent", "Mozilla iPhone") |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+    html =
+      conn
+      |> put_req_header("user-agent", "Mozilla iPhone")
+      |> get("/games/voltron")
+      |> html_response(200)
+      |> LazyHTML.from_document()
+
     assert Enum.count(LazyHTML.query(html, "#game-copy-link")) == 1
     assert Enum.count(LazyHTML.query(html, "[data-game-action][hidden]")) == 1
     refute LazyHTML.text(html) =~ "Email me"
   end
 
-  test "only a successful artifact response acknowledges the exact download request", %{conn: conn, game: game} do
-    user = Repo.insert!(User.changeset(%User{}, %{name: "Player", email: "player@example.net", oidc_sub: "cookie-player"}))
+  test "only a successful artifact response acknowledges the exact download request", %{
+    conn: conn,
+    game: game
+  } do
+    user =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Player",
+          email: "player@example.net",
+          oidc_sub: "cookie-player"
+        })
+      )
+
     conn = init_test_session(conn, current_user_id: user.id)
     nonce = String.duplicate("a", 32)
     downloaded = get(conn, "/games/voltron/releases/one/download?download_request=" <> nonce)
@@ -333,6 +354,15 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute html =~ "game-live-chat"
     assert html =~ "community-sign-in"
     assert html =~ "after you join"
+  end
+
+  # Optional CI artifact from the real controller render, consumed by the
+  # approved runner's browser layout check. No production data is used.
+  defp browser_evidence(name, html) do
+    if directory = System.get_env("GAME_PAGE_BROWSER_EVIDENCE") do
+      File.mkdir_p!(directory)
+      File.write!(Path.join(directory, name <> ".html"), html)
+    end
   end
 
 end

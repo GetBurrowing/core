@@ -32,6 +32,7 @@ jobs:
       PGHOST: postgres
       PGUSER: postgres
       PGPASSWORD: postgres
+      GAME_PAGE_BROWSER_EVIDENCE: /tmp/game-page-browser/game-page-evidence
     defaults:
       run:
         working-directory: apps/platform
@@ -66,11 +67,41 @@ jobs:
         with:
           name: game-page-format
           path: game-page-formatted.tar.gz
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/assets/package-lock.json
+      - name: JavaScript dependencies and game page checks
+        working-directory: apps/platform/assets
+        run: |
+          npm ci
+          npx vitest run test/public_game_page.test.js
       - name: Compile and exercise game and existing auth/attachment boundaries
         run: |
           mix ecto.create
           mix ecto.migrate
           mix precommit test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs test/platform/repo_lookup_boundary_test.exs
+      - name: Check the actual page on phone and desktop
+        run: |
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
+          mix tailwind platform --minify
+          cd assets
+          NODE_PATH=../deps npx esbuild js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=. --alias:@extensions=./js/extensions/none.js --minify
+          cd ..
+          cp -r priv/static/assets priv/static/images /tmp/game-page-browser/
+          npm install --prefix /tmp/game-page-playwright playwright@1.58.2
+          /tmp/game-page-playwright/node_modules/.bin/playwright install --with-deps chromium
+          mkdir -p /tmp/game-page-screenshots
+          node -e 'const h=require("node:http"),f=require("node:fs"),p=require("node:path");h.createServer((q,r)=>{const x=p.join("/tmp/game-page-browser",new URL(q.url,"http://localhost").pathname);f.readFile(x,(e,b)=>{if(e){r.writeHead(404);return r.end()}r.setHeader("Content-Type",x.endsWith(".css")?"text/css":x.endsWith(".js")?"text/javascript":x.endsWith(".png")?"image/png":x.endsWith(".jpg")?"image/jpeg":"text/html");r.end(b)})}).listen(8765,"127.0.0.1")' &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          GAME_PAGE_PLAYWRIGHT=/tmp/game-page-playwright/node_modules/playwright GAME_PAGE_SCREENSHOTS=/tmp/game-page-screenshots node "$GITHUB_WORKSPACE/.github/scripts/game-page-layout.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-page-layout
+          path: /tmp/game-page-screenshots
       - name: Prove ordinary account provisioning is rejected for a new game player
         run: |
           cp lib/platform/games.ex /tmp/game-page-original.ex
