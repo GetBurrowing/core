@@ -185,7 +185,10 @@ defmodule Platform.Federation.ToolSurface do
       "feedback for one memory path; out of scope for task 01a04a7a",
     "federation_status" =>
       "a status report whose lists are components of one snapshot, not a paged corpus",
-    "canvas_template" => "a static template catalogue returned whole from code, not a data corpus"
+    "canvas_template" =>
+      "a static template catalogue returned whole from code, not a data corpus",
+    "sharing_list" =>
+      "the fixed sharing registry (four entries today) returned whole from code with each switch's state, not a data corpus"
   }
 
   @doc """

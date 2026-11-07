@@ -235,7 +235,10 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # 229 adds space_rename's two HONEST declarations (task 01a19948 stage 2):
   # space_id and name are read only through require_string/3; neither is
   # aliased, defaulted or resolved from caller context.
-  @surveyed_required_count 229
+  # 231 adds sharing_set's two HONEST declarations (task 01a1b678 stage 3):
+  # `key` and `on` are read under their declared names only; a missing or
+  # invalid value is refused with :invalid_argument, never defaulted.
+  @surveyed_required_count 231
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

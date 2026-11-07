@@ -230,6 +230,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -431,10 +434,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # four tool-definition digests move. Names, bundles, summaries and
     # parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @previous_tool_digest_off "dec8d76d3a099473cf4d67e842f57702c6b3ec8f6c5cd73a9cce673f2f40c95a"
-    @previous_tool_digest_on "b96f42c432b252e8759d84749c81938b6ab456dd4c6de0cfec158c6fbad74c6b"
-    @main_tool_digest_off "a8436315038c731fbf2e9b31edce83137e98b07c9e5e0dbc501c8933ee7e5c9e"
-    @main_tool_digest_on "982f234f1d34aee0311551f81042547f5888d433c392c5580f4b25911709dc03"
+    # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
+    # the `federation` bundle, and feedback_submit declares `space_id`. All four
+    # values measured locally on the stage's branch.
+    @previous_tool_digest_off "c6d4294dca77c58531b62ff52bb2b3d3489c11f0367b40a1b5dcc89ccaa60045"
+    @previous_tool_digest_on "5da04ce33d34382712fcd96cabeb75aefff8cd87bbfca1d31f34f8a3954225b2"
+    @main_tool_digest_off "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
+    @main_tool_digest_on "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

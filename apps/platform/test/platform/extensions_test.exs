@@ -755,6 +755,9 @@ defmodule Platform.ExtensionsTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
