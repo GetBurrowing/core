@@ -499,8 +499,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1b6a1 stage 1 adds habits.learned_defaults, a core surface
     # appended after hr.profile, so it precedes the Play keys as well; it
     # also adds the core metric habits.prefill_accept_rate.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults game_stream.encoder_preset game_stream.roster game_stream.touch)
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults secretary.policy)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults secretary.policy game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a1b721 stage 1 adds secretary.policy, appended after
+    # habits.learned_defaults, so it precedes the Play keys as well.
 
     defp without_triage_item_schema(definitions) do
       Enum.map(definitions, fn

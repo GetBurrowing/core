@@ -97,6 +97,8 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
                  "planner.stage_budget",
+                 # Task 01a1b721 stage 1: the triage agent's surface.
+                 "secretary.policy",
                  "test.budget",
                  # Task 01a1af00 stage 1: the UX friction surface, a dispatch path.
                  "ux.friction_detection"

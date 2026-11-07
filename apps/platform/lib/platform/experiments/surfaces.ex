@@ -88,7 +88,11 @@ defmodule Platform.Experiments.Surfaces do
     # and decay (0061-learned-defaults.md). Nothing is seeded; the control
     # is prefill_threshold 0.6, min_signals 3, act_after_accepts 5,
     # half_life_days 30.
-    Platform.Experiments.Surfaces.LearnedDefaults
+    Platform.Experiments.Surfaces.LearnedDefaults,
+    # Task 01a1b721 stage 1: the per-person triage agent's brief, ranking,
+    # interrupt threshold and token ceilings. Subject "user". Nothing is
+    # seeded; the control is priv/secretary/.
+    Platform.Experiments.Surfaces.SecretaryPolicy
   ]
 
   @prompt_surface "dispatch.prompt"
