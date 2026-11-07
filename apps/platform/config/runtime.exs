@@ -782,6 +782,24 @@ if System.get_env("FEEDBACK_BROKER_SERVER") in ["true", "1"] do
     rate_per_hour: broker_rate
 end
 
+# ── Vendor support access (task 01a1b362 stage 1, ADR 0059) ──────────────
+# SUPPORT_VENDOR_KEYS: the PUBLIC halves of the vendor's grant-signing keys,
+# `kid:base64` pairs separated by commas (more than one during rotation).
+# Unset, the grant route is a 404. INSTALL_ID: this install's id as the
+# vendor knows it; grants naming another install are refused, and the repair
+# principal is `support-<INSTALL_ID>`. SUPPORT_ACCESS_STATE_PATH and
+# SUPPORT_SHELL_EVENTS_PATH: the host files the installer bind-mounts.
+# SUPPORT_VENDOR_NAME: display only. SUPPORT_ACCESS_DEFAULT is read by the
+# migration that seeds the switch, not here. Not read under test.
+if config_env() != :test do
+  config :platform, :support_access,
+    vendor_keys: Platform.SupportAccess.Config.parse_keys(System.get_env("SUPPORT_VENDOR_KEYS")),
+    install_id: System.get_env("INSTALL_ID"),
+    state_path: System.get_env("SUPPORT_ACCESS_STATE_PATH"),
+    shell_events_path: System.get_env("SUPPORT_SHELL_EVENTS_PATH"),
+    vendor_name: System.get_env("SUPPORT_VENDOR_NAME")
+end
+
 # ── WebMCP tool surface (BACKLOG #14) ─────────────────────────────────────────
 # Gates registration of `navigator.modelContext` tools in app.js. Off by default
 # in prod; on by default in dev. Override with WEBMCP_ENABLED=true|false.

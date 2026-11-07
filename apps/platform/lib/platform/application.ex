@@ -201,6 +201,10 @@ defmodule Platform.Application do
          # Feedback broker per-IP counters (task 01a1a6a5 stage 3). Idle on
          # installs that do not run FEEDBACK_BROKER_SERVER.
          Platform.Feedback.BrokerRateLimit,
+         # Vendor support grant junk counters (task 01a1b362 stage 1, ADR
+         # 0059). Pure ETS owner; must exist before the Endpoint takes a
+         # grant POST.
+         Platform.SupportAccess.JunkLimit,
          # Dedicated HTTP/2 pool for APNs (task 01a10882 stage 2). Apple
          # requires HTTP/2 and multiplexes every push for one provider
          # over a connection, so the pool is its own and HTTP/2 only.
@@ -303,6 +307,13 @@ defmodule Platform.Application do
          # subscribes to "chat:agent_runtime" and freezes in-context
          # messages on :agent_first_state_op signals. Needs Repo + PubSub.
          Platform.Chat.AdHocFreezeListener,
+         # Vendor support sweeper (task 01a1b362 stage 1, ADR 0059): ends
+         # expired support sessions, rewrites the host state file, ingests
+         # shell events. Needs Repo + PubSub. Off in config/test.exs.
+         if(flag.(:platform, :start_support_access_sweeper, true),
+           do: Platform.SupportAccess.Sweeper,
+           else: []
+         ),
          # Start to serve requests, typically the last entry
          PlatformWeb.Endpoint
        ]))

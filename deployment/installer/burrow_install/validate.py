@@ -15,7 +15,7 @@ second error for it, so one wrong field yields exactly one error line.
 
 import re
 
-from . import SCHEMA_VERSION, registry
+from . import SCHEMA_VERSION, registry, support
 from .manifest import SCHEMA, ArrayOf, Field, normalize
 
 
@@ -54,6 +54,8 @@ ERROR_CODES = (
     "duplicate_endpoint_name",
     "invalid_org_name",
     "invalid_ssh_authorized_key",
+    "invalid_ssh_user_ca",
+    "invalid_support_key",
 )
 
 # Rules of install.target = "mac" (task 01a0d6ab). Kept apart from
@@ -356,6 +358,10 @@ def _rules(m, bad, errors, present=frozenset()):
             if f"access.{key}" in present:
                 add("field_not_applicable", f"access.{key}", 'only used with target = "mac"')
 
+    # [support] (task 01a1b362 stage 3): None when the manifest has no block.
+    if m["support"] is not None:
+        _support_rules(m, bad, add, mac)
+
     # [voice] vs [host]
     if (
         services["voice"]
@@ -578,6 +584,69 @@ def _mac_local_embeddings(m, present):
     )
 
 
+def _support_rules(m, bad, add, mac):
+    sup = m["support"]
+    if sup["vendor_name"] is not None and not valid_org_name(sup["vendor_name"]):
+        add(
+            "invalid_value",
+            "support.vendor_name",
+            f"must be 1-{ORG_NAME_MAX} printable characters with no leading or trailing "
+            'space and no ", $ or backtick',
+        )
+    if sup["install_id"] is not None and not support.INSTALL_ID_RE.match(sup["install_id"]):
+        add("invalid_value", "support.install_id", "must match [A-Za-z0-9._-]{1,64}")
+    if not _is_bad("support.vendor_grant_keys", bad):
+        seen = {}
+        for index, key in enumerate(sup["vendor_grant_keys"]):
+            base = f"support.vendor_grant_keys[{index}]"
+            kid, public_key = key["kid"], key["public_key"]
+            if kid is None or public_key is None:
+                if not _is_bad(base, bad):
+                    add("missing_required", base, "every grant key needs kid and public_key")
+                continue
+            if not support.KID_RE.match(kid):
+                add("invalid_support_key", f"{base}.kid", "must match [A-Za-z0-9._-]{1,64}")
+            elif kid in seen:
+                add(
+                    "invalid_support_key",
+                    f"{base}.kid",
+                    f"{kid!r} is already used by support.vendor_grant_keys[{seen[kid]}]",
+                )
+            else:
+                seen[kid] = index
+            if support.grant_key_bytes(public_key) is None:
+                add(
+                    "invalid_support_key",
+                    f"{base}.public_key",
+                    "must be an Ed25519 public key: 32 bytes in base64 or base64url",
+                )
+    ca = sup["ssh_user_ca"]
+    if ca is None:
+        return
+    if mac:
+        add(
+            "field_not_applicable",
+            "support.ssh_user_ca",
+            'only used with target = "single-host" (the host sshd drop-in)',
+        )
+        return
+    lines = support.ca_lines(ca)
+    problems = [support.ca_line_problem(line) for line in lines]
+    if len(lines) > support.MAX_CA_LINES:
+        problem = f"holds {len(lines)} lines; at most {support.MAX_CA_LINES} (a CA rollover)"
+    elif len(set(lines)) != len(lines):
+        problem = "lists the same CA line twice"
+    else:
+        problem = next((p for p in problems if p), None)
+    if problem:
+        add(
+            "invalid_ssh_user_ca",
+            "support.ssh_user_ca",
+            f"{problem}; expected one OpenSSH public key line per CA: ssh-ed25519, "
+            "the base64 key, then an optional comment",
+        )
+
+
 def _mac_rules(m, bad, present, add, check_url, check_ref):
     services = m["services"]
     if services["voice"]:
@@ -736,6 +805,9 @@ def validate(raw):
     normalized = normalize(clean)
     if "agents" not in clean:
         normalized["agents"]["profile"] = AGENTS_ABSENT_PROFILE
+    if "support" not in clean:
+        # No [support] block renders nothing (task 01a1b362 stage 3).
+        normalized["support"] = None
     if normalized["install"]["hosted"] is True and "backup.target" not in _present(clean):
         # A hosted install defaults to a real backup target (stage 5).
         normalized["backup"]["target"] = HOSTED_BACKUP_TARGET

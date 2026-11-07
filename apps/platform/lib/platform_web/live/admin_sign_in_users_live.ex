@@ -35,6 +35,9 @@ defmodule PlatformWeb.AdminSignInUsersLive do
 
   use PlatformWeb, :live_view
 
+  import PlatformWeb.Components.SupportAccessComponents,
+    only: [support_marker: 1, support_leaves_at: 1]
+
   alias Platform.Accounts
   alias Platform.SignInAdmin
   alias Platform.SignInAdmin.{Config, Link}
@@ -342,6 +345,13 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     users = Accounts.list_users(include_archived: true)
     admins = MapSet.new(for u <- users, Tenancy.root_admin?(u), do: u.id)
     status = if socket.assigns.service == :unreachable, do: :unknown, else: :loading
+    # Vendor support users (task 01a1b362 stage 2): marker + "leaves at".
+    socket =
+      assign(
+        socket,
+        :support_marks,
+        Platform.SupportAccess.support_marks(Enum.map(users, & &1.id))
+      )
 
     rows =
       users
@@ -363,7 +373,9 @@ defmodule PlatformWeb.AdminSignInUsersLive do
       role: if(MapSet.member?(admins, user.id), do: :admin, else: :member),
       status: status,
       archived?: not is_nil(user.archived_at),
-      self?: self?(socket, user.id)
+      self?: self?(socket, user.id),
+      support?: Map.has_key?(socket.assigns[:support_marks] || %{}, user.id),
+      support_leaves_at: Map.get(socket.assigns[:support_marks] || %{}, user.id)
     }
   end
 
@@ -377,7 +389,9 @@ defmodule PlatformWeb.AdminSignInUsersLive do
       role: nil,
       status: status,
       archived?: false,
-      self?: false
+      self?: false,
+      support?: false,
+      support_leaves_at: nil
     }
   end
 

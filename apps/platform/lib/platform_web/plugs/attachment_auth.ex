@@ -56,7 +56,10 @@ defmodule PlatformWeb.Plugs.AttachmentAuth do
 
   defp authenticate_session(conn) do
     with user_id when is_binary(user_id) <- get_session(conn, :current_user_id),
-         %_{archived_at: nil} = user <- Accounts.get_user(user_id) do
+         %_{archived_at: nil} = user <- Accounts.get_user(user_id),
+         # Vendor support user (task 01a1b362 stage 1, ADR 0059).
+         true <-
+           Platform.SupportAccess.session_allows?(user, get_session(conn, :support_session_id)) do
       conn
       |> assign(:current_user, user)
       |> assign(:principal, {:user, user.id})

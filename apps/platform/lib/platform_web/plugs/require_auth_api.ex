@@ -25,6 +25,7 @@ defmodule PlatformWeb.Plugs.RequireAuthAPI do
   import Phoenix.Controller, only: [json: 2]
 
   alias Platform.Accounts
+  alias Platform.SupportAccess
 
   def init(opts), do: opts
 
@@ -46,7 +47,14 @@ defmodule PlatformWeb.Plugs.RequireAuthAPI do
             |> unauthorized("Account is archived.")
 
           user ->
-            assign(conn, :current_user, user)
+            # Vendor support user (task 01a1b362 stage 1, ADR 0059).
+            if SupportAccess.session_allows?(user, get_session(conn, :support_session_id)) do
+              assign(conn, :current_user, user)
+            else
+              conn
+              |> configure_session(drop: true)
+              |> unauthorized("Support session has ended.")
+            end
         end
 
       _ ->

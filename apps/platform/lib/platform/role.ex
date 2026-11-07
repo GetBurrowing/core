@@ -213,6 +213,9 @@ defmodule Platform.Role do
     Platform.Push.RelayRateLimit,
     Platform.Calendar.BookingRateLimit,
     Platform.Feedback.BrokerRateLimit,
+    # Grant-request junk counters (task 01a1b362): read by the grant
+    # endpoint's gate, so it serves requests.
+    Platform.SupportAccess.JunkLimit,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
@@ -257,6 +260,9 @@ defmodule Platform.Role do
     Platform.Vault.RefreshWorker,
     Platform.Chat.AttachmentReaper,
     Platform.Chat.AdHocFreezeListener,
+    # Support session sweeper (task 01a1b362): a timer writing the DB and
+    # the host state file, one per install.
+    Platform.SupportAccess.Sweeper,
     Platform.Responsibilities.Registry,
     Platform.Responsibilities.Router,
     Platform.Responsibilities.CutoverMonitor,

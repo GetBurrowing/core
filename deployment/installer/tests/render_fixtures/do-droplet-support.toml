@@ -1,0 +1,75 @@
+# do-droplet.toml plus the [support] block the vendor's support system passes
+# (core task 01a1b362 stage 3, ADR 0059). Every other line is do-droplet.toml's,
+# so the golden diff between the two is the support pieces only.
+# The keys below are fixtures (counting bytes), PUBLIC halves only; no private
+# half exists for any of them.
+# One-click DigitalOcean droplet (core task 01a10315 stage 1): what
+# a hosted install renders for a customer. single-host-agents-full.toml with:
+# tls = "acme" + acme_email, images.source = "registry", install.org_name,
+# host.ssh_authorized_key, [push] vapid = "generate-on-host" and voice off.
+# Stage 6: [embeddings] model_source = "download" (the host fetches the model).
+# Task 01a18f76: size_tier = "small", the tier for the default s-2vcpu-4gb
+# droplet (do-droplet-8gb.toml is the s-4vcpu-8gb one).
+# The key below is a fixture (32 counting bytes), not anyone's key.
+
+schema_version = 1
+
+[install]
+name = "burrow-01a0d69d"
+size_tier = "small"
+org_name = "Acme Bakery"
+
+[domain]
+primary = "burrow-01a0d69d.test"
+tls = "acme"
+acme_email = "owner@acme-bakery.test"
+
+[host]
+gpu = false
+ssh_authorized_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f do-droplet-fixture"
+
+[services]
+files = true
+memory = true
+voice = false
+embeddings = true
+
+[voice]
+accelerator = "cuda"
+
+[embeddings]
+mode = "local"
+model_source = "download"
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+registry = "ghcr.io/example"
+source = "registry"
+
+[day2]
+upgrade_channel = "stable"
+phone_home = false
+
+[agents]
+profile = "full_machine"
+
+[push]
+vapid = "generate-on-host"
+
+[support]
+access_default = "on"
+vendor_name = "Example Vendor Support"
+ssh_user_ca = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/ support-ca-fixture"
+
+[[support.vendor_grant_keys]]
+kid = "grant-2026-11"
+public_key = "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8="
+
+[[support.vendor_grant_keys]]
+kid = "grant-2027-01"
+public_key = "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"

@@ -146,15 +146,24 @@
                     {initials(row.name)}
                   </div>
                   <div class="min-w-0">
-                    <div class={[
-                      "text-sm font-medium truncate",
-                      if(row.status == :disabled,
-                        do: "text-base-content",
-                        else: "text-base-content"
-                      )
-                    ]}>
-                      {row.name}
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <div class={[
+                        "min-w-0 text-sm font-medium truncate",
+                        if(row.status == :disabled,
+                          do: "text-base-content",
+                          else: "text-base-content"
+                        )
+                      ]}>
+                        {row.name}
+                      </div>
+                      <.support_marker :if={row.support?} />
                     </div>
+                    <.support_leaves_at
+                      :if={row.support?}
+                      at={row.support_leaves_at}
+                      zone={@time_zone}
+                      class="block text-xs"
+                    />
                     <div class="text-xs text-subtle md:hidden truncate">{row.email}</div>
                   </div>
                 </div>
@@ -209,17 +218,26 @@
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
-                <div class={[
-                  "text-sm font-medium truncate",
-                  if(row.status == :disabled,
-                    do: "text-base-content",
-                    else: "text-base-content"
-                  )
-                ]}>
-                  {row.name}
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <div class={[
+                    "min-w-0 text-sm font-medium truncate",
+                    if(row.status == :disabled,
+                      do: "text-base-content",
+                      else: "text-base-content"
+                    )
+                  ]}>
+                    {row.name}
+                  </div>
+                  <.support_marker :if={row.support?} />
                 </div>
                 <.status_pill row={row} />
               </div>
+              <.support_leaves_at
+                :if={row.support?}
+                at={row.support_leaves_at}
+                zone={@time_zone}
+                class="block text-xs"
+              />
               <div class="text-xs text-subtle truncate">
                 {row.email}<span :if={role_label(row.role)}> · {role_label(row.role)}</span>
               </div>

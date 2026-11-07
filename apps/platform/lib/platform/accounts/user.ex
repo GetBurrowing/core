@@ -32,6 +32,13 @@ defmodule Platform.Accounts.User do
     # stored.
     field(:sign_in_link_expires_at, :utc_datetime)
 
+    # Vendor support user (task 01a1b362 stage 1, ADR 0059). One per support
+    # operator email, created only by `Platform.SupportAccess`. Such a user is
+    # treated as signed out unless its support session is active
+    # (`Platform.SupportAccess.session_allows?/2`). Never cast from user
+    # input: only `support_changeset/2` sets it.
+    field(:support_vendor, :boolean, default: false)
+
     # MT/RBAC foundation (Plan 2 v3, task 019e3c4a). Users carry their
     # org memberships so authenticated request hot paths can preload
     # them on the same round-trip as the user fetch and avoid a
@@ -59,5 +66,12 @@ defmodule Platform.Accounts.User do
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/)
     |> unique_constraint(:email)
     |> unique_constraint(:oidc_sub)
+  end
+
+  @doc "Changeset for a vendor support user (`Platform.SupportAccess` only)."
+  def support_changeset(user, attrs) do
+    user
+    |> changeset(attrs)
+    |> put_change(:support_vendor, true)
   end
 end

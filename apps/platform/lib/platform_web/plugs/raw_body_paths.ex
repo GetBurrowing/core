@@ -39,7 +39,10 @@ defmodule PlatformWeb.Plugs.RawBodyPaths do
   # its 8 MB default.
   @raw_body_prefixes [
     ["chat", "attachments", "upload"],
-    ["federation", "v1", "inbox"]
+    ["federation", "v1", "inbox"],
+    # Vendor support grants (task 01a1b362 stage 1): the Ed25519 signature
+    # covers the exact body bytes, read by `SupportGrantController` with a cap.
+    ["api", "support-access", "v1", "grants"]
   ]
 
   @impl true

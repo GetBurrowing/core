@@ -1,0 +1,293 @@
+#!/usr/bin/python3 -I
+"""burrow-support-shell: the vendor support repair shell (sshd ForceCommand).
+
+Core task 01a1b362 stage 3 (ADR 0059). Rendered into an install as
+/opt/burrow/bin/burrow-support-shell. sshd runs it for every login of the
+burrow-support user (ForceCommand), which only a short-lived certificate
+from the vendor's support system can open, and only while the install
+owner's switch is on and core holds a live repair session for the
+certificate's key id (see burrow-support-principals).
+
+What it does:
+  * reads the session id (the certificate key id) from SSH_USER_AUTH
+    (sshd ExposeAuthInfo yes), then re-runs itself as root through sudo;
+  * appends shell_opened, shell_command (each command line's text, through
+    bash PROMPT_COMMAND) and shell_closed JSON lines to
+    /var/lib/burrow-support/events.jsonl, which core reads into its audit
+    log as support.shell_opened / support.shell_command / support.shell_closed;
+  * records a transcript with `script -q -f` to
+    /var/log/burrow-support/<session id>.log (root, 0600);
+  * every 15 s re-checks /var/lib/burrow-support/state.json and ends the
+    shell (SIGHUP, then SIGKILL) once its session is gone, expired, or the
+    owner turned vendor support access off.
+
+THIS RECORD IS TAMPER-EVIDENT, NOT TAMPER-PROOF AGAINST ROOT. A repair
+session is root on this host: it can unset PROMPT_COMMAND, edit the event
+file or the transcript, or detach a process from the session. The record is
+what the host reported, not proof of what ran.
+
+Usage (by sshd only):
+  burrow-support-shell                       the ForceCommand entry point
+  burrow-support-shell --help                this text
+"""
+
+import datetime
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+INSTALL_BIN = "/opt/burrow/bin"
+SELF = f"{INSTALL_BIN}/burrow-support-shell"
+PRINCIPALS = f"{INSTALL_BIN}/burrow-support-principals"
+STATE_PATH = "/var/lib/burrow-support/state.json"
+EVENTS_PATH = "/var/lib/burrow-support/events.jsonl"
+LOG_DIR = "/var/log/burrow-support"
+SUPPORT_USER = "burrow-support"
+# core-platform's app user and group in its image (apps/platform/Dockerfile:
+# useradd -u 1000 app): the group that may read the event file.
+CORE_GID = 1000
+CHECK_INTERVAL_S = 15
+KILL_GRACE_S = 5
+_SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_CERT_TYPE = re.compile(r"[a-z0-9.@-]+-cert-v01@openssh\.com")
+# Installer tests only: run without root against files under this directory.
+# Honoured only when NOT running as root, so it can never redirect the real
+# record (sudo drops it, and the record is written as root).
+TEST_DIR_ENV = "BURROW_SUPPORT_SHELL_TEST_DIR"
+TEST_INTERVAL_ENV = "BURROW_SUPPORT_SHELL_CHECK_S"
+
+
+class Paths:
+    def __init__(self):
+        test_dir = os.environ.get(TEST_DIR_ENV) if os.geteuid() != 0 else None
+        self.testing = bool(test_dir)
+        if self.testing:
+            here = os.path.dirname(os.path.realpath(sys.argv[0]))
+            self.self_ = os.path.realpath(sys.argv[0])
+            self.principals = os.path.join(here, "burrow-support-principals")
+            self.state = os.path.join(test_dir, "state.json")
+            self.events = os.path.join(test_dir, "events.jsonl")
+            self.log_dir = os.path.join(test_dir, "log")
+            self.interval = float(os.environ.get(TEST_INTERVAL_ENV) or CHECK_INTERVAL_S)
+        else:
+            self.self_ = SELF
+            self.principals = PRINCIPALS
+            self.state = STATE_PATH
+            self.events = EVENTS_PATH
+            self.log_dir = LOG_DIR
+            self.interval = CHECK_INTERVAL_S
+
+
+def _now():
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def emit(paths, event, session_id, command=None):
+    """Append one JSON line (one write(2) on an O_APPEND fd)."""
+    doc = {"event": event, "session_id": session_id, "ts": _now()}
+    if command is not None:
+        doc["command"] = command
+    line = (json.dumps(doc, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(paths.events, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+    try:
+        if os.geteuid() == 0:
+            os.fchown(fd, 0, CORE_GID)
+            os.fchmod(fd, 0o640)
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+
+def live(paths, session_id):
+    """True while the principals command would still admit this session."""
+    argv = [paths.principals, SUPPORT_USER, session_id]
+    if paths.testing:
+        argv = [sys.executable, "-I", *argv, paths.state]
+    try:
+        out = subprocess.run(argv, capture_output=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bool(out.strip())
+
+
+def key_id_from_auth_info(path):
+    """The certificate key id from the ExposeAuthInfo file, or None."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    certs = [
+        parts[1:3]
+        for parts in (line.split() for line in lines)
+        if len(parts) >= 3 and parts[0] == "publickey" and _CERT_TYPE.fullmatch(parts[1])
+    ]
+    if not certs:
+        return None
+    with tempfile.TemporaryDirectory(prefix="burrow-support-") as tmp:
+        cert = os.path.join(tmp, "cert.pub")
+        with open(cert, "w", encoding="utf-8") as handle:
+            handle.write(" ".join(certs[-1]) + "\n")
+        try:
+            out = subprocess.run(
+                ["ssh-keygen", "-L", "-f", cert],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+    match = re.search(r'^\s*Key ID: "(.*)"\s*$', out, re.MULTILINE)
+    if match and _SESSION_ID.fullmatch(match.group(1)):
+        return match.group(1)
+    return None
+
+
+def _rcfile(paths, session_id):
+    log = shlex.quote(paths.self_)
+    sid = shlex.quote(session_id)
+    prefix = f"{shlex.quote(sys.executable)} -I " if paths.testing else ""
+    return f"""# burrow-support-shell session {session_id}
+HISTFILE=/dev/null
+unset HISTCONTROL HISTIGNORE
+set -o history
+PS1='[vendor support \\u@\\h \\W]\\$ '
+__burrow_support_last=
+__burrow_support_log() {{
+  local entry num cmd
+  entry=$(HISTTIMEFORMAT= builtin history 1)
+  entry="${{entry#"${{entry%%[![:space:]]*}}"}}"
+  num="${{entry%%[[:space:]]*}}"
+  [ -n "$num" ] && [ "$num" != "$__burrow_support_last" ] || return 0
+  __burrow_support_last=$num
+  cmd="${{entry#"$num"}}"
+  cmd="${{cmd#"${{cmd%%[![:space:]]*}}"}}"
+  {prefix}{log} --log-command {sid} "$cmd"
+}}
+PROMPT_COMMAND=__burrow_support_log
+echo "Vendor support session {session_id}: commands and a transcript are recorded."
+"""
+
+
+def _descendants(root):
+    children = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", encoding="utf-8") as handle:
+                stat = handle.read()
+        except OSError:
+            continue
+        ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        children.setdefault(ppid, []).append(int(entry))
+    out, todo = [], [root]
+    while todo:
+        pid = todo.pop()
+        for child in children.get(pid, []):
+            out.append(child)
+            todo.append(child)
+    return out
+
+
+def _signal_all(pids, sig):
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+
+
+def end_session(proc):
+    """SIGHUP the shell and everything under it, then SIGKILL what is left."""
+    _signal_all(_descendants(proc.pid) + [proc.pid], signal.SIGHUP)
+    deadline = time.monotonic() + KILL_GRACE_S
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.1)
+    _signal_all(_descendants(proc.pid) + [proc.pid], signal.SIGKILL)
+
+
+def run_session(paths, session_id, original_command=None):
+    if not _SESSION_ID.fullmatch(session_id or ""):
+        print("burrow-support-shell: no support session id", file=sys.stderr)
+        return 1
+    if not live(paths, session_id):
+        print("burrow-support-shell: this support session is not live", file=sys.stderr)
+        return 1
+    os.umask(0o077)
+    os.makedirs(paths.log_dir, mode=0o700, exist_ok=True)
+    transcript = os.path.join(paths.log_dir, f"{session_id}.log")
+    emit(paths, "shell_opened", session_id)
+    with tempfile.TemporaryDirectory(prefix="burrow-support-") as tmp:
+        rc = os.path.join(tmp, "bashrc")
+        with open(rc, "w", encoding="utf-8") as handle:
+            handle.write(_rcfile(paths, session_id))
+        if original_command is not None:
+            emit(paths, "shell_command", session_id, original_command)
+            inner = f"bash -c {shlex.quote(original_command)}"
+        else:
+            inner = f"bash --rcfile {shlex.quote(rc)} -i"
+        env = dict(os.environ, SHELL="/bin/bash", BURROW_SUPPORT_SESSION=session_id)
+        proc = subprocess.Popen(["script", "-q", "-f", "-c", inner, transcript], env=env)
+        stop = threading.Event()
+
+        def watch():
+            while not stop.wait(paths.interval):
+                if not live(paths, session_id):
+                    print(
+                        "\r\nburrow-support-shell: session ended (revoked, expired or "
+                        "vendor support access turned off)\r",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    end_session(proc)
+                    return
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            code = proc.wait()
+        finally:
+            stop.set()
+            emit(paths, "shell_closed", session_id)
+    return code
+
+
+def main(argv):
+    paths = Paths()
+    if argv[1:2] in (["-h"], ["--help"]):
+        print(__doc__)
+        return 0
+    if argv[1:2] == ["--log-command"] and len(argv) == 4:
+        if _SESSION_ID.fullmatch(argv[2]):
+            emit(paths, "shell_command", argv[2], argv[3])
+        return 0
+    if argv[1:2] == ["--as-root"] and len(argv) in (3, 4):
+        return run_session(paths, argv[2], argv[3] if len(argv) == 4 else None)
+    if len(argv) != 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    session_id = key_id_from_auth_info(os.environ.get("SSH_USER_AUTH"))
+    if session_id is None:
+        print("burrow-support-shell: this login carries no support certificate", file=sys.stderr)
+        return 1
+    original = os.environ.get("SSH_ORIGINAL_COMMAND")
+    if paths.testing or os.geteuid() == 0:
+        return run_session(paths, session_id, original)
+    args = ["--as-root", session_id] + ([original] if original is not None else [])
+    os.execv("/usr/bin/sudo", ["sudo", "-n", "--", SELF, *args])
+    return 1  # not reached
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

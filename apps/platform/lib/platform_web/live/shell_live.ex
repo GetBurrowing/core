@@ -116,6 +116,7 @@ defmodule PlatformWeb.ShellLive do
         # subscribe and get their own scoped count.
         if is_binary(raw_user_id), do: Inbox.subscribe(raw_user_id)
         if is_binary(raw_user_id), do: AccessLive.subscribe(raw_user_id)
+        if is_binary(raw_user_id), do: Platform.SupportAccess.subscribe()
 
         socket
         |> start_async(:shell_chat_space_ids, fn ->
@@ -186,6 +187,9 @@ defmodule PlatformWeb.ShellLive do
       # dead render and for an unknown zone; `PlatformWeb.MaskNamesLabel`
       # then prints UTC and says so.
       |> assign(:mask_zone, mask_zone(socket))
+      # Vendor support banner (task 01a1b362 stage 2): every live session,
+      # read on mount and re-read on `{:support_access_changed, _}`.
+      |> assign_support_banner(user_record)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
       |> assign(:meeting_space_name, nil)
@@ -258,6 +262,25 @@ defmodule PlatformWeb.ShellLive do
       # the event.
       |> push_app_badge()
       |> maybe_seed_meeting_state(raw_user_id)
+      # Vendor support (task 01a1b362 stage 2): a session started or ended,
+      # or the switch changed. Re-read the banner, then let a view that shows
+      # more (SettingsLive's Support card) refresh through
+      # `on_support_access_changed/1`, the `on_access_changed/1` shape.
+      # Halts: no view handles the message itself.
+      |> attach_hook(:support_access, :handle_info, fn
+        {:support_access_changed, _}, socket ->
+          socket = assign_support_banner(socket, socket.assigns[:current_user_record])
+
+          socket =
+            if function_exported?(socket.view, :on_support_access_changed, 1),
+              do: socket.view.on_support_access_changed(socket),
+              else: socket
+
+          {:halt, socket}
+
+        _msg, socket ->
+          {:cont, socket}
+      end)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
 
@@ -1201,6 +1224,30 @@ defmodule PlatformWeb.ShellLive do
       ^before -> socket
       updated -> assign(socket, :mask_names?, Accounts.mask_names?(updated))
     end
+  end
+
+  # Every signed-in viewer sees the banner while a session is live: it is the
+  # honesty mechanism, so it is not limited to admins. "Details" links to
+  # Settings → Support only for a viewer who can see that card.
+  # Only on an install with a vendor key configured: without one no session
+  # can be issued, and every other install's shell mount stays one query
+  # lighter (tasks_live_switch_budget_test).
+  defp assign_support_banner(socket, %Accounts.User{} = user) do
+    if Platform.SupportAccess.Config.configured?(),
+      do: assign_live_support_banner(socket, user),
+      else: assign_support_banner(socket, nil)
+  end
+
+  defp assign_support_banner(socket, _user) do
+    socket
+    |> assign(:support_sessions, [])
+    |> assign(:support_details?, false)
+  end
+
+  defp assign_live_support_banner(socket, user) do
+    socket
+    |> assign(:support_sessions, Platform.SupportAccess.active_sessions_all())
+    |> assign(:support_details?, PlatformWeb.SettingsLive.support_admin?(user))
   end
 
   defp mask_zone(socket) do

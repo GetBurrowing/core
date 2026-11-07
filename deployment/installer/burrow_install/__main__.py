@@ -23,6 +23,12 @@ Commands:
                         one-time sign-in link to --link-file (0600); print one JSON
                         document, never the link or the key. Exit 0 ok, 1 pocket-id
                         unreachable or erroring, 2 usage. See burrow_install/bootstrap.py.
+  support enable-host --manifest <m> --reuse-secrets <secrets.env> [--registry-auth <json>]
+         [--install-root /opt/burrow] [--dry-run]
+                        render ONLY the vendor support env and host files of the manifest's
+                        [support] block onto a RUNNING install (as root on its host), then
+                        run bin/burrow-support-setup and recreate core-platform. Idempotent.
+                        See burrow_install/support.py.
   redact <render-dir> --out <dir>
                         copy a render with every secret value replaced by
                         ``<secret:NAME>``, so two renders can be diffed safely.
@@ -31,7 +37,7 @@ Commands:
 import argparse
 import sys
 
-from . import registry
+from . import registry, support
 from .manifest import ManifestLoadError, load
 from .render import DEFAULT_TARGET, TARGETS, RenderError, redact_dir, render
 from .validate import validate, warnings
@@ -79,6 +85,17 @@ def _parser():
     cmd.add_argument("--customer-secrets", metavar="FILE")
     cmd.add_argument("--registry-auth", metavar="CONFIG_JSON")
 
+    cmd = sub.add_parser("support", help="vendor support access on a running install")
+    support_sub = cmd.add_subparsers(dest="support_command", required=True)
+    cmd = support_sub.add_parser("enable-host", help="render the support pieces onto this host")
+    cmd.add_argument("--manifest", required=True)
+    cmd.add_argument("--reuse-secrets", required=True, metavar="SECRETS_ENV")
+    cmd.add_argument("--registry-auth", metavar="CONFIG_JSON")
+    cmd.add_argument("--install-root", default="/opt/burrow")
+    # Tests and image staging only: write under this directory instead of /.
+    cmd.add_argument("--fs-root", default="/", help=argparse.SUPPRESS)
+    cmd.add_argument("--dry-run", action="store_true", help="print the changes, make none")
+
     cmd = sub.add_parser("redact", help="copy a render with secret values replaced")
     cmd.add_argument("render_dir")
     cmd.add_argument("--out", required=True)
@@ -113,6 +130,19 @@ def main(argv=None):
     manifest = _load_valid(args.manifest, sys.stdout)
     if manifest is None:
         return EXIT_INVALID
+    if args.command == "support":
+        try:
+            return support.enable_host(
+                manifest,
+                args.reuse_secrets,
+                registry_auth=args.registry_auth,
+                install_root=args.install_root,
+                fs_root=args.fs_root,
+                dry_run=args.dry_run,
+            )
+        except support.SupportError as exc:
+            print(exc.line())
+            return EXIT_INVALID
     if args.command == "validate":
         print("ok")
     elif args.command == "services":

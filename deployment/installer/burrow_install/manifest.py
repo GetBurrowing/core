@@ -78,6 +78,9 @@ VAPID_MODES = ("off", "generate-on-host")
 # "download": the host fetches it at first boot from a pinned URL and checks
 # its sha256 (bin/burrow-fetch-model, registry.EMBEDDINGS_MODEL_SOURCE).
 MODEL_SOURCES = ("operator", "download")
+# [support] access_default (core task 01a1b362 stage 3): core's
+# SUPPORT_ACCESS_DEFAULT, where exactly "on" seeds the switch on.
+SUPPORT_ACCESS_DEFAULTS = ("on", "off")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -221,6 +224,26 @@ SCHEMA = {
     # Web Push (VAPID) keys for core (core task 01a10315 stage 1).
     "push": {
         "vapid": _enum(VAPID_MODES, "off"),
+    },
+    # Vendor support access (core task 01a1b362 stage 3, ADR 0059). The vendor's
+    # support system passes this block; nothing in code renders it by default.
+    # ABSENT (validate.validate sets it to None) renders nothing at all, so
+    # every manifest written before it renders byte-unchanged and core refuses
+    # every grant (no vendor key: the grant route is a 404).
+    "support": {
+        # Seeds core's switch at FIRST migrate only (SUPPORT_ACCESS_DEFAULT).
+        "access_default": _enum(SUPPORT_ACCESS_DEFAULTS, "off"),
+        # Display name only (SUPPORT_VENDOR_NAME).
+        "vendor_name": _str(),
+        # The PUBLIC halves of the grant-signing keys (SUPPORT_VENDOR_KEYS).
+        "vendor_grant_keys": ArrayOf({"kid": _str(), "public_key": _str()}),
+        # The SSH user CA's PUBLIC key (ssh-ed25519 only). Set, the host gets
+        # the burrow-support user, sshd drop-in and principals command; two
+        # lines (newline-separated) during a CA rollover.
+        "ssh_user_ca": _str(),
+        # INSTALL_ID, "this install's id as the vendor knows it". Unset, it
+        # is install.name.
+        "install_id": _str(),
     },
 }
 

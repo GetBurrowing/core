@@ -451,6 +451,10 @@ config :platform, :github_webhook_secret, "test-github-webhook-secret"
 # tests.
 config :platform, :start_summarizer_sweeper, false
 
+# Vendor support sweeper (task 01a1b362 stage 1): a DB-touching tick would
+# run outside the sandbox. Tests call `Platform.SupportAccess.sweep/1`.
+config :platform, :start_support_access_sweeper, false
+
 # CandidateSweeper (task 01a03fba stage 3). Off in test: it is a
 # one-second tick that mints tasks and canvases, so an ambient instance
 # would fire other suites' candidates from outside their DataCase
