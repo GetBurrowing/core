@@ -46,8 +46,9 @@ defmodule Platform.Experiments.Surfaces.UxFrictionDetectionTest do
     assert {:ok, %{"directive" => nil, "grouping_threshold" => 0.8, "min_occurrences" => 3}} =
              S.validate_payload(%{"directive" => "   "})
 
-    assert {:ok, %{"grouping_threshold" => 1.0 / 2}} =
-             S.validate_payload(%{"grouping_threshold" => 0.5})
+    # An integer-valued bound still comes back a float.
+    assert {:ok, %{"min_occurrences" => 1, "grouping_threshold" => 0.5}} =
+             S.validate_payload(%{"grouping_threshold" => 0.5, "min_occurrences" => 1})
 
     assert S.render_directive(%{"directive" => "  Be strict. "}) == "Be strict."
   end

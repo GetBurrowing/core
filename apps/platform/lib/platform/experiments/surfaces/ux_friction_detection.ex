@@ -1,7 +1,7 @@
 defmodule Platform.Experiments.Surfaces.UxFrictionDetection do
   @moduledoc """
   The `ux.friction_detection` surface: how the UX friction watch
-  (`ux.friction_watch`, designer bundle) turns chat into findings. Task
+  (`ux.friction_watch`, which joins the designer bundle with its handler in stage 2) turns chat into findings. Task
   01a1af00 stage 1, on the experimentation layer of ADR-0052, modelled on
   `Platform.Experiments.Surfaces.HrProfile`.
 

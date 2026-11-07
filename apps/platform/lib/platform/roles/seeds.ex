@@ -78,14 +78,7 @@ defmodule Platform.Roles.Seeds do
         # both facts in one row so they cannot drift, and
         # `intent_routing_test.exs` asserts this bundle agrees with it.
         "meetings.visual_adjust",
-        "meetings.interaction_design",
-        # Task 01a1af00 stage 1 ("Finish the UX role"). NO new role: the UX
-        # job reads chat for UI friction within the designer's existing scope
-        # and never writes code, so no permission split forces one. This key
-        # MUST equal the handler key it will be fired on (see the historian
-        # note below). Existing DBs pick it up from
-        # `20261107140100_seed_ux_friction_watch_bundle.exs`.
-        "ux.friction_watch"
+        "meetings.interaction_design"
       ]
     },
     %{

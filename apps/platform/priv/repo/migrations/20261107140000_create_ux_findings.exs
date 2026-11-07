@@ -2,8 +2,8 @@ defmodule Platform.Repo.Migrations.CreateUxFindings do
   @moduledoc """
   Create `ux_findings` (task `01a1af00-86ac-7000-94ba-a121d5cb8116` stage 1).
 
-  One row is one question the UX friction watch (`ux.friction_watch`, in the
-  designer's bundle) puts to one human: a `decision` with up to three options,
+  One row is one question the UX friction watch (`ux.friction_watch`, which joins the
+  designer bundle with its handler in stage 2) puts to one human: a `decision` with up to three options,
   exactly one recommended, or an `fyi`. Evidence is a count, at most two
   quotes and `chat:<space_id>:<message_id>` citations. The row carries the
   experiment `variant` that produced it, so the keep-versus-dismiss metric

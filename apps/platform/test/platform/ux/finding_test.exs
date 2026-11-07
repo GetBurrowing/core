@@ -37,8 +37,15 @@ defmodule Platform.Ux.FindingTest do
     )
   end
 
-  defp errors(changeset, field),
-    do: changeset |> errors_on() |> Map.get(field, [])
+  defp errors(changeset, field) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Enum.reduce(opts, msg, fn {k, v}, acc ->
+        String.replace(acc, "%{#{k}}", to_string(inspect(v)))
+      end)
+    end)
+    |> Map.get(field, [])
+  end
 
   test "a well-formed decision inserts, defaulting to open, with string keys" do
     user = user!()

@@ -28,7 +28,9 @@ defmodule Platform.Experiments.Metrics.UxFindingKeepRate do
       Repo.all(
         from(f in Finding,
           join: a in Assignment,
-          on: a.subject_id == fragment("coalesce(?, ?::uuid)", f.workspace_id, ^@nil_uuid),
+          on:
+            a.subject_id ==
+              fragment("coalesce(?, ?)", f.workspace_id, type(^@nil_uuid, Ecto.UUID)),
           where:
             a.experiment_id == ^experiment_id and a.variant_slug == ^variant_slug and
               a.subject_type == "workspace" and is_nil(a.excluded_reason) and

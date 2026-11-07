@@ -1,6 +1,6 @@
 defmodule Platform.Ux.Finding do
   @moduledoc """
-  One question the UX friction watch (`ux.friction_watch`, designer bundle)
+  One question the UX friction watch (`ux.friction_watch`, which joins the designer bundle with its handler in stage 2)
   puts to one human. Task `01a1af00-86ac-7000-94ba-a121d5cb8116` stage 1.
 
   ## Fields
