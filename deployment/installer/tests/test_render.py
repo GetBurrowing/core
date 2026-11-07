@@ -1334,8 +1334,14 @@ class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
 
     def build_kwargs(self, path):
         for case, fixture in GOLDEN_CASES.items():
-            if fixture == path and case in GOLDEN_REGISTRY_AUTH:
-                return {"registry_auth": GOLDEN_REGISTRY_AUTH[case]}
+            if fixture == path:
+                kwargs = {}
+                if case in GOLDEN_REGISTRY_AUTH:
+                    kwargs["registry_auth"] = GOLDEN_REGISTRY_AUTH[case]
+                if case in GOLDEN_CUSTOMER_SECRETS:
+                    kwargs["customer_secrets"] = GOLDEN_CUSTOMER_SECRETS[case]
+                if kwargs:
+                    return kwargs
         return {}
 
     def core_block(self, rendered):
