@@ -514,7 +514,9 @@ describe("no path from Burrow into an agent's pane", () => {
   // Task 01a1b365 added the three Claude login commands. None reaches a pane:
   // claude_login.ts writes the code to its own `claude auth login` child's
   // stdin (test/claude_login.test.ts pins that it names no tmux at all).
-  test("the commands core can send are exactly start, restart, stop, logs, pane, file_read, check_auth, the three claude login commands, env_names and admin", () => {
+  // Task 01a1b721 stage 2 added agent.oneshot: its prompt goes to a fresh
+  // CLI child's stdin in its own temp dir, never to a pane (pinned below).
+  test("the commands core can send are exactly start, restart, stop, logs, pane, file_read, check_auth, the three claude login commands, oneshot, env_names and admin", () => {
     const main = readFileSync(resolve(src, "main.ts"), "utf8");
     const events = [...main.matchAll(/channel\.on\("([^"]+)"/g)].map((m) => m[1]).sort();
     expect(events).toEqual([
@@ -524,6 +526,7 @@ describe("no path from Burrow into an agent's pane", () => {
       "agent.claude_logout",
       "agent.file_read",
       "agent.logs",
+      "agent.oneshot",
       "agent.pane",
       "agent.restart",
       "agent.start",
@@ -531,6 +534,13 @@ describe("no path from Burrow into an agent's pane", () => {
       "host.admin",
       "host.env_names",
     ]);
+  });
+
+  test("agent.oneshot never reaches a pane: no tmux, pane or session in oneshot.ts", () => {
+    const oneshot = readFileSync(resolve(src, "oneshot.ts"), "utf8");
+    // Counter-pin: the scan reads real source (oneshot.ts builds the print-mode argv).
+    expect(oneshot).toContain("--no-session-persistence");
+    expect(oneshot).not.toMatch(/tmux|capture-pane|agentPane|SESSION/);
   });
 
   test("the two host.* commands never reach a pane or a login: no pane, tmux or login code in docker.ts", () => {

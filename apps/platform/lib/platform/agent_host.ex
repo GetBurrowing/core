@@ -44,7 +44,10 @@ defmodule Platform.AgentHost do
     * `agent.claude_login_start` `{agent_id, ref}`, `agent.claude_login_code`
       `{agent_id, ref, code}` and `agent.claude_logout` `{agent_id, ref}`: the
       owner's Claude subscription login (task 01a1b365,
-      `claude_login_start/3`, `claude_login_submit/4`, `claude_logout/3`).
+      `claude_login_start/3`, `claude_login_submit/4`, `claude_logout/3`);
+    * `agent.oneshot` `{agent_id, ref, prompt, max_output_tokens,
+      timeout_ms}`: one isolated, tool-less question to the agent's own CLI
+      on its own login (task 01a1b721 stage 2, `oneshot/3`).
 
   ## Events (host to core)
 
@@ -63,13 +66,18 @@ defmodule Platform.AgentHost do
       `"unknown"` (no API key, as with a subscription login, or no answer);
     * `agent.claude_login` `{ref, agent_id, result, url? | account?, plan?}`:
       `url` (a start), `ok` with account and plan, `bad_code`,
-      `no_subscription`, `no_session` or `failed`. It never carries the code.
+      `no_subscription`, `no_session` or `failed`. It never carries the code;
+    * `agent.oneshot` `{ref, agent_id, result, reason?, text?, usage?}`: `ok`
+      with `text` and `usage` `{input_tokens, output_tokens,
+      cache_read_tokens, cache_creation_tokens}`, `refused` with a `reason`
+      (`api_key_login`, `not_running`, `not_logged_in`,
+      `tools_not_disableable`, ...), `failed` or `timeout`.
 
   Observed state is broadcast on `"agent_host:status"` as
   `{:agent_host_status, event}`.
   """
 
-  alias Platform.AgentHost.{LoginCode, Reconciler, Redact, State}
+  alias Platform.AgentHost.{LoginCode, OneshotPrompt, Reconciler, Redact, State}
   alias Platform.Agents.{Agent, NativeAgents}
 
   @logs_timeout_ms 5_000
@@ -82,6 +90,10 @@ defmodule Platform.AgentHost do
   # The host waits up to 30 s for the login to end, then reads `claude auth status`.
   @login_submit_timeout_ms 45_000
   @logout_timeout_ms 15_000
+  # The host kills the CLI at timeout_ms; core waits a little longer for the reply.
+  @oneshot_timeout_ms 120_000
+  @oneshot_grace_ms 10_000
+  @oneshot_max_output_tokens 4_000
 
   @doc "The token the host must present, or nil when none is configured."
   @spec token() :: String.t() | nil
@@ -538,6 +550,86 @@ defmodule Platform.AgentHost do
       Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
     end
   end
+
+  # ── One-shot, tool-less question (task 01a1b721 stage 2) ────────────
+
+  @typedoc "Token usage the host's CLI reported for one `oneshot/3`."
+  @type usage :: %{
+          input_tokens: non_neg_integer(),
+          output_tokens: non_neg_integer(),
+          cache_read_tokens: non_neg_integer(),
+          cache_creation_tokens: non_neg_integer()
+        }
+
+  @doc """
+  Ask `agent`'s own harness CLI ONE isolated question on the agent's own
+  login, and wait for the answer: `{:ok, %{text: text, usage: usage}}`.
+
+  The host (services/agent-host/src/oneshot.ts) runs the CLI as the agent's
+  OS user in print mode with no tools, no MCP servers, no settings and no
+  session, the prompt on stdin, in a fresh temp dir, with every API-key
+  variable stripped from its env. Core never sees a credential and sends no
+  HTTP to any model: this is a request over the host's own socket.
+
+  `{:error, :refused, reason}` when the host refused (`"api_key_login"`,
+  `"not_running"`, `"not_logged_in"`, `"tools_not_disableable"`,
+  `"unsupported_harness"`, `"invalid"`); otherwise `{:error, :not_connected
+  | :timeout | :failed | :unsupported_host}`. A host older than this event
+  never answers it, so the caller gets `{:error, :timeout}` and treats it as
+  no AI. `:unsupported_host` is a reply this protocol does not know.
+
+  Options: `:timeout` (ms the host lets the CLI run, default 120 s; core
+  waits `:grace_ms` longer, default #{div(@oneshot_grace_ms, 1000)} s) and
+  `:max_output_tokens` (default #{@oneshot_max_output_tokens}).
+
+  The prompt travels as a `Platform.AgentHost.OneshotPrompt` up to the
+  channel push, and neither it nor the answer is ever logged here.
+  """
+  @spec oneshot(Agent.t() | binary(), String.t(), keyword()) ::
+          {:ok, %{text: String.t(), usage: usage()}}
+          | {:error, :refused, String.t()}
+          | {:error, :not_connected | :timeout | :failed | :unsupported_host}
+  def oneshot(agent, prompt, opts \\ [])
+  def oneshot(%Agent{id: id}, prompt, opts), do: oneshot(id, prompt, opts)
+
+  def oneshot(agent_id, prompt, opts) when is_binary(agent_id) and is_binary(prompt) do
+    timeout = Keyword.get(opts, :timeout, @oneshot_timeout_ms)
+    max_output = Keyword.get(opts, :max_output_tokens, @oneshot_max_output_tokens)
+    grace = Keyword.get(opts, :grace_ms, @oneshot_grace_ms)
+    ref = new_ref()
+    topic = reply_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    payload = %{
+      "agent_id" => agent_id,
+      "ref" => ref,
+      "prompt" => OneshotPrompt.new(prompt),
+      "max_output_tokens" => max_output,
+      "timeout_ms" => timeout
+    }
+
+    try do
+      with :ok <- Reconciler.host_call("agent.oneshot", payload) do
+        receive do
+          {:agent_host_oneshot, ^ref, reply} -> oneshot_result(reply)
+        after
+          timeout + grace -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
+
+  defp oneshot_result(%{"result" => "ok", "text" => text, "usage" => usage}),
+    do: {:ok, %{text: text, usage: usage}}
+
+  defp oneshot_result(%{"result" => "refused", "reason" => reason}),
+    do: {:error, :refused, reason}
+
+  defp oneshot_result(%{"result" => "failed"}), do: {:error, :failed}
+  defp oneshot_result(%{"result" => "timeout"}), do: {:error, :timeout}
+  defp oneshot_result(_reply), do: {:error, :unsupported_host}
 
   @doc "True when the connected host advertised `full_root` in its hello."
   @spec full_root?() :: boolean()

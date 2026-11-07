@@ -15,6 +15,14 @@ defmodule Platform.FakeAgentHost do
   `owner@example.com` / `max`, anything else `bad_code`. The `:claude_login`
   option or `set_claude_login/2` switches a good code to `:no_subscription`,
   or the host to answering nothing (`:timeout`).
+
+  A stubbed `agent.oneshot` (task 01a1b721 stage 2), the dev fake host's
+  deterministic answer (`FakeHost.oneshot_reply/3`), refusing `not_running`
+  and `api_key_login` as the real host does. The `:oneshot` option is a
+  `FakeHost.oneshot_modes/0` mode or `:silent` (never answers, like a host
+  older than the event). With `:notify` (a pid), every `agent.oneshot` the
+  host receives is reported to it as `{:fake_agent_host_oneshot, agent_id}`
+  (the prompt is not forwarded).
   """
   use GenServer
 
@@ -37,7 +45,9 @@ defmodule Platform.FakeAgentHost do
      %{
        root: Keyword.get(opts, :root),
        restart: Keyword.get(opts, :restart, {"ready", [], []}),
-       claude_login: Keyword.get(opts, :claude_login, :ok)
+       claude_login: Keyword.get(opts, :claude_login, :ok),
+       oneshot: Keyword.get(opts, :oneshot, :ok),
+       notify: Keyword.get(opts, :notify)
      }}
   end
 
@@ -112,6 +122,33 @@ defmodule Platform.FakeAgentHost do
           Map.merge(%{"ref" => ref, "agent_id" => id}, reply),
           %Phoenix.Socket{}
         )
+    end
+
+    {:noreply, s}
+  end
+
+  def handle_info(
+        {:agent_host_push, "agent.oneshot", %{"agent_id" => id, "ref" => ref} = payload},
+        s
+      ) do
+    if is_pid(s.notify), do: send(s.notify, {:fake_agent_host_oneshot, id})
+
+    if s.oneshot != :silent do
+      agent = Platform.Repo.get(Platform.Agents.Agent, id)
+
+      facts = %{
+        running?: match?(%{state: :running}, Platform.AgentHost.status(id)),
+        api_key?: agent != nil and Platform.Agents.NativeLogin.api_key_set?(agent)
+      }
+
+      PlatformWeb.AgentHostChannel.handle_in(
+        "agent.oneshot",
+        Map.merge(
+          %{"ref" => ref, "agent_id" => id},
+          FakeHost.oneshot_reply(payload, s.oneshot, facts)
+        ),
+        %Phoenix.Socket{}
+      )
     end
 
     {:noreply, s}

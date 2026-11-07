@@ -561,6 +561,11 @@ defmodule PlatformWeb.Router do
       post("/ux_fixture/seed", DevUxFixtureController, :seed)
       post("/ux_fixture/fire", DevUxFixtureController, :fire)
       get("/ux_fixture/status", DevUxFixtureController, :status)
+
+      # Dev controls for the secretary's model path (task 01a1b721 stage 2):
+      # the fake host's agent.oneshot mode and the dev Burrow's login kind.
+      # Answers only with BURROW_FAKE_AGENT_HOST=1.
+      forward("/fake-secretary", Dev.FakeSecretary)
     end
   end
 

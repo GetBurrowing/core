@@ -177,6 +177,22 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "meetings.summarize.v1"
   ]
 
+  # Bundle keys that only NAME WHOSE LOGIN ANSWERS a tool-less one-shot
+  # and are never fired, so they deliberately have no responsibility row,
+  # no handler and no prompt template. An EXACT pin, like
+  # `@unseeded_roster_slugs`: the test below asserts each one is in the
+  # roster AND has no responsibilities row (so `Responsibilities.Router`
+  # cannot resolve, let alone dispatch, it), and every other roster key is
+  # still held to the strict row + template rule. Adding a key here is a
+  # decision that the key is never dispatched; a key that later gains a
+  # row must come off this list (the no-row assertion fails until it does).
+  #
+  # `secretary.evaluate` (task 01a1b721 stage 2, triage_officer bundle):
+  # `Platform.Secretary.Model.Host` resolves its assignee with
+  # `Roles.assignee_for/1` and asks that agent's own CLI through
+  # `Platform.AgentHost.oneshot/3`; the Router is never involved.
+  @login_only_bundle_keys ["secretary.evaluate"]
+
   # Creation calls. A migration that only force-updates an existing row
   # (`update_template`) or deletes one (`delete_template`) does not put
   # the row on a fresh database and therefore does not own the slug.
@@ -252,6 +268,24 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
              A pinned slug NOT appearing here means it finally got a seeder:
              delete it from @unseeded_roster_slugs.
              """
+    end
+
+    test "login-only bundle keys are in the roster and have no responsibility row" do
+      all_keys =
+        Seeds.default_roles()
+        |> Enum.flat_map(& &1.bundle)
+        |> Enum.uniq()
+
+      for key <- @login_only_bundle_keys do
+        assert key in all_keys, "pinned login-only key #{key} is not in any role's bundle"
+
+        assert Responsibilities.get_by_key(key) == nil,
+               "login-only key #{key} now has a responsibilities row: it can be fired, so " <>
+                 "it must come off @login_only_bundle_keys and meet the row + template rule"
+      end
+
+      # And the exemption is exactly the pin: every other bundle key is swept.
+      assert Enum.sort(all_keys -- roster_keys()) == Enum.sort(@login_only_bundle_keys)
     end
 
     test "the sweep names a slug no seeder owns (mutation control)" do
@@ -404,6 +438,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     Seeds.default_roles()
     |> Enum.flat_map(& &1.bundle)
     |> Enum.uniq()
+    |> Kernel.--(@login_only_bundle_keys)
   end
 
   defp roster_slugs do

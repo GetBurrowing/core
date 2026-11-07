@@ -11,6 +11,8 @@
  *        agent.claude_login_start     {agent_id, ref}                     start its own `claude auth login` (claude_login.ts)
  *        agent.claude_login_code      {agent_id, ref, code}               the owner's pasted code, to that login's stdin only
  *        agent.claude_logout          {agent_id, ref}                     `claude auth logout` as the agent
+ *        agent.oneshot                {agent_id, ref, prompt, max_output_tokens, timeout_ms}
+ *                                     one tool-less question on the agent's own login (oneshot.ts)
  *        host.env_names               {agent_id?, ref}                    env NAMES only, never values
  *        host.admin                   {op, service, tag?, ref}            restart|deploy|rollback, full_root only
  *   out  host.inventory               {profile, agents: [observation]}   on every join
@@ -23,6 +25,9 @@
  *        agent.claude_login           {ref, agent_id, result, url?, account?, plan?}
  *                                     url (start only) | ok (+ account, plan) | bad_code |
  *                                     no_subscription | no_session | failed
+ *        agent.oneshot                {ref, agent_id, result, reason?, text?, usage?}
+ *                                     ok (+ text, usage) | refused (+ reason) | failed | timeout;
+ *                                     the prompt and the text are never logged
  *        host.reply                   {ref, result}                       answer to host.env_names | host.admin
  *
  * An observation's `login` is `{step}`, except a Codex agent at its device
@@ -70,6 +75,7 @@ import { snapshotTools, type ProbeUser, type ToolSnapshot } from "./tools.ts";
 import { agentPane } from "./pane.ts";
 import { ClaudeLogin, liveLoginSpawn, restartArgv } from "./claude_login.ts";
 import { assertNoSecretsInArgv } from "./exec.ts";
+import { liveOneshotDeps, parseOneshot, runOneshot, type OneshotDeps } from "./oneshot.ts";
 import { deployService, restartService, rollbackService, type AdminResult, type DockerFetch } from "./docker.ts";
 import type { Payload } from "./phoenix.ts";
 
@@ -95,6 +101,7 @@ export class Host {
     private readonly docker: DockerFetch | null = null,
     restart?: Partial<RestartDeps>,
     claude?: ClaudeLogin,
+    oneshot?: Partial<OneshotDeps>,
   ) {
     this.claude =
       claude ??
@@ -107,7 +114,19 @@ export class Host {
       startAgent,
       ...restart,
     };
+    this.oneshotDeps = {
+      ...liveOneshotDeps({
+        readEnv: (id) => this.auth.readEnv(id),
+        state: async (id) => (await this.observe(id)).state,
+        secrets: deps.secrets,
+        log: deps.log,
+        check: assertNoSecretsInArgv,
+      }),
+      ...oneshot,
+    };
   }
+
+  private readonly oneshotDeps: OneshotDeps;
 
   private readonly restartDeps: RestartDeps;
   private readonly claude: ClaudeLogin;
@@ -376,6 +395,29 @@ export class Host {
       if (r.exitCode !== 0) this.deps.log(`agent ${t.agentId}: restart after claude login failed: ${r.stderr.trim()}`);
       await this.report(await this.observe(t.agentId), true);
     });
+  }
+
+  /**
+   * `agent.oneshot` (oneshot.ts): one tool-less question to the agent's own
+   * CLI on its own login, answered `agent.oneshot {ref, agent_id, result, ...}`.
+   * The prompt is taken out of the payload at once and goes only to the
+   * child's stdin. Not queued behind the agent's start/stop work: it runs
+   * beside the agent's unit, in its own temp dir. Only the result word and
+   * a refusal reason are logged.
+   */
+  async handleOneshot(payload: Payload): Promise<void> {
+    const prompt = payload.prompt;
+    delete payload.prompt;
+    const ref = typeof payload.ref === "string" && payload.ref !== "" ? payload.ref : null;
+    if (ref === null) return;
+    const agentId = isAgentId(payload.agent_id) ? payload.agent_id : "";
+    const req = parseOneshot({ ...payload, prompt });
+    const reply =
+      typeof req === "string"
+        ? { result: "refused" as const, reason: "invalid" as const }
+        : await runOneshot(this.oneshotDeps, req);
+    this.deps.log(`agent ${agentId}: oneshot ${reply.result}${"reason" in reply ? ` (${reply.reason})` : ""}`);
+    await this.transport.push("agent.oneshot", { ref, agent_id: agentId, ...(reply as unknown as Payload) });
   }
 
   /** `agent.claude_logout`: `claude auth logout` as the agent; `claude auth status` decides the reply. */

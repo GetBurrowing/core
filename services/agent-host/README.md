@@ -35,6 +35,14 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   which reaches ONLY that agent's 0600 env file as `ANTHROPIC_API_KEY`
   (stage 6). suite-cli answers Claude Code's "use this API key?" prompt for
   that key only. The other mode, `operator`, is below.
+- `agent.oneshot` (core task 01a1b721, `src/oneshot.ts`) asks the agent's own
+  CLI one isolated question on its own subscription login and answers with
+  the text and the token usage: Claude Code in print mode with no tools, no
+  MCP servers, no settings and no session, the prompt on stdin (never argv,
+  never logged), a fresh temp cwd removed afterwards, and every API-key
+  variable stripped from the child's env. An agent on an API key is refused
+  `api_key_login`. Codex is refused `tools_not_disableable`: its `exec` has
+  no switch that removes its shell tool.
 - `agent.pane` returns the agent's recent pane text for Burrow's read-only
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.

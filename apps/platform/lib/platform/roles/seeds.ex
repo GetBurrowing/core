@@ -164,7 +164,14 @@ defmodule Platform.Roles.Seeds do
         # tool-less call, so this agent's runtime bundles are never used
         # for it. Existing DBs pick it up from
         # `20261010160200_seed_feedback_intake_bundle.exs`.
-        "feedback.intake"
+        "feedback.intake",
+        # Task 01a1b721 stage 2: the secretary. This row ONLY names whose
+        # subscription login answers the secretary's one-shot, tool-less
+        # question (`Platform.Secretary.Model.Host`). It is never fired: no
+        # responsibility row, no handler, no Router dispatch, and the
+        # agent's chat session never sees the prompt. Existing DBs pick it
+        # up from `20261107221500_seed_secretary_evaluate_bundle.exs`.
+        "secretary.evaluate"
       ]
     },
     %{

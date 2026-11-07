@@ -91,6 +91,8 @@ if (import.meta.main) {
   channel.on("agent.claude_login_start", (p) => void host.handleClaudeLoginStart(p).catch(named("claude login start")));
   channel.on("agent.claude_login_code", (p) => void host.handleClaudeLoginCode(p).catch(named("claude login code")));
   channel.on("agent.claude_logout", (p) => void host.handleClaudeLogout(p).catch(named("claude logout")));
+  // One tool-less question on the agent's own login (oneshot.ts). Logged by error NAME only.
+  channel.on("agent.oneshot", (p) => void host.handleOneshot(p).catch(named("oneshot")));
   channel.on("host.env_names", (p) => void host.handleEnvNames(p).catch((e: unknown) => log(`env_names failed: ${String(e)}`)));
   channel.on("host.admin", (p) => void host.handleAdmin(p).catch((e: unknown) => log(`admin failed: ${String(e)}`)));
 

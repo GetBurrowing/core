@@ -35,6 +35,41 @@ defmodule Platform.AgentHost.FakeHost do
   Endpoint in the supervision tree, so it waits and retries every second
   (`join/1`).
 
+  A deterministic `agent.oneshot` (task 01a1b721 stage 2,
+  `oneshot_reply/3`, `oneshot_answer/1`): the secretary's tool-less
+  question is answered from the prompt's machine-readable INPUTS block
+  (`Platform.Secretary.Model.Host.inputs_open/0`), never by a model. The
+  fixed mapping, by the item's kind (an `inbox:` / `chat:` prefix dropped):
+
+    * `task_plan_review`, `review_request_pending` -> `decide`;
+    * `task_sponsor_assigned`, `lifecycle_step_failed`, `social_*` and any
+      kind not named here -> `waiting`;
+    * `chat_mention`, a DM (`chat:dm`), and any chat message that mentions
+      the person -> `waiting`; other chat in a space they are in -> `fyi`;
+    * `meeting_starting` -> `waiting`, deadline = its start (`deadline_at`);
+    * `meeting_invited`, `meeting_cancelled`, `briefing`,
+      `meeting_briefing` -> `fyi`; a chat message in an open channel the
+      person is not in (`member: false`) -> `not_in_space`;
+    * a calendar event (`calendar:event`) flagged `family` -> `waiting` with
+      `family: true`; any other calendar event -> `fyi`;
+    * a meeting action item addressed to the person (`meeting:action_item`)
+      -> `suggested`, and a to-do suggestion from it; the person's own
+      to-dos (`todo:*`) -> `todo`.
+
+  Rank: deadline ascending (none last), then kind order (decide, waiting,
+  not_in_space, todo, suggested, fyi), then ref. Reason `"Fake: <kind> from
+  <source>"`. Brief: the top `brief_max_lines` ranked items that are not
+  FYI, `needs_you_now` for a `decide` item due on the block's `today`.
+  Group `"none"`. Usage: input = prompt bytes / 4, output = answer bytes / 4.
+  The same prompt gives the same answer, byte for byte.
+
+  `set_oneshot_mode/2` (dev route `POST /dev/fake-secretary/mode/<mode>`):
+  `ok` (the default), `slow` (the answer comes after 20 s) or
+  `not_logged_in` (refused `not_logged_in`). Like the real host, an agent
+  with a saved API key (`Platform.Agents.NativeLogin.put_api_key/3`) is
+  refused `api_key_login`, and an agent not running `not_running`. The
+  prompt is read here and dropped; it is never kept or logged.
+
   `agent.stop` reports `stopped`. Logs, pane, file and auth requests get no
   answer; their callers time out as they would against a host that is slow.
 
@@ -45,7 +80,7 @@ defmodule Platform.AgentHost.FakeHost do
 
   require Logger
 
-  alias Platform.AgentHost.{LoginCode, Reconciler}
+  alias Platform.AgentHost.{LoginCode, OneshotPrompt, Reconciler}
 
   @device_url "https://auth.openai.com/codex/device"
   @device_code "FAKE-1234"
@@ -54,6 +89,8 @@ defmodule Platform.AgentHost.FakeHost do
   @claude_account "owner@example.com"
   @claude_plan "max"
   @claude_modes [:ok, :no_subscription, :timeout]
+  @oneshot_modes [:ok, :slow, :not_logged_in]
+  @slow_ms 20_000
   @report_after_ms 500
   @rejoin_after_ms 1_000
 
@@ -115,6 +152,223 @@ defmodule Platform.AgentHost.FakeHost do
     end
   end
 
+  @doc "Every mode of the fake `agent.oneshot`, the default first."
+  def oneshot_modes, do: @oneshot_modes
+
+  @doc """
+  Switch the fake `agent.oneshot` (`oneshot_modes/0`). `:ok`, or
+  `{:error, :unknown_mode | :not_running}`.
+  """
+  @spec set_oneshot_mode(atom(), GenServer.server()) ::
+          :ok | {:error, :unknown_mode | :not_running}
+  def set_oneshot_mode(mode, server \\ __MODULE__) do
+    cond do
+      mode not in @oneshot_modes -> {:error, :unknown_mode}
+      GenServer.whereis(server) -> GenServer.call(server, {:oneshot_mode, mode})
+      true -> {:error, :not_running}
+    end
+  end
+
+  @doc """
+  The fake host's `agent.oneshot` reply, before the channel's sanitising.
+  Pure; shared with the test stand-in (`Platform.FakeAgentHost`). `mode` is
+  one of `oneshot_modes/0` (`:slow` answers like `:ok`; the delay is the
+  server's); `facts` says whether the agent is `running` and has an API key
+  saved (`api_key?`).
+  """
+  @spec oneshot_reply(map(), atom(), %{running?: boolean(), api_key?: boolean()}) :: map()
+  def oneshot_reply(payload, mode, facts) do
+    cond do
+      not facts.running? -> %{"result" => "refused", "reason" => "not_running"}
+      facts.api_key? -> %{"result" => "refused", "reason" => "api_key_login"}
+      mode == :not_logged_in -> %{"result" => "refused", "reason" => "not_logged_in"}
+      true -> answer_reply(payload["prompt"])
+    end
+  end
+
+  defp answer_reply(%OneshotPrompt{} = prompt) do
+    text = OneshotPrompt.reveal(prompt)
+
+    case oneshot_answer(text) do
+      {:ok, answer} ->
+        %{
+          "result" => "ok",
+          "text" => answer,
+          "usage" => %{
+            "input_tokens" => div(byte_size(text), 4),
+            "output_tokens" => div(byte_size(answer), 4),
+            "cache_read_tokens" => 0,
+            "cache_creation_tokens" => 0
+          }
+        }
+
+      :error ->
+        %{"result" => "failed", "reason" => "no_inputs_block"}
+    end
+  end
+
+  defp answer_reply(_prompt), do: %{"result" => "refused", "reason" => "invalid"}
+
+  @kind_order %{
+    "decide" => 0,
+    "waiting" => 1,
+    "not_in_space" => 2,
+    "todo" => 3,
+    "suggested" => 4,
+    "fyi" => 5
+  }
+
+  @doc """
+  The deterministic answer JSON for a prompt carrying an INPUTS block
+  (`Platform.Secretary.Model.Host.inputs_open/0`), or `:error` when it has
+  none. Pure. The mapping is in the moduledoc.
+  """
+  @spec oneshot_answer(String.t()) :: {:ok, String.t()} | :error
+  def oneshot_answer(prompt) when is_binary(prompt) do
+    with {:ok, block} <- inputs_block(prompt) do
+      items = Enum.filter(List.wrap(block["items"]), &is_map/1)
+      today = block["today"]
+      brief_max = if is_integer(block["brief_max_lines"]), do: block["brief_max_lines"], else: 5
+
+      ranked =
+        items
+        |> Enum.map(&evaluate/1)
+        |> Enum.sort_by(fn e ->
+          {deadline_key(e["deadline_at"]), @kind_order[e["tag"]], e["ref_id"]}
+        end)
+        |> Enum.with_index(1)
+        |> Enum.map(fn {e, rank} -> Map.put(e, "rank", rank) end)
+        |> Enum.map(fn e -> Map.put(e, "needs_you_now", needs_you_now?(e, today)) end)
+
+      brief =
+        ranked
+        |> Enum.reject(&(&1["tag"] == "fyi"))
+        |> Enum.take(brief_max)
+        |> Enum.map(fn e ->
+          %{
+            "ref_type" => e["ref_type"],
+            "ref_id" => e["ref_id"],
+            "line" => e["reason"],
+            "action_label" => "Open",
+            "tag" => if(e["family"], do: "family", else: nil),
+            "needs_you_now" => e["needs_you_now"]
+          }
+        end)
+
+      todos =
+        for item <- items, kind(item) == "meeting:action_item" do
+          %{
+            "ref_type" => item["ref_type"],
+            "ref_id" => item["ref_id"],
+            "title" => item["title"] || item["text"] || "",
+            "quote" => item["text"]
+          }
+        end
+
+      {:ok,
+       Jason.encode!(%{
+         "evaluations" => ranked,
+         "brief" => brief,
+         "todos_suggested" => todos,
+         "todos_done" => []
+       })}
+    end
+  end
+
+  defp inputs_block(prompt) do
+    open = Platform.Secretary.Model.Host.inputs_open()
+    close = Platform.Secretary.Model.Host.inputs_close()
+
+    with [_, rest] <- String.split(prompt, open <> "\n", parts: 2),
+         [json, _] <- String.split(rest, "\n" <> close, parts: 2),
+         {:ok, %{} = block} <- Jason.decode(json) do
+      {:ok, block}
+    else
+      _ -> :error
+    end
+  end
+
+  defp kind(item), do: to_string(item["kind"] || "")
+
+  defp short_kind(item) do
+    k = kind(item)
+
+    case String.split(k, ":", parts: 2) do
+      ["inbox", rest] -> rest
+      _ -> k
+    end
+  end
+
+  defp evaluate(item) do
+    {tag, family?} = tag_for(item)
+    source = item["source"] || item["ref_type"] || "unknown"
+
+    %{
+      "ref_type" => item["ref_type"],
+      "ref_id" => item["ref_id"],
+      "tag" => tag,
+      "group_key" => "none",
+      "reason" => "Fake: #{short_kind(item)} from #{source}",
+      "family" => family?,
+      "deadline_at" => item["deadline_at"]
+    }
+  end
+
+  defp tag_for(item) do
+    k = short_kind(item)
+
+    cond do
+      k in ["task_plan_review", "review_request_pending"] ->
+        {"decide", false}
+
+      k == "meeting_starting" ->
+        {"waiting", false}
+
+      k in ["meeting_invited", "meeting_cancelled", "briefing", "meeting_briefing"] ->
+        {"fyi", false}
+
+      k == "chat_mention" ->
+        {"waiting", false}
+
+      String.starts_with?(k, "chat:") ->
+        chat_tag(item)
+
+      k == "calendar:event" and item["family"] == true ->
+        {"waiting", true}
+
+      k == "calendar:event" ->
+        {"fyi", false}
+
+      k == "meeting:action_item" ->
+        {"suggested", false}
+
+      String.starts_with?(k, "todo:") ->
+        {"todo", false}
+
+      true ->
+        {"waiting", false}
+    end
+  end
+
+  defp chat_tag(item) do
+    cond do
+      item["member"] == false -> {"not_in_space", false}
+      kind(item) == "chat:dm" -> {"waiting", false}
+      item["mentioned"] == true -> {"waiting", false}
+      true -> {"fyi", false}
+    end
+  end
+
+  # nil deadlines sort last; ISO-8601 UTC strings sort as time.
+  defp deadline_key(d) when is_binary(d), do: {0, d}
+  defp deadline_key(_), do: {1, ""}
+
+  defp needs_you_now?(%{"tag" => "decide", "deadline_at" => d}, today)
+       when is_binary(d) and is_binary(today),
+       do: String.starts_with?(d, today)
+
+  defp needs_you_now?(_e, _today), do: false
+
   @doc """
   Finish `agent_id`'s fake Codex login, as if its owner approved the code on
   OpenAI's page. `:ok`, or `{:error, :unknown_agent}` for an agent this fake
@@ -137,6 +391,7 @@ defmodule Platform.AgentHost.FakeHost do
       agents: %{},
       completed: MapSet.new(),
       claude_login: :ok,
+      oneshot: :ok,
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
       endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
       reconciler: nil
@@ -151,6 +406,9 @@ defmodule Platform.AgentHost.FakeHost do
   @impl true
   def handle_call({:claude_login_mode, mode}, _from, state),
     do: {:reply, :ok, %{state | claude_login: mode}}
+
+  def handle_call({:oneshot_mode, mode}, _from, state),
+    do: {:reply, :ok, %{state | oneshot: mode}}
 
   def handle_call({:complete, agent_id}, _from, state) do
     case Map.get(state.agents, agent_id) do
@@ -215,7 +473,30 @@ defmodule Platform.AgentHost.FakeHost do
     {:noreply, state}
   end
 
+  def handle_info(
+        {:agent_host_push, "agent.oneshot", %{"agent_id" => id, "ref" => ref} = payload},
+        state
+      )
+      when is_binary(id) and is_binary(ref) do
+    reply =
+      Map.merge(
+        %{"ref" => ref, "agent_id" => id},
+        oneshot_reply(payload, state.oneshot, oneshot_facts(id))
+      )
+
+    if state.oneshot == :slow and reply["result"] == "ok",
+      do: Process.send_after(self(), {:oneshot_reply, reply}, @slow_ms),
+      else: send_oneshot(reply)
+
+    {:noreply, state}
+  end
+
   def handle_info({:agent_host_push, _event, _payload}, state), do: {:noreply, state}
+
+  def handle_info({:oneshot_reply, reply}, state) do
+    send_oneshot(reply)
+    {:noreply, state}
+  end
 
   def handle_info({:report, id}, state) do
     case Map.get(state.agents, id) do
@@ -260,6 +541,19 @@ defmodule Platform.AgentHost.FakeHost do
       "detail" => "login",
       "login" => %{"step" => "login"}
     }
+
+  # Through the real channel handler's sanitising, as the host's reply would be.
+  defp send_oneshot(reply),
+    do: PlatformWeb.AgentHostChannel.handle_in("agent.oneshot", reply, %Phoenix.Socket{})
+
+  defp oneshot_facts(id) do
+    agent = Platform.Repo.get(Platform.Agents.Agent, id)
+
+    %{
+      running?: match?(%{state: :running}, Platform.AgentHost.status(id)),
+      api_key?: agent != nil and Platform.Agents.NativeLogin.api_key_set?(agent)
+    }
+  end
 
   defp report(id, payload) do
     case Reconciler.agent_state(self(), payload) do

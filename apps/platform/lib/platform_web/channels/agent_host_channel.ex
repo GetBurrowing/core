@@ -14,7 +14,7 @@ defmodule PlatformWeb.AgentHostChannel do
   use Phoenix.Channel, log_handle_in: false
 
   alias Platform.AgentHost
-  alias Platform.AgentHost.{LoginCode, Reconciler}
+  alias Platform.AgentHost.{LoginCode, OneshotPrompt, Reconciler}
 
   @impl true
   def join("agent_host:control", payload, socket) do
@@ -115,6 +115,21 @@ defmodule PlatformWeb.AgentHostChannel do
     {:reply, :ok, socket}
   end
 
+  # The answer to `agent.oneshot` (task 01a1b721 stage 2): the result word,
+  # a refusal reason, the answer text and the token usage. Never logged here.
+  # Broadcast on the ref's own reply topic, which only the caller waiting on
+  # that ref subscribes to.
+  def handle_in("agent.oneshot", %{"ref" => ref, "result" => result} = payload, socket)
+      when is_binary(ref) and is_binary(result) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      AgentHost.reply_topic(ref),
+      {:agent_host_oneshot, ref, oneshot_reply(result, payload)}
+    )
+
+    {:reply, :ok, socket}
+  end
+
   # The answer to `host.env_names` / `host.admin` (task 01a17b10 stage 3).
   # Env names only; never logged here.
   def handle_in("host.reply", %{"ref" => ref, "result" => result}, socket)
@@ -142,7 +157,41 @@ defmodule PlatformWeb.AgentHostChannel do
   defp unwrap_login_code(%{"code" => %LoginCode{} = code} = payload),
     do: %{payload | "code" => LoginCode.reveal(code)}
 
+  defp unwrap_login_code(%{"prompt" => %OneshotPrompt{} = prompt} = payload),
+    do: %{payload | "prompt" => OneshotPrompt.reveal(prompt)}
+
   defp unwrap_login_code(payload), do: payload
+
+  @usage_keys [
+    {"input_tokens", :input_tokens},
+    {"output_tokens", :output_tokens},
+    {"cache_read_tokens", :cache_read_tokens},
+    {"cache_creation_tokens", :cache_creation_tokens}
+  ]
+
+  @doc false
+  # The sanitised `agent.oneshot` reply. Public for the stand-in hosts.
+  def oneshot_reply("ok", %{"text" => text} = payload) when is_binary(text) do
+    usage = if is_map(payload["usage"]), do: payload["usage"], else: %{}
+
+    %{
+      "result" => "ok",
+      "text" => text,
+      "usage" =>
+        Map.new(@usage_keys, fn {k, atom} ->
+          v = usage[k]
+          {atom, if(is_integer(v) and v >= 0, do: v, else: 0)}
+        end)
+    }
+  end
+
+  def oneshot_reply("refused", %{"reason" => reason}) when is_binary(reason),
+    do: %{"result" => "refused", "reason" => String.slice(reason, 0, 64)}
+
+  def oneshot_reply("refused", _payload), do: %{"result" => "refused", "reason" => "unknown"}
+  def oneshot_reply("timeout", _payload), do: %{"result" => "timeout"}
+  def oneshot_reply("failed", _payload), do: %{"result" => "failed"}
+  def oneshot_reply(_result, _payload), do: %{"result" => "unknown"}
 
   @login_results ~w(ok bad_code no_subscription no_session failed)
 
