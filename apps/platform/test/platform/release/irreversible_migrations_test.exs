@@ -45,7 +45,7 @@ defmodule Platform.Release.IrreversibleMigrationsTest do
     {"create constraint", ~r/create constraint/}
   ]
 
-  @waiver ~r/^\s*#\s*old-code-compatible:\s*\S/m
+  @waiver ~r/^[ \t]*#[ \t]*old-code-compatible:[ \t]*\S/m
 
   # --- the rule, as pure functions over text --------------------------------
 
