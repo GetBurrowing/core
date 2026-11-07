@@ -253,13 +253,19 @@ defmodule Platform.Sharing.UsageEvents do
         cond do
           elem(Redaction.redact(encoded), 1) > 0 -> :redaction_hit
           Regex.match?(@email, encoded) -> :email_sentinel
-          not only_known_strings?(body) -> :unknown_string
+          not valid_outcomes?(body) -> :unknown_string
+          not only_known_strings?(Map.delete(body, "instruction_outcomes")) -> :unknown_string
           true -> nil
         end
 
       {:error, _} ->
         :not_encodable
     end
+  end
+
+  defp valid_outcomes?(body) do
+    not Map.has_key?(body, "instruction_outcomes") or
+      Platform.InstructionPacks.Outcomes.valid?(body["instruction_outcomes"])
   end
 
   defp only_known_strings?(body) do

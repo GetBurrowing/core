@@ -99,7 +99,7 @@ defmodule Platform.Sharing.UsageBatcher do
     if on? do
       counts = Map.merge(UsageEvents.pending(), Keyword.get(opts, :inject_counts, %{}))
       body = UsageEvents.build_body(install_id(), started, DateTime.diff(ended, started), counts)
-      send_body(body, state, ended)
+      send_body(with_outcomes(body), state, ended)
     else
       {:off, %{state | window_start: ended}}
     end
@@ -115,7 +115,7 @@ defmodule Platform.Sharing.UsageBatcher do
   defp send_body(body, state, ended) do
     case UsageEvents.refusal(body) do
       nil ->
-        case Broker.post_usage(body) do
+        case final_send(body) do
           :ok ->
             UsageEvents.subtract(body["counts"])
             {{:sent, body}, %{state | window_start: ended}}
@@ -128,6 +128,29 @@ defmodule Platform.Sharing.UsageBatcher do
         Logger.warning("[Sharing.UsageBatcher] batch refused: #{reason}")
         UsageEvents.subtract(body["counts"])
         {{:refused, reason}, %{state | window_start: ended}}
+    end
+  end
+
+  defp with_outcomes(body) do
+    if Sharing.enabled?(:instruction_updates_stopped) do
+      body
+    else
+      case Platform.InstructionPacks.Outcomes.snapshot() do
+        [] -> body
+        rows -> Map.put(body, "instruction_outcomes", rows)
+      end
+    end
+  end
+
+  # A queued batch grants no enduring consent. Drop the whole request at the
+  # last boundary; switching off never emits a farewell request.
+  defp final_send(body) do
+    if switch_on?() and
+         (not Map.has_key?(body, "instruction_outcomes") or
+            not Sharing.enabled?(:instruction_updates_stopped)) do
+      Broker.post_usage(body)
+    else
+      {:error, :sharing_disabled}
     end
   end
 

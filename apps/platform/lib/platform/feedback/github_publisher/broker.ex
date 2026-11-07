@@ -92,13 +92,26 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
   """
   @spec post_usage(map()) :: :ok | {:error, atom()}
   def post_usage(body) when is_map(body) do
-    with {:ok, base} <- base_url(),
+    with :ok <- usage_consent(body),
+         {:ok, base} <- base_url(),
          {:ok, status, _response} <- request(:post, base <> "/usage", "post_usage", json: body) do
       case status do
         status when status in [200, 201, 202] -> :ok
         status -> GithubPublisher.http_error(status)
       end
     end
+  end
+
+  defp usage_consent(body) do
+    cond do
+      not Platform.Sharing.enabled?(:usage_counts) -> {:error, :sharing_disabled}
+      Map.has_key?(body, "instruction_outcomes") and
+          Platform.Sharing.enabled?(:instruction_updates_stopped) -> {:error, :sharing_disabled}
+      Platform.Sharing.UsageEvents.refusal(body) != nil -> {:error, :invalid_usage}
+      true -> :ok
+    end
+  rescue
+    _ -> {:error, :sharing_disabled}
   end
 
   defp installation_label do

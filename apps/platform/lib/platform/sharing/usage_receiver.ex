@@ -45,12 +45,20 @@ defmodule Platform.Sharing.UsageReceiver do
           }
         end)
 
-      {written, _} =
-        Repo.insert_all(UsageCount, rows,
+      {:ok, written} = Repo.transaction(fn ->
+        if Map.has_key?(params, "instruction_outcomes") do
+          Repo.insert_all("sharing_instruction_outcomes", [%{
+            sharing_install_id: Ecto.UUID.dump!(install_id), window_start: start,
+            payload: %{"packs" => params["instruction_outcomes"]}, inserted_at: now, updated_at: now
+          }], on_conflict: {:replace, [:payload, :updated_at]}, conflict_target: [:sharing_install_id, :window_start])
+        end
+        {written, _} = Repo.insert_all(UsageCount, rows,
           on_conflict: {:replace, [:count, :window_seconds, :updated_at]},
           conflict_target: [:sharing_install_id, :window_start, :event]
         )
 
+        written
+      end)
       {:ok, written}
     end
   end
@@ -66,7 +74,8 @@ defmodule Platform.Sharing.UsageReceiver do
              seconds <= @max_window_seconds do
     pinned = UsageEvents.events()
 
-    with true <- Enum.sort(Map.keys(params)) == Enum.sort(@keys),
+    with true <- Enum.sort(Map.keys(Map.delete(params, "instruction_outcomes"))) == Enum.sort(@keys),
+         true <- outcomes_valid?(params),
          true <- map_size(window) == 2,
          {:ok, install_id} <- cast_uuid(params["sharing_install_id"]),
          %{} = counts <- params["counts"],
@@ -82,6 +91,11 @@ defmodule Platform.Sharing.UsageReceiver do
   end
 
   def validate(_params), do: {:error, :invalid_usage}
+
+  defp outcomes_valid?(params) do
+    not Map.has_key?(params, "instruction_outcomes") or
+      Platform.InstructionPacks.Outcomes.valid?(params["instruction_outcomes"])
+  end
 
   defp cast_uuid(value), do: Platform.UUID.cast(value)
 end
