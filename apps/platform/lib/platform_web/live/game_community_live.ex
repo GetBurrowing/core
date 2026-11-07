@@ -10,9 +10,11 @@ defmodule PlatformWeb.GameCommunityLive do
       socket = assign(socket, :current_user_record, user)
       {:cont, socket} = PlatformWeb.LiveAuth.on_mount(:default, params, session, socket)
 
-      PlatformWeb.ChatLive.embedded_mount(params,
+      PlatformWeb.ChatLive.embedded_mount(
+        params,
         %{"current_user_id" => user.id, "chat_space_slug" => space.id},
-        assign(socket, :game_access_denied, false))
+        assign(socket, :game_access_denied, false)
+      )
     else
       _ -> {:ok, assign(socket, :game_access_denied, true)}
     end
@@ -21,7 +23,9 @@ defmodule PlatformWeb.GameCommunityLive do
   @impl true
   def render(%{game_access_denied: true} = assigns) do
     ~H"""
-    <p id="game-chat-access-denied" role="status">Sign in and join this game’s community to see its messages.</p>
+    <p id="game-chat-access-denied" role="status">
+      Sign in and join this game’s community to see its messages.
+    </p>
     """
   end
 
@@ -31,10 +35,13 @@ defmodule PlatformWeb.GameCommunityLive do
   def handle_event(_event, _params, %{assigns: %{game_access_denied: true}} = socket),
     do: {:noreply, socket}
 
-  def handle_event(event, params, socket), do: PlatformWeb.ChatLive.handle_event(event, params, socket)
+  def handle_event(event, params, socket),
+    do: PlatformWeb.ChatLive.handle_event(event, params, socket)
 
   @impl true
-  def handle_info(_message, %{assigns: %{game_access_denied: true}} = socket), do: {:noreply, socket}
+  def handle_info(_message, %{assigns: %{game_access_denied: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_info(message, socket), do: PlatformWeb.ChatLive.handle_info(message, socket)
 
   @impl true

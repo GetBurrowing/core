@@ -190,7 +190,6 @@
               <div class="gp-game-chat-body">
                 <div id="game-live-chat" class="gp-chat">
                   {live_render(@conn, PlatformWeb.GameCommunityLive,
-                    id: "game-community-chat",
                     session: %{
                       "game_slug" => @game["slug"],
                       "current_user_id" => @user.id
