@@ -472,6 +472,55 @@ if config_env() != :test do
     disposition_mode: System.get_env("FEEDBACK_INTAKE_DISPOSITION", "comment")
 end
 
+# ── Sharing with Burrow (task 01a1b678 stage 1) ───────────────────────────────
+# USAGE_COUNTS, FRICTION_REPORTS and HELP_CHANNEL_REPORTS seed the owner's
+# switches in the `install_sharing` row ONCE, on its first read; the
+# `feedback` switch is seeded from FEEDBACK_POLICY above. After that the row
+# wins, so changing these later never flips a switch. Unset means off, so an
+# existing install that never gets these names shares nothing new. The
+# self-host installer renders them for NEW manifests only; hosted installs
+# get them from the hosted renderer.
+#
+# FRICTION_REPORT_THRESHOLD, FRICTION_REPORT_WINDOW_DAYS and
+# FRICTION_REPORTS_MAX_PER_WEEK override the friction-report knobs whose
+# defaults live in config/config.exs.
+#
+# Skipped under :test, which seeds nothing (every switch off) and keeps the
+# config.exs knob defaults.
+if config_env() != :test do
+  sharing_on? = fn name ->
+    String.downcase(String.trim(System.get_env(name, ""))) in ~w(true 1 yes on)
+  end
+
+  config :platform, :sharing_seed,
+    usage_counts: sharing_on?.("USAGE_COUNTS"),
+    friction_reports: sharing_on?.("FRICTION_REPORTS"),
+    help_channel_reports: sharing_on?.("HELP_CHANNEL_REPORTS")
+
+  friction_int = fn name, default ->
+    case Integer.parse(System.get_env(name, "")) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  end
+
+  friction_defaults = Application.get_env(:platform, :friction_reports, [])
+
+  config :platform, :friction_reports,
+    threshold:
+      friction_int.("FRICTION_REPORT_THRESHOLD", Keyword.get(friction_defaults, :threshold, 3)),
+    window_days:
+      friction_int.(
+        "FRICTION_REPORT_WINDOW_DAYS",
+        Keyword.get(friction_defaults, :window_days, 7)
+      ),
+    max_reports_per_install_per_week:
+      friction_int.(
+        "FRICTION_REPORTS_MAX_PER_WEEK",
+        Keyword.get(friction_defaults, :max_reports_per_install_per_week, 5)
+      )
+end
+
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
 # must read it from an env var and fail fast if unset.
 if config_env() == :prod do

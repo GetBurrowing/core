@@ -546,4 +546,16 @@ config :platform, :host_surface_enforcement, :on
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
+# Agent friction reports (task 01a1b678 stage 1): the knobs as data. An agent
+# files one report when it hits the same problem `threshold` times within
+# `window_days`, and an install files at most
+# `max_reports_per_install_per_week`. config/runtime.exs overrides each from
+# FRICTION_REPORT_THRESHOLD, FRICTION_REPORT_WINDOW_DAYS and
+# FRICTION_REPORTS_MAX_PER_WEEK outside :test. Read through
+# `Platform.Sharing.friction_settings/0`.
+config :platform, :friction_reports,
+  threshold: 3,
+  window_days: 7,
+  max_reports_per_install_per_week: 5
+
 import_config "#{config_env()}.exs"
