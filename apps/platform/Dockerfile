@@ -181,6 +181,12 @@ USER app
 
 COPY --from=build --chown=app:app /app/_build/prod/rel/platform ./
 
+# Release-channel metadata (task 01a1b7b6 stage 2): the migrations this
+# release's PREVIOUS release cannot run against. The host updater reads it
+# from the image to hold an irreversible release for an explicit "Update now"
+# and to refuse an automatic rollback past it. Identical in every image.
+COPY deployment/release/irreversible-migrations.txt /app/release/irreversible-migrations.txt
+
 EXPOSE 4000
 
 CMD ["/bin/sh", "-c", "/app/bin/platform eval 'Platform.Release.migrate()' && /app/bin/platform start"]

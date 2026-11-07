@@ -160,11 +160,12 @@ defmodule Platform.CiBuildIdentityTest do
     end
 
     # Raw literals, one per tag expression: the `core` flavour's tag sets
-    # (ADR 0055; main: core, core-<sha>, core-<short sha>; feature branch:
+    # (ADR 0055; main: core, core-edge, core-<sha>, core-<short sha>; feature branch:
     # core-<branch tag>, core-<sha>, core-<short sha>). Each must appear as a
     # `-t` argument.
     @ghcr_main_tags [
       "ghcr.io/getburrowing/core:core",
+      "ghcr.io/getburrowing/core:core-edge",
       "ghcr.io/getburrowing/core:core-${{ github.sha }}",
       "ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.short_sha }}"
     ]
@@ -174,7 +175,7 @@ defmodule Platform.CiBuildIdentityTest do
       "ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.short_sha }}"
     ]
 
-    test "main publishes core, core-<sha> and core-<short sha>", %{publish: job} do
+    test "main publishes core, core-edge, core-<sha> and core-<short sha>", %{publish: job} do
       step = named_step(job, "Create manifest list (main)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref == 'refs\/heads\/main'\s*$/m
 
@@ -252,6 +253,7 @@ defmodule Platform.CiBuildIdentityTest do
 
     @ghcr_play_main_tags [
       "ghcr.io/getburrowing/core:play",
+      "ghcr.io/getburrowing/core:play-edge",
       "ghcr.io/getburrowing/core:play-${{ github.sha }}",
       "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
       "ghcr.io/getburrowing/core:latest",

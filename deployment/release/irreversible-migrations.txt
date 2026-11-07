@@ -1,0 +1,23 @@
+# Irreversible migrations (task 01a1b7b6 stage 2).
+#
+# One migration version per line (the 14-digit prefix of its file name under
+# apps/*/priv/repo/migrations/). Lines starting with `#` and blank lines are
+# ignored.
+#
+# List a migration here when the PREVIOUS release's code cannot run against
+# the schema it leaves behind: it drops or renames a column or table, changes
+# a type, adds a NOT NULL column without a default, adds a constraint or a
+# unique index old code can violate, or rewrites data old code cannot read.
+#
+# Listing a version flags every release that contains it. The host updater
+# (deployment/installer/updater/burrow_update.py) holds such a release on the
+# automatic timer (held_irreversible) and crosses it only on an explicit
+# "Update now", after a pg_dump; once it is crossed, automatic rollback past
+# it is refused.
+#
+# apps/platform/test/platform/release/irreversible_migrations_test.exs
+# requires every new migration that looks destructive to be listed here OR
+# to carry a `# old-code-compatible: <reason>` comment, and every version
+# listed here to name an existing migration file.
+#
+# The file ships in both images at /app/release/irreversible-migrations.txt.

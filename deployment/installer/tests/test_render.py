@@ -1032,6 +1032,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
             _ci_publish_refs(play[0]),
             [
                 "ghcr.io/getburrowing/core:play",
+                "ghcr.io/getburrowing/core:play-edge",
                 "ghcr.io/getburrowing/core:play-${{ github.sha }}",
                 "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
                 "ghcr.io/getburrowing/core:latest",
