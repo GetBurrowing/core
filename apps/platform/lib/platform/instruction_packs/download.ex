@@ -33,8 +33,15 @@ defmodule Platform.InstructionPacks.Download do
           ]
 
       case Req.get(opts) do
-        {:ok, %{status: 200, body: body}} -> Signature.decode(body, roots)
-        _ -> {:error, :download_failed}
+        {:ok, %{status: 200, body: body}} ->
+          case Signature.decode(body, roots) do
+            {:ok, %{"pack_id" => ^pack_id, "version" => ^version} = manifest} -> {:ok, manifest}
+            {:ok, _} -> {:error, :unexpected_release}
+            error -> error
+          end
+
+        _ ->
+          {:error, :download_failed}
       end
     else
       _ -> {:error, :invalid_pack_source}

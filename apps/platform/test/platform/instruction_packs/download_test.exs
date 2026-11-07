@@ -51,6 +51,14 @@ defmodule Platform.InstructionPacks.DownloadTest do
              Download.fetch("setup-guide", 1, roots, plug: {Req.Test, __MODULE__})
   end
 
+  test "valid signed bytes cannot substitute a different requested version" do
+    {e, roots} = envelope()
+    Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(e)) end)
+
+    assert {:error, :unexpected_release} =
+             Download.fetch("setup-guide", 2, roots, plug: {Req.Test, __MODULE__})
+  end
+
   test "plain HTTP and URLs with credentials fail closed" do
     for url <- ["http://example.invalid/api", "https://user:secret@example.invalid/api"] do
       Application.put_env(:platform, Platform.Feedback.GithubPublisher, broker_url: url)

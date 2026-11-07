@@ -37,8 +37,9 @@ defmodule Platform.InstructionPacks do
     end
   end
 
-  def get_release(pack_id, version) when is_integer(version) and version > 0,
-    do: Repo.get_by(Release, pack_id: pack_id, version: version)
+  def get_release(pack_id, version)
+      when is_integer(version) and version > 0 and version <= 9_223_372_036_854_775_807,
+      do: Repo.get_by(Release, pack_id: pack_id, version: version)
 
   def get_release(_, _), do: nil
 end
