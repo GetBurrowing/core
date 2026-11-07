@@ -1077,6 +1077,10 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AccessRolesLive ->
         "Custom roles"
 
+      # Task 01a1b7b6 stage 3: the fallback would print "AdminUpdates".
+      PlatformWeb.AdminUpdatesLive ->
+        "Updates"
+
       _ ->
         view
         |> Module.split()

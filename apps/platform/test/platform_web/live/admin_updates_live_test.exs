@@ -45,7 +45,7 @@ defmodule PlatformWeb.AdminUpdatesLiveTest do
     assert view
            |> render()
            |> LazyHTML.from_fragment()
-           |> LazyHTML.query(~s(input[type="checkbox"]))
+           |> LazyHTML.query(~s([data-role="updates-page"] input[type="checkbox"]))
            |> Enum.count() == 1
 
     assert has_element?(
@@ -56,9 +56,9 @@ defmodule PlatformWeb.AdminUpdatesLiveTest do
 
     assert has_element?(view, ~s(button[data-role="updates-update-now"].btn-primary))
     assert has_element?(view, ~s([data-role="updates-last-result"][data-result="ok"]), "updated")
-    assert has_element?(view, ~s([data-role="updates-last-result"]), "2026-11-07T20:00 UTC")
+    assert has_element?(view, ~s([data-role="updates-last-result"]), "2026-11-07 20:00 UTC")
     # The channel is host config: there is no control for it.
-    refute has_element?(view, ~s(select))
+    refute has_element?(view, ~s([data-role="updates-page"] select))
     refute has_element?(view, ~s([data-role="updates-not-installed"]))
   end
 
@@ -148,9 +148,11 @@ defmodule PlatformWeb.AdminUpdatesLiveTest do
            )
 
     assert has_element?(view, ~s([data-role="updates-not-installed"]), "installs.md")
-    refute has_element?(view, ~s(button))
-    refute has_element?(view, ~s(input))
-    refute has_element?(view, ~s(form))
+    # Positive control: the page container is there, so the refutes below look inside it.
+    assert has_element?(view, ~s([data-role="updates-page"]))
+    refute has_element?(view, ~s([data-role="updates-page"] button))
+    refute has_element?(view, ~s([data-role="updates-page"] input))
+    refute has_element?(view, ~s([data-role="updates-page"] form))
   end
 
   test "deferred: the waiting line with its since time; Update now stays enabled", ctx do
@@ -162,7 +164,7 @@ defmodule PlatformWeb.AdminUpdatesLiveTest do
     view = mount_root(ctx)
 
     assert has_element?(view, ~s([data-role="updates-deferred"]), "Waiting: a meeting is live")
-    assert has_element?(view, ~s([data-role="updates-deferred"]), "2026-11-07T19:42 UTC")
+    assert has_element?(view, ~s([data-role="updates-deferred"]), "2026-11-07 19:42 UTC")
 
     assert has_element?(
              view,

@@ -200,6 +200,11 @@ defmodule PlatformWeb.AdminUpdatesLive do
   defp refused_words(reason), do: "request refused · " <> String.replace(reason, "_", " ")
 
   @doc false
+  # "2026-11-07T21:48:00Z" -> "2026-11-07 21:48" (UTC, minutes).
+  def stamp(iso) when is_binary(iso), do: iso |> String.slice(0, 16) |> String.replace("T", " ")
+  def stamp(_), do: nil
+
+  @doc false
   def ago(nil, _now), do: nil
 
   def ago(iso, now) do
@@ -255,7 +260,7 @@ defmodule PlatformWeb.AdminUpdatesLive do
       </div>
 
       <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
-        <div class="mx-auto max-w-2xl space-y-4">
+        <div class="mx-auto max-w-2xl space-y-4" data-role="updates-page">
           <%= case @status_kind do %>
             <% :not_installed -> %>
               <section
@@ -321,15 +326,15 @@ defmodule PlatformWeb.AdminUpdatesLive do
       |> assign(:headline, headline(status))
       |> assign(:running, short(status.current && status.current.commit))
       |> assign(:checked, ago(status.last_checked_at, assigns.now))
-      |> assign(:result_at, status.last_checked_at && String.slice(status.last_checked_at, 0, 16))
+      |> assign(:result_at, stamp(status.last_checked_at))
 
     ~H"""
     <section class="rounded-xl border border-edge bg-base-100" data-role="updates-card">
       <div class="space-y-3 p-4">
         <p class="font-mono text-sm tabular-nums text-base-content" data-role="updates-meta">
           <span data-role="updates-channel">{@status.channel || "unknown"}</span>
-          <span :if={@running}> · running   {@running}</span>
-          <span :if={@checked}> · checked   {@checked}</span>
+          <span :if={@running}> · running     {@running}</span>
+          <span :if={@checked}> · checked     {@checked}</span>
         </p>
 
         <p :if={@headline} class="text-sm text-base-content" data-role="updates-headline">
@@ -356,14 +361,14 @@ defmodule PlatformWeb.AdminUpdatesLive do
               Updates.commit(@status.last_rollback.to)
             ) || "?"}
             <span :if={@status.last_rollback.at} class="text-subtle">
-              · {String.slice(@status.last_rollback.at, 0, 16)} UTC
+              · {stamp(@status.last_rollback.at)} UTC
             </span>
           </span>
         </p>
 
         <p :if={@deferred?} class="text-sm text-base-content" data-role="updates-deferred">
           Waiting: a meeting is live<span :if={@status.deferred_since}>
-            (since <span class="font-mono tabular-nums">{String.slice(@status.deferred_since, 0, 16)} UTC</span>)</span>.
+            (since <span class="font-mono tabular-nums">{stamp(@status.deferred_since)} UTC</span>)</span>.
           Starts when the live meeting ends.
         </p>
 
@@ -382,10 +387,13 @@ defmodule PlatformWeb.AdminUpdatesLive do
         <div class="min-w-0">
           <p class="text-sm font-medium text-base-content">Update automatically</p>
           <p class="text-xs text-subtle" data-role="updates-auto-note">
-            <%= if @pending_auto_update != nil do %>
-              Saved. The server picks it up in a moment.
-            <% else %>
-              Checks for a new {@status.channel || ""} release every hour.
+            <%= cond do %>
+              <% @pending_auto_update != nil -> %>
+                Saved. The server picks it up in a moment.
+              <% @pinned? -> %>
+                A pinned server never updates on its own.
+              <% true -> %>
+                Checks for a new {@status.channel || ""} release every hour.
             <% end %>
           </p>
         </div>

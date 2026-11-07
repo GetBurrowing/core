@@ -157,6 +157,7 @@ defmodule PlatformWeb.SettingsLive do
       view: PlatformWeb.AdminThemesLive,
       desktop_only: true
     },
+    %{label: "Updates", path: "/admin/updates", view: PlatformWeb.AdminUpdatesLive},
     %{label: "User access", path: "/admin/users", view: PlatformWeb.UserAccessLive},
     %{
       label: "Users",
