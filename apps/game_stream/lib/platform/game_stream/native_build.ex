@@ -66,7 +66,8 @@ defmodule Platform.GameStream.NativeBuild do
   def package_valid?(%{"schema_version" => 1} = m) do
     artifacts = m["artifacts"]
 
-    is_binary(m["source_sha"]) and Regex.match?(~r/\A[0-9a-f]{40}\z/, m["source_sha"]) and
+    is_binary(m["repository"]) and m["repo_url"] == "https://github.com/" <> m["repository"] and
+      is_binary(m["source_sha"]) and Regex.match?(~r/\A[0-9a-f]{40}\z/, m["source_sha"]) and
       is_integer(m["build_number"]) and m["build_number"] > 0 and
       is_list(artifacts) and Enum.all?(artifacts, &artifact_valid?/1) and
       MapSet.subset?(

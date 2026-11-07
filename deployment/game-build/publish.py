@@ -70,7 +70,8 @@ def oidc(audience):
         return json.load(response)['value']
 
 def register(manifest, endpoint, project):
-    require(endpoint.startswith('https://') and '?' not in endpoint, 'invalid native package')
+    origin = urllib.parse.urlsplit(endpoint)
+    require(origin.scheme == 'https' and origin.hostname and not origin.username and not origin.password and not origin.query and not origin.fragment and origin.path in ('', '/'), 'an HTTPS publication origin is required')
     token = oidc('burrow-native-builds')
     req = urllib.request.Request(endpoint.rstrip('/') + '/api/ext/play/builds/' + project, data=json.dumps(manifest).encode(), method='POST', headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=60) as response:
@@ -92,7 +93,7 @@ def main():
         require(re.fullmatch('[0-9a-f]{40}', signer_sha), 'invalid native package')
         for a in manifest['artifacts']:
             subprocess.run(['gh', 'attestation', 'verify', str(Path(args.directory) / a['filename']), '--bundle', args.bundle, '--custom-trusted-root', str(Path(__file__).with_name('trusted_root.jsonl')), '--repo', manifest['repository'], '--signer-workflow', workflow, '--signer-digest', signer_sha, '--deny-self-hosted-runners', '--source-ref', 'refs/heads/main', '--source-digest', manifest['source_sha']], check=True, stdout=subprocess.DEVNULL)
-    if args.endpoint:
+    if args.endpoint is not None:
         require(args.verify_attestations, 'publication requires verified provenance')
         require(args.project, 'invalid native package')
         register(manifest, args.endpoint, args.project)

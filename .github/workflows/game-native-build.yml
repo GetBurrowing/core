@@ -200,9 +200,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          BURROW_URL: ${{ inputs.burrow_url }}
+          PROJECT_ID: ${{ inputs.project_id }}
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$BURROW_URL" && test -n "$PROJECT_ID"
           tag="native-$GITHUB_SHA"
           # Never clobber an artifact. Reruns must reuse exactly the same source release.
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

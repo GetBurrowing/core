@@ -106,6 +106,8 @@ defmodule Platform.GameStream.BuildIdentityTest do
       "source_sha" => String.duplicate("b", 40),
       "build_number" => 42,
       "artifacts" => artifacts,
+      "repository" => "owner/game",
+      "repo_url" => "https://github.com/owner/game",
       "engine" => "future-engine",
       "protocol_version" => 1,
       "capacity" => 4,
@@ -116,6 +118,7 @@ defmodule Platform.GameStream.BuildIdentityTest do
     refute NativeBuild.valid?(Map.put(manifest, "artifacts", tl(artifacts)))
     refute NativeBuild.valid?(Map.put(manifest, "artifacts", artifacts ++ artifacts))
     refute NativeBuild.valid?(Map.put(manifest, "build_number", "42"))
+    refute NativeBuild.valid?(Map.put(manifest, "repo_url", "https://github.com/other/game"))
   end
 
   test "asset handoff only accepts GitHub's signed HTTPS asset origins" do

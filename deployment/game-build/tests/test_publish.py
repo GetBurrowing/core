@@ -96,6 +96,11 @@ class Packages(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'symlink'):
             publish.validate(self.manifest, self.directory)
 
+    def test_empty_publication_destination_fails_before_requesting_identity(self):
+        for endpoint in ('', 'http://example.invalid', 'https://token@example.invalid', 'https://example.invalid/?secret=x'):
+            with self.assertRaises(ValueError):
+                publish.register(self.manifest, endpoint, 'project')
+
     def test_no_engine_build_or_unreal_pipeline(self):
         self.assertNotIn('RunUAT', Path(publish.__file__).read_text())
         self.assertFalse((Path(publish.__file__).parent / 'unreal.sh').exists())

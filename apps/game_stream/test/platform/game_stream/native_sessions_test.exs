@@ -418,6 +418,7 @@ defmodule Platform.GameStream.NativeSessionsTest do
     complete =
       Map.merge(ctx.build.manifest, %{
         "schema_version" => 1,
+        "repository" => String.replace_prefix(ctx.project.repo_url, "https://github.com/", ""),
         "source_sha" => String.duplicate("b", 40),
         "build_number" => 42,
         "artifacts" => artifacts
