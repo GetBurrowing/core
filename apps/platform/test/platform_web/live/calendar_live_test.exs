@@ -1454,6 +1454,26 @@ defmodule PlatformWeb.CalendarLiveTest do
     refute has_element?(view, "#calendar-editor")
   end
 
+  # Task 01a1b34f: the Visibility radios are `sr-only` (position: absolute).
+  # Without a positioned label their containing block is the shell's
+  # overflow-hidden `<main data-scroll-container>`, and focusing one on click
+  # scrolls that main out of view. Every hidden radio needs a `label.relative`.
+  test "Visibility radios are positioned by their label", %{conn: conn} do
+    {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
+    view |> element("#calendar-new") |> render_click()
+
+    doc = view |> render() |> LazyHTML.from_document()
+    all = doc |> LazyHTML.query(".cal-visopt input.sr-only[type=radio]") |> Enum.count()
+
+    positioned =
+      doc
+      |> LazyHTML.query(".cal-visopt label.relative input.sr-only[type=radio]")
+      |> Enum.count()
+
+    assert all == 2
+    assert positioned == all
+  end
+
   test "Busy only persists as visibility busy", %{conn: conn, scope: scope} do
     {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
     view |> element("#calendar-new") |> render_click()
