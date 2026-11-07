@@ -314,7 +314,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
              |> put_flash(:info, "Federated agent #{agent.name} created.")}
 
           {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
+            {:noreply, put_flash(socket, :error, federate_error_message(changeset, runtime_id))}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Federation failed: #{inspect(reason)}")}
@@ -657,4 +657,22 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   defp truthy_checkbox?("true"), do: true
   defp truthy_checkbox?("on"), do: true
   defp truthy_checkbox?(_), do: false
+
+  # A revoked runtime's id is reused by `Federation.register_runtime/2` (task
+  # 01a1b34b stage 3), so a unique-constraint error on runtime_id here means a
+  # pending, active or suspended runtime still holds it.
+  defp federate_error_message(%Ecto.Changeset{errors: errors} = changeset, runtime_id) do
+    case Keyword.get(errors, :runtime_id) do
+      {_msg, opts} when is_list(opts) ->
+        if opts[:constraint] == :unique do
+          "Runtime ID \"#{runtime_id}\" is in use by an active runtime. " <>
+            "Revoke that runtime first, then federate again."
+        else
+          changeset_error_summary(changeset)
+        end
+
+      _ ->
+        changeset_error_summary(changeset)
+    end
+  end
 end

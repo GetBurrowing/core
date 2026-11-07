@@ -816,4 +816,229 @@ defmodule Platform.FederationTest do
       refute_received {:auto_invite, _, _}
     end
   end
+
+  # ── Re-federating a revoked runtime_id (task 01a1b34b stage 3) ──────────────
+  #
+  # A runtime_id belongs to one agent_runtimes row forever. Re-federating an id
+  # whose row is `revoked` reuses that row in place (same pk) for the new
+  # owner; an id held by a pending, active or suspended runtime is still
+  # refused with the unique-constraint error, and that runtime is untouched.
+
+  describe "provision_agent_runtime/3 with a runtime_id held by a revoked runtime" do
+    alias Platform.Federation.DeadLetters
+    alias PlatformWeb.ControlCenter.AgentData
+
+    defp reuse_provision!(owner, runtime_id, modules) do
+      n = System.unique_integer([:positive])
+
+      Federation.provision_agent_runtime(
+        owner.id,
+        %{slug: "reuse-agent-#{n}", name: "Reuse Agent #{n}", status: "active"},
+        %{runtime_id: runtime_id, display_name: "Box #{n}", tool_profile: modules}
+      )
+    end
+
+    defp socket_connect(runtime_id, token) do
+      PlatformWeb.RuntimeSocket.connect(
+        %{"runtime_id" => runtime_id, "token" => token},
+        %Phoenix.Socket{},
+        %{}
+      )
+    end
+
+    defp pending_dead_letter!(runtime_id) do
+      {:ok, row} =
+        DeadLetters.record(%{
+          runtime_id: runtime_id,
+          source: "system_event",
+          responsibility_key: "reuse.k.#{System.unique_integer([:positive])}",
+          reason: "runtime_offline"
+        })
+
+      row
+    end
+
+    defp unchanged_fields(%AgentRuntime{} = r),
+      do:
+        Map.take(r, [
+          :id,
+          :owner_user_id,
+          :agent_id,
+          :status,
+          :auth_token_hash,
+          :display_name,
+          :metadata,
+          :updated_at
+        ])
+
+    test "reuses the row: same pk, new agent and owner, new token, history recorded" do
+      owner1 = create_user()
+      owner2 = create_user()
+      rid = "reuse-rt-#{System.unique_integer([:positive])}"
+
+      {:ok, agent1, runtime1, token1} = reuse_provision!(owner1, rid, ~w(federation space))
+      dead_letter = pending_dead_letter!(rid)
+
+      # Stage 1 path: deleting the agent revokes its runtime.
+      :ok = AgentData.delete_agent(agent1)
+      assert Repo.get!(AgentRuntime, runtime1.id).status == "revoked"
+
+      assert {:ok, %Agent{} = agent2, %AgentRuntime{} = runtime2, token2} =
+               reuse_provision!(owner2, rid, ~w(federation messaging))
+
+      assert runtime2.id == runtime1.id
+      assert token2 != token1
+
+      row = Repo.get!(AgentRuntime, runtime1.id)
+      assert row.agent_id == agent2.id
+      assert row.status == "active"
+      assert row.owner_user_id == owner2.id
+      assert row.last_connected_at == nil
+      assert Repo.get!(Agent, agent2.id).runtime_id == row.id
+      assert Repo.aggregate(from(r in AgentRuntime, where: r.runtime_id == ^rid), :count) == 1
+
+      # The new token connects; the old one is still refused.
+      assert {:ok, %Phoenix.Socket{}} = socket_connect(rid, token2)
+      assert socket_connect(rid, token1) == :error
+      assert Federation.get_runtime_by_token(token1) == nil
+
+      assert [prior] = row.metadata["prior_incarnations"]
+      assert prior["previous_agent_id"] == agent1.id
+      assert prior["previous_owner_user_id"] == owner1.id
+      assert prior["previous_display_name"] == runtime1.display_name
+      assert prior["previous_inserted_at"] == DateTime.to_iso8601(runtime1.inserted_at)
+      assert is_binary(prior["revoked_at"])
+      refute Map.has_key?(row.metadata, "revoked_agent_id")
+
+      # The tool profile is the new request's, not the old one.
+      assert RuntimeProfiles.tool_profile(row) == ~w(federation messaging)
+
+      # The dead letter stage 1 abandoned is not replayed to agent2.
+      assert DeadLetters.pending_for_runtime(rid) == []
+
+      assert Repo.get!(Platform.Federation.DeadLetter, dead_letter.id).disposition ==
+               "abandoned"
+
+      # One audit event names the pk and both owners.
+      assert [event] =
+               Repo.all(
+                 from(e in Platform.Audit.Event,
+                   where:
+                     e.event_type == "platform.federation.runtime_reused" and
+                       e.resource_id == ^row.id
+                 )
+               )
+
+      assert event.metadata["runtime_id"] == rid
+      assert event.metadata["previous_owner_user_id"] == owner1.id
+      assert event.metadata["new_owner_user_id"] == owner2.id
+    end
+
+    test "two reuse cycles leave two prior_incarnations entries, in order" do
+      owner1 = create_user()
+      owner2 = create_user()
+      owner3 = create_user()
+      rid = "reuse-twice-#{System.unique_integer([:positive])}"
+
+      {:ok, agent1, runtime, _} = reuse_provision!(owner1, rid, ~w(federation))
+      :ok = AgentData.delete_agent(agent1)
+      {:ok, agent2, _, _} = reuse_provision!(owner2, rid, ~w(federation))
+      second_start = Repo.get!(AgentRuntime, runtime.id).metadata["incarnated_at"]
+      :ok = AgentData.delete_agent(agent2)
+      {:ok, agent3, _, token3} = reuse_provision!(owner3, rid, ~w(federation space))
+
+      row = Repo.get!(AgentRuntime, runtime.id)
+      assert row.agent_id == agent3.id
+      assert {:ok, _} = socket_connect(rid, token3)
+
+      assert [first, second] = row.metadata["prior_incarnations"]
+      assert first["previous_agent_id"] == agent1.id
+      assert first["previous_owner_user_id"] == owner1.id
+      assert second["previous_agent_id"] == agent2.id
+      assert second["previous_owner_user_id"] == owner2.id
+      assert second["previous_inserted_at"] == second_start
+    end
+
+    test "a runtime revoked without deleting its agent: the old agent loses its pointer and its queue" do
+      owner1 = create_user()
+      owner2 = create_user()
+      rid = "reuse-manual-#{System.unique_integer([:positive])}"
+
+      {:ok, agent1, runtime1, _} = reuse_provision!(owner1, rid, ~w(federation))
+      {:ok, _} = Federation.revoke_runtime(runtime1)
+      dead_letter = pending_dead_letter!(rid)
+
+      {:ok, agent2, runtime2, _} = reuse_provision!(owner2, rid, ~w(federation))
+
+      assert runtime2.id == runtime1.id
+      assert Repo.get!(Agent, agent1.id).runtime_id == nil
+      assert Repo.get!(Agent, agent2.id).runtime_id == runtime1.id
+      assert [%{"previous_agent_id" => prev}] = runtime2.metadata["prior_incarnations"]
+      assert prev == agent1.id
+      assert DeadLetters.pending_for_runtime(rid) == []
+
+      assert Repo.get!(Platform.Federation.DeadLetter, dead_letter.id).disposition ==
+               "abandoned"
+    end
+
+    test "an id held by an ACTIVE runtime is refused and that runtime is untouched" do
+      owner = create_user()
+      intruder = create_user()
+      rid = "reuse-active-#{System.unique_integer([:positive])}"
+
+      {:ok, agent, runtime, token} = reuse_provision!(owner, rid, ~w(federation))
+      before = unchanged_fields(Repo.get!(AgentRuntime, runtime.id))
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               reuse_provision!(intruder, rid, ~w(federation messaging))
+
+      assert {"has already been taken", _} = changeset.errors[:runtime_id]
+
+      row = Repo.get!(AgentRuntime, runtime.id)
+      assert unchanged_fields(row) == before
+      assert row.auth_token_hash == AgentRuntime.hash_token(token)
+      assert row.agent_id == agent.id
+      assert RuntimeProfiles.tool_profile(row) == ~w(federation)
+      assert {:ok, _} = socket_connect(rid, token)
+    end
+
+    test "an id held by a SUSPENDED runtime is refused and that runtime is untouched" do
+      owner = create_user()
+      intruder = create_user()
+      rid = "reuse-suspended-#{System.unique_integer([:positive])}"
+
+      {:ok, agent, runtime, token} = reuse_provision!(owner, rid, ~w(federation))
+      {:ok, _} = Federation.suspend_runtime(runtime)
+      before = unchanged_fields(Repo.get!(AgentRuntime, runtime.id))
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               reuse_provision!(intruder, rid, ~w(federation))
+
+      assert {"has already been taken", _} = changeset.errors[:runtime_id]
+
+      row = Repo.get!(AgentRuntime, runtime.id)
+      assert unchanged_fields(row) == before
+      assert row.status == "suspended"
+      assert row.auth_token_hash == AgentRuntime.hash_token(token)
+      assert row.agent_id == agent.id
+    end
+
+    test "an id held by a PENDING runtime is refused and that runtime is untouched" do
+      owner = create_user()
+      rid = "reuse-pending-#{System.unique_integer([:positive])}"
+
+      pending =
+        %AgentRuntime{}
+        |> AgentRuntime.changeset(%{runtime_id: rid, owner_user_id: owner.id})
+        |> Repo.insert!()
+
+      before = unchanged_fields(pending)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               reuse_provision!(create_user(), rid, ~w(federation))
+
+      assert {"has already been taken", _} = changeset.errors[:runtime_id]
+      assert unchanged_fields(Repo.get!(AgentRuntime, pending.id)) == before
+    end
+  end
 end
