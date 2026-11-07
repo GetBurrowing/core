@@ -189,6 +189,20 @@ defmodule Platform.Onboarding.PersonSetupTest do
     end
   end
 
+  test "notifications: another person's subscription does not count" do
+    user = user!()
+    dm_space!(user)
+    {_space, theirs} = dm_space!(user!("other"))
+
+    {:ok, _} =
+      Push.subscribe(theirs.id, %{
+        endpoint: "https://push.example.com/#{System.unique_integer([:positive])}",
+        keys: %{p256dh: "p256dh-key", auth: "auth-key"}
+      })
+
+    assert states(user).notifications == :todo
+  end
+
   describe "phone app" do
     test "flips on an APNs token row; an app session alone stays unknown" do
       user = user!()
