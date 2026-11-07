@@ -507,6 +507,13 @@ defmodule Platform.Role do
     },
     %{
       kind: :http,
+      file: "lib/platform/instruction_packs/download.ex",
+      class: :follows_caller,
+      note:
+        "bounded signed-pack transport with no trigger of its own; runs only where its caller fetches a release"
+    },
+    %{
+      kind: :http,
       file: "lib/platform/feedback/github_publisher/broker.ex",
       class: :request,
       note: "feedback_submit through the broker"
