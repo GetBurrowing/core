@@ -7,6 +7,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
   import PlatformWeb.ControlCenter.Helpers
 
+  alias PlatformWeb.ControlCenter.SheetRefusal
+
   attr :show, :boolean, required: true
   attr :onboarding_flow, :atom, default: nil
   attr :selected_template, :map, default: nil
@@ -24,11 +26,16 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   # "Run on this server" is offered only while an agent host is connected
   # (task 01a10322 stage 4).
   attr :agent_host_connected?, :boolean, default: false
+  # Fail closed: without the flag the create paths render locked (task 01a1ae4b).
+  attr :can_create_ownerless?, :boolean, default: false
+  # A policy refusal raised while this overlay is open (task 01a1ae4b stage 2).
+  attr :sheet_refusal, :string, default: nil
 
   def overlay(assigns) do
     ~H"""
     <div
       :if={@show}
+      id="onboarding-overlay"
       class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-base-300/80 backdrop-blur-sm"
     >
       <div class="w-full max-w-2xl px-4 py-8 sm:py-16">
@@ -56,9 +63,14 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             </button>
           </div>
 
+          <div :if={@sheet_refusal} class="mt-4">
+            <SheetRefusal.alert message={@sheet_refusal} />
+          </div>
+
           <.chooser_cards
             :if={is_nil(@onboarding_flow)}
             agent_host_connected?={@agent_host_connected?}
+            can_create_ownerless?={@can_create_ownerless?}
           />
 
           <.native_flow :if={@onboarding_flow == :native} />
@@ -101,11 +113,20 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     """
   end
 
+  @admin_line_title "Only org admins can add external agents."
+  @admin_line_body "Ask an admin to add it or to grant you agent management."
+
+  @doc """
+  The reason a member sees on the locked create paths (task 01a1ae4b).
+  """
+  def admin_line, do: @admin_line_title <> " " <> @admin_line_body
+
   attr :agent_host_connected?, :boolean, default: false
+  attr :can_create_ownerless?, :boolean, default: false
 
   defp chooser_cards(assigns) do
     ~H"""
-    <div class="mt-6 grid gap-4 sm:grid-cols-2">
+    <div id="add-agent-chooser" class="mt-6 grid gap-4 sm:grid-cols-2">
       <button
         :if={@agent_host_connected?}
         id="choose-native"
@@ -122,6 +143,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       </button>
 
       <button
+        :if={@can_create_ownerless?}
+        id="choose-template"
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="template"
@@ -133,8 +156,18 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           Designer, Researcher, Architect, and more
         </span>
       </button>
+      <.locked_card
+        :if={!@can_create_ownerless?}
+        id="choose-template"
+        icon="hero-briefcase"
+        title="From a Template"
+        subtitle="Designer, Researcher, Architect, and more"
+        line_id="add-chooser-admin-line"
+        show_line
+      />
 
       <button
+        id="choose-federate"
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="federate"
@@ -148,6 +181,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       </button>
 
       <button
+        :if={@can_create_ownerless?}
+        id="choose-import"
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="import"
@@ -157,8 +192,18 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <span class="text-sm font-semibold text-base-content">Import</span>
         <span class="text-xs text-subtle">From an OpenClaw or Claude Code workspace</span>
       </button>
+      <.locked_card
+        :if={!@can_create_ownerless?}
+        id="choose-import"
+        icon="hero-arrow-down-tray"
+        title="Import"
+        subtitle="From an OpenClaw or Claude Code workspace"
+        line_id="add-chooser-admin-line"
+      />
 
       <button
+        :if={@can_create_ownerless?}
+        id="choose-create"
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="create"
@@ -168,8 +213,18 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <span class="text-sm font-semibold text-base-content">Create Custom</span>
         <span class="text-xs text-subtle">Full manual setup</span>
       </button>
+      <.locked_card
+        :if={!@can_create_ownerless?}
+        id="choose-create"
+        icon="hero-wrench-screwdriver"
+        title="Create Custom"
+        subtitle="Full manual setup"
+        line_id="add-chooser-admin-line"
+      />
 
       <button
+        :if={@can_create_ownerless?}
+        id="choose-external"
         type="button"
         phx-click="choose_onboarding"
         phx-value-flow="external"
@@ -184,7 +239,102 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Burrow-managed runtime.
         </span>
       </button>
+      <.locked_card
+        :if={!@can_create_ownerless?}
+        id="choose-external"
+        icon="hero-bolt"
+        title="External Agent"
+        subtitle="OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Burrow-managed runtime."
+        line_id="add-chooser-admin-line"
+        class="sm:col-span-2"
+      />
     </div>
+    """
+  end
+
+  @doc """
+  A create path the user may not take (task 01a1ae4b). Visible so members
+  learn it exists and who to ask; `aria-disabled`, still focusable, and with
+  no `phx-click`, so tapping it sends nothing and nothing can be refused.
+  Readable at AA: base-200 surface with `text-subtle`, never an opacity
+  fade, never primary. The lock is the info slot. `show_line` writes the
+  admin line on this card; every locked card points at it with
+  `aria-describedby`, so it appears once.
+  """
+  attr :id, :string, required: true
+  attr :icon, :string, required: true
+  attr :title, :string, required: true
+  attr :subtitle, :string, default: nil
+  attr :line_id, :string, required: true
+  attr :show_line, :boolean, default: false
+  attr :compact, :boolean, default: false
+  attr :class, :string, default: nil
+
+  def locked_card(assigns) do
+    assigns =
+      assigns
+      |> assign(:line_title, @admin_line_title)
+      |> assign(:line_body, @admin_line_body)
+
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      aria-disabled="true"
+      aria-describedby={@line_id}
+      data-locked="true"
+      class={[
+        "flex cursor-not-allowed flex-col items-center rounded-2xl border border-edge bg-base-200 text-center",
+        if(@compact, do: "gap-2 px-3 py-4", else: "gap-3 px-4 py-6"),
+        @class
+      ]}
+    >
+      <span class={[@icon, if(@compact, do: "h-6 w-6", else: "h-8 w-8"), "text-subtle"]} />
+      <span class={[
+        "inline-flex items-center gap-1.5 font-semibold text-subtle",
+        if(@compact, do: "text-xs", else: "text-sm")
+      ]}>
+        <span class="hero-lock-closed h-4 w-4 shrink-0 text-info" aria-hidden="true" />
+        {@title}
+      </span>
+      <span :if={@subtitle} class="text-xs text-subtle">{@subtitle}</span>
+      <span
+        :if={@show_line}
+        id={@line_id}
+        data-role="admin-line"
+        class="flex flex-col text-[13px] font-normal leading-snug text-subtle"
+      >
+        <span>{@line_title}</span>
+        <span>{@line_body}</span>
+      </span>
+    </button>
+    """
+  end
+
+  @doc """
+  The admin line on its own, for a grid whose locked tiles are too small to
+  carry it (the empty-state grid). Rendered once; tiles reference `id`.
+  """
+  attr :id, :string, required: true
+
+  def admin_line_note(assigns) do
+    assigns =
+      assigns
+      |> assign(:line_title, @admin_line_title)
+      |> assign(:line_body, @admin_line_body)
+
+    ~H"""
+    <p
+      id={@id}
+      data-role="admin-line"
+      class="flex w-full max-w-sm items-start gap-2 rounded-2xl bg-base-200 px-3 py-2 text-left text-[13px] leading-snug text-subtle"
+    >
+      <span class="hero-lock-closed mt-0.5 h-4 w-4 shrink-0 text-info" aria-hidden="true" />
+      <span class="flex flex-col">
+        <span>{@line_title}</span>
+        <span>{@line_body}</span>
+      </span>
+    </p>
     """
   end
 

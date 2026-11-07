@@ -51,6 +51,7 @@ defmodule PlatformWeb.ControlCenterLive do
      socket
      |> assign(:page_title, "Agents")
      |> assign(:current_user_id, current_user_id)
+     |> assign_create_permission(Platform.Access.Scope.for_user(%{id: current_user_id}))
      |> assign(:agent_host_connected?, AgentHost.connected?())
      |> assign(:restarting_agent_id, nil)
      |> assign(:manageable_agent_ids, MapSet.new())
@@ -111,6 +112,8 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:show_add_space_modal, false)
      |> assign(:available_spaces, [])
      |> assign(:available_meeting_spaces, [])
+     # A policy refusal raised while a sheet is open (task 01a1ae4b stage 2).
+     |> assign(:sheet_refusal, nil)
      # Roles panel assigns (M7 stage 5)
      |> assign(:active_tab, :roles)
      |> assign(:show_role_advanced, false)
@@ -141,6 +144,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
     socket =
       socket
+      |> close_add_space_modal_on_switch(selected_agent)
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
@@ -297,7 +301,10 @@ defmodule PlatformWeb.ControlCenterLive do
     "federate_done" => :ui,
     "toggle_import_agent" => :create_ownerless,
     "submit_import" => :create_ownerless,
-    "external_agent_change" => :create_ownerless,
+    # Field validation only (slug re-derivation, form round-trip; no DB or
+    # network), so it is :ui: refusing it fired a refusal on every keystroke
+    # (task 01a1ae4b). The create itself is submit_external, still gated.
+    "external_agent_change" => :ui,
     "submit_external" => :create_ownerless,
     "set_vault_mode" => :vault,
     "suspend_federated_runtime" => :manage_selected,
@@ -330,10 +337,12 @@ defmodule PlatformWeb.ControlCenterLive do
     "session_restart_cancel" => :ui
   }
 
+  @create_refused_message "You don't have permission to add agents to this org."
+
   @impl true
   def handle_event(name, params, socket) do
     scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
-    socket = assign(socket, :access_scope, scope)
+    socket = socket |> assign(:access_scope, scope) |> assign_create_permission(scope)
 
     permitted? =
       case Map.get(@event_policy, name) do
@@ -369,22 +378,44 @@ defmodule PlatformWeb.ControlCenterLive do
       end
 
     if permitted? do
-      handle_control_event(name, params, socket)
+      handle_control_event(name, params, assign(socket, :sheet_refusal, nil))
     else
       message =
-        cond do
-          Map.get(@event_policy, name) == :access_admin ->
+        case Map.get(@event_policy, name) do
+          :access_admin ->
             GrantEvents.forbidden_message()
 
-          NativeAgents.managed?(socket.assigns[:selected_agent]) ->
-            NativeAgentEvents.refused_message()
+          :create_ownerless ->
+            @create_refused_message
 
-          true ->
-            "You can only manage your own agents."
+          _ownership ->
+            if NativeAgents.managed?(socket.assigns[:selected_agent]),
+              do: NativeAgentEvents.refused_message(),
+              else: "You can only manage your own agents."
         end
 
-      {:noreply, put_flash(socket, :error, message)}
+      {:noreply, refuse(socket, message)}
     end
+  end
+
+  # Every policy refusal goes through here (task 01a1ae4b stage 2). The
+  # sheets on this page (the onboarding overlay, the Add-to-Space modal and
+  # the grant panel) are full-screen overlays above the layout's flash toast,
+  # so a flash raised while one is open would land behind it, unread. While a
+  # sheet is open the message goes to `:sheet_refusal`, which the sheet
+  # renders at the top of its body; the form assigns are left alone, so what
+  # was typed stays. With no sheet open it is the page flash, as before.
+  defp refuse(socket, message) do
+    if sheet_open?(socket.assigns) do
+      assign(socket, :sheet_refusal, message)
+    else
+      put_flash(socket, :error, message)
+    end
+  end
+
+  defp sheet_open?(assigns) do
+    assigns[:show_onboarding_chooser] == true or assigns[:show_add_space_modal] == true or
+      not is_nil(assigns[:grant_panel])
   end
 
   # ── Roles panel events (M7 stage 5) ───────────────────────────────
@@ -401,6 +432,21 @@ defmodule PlatformWeb.ControlCenterLive do
   # External Agent onboarding flow with the role_key pre-bound so the
   # form's role <select> renders that role pre-selected and the submit
   # handler picks it up (stage 6 wiring, reused here).
+  defp handle_control_event(
+         "assign_role",
+         %{"role_key" => _role_key, "agent_id" => "__new_external__"},
+         %{assigns: %{can_create_ownerless?: false}} = socket
+       ) do
+    # A member cannot create an ownerless agent (task 01a1ae4b): the picker
+    # does not offer this sentinel to them, and a forged one lands on the
+    # chooser, where the create paths are shown disabled with the reason.
+    {:noreply,
+     socket
+     |> assign(:show_onboarding_chooser, true)
+     |> assign(:onboarding_flow, nil)
+     |> assign(:probe_result, nil)}
+  end
+
   defp handle_control_event(
          "assign_role",
          %{"role_key" => role_key, "agent_id" => "__new_external__"},
@@ -898,6 +944,8 @@ defmodule PlatformWeb.ControlCenterLive do
         roles={@roles}
         role_assignments_by_key={@role_assignments_by_key}
         agent_host_connected?={@agent_host_connected?}
+        can_create_ownerless?={@can_create_ownerless?}
+        sheet_refusal={@sheet_refusal}
       />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
@@ -958,8 +1006,9 @@ defmodule PlatformWeb.ControlCenterLive do
                 </p>
               </div>
 
-              <div class="grid w-full max-w-sm grid-cols-2 gap-3">
+              <div id="empty-state-add-grid" class="grid w-full max-w-sm grid-cols-2 gap-3">
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="template"
@@ -968,6 +1017,14 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-briefcase h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Template</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-template"
+                  icon="hero-briefcase"
+                  title="Template"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
                 <button
                   type="button"
                   phx-click="choose_onboarding"
@@ -978,6 +1035,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="text-xs font-semibold">Federate</span>
                 </button>
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="import"
@@ -986,7 +1044,16 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-arrow-down-tray h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Import</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-import"
+                  icon="hero-arrow-down-tray"
+                  title="Import"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="create"
@@ -995,7 +1062,19 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-wrench-screwdriver h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Custom</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-create"
+                  icon="hero-wrench-screwdriver"
+                  title="Custom"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
               </div>
+              <Onboarding.admin_line_note
+                :if={!@can_create_ownerless?}
+                id="empty-state-admin-line"
+              />
             </div>
           </nav>
         </aside>
@@ -1071,6 +1150,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 managed?={not is_nil(@native_header)}
                 can_grant?={@can_grant?}
                 grant_panel={@grant_panel}
+                sheet_refusal={@sheet_refusal}
                 can_manage?={
                   Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
                     (is_nil(@native_header) or @native_header.can_manage?)
@@ -1173,6 +1253,7 @@ defmodule PlatformWeb.ControlCenterLive do
             responsibility_rows={@responsibility_rows}
             selectable_agents={@selectable_agents}
             access_scope={@access_scope}
+            can_create_ownerless?={@can_create_ownerless?}
           />
         </main>
       </div>
@@ -1187,15 +1268,26 @@ defmodule PlatformWeb.ControlCenterLive do
         <span class="hero-plus h-6 w-6" />
       </button>
 
+      <%!-- Kept open while it holds a refusal, so the refusal is read where
+           the person is looking (task 01a1ae4b stage 2). --%>
       <PlatformWeb.ControlCenter.RuntimePanel.grant_panel
-        :if={@grant_panel && @can_grant?}
+        :if={@grant_panel && (@can_grant? or not is_nil(@sheet_refusal))}
         panel={@grant_panel}
+        sheet_refusal={@sheet_refusal}
       />
     </div>
     """
   end
 
   # ── Private: panel assignment ─────────────────────────────────────
+
+  # Whether this user may create an ownerless agent (External Agent, Import,
+  # template, Create Custom). The chooser, the empty-state grid and the roles
+  # picker read it so a member sees those paths closed before typing
+  # (task 01a1ae4b); the event policy stays the enforcement.
+  defp assign_create_permission(socket, scope) do
+    assign(socket, :can_create_ownerless?, Platform.Access.Agents.may_create_ownerless?(scope))
+  end
 
   defp assign_roles_panel(socket) do
     socket
@@ -1257,6 +1349,18 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:available_meeting_spaces, [])
     |> assign_roles_panel()
     |> assign_native()
+  end
+
+  # The Add-to-Space modal belongs to the agent it was opened for. Its render
+  # condition is only `@show_add_space_modal` (so a refusal can render in it),
+  # so it is closed when another agent is selected (task 01a1ae4b stage 2).
+  # Called before `:selected_agent` is reassigned; a refresh of the same agent
+  # leaves it open.
+  defp close_add_space_modal_on_switch(socket, selected_agent) do
+    case {socket.assigns[:selected_agent], selected_agent} do
+      {%Agent{id: id}, %Agent{id: id}} -> socket
+      _switched -> assign(socket, :show_add_space_modal, false)
+    end
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
