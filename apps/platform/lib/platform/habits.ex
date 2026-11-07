@@ -47,8 +47,9 @@ defmodule Platform.Habits do
   @choice_event [:platform, :interaction, :choice]
   @signal_keys ~w(actor_user_id space_id action target_type target_id outcome rung source_message_id)a
 
-  # A signal recorded a few milliseconds ago has decayed by ~1e-9. Without a
-  # tolerance, three fresh signals would sum to just under min_signals = 3.
+  # Tolerance for the decayed comparisons (score > 0, confidence >=
+  # prefill_threshold). min_signals is a number of times and is compared
+  # with the raw count, never a decayed weight.
   @epsilon 1.0e-6
   @seconds_per_day 86_400
   # § 8: signals older than this many half-lives are pruned.
@@ -239,8 +240,11 @@ defmodule Platform.Habits do
       every `accepted`, `chosen` and `overridden` signal for the action in
       the space.
     * **prefill** is the top target only when its confidence >=
-      `prefill_threshold`, its decayed accepted+chosen count >= `min_signals`,
-      and its pattern is not stopped.
+      `prefill_threshold`, its RAW (undecayed) count of `accepted` and
+      `chosen` signals inside the lookback window (`#{@retention_half_lives}`
+      half-lives) >= `min_signals`, and its pattern is not stopped.
+      `min_signals` is a number of times: three picks spread over days are
+      three, however much each has decayed.
     * **act** is the prefill target only when, in addition, the pattern's
       `accepted_prefills >= act_after_accepts` and
       `Actions.reversible?(action, target)` is true. An agent target never
@@ -281,18 +285,20 @@ defmodule Platform.Habits do
     tallies =
       Enum.reduce(signals, %{}, fn {type, id, outcome, at}, acc ->
         w = decayed_weight(at, now, half_life)
-        {pos, neg} = Map.get(acc, {type, id}, {0.0, 0.0})
+        {pos, neg, times} = Map.get(acc, {type, id}, {0.0, 0.0, 0})
 
-        tally = if outcome == "overridden", do: {pos, neg + w}, else: {pos + w, neg}
+        tally =
+          if outcome == "overridden", do: {pos, neg + w, times}, else: {pos + w, neg, times + 1}
+
         Map.put(acc, {type, id}, tally)
       end)
 
-    total = tallies |> Map.values() |> Enum.reduce(0.0, fn {p, n}, sum -> sum + p + n end)
+    total = tallies |> Map.values() |> Enum.reduce(0.0, fn {p, n, _}, sum -> sum + p + n end)
 
     ranked =
       tallies
-      |> Enum.map(fn {{type, id}, {pos, neg}} ->
-        %{target_type: type, target_id: id, score: pos - neg, count: pos}
+      |> Enum.map(fn {{type, id}, {pos, neg, times}} ->
+        %{target_type: type, target_id: id, score: pos - neg, times: times}
       end)
       |> Enum.filter(&(&1.score > @epsilon))
       |> Enum.sort_by(&{-&1.score, &1.target_id})
@@ -308,7 +314,7 @@ defmodule Platform.Habits do
 
         %{
           empty
-          | ranked: Enum.map(ranked, &Map.delete(&1, :count)),
+          | ranked: Enum.map(ranked, &Map.delete(&1, :times)),
             prefill: prefill,
             act: act
         }
@@ -319,7 +325,7 @@ defmodule Platform.Habits do
     confidence = if total > 0, do: top.score / total, else: 0.0
 
     if confidence + @epsilon >= payload["prefill_threshold"] and
-         top.count + @epsilon >= payload["min_signals"] and
+         top.times >= payload["min_signals"] and
          not stopped?(pattern) do
       %{target_type: top.target_type, target_id: top.target_id}
     end
