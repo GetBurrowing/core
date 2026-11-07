@@ -432,10 +432,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
     # the `federation` bundle, and feedback_submit declares `space_id`. All four
     # values measured locally on the stage's branch.
-    @previous_tool_digest_off "c6d4294dca77c58531b62ff52bb2b3d3489c11f0367b40a1b5dcc89ccaa60045"
-    @previous_tool_digest_on "5da04ce33d34382712fcd96cabeb75aefff8cd87bbfca1d31f34f8a3954225b2"
-    @main_tool_digest_off "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
-    @main_tool_digest_on "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
+    # Task 01a1b6e1: sharing_set gains instruction_updates. Measured on Moon
+    # at 5b1d04b64 / measurement probe 3f0cc6c9b; all names remain strict.
+    @previous_tool_digest_off "e0d06a1a374ddc981ac3a68ff397a3a3543310e996f20fd223e0cc58c1f06137"
+    @previous_tool_digest_on "21aaf1d9d1992e20dad655aad95f20158e232e9c6afe5b5877e6ba308b49c555"
+    @main_tool_digest_off "0faf461def08ed2226b5841da0f9720149da7ef719742099589dc3a95fd39a92"
+    @main_tool_digest_on "7769402ad6614fb3e8f1c49e922e85858a274149e0c0f99e323475f95b2a0bb6"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
@@ -515,6 +517,22 @@ defmodule Platform.GameStream.ExtensionParityTest do
     defp canon(f) when is_function(f), do: {:fun, inspect(f)}
     defp canon(x), do: x
 
+    # Preserve the previous byte oracle after removing ONLY this task's
+    # independently named enum value and its generated disclosure suffix.
+    defp without_instruction_updates(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "instruction_updates"))
+            |> Map.update!(:description, &String.replace_suffix(&1, ", instruction_updates", ""))
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
     defp digest(term),
       do:
         :crypto.hash(:sha256, :erlang.term_to_binary(canon(term))) |> Base.encode16(case: :lower)
@@ -549,6 +567,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
       assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
       assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_off
       assert digest(defs) == @main_tool_digest_off
+
+      assert digest(without_instruction_updates(defs)) ==
+               "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
     end
 
     test "flag on: tool_definitions/0 is main's, byte for byte" do
@@ -565,6 +586,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
       assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_on
       assert digest(defs) == @main_tool_digest_on
+
+      assert digest(without_instruction_updates(defs)) ==
+               "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
     end
 
     # The one rail change since main (task 01a1557a-efdd stage 1): More >

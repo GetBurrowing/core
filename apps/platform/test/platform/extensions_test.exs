@@ -938,7 +938,10 @@ defmodule Platform.ExtensionsTest do
     # branch rebased onto e978e422 (dd4084948).
     # Re-pinned by task 01a1b678 stage 3: sharing_list and sharing_set in
     # `federation` and feedback_submit's `space_id`. Measured locally.
-    @main_tool_digest_off "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
+    # Task 01a1b6e1: instruction_updates adds one Sharing key to sharing_set
+    # enum/disclosure copy. Names, bundles and all other schemas stay pinned.
+    # Measured by Moon extensions_test on 5b1d04b64 (30/31; digest alone changed).
+    @main_tool_digest_off "ebf9d60d436909e48e0704be88cc07283330e8bd9bbcd2ab9a5d744f0341d586"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
@@ -983,6 +986,22 @@ defmodule Platform.ExtensionsTest do
 
     defp canon(f) when is_function(f), do: {:fun, inspect(f)}
     defp canon(x), do: x
+
+    # Preserve the previous byte oracle after removing ONLY this task's
+    # independently named enum value and its generated disclosure suffix.
+    defp without_instruction_updates(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "instruction_updates"))
+            |> Map.update!(:description, &String.replace_suffix(&1, ", instruction_updates", ""))
+          end)
+
+        tool ->
+          tool
+      end)
+    end
 
     defp digest(term),
       do:
@@ -1105,6 +1124,9 @@ defmodule Platform.ExtensionsTest do
       # canvas_create embeds the kind union. Strip only the two additive
       # consent-card properties, preserving the legacy definition oracle.
       assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
+
+      assert digest(without_instruction_updates(legacy_kind_props(legacy))) ==
+               "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do

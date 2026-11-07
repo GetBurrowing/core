@@ -14,8 +14,8 @@ defmodule Platform.Sharing do
   switch or switched without being shown. Owner-facing copy never says
   "telemetry" or "analytics"; `Platform.SharingTest` pins that.
 
-  Four entries ship today: `feedback`, `usage_counts`, `friction_reports` and
-  `help_channel_reports`. More are expected, each added as ONE entry here
+  Five entries ship today: `feedback`, `usage_counts`, `friction_reports`,
+  `help_channel_reports` and `instruction_updates`. More are expected, each added as ONE entry here
   plus ONE boolean column on `install_sharing` and ONE env name for the seed:
 
     * support access (task 01a1b362) adds an entry when it lands;
@@ -38,7 +38,13 @@ defmodule Platform.Sharing do
       `quarantined` or `trusted`);
     * `usage_counts` from `USAGE_COUNTS`;
     * `friction_reports` from `FRICTION_REPORTS`;
-    * `help_channel_reports` from `HELP_CHANNEL_REPORTS`.
+    * `help_channel_reports` from `HELP_CHANNEL_REPORTS`;
+    * `instruction_updates` from `INSTRUCTION_UPDATES`.
+
+  `instruction_updates_stopped` is the install-wide instruction stop, not
+  another outbound sharing category. It defaults false, has no env seed, and
+  uses this same singleton and audited setter. Owner-facing writes go through
+  `Platform.InstructionPacks.Installer` authorization.
 
   Unset means off. After the seed the ROW wins: re-rendering an install with
   different env never flips a switch, on or off. Only `set/3` changes a
