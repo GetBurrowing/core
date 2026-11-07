@@ -5,6 +5,7 @@ import {
   KEYBOARD_ATTR,
   KEYBOARD_INSET_VAR,
   KEYBOARD_MIN_PX,
+  VISUAL_VIEWPORT_H_VAR,
 } from "../../js/lib/keyboard_inset.js"
 
 // iPhone 16 installed PWA: 852px layout viewport; the keyboard plus its
@@ -147,5 +148,79 @@ describe("watchKeyboard", () => {
     const detach = watchKeyboard({ innerHeight: LAYOUT, innerWidth: 390 }, { documentElement: root })
     detach()
     expect(root.attrs).toEqual({})
+  })
+})
+
+describe("watchKeyboard is shared by reference count", () => {
+  const OPEN_H = LAYOUT - KEYBOARD
+
+  function shared() {
+    const vv = fakeViewport(LAYOUT)
+    const win = { visualViewport: vv, innerHeight: LAYOUT, innerWidth: 390 }
+    const root = fakeRoot()
+    const doc = { documentElement: root }
+    return { vv, win, root, doc }
+  }
+
+  const state = (root) => ({
+    open: root.attrs[KEYBOARD_ATTR],
+    inset: root.style.props[KEYBOARD_INSET_VAR],
+    height: root.style.props[VISUAL_VIEWPORT_H_VAR],
+  })
+
+  it("publishes the visible height while open and nothing while closed", () => {
+    const { vv, win, root, doc } = shared()
+    const detach = watchKeyboard(win, doc)
+    expect(state(root).height).toBeUndefined()
+
+    vv.height = OPEN_H
+    vv.fire("resize")
+    expect(state(root)).toEqual({ open: "", inset: `${KEYBOARD}px`, height: `${OPEN_H}px` })
+
+    vv.height = LAYOUT
+    vv.fire("resize")
+    expect(state(root)).toEqual({ open: undefined, inset: undefined, height: undefined })
+    detach()
+  })
+
+  it("two callers share one listener; only the last detach clears <html> and removes it", () => {
+    const { vv, win, root, doc } = shared()
+    const detachA = watchKeyboard(win, doc)
+    const detachB = watchKeyboard(win, doc)
+    expect(vv.count("resize")).toBe(1)
+    expect(vv.count("scroll")).toBe(1)
+
+    vv.height = OPEN_H
+    vv.fire("resize")
+    expect(state(root)).toEqual({ open: "", inset: `${KEYBOARD}px`, height: `${OPEN_H}px` })
+
+    detachA()
+    // A second call from the same caller counts once, so it cannot release B's hold.
+    detachA()
+    expect(state(root)).toEqual({ open: "", inset: `${KEYBOARD}px`, height: `${OPEN_H}px` })
+    expect(vv.count("resize")).toBe(1)
+
+    // B is still attached and still tracking.
+    vv.height = OPEN_H - 20
+    vv.fire("resize")
+    expect(state(root).height).toBe(`${OPEN_H - 20}px`)
+
+    detachB()
+    expect(state(root)).toEqual({ open: undefined, inset: undefined, height: undefined })
+    expect(vv.count("resize")).toBe(0)
+    expect(vv.count("scroll")).toBe(0)
+  })
+
+  it("a caller attaching after everyone detached starts a fresh watcher", () => {
+    const { vv, win, root, doc } = shared()
+    watchKeyboard(win, doc)()
+    expect(vv.count("resize")).toBe(0)
+    const detach = watchKeyboard(win, doc)
+    expect(vv.count("resize")).toBe(1)
+    vv.height = OPEN_H
+    vv.fire("resize")
+    expect(state(root).open).toBe("")
+    detach()
+    expect(state(root).open).toBeUndefined()
   })
 })
