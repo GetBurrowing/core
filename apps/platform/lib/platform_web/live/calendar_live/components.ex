@@ -1247,12 +1247,15 @@ defmodule PlatformWeb.CalendarLive.Components do
           <div class="cal-field">
             Visibility
             <div class="cal-visopt" role="radiogroup" aria-label="Visibility">
-              <label :for={
-                {value, label, note} <- [
-                  {"busy", "Busy only", "Others, agents and your iCal feed just see “Busy”."},
-                  {"details", "Full details", "People with access see the title and notes."}
-                ]
-              }>
+              <label
+                :for={
+                  {value, label, note} <- [
+                    {"busy", "Busy only", "Others, agents and your iCal feed just see “Busy”."},
+                    {"details", "Full details", "People with access see the title and notes."}
+                  ]
+                }
+                class="relative"
+              >
                 <input
                   type="radio"
                   name={@form[:visibility].name}

@@ -930,7 +930,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             <label
               :for={{value, label} <- [{"blank", "Blank"}, {"prototype", "Prototype"}]}
               class={[
-                "flex min-h-9 cursor-pointer items-center justify-center rounded-field text-sm",
+                "relative flex min-h-9 cursor-pointer items-center justify-center rounded-field text-sm",
                 new_canvas_kind(@new_canvas_form) == value &&
                   "bg-base-200 font-semibold text-base-content",
                 new_canvas_kind(@new_canvas_form) != value && "text-subtle"
