@@ -431,6 +431,44 @@ defmodule Platform.Tasks do
 
   def list_projects_for_user(_user, _opts), do: []
 
+  @first_project %{name: "General", slug: "general"}
+
+  @doc """
+  A project to start a meeting in, for a viewer who sees none (core task
+  01a1b7ed stage 3). A fresh install has no project, and `meetings.project_id`
+  is NOT NULL, so its owner's first "Start meeting" used to dead-end on an
+  empty Space list. A ROOT member who sees no project is looking at an
+  install with none at all (root members see every project), so this creates
+  the install's first project, "General", in the root org. Anyone else gets
+  `{:error, :no_project}`: a project in some other org is not theirs to make.
+
+  Returns `{:ok, project}` (the viewer's first visible project when one
+  already exists, including one a concurrent call just made).
+  """
+  @spec ensure_first_project(map() | nil) :: {:ok, Project.t()} | {:error, :no_project}
+  def ensure_first_project(user) do
+    case list_projects_for_user(user) do
+      [project | _] ->
+        {:ok, project}
+
+      [] ->
+        if Platform.Tenancy.root_member?(user) do
+          case create_project(@first_project) do
+            {:ok, project} ->
+              {:ok, project}
+
+            {:error, _} ->
+              case list_projects_for_user(user) do
+                [project | _] -> {:ok, project}
+                [] -> {:error, :no_project}
+              end
+          end
+        else
+          {:error, :no_project}
+        end
+    end
+  end
+
   # NOT viewer scoping — a CALLER-supplied narrowing opt, which is why it is
   # a plain `where` and not `Tenancy.scope/3`. It composes AFTER the choke
   # point, so it can only ever intersect with what the viewer may already

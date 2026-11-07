@@ -4112,6 +4112,7 @@ defmodule PlatformWeb.MeetingLive do
     title = String.trim(title)
     projects = socket.assigns[:projects] || []
     project_id = Enum.find_value(projects, &(&1.id == params["project_id"] && &1.id))
+    {socket, project_id} = first_project_if_none(socket, project_id, title != "")
 
     cond do
       title == "" ->
@@ -8427,6 +8428,24 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:meet_now_project_id, id)
     |> assign(:meet_now_project_name, name)
   end
+
+  # Core task 01a1b7ed stage 3: a fresh install has no project, so its owner's
+  # first "+ New meeting" -> Start meeting dead-ended on an empty Space list
+  # (Meet now's tile is hidden without a project, by design, and unchanged). With NO project
+  # visible at all (and only when the start would otherwise go ahead), make
+  # the install's first one (`Tasks.ensure_first_project/1`, root members
+  # only) and put it in the list. A viewer who already sees projects but
+  # chose none is left alone.
+  defp first_project_if_none(socket, nil, true) do
+    with [] <- socket.assigns[:projects] || [],
+         {:ok, project} <- Tasks.ensure_first_project(socket.assigns[:current_user_record]) do
+      {assign(socket, :projects, [project]), project.id}
+    else
+      _ -> {socket, nil}
+    end
+  end
+
+  defp first_project_if_none(socket, project_id, _go?), do: {socket, project_id}
 
   defp meet_now_project_id(socket) do
     projects = socket.assigns[:projects] || []
