@@ -280,10 +280,19 @@ defmodule PlatformWeb.AuthController do
   defp admit_callback(conn, oidc_user, surface) do
     if game = game_login(conn) do
       case Platform.Games.admit_oidc(game, oidc_user) do
-        {:ok, user} -> {:ok, %ExternalAdmission.Result{user: user, state: :full,
-          external?: Platform.Tenancy.external_user?(user)}}
-        {:error, :user_archived} -> {:error, {:user_archived, oidc_user.email}}
-        {:error, reason} -> {:error, reason}
+        {:ok, user} ->
+          {:ok,
+           %ExternalAdmission.Result{
+             user: user,
+             state: :full,
+             external?: Platform.Tenancy.external_user?(user)
+           }}
+
+        {:error, :user_archived} ->
+          {:error, {:user_archived, oidc_user.email}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       # An expired game login must not fall through to ordinary org admission.
@@ -299,7 +308,9 @@ defmodule PlatformWeb.AuthController do
     case get_session(conn, :game_login) do
       %{slug: slug, expires_at: expires_at} when is_integer(expires_at) ->
         if expires_at > System.system_time(:second), do: Platform.Games.get(slug)
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -381,7 +392,9 @@ defmodule PlatformWeb.AuthController do
   # rbac-external-users M2 stage 3: `:external` when the request arrives on
   # the `chat.` host, else `:app`. (M4 owns the real external live_session.)
   defp login_surface(conn) do
-    if game_login(conn) || String.starts_with?(to_string(conn.host), "chat."), do: :external, else: :app
+    if game_login(conn) || String.starts_with?(to_string(conn.host), "chat."),
+      do: :external,
+      else: :app
   end
 
   # Land the session on the right surface. `:full` keeps the caller's normal

@@ -391,10 +391,14 @@ defmodule Platform.Accounts do
     attrs = build_oidc_user_attrs(oidc_user)
 
     case Repo.get_by(User, oidc_sub: sub) do
-      %User{archived_at: %DateTime{}} -> {:error, :user_archived}
+      %User{archived_at: %DateTime{}} ->
+        {:error, :user_archived}
+
       %User{} = user ->
         user |> User.changeset(refresh_oidc_user_attrs(user, attrs)) |> Repo.update()
-      nil -> %User{} |> User.changeset(attrs) |> Repo.insert()
+
+      nil ->
+        %User{} |> User.changeset(attrs) |> Repo.insert()
     end
   end
 
