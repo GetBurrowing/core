@@ -33,6 +33,18 @@ const path = require('node:path')
       await page.evaluate(() => window.scrollTo(0, 0))
       await page.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'phone-windows-override.png' : 'desktop.png'), fullPage:true})
       assert.deepEqual(errors, [], 'page JavaScript errors')
+      const community = await context.newPage()
+      await community.goto(origin + '/game-page-evidence/community.html')
+      await community.waitForFunction(() => document.getElementById('public-game')?.dataset.gamePageReady === 'true')
+      assert.equal(await community.locator('#game-live-chat').isVisible(), true)
+      assert.equal(await community.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'community horizontal overflow')
+      if (mobile) {
+        await community.setViewportSize({width:390, height:500})
+        await community.waitForFunction(() => parseFloat(document.querySelector('#public-game').style.getPropertyValue('--game-viewport-height')) <= 500)
+        assert.ok((await community.locator('.gp-room').boundingBox()).height <= 410, 'chat ignores the reduced viewport')
+        await community.setViewportSize({width:390, height:844})
+      }
+      await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
       await context.close()
     }
   } finally { await browser.close() }

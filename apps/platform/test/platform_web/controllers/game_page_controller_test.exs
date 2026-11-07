@@ -194,8 +194,15 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert redirected_to(joined) == "/games/voltron?tab=community"
     {:ok, view, _html} = live(conn, "/games/voltron?tab=community")
     assert has_element?(view, "#compose-form")
-    render_submit(view, "send_message", %{"compose" => %{"text" => "Ready to play from the game page"}})
-    assert Enum.any?(Chat.list_messages(community.id), &(&1.content == "Ready to play from the game page"))
+
+    render_submit(view, "send_message", %{
+      "compose" => %{"text" => "Ready to play from the game page"}
+    })
+
+    assert Enum.any?(
+             Chat.list_messages(community.id),
+             &(&1.content == "Ready to play from the game page")
+           )
   end
 
   test "unknown games cannot set a login destination; ordinary login clears old game intent", %{
