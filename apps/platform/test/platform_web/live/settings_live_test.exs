@@ -1226,10 +1226,12 @@ defmodule PlatformWeb.SettingsLiveTest do
       Application.put_env(:platform, :feedback_policy, "disabled")
       user = member!()
 
-      {:ok, view, html} = live(authed(user), "/settings")
-      refute html =~ "Send feedback"
+      {:ok, view, _html} = live(authed(user), "/settings")
       refute has_element?(view, "[data-role=settings-feedback]")
-      refute has_element?(view, "[data-role=settings-help-label]")
+      # The Help label stays for the Sharing with Burrow card (task 01a1b678
+      # stage 5), which renders whatever the feedback policy says.
+      assert has_element?(view, "[data-role=settings-help-label]")
+      assert has_element?(view, "#settings-sharing")
       refute has_element?(view, "#settings-feedback-sheet")
 
       {:ok, view2, _} = live(authed(user), "/settings?sheet=feedback")

@@ -106,7 +106,7 @@ defmodule PlatformWeb.Components.SharingCard do
               data-role="sharing-exactly-link"
               phx-click={open_panel(@id)}
               aria-controls={"#{@id}-exactly"}
-              class="mt-1 min-h-11 cursor-pointer text-[13px] text-base-content underline underline-offset-2 hover:no-underline focus-visible-ring sm:min-h-0"
+              class="mt-1 min-h-11 cursor-pointer text-[13px] text-base-content underline underline-offset-2 active:no-underline focus-visible-ring sm:min-h-0"
             >
               Exactly what's sent
             </button>
