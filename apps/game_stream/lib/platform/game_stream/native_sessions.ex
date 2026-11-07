@@ -163,7 +163,8 @@ defmodule Platform.GameStream.NativeSessions do
           from(t in JoinToken, where: t.digest == ^JoinToken.hash(raw), lock: "FOR UPDATE")
         )
 
-      unless (not is_nil(token) && is_nil(token.consumed_at) && DateTime.compare(token.expires_at, now) == :gt &&
+      unless (not is_nil(token) && is_nil(token.consumed_at) &&
+                DateTime.compare(token.expires_at, now) == :gt &&
                 token.session_id == row.id && token.channel_id == row.channel_id &&
                 token.build_id == row.build_id &&
                 token.generation == row.generation && claims["build_id"] == row.build_id &&
