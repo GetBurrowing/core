@@ -75,3 +75,79 @@ registry from 01a1b678, Habits aggregation from 01a1b6a1 and setup-guide stores
 from 01a1b6de when those interfaces land; do not create duplicate registries or
 silently disable missing dependencies. Hosted updater 01a1b35d is image/code
 updates and remains separate. Stage 1 does not yet auto-pull/apply or send metrics.
+
+## Install-side application and ownership
+
+The application path retains verified signed envelopes separately from broker
+publication. An install's State records selected version, high-water mark, pin,
+checked/applied times and append-only selection history. Entry records each
+vendor baseline/hash, last value actually applied, effective version and
+base/local/incoming conflict. A conflicted release's selected version therefore
+is not a claim that every target runs that version.
+
+Existing content is local, even if it is byte-identical to a seeded default.
+Owners explicitly accept incoming conflicts before those targets become
+vendor-owned. Subsequent updates compare the live bytes with the last value
+actually applied; edits and deletions stay local. Missing/ambiguous mappings
+reject a whole release. Retired vendor targets clear only their text in place,
+preserving skill ids and attachments; locally edited targets are never cleared.
+Text templates continue to use the existing Mustache renderer, never EEx.
+
+Fetch happens outside the content transaction. The final transaction locks the
+actual install_sharing singleton and checks the consent value, stop switch and
+snapshot timestamp again. Pin, conflict resolution and application serialize on
+the install-state advisory lock. Every content/store write, provenance update,
+retained release and history/audit event commits together. Network failure,
+untrusted signatures, unsupported minimum versions, old/out-of-order versions,
+missing target mappings or consent changes leave the last good content active.
+
+Rollback requires owner authorization and a retained, previously applied release,
+re-verifies its signature against current trust roots, preserves edits since
+application and pins the rolled-back version. Unpinning allows sequential
+advancement again. Conflict resolution is owner-only, audited and refuses a
+stale local snapshot rather than overwriting edits made after a conflict appeared.
+
+The BEAM poller requests the next sequential version of each trusted-config pack
+id through the existing broker. It does not follow a pack-supplied URL or change
+stable/edge image tracking. Tests disable background polling unless explicitly
+started. Existing installs must receive this code through the normal code updater
+before they can pull instruction packs; this feature adds no release promotion,
+SSH update path, systemd timer or new remote host.
+
+Trusted owner/installer runtime settings are `INSTRUCTION_PACKS` (comma-separated
+pack ids), `INSTRUCTION_PACK_TRUST_ROOTS` (JSON object of key id to base64 32-byte
+public key) and `INSTRUCTION_PACK_POLLER=false` to disable scheduling. Public keys
+are provisioned through the trusted installer/owner channel; no pack supplies or
+changes them. A missing trust root rejects the download. Publisher private keys
+remain exclusively in publisher secret storage.
+
+With no explicit pack-id allowlist, the poller discovers at most 100 unique
+slug ids at GET `/instruction-packs` on that same broker scope. This catalog is
+untrusted discovery metadata only: it carries no text, URL, key, version choice
+or authority to apply. Every requested version still passes signature/schema/
+compatibility/chain verification. Catalog changes cannot grant tools or replace
+local data. A consent snapshot spans discovery and download, so an off/on toggle
+cancels work queued by the old cycle. An explicit INSTRUCTION_PACKS setting
+restricts discovery to those trusted-config ids instead.
+
+## Consumed role and setup-guide targets
+
+`role_prompt` target `burrow` resolves `agents.burrow.role.v1` and
+`setup_dialogue` target `burrow` resolves `agents.burrow.setup.v1` in the existing
+PromptTemplates store. Generic prompt_template entries cannot alias those rows;
+unknown typed targets reject the entire release. Their insert-only seed derives
+from the actual Burrow.identity_template/2 role/setup text, the consumer extended
+by the setup-guide task. It does not duplicate a second role registry or grant.
+
+NativeAgents originally seeds an instructions file once, so changing that seed
+alone would leave existing agents stale. AttentionDispatch now reads these saved
+text values for the existing install-managed Burrow agent on its next eligible
+attention. Prompt-bearing signals receive supplemental guidance before the
+original work; chat context retains its existing org map and adds an explicitly
+labelled instruction-guidance/burrow source. Human message content/identity and
+existing wiki entries remain unchanged. A deliberate absent/no-work prompt stays
+absent. Other agents do not receive the guide's identity. This uses the channel
+runtime's existing prompt/context rendering; no runtime restart, filesystem write,
+permission change or new client executable is performed by applying a pack.
+Local instructions retain precedence over supplemental guidance. Removing a
+saved guidance row is a local deletion, and pack application will not recreate it.

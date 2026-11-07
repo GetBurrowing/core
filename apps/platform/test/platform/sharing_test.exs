@@ -46,7 +46,8 @@ defmodule Platform.SharingTest do
                :feedback,
                :usage_counts,
                :friction_reports,
-               :help_channel_reports
+               :help_channel_reports,
+               :instruction_updates
              ]
 
       for entry <- Sharing.registry() do
@@ -99,6 +100,7 @@ defmodule Platform.SharingTest do
 
       assert Sharing.seed_env_names() == %{
                feedback: "FEEDBACK_POLICY",
+               instruction_updates: "INSTRUCTION_UPDATES",
                usage_counts: "USAGE_COUNTS",
                friction_reports: "FRICTION_REPORTS",
                help_channel_reports: "HELP_CHANNEL_REPORTS"

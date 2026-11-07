@@ -591,6 +591,7 @@ write_files:
             FILES_SERVICE_URL: "http://files-service:8200"
             FRICTION_REPORTS: "true"
             HELP_CHANNEL_REPORTS: "true"
+            INSTRUCTION_UPDATES: "true"
             MEMORY_SERVICE_INGEST_TIMEOUT_MS: "2700000"
             MEMORY_SERVICE_URL: "http://memory-service:8100"
             OIDC_CLIENT_ID: "suite-core"

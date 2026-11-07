@@ -21,7 +21,13 @@ defmodule Platform.Sharing.InstallSharing do
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
 
-  @switches [:feedback, :usage_counts, :friction_reports, :help_channel_reports]
+  @switches [
+    :feedback,
+    :usage_counts,
+    :friction_reports,
+    :help_channel_reports,
+    :instruction_updates
+  ]
 
   @type t :: %__MODULE__{}
 
@@ -32,6 +38,8 @@ defmodule Platform.Sharing.InstallSharing do
     field(:usage_counts, :boolean, default: false)
     field(:friction_reports, :boolean, default: false)
     field(:help_channel_reports, :boolean, default: false)
+    field(:instruction_updates, :boolean, default: false)
+    field(:instruction_updates_stopped, :boolean, default: false)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -51,7 +59,7 @@ defmodule Platform.Sharing.InstallSharing do
   @doc "Changeset for one switch. Casts that switch only."
   @spec switch_changeset(t(), atom(), boolean()) :: Ecto.Changeset.t()
   def switch_changeset(%__MODULE__{} = row, key, value)
-      when key in @switches and is_boolean(value) do
+      when (key in @switches or key == :instruction_updates_stopped) and is_boolean(value) do
     row
     |> cast(%{key => value}, [key])
     |> validate_required([key])

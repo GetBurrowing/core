@@ -112,6 +112,18 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/instruction_packs/guidance.ex", :get, "Agent", 1, :safe_internal,
+     "guidance resolves only the server-selected dispatch recipient; the UUID branch checks Platform.UUID.valid? before Repo.get, while slugs use SlugLookup"},
+    {"platform/instruction_packs/guidance.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "agent/1 validates the dispatch recipient UUID before the only Repo.get; malformed strings go through the ambiguity-checked slug lookup"},
+    {"platform/instruction_packs/poller.ex", :get, "State", 1, :safe_internal,
+     "State primary key pack_id is a string slug, not UUID; values come from bounded catalog or trusted owner config"},
+    {"platform/instruction_packs/installer.ex", :get!, "State", 1, :safe_internal,
+     "State primary key pack_id is a string slug; locked_state serializes the install before reading it"},
+    {"platform/instruction_packs/installer.ex", :get_by, "Entry", 2, :safe_internal,
+     "Entry lookups use string pack_id/type/target columns only; no client UUID cast occurs"},
+    {"platform/instruction_packs/installer.ex", :get_by, "RetainedRelease", 2, :safe_internal,
+     "RetainedRelease lookups use string pack_id and integer version, never its surrogate UUID id"},
     {"platform/instruction_packs.ex", :get_by, "Release", 1, :safe_internal,
      "get_release/2 queries pack_id, a string foreign key, and version, a positive bounded bigint checked before this lookup; neither lookup argument is cast to a UUID"},
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
@@ -1132,6 +1144,8 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Target lookups compare string slugs and lock existing skill/prompt rows.
+    "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.
     "platform/instruction_packs.ex" => 1,
     # target/4 guards the client event UUID; locked_briefing/2 uses a

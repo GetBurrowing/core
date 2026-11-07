@@ -1,5 +1,8 @@
 import Config
 
+# Instruction pulls are explicit in tests; never start a background broker request.
+config :platform, :start_instruction_pack_poller, false
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :platform, PlatformWeb.Endpoint,

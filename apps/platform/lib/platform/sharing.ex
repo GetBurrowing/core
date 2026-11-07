@@ -57,7 +57,13 @@ defmodule Platform.Sharing do
   alias Platform.Repo
   alias Platform.Sharing.InstallSharing
 
-  @type key :: :feedback | :usage_counts | :friction_reports | :help_channel_reports
+  @type key ::
+          :feedback
+          | :usage_counts
+          | :friction_reports
+          | :help_channel_reports
+          | :instruction_updates
+          | :instruction_updates_stopped
 
   @type entry :: %{
           key: key(),
@@ -111,12 +117,23 @@ defmodule Platform.Sharing do
         "The bug report text posted in Help & feedback, after emails and secrets are removed"
       ],
       default_for_new_installs: true
+    },
+    %{
+      key: :instruction_updates,
+      title: "Agent instruction updates",
+      description:
+        "Receive signed instructions and best practices from Kobo. Your local edits stay yours.",
+      exactly_sent: [
+        "Instruction pack ids and versions are requested from the existing broker; instruction text is received, not sent"
+      ],
+      default_for_new_installs: true
     }
   ]
 
   @never_sent ["message text", "names", "emails", "space or agent names"]
 
   @seed_env %{
+    instruction_updates: "INSTRUCTION_UPDATES",
     usage_counts: "USAGE_COUNTS",
     friction_reports: "FRICTION_REPORTS",
     help_channel_reports: "HELP_CHANNEL_REPORTS"
@@ -269,7 +286,7 @@ defmodule Platform.Sharing do
   defp read, do: Repo.one(from(s in InstallSharing, limit: 1))
 
   defp ensure_key!(key) do
-    unless key in InstallSharing.switches() do
+    unless key in InstallSharing.switches() or key == :instruction_updates_stopped do
       raise ArgumentError, "unknown sharing key #{inspect(key)}"
     end
   end

@@ -493,6 +493,7 @@ if config_env() != :test do
   end
 
   config :platform, :sharing_seed,
+    instruction_updates: sharing_on?.("INSTRUCTION_UPDATES"),
     usage_counts: sharing_on?.("USAGE_COUNTS"),
     friction_reports: sharing_on?.("FRICTION_REPORTS"),
     help_channel_reports: sharing_on?.("HELP_CHANNEL_REPORTS")
@@ -1023,3 +1024,29 @@ end
 if config_env() == :dev and System.get_env("BURROW_FAKE_AGENT_HOST") == "1" do
   config :platform, :fake_agent_host, true
 end
+
+# Instruction packs use the existing feedback broker host. These values come
+# from trusted owner/installer configuration, never a downloaded manifest.
+# Public keys only: the publisher private key must never be installed here.
+instruction_roots =
+  case System.get_env("INSTRUCTION_PACK_TRUST_ROOTS") do
+    nil ->
+      %{}
+
+    raw ->
+      raw
+      |> Jason.decode!()
+      |> Map.new(fn {key, encoded} ->
+        public = Base.decode64!(encoded)
+        if byte_size(public) != 32, do: raise("invalid instruction pack public key")
+        {key, public}
+      end)
+  end
+
+config :platform, :instruction_packs,
+  packs: System.get_env("INSTRUCTION_PACKS", "") |> String.split(",", trim: true),
+  trust_roots: instruction_roots
+
+config :platform,
+       :start_instruction_pack_poller,
+       config_env() != :test and System.get_env("INSTRUCTION_PACK_POLLER", "true") != "false"

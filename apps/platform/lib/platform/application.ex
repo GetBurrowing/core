@@ -95,6 +95,10 @@ defmodule Platform.Application do
        List.flatten([
          Platform.Vault.Encryption,
          Platform.Repo,
+         if(flag.(:platform, :start_instruction_pack_poller, true),
+           do: Platform.InstructionPacks.Poller,
+           else: []
+         ),
          if(flag.(:platform, :start_calendar_refresh, true),
            do: Platform.Calendar.RefreshWorker,
            else: []

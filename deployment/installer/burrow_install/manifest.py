@@ -74,7 +74,7 @@ AGENT_LOGINS = ("api_key", "operator")
 VAPID_MODES = ("off", "generate-on-host")
 # [sharing] keys (core task 01a1b678): Platform.Sharing.registry/0, in order.
 # `setup init` writes each as explicit true into a NEW manifest.
-SHARING_KEYS = ("feedback", "usage_counts", "friction_reports", "help_channel_reports")
+SHARING_KEYS = ("feedback", "usage_counts", "friction_reports", "help_channel_reports", "instruction_updates")
 # Where the local embeddings model comes from (core task 01a10315 stage 6).
 # "operator" (the default, every manifest written before this knob): the
 # operator places models/<file> on the host before the stack starts.

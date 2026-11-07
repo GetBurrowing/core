@@ -214,6 +214,7 @@ class InitSharingTest(Base):
         "usage_counts": True,
         "friction_reports": True,
         "help_channel_reports": True,
+        "instruction_updates": True,
     }
 
     def manifest(self):

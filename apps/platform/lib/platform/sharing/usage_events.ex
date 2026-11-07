@@ -70,8 +70,6 @@ defmodule Platform.Sharing.UsageEvents do
   a string the allowlist does not know). Any hit refuses the whole batch.
   """
 
-  require Logger
-
   alias Platform.Feedback.Redaction
 
   @table __MODULE__

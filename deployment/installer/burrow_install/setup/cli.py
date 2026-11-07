@@ -390,7 +390,8 @@ def _init(args, env, out):
             path = legacy
     check_dir_allowed(path)
     install = Install(path)
-    # Core task 01a1b678: a NEW install shares with Burrow by default, so its
+    # Core tasks 01a1b678/01a1b6e1: a NEW install shares with Burrow and
+    # receives signed instruction updates by default (Jordan, 2026-11-07), so its
     # manifest says so explicitly. A value --from already set (true or false)
     # is kept. An existing install keeps whatever its manifest already says
     # (including saying nothing), so re-running init never adds a switch.

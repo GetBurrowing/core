@@ -60,3 +60,4 @@ feedback = true
 usage_counts = true
 friction_reports = true
 help_channel_reports = true
+instruction_updates = true

@@ -782,6 +782,7 @@ class Service:
 # 01a1b678 stage 1, Platform.Sharing.seed_env_names/0). `feedback` is not
 # here: it renders FEEDBACK_POLICY through feedback_enabled/1.
 SHARING_ENV = {
+    "instruction_updates": "INSTRUCTION_UPDATES",
     "usage_counts": "USAGE_COUNTS",
     "friction_reports": "FRICTION_REPORTS",
     "help_channel_reports": "HELP_CHANNEL_REPORTS",
