@@ -70,7 +70,7 @@ defmodule PlatformWeb.VoiceDmEndToEndTest do
     end
 
     user = user!()
-    {agent, topic} = helper_agent!()
+    {agent, topic} = helper_agent!(user)
 
     {:ok,
      conn: init_test_session(conn, current_user_id: user.id),
@@ -82,31 +82,40 @@ defmodule PlatformWeb.VoiceDmEndToEndTest do
   defp user! do
     n = System.unique_integer([:positive])
 
-    Repo.insert!(%User{
-      name: "Test User",
-      email: "voice-e2e-#{n}@example.com",
-      oidc_sub: "oidc-voice-e2e-#{n}",
-      preferences: %{"first_run_goal" => "existing"}
+    user =
+      Repo.insert!(%User{
+        name: "Test User",
+        email: "voice-e2e-#{n}@example.com",
+        oidc_sub: "oidc-voice-e2e-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
+      })
+
+    # A member of the install's root org, as every signed-in internal user is.
+    root = Platform.Tenancy.get_org_by_slug!(Platform.Tenancy.root_org_slug())
+
+    %Platform.Tenancy.OrgMembership{}
+    |> Platform.Tenancy.OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: root.id,
+      role: "member"
     })
+    |> Repo.insert!()
+
+    user
   end
 
   # Helper Agent is the default voice partner (slug "meeting-assistant"),
   # reachable by voice, and an external agent with an ONLINE runtime whose
-  # topic the test subscribes to, so a chat dispatch is observable.
-  defp helper_agent! do
+  # topic the test subscribes to, so a chat dispatch is observable. Its
+  # runtime is the user's own (the owner caps what the agent may read, and an
+  # owner outside the DM could not let it read the DM at all).
+  defp helper_agent!(owner) do
     from(a in Agent, where: a.slug == "meeting-assistant")
     |> Repo.update_all(
       set: [slug: "meeting-assistant-old-#{System.unique_integer([:positive])}", status: "paused"]
     )
 
     n = System.unique_integer([:positive])
-
-    owner =
-      Repo.insert!(%User{
-        name: "Owner",
-        email: "voice-e2e-owner-#{n}@example.com",
-        oidc_sub: "oidc-voice-e2e-owner-#{n}"
-      })
 
     runtime =
       Repo.insert!(%AgentRuntime{
