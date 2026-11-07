@@ -179,9 +179,15 @@ fallback already reaches every network embedded TURN on UDP would; only 443-only
 TURN/TLS on 443 shared with Caddy by SNI, a named follow-up.
 Agent voice in meetings (burrow-voice-worker) is not part of either target in v1.
 
-## `[day2]` (reserved)
+## `[day2]`
 
-These keys are validated but not yet acted on. ADR 0053 names the follow-up work that will use them.
+`upgrade_channel` is acted on (core task 01a1b7b6): it becomes `CHANNEL` in the host updater's
+`/etc/burrow-updater/updater.env`, and the updater follows `<core repo>:<flavour>-<channel>`. Two
+inputs force `pinned` whatever the key says, with a comment in updater.env: a set
+`images.refs.core-platform` (an operator pin) and `images.source = "preloaded"` (nothing is
+pulled). `phone_home` is still reserved: validated, not acted on. The updater, its channels and
+the bootstrap command for an existing install are described in `docs/burrow/installs.md`
+("Updates").
 
 | Key | Type | Default |
 |---|---|---|
@@ -326,7 +332,7 @@ does not raise a second error. So one wrong field produces exactly one error lin
 | `UPSTREAM_PORT` | Constant `4000`. |
 | `HEALTHCHECK_URL` | `https://<domain.primary>/health` |
 | `PLATFORM_IMAGE` | `images.refs.core-platform`, else the flavour of `install.modules` (`<registry>/core:core` or `<registry>/core:play`). |
-| `PROMOTION_CHANNEL` | `day2.upgrade_channel` (reserved; not yet acted on). |
+| `PROMOTION_CHANNEL` | `day2.upgrade_channel`, acted on by the host updater (see `[day2]`). |
 | `PROMOTION_REF` | Not produced: promotion state is private instance state (ADR 0003 §4). |
 
 The manifest also produces values that ADR 0003 predates, and that the renderer (stage 2 of task
