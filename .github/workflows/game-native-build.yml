@@ -79,7 +79,7 @@ jobs:
         include:
           - {runner: windows-2025, package: windows-x86_64.zip, executable: voltron.exe, platform: windows}
           - {runner: ubuntu-24.04, package: linux-x86_64.tar.gz, executable: voltron.x86_64, platform: linux}
-          - {runner: macos-14, package: macos-universal.zip, executable: Voltron.app/Contents/MacOS/Voltron, platform: macos}
+          - {runner: macos-15, package: macos-universal.zip, executable: Voltron.app/Contents/MacOS/Voltron, platform: macos}
           - {runner: macos-15-intel, package: macos-universal.zip, executable: Voltron.app/Contents/MacOS/Voltron, platform: macos}
           - {runner: ubuntu-24.04, package: linux-server-x86_64.tar.gz, executable: voltron-server.x86_64, platform: server}
     runs-on: ${{ matrix.runner }}
@@ -112,8 +112,21 @@ jobs:
         with:
           name: player-${{ matrix.runner }}-${{ matrix.platform }}
           path: player.log
+  attest:
+    needs: export
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: {name: native-packages, path: packages}
+      - name: Attest immutable archives using GitHub workload identity
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with: {subject-path: 'packages/*'}
   publish:
-    needs: [export, player-smoke]
+    needs: [export, player-smoke, attest]
     if: inputs.publish && github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
@@ -148,9 +161,6 @@ jobs:
         with: {path: game, persist-credentials: false}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: {name: native-packages, path: packages}
-      - name: Attest immutable archives
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with: {subject-path: 'packages/*'}
       - name: Publish immutable release assets and dedicated image
         env:
           GH_TOKEN: ${{ github.token }}

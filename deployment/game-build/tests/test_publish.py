@@ -50,27 +50,27 @@ class Packages(unittest.TestCase):
 
     def test_missing_platform_cannot_publish(self):
         self.manifest['artifacts'].pop()
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(ValueError):
             publish.validate(self.manifest, self.directory)
 
     def test_checksum_mismatch_cannot_publish(self):
         self.manifest['artifacts'][0]['sha256'] = '0'*64
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(ValueError):
             publish.validate(self.manifest, self.directory)
 
     def test_missing_executable_cannot_publish(self):
         self.manifest['artifacts'][0]['executable'] = 'missing'
-        with self.assertRaises((AssertionError, KeyError)):
+        with self.assertRaises((ValueError, KeyError)):
             publish.validate(self.manifest, self.directory)
 
     def test_path_traversal_and_duplicate_platform_rejected(self):
         for value in ('../escape', '/absolute', 'C:\\escape'):
             manifest = copy.deepcopy(self.manifest)
             manifest['artifacts'][0]['executable'] = value
-            with self.assertRaises(AssertionError):
+            with self.assertRaises(ValueError):
                 publish.validate(manifest, self.directory)
         self.manifest['artifacts'].append(self.manifest['artifacts'][0])
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(ValueError):
             publish.validate(self.manifest, self.directory)
 
     def test_no_engine_build_or_unreal_pipeline(self):
