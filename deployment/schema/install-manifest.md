@@ -421,7 +421,7 @@ step does: nothing else registers the client on a `single-host` install. The JSO
 ### Learned default shapes sharing
 
 `[sharing].learned_default_shapes` seeds `LEARNED_DEFAULT_SHAPES` on first boot.
-New setup-generated manifests write `true` explicitly (Jordan, 2026-11-07).
+New setup-generated manifests write `true` explicitly under the new-install sharing policy.
 Absent/false values remain off; existing singleton rows are never re-enabled
 by manifest changes. This shares only five-person-or-larger anonymous aggregate
 buckets, through the existing usage broker request, and also requires
