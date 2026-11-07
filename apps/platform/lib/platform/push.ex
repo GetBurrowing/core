@@ -705,6 +705,44 @@ defmodule Platform.Push do
 
   defp external_user_participant?(_), do: false
 
+  @doc """
+  True when `user_id` has at least one web push subscription row
+  (`push_subscriptions`) under any of its user-typed `chat_participants`
+  rows: the same set `send_to_user/2` delivers to. False for a `user_id`
+  that is not a UUID (task 01a1b6de stage 2).
+  """
+  @spec web_subscribed?(binary() | nil) :: boolean()
+  def web_subscribed?(user_id) when is_binary(user_id) do
+    Platform.UUID.valid?(user_id) and
+      Repo.exists?(
+        from(s in Subscription,
+          join: p in Participant,
+          on: p.id == s.participant_id,
+          where: p.participant_type == "user" and p.participant_id == ^user_id
+        )
+      )
+  end
+
+  def web_subscribed?(_), do: false
+
+  @doc """
+  The native app platforms `user_id` has a push token recorded for:
+  `:ios` for an `apns_devices` row (`APNs.devices_for_user/1`), `:android`
+  for an `fcm_devices` row (`FCM.devices_for_user/1`). `[]` when none is
+  recorded, which says nothing about whether the app is installed (task
+  01a1b6de stage 2).
+  """
+  @spec native_platforms(binary() | nil) :: [:ios | :android]
+  def native_platforms(user_id) when is_binary(user_id) do
+    [
+      APNs.devices_for_user(user_id) != [] && :ios,
+      FCM.devices_for_user(user_id) != [] && :android
+    ]
+    |> Enum.filter(& &1)
+  end
+
+  def native_platforms(_), do: []
+
   @doc "List all push subscriptions for a participant."
   @spec list_subscriptions(binary()) :: [Subscription.t()]
   def list_subscriptions(participant_id), do: participant_row_subscriptions(participant_id)

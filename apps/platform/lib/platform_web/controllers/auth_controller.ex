@@ -196,6 +196,7 @@ defmodule PlatformWeb.AuthController do
          {:ok, %ExternalAdmission.Result{} = result} <-
            admit_capturing_email(oidc_user, surface) do
       user = result.user
+      welcome_new_member(result)
 
       :telemetry.execute(
         [:platform, :auth, :callback],
@@ -435,6 +436,7 @@ defmodule PlatformWeb.AuthController do
     case ExternalAdmission.admit(%{sub: sub, email: email, name: name}, surface: surface) do
       %ExternalAdmission.Result{} = result ->
         user = result.user
+        welcome_new_member(result)
 
         # Add to `general` ONLY for a full INTERNAL dev user. Holding users get
         # zero scoped content; a full EXTERNAL user's spaces come from the grant.
@@ -486,6 +488,18 @@ defmodule PlatformWeb.AuthController do
     |> configure_session(drop: true)
     |> redirect(external: OIDC.logout_url(id_token_hint, end_session_endpoint))
   end
+
+  # Task 01a1b6de stage 2: a full INTERNAL member's arrival triggers Burrow's
+  # welcome. `MemberWelcome.ensure/1` posts it once per user (the claim is keyed
+  # on the user id), so every later sign-in is a no-op; without a Burrow agent it
+  # writes nothing and a later sign-in tries again. Its result never changes
+  # where the login lands.
+  defp welcome_new_member(%ExternalAdmission.Result{state: :full, external?: false, user: user}) do
+    _ = Platform.Onboarding.MemberWelcome.ensure(user)
+    :ok
+  end
+
+  defp welcome_new_member(_result), do: :ok
 
   # -- Telemetry helpers --
 

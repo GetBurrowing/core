@@ -553,6 +553,150 @@ defmodule Platform.Accounts do
     end
   end
 
+  # ── Single-key atomic preference writes (task 01a1b6de stage 2) ──────
+  #
+  # `update_user_preference/3` reads the user and writes back the WHOLE map,
+  # so two concurrent writers of different keys can clobber each other. These
+  # touch exactly one key, in one UPDATE each, and never read the map into the
+  # BEAM. Values are stored as JSON strings.
+
+  @doc """
+  Set preference `key` to `value` only while `key` is ABSENT. One statement,
+  so of two concurrent claims exactly one wins: `:ok` for it, `{:error,
+  :taken}` for every other call, and for an unknown user or a `user_id` that
+  is not a UUID.
+  """
+  @spec claim_preference(binary(), String.t(), String.t()) :: :ok | {:error, :taken}
+  def claim_preference(user_id, key, value)
+      when is_binary(user_id) and is_binary(key) and is_binary(value) do
+    if Platform.UUID.valid?(user_id) do
+      from(u in User,
+        where:
+          u.id == ^user_id and
+            not fragment("COALESCE(?, '{}'::jsonb) \\? ?", u.preferences, ^key),
+        update: [
+          set: [
+            preferences:
+              fragment(
+                "COALESCE(?, '{}'::jsonb) || jsonb_build_object(?::text, ?::text)",
+                u.preferences,
+                ^key,
+                ^value
+              ),
+            updated_at: ^preference_now()
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+      |> case do
+        {1, _} -> :ok
+        {0, _} -> {:error, :taken}
+      end
+    else
+      {:error, :taken}
+    end
+  end
+
+  @doc """
+  Replace preference `key` with `value` only while it holds exactly
+  `expected` (compare-and-set). `:ok` when it swapped, `{:error, :changed}`
+  otherwise (including an unknown user or a non-UUID `user_id`).
+  """
+  @spec swap_preference(binary(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, :changed}
+  def swap_preference(user_id, key, expected, value)
+      when is_binary(user_id) and is_binary(key) and is_binary(expected) and is_binary(value) do
+    if Platform.UUID.valid?(user_id) do
+      from(u in User,
+        where: u.id == ^user_id and fragment("?->>? = ?", u.preferences, ^key, ^expected),
+        update: [
+          set: [
+            preferences:
+              fragment(
+                "COALESCE(?, '{}'::jsonb) || jsonb_build_object(?::text, ?::text)",
+                u.preferences,
+                ^key,
+                ^value
+              ),
+            updated_at: ^preference_now()
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+      |> case do
+        {1, _} -> :ok
+        {0, _} -> {:error, :changed}
+      end
+    else
+      {:error, :changed}
+    end
+  end
+
+  @doc """
+  Remove preference `key` only while it holds exactly `expected`, so a value
+  written meanwhile by someone else stays. Always `:ok`.
+  """
+  @spec release_preference(binary(), String.t(), String.t()) :: :ok
+  def release_preference(user_id, key, expected)
+      when is_binary(user_id) and is_binary(key) and is_binary(expected) do
+    if Platform.UUID.valid?(user_id) do
+      from(u in User,
+        where: u.id == ^user_id and fragment("?->>? = ?", u.preferences, ^key, ^expected),
+        update: [
+          set: [
+            preferences: fragment("? - ?::text", u.preferences, ^key),
+            updated_at: ^preference_now()
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+    end
+
+    :ok
+  end
+
+  defp preference_now, do: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+
+  # ── First sign-in (task 01a1b6de stage 2) ───────────────────────────
+
+  @doc """
+  When `user_id` first signed in, from the install's own login records, or
+  nil when it never has.
+
+  A `users` row alone is NOT a sign-in: an invite
+  (`Platform.SignInAdmin`) creates the row before the person ever logs in.
+  The records are the audit rows every login writes through
+  `Platform.Audit.TelemetryHandler`:
+
+    * `platform.auth.external_admission`: emitted by
+      `Platform.Accounts.ExternalAdmission.admit/2` on every OIDC and dev
+      login, whatever the admission state;
+    * `platform.auth.callback` with action `"success"`: the OIDC callback,
+      which older installs have from before admission was audited.
+
+  The earliest of the two. Nil for a `user_id` that is not a UUID.
+  """
+  @spec first_sign_in_at(binary() | nil) :: DateTime.t() | nil
+  def first_sign_in_at(user_id) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      [
+        Platform.Audit.earliest_at(
+          actor_id: user_id,
+          event_type: "platform.auth.external_admission"
+        ),
+        Platform.Audit.earliest_at(
+          actor_id: user_id,
+          event_type: "platform.auth.callback",
+          action: "success"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.min(DateTime, fn -> nil end)
+    end
+  end
+
+  def first_sign_in_at(_), do: nil
+
   @insight_delivery_opt_out_key "insight_delivery_opt_out"
 
   @doc """

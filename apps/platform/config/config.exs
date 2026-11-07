@@ -289,6 +289,12 @@ config :platform, Platform.Vault, allow_unscoped_workspace_access: false
 config :platform, PlatformWeb.ConnectAiLive,
   provider_order: [:codex, :api_key, :claude_subscription]
 
+# The person setup checklist (task 01a1b6de stage 2): a step still `todo` this
+# long after the person's first sign-in reads `stuck`
+# (`Platform.Onboarding.PersonSetup`). Data, not a constant in the module: an
+# install or an experiment can change it here. Unset means nobody is stuck.
+config :platform, Platform.Onboarding.PersonSetup, stuck_after_seconds: 2 * 24 * 60 * 60
+
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to
 # `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header

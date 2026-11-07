@@ -230,6 +230,38 @@ defmodule Platform.Agents.NativeLogin do
   end
 
   @doc """
+  True when `user_id` owns a native agent (its runtime's `owner_user_id`)
+  that is logged in on a SUBSCRIPTION: the agent host observes it
+  `:running` and no Anthropic API key is saved for it (task 01a1b6de stage
+  2, the member setup checklist's AI login step).
+
+  An agent with a saved API key never counts, whatever its state: the key
+  wins over a subscription login (see the moduledoc), so a running agent with
+  a key is running on the key. A running Codex agent (device login) or a
+  running Claude Code agent without a key (Claude Pro or Max, through
+  `Platform.AgentHost.claude_login_submit/4`, or at a terminal in operator
+  mode) counts. Nothing about this is stored: it is read from the agents'
+  rows, the Vault and the host's observed state on every call.
+  """
+  @spec subscription_logged_in?(binary() | nil) :: boolean()
+  def subscription_logged_in?(user_id) when is_binary(user_id) do
+    Enum.any?(NativeAgents.list(), fn %{agent: agent, runtime: runtime} ->
+      runtime.owner_user_id == user_id and subscription_login?(agent)
+    end)
+  end
+
+  def subscription_logged_in?(_), do: false
+
+  @doc """
+  True when `agent` is observed `:running` with no Anthropic API key saved,
+  i.e. logged in on a subscription. See `subscription_logged_in?/1`.
+  """
+  @spec subscription_login?(Agent.t()) :: boolean()
+  def subscription_login?(%Agent{} = agent) do
+    not api_key_set?(agent) and match?(%{state: :running}, Platform.AgentHost.status(agent.id))
+  end
+
+  @doc """
   `:ok` when `value` is shaped like an Anthropic API key: one token, starting
   `sk-ant-`, 28 to 512 characters of letters, digits, `-` and `_`. Anything
   else, including a Claude login code, is refused.
