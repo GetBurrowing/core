@@ -120,6 +120,7 @@ defmodule PlatformWeb.GamePageController do
   end
 
   defp download_started_cookie(conn) do
+    # Non-secret UI acknowledgement only: this cookie grants no access.
     nonce = conn.params["download_request"]
 
     if is_binary(nonce) and Regex.match?(~r/^[a-f0-9]{32}$/, nonce) do

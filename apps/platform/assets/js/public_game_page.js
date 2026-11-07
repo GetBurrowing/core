@@ -36,6 +36,10 @@ export function installPublicGamePage(doc = document, win = window) {
     unsupported.hidden = !nonWindows
     action.hidden = nonWindows
   }
+  const resize = () => root.style.setProperty("--game-viewport-height", `${win.visualViewport?.height || win.innerHeight}px`)
+  resize()
+  win.visualViewport?.addEventListener("resize", resize)
+  win.addEventListener("resize", resize)
   root.dataset.gamePageReady = "true"
   let stop = null, frame = null
   root.addEventListener("click", async event => {
@@ -96,5 +100,9 @@ export function installPublicGamePage(doc = document, win = window) {
       },
     })
   })
-  win.addEventListener("pagehide", () => stop?.(), {once: true})
+  win.addEventListener("pagehide", () => {
+    stop?.()
+    win.visualViewport?.removeEventListener("resize", resize)
+    win.removeEventListener("resize", resize)
+  }, {once: true})
 }
