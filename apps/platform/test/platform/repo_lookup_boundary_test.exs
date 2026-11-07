@@ -795,6 +795,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1b721 stage 1: `meetings/1` keeps only unfiled action items whose `id` (read out of a MeetingBriefing's `items` jsonb) is a valid UUID before it becomes an Input `ref_id`, which later stages pin in `where:` clauses"},
     {"platform/secretary/store.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1b721 stage 1: `ids_valid?/1`, called by every public reader and writer before its query (viewer user id, batch id, evaluation id, ref id, `:evaluation_id` option), so a malformed id reads as missing (`nil`, `[]`, `{:error, :not_found}`) instead of raising Ecto.Query.CastError; pinned by store_test.exs \"malformed ids read as missing\""},
+    {"platform/secretary/budget.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1b721 stage 3: `spent_today/2` guards the viewer user id with Platform.UUID.valid?/1 before the batch sum pins it in `where:` (this file's `@repo_one_counts` entry); a malformed id spends 0"},
+    {"platform/secretary/scheduler.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1b721 stage 3: `recipients/1` guards the message id it gets from the `[:platform, :chat, :message_posted]` telemetry metadata with Platform.UUID.valid?/1 before the Message query pins it; a malformed id has no recipients"},
     {"platform/secretary/todos.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1b721 stage 1: `valid_id?/1` guards the viewer user id, the entry id and `suggest/2`'s `source_space_id` before every query, so a malformed id is `{:error, :not_found}`, `{:error, :not_a_participant}`, nil or []; pinned by store_test.exs \"malformed ids read as missing\""},
     {"platform/people/visibility.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1148,6 +1152,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # upsert_evaluation/2, get_evaluation/3 and hidden_kind?/2, each behind
     # ids_valid?/1.
     "platform/secretary/store.ex" => 4,
+    # Task 01a1b721 stage 3: charged_between/3's token sum; the only id it
+    # pins is spent_today/2's user id, behind Platform.UUID.valid?/1.
+    "platform/secretary/budget.ex" => 1,
     # Task 01a1b721 stage 1: get/2, behind valid_id?/1.
     "platform/secretary/todos.ex" => 1,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
