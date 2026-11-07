@@ -163,13 +163,13 @@ defmodule Platform.GameStream.NativeSessions do
           from(t in JoinToken, where: t.digest == ^JoinToken.hash(raw), lock: "FOR UPDATE")
         )
 
-      unless token && is_nil(token.consumed_at) && DateTime.compare(token.expires_at, now) == :gt &&
-               token.session_id == row.id && token.channel_id == row.channel_id &&
-               token.build_id == row.build_id &&
-               token.generation == row.generation && claims["build_id"] == row.build_id &&
-               claims["channel_id"] == row.channel_id && claims["user_id"] == token.user_id &&
-               claims["generation"] == row.generation and
-                 claims["protocol_version"] == row.protocol_version,
+      unless (token && is_nil(token.consumed_at) && DateTime.compare(token.expires_at, now) == :gt &&
+                token.session_id == row.id && token.channel_id == row.channel_id &&
+                token.build_id == row.build_id &&
+                token.generation == row.generation && claims["build_id"] == row.build_id &&
+                claims["channel_id"] == row.channel_id && claims["user_id"] == token.user_id &&
+                claims["generation"] == row.generation) and
+               claims["protocol_version"] == row.protocol_version,
              do: Repo.rollback(:unauthorized)
 
       user = Repo.get(User, token.user_id) || Repo.rollback(:unauthorized)

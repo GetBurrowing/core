@@ -279,27 +279,57 @@ defmodule Platform.GameStream.NativeSessionsTest do
     Repo.delete!(other_org)
     assert {:error, :unauthorized} = GameChannels.authorize(ctx.user, "sixteen-char-xxx")
   end
+
   test "concurrent users reserve each slot once and excess join fails full", ctx do
     {row, _credential} = running(ctx)
 
     users =
       for n <- 1..5 do
         suffix = System.unique_integer([:positive])
-        user = Repo.insert!(%User{email: "capacity-#{suffix}@example.com", name: "Pilot #{n}", oidc_sub: "capacity-#{suffix}"})
-        Repo.insert!(OrgMembership.changeset(%OrgMembership{}, %{user_id: user.id, org_id: ctx.project.org_id, role: "member"}))
+
+        user =
+          Repo.insert!(%User{
+            email: "capacity-#{suffix}@example.com",
+            name: "Pilot #{n}",
+            oidc_sub: "capacity-#{suffix}"
+          })
+
+        Repo.insert!(
+          OrgMembership.changeset(%OrgMembership{}, %{
+            user_id: user.id,
+            org_id: ctx.project.org_id,
+            role: "member"
+          })
+        )
+
         user
       end
 
     try do
       results =
         users
-        |> Enum.map(fn user -> Task.async(fn -> Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn -> NativeSessions.mint(user, row.id) end) end) end)
+        |> Enum.map(fn user ->
+          Task.async(fn ->
+            Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+              NativeSessions.mint(user, row.id)
+            end)
+          end)
+        end)
         |> Enum.map(&Task.await(&1, 15_000))
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 4
       assert Enum.count(results, &match?({:error, :full}, &1)) == 1
-      assert Repo.all(from(t in JoinToken, where: t.session_id == ^row.id, order_by: t.slot, select: t.slot)) == [0, 1, 2, 3]
-      assert {:error, :active_session} = GameChannels.configure(ctx.user, ctx.channel.id, ctx.project.id)
+
+      assert Repo.all(
+               from(t in JoinToken,
+                 where: t.session_id == ^row.id,
+                 order_by: t.slot,
+                 select: t.slot
+               )
+             ) == [0, 1, 2, 3]
+
+      assert {:error, :active_session} =
+               GameChannels.configure(ctx.user, ctx.channel.id, ctx.project.id)
     after
       ids = Enum.map(users, & &1.id)
       Repo.delete_all(from(t in JoinToken, where: t.user_id in ^ids))
@@ -307,5 +337,4 @@ defmodule Platform.GameStream.NativeSessionsTest do
       Repo.delete_all(from(u in User, where: u.id in ^ids))
     end
   end
-
 end
