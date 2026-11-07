@@ -1151,7 +1151,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Target lookups compare string slugs and lock existing skill/prompt rows.
     "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.
-    "platform/instruction_packs.ex" => 1,
+    # latest_release/1 adds one boundary read of Release.pack_id, a :string
+    # column; its is_binary guard precedes the query, and no UUID field is compared.
+    "platform/instruction_packs.ex" => 2,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
