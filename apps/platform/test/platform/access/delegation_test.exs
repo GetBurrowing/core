@@ -589,6 +589,7 @@ defmodule Platform.Access.DelegationTest do
                "platform/support_access.ex",
                "platform/tenancy.ex"
              ]
+
       refute Enum.any?(callers, &String.starts_with?(&1, "platform_web/"))
 
       # SignInAdmin's only route to it is the private invite helper.
