@@ -4,13 +4,15 @@
 //     anything with [data-viewer-open] is clicked (capture phase, before the
 //     open is pushed and before the bottom nav hides);
 //   - open same-host canvas / prototype anchors in message text in the app;
-//   - close the same way everywhere (back, Esc, ArrowLeft, swipe-down
-//     >120px): shrink back into the source card, restore the exact
-//     scrollTop after the close patch, return focus and ring the source card
-//     for 1s;
-//   - swipe-down by mode (direction canvas rule 5): image (when not zoomed),
-//     video and file anywhere on the viewer; prototype and link only on the
-//     top bar, because a prototype takes gestures of its own;
+//   - close the same way everywhere: shrink back into the source card,
+//     restore the exact scrollTop after the close patch, return focus and
+//     ring the source card for 1s. The exits themselves (the back control,
+//     the phone's back / browser back, Esc, swipe-down >120px) and the one
+//     history entry that makes back work belong to lib/dismissable_overlay.js;
+//     this hook only says when a swipe may start (direction canvas rule 5):
+//     image (when not zoomed), video and file anywhere on the viewer;
+//     prototype and link only on the top bar, because a prototype takes
+//     gestures of its own;
 //   - zoom images (rule 9): pinch and double-tap; while zoomed a drag pans
 //     and swipe-down is off;
 //   - grow from the source card on open (FLIP); a 150ms fade under
@@ -18,12 +20,19 @@
 //   - share: navigator.share on phones, else copy the absolute link and let
 //     the server flash "Link copied".
 
-const SWIPE_CLOSE_PX = 120
+import { openLayer } from "../lib/dismissable_overlay"
+import { phoneShare, shareDownload } from "../lib/share_download"
+
 const HIGHLIGHT_MS = 1000
 const HIGHLIGHT_CLASSES = ["ring-2", "ring-base-300"]
 const DOUBLE_TAP_MS = 300
 const ZOOM_STEP = 2.5
 const ZOOM_MAX = 5
+// The browser's PDF viewer focuses itself ~100ms after its iframe loads, and
+// a focused PDF plugin keeps every keydown, so Esc stopped closing. Focus
+// that lands in the frame before load or within this long after it is the
+// plugin's, not the user's, and goes back to the back control.
+const PDF_FOCUS_GUARD_MS = 1500
 
 function chatScroller() {
   const list = document.getElementById("message-list")
@@ -39,6 +48,7 @@ const ChatViewer = {
   mounted() {
     this.saved = null
     this.closing = false
+    this.layer = null
     this.wasOpen = this.isOpen()
     this.resetZoom()
 
@@ -70,16 +80,19 @@ const ChatViewer = {
     }
     document.addEventListener("click", this.onCaptureClick, true)
 
-    this.onKey = (e) => {
-      if (!this.isOpen()) return
-      if (e.key === "Escape" || (e.key === "ArrowLeft" && !this.inEditable(e.target))) {
-        // Esc must not also close a sheet underneath.
-        e.preventDefault()
-        e.stopImmediatePropagation()
-        this.close()
-      }
+    // An opener that is not a native control (the gallery item is a
+    // role=button div) opens on Enter or Space exactly as a tap does: the
+    // synthesized click runs the capture above and the opener's phx-click.
+    this.onOpenerKey = (e) => {
+      if ((e.key !== "Enter" && e.key !== " ") || e.repeat || this.isOpen()) return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const t = e.target
+      if (!t || !t.hasAttribute || !t.hasAttribute("data-viewer-open")) return
+      if (t.getAttribute("role") !== "button" || typeof t.click !== "function") return
+      e.preventDefault()
+      t.click()
     }
-    window.addEventListener("keydown", this.onKey, true)
+    document.addEventListener("keydown", this.onOpenerKey)
 
     // Back and Share are handled here so a close can animate first; the
     // back button keeps phx-click="viewer_close" for a client without JS.
@@ -94,6 +107,15 @@ const ChatViewer = {
         } else if (e.target.closest("[data-role=viewer-share]")) {
           e.preventDefault()
           this.share()
+        } else if (e.target.closest("[data-role=viewer-download]") && this.phoneShare()) {
+          // The iOS shell has no download handling (no WKDownload, and the
+          // shell allows every same-host main-frame load), so a download
+          // anchor there either does nothing or navigates the whole web view
+          // to the raw file with no way back. On a phone hand the file to
+          // the share sheet ("Save Image", "Save to Files") instead.
+          e.preventDefault()
+          e.stopPropagation()
+          this.shareDownload(e.target.closest("[data-role=viewer-download]"))
         }
       },
       true,
@@ -123,29 +145,89 @@ const ChatViewer = {
       if (src !== this.lastSrc) this.resetZoom()
       else this.applyZoom()
     }
-    if (!open && this.wasOpen) this.restore()
+    if (!open && this.wasOpen) {
+      // Closed by the server: drop the layer's history entry too. Its onClose
+      // is a no-op here because the root is already closed.
+      if (this.layer && this.layer.isOpen()) this.layer.close()
+      this.layer = null
+      this.restore()
+    }
     this.wasOpen = open
   },
 
   destroyed() {
     document.removeEventListener("click", this.onCaptureClick, true)
-    window.removeEventListener("keydown", this.onKey, true)
+    document.removeEventListener("keydown", this.onOpenerKey)
+    this.releasePdfGuard()
+    // Gone without a close (a navigation): forget the layer, do not go back.
+    if (this.layer) this.layer.release()
+    this.layer = null
   },
 
   isOpen() {
     return this.el.dataset.state === "open"
   },
 
-  inEditable(t) {
-    return t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
-  },
-
   onOpened() {
     this.closing = false
     this.resetZoom()
-    const back = this.el.querySelector("[data-role=viewer-back]")
-    if (back) back.focus({ preventScroll: true })
+    if (this.layer && this.layer.isOpen()) this.layer.release()
+    const saved = this.saved
+    const source = saved && saved.sourceId ? document.getElementById(saved.sourceId) : null
+    // One history entry, the exits and focus (onto the back control) are the
+    // shared overlay module's.
+    this.layer = openLayer({
+      el: this.el,
+      onClose: () => this.animateAndClose(),
+      swipeTarget: this.el,
+      canSwipe: (e) => this.canSwipe(e),
+      returnFocusTo: source,
+    })
+    this.guardPdfFocus()
     this.animateOpen()
+  },
+
+  // See PDF_FOCUS_GUARD_MS. A click into the PDF after the guard window
+  // keeps its focus (the back control and the phone's back still close).
+  guardPdfFocus() {
+    this.releasePdfGuard()
+    const frame = this.el.querySelector("[data-role=viewer-pdf]")
+    const back = this.el.querySelector("[data-role=viewer-back]")
+    if (!frame || !back) return
+    let deadline = null
+    const onLoad = () => {
+      deadline = Date.now() + PDF_FOCUS_GUARD_MS
+    }
+    const onBlur = () => {
+      if (deadline !== null && Date.now() > deadline) return
+      // Not inside the blur itself: focus moved there mid-transfer is
+      // overridden as the transfer completes and the PDF keeps the keys.
+      setTimeout(() => {
+        if (!this.isOpen() || document.activeElement !== frame) return
+        back.focus({ preventScroll: true })
+      }, 0)
+    }
+    frame.addEventListener("load", onLoad)
+    window.addEventListener("blur", onBlur)
+    this.releasePdfGuard = () => {
+      frame.removeEventListener("load", onLoad)
+      window.removeEventListener("blur", onBlur)
+      this.releasePdfGuard = () => {}
+    }
+  },
+
+  releasePdfGuard() {},
+
+  // Rule 5: where a swipe-down may start. The module owns the gesture.
+  canSwipe(e) {
+    if (!this.isOpen() || this.closing) return false
+    const t = e.target
+    if (!t || !t.closest) return false
+    if (t.closest("button, a, video, iframe, input")) return false
+    const mode = this.el.dataset.mode
+    if (mode === "image" && this.zoomed() && t.closest("[data-role=viewer-stage]")) return false
+    if (mode === "prototype" || mode === "link") return !!t.closest("[data-role=viewer-bar]")
+    return true
   },
 
   // ── Motion ────────────────────────────────────────────────────────────
@@ -211,7 +293,13 @@ const ChatViewer = {
     return anim.finished.catch(() => {}).then(() => anim)
   },
 
+  // Every exit goes through the layer, so its history entry is dropped once.
   close() {
+    if (this.layer && this.layer.isOpen()) this.layer.close()
+    else this.animateAndClose()
+  },
+
+  animateAndClose() {
     if (this.closing || !this.isOpen()) return
     this.closing = true
     this.animateClose().then((anim) => {
@@ -222,6 +310,7 @@ const ChatViewer = {
   },
 
   restore() {
+    this.releasePdfGuard()
     const saved = this.saved
     this.saved = null
     this.closing = false
@@ -253,12 +342,20 @@ const ChatViewer = {
 
   // ── Share ─────────────────────────────────────────────────────────────
 
+  phoneShare() {
+    return phoneShare()
+  },
+
+  shareDownload(anchor) {
+    shareDownload(anchor)
+  },
+
   share() {
     const path = this.el.dataset.sharePath
     if (!path) return
     const url = /^https?:\/\//i.test(path) ? path : window.location.origin + path
     const title = (this.el.querySelector("[data-role=viewer-filename]") || {}).textContent
-    if (navigator.share && window.matchMedia("(pointer: coarse)").matches) {
+    if (this.phoneShare()) {
       navigator.share({ url, title: title ? title.trim() : undefined }).catch(() => {})
       return
     }
@@ -315,20 +412,15 @@ const ChatViewer = {
     this.applyZoom()
   },
 
-  // ── Pointers: swipe-down, pinch, pan, double-tap ──────────────────────
+  // ── Pointers: pinch, pan, double-tap (swipe-down is the module's) ─────
 
   bindPointers() {
     const pts = new Map()
-    let swipe = null
+    let press = null
     let pan = null
     let pinch = null
     let lastTap = null
 
-    const resetSwipe = () => {
-      swipe = null
-      this.el.style.transform = ""
-      this.el.style.opacity = ""
-    }
     const dist = () => {
       const [a, b] = [...pts.values()]
       return Math.hypot(a.x - b.x, a.y - b.y)
@@ -342,7 +434,7 @@ const ChatViewer = {
       const onImage = mode === "image" && !!e.target.closest("[data-role=viewer-stage]")
 
       if (pts.size === 2 && onImage) {
-        resetSwipe()
+        press = null
         pan = null
         pinch = { d0: dist(), s0: this.zoom.scale }
         return
@@ -352,9 +444,7 @@ const ChatViewer = {
       if (onImage && this.zoomed()) {
         pan = { x0: e.clientX, y0: e.clientY, zx: this.zoom.x, zy: this.zoom.y }
       } else {
-        const onBar = !!e.target.closest("[data-role=viewer-bar]")
-        const barOnly = mode === "prototype" || mode === "link"
-        if (!barOnly || onBar) swipe = { y0: e.clientY, x0: e.clientX, id: e.pointerId }
+        press = { y0: e.clientY, x0: e.clientX, id: e.pointerId }
       }
       try {
         this.el.setPointerCapture(e.pointerId)
@@ -376,10 +466,6 @@ const ChatViewer = {
           y: pan.zy + (e.clientY - pan.y0),
         }
         this.applyZoom()
-      } else if (swipe && e.pointerId === swipe.id) {
-        const dy = Math.max(0, e.clientY - swipe.y0)
-        this.el.style.transform = `translateY(${dy}px)`
-        this.el.style.opacity = String(1 - Math.min(dy / 400, 0.6))
       }
     })
 
@@ -411,25 +497,16 @@ const ChatViewer = {
         if (!cancelled && moved < 10) tap(e, p.x0, p.y0)
         return
       }
-      if (swipe && e.pointerId === swipe.id) {
-        const dy = e.clientY - swipe.y0
-        const dx = Math.abs(e.clientX - swipe.x0)
-        const s = swipe
-        swipe = null
-        if (!cancelled && dy > SWIPE_CLOSE_PX) {
-          this.close()
-          return
-        }
-        this.el.style.transform = ""
-        this.el.style.opacity = ""
-        if (!cancelled && Math.abs(dy) < 10 && dx < 10) tap(e, s.x0, s.y0)
+      if (press && e.pointerId === press.id) {
+        const p = press
+        press = null
+        const dy = Math.abs(e.clientY - p.y0)
+        const dx = Math.abs(e.clientX - p.x0)
+        if (!cancelled && dy < 10 && dx < 10) tap(e, p.x0, p.y0)
       }
     }
     this.el.addEventListener("pointerup", (e) => end(e, false))
-    this.el.addEventListener("pointercancel", (e) => {
-      end(e, true)
-      resetSwipe()
-    })
+    this.el.addEventListener("pointercancel", (e) => end(e, true))
   },
 }
 

@@ -4,7 +4,7 @@ defmodule PlatformWeb.Components.ChatViewer do
   canvas 01a16748 VIEWER block). One full-window surface on desktop and
   phone. It is not a sheet: no backdrop, no handle.
 
-  Top bar (56px, always visible): back (← "Back to chat"), the centred
+  Top bar (56px plus the top safe-area inset, always visible): back (← "Back to chat"), the centred
   filename with a small meta line ("PDF · 2.1 MB"), Share, and Download only
   where a file exists (never for a prototype or a link).
 
@@ -56,10 +56,14 @@ defmodule PlatformWeb.Components.ChatViewer do
         if(@dark?, do: "bg-viewer text-on-viewer", else: "bg-base-100 text-base-content")
       ]}
     >
+      <%!-- The close-bar contract of assets/js/lib/dismissable_overlay.js:
+           overlay-close-bar is 3.5rem plus the top safe-area inset and padded
+           down by it, so back sits wholly below the status bar; the back
+           control is overlay-close-control, 44x44. --%>
       <div
         data-role="viewer-bar"
         class={[
-          "safe-area-top flex h-14 shrink-0 touch-none items-center gap-1 px-2",
+          "overlay-close-bar flex touch-none items-center gap-1",
           if(@dark?, do: "bg-viewer", else: "border-b border-edge bg-base-100")
         ]}
       >
@@ -68,7 +72,7 @@ defmodule PlatformWeb.Components.ChatViewer do
           data-role="viewer-back"
           phx-click="viewer_close"
           aria-label="Back to chat"
-          class="btn btn-ghost btn-square btn-sm text-current"
+          class="overlay-close-control btn btn-ghost btn-square size-11"
         >
           <.icon name="hero-arrow-left" class="size-5" />
         </button>
@@ -126,8 +130,8 @@ defmodule PlatformWeb.Components.ChatViewer do
           if(@dark?, do: "opacity-60", else: "text-subtle")
         ]}
       >
-        <span class="lg:hidden">swipe down or ← to go back</span>
-        <span class="hidden lg:inline">Esc or ← to go back</span>
+        <span class="lg:hidden">swipe down or back to close</span>
+        <span class="hidden lg:inline">Esc to close</span>
       </div>
     </div>
     """

@@ -1226,6 +1226,42 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert row_kinds(w.view) == ~w(canvas file site video video)
     end
 
+    # Task 01a1b67d: an image Files row opens the in-app image layer
+    # (data-image-viewer); a non-image row opens the same layer in file mode.
+    # Neither is navigated in place by in_app_links.js.
+    test "an image file row carries data-image-viewer; a PDF row does not", %{conn: conn} do
+      user = user!("imgrow")
+      channel = space!("channel")
+      p = seat_user(channel, user)
+      msg = post!(channel, p, "screenshot and spec")
+      png = attachment!(channel, msg, "screen.png", "image/png")
+      pdf = attachment!(channel, msg, "spec.pdf", "application/pdf")
+      {view, _html} = open_as(conn, user, channel)
+      tap_title(view)
+      seg(view, "file")
+
+      doc = view |> render() |> LazyHTML.from_fragment()
+
+      assert [_] =
+               doc
+               |> LazyHTML.query(
+                 "#space-sheet a[data-image-viewer][href='/chat/attachments/#{png.id}']"
+               )
+               |> Enum.to_list()
+
+      assert [_] =
+               doc
+               |> LazyHTML.query("#space-sheet a[href='/chat/attachments/#{pdf.id}']")
+               |> Enum.to_list()
+
+      assert [] =
+               doc
+               |> LazyHTML.query(
+                 "#space-sheet a[data-image-viewer][href='/chat/attachments/#{pdf.id}']"
+               )
+               |> Enum.to_list()
+    end
+
     test "each segment lists its one type", %{conn: conn} do
       w = shared_world(conn)
       tap_title(w.view)
