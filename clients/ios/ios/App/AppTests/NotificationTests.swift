@@ -292,7 +292,8 @@ final class SenderNotificationFixtureTests: XCTestCase {
         try assertImage(agent.sender?.image, is: agentDisc, "agent disc from author_type")
 
         let person = CommunicationNotification.sendMessageIntent(
-            try XCTUnwrap(CommunicationPayload(userInfo: directPush(authorType: "user", authorID: personID, name: personName, tone: "3", avatar: nil).userInfo)))
+            try XCTUnwrap(CommunicationPayload(userInfo: directPush(authorType: "user", authorID: personID, name: personName, tone: "3", avatar: nil).userInfo))
+        )
         let personDisc = AvatarRenderer.senderImage(name: personName, tone: "3", picture: nil)
         XCTAssertNotEqual(agentDisc, personDisc)
         XCTAssertNotEqual(agent.sender?.customIdentifier, person.sender?.customIdentifier)

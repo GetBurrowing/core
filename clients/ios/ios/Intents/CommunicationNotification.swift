@@ -49,7 +49,7 @@ struct CommunicationPayload: Equatable {
         self.spaceID = spaceID
         self.messageID = messageID
         self.authorID = authorID
-        authorType = nil
+        authorType = text("author_type")
         authorName = text("author_name")
         spaceName = text("space_name")
         avatarURL = AvatarFetcher.usable(text("author_avatar_url"))
