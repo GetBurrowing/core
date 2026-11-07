@@ -134,11 +134,9 @@ defmodule Platform.FakeAgentHost do
     if is_pid(s.notify), do: send(s.notify, {:fake_agent_host_oneshot, id})
 
     if s.oneshot != :silent do
-      agent = Platform.Repo.get(Platform.Agents.Agent, id)
-
       facts = %{
         running?: match?(%{state: :running}, Platform.AgentHost.status(id)),
-        api_key?: agent != nil and Platform.Agents.NativeLogin.api_key_set?(agent)
+        api_key?: Platform.Agents.NativeLogin.api_key_set?(%Platform.Agents.Agent{id: id})
       }
 
       PlatformWeb.AgentHostChannel.handle_in(

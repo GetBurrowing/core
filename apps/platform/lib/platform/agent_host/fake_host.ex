@@ -546,12 +546,12 @@ defmodule Platform.AgentHost.FakeHost do
   defp send_oneshot(reply),
     do: PlatformWeb.AgentHostChannel.handle_in("agent.oneshot", reply, %Phoenix.Socket{})
 
+  # `api_key_set?/1` reads only the id (the Vault metadata scope), so no row
+  # is loaded here.
   defp oneshot_facts(id) do
-    agent = Platform.Repo.get(Platform.Agents.Agent, id)
-
     %{
       running?: match?(%{state: :running}, Platform.AgentHost.status(id)),
-      api_key?: agent != nil and Platform.Agents.NativeLogin.api_key_set?(agent)
+      api_key?: Platform.Agents.NativeLogin.api_key_set?(%Platform.Agents.Agent{id: id})
     }
   end
 
