@@ -12,7 +12,30 @@ defmodule Platform.Agents.Manners do
   those builders; `Platform.Agents.MannersTest` renders each one and scans
   `lib/` for prompt builders missing from the list, so a new path that does
   not carry the rule goes red.
+
+  ## Blocks (task 01a1b6ff)
+
+  A second shared section rides the same paths: the voice block
+  (`voice_block/0`, the text in `Platform.Agents.VoiceBlock`). `blocks/0`
+  lists both as `{marker, text}`, `ensure/2` inserts each one whose marker
+  heading is absent, and `blocks_for/1` says which markers each
+  `prompt_paths/0` entry carries:
+
+    * `:native_start` and `:built_in_chat` carry the handoff rule and the
+      voice block. Both are generated at the moment the prompt is assembled,
+      so the voice block is never stored.
+    * `:native_seed` and `:burrow_seed` (the stored seeds) carry the handoff
+      rule only; the voice block arrives at start.
+    * `:federation_preamble` carries the handoff rule only. Federated
+      runtimes are not Burrow-run agents, and a dispatch preamble is task
+      work, not conversation.
+
+  Still pure: no Repo, no Experiments. The voice block is an experiment
+  surface (`agents.voice_block`); a call site resolves it for its agent and
+  passes the text in (`blocks/1`, `blocks_for/2`).
   """
+
+  alias Platform.Agents.VoiceBlock
 
   @marker "## Handing work to a person"
 
@@ -78,5 +101,59 @@ defmodule Platform.Agents.Manners do
       {:built_in_chat, Platform.Agents.QuickAgent, :build_system_prompt},
       {:federation_preamble, Platform.Orchestration.PromptTemplates, :federation_preamble}
     ]
+  end
+
+  @doc "The control voice block (`Platform.Agents.VoiceBlock.text/0`)."
+  @spec voice_block() :: String.t()
+  def voice_block, do: VoiceBlock.text()
+
+  @doc "The shared blocks, as `{marker, text}`: the handoff rule, then the control voice block."
+  @spec blocks() :: [{String.t(), String.t()}]
+  def blocks, do: blocks(voice_block())
+
+  @doc """
+  The shared blocks with `voice_text` (an experiment arm's block, resolved
+  by the caller) in place of the control voice block.
+  """
+  @spec blocks(String.t()) :: [{String.t(), String.t()}]
+  def blocks(voice_text) when is_binary(voice_text),
+    do: [{@marker, @handoff_rule}, {VoiceBlock.marker(), voice_text}]
+
+  @doc """
+  The markers a `prompt_paths/0` id must carry. See the moduledoc for why
+  the seeds and the federation preamble carry the handoff rule only.
+  """
+  @spec blocks_for(atom()) :: [String.t()]
+  def blocks_for(path_id) when path_id in [:native_start, :built_in_chat],
+    do: [@marker, VoiceBlock.marker()]
+
+  def blocks_for(path_id) when path_id in [:native_seed, :burrow_seed, :federation_preamble],
+    do: [@marker]
+
+  @doc "`blocks/1` filtered to the markers `blocks_for/1` names for `path_id`."
+  @spec blocks_for(atom(), String.t()) :: [{String.t(), String.t()}]
+  def blocks_for(path_id, voice_text) do
+    markers = blocks_for(path_id)
+    Enum.filter(blocks(voice_text), fn {marker, _text} -> marker in markers end)
+  end
+
+  @doc """
+  `content` with each `{marker, text}` block appended, in order, unless the
+  content already carries that block's marker heading. Idempotent, and the
+  content's trailing whitespace stays at the end, as with `ensure/1`.
+  """
+  @spec ensure(String.t(), [{String.t(), String.t()}]) :: String.t()
+  def ensure(content, blocks) when is_binary(content) and is_list(blocks) do
+    Enum.reduce(blocks, content, fn {marker, text}, acc ->
+      if String.contains?(acc, marker), do: acc, else: append_block(acc, text)
+    end)
+  end
+
+  defp append_block(content, text) do
+    body = String.trim_trailing(content)
+    tail = binary_part(content, byte_size(body), byte_size(content) - byte_size(body))
+    block = String.trim_trailing(text)
+
+    if body == "", do: block <> tail, else: body <> "\n\n" <> block <> tail
   end
 end

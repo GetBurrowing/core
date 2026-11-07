@@ -269,7 +269,9 @@ defmodule Platform.Chat.AgentResponder do
     chat_module().chat(body,
       history: Enum.map(context.history, &built_in_history_entry/1),
       space_id: context.message.space_id,
-      participant_id: context.agent_participant.id
+      participant_id: context.agent_participant.id,
+      # QuickAgent resolves this agent's voice block (task 01a1b6ff).
+      agent_id: context.agent.id
     )
   end
 

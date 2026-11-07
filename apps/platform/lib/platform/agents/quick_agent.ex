@@ -10,6 +10,7 @@ defmodule Platform.Agents.QuickAgent do
   require Logger
 
   alias Platform.Agents.{CodexAuth, Manners, Providers.Codex, ToolRunner, WorkspaceBootstrap}
+  alias Platform.Experiments.Surfaces.AgentVoiceBlock
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
   @default_model "gpt-5.4"
@@ -21,7 +22,10 @@ defmodule Platform.Agents.QuickAgent do
   """
   def chat(user_message, opts \\ []) do
     workspace_path = workspace_path()
-    system_prompt = build_system_prompt(workspace_path)
+    # The voice block resolved for this agent on agents.voice_block, or the
+    # control when the caller passes no agent id (task 01a1b6ff).
+    voice_block = AgentVoiceBlock.for_agent(opts[:agent_id])["block"]
+    system_prompt = build_system_prompt(workspace_path, voice_block)
     messages = (opts[:history] || []) ++ [%{"role" => "user", "content" => user_message}]
 
     tools = Keyword.get(opts, :tools, ToolRunner.tool_definitions())
@@ -51,7 +55,8 @@ defmodule Platform.Agents.QuickAgent do
 
   @doc false
   # Public for `Platform.Agents.MannersTest`, which renders the fixed frame.
-  def build_system_prompt(workspace_path) do
+  # `voice_block` defaults to the control (task 01a1b6ff).
+  def build_system_prompt(workspace_path, voice_block \\ Manners.voice_block()) do
     files =
       @workspace_files
       |> Enum.map(fn file ->
@@ -76,6 +81,8 @@ defmodule Platform.Agents.QuickAgent do
     Keep responses concise and helpful.
 
     #{Manners.handoff_rule()}
+    #{String.trim_trailing(voice_block)}
+
     You have access to tools that let you execute shell commands, read/write files,
     fetch web pages, and create/update live canvases in the chat. Use them when
     the user's request requires action beyond just conversation.

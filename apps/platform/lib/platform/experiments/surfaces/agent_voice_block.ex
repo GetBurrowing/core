@@ -19,6 +19,8 @@ defmodule Platform.Experiments.Surfaces.AgentVoiceBlock do
 
   alias Platform.Agents.VoiceBlock
   alias Platform.Agents.VoiceCheck
+  alias Platform.Experiments.Subject
+  alias Platform.Experiments.Surfaces
 
   @target "agents.voice_block"
   @max_block_chars 8000
@@ -75,6 +77,39 @@ defmodule Platform.Experiments.Surfaces.AgentVoiceBlock do
   @impl true
   def control_payload(_target, _opts \\ []),
     do: {:ok, %{"block" => VoiceBlock.text(), "banned" => VoiceCheck.default_banned()}}
+
+  @doc """
+  What `agent_id` gets on this surface: the arm's payload when a running
+  experiment assigns it, else a promoted default, else the control. A nil
+  agent id (the built-in chat agent called without one) gets the control.
+
+  Never raises: `Surfaces.resolve/4` falls through to the default on any
+  failure, and a default that does not validate is ignored for the control.
+  """
+  @spec for_agent(String.t() | nil) :: %{String.t() => term()}
+  def for_agent(agent_id) when is_binary(agent_id) do
+    case Surfaces.resolve(@target, @target, Subject.new("agent", agent_id)) do
+      {:variant, _experiment, _slug, %{"block" => _, "banned" => _} = payload} -> payload
+      {:default, payload} -> validated_or_control(payload)
+      _ -> control()
+    end
+  end
+
+  def for_agent(_agent_id), do: control()
+
+  @doc "The control payload."
+  @spec control() :: %{String.t() => term()}
+  def control do
+    {:ok, payload} = control_payload(@target)
+    payload
+  end
+
+  defp validated_or_control(payload) do
+    case validate_payload(payload) do
+      {:ok, payload} -> payload
+      {:error, _} -> control()
+    end
+  end
 
   defp unknown_key_errors(payload) do
     case Map.keys(payload) -- @keys do
