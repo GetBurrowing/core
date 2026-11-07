@@ -5,7 +5,7 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
   import Platform.TenancyFixtures
   import Platform.InstructionPackFixtures
   alias Platform.{Repo, Sharing, Skills}
-  alias Platform.InstructionPacks.{Installer, Manifest, Owner, State}
+  alias Platform.InstructionPacks.{Check, Installer, Manifest, Owner, Poller, State}
 
   setup do
     owner = root_admin!()
@@ -152,6 +152,52 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
     view |> element("button[phx-click=refresh]") |> render_click()
     assert view |> element("[data-role=pack-effective]") |> render() =~ "Local version"
     assert view |> element("[data-role=pack-status]") |> render() =~ "Local overrides"
+  end
+
+  test "catalog failure is visible before first pack and successful discovery clears it", %{
+    owner: owner
+  } do
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 assert Check.get().pending
+                 Plug.Conn.send_resp(conn, 503, "unavailable")
+               end
+             )
+
+    refute Check.get().pending
+    assert Repo.all(State) == []
+    {:ok, view, html} = open(owner)
+    assert html =~ "Network failure"
+
+    assert :ok =
+             Poller.poll(plug: fn conn -> Plug.Conn.send_resp(conn, 200, ~s({"packs":[]})) end)
+
+    assert Check.get().last_successful_check_at != nil
+    view |> element("button[phx-click=refresh]") |> render_click()
+
+    assert view |> element("[data-role=instruction-check-status]") |> render() =~
+             "Last update check succeeded"
+
+    {:ok, _} = Installer.stop_updates(true, owner)
+    assert :ok = Poller.poll(plug: fn _conn -> flunk("stop must prevent catalog fetch") end)
+    view |> element("button[phx-click=refresh]") |> render_click()
+
+    assert view |> element("[data-role=instruction-check-status]") |> render() =~
+             "Instruction updates are disabled"
   end
 
   test "verification and network failures display distinct status without false application", %{

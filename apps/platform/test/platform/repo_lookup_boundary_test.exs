@@ -112,6 +112,8 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,
+     "Check has a boolean singleton primary key; the only Repo.get argument is the literal true, never a caller-supplied value"},
     {"platform/instruction_packs/owner.ex", :get, "State", 1, :safe_internal,
      "State primary key pack_id is a string, not UUID; Owner.pin guards pack with is_binary before the Repo.get lookup"},
     {"platform/instruction_packs/guidance.ex", :get, "Agent", 1, :safe_internal,

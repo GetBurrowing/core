@@ -17,7 +17,12 @@ defmodule Platform.InstructionPacks.Download do
          true <- Enum.all?(ids, &slug?/1) and Enum.uniq(ids) == ids do
       {:ok, ids}
     else
-      _ -> {:error, :invalid_catalog}
+      {:error, reason}
+      when reason in [:download_failed, :invalid_pack_source, :release_unavailable] ->
+        {:error, reason}
+
+      _ ->
+        {:error, :invalid_catalog}
     end
   rescue
     _ -> {:error, :invalid_catalog}

@@ -120,6 +120,28 @@ defmodule PlatformWeb.InstructionPacksComponent do
     end
   end
 
+  defp check_status(check, sharing) do
+    cond do
+      sharing.instruction_updates_stopped or not sharing.instruction_updates ->
+        "Instruction updates are disabled."
+
+      check.pending ->
+        "Checking for instruction updates…"
+
+      check.error_kind == "network" ->
+        "Network failure — last good instructions remain active."
+
+      check.error_kind == "verification" ->
+        "Verification failure — last good instructions remain active."
+
+      check.last_successful_check_at ->
+        "Last update check succeeded."
+
+      true ->
+        "Waiting for the first update check."
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -199,6 +221,18 @@ defmodule PlatformWeb.InstructionPacksComponent do
               do: "Instruction updates stopped — allow updates",
               else: "Stop instruction updates across this install"}
           </button>
+          <section
+            aria-label="Instruction check status"
+            class="rounded-box border border-edge p-3 space-y-2"
+          >
+            <p role="status" data-role="instruction-check-status">
+              {check_status(@data.check, @data.sharing)}
+            </p>
+            <p class="text-subtle">Last check: {time(@data.check.checked_at)}</p>
+            <p class="text-subtle">
+              Last successful check: {time(@data.check.last_successful_check_at)}
+            </p>
+          </section>
           <p :if={@data.packs == []} data-role="packs-empty" class="text-subtle">
             No verified instruction packs received yet. The next permitted scheduled check will look for updates.
           </p>

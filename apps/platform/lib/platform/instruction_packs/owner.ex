@@ -2,7 +2,7 @@ defmodule Platform.InstructionPacks.Owner do
   @moduledoc "Owner-facing read model. Authorization is checked on every request, never cached from mount."
   import Ecto.Query
   alias Platform.{Access, Repo, Sharing}
-  alias Platform.InstructionPacks.{Entry, Installer, RetainedRelease, State, Targets}
+  alias Platform.InstructionPacks.{Check, Entry, Installer, RetainedRelease, State, Targets}
 
   def snapshot(actor) do
     with :ok <- authorize(actor) do
@@ -58,7 +58,7 @@ defmodule Platform.InstructionPacks.Owner do
             )
           )
 
-        %{sharing: Sharing.get(), packs: rows, events: events}
+        %{sharing: Sharing.get(), check: Check.get(), packs: rows, events: events}
       end)
     end
   end

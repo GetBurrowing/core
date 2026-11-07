@@ -5,7 +5,7 @@ defmodule Platform.InstructionPacks.Poller do
   Missing releases/network errors leave the last good contents active.
   """
   use GenServer
-  alias Platform.InstructionPacks.{Download, Installer, State}
+  alias Platform.InstructionPacks.{Check, Download, Installer, State}
   alias Platform.Repo
 
   def start_link(options), do: GenServer.start_link(__MODULE__, options, name: __MODULE__)
@@ -28,17 +28,37 @@ defmodule Platform.InstructionPacks.Poller do
     config = Application.get_env(:platform, :instruction_packs, [])
     roots = Keyword.get(config, :trust_roots, %{})
 
-    with {:ok, snapshot} <- Installer.consent_snapshot(),
-         {:ok, packs} <- discover(Keyword.get(config, :packs, []), options) do
-      for pack_id <- packs do
-        state = Repo.get(State, pack_id)
+    result =
+      with {:ok, snapshot} <- Installer.consent_snapshot() do
+        Check.begin_check()
 
-        unless state && state.pinned_version do
-          next = if state && state.version, do: state.version + 1, else: 1
-          Installer.pull(pack_id, next, roots, Keyword.put(options, :consent_snapshot, snapshot))
+        with {:ok, packs} <- discover(Keyword.get(config, :packs, []), options) do
+          results =
+            for pack_id <- packs do
+              state = Repo.get(State, pack_id)
+
+              if state && state.pinned_version do
+                :ok
+              else
+                next = if state && state.version, do: state.version + 1, else: 1
+
+                Installer.pull(
+                  pack_id,
+                  next,
+                  roots,
+                  Keyword.put(options, :consent_snapshot, snapshot)
+                )
+              end
+            end
+
+          Enum.find(results, fn
+            {:error, reason} -> reason not in [:release_unavailable, :pinned]
+            _ -> false
+          end) || :ok
         end
       end
-    end
+
+    Check.finish(result)
 
     :ok
   end
