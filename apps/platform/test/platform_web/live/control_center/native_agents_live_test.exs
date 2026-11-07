@@ -467,11 +467,15 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
     test "is offered only while an agent host is connected", %{conn: conn, owner: owner} do
       {:ok, view, _html} = live(as(conn, owner), ~p"/control")
       view |> element("#add-agent-btn-sidebar") |> render_click()
+      # The Add entry opens the character builder; the flows sit behind Advanced.
+      view |> element("#ba-advanced") |> render_click()
       refute has_element?(view, "#choose-native")
 
       join_host!()
       {:ok, view, _html} = live(as(conn, owner), ~p"/control")
       view |> element("#add-agent-btn-sidebar") |> render_click()
+      # The Add entry opens the character builder; the flows sit behind Advanced.
+      view |> element("#ba-advanced") |> render_click()
       assert has_element?(view, "#choose-native", "Run on this server")
     end
 
@@ -480,6 +484,8 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
       {:ok, view, _html} = live(as(conn, owner), ~p"/control")
 
       view |> element("#add-agent-btn-sidebar") |> render_click()
+      # The Add entry opens the character builder; the flows sit behind Advanced.
+      view |> element("#ba-advanced") |> render_click()
       view |> element("#choose-native") |> render_click()
 
       # Codex is shown and disabled until `suite codex` has merged.

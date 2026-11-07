@@ -501,6 +501,20 @@ defmodule Platform.Agents.Character do
     end
   end
 
+  @doc """
+  Give a character the face its creator uploaded in the builder (stage 2):
+  the `avatar_url` and `avatar_storage_key` that
+  `PlatformWeb.ControlCenter.AgentAvatarUpload.consume/2` returns. An empty
+  map (nothing uploaded) leaves the agent as it is.
+  """
+  def put_avatar(%Agent{} = agent, attrs) when attrs == %{}, do: {:ok, agent}
+
+  def put_avatar(%Agent{} = agent, %{} = attrs) do
+    agent
+    |> Agent.changeset(Map.take(attrs, [:avatar_url, :avatar_storage_key]))
+    |> Repo.update()
+  end
+
   defp write_file(multi, step, key, b) do
     Multi.run(multi, step, fn _repo, %{agent: agent} ->
       MemoryContext.upsert_workspace_file(agent.id, key, Map.fetch!(file_contents(b), key))

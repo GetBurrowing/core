@@ -102,6 +102,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # The character builder's Try-it field, "Ask <name> anything…" (task
+    # 01a1b6ad stage 2): no placeholder: utility, so the base ::placeholder rule.
+    "platform_web/live/control_center/character_builder.ex" => :global_default,
     # The agent page's Grant panel "Role name" field (task 01a1a2e4-9265
     # stage 3): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/runtime_panel.ex" => :global_default,

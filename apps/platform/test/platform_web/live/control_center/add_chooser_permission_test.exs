@@ -1,7 +1,9 @@
 defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
   @moduledoc """
   Task 01a1ae4b stage 1: the Agents > Add chooser shows the create paths
-  (External Agent, Import, From a Template, Create Custom) closed to a user
+  (External Agent, Import, Create Custom; From a Template is gone since task
+  01a1b6ad stage 2, whose character builder is now the Add entry and puts
+  these cards behind its Advanced link) closed to a user
   without agents.manage_all, with the reason, before they type. Federate
   stays open. Server side, a forged flow or roles-picker sentinel never opens
   a create form, and field validation no longer fires a refusal per keystroke.
@@ -20,7 +22,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
   alias PlatformWeb.ControlCenter.Onboarding
 
   @admin_line "Only org admins can add external agents. Ask an admin to add it or to grant you agent management."
-  @locked_flows ~w(template import create external)
+  @locked_flows ~w(import create external)
 
   describe "member" do
     setup %{conn: conn} do
@@ -32,7 +34,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
       conn: conn
     } do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
 
       for flow <- @locked_flows do
         card = "#add-agent-chooser #choose-#{flow}"
@@ -61,7 +63,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
 
     test "the line text renders verbatim in the chooser", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
 
       text =
         view
@@ -77,7 +79,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
 
     test "a forged choose_onboarding for a create flow keeps the chooser", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
 
       for flow <- @locked_flows do
         html = render_click(view, "choose_onboarding", %{"flow" => flow})
@@ -113,7 +115,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
 
     test "external_agent_change is validation only: no refusal on a keystroke", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
 
       html =
         render_change(view, "external_agent_change", %{
@@ -146,7 +148,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
 
     test "sees every card enabled and no admin line", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
 
       for flow <- ["federate" | @locked_flows] do
         assert has_element?(
@@ -163,7 +165,7 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
 
     test "chooses External Agent, fills it in and creates the agent", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/control")
-      render_click(view, "open_onboarding_chooser", %{})
+      open_advanced(view)
       render_click(view, "choose_onboarding", %{"flow" => "external"})
       assert has_element?(view, "#external-agent-form")
 
@@ -192,6 +194,12 @@ defmodule PlatformWeb.ControlCenter.AddChooserPermissionTest do
       secret: "",
       save_to_vault: "false"
     }
+  end
+
+  # Add opens the character builder; the chooser is behind its Advanced link.
+  defp open_advanced(view) do
+    render_click(view, "open_onboarding_chooser", %{})
+    view |> element("#ba-advanced") |> render_click()
   end
 
   defp count(html, needle), do: html |> String.split(needle) |> length() |> Kernel.-(1)
