@@ -223,6 +223,11 @@ config :platform, :start_space_purger, false
 # every mail test's inbound row from outside every sandbox.
 config :platform, :start_experiments_mail_subscriber, false
 
+# Usage counts batcher (task 01a1b678 stage 2): tests start it with
+# start_supervised/1 and drive `flush/2`. Left on it would POST to the broker
+# stub from outside every test.
+config :platform, :start_usage_batcher, false
+
 # Canvas body search backfill (task 01a07402 stage 3): tests call `run/1`
 # directly inside the DataCase sandbox. Left on at boot it would run against
 # the real test database from outside every sandbox, indexing rows the suite

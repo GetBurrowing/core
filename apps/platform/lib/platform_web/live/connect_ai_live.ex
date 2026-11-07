@@ -458,6 +458,10 @@ defmodule PlatformWeb.ConnectAiLive do
   defp maybe_getting_started(socket, agent, true) do
     case socket.assigns[:space] do
       nil ->
+        # Seat Burrow in Help & feedback once it runs (task 01a1b678 stage 3).
+        # A no-op on an install without that channel.
+        _ = Platform.Sharing.HelpChannel.ensure_agent(agent)
+
         case GettingStarted.ensure_getting_started(agent, socket.assigns.current_user_record) do
           {:ok, space} -> assign(socket, :space, space)
           {:error, _} -> socket

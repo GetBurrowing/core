@@ -13,7 +13,8 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
 
     * INTERNAL owner, `["federation"]` — the `capabilities` push carries
       exactly `["federation_status", "vault_fetch", "vault_list"]` (the
-      vault tools joined the bundle in task 01a131c5), and `tool_call
+      vault tools joined the bundle in task 01a131c5) plus `sharing_list` and
+      `sharing_set` (task 01a1b678 stage 3), and `tool_call
       task_create` is denied
       with `not in allowed bundles` WITHOUT creating a row;
     * EXTERNAL owner, broad bundles — the push is exactly the six chat tools,
@@ -82,8 +83,17 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
 
       {socket, capabilities} = join_runtime(ctx, ctx.int.id, ["federation"])
 
-      assert tool_names(capabilities) == ["federation_status", "vault_fetch", "vault_list"]
-      assert capabilities.tool_count == 3
+      # sharing_list and sharing_set (task 01a1b678 stage 3) are always listed
+      # in `federation`; their handlers gate on an install-admin owner.
+      assert tool_names(capabilities) == [
+               "federation_status",
+               "sharing_list",
+               "sharing_set",
+               "vault_fetch",
+               "vault_list"
+             ]
+
+      assert capabilities.tool_count == 5
 
       # Otherwise-valid arguments: this call WOULD have created a row had the
       # channel executed it, which is exactly what it used to do.

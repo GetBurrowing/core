@@ -318,6 +318,8 @@ defmodule PlatformWeb.Router do
     get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
     get("/instruction-packs", InstructionPackController, :index, log: false)
     get("/instruction-packs/:pack_id/:version", InstructionPackController, :show, log: false)
+    # Anonymous usage counts (task 01a1b678 stage 2).
+    post("/usage", FeedbackBrokerController, :usage, log: false)
   end
 
   scope "/api/app", PlatformWeb do

@@ -7,7 +7,7 @@ defmodule Platform.Feedback.PolicyTest do
 
   async: false — flips `:feedback_policy`; every test restores it on exit.
   """
-  use ExUnit.Case, async: false
+  use Platform.DataCase, async: false
 
   alias Platform.Feedback.Policy
 
