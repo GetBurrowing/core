@@ -15,7 +15,7 @@ defmodule Platform.GameStream.ReleaseRollbackTest do
 
   alias Platform.Release
 
-  @play_versions [20_260_926_030_000, 20_260_928_200_000]
+  @play_versions [20_260_926_030_000, 20_260_928_200_000, 20_261_107_180_000]
 
   test "the release migrates core's path first, then Play's" do
     [core, play] = Release.migrations_paths(Repo)

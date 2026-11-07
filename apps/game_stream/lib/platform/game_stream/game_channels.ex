@@ -13,7 +13,7 @@ defmodule Platform.GameStream.GameChannels do
     timestamps(type: :utc_datetime_usec)
   end
 
-  def configure(%User{} = user, channel_id, project_id) do
+  def configure(%User{archived_at: nil} = user, channel_id, project_id) do
     with true <- Platform.UUID.valid?(channel_id) and Platform.UUID.valid?(project_id),
          %Space{kind: "channel", archived_at: nil} = space <- Repo.get(Space, channel_id),
          %Project{archived_at: nil, repo_url: repo} = project <- Repo.get(Project, project_id),
@@ -46,7 +46,7 @@ defmodule Platform.GameStream.GameChannels do
     end
   end
 
-  def authorize(%User{} = user, channel_id) do
+  def authorize(%User{archived_at: nil} = user, channel_id) do
     with true <- Platform.UUID.valid?(channel_id),
          %Space{kind: "channel", archived_at: nil} = space <- Repo.get(Space, channel_id),
          :ok <- Access.authorize(user, "chat.read", space),
