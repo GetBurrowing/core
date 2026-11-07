@@ -30,12 +30,14 @@ defmodule Platform.GameStream.ModuleInventoryTest do
   # Task 01a13867 added the core surface memory.insight_synthesis.
   # Task 01a1aa47 added the core surface hr.profile.
   # Task 01a1af00 stage 1 added the core surface ux.friction_detection.
+  # Task 01a1b6de stage 4 added the core surface agents.unblock_ask.reask_interval.
   test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
     assert Enum.sort(rails.allowed_surfaces) ==
              [
                "agents.tool_profile",
+               "agents.unblock_ask.reask_interval",
                "chat.context_summary",
                "dispatch.code_mode",
                "dispatch.product_docs_preamble",
@@ -61,6 +63,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
     assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
              [
                "agents.tool_profile",
+               "agents.unblock_ask.reask_interval",
                "chat.context_summary",
                "dispatch.code_mode",
                "dispatch.product_docs_preamble",

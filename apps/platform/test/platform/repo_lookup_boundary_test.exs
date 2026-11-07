@@ -435,6 +435,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1af00 stage 3: resource_for(\"ux_finding\", id) checks Platform.UUID.valid?/1 on the id before Repo.get; its caller emit/1 passes source_id from a valid Inbox.Item Ecto.UUID changeset as well"},
     {"platform/ux/digest.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "task 01a1af00 stage 4: digest_space/1 checks Platform.UUID.valid?/1 on the agent's metadata[\"ux_digest_space_id\"] (an admin-edited string) before Chat.get_agent_participant/2, and org_scope/2 checks the trigger meta's org_id before `where: f.org_id == ^org_id`, so a malformed value is {:skipped, :no_digest_space} / no org filter, never Ecto.Query.CastError"},
+    {"platform/agents/unblock_asks.ex", :platform_uuid_guard, "-", 7, :safe_internal,
+     "task 01a1b6de stage 4: every lookup in Platform.Agents.UnblockAsks that pins an id arriving from a LiveView param (the ask id), a click payload or a subject id goes through Platform.UUID.valid?/1 first (get_for_owner/2, list_live_for_owner/1, live_asks/2, inbox_row_stale?/1, lock_for_owner/2), so a malformed id is nil / [] / false / :not_found instead of Ecto.Query.CastError"},
     {"platform/ux/decisions.ex", :platform_uuid_guard, "-", 10, :safe_internal,
      "task 01a1af00 stage 3: every lookup in Platform.Ux.Decisions that pins an id arriving from a LiveView param (/inbox/ux/:finding_id), a click payload or a finding's citation/mockup strings goes through Platform.UUID.valid?/1 first (get_for_recipient/2, list_for_recipient/2, lock_for_recipient/2, inbox_row_stale?/1, parse_citation/1, mockup_src/1), so a malformed id is nil / not_found / dropped instead of Ecto.Query.CastError"},
     # ── Lifecycle ──────────────────────────────────────────────────────
@@ -1479,6 +1481,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # guards (the finding id is a LiveView path param), so a malformed value
     # is nil, never a cast error.
     "platform/ux/decisions.ex" => 2,
+    # Task 01a1b6de stage 4: `get_for_owner/2` and `lock_for_owner/2` pin
+    # `a.id` and `a.owner_user_id`, both behind Platform.UUID.valid?/1 guards
+    # (the ask id will arrive as a LiveView path param), so a malformed value
+    # is nil / :not_found, never a cast error.
+    "platform/agents/unblock_asks.ex" => 2,
     # Task 01a1af00 stage 4: `Platform.Ux.Digest.decision_count/3` pins only
     # `f.org_id`, behind the Platform.UUID.valid?/1 guard in `org_scope/2`,
     # and two DateTimes.

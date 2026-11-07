@@ -83,7 +83,11 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a1af00 stage 1: the UX friction watch's detection directive,
     # grouping threshold and minimum occurrences. Nothing is seeded; the
     # control is the handler's defaults.
-    Platform.Experiments.Surfaces.UxFrictionDetection
+    Platform.Experiments.Surfaces.UxFrictionDetection,
+    # Task 01a1b6de stage 4: how long the lead agent waits before re-asking
+    # about an unchanged blocker. Nothing is seeded; the control is the
+    # configured interval.
+    Platform.Experiments.Surfaces.UnblockAskReaskInterval
   ]
 
   @prompt_surface "dispatch.prompt"

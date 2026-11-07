@@ -58,6 +58,7 @@ defmodule Platform.Agents.TeamCheck.Classifier do
   @type result :: %{
           class: class(),
           evidence: String.t(),
+          basis: String.t(),
           fixer: person(),
           action: String.t() | nil
         }
@@ -93,23 +94,29 @@ defmodule Platform.Agents.TeamCheck.Classifier do
   @doc """
   Classify `evidence` (see `t:evidence/0`). Returns the class, a ONE-line
   evidence string, the person who can fix it and what they should do
-  (`fixer`/`action` are nil for `:ok`).
+  (`fixer`/`action` are nil for `:ok`), and `basis`: the STABLE part of the
+  state the class was read from (task 01a1b6de stage 4). Unlike `evidence`
+  it carries no age that grows between checks, so the unblock ask's state
+  fingerprint changes only when the state does: for `:offline` the last
+  seen instant (or "never"), for a text class the deciding failure's type
+  and text.
   """
   @spec classify(evidence()) :: result()
   def classify(%{presence: presence, now: now, offline_after_seconds: threshold} = evidence) do
     failures = evidence |> Map.get(:failures, []) |> List.wrap() |> newest_first()
 
     case offline(presence, now, threshold) do
-      {:offline, line} ->
-        result(:offline, line, evidence)
+      {:offline, line, basis} ->
+        result(:offline, line, basis, evidence)
 
       :present ->
         case first_text_class(failures) do
           {class, failure} ->
-            result(class, "#{failure.event_type}: #{failure.text}", evidence)
+            line = "#{failure.event_type}: #{failure.text}"
+            result(class, line, line, evidence)
 
           nil ->
-            result(:ok, ok_line(failures), evidence)
+            result(:ok, ok_line(failures), "ok", evidence)
         end
     end
   end
@@ -131,13 +138,14 @@ defmodule Platform.Agents.TeamCheck.Classifier do
 
         if age > threshold do
           {:offline,
-           "not connected; last seen #{age_words(age)} ago (#{DateTime.to_iso8601(seen)})"}
+           "not connected; last seen #{age_words(age)} ago (#{DateTime.to_iso8601(seen)})",
+           "offline: last seen #{DateTime.to_iso8601(seen)}"}
         else
           :present
         end
 
       _ ->
-        {:offline, "not connected and never seen#{source_words(presence)}"}
+        {:offline, "not connected and never seen#{source_words(presence)}", "offline: never seen"}
     end
   end
 
@@ -157,13 +165,14 @@ defmodule Platform.Agents.TeamCheck.Classifier do
       "#{newest.event_type}: #{newest.text}"
   end
 
-  defp result(:ok, line, _evidence),
-    do: %{class: :ok, evidence: one_line(line), fixer: nil, action: nil}
+  defp result(:ok, line, basis, _evidence),
+    do: %{class: :ok, evidence: one_line(line), basis: basis, fixer: nil, action: nil}
 
-  defp result(class, line, evidence) do
+  defp result(class, line, basis, evidence) do
     %{
       class: class,
       evidence: one_line(line),
+      basis: basis,
       fixer: Map.get(evidence, :sponsor) || Map.get(evidence, :owner),
       action: Map.fetch!(@actions, class)
     }

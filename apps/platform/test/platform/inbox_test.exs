@@ -1076,7 +1076,10 @@ defmodule Platform.InboxTest do
                "meeting_briefing",
                # Task 01a1af00 stage 3: opening the UX question is reading
                # it; it stays listed until answered.
-               "ux_decision"
+               "ux_decision",
+               # Task 01a1b6de stage 4: an unblock ask stays listed until the
+               # subject's state clears it.
+               "agent_unblock_ask"
              ]
 
       assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
@@ -1091,6 +1094,14 @@ defmodule Platform.InboxTest do
       refute "ux_decision" in Inbox.core_action_kinds()
       refute "ux_decision" in Platform.Mobile.AppEntities.approval_kinds()
       assert Inbox.core_action_kinds() == ~w(task_plan_review review_request_pending)
+    end
+
+    # Task 01a1b6de stage 4: an unblock ask stays listed on open and is
+    # cleared by its subject's state; it is not an approval.
+    test "agent_unblock_ask is listed on open but is not a core (Mobile approval) action kind" do
+      assert "agent_unblock_ask" in Inbox.action_kinds()
+      refute "agent_unblock_ask" in Inbox.core_action_kinds()
+      refute "agent_unblock_ask" in Platform.Mobile.AppEntities.approval_kinds()
     end
 
     # Task 01a15ee1 stage 1: a briefing stays listed when opened, but it is

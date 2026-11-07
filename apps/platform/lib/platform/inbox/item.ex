@@ -52,13 +52,18 @@ defmodule Platform.Inbox.Item do
   # `source_type: "ux_finding"` and `source_id` = the `ux_findings` id. It is
   # NOT an approval: it is answered in the Inbox (Build it / Try the other
   # option / Not now), never approved or rejected.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited meeting_cancelled task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing ux_decision)
+  # `agent_unblock_ask` (task 01a1b6de stage 4) is the lead agent asking the
+  # one human who can unstick an agent or a person
+  # (`Platform.Agents.UnblockAsks`), with `source_type: "unblock_ask"` and
+  # `source_id` = the `unblock_asks` id. Not an approval: it is settled by
+  # the subject's state ("I did it, check again" re-runs the check).
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited meeting_cancelled task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing ux_decision agent_unblock_ask)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
   # the plain `task` source so a rollup dismissal never touches a
   # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
-  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing ux_finding)
+  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing ux_finding unblock_ask)
 
   # `inbox_items.title` is `varchar(255)` (`add(:title, :string)` in
   # `20260723185711_create_inbox_items.exs`). Producers build titles as a

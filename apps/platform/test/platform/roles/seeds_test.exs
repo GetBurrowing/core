@@ -180,11 +180,11 @@ defmodule Platform.Roles.SeedsTest do
 
       assert Repo.aggregate(Role, :count, :key) == 10
 
-      # Same 35 as the fresh-DB case above — the point of this test is
+      # Same 36 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 35
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 36
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

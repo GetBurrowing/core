@@ -107,6 +107,7 @@ defmodule Platform.Agents.TeamCheck.ClassifierTest do
       assert result == %{
                class: :ok,
                evidence: "present; no open failures",
+               basis: "ok",
                fixer: nil,
                action: nil
              }

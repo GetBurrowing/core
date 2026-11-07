@@ -9,11 +9,14 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
   classifies each agent with the pure
   `Platform.Agents.TeamCheck.Classifier.classify/1`. No model is called to
   classify. The leader's turn only phrases the asks for the agents
-  `TeamCheck.to_raise/3` selected.
+  `Platform.Agents.UnblockAsks` asked or re-asked on this fire (task 01a1b6de
+  stage 4): each ask is an `agent_unblock_ask` Inbox item for the fixer, and
+  the leader's message links to it. Stuck people (`PersonSetup`) are asked
+  the same way, in their own Inbox.
 
   `build_prompt/1` REFUSES with `{:error, {:nothing_to_raise, reason}}` when no
-  agent is due, so a healthy install, or one whose stuck agents were all asked
-  within the re-ask interval, costs no turn.
+  ask was sent, so a healthy install, or one whose stuck subjects were all
+  asked within the re-ask interval, costs no turn.
 
   Granting access, rotating credentials or approving spend is NOT done here:
   the ask names who can and what to do.
@@ -23,11 +26,12 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
     * schedule — `trigger_config` (`GoalCadence`), declared default daily at
       15:00 UTC. An admin cadence write marks it `operator_set` and it
       survives every boot's re-registration.
-    * re-ask interval, offline threshold, lookback — the row's `metadata`
-      (`"reask_after_hours"` 72, `"offline_after_minutes"` 120,
-      `"lookback_hours"` 168), read by `Platform.Agents.TeamCheck`. Metadata
-      is replaced by the declared values on boot, so a lasting change is a
-      change to `register/0`.
+    * re-ask interval, offline threshold, lookback — `config :platform,
+      Platform.Agents.TeamCheck` (72h, 120 min, 168h), overridden by the
+      row's `metadata["operator_config"]`
+      (`Responsibilities.put_operator_config/2`), which boot
+      re-registration keeps. The re-ask interval is also the
+      `agents.unblock_ask.reask_interval` experiment surface, which wins.
 
   ## Spec
 
@@ -42,6 +46,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
   require Logger
 
   alias Platform.Agents.TeamCheck
+  alias Platform.Agents.UnblockAsks
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Responsibilities.Responsibility
 
@@ -76,13 +81,14 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
         output_contract: %{"asks" => "string"},
         default_prompt_template: @template_slug,
         cost_profile: "low_freq_capable",
-        metadata:
-          Map.merge(TeamCheck.default_config(), %{
-            "owner" => "platform.agents",
-            "status" => "active",
-            "role" => "agents_leader",
-            "task" => "01a1b6de"
-          })
+        # The interval, threshold and lookback defaults are config, not
+        # declared metadata: what is declared here is replaced on every boot.
+        metadata: %{
+          "owner" => "platform.agents",
+          "status" => "active",
+          "role" => "agents_leader",
+          "task" => "01a1b6de"
+        }
       }
     ]
   end
@@ -95,14 +101,23 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
   end
 
   @doc """
-  Statuses, the subset due to be raised, and the rendered lines. Stamps the
-  raised agents so the next fire inside the interval does not ask again.
+  Statuses, the asks sent on this fire, and the rendered lines. The asks are
+  `unblock_asks` rows (`UnblockAsks.sync_agents/2`, `sync_people/1`), so the
+  next fire inside the interval does not ask again.
+
+  `opts` are passed to both syncs and `TeamCheck.statuses/1`
+  (`:federation`, `:users`, `:stuck_after_seconds`).
   """
-  @spec build_context(Responsibility.t() | nil, DateTime.t()) :: map()
-  def build_context(row, now \\ DateTime.utc_now()) do
-    statuses = TeamCheck.statuses(row: row, now: now)
-    raise_list = TeamCheck.to_raise(statuses, row, now)
-    TeamCheck.record_asks(statuses, raise_list, now)
+  @spec build_context(Responsibility.t() | nil, DateTime.t(), keyword()) :: map()
+  def build_context(row, now \\ DateTime.utc_now(), opts \\ []) do
+    opts = Keyword.merge(opts, row: row, now: now)
+    statuses = TeamCheck.statuses(Keyword.take(opts, [:row, :now, :federation]))
+
+    sent =
+      (UnblockAsks.sync_agents(statuses, opts) ++ UnblockAsks.sync_people(opts))
+      |> Enum.filter(fn {outcome, _ask, _status} -> outcome in [:asked, :reasked] end)
+
+    raise_list = Enum.map(sent, &raise_entry/1)
 
     %{
       statuses: statuses,
@@ -110,6 +125,19 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
       reask_after_hours: TeamCheck.reask_after_hours(row),
       team_status: Enum.map_join(statuses, "\n", &status_line/1),
       raise_list: Enum.map_join(raise_list, "\n", &ask_line/1)
+    }
+  end
+
+  defp raise_entry({_outcome, ask, %{agent_id: _} = status}),
+    do: Map.merge(status, %{ask: ask, url: UnblockAsks.url(ask.id)})
+
+  defp raise_entry({_outcome, ask, %{user: user}}) do
+    %{
+      agent_id: nil,
+      person: user,
+      ask: ask,
+      url: UnblockAsks.url(ask.id),
+      evidence: ask.evidence
     }
   end
 
@@ -150,7 +178,12 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
     "- #{status.agent_name} (#{status.kind}): #{status.class} — #{status.evidence}"
   end
 
-  @doc "One line per agent to raise: who, what is wrong, who fixes it and how."
+  @doc "One line per ask sent: who, what is wrong, who fixes it, how, and its link."
+  def ask_line(%{person: person, url: url} = entry) do
+    "- #{person.name}: stuck on setup (#{entry.evidence}). Ask #{person.name} to " <>
+      "finish those steps: #{url}"
+  end
+
   def ask_line(status) do
     fixer =
       case status.fixer do
@@ -158,8 +191,10 @@ defmodule Platform.Responsibilities.Handlers.AgentsTeamCheck do
         _ -> "the install owner (none is set)"
       end
 
+    link = if is_binary(status[:url]), do: " The steps: #{status.url}", else: ""
+
     "- #{status.agent_name}: #{status.class} (#{status.evidence}). Ask #{fixer} to " <>
-      "#{status.action}."
+      "#{status.action}.#{link}"
   end
 
   @impl true

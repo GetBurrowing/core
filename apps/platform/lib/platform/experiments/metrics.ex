@@ -145,6 +145,16 @@ defmodule Platform.Experiments.Metrics do
           "dismissed (Not now, or the Inbox row dismissed), over a variant's workspaces.",
       direction: :higher_is_better
     },
+    # Task 01a1b6de stage 4, for the `agents.unblock_ask.reask_interval`
+    # surface: asks resolved over asks sent (first asks and re-asks).
+    "unblock_asks_resolved_per_sent" => %{
+      module: Platform.Experiments.Metrics.UnblockAsksResolvedPerSent,
+      label: "Unblock asks resolved per sent",
+      description:
+        "Asks resolved over asks sent (first asks plus re-asks), over a variant's " <>
+          "stuck agents and people.",
+      direction: :higher_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

@@ -246,6 +246,8 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
       assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
                [
                  "agents.tool_profile",
+                 # Task 01a1b6de stage 4: the unblock ask re-ask interval.
+                 "agents.unblock_ask.reask_interval",
                  "chat.context_summary",
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",

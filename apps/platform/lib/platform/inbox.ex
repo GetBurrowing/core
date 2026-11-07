@@ -99,7 +99,13 @@ defmodule Platform.Inbox do
   # question is reading it, and the row stays until it is answered
   # (`Platform.Ux.Decisions.answer/4` dismisses it) or dismissed. NOT an
   # approval, so never in `@action_kinds`.
-  @listed_on_open ~w(briefing meeting_briefing ux_decision)
+  # `agent_unblock_ask` (task 01a1b6de stage 4) is listed on open: opening
+  # the ask is reading it, and the row stays until the subject's state
+  # clears it (`Platform.Agents.UnblockAsks`; the reconciler dismisses it
+  # through `row_stale?/1`) or the fixer picks "Not now". It counts in the
+  # badge until opened, like every listed-on-open kind (task 01a1b673). NOT
+  # an approval, so never in `@action_kinds`.
+  @listed_on_open ~w(briefing meeting_briefing ux_decision agent_unblock_ask)
 
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
@@ -1371,6 +1377,11 @@ defmodule Platform.Inbox do
       TTL ago (`Platform.Memory.Insight.default_ttl_days/0`). A missing row,
       or a meeting with no `ended_at`, is not confirmation and the row stays.
       See `Platform.Meetings.MeetingBriefings.inbox_row_stale?/2`.
+    * `agent_unblock_ask` (`source_type: "unblock_ask"`, `source_id` = the
+      `unblock_asks` id; task `01a1b6de` stage 4, ADR 0049) — stale iff the
+      ask exists and is `resolved` (its subject's state cleared it) or
+      `dismissed` ("Not now"). A missing ask is not confirmation. See
+      `Platform.Agents.UnblockAsks.inbox_row_stale?/1`.
     * `task_sponsor_assigned` — deliberately NO clause; see `row_stale?/1`.
 
   Cost: one indexed load of the user's live rows (indexed on `user_id`), then a
@@ -1433,6 +1444,12 @@ defmodule Platform.Inbox do
   # Task 01a1af00 stage 3: a UX question answered or dismissed elsewhere.
   defp row_stale?(%Item{kind: "ux_decision", source_type: "ux_finding", source_id: finding_id}) do
     Platform.Ux.Decisions.inbox_row_stale?(finding_id)
+  end
+
+  # Task 01a1b6de stage 4: an unblock ask the subject's state resolved, or
+  # the fixer put off with "Not now".
+  defp row_stale?(%Item{kind: "agent_unblock_ask", source_type: "unblock_ask", source_id: id}) do
+    Platform.Agents.UnblockAsks.inbox_row_stale?(id)
   end
 
   # DELIBERATE DECISION — do not add a `task_sponsor_assigned` clause without

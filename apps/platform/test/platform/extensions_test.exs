@@ -361,10 +361,11 @@ defmodule Platform.ExtensionsTest do
       # Core's non-approval `briefing` and `meeting_briefing` stay listed on
       # open but are never core (Mobile approval) action kinds (tasks 01a15ee1
       # stage 1 and 01a1694a stage 2), and neither is the UX role's
-      # `ux_decision` (task 01a1af00 stage 3).
+      # `ux_decision` (task 01a1af00 stage 3), nor the lead agent's
+      # `agent_unblock_ask` (task 01a1b6de stage 4).
       assert Platform.Inbox.action_kinds() ==
                Platform.Inbox.core_action_kinds() ++
-                 ["briefing", "meeting_briefing", "ux_decision"]
+                 ["briefing", "meeting_briefing", "ux_decision", "agent_unblock_ask"]
 
       assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
       assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
@@ -965,8 +966,8 @@ defmodule Platform.ExtensionsTest do
     ]
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
-    @core_metrics ~w(cycle_time insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection)
+    @core_metrics ~w(cycle_time insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase unblock_asks_resolved_per_sent ux_finding_keep_rate validation_failure_rate)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection agents.unblock_ask.reask_interval)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

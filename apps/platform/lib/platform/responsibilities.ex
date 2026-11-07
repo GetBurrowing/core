@@ -176,9 +176,10 @@ defmodule Platform.Responsibilities do
     end
   end
 
-  # `{:replace, @upsert_replace_fields}` with ONE difference:
+  # `{:replace, @upsert_replace_fields}` with TWO differences:
   # `trigger_config` keeps the stored value when it carries the operator
-  # marker. `upsert_replace_fields/0` (test-visible) pins that this set
+  # marker, and `metadata` keeps its stored `"operator_config"` key (task
+  # 01a1b6de stage 4, `put_operator_config/2`). `upsert_replace_fields/0` (test-visible) pins that this set
   # list and the attribute name the same fields.
   defp upsert_on_conflict do
     from(r in Responsibility,
@@ -197,7 +198,14 @@ defmodule Platform.Responsibilities do
           output_contract: fragment("EXCLUDED.output_contract"),
           default_prompt_template: fragment("EXCLUDED.default_prompt_template"),
           cost_profile: fragment("EXCLUDED.cost_profile"),
-          metadata: fragment("EXCLUDED.metadata"),
+          # Task 01a1b6de stage 4: an operator's `metadata["operator_config"]`
+          # survives every boot; the rest of `metadata` is the declared value.
+          metadata:
+            fragment(
+              "CASE WHEN (?->'operator_config') IS NOT NULL THEN EXCLUDED.metadata || jsonb_build_object('operator_config', ?->'operator_config') ELSE EXCLUDED.metadata END",
+              r.metadata,
+              r.metadata
+            ),
           updated_at: fragment("EXCLUDED.updated_at")
         ]
       ]
@@ -212,6 +220,34 @@ defmodule Platform.Responsibilities do
   def upsert_replace_fields do
     %Ecto.Query{updates: [%{expr: [set: set]}]} = upsert_on_conflict()
     {Enum.sort(@upsert_replace_fields), set |> Keyword.keys() |> Enum.sort()}
+  end
+
+  # ── operator config (task 01a1b6de stage 4) ────────────────────────────────
+
+  @doc """
+  Merge `config` (string keys) into the `key` row's
+  `metadata["operator_config"]`, the one part of `metadata` boot
+  re-registration keeps (`upsert_by_key/1`). A nil value removes that key.
+  Returns `{:error, :not_found}` for an unknown row.
+  """
+  @spec put_operator_config(String.t(), map()) ::
+          {:ok, Responsibility.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def put_operator_config(key, config) when is_binary(key) and is_map(config) do
+    case get_by_key(key) do
+      nil ->
+        {:error, :not_found}
+
+      %Responsibility{metadata: metadata} = row ->
+        metadata = metadata || %{}
+
+        merged =
+          metadata
+          |> Map.get("operator_config", %{})
+          |> Map.merge(Map.new(config, fn {k, v} -> {to_string(k), v} end))
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+        update_responsibility(row, %{metadata: Map.put(metadata, "operator_config", merged)})
+    end
   end
 
   # ── operator cadence writes (task 01a0e882 stage 2) ────────────────────────

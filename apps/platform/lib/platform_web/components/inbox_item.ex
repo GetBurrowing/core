@@ -220,7 +220,9 @@ defmodule PlatformWeb.Components.InboxItem do
     "meeting_briefing" => %{long: "Meeting briefing", short: "Meeting"},
     # The UX role's question (task 01a1af00 stage 3). The short form is the
     # chip its own row renders.
-    "ux_decision" => %{long: "UX decision", short: "UX"}
+    "ux_decision" => %{long: "UX decision", short: "UX"},
+    # The lead agent's unblock ask (task 01a1b6de stage 4).
+    "agent_unblock_ask" => %{long: "Unblock ask", short: "Unblock"}
   }
 
   @doc "The core kinds `kind_label/2` has an explicit entry for."
@@ -265,6 +267,8 @@ defmodule PlatformWeb.Components.InboxItem do
   def kind_icon("meeting_briefing"), do: "hero-video-camera"
   # The UX role's question. Above the catch-all.
   def kind_icon("ux_decision"), do: "hero-light-bulb"
+  # The lead agent's unblock ask. Above the catch-all.
+  def kind_icon("agent_unblock_ask"), do: "hero-lock-open"
 
   def kind_icon(other) do
     case Platform.Extensions.inbox_kind(other) do
@@ -284,6 +288,7 @@ defmodule PlatformWeb.Components.InboxItem do
   defp needs_action?(%Item{kind: "briefing"}), do: false
   defp needs_action?(%Item{kind: "meeting_briefing"}), do: false
   defp needs_action?(%Item{kind: "ux_decision"}), do: false
+  defp needs_action?(%Item{kind: "agent_unblock_ask"}), do: false
   defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

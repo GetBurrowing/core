@@ -83,6 +83,8 @@ defmodule Platform.Experiments.GuardrailsTest do
       assert Enum.sort(rails.allowed_surfaces) ==
                [
                  "agents.tool_profile",
+                 # Task 01a1b6de stage 4: the re-ask interval, a dispatch path.
+                 "agents.unblock_ask.reask_interval",
                  "chat.context_summary",
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",

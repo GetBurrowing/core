@@ -466,7 +466,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :changelog,
       :admin
     ]
-    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate validation_failure_rate)
+    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase unblock_asks_resolved_per_sent ux_finding_keep_rate validation_failure_rate)
     # main's ORDER: dispatch.prompt, mail.draft.generator, planner.stage_budget,
     # chat.context_summary, game_stream.encoder_preset, game_stream.roster,
     # meetings.open_question_classifier. The stage appends extension surfaces
@@ -489,8 +489,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1af00 stage 1 adds ux.friction_detection, a core surface appended
     # after hr.profile, so it precedes the Play keys as well; it also adds the
     # core metric ux_finding_keep_rate.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a1b6de stage 4 adds agents.unblock_ask.reask_interval, a core
+    # surface appended after ux.friction_detection, so it precedes the Play
+    # keys as well; it also adds the core metric unblock_asks_resolved_per_sent.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection agents.unblock_ask.reask_interval)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection agents.unblock_ask.reask_interval game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp without_triage_item_schema(definitions) do
       Enum.map(definitions, fn

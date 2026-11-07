@@ -297,6 +297,17 @@ config :platform, PlatformWeb.ConnectAiLive,
 # install or an experiment can change it here. Unset means nobody is stuck.
 config :platform, Platform.Onboarding.PersonSetup, stuck_after_seconds: 2 * 24 * 60 * 60
 
+# The lead agent's team check and unblock asks (task 01a1b6de stages 3-4):
+# the configured defaults. An operator override lives on the
+# `agents.team_check` row's `metadata["operator_config"]`, which boot
+# re-registration keeps (`Platform.Responsibilities.upsert_by_key/1`); the
+# re-ask interval is also the `agents.unblock_ask.reask_interval` experiment
+# surface, whose arm or promoted default wins over both.
+config :platform, Platform.Agents.TeamCheck,
+  reask_after_hours: 72,
+  offline_after_minutes: 120,
+  lookback_hours: 168
+
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to
 # `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header

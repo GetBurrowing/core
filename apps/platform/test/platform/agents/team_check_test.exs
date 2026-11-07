@@ -298,7 +298,7 @@ defmodule Platform.Agents.TeamCheckTest do
       assert TeamCheck.cadence() == %{cadence: :every_4h, hour_utc: nil}
     end
 
-    test "the re-ask interval comes from the row's metadata", %{row: row} do
+    test "the re-ask interval comes from the row: operator config, then metadata", %{row: row} do
       {:ok, row} =
         Responsibilities.update_responsibility(row, %{
           metadata: Map.put(row.metadata, "reask_after_hours", 1)
@@ -306,24 +306,12 @@ defmodule Platform.Agents.TeamCheckTest do
 
       assert TeamCheck.reask_after_hours(row) == 1
 
-      asked_2h_ago = %{
-        "class" => "access",
-        "asked_at" => DateTime.to_iso8601(DateTime.add(@now, -7_200))
-      }
+      # Task 01a1b6de stage 4: the operator's value beats declared metadata.
+      {:ok, row} = Responsibilities.put_operator_config(row.key, %{"reask_after_hours" => 9})
+      assert TeamCheck.reask_after_hours(row) == 9
 
-      status = %{agent_id: "a", class: :access, last_ask: asked_2h_ago}
-
-      assert TeamCheck.to_raise([status], row, @now) == [status]
-
-      {:ok, row72} =
-        Responsibilities.update_responsibility(row, %{
-          metadata: Map.put(row.metadata, "reask_after_hours", 72)
-        })
-
-      assert TeamCheck.to_raise([status], row72, @now) == []
-
-      # A changed class is raised again inside the interval.
-      assert TeamCheck.to_raise([%{status | class: :credentials}], row72, @now) != []
+      # Neither: the configured default.
+      assert TeamCheck.reask_after_hours(%Responsibilities.Responsibility{metadata: %{}}) == 72
     end
 
     test "the offline threshold comes from the row's metadata" do

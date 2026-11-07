@@ -31,15 +31,24 @@ defmodule Platform.Agents.TeamCheck do
   `Platform.Responsibilities.GoalCadence.from_row/1` (`cadence/0`). The
   re-ask interval (`"reask_after_hours"`), the offline threshold
   (`"offline_after_minutes"`) and the failure lookback (`"lookback_hours"`)
-  are read off the row's `metadata`; the module constants below are only the
-  defaults used when the row or the key is absent.
+  are read, first found wins, from:
+
+    1. the row's `metadata["operator_config"]`, written by
+       `Platform.Responsibilities.put_operator_config/2`. Boot
+       re-registration keeps this key and replaces the rest of `metadata`
+       (task 01a1b6de stage 4), so an operator's value survives a deploy;
+    2. the row's `metadata`;
+    3. `config :platform, Platform.Agents.TeamCheck` (config/config.exs);
+    4. the module constants, only when the config is absent too.
+
+  The re-ask interval an ask actually uses is resolved per subject through
+  the `agents.unblock_ask.reask_interval` experiment surface first
+  (`Platform.Agents.UnblockAsks.interval_for/2`), falling back to the above.
 
   ## Re-asking
 
-  A stuck agent is raised once, then not again until the interval passes or
-  its class changes. The last raise is stamped on the agent's own
-  `metadata["team_check"]` (`"class"`, `"asked_at"`), cleared when it reads
-  `:ok`.
+  Asks are `unblock_asks` rows, one live row per subject and class
+  (`Platform.Agents.UnblockAsks`), which decide when to ask again.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -68,21 +77,30 @@ defmodule Platform.Agents.TeamCheck do
   @default_offline_after_minutes 120
   @default_lookback_hours 168
 
-  @stamp_key "team_check"
-
   @doc "The responsibility key."
   def key, do: @key
 
   @doc "Event types read as failures."
   def failure_types, do: @failure_types
 
-  @doc "The defaults the row's metadata overrides."
+  @doc "The configured defaults (config, then module constants) the row overrides."
   def default_config do
+    config = Application.get_env(:platform, __MODULE__, [])
+
     %{
-      "reask_after_hours" => @default_reask_after_hours,
-      "offline_after_minutes" => @default_offline_after_minutes,
-      "lookback_hours" => @default_lookback_hours
+      "reask_after_hours" =>
+        config_value(config, :reask_after_hours, @default_reask_after_hours, 1),
+      "offline_after_minutes" =>
+        config_value(config, :offline_after_minutes, @default_offline_after_minutes, 0),
+      "lookback_hours" => config_value(config, :lookback_hours, @default_lookback_hours, 1)
     }
+  end
+
+  defp config_value(config, key, default, min) do
+    case Keyword.get(config, key) do
+      n when is_integer(n) and n >= min -> n
+      _ -> default
+    end
   end
 
   @doc "The `agents.team_check` row's cadence; daily at the declared hour when absent."
@@ -105,17 +123,26 @@ defmodule Platform.Agents.TeamCheck do
   def lookback_hours(row), do: config_int(row, "lookback_hours")
 
   defp config_int(%Responsibility{metadata: metadata}, field) when is_map(metadata) do
-    case Map.get(metadata, field) do
-      n when is_integer(n) and n >= 0 -> n
-      _ -> Map.fetch!(default_config(), field)
-    end
+    operator = Map.get(metadata, "operator_config")
+    operator = if is_map(operator), do: operator, else: %{}
+
+    Enum.find_value(
+      [Map.get(operator, field), Map.get(metadata, field)],
+      Map.fetch!(default_config(), field),
+      fn
+        n when is_integer(n) and n >= 0 -> n
+        _ -> nil
+      end
+    )
   end
 
   defp config_int(_row, field), do: Map.fetch!(default_config(), field)
 
   @doc """
   One status per active agent:
-  `%{agent, agent_id, agent_name, kind, class, evidence, fixer, action, last_ask}`.
+  `%{agent, agent_id, agent_name, kind, class, evidence, basis, fixer, action,
+  details}`. `details` are the placeholder values an unblock ask renders
+  with, read from the deciding failure text (`refusal_details/1`).
 
   Options: `:row` (the responsibility row; read from the DB when absent),
   `:now`, and `:federation` (rows shaped like `Federation.federation_status/0`,
@@ -152,85 +179,38 @@ defmodule Platform.Agents.TeamCheck do
         agent_id: agent.id,
         agent_name: agent.name,
         kind: Kind.classify(agent),
-        last_ask: last_ask(agent)
+        runtime_ids: agent_runtimes |> Enum.map(& &1.runtime_id) |> Enum.filter(&is_binary/1),
+        details: refusal_details(result.basis)
       })
     end)
   end
 
   @doc """
-  The statuses that should be raised now: not `:ok`, and either never asked,
-  asked about a different class, or asked longer ago than the interval.
+  The placeholder values a refusal text names: `"org"` and `"repo"` from
+  "Permission to <org>/<repo>.git denied", `"account"` from "denied to
+  <account>". Keys the text does not name are absent.
   """
-  @spec to_raise([map()], Responsibility.t() | nil, DateTime.t()) :: [map()]
-  def to_raise(statuses, row, now \\ DateTime.utc_now()) do
-    interval = reask_after_hours(row) * 3600
-
-    Enum.filter(statuses, fn status ->
-      status.class != :ok and due?(status.last_ask, status.class, interval, now)
-    end)
-  end
-
-  defp due?(nil, _class, _interval, _now), do: true
-
-  defp due?(%{"class" => asked_class, "asked_at" => asked_at}, class, interval, now) do
-    with true <- asked_class == Atom.to_string(class),
-         {:ok, at, _} <- DateTime.from_iso8601(to_string(asked_at)) do
-      DateTime.diff(now, at, :second) >= interval
-    else
-      _ -> true
-    end
-  end
-
-  defp due?(_last_ask, _class, _interval, _now), do: true
-
-  @doc """
-  Stamp what was raised and clear stamps on agents that now read `:ok`.
-  A failed write is logged, never raised.
-  """
-  @spec record_asks([map()], [map()], DateTime.t()) :: :ok
-  def record_asks(statuses, raised, now \\ DateTime.utc_now()) do
-    raised_ids = MapSet.new(raised, & &1.agent_id)
-
-    Enum.each(statuses, fn status ->
-      cond do
-        MapSet.member?(raised_ids, status.agent_id) ->
-          stamp(status.agent, %{
-            "class" => Atom.to_string(status.class),
-            "asked_at" => DateTime.to_iso8601(now)
-          })
-
-        status.class == :ok and status.last_ask != nil ->
-          stamp(status.agent, nil)
-
-        true ->
-          :ok
+  @spec refusal_details(String.t() | nil) :: map()
+  def refusal_details(text) when is_binary(text) do
+    repo =
+      case Regex.run(
+             ~r{[Pp]ermission to ([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)? denied},
+             text
+           ) do
+        [_, org, repo] -> %{"org" => org, "repo" => repo}
+        _ -> %{}
       end
-    end)
+
+    account =
+      case Regex.run(~r{denied to ([A-Za-z0-9][A-Za-z0-9_-]*(?:\[bot\])?)}, text) do
+        [_, account] -> %{"account" => account}
+        _ -> %{}
+      end
+
+    Map.merge(repo, account)
   end
 
-  # The struct `statuses/1` loaded, so no id lookup happens here.
-  defp stamp(%Agent{} = agent, value) do
-    metadata = agent.metadata || %{}
-
-    metadata =
-      if value, do: Map.put(metadata, @stamp_key, value), else: Map.delete(metadata, @stamp_key)
-
-    case agent |> Ecto.Changeset.change(metadata: metadata) |> Repo.update() do
-      {:ok, _} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[agents.team_check] could not stamp #{agent.id}: #{inspect(reason)}")
-        :ok
-    end
-  rescue
-    error ->
-      Logger.warning("[agents.team_check] stamp raised for #{agent.id}: #{inspect(error)}")
-      :ok
-  end
-
-  defp last_ask(%Agent{metadata: %{@stamp_key => %{} = ask}}), do: ask
-  defp last_ask(_agent), do: nil
+  def refusal_details(_text), do: %{}
 
   # ── signals ──────────────────────────────────────────────────────────────
 
