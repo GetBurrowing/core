@@ -559,7 +559,18 @@ defmodule PlatformWeb.SettingsLive do
         </button>
 
         <p :if={@install_owner?} class={section_label_class()}>Sharing with Burrow</p>
-        <button :if={@install_owner?} type="button" phx-click="open_sharing_sheet" data-role="settings-sharing" class={row_class()}><span>Sharing with Burrow</span><span class="hero-chevron-right size-4 text-subtle" aria-hidden="true"></span></button>
+        <button
+          :if={@install_owner?}
+          type="button"
+          phx-click="open_sharing_sheet"
+          data-role="settings-sharing"
+          class={row_class()}
+        >
+          <span>Sharing with Burrow</span><span
+            class="hero-chevron-right size-4 text-subtle"
+            aria-hidden="true"
+          ></span>
+        </button>
         <%= if @feedback_enabled do %>
           <p class={section_label_class()} data-role="settings-help-label">Help</p>
           <button
@@ -794,7 +805,11 @@ defmodule PlatformWeb.SettingsLive do
         <:title>Sharing with Burrow</:title>
         <div :if={@sheet == :sharing} class="max-h-[75dvh] overflow-y-auto px-4 pb-6">
           <h2 class="text-lg font-semibold mb-4">Sharing with Burrow</h2>
-          <.live_component module={PlatformWeb.InstructionPacksComponent} id="settings-instruction-packs" actor={@current_user_record} />
+          <.live_component
+            module={PlatformWeb.InstructionPacksComponent}
+            id="settings-instruction-packs"
+            actor={@current_user_record}
+          />
         </div>
       </.sheet>
       <.sheet
