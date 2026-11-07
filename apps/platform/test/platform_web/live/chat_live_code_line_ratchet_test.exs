@@ -680,7 +680,12 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # (2010 -> 2032). `handle_info({:space_renamed, _})` updates the open
   # header, tab title and rail; the rail reload that `{:space_created, _}`
   # held inline moved into `reload_rail_channels/1`, which both clauses call.
-  @chat_live_code_line_count 2032
+  # Task 01a1b6fd stage 1 (unread first): +2, measured by this guard
+  # (2032 -> 2034). `handle_params/3` sets `@list_floated` on open
+  # (`ChatListHooks.float_on_open/2`, before `clear_unread/2` zeroes the
+  # count it reads) and clears it on `/chat` (`ChatListHooks.clear_floated/1`),
+  # one pipeline line each; the logic lives in `ChatListHooks`.
+  @chat_live_code_line_count 2034
 
   @doc """
   Count the CODE lines of a source file.

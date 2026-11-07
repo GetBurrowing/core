@@ -649,12 +649,12 @@ defmodule Platform.Accounts do
   """
   @spec put_float_new_messages(binary(), boolean()) :: {:ok, User.t()} | {:error, :not_found}
   def put_float_new_messages(user_id, enabled) when is_binary(user_id) and is_boolean(enabled) do
-    with {:ok, uuid} <- Ecto.UUID.cast(user_id) do
+    if Platform.UUID.valid?(user_id) do
       now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
 
       query =
         from(u in User,
-          where: u.id == ^uuid,
+          where: u.id == ^user_id,
           select: u,
           update: [
             set: [
@@ -678,7 +678,7 @@ defmodule Platform.Accounts do
           {:error, :not_found}
       end
     else
-      :error -> {:error, :not_found}
+      {:error, :not_found}
     end
   end
 
