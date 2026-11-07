@@ -112,6 +112,8 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/instruction_packs.ex", :get_by, "Release", 1, :safe_internal,
+     "get_release/2 queries pack_id, a string foreign key, and version, a positive bounded bigint checked before this lookup; neither lookup argument is cast to a UUID"},
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
     # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
     {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
@@ -1118,6 +1120,8 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Publisher lookup pins the validated manifest pack_id string; no UUID input.
+    "platform/instruction_packs.ex" => 1,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.

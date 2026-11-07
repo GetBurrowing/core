@@ -67,7 +67,7 @@ no decompression, finite connection/response timeouts and a streaming byte cap.
 Manifest text cannot supply a URL or request options. It verifies against only
 the separately configured trust roots before returning a manifest.
 
-Signatures authenticate Kobo as publisher; they do not prove prompt semantics
+Signatures authenticate the vendor as publisher; they do not prove prompt semantics
 safe. Text can contain malicious instructions. Tools and egress must continue to
 be authorized server-side, independently of prompt text and pack opt-in.
 A pack never changes sharing consent. Subsequent stages must use the sharing
