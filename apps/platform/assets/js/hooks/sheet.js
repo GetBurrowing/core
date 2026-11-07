@@ -2,6 +2,15 @@
 // swipe-down-to-close.
 // Component: lib/platform_web/components/sheet.ex
 // Spec: docs/design-system/components/sheet.md §2
+//
+// The soft keyboard: every sheet attaches the shared `watchKeyboard` while it
+// is mounted, so `data-keyboard-open`, `--keyboard-inset` and
+// `--visual-viewport-h` are on <html> on every page, not only in chat. The
+// phone rule in app.css lifts a bottom sheet's panel above the keyboard and
+// clamps it to the visible height. The watcher is reference-counted, so this
+// coexists with ChatDock's own attach.
+
+import { watchKeyboard } from "../lib/keyboard_inset.js"
 
 // A node the browser actually lays out. `checkVisibility` is in every engine
 // this app supports; where it is missing (the node test shims) every node
@@ -61,6 +70,7 @@ const Sheet = {
     document.addEventListener("keydown", this.handleEscape)
     this.el.addEventListener("keydown", this.handleFocusTrap)
     this._setupSwipe()
+    this._unwatchKeyboard = watchKeyboard()
 
     // If the sheet boots open (rare but valid), still grab focus.
     if (this.el.dataset.open === "true") {
@@ -82,6 +92,10 @@ const Sheet = {
   },
 
   destroyed() {
+    if (this._unwatchKeyboard) {
+      this._unwatchKeyboard()
+      this._unwatchKeyboard = null
+    }
     document.removeEventListener("keydown", this.handleEscape)
     this.el.removeEventListener("keydown", this.handleFocusTrap)
     if (this.swipePanel) {

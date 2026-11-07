@@ -1,5 +1,6 @@
 // Soft-keyboard detection for the phone chat dock (sponsor feedback, 2026-10-23: about
-// 85px of empty ground between the composer and the iOS keyboard).
+// 85px of empty ground between the composer and the iOS keyboard), and for
+// every bottom sheet (the Sheet hook), which clamps itself above the keyboard.
 //
 // Why CSS alone could not do it. The focused-composer rule in app.css drops
 // the tab bar's height from --bottom-nav-clearance but keeps
@@ -35,27 +36,33 @@ export function keyboardState({ innerHeight, vvHeight, vvOffsetTop, baseline }) 
   return { open, inset }
 }
 
-// Attaches to window.visualViewport and mirrors the state onto <html> (which
-// LiveView never patches). Returns a detach function. A no-op where there is
-// no visualViewport.
-export function watchKeyboard(win = globalThis.window, doc = globalThis.document) {
-  const vv = win && win.visualViewport
-  const root = doc && doc.documentElement
-  if (!vv || !root || typeof vv.addEventListener !== "function") return () => {}
+// The visible height while the keyboard is up, so a bottom sheet can clamp
+// itself to what the viewer can actually see. Set and cleared together with
+// KEYBOARD_INSET_VAR.
+export const VISUAL_VIEWPORT_H_VAR = "--visual-viewport-h"
 
+// One watcher per visualViewport, shared by every caller (the chat dock and
+// every Sheet). Callers attach and detach independently; the listeners and the
+// state on <html> live until the LAST caller detaches. Without the count, the
+// first caller to detach would clear the attribute under the others.
+const watchers = new WeakMap()
+
+function startWatcher(win, vv, root) {
   let width = win.innerWidth
   let baseline = Math.max(vv.height, win.innerHeight || 0)
-  let last = { open: false, inset: 0 }
+  let last = { open: false, inset: 0, height: 0 }
 
   const apply = (state) => {
-    if (state.open === last.open && state.inset === last.inset) return
+    if (state.open === last.open && state.inset === last.inset && state.height === last.height) return
     last = state
     if (state.open) {
       root.setAttribute(KEYBOARD_ATTR, "")
       root.style.setProperty(KEYBOARD_INSET_VAR, `${state.inset}px`)
+      root.style.setProperty(VISUAL_VIEWPORT_H_VAR, `${state.height}px`)
     } else {
       root.removeAttribute(KEYBOARD_ATTR)
       root.style.removeProperty(KEYBOARD_INSET_VAR)
+      root.style.removeProperty(VISUAL_VIEWPORT_H_VAR)
     }
   }
 
@@ -72,16 +79,45 @@ export function watchKeyboard(win = globalThis.window, doc = globalThis.document
       baseline,
     })
     if (!state.open) baseline = Math.max(baseline, vv.height)
-    apply(state)
+    apply({ ...state, height: state.open ? Math.round(vv.height) : 0 })
   }
 
   vv.addEventListener("resize", update)
   vv.addEventListener("scroll", update)
   update()
 
+  return {
+    count: 0,
+    stop() {
+      vv.removeEventListener("resize", update)
+      vv.removeEventListener("scroll", update)
+      apply({ open: false, inset: 0, height: 0 })
+    },
+  }
+}
+
+// Attaches to window.visualViewport and mirrors the state onto <html> (which
+// LiveView never patches). Returns this caller's detach function; calling it
+// twice counts once. A no-op where there is no visualViewport.
+export function watchKeyboard(win = globalThis.window, doc = globalThis.document) {
+  const vv = win && win.visualViewport
+  const root = doc && doc.documentElement
+  if (!vv || !root || typeof vv.addEventListener !== "function") return () => {}
+
+  let watcher = watchers.get(vv)
+  if (!watcher) {
+    watcher = startWatcher(win, vv, root)
+    watchers.set(vv, watcher)
+  }
+  watcher.count += 1
+
+  let attached = true
   return () => {
-    vv.removeEventListener("resize", update)
-    vv.removeEventListener("scroll", update)
-    apply({ open: false, inset: 0 })
+    if (!attached) return
+    attached = false
+    watcher.count -= 1
+    if (watcher.count > 0) return
+    watchers.delete(vv)
+    watcher.stop()
   }
 }

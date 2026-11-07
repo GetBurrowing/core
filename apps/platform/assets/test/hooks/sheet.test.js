@@ -293,3 +293,90 @@ describe("Sheet hook focus return", () => {
     expect(() => s.hook.updated()).not.toThrow()
   })
 })
+
+describe("Sheet hook keyboard", () => {
+  // A 375x812 phone; the keyboard takes 336px of the visual viewport.
+  const LAYOUT = 812
+  const KEYBOARD = 336
+
+  function stubViewport() {
+    const listeners = {}
+    const vv = {
+      height: LAYOUT,
+      offsetTop: 0,
+      addEventListener(type, fn) {
+        ;(listeners[type] ||= []).push(fn)
+      },
+      removeEventListener(type, fn) {
+        listeners[type] = (listeners[type] || []).filter((f) => f !== fn)
+      },
+      fire(type) {
+        for (const fn of listeners[type] || []) fn()
+      },
+      count(type) {
+        return (listeners[type] || []).length
+      },
+    }
+    const root = {
+      attrs: {},
+      setAttribute(k, v) {
+        this.attrs[k] = v
+      },
+      removeAttribute(k) {
+        delete this.attrs[k]
+      },
+      style: {
+        props: {},
+        setProperty(k, v) {
+          this.props[k] = v
+        },
+        removeProperty(k) {
+          delete this.props[k]
+        },
+      },
+    }
+    globalThis.window.visualViewport = vv
+    globalThis.window.innerHeight = LAYOUT
+    globalThis.window.innerWidth = 375
+    globalThis.document.documentElement = root
+    return { vv, root }
+  }
+
+  it("a mounted sheet mirrors a 336px keyboard onto <html>, and destroy clears it", () => {
+    const { vv, root } = stubViewport()
+    const s = buildSheet()
+    s.hook.mounted()
+    expect(vv.count("resize")).toBe(1)
+    expect(root.attrs["data-keyboard-open"]).toBeUndefined()
+
+    vv.height = LAYOUT - KEYBOARD
+    vv.fire("resize")
+    expect(root.attrs["data-keyboard-open"]).toBe("")
+    expect(root.style.props["--keyboard-inset"]).toBe(`${KEYBOARD}px`)
+    expect(root.style.props["--visual-viewport-h"]).toBe(`${LAYOUT - KEYBOARD}px`)
+
+    s.hook.destroyed()
+    expect(root.attrs["data-keyboard-open"]).toBeUndefined()
+    expect(root.style.props["--keyboard-inset"]).toBeUndefined()
+    expect(root.style.props["--visual-viewport-h"]).toBeUndefined()
+    expect(vv.count("resize")).toBe(0)
+    expect(vv.count("scroll")).toBe(0)
+  })
+
+  it("two open sheets share the watcher: closing one keeps the other lifted", () => {
+    const { vv, root } = stubViewport()
+    const a = buildSheet()
+    const b = buildSheet()
+    a.hook.mounted()
+    b.hook.mounted()
+    vv.height = LAYOUT - KEYBOARD
+    vv.fire("resize")
+
+    a.hook.destroyed()
+    expect(root.attrs["data-keyboard-open"]).toBe("")
+    expect(root.style.props["--keyboard-inset"]).toBe(`${KEYBOARD}px`)
+
+    b.hook.destroyed()
+    expect(root.attrs["data-keyboard-open"]).toBeUndefined()
+  })
+})
