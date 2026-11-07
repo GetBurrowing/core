@@ -18,6 +18,10 @@ defmodule Platform.InstructionPacks.Outcomes do
 
   def snapshot do
     Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        "instruction_pack_install"
+      ])
+
       Repo.all(from(s in State, where: not is_nil(s.version), order_by: s.pack_id, limit: 51))
       |> Enum.map(fn state ->
         entries = Repo.all(from(e in Entry, where: e.pack_id == ^state.pack_id))
@@ -48,6 +52,7 @@ defmodule Platform.InstructionPacks.Outcomes do
     case Targets.resolve(entry.type, entry.target) do
       {:ok, target} ->
         entry.conflict != nil or entry.applied_hash == nil or
+          Targets.record_id(target) != entry.record_id or
           Entry.hash(Targets.content(target)) != entry.applied_hash
 
       _ ->
@@ -66,7 +71,7 @@ defmodule Platform.InstructionPacks.Outcomes do
   defp valid_row?(row) when is_map(row) do
     Enum.sort(Map.keys(row)) == Enum.sort(@keys) and
       is_binary(row["pack_id"]) and
-      Regex.match?(~r/\A[a-z0-9][a-z0-9._-]{0,99}\z/, row["pack_id"]) and
+      Regex.match?(~r/\A[a-z0-9][a-z0-9._-]{0,127}\z/, row["pack_id"]) and
       version?(row["selected_version"]) and
       is_list(row["effective_versions"]) and length(row["effective_versions"]) <= @max_versions and
       Enum.all?(row["effective_versions"], &version?/1) and
@@ -75,6 +80,6 @@ defmodule Platform.InstructionPacks.Outcomes do
   end
 
   defp valid_row?(_), do: false
-  defp version?(n), do: is_integer(n) and n > 0 and n <= 2_147_483_647
+  defp version?(n), do: is_integer(n) and n > 0 and n <= 9_223_372_036_854_775_807
 end
 
