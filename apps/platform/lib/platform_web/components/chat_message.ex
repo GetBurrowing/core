@@ -706,17 +706,15 @@ defmodule PlatformWeb.Components.ChatMessage do
                       field_id={"inline-thread-compose-#{@msg.id}"}
                     />
                     <%!-- The form value, written by ComposeInput on every
-                         edit. `type="text"` with `hidden` (not
-                         `type="hidden"`) for the reason the space composer's
-                         value input gives. --%>
-                    <input
-                      type="text"
+                         edit. A `hidden` `<textarea>`, so line breaks
+                         survive, for the reason the space composer's value
+                         input gives (task 01a1b671). --%>
+                    <textarea
                       name="inline_thread_compose[text]"
                       id={"inline-thread-compose-value-#{@msg.id}"}
-                      value=""
                       hidden
                       autocomplete="off"
-                    />
+                    ></textarea>
                     <div
                       id={"inline-thread-compose-#{@msg.id}"}
                       class="thread-input"

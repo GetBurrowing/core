@@ -734,23 +734,23 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                (`phx-update="ignore"`); ComposeInput serializes it to ADR
                0037 `@[Name]` text in the hidden `compose[text]` input on
                every edit, which is what `phx-change` and `phx-submit` read.
-               That input is `type="text"` with the `hidden` attribute, not
-               `type="hidden"`: it is equally invisible, unfocusable and
-               absent from the accessibility tree, and LiveViewTest's
-               `form/3` accepts a typed value for it, which it refuses for a
-               hidden input (one fixed value only). The explicit
+               That input is a `<textarea>` with the `hidden` attribute:
+               an `<input type="text">` strips line breaks from its value, so
+               every Return and Shift+Enter was lost at send (task 01a1b671).
+               Not `type="hidden"`: LiveViewTest's `form/3` refuses a typed
+               value for a hidden input (one fixed value only), and the
+               textarea is equally invisible, unfocusable and absent from
+               the accessibility tree. The explicit
                `tabindex="0"` is what lets `JS.focus/1` (Reply on an agent
                message, task 01a174f5 stage 2) take it: Chrome reports a
                contenteditable's `tabIndex` as -1, and LiveView's
                focusability check reads that property. --%>
-          <input
-            type="text"
+          <textarea
             name="compose[text]"
             id="compose_text_value"
-            value={Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}
             hidden
             autocomplete="off"
-          />
+          >{Phoenix.HTML.Form.normalize_value("textarea", @compose_form[:text].value)}</textarea>
           <div
             id={@compose_form[:text].id}
             class="compose-field"

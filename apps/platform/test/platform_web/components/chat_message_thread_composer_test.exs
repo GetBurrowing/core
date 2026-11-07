@@ -180,10 +180,10 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     assert attr_of(html, field, "data-value-input") == "inline-thread-compose-value-msg-1"
     assert count(html, "#{field}[data-clear-on-submit]") == 1
 
-    # The form value: a hidden text input named as the reply handler reads it.
-    value = "#{@form} input#inline-thread-compose-value-msg-1"
+    # The form value: a hidden textarea (keeps line breaks) named as the reply handler reads it.
+    value = "#{@form} textarea#inline-thread-compose-value-msg-1"
     assert attr_of(html, value, "name") == "inline_thread_compose[text]"
-    assert attr_of(html, value, "type") == "text"
+    assert count(html, "#{@form} input#inline-thread-compose-value-msg-1") == 0
     assert count(html, "#{value}[hidden]") == 1
 
     # The old plain text input is gone.
