@@ -75,6 +75,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
   alias Platform.Responsibilities.Providers.Tasks
+  alias Platform.Responsibilities.Providers.Ux
 
   @feature_providers %{
     "agents" => Agents,
@@ -89,7 +90,9 @@ defmodule Platform.Responsibilities.Providers do
     "janitor" => Janitor,
     "meetings" => Meetings,
     "memory" => Memory,
-    "tasks" => Tasks
+    "tasks" => Tasks,
+    # Task 01a1af00 stage 2: `ux.friction_watch` (designer bundle).
+    "ux" => Ux
   }
 
   @retired %{

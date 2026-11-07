@@ -4,11 +4,17 @@
        /inbox/briefing/:date (task 01a15ee1) it steps aside for the detail
        pane, which is then the whole phone screen with its "‹ Inbox" link.
        The wrapper is the flex item: the row below is a flex row. --%>
-  <div :if={@live_action not in [:briefing, :meeting_briefing]} class="min-w-0 flex-1 lg:hidden">
+  <div
+    :if={@live_action not in [:briefing, :meeting_briefing, :ux_decision]}
+    class="min-w-0 flex-1 lg:hidden"
+  >
     <PlatformWeb.Inbox.InboxList.inbox_list
       rows={@streams.inbox_rows}
-      row_count={clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count)}
+      row_count={
+        clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count, @ux_count)
+      }
       undo={@undo}
+      ux_rows={@ux_rows}
       mention_authors={@mention_authors}
       mention_space_labels={@mention_space_labels}
       source_titles={@source_titles}
@@ -39,7 +45,13 @@
              offers nothing to clear. --%>
         <button
           :if={
-            clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count) > 0
+            clearable_count(
+              @review_count,
+              @mention_count,
+              @meeting_count,
+              @briefing_count,
+              @ux_count
+            ) > 0
           }
           type="button"
           phx-click="clear_all"
@@ -50,7 +62,8 @@
             @review_count,
             @mention_count,
             @meeting_count,
-            @briefing_count
+            @briefing_count,
+            @ux_count
           )})
         </button>
       </header>
@@ -110,7 +123,7 @@
       <.empty_state
         :if={
           @review_count == 0 and @mention_count == 0 and @meeting_count == 0 and
-            @briefing_count == 0
+            @briefing_count == 0 and @ux_count == 0
         }
         variant={:minimal}
       >
@@ -130,8 +143,15 @@
       <p
         :if={
           @filter != "all" and
-            clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count) > 0 and
+            clearable_count(
+              @review_count,
+              @mention_count,
+              @meeting_count,
+              @briefing_count,
+              @ux_count
+            ) > 0 and
             filtered_count(@filter, %{
+              ux: @ux_count,
               briefing: @briefing_count,
               review: @review_count,
               mentions: @mention_count,
@@ -145,6 +165,24 @@
       </p>
 
       <div class="space-y-8">
+        <%!-- The UX role's questions (task 01a1af00 stage 3): one row per
+             question, the question as the title, above everything else. --%>
+        <ul
+          :if={@ux_count > 0 and shows?(@filter, :ux)}
+          id="inbox-ux-list"
+          role="list"
+          class="space-y-2"
+          phx-update="stream"
+          data-role="inbox-ux-decisions"
+        >
+          <.ux_decision_row
+            :for={{dom_id, row} <- @streams.ux_items}
+            id={dom_id}
+            row={row}
+            patch={row.url <> filter_query(@filter)}
+          />
+        </ul>
+
         <%!-- The daily briefing (task 01a15ee1 stage 4): above the sections,
              newest first, one row per day. --%>
         <ul
@@ -265,13 +303,13 @@
   <section
     class={[
       "min-w-0 flex-1 overflow-auto bg-base-200",
-      @live_action not in [:briefing, :meeting_briefing] && "max-lg:hidden"
+      @live_action not in [:briefing, :meeting_briefing, :ux_decision] && "max-lg:hidden"
     ]}
     data-role="inbox-detail-pane"
     aria-label="Inbox item"
   >
     <p
-      :if={is_nil(@briefing_detail) and is_nil(@meeting_detail_id)}
+      :if={is_nil(@briefing_detail) and is_nil(@meeting_detail_id) and is_nil(@ux_detail_id)}
       class="flex h-full items-center justify-center p-6 text-sm text-subtle"
       data-role="inbox-detail-empty"
     >
@@ -295,6 +333,24 @@
         meeting_id={@meeting_detail_id}
         user_id={@current_user_id}
         time_zone={@time_zone}
+      />
+    </div>
+
+    <%!-- The UX role's question (task 01a1af00 stage 3). The component loads
+         only through Decisions.get_for_recipient/2. --%>
+    <div :if={@ux_detail_id} class="mx-auto max-w-3xl p-6">
+      <.link
+        patch={"/inbox" <> filter_query(@filter)}
+        class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
+        data-role="inbox-detail-back"
+      >
+        ‹ Inbox
+      </.link>
+      <.live_component
+        module={PlatformWeb.InboxLive.UxDecisionComponent}
+        id={ux_decision_component_id(@ux_detail_id)}
+        finding_id={@ux_detail_id}
+        user_id={@current_user_id}
       />
     </div>
 
@@ -399,7 +455,7 @@
        toast has no Undo: those have no inverse. It clears the tab bar AND
        the home indicator on the phone. --%>
   <div
-    :if={@toast && @toast[:variant] in [:single, :briefing]}
+    :if={@toast && @toast[:variant] in [:single, :briefing, :ux]}
     id="inbox-toast"
     phx-hook="ToastPause"
     data-role="inbox-toast"
@@ -409,7 +465,7 @@
     aria-live="polite"
     class={[
       "fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm",
-      @toast[:variant] != :briefing && "max-lg:hidden"
+      @toast[:variant] not in [:briefing, :ux] && "max-lg:hidden"
     ]}
   >
     <div class="flex min-h-11 items-center gap-3 rounded-lg border border-edge bg-base-100 pl-4 pr-2 shadow-md">
@@ -429,7 +485,7 @@
   </div>
 
   <div
-    :if={@toast && @toast[:variant] not in [:single, :briefing]}
+    :if={@toast && @toast[:variant] not in [:single, :briefing, :ux]}
     data-role="inbox-toast"
     role="status"
     aria-live="polite"

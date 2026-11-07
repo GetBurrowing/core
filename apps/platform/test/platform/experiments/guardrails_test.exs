@@ -95,7 +95,9 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
                  "planner.stage_budget",
-                 "test.budget"
+                 "test.budget",
+                 # Task 01a1af00 stage 1: the UX friction surface, a dispatch path.
+                 "ux.friction_detection"
                ]
 
       assert Guardrails.default_allowed_surfaces() == rails.allowed_surfaces

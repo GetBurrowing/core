@@ -429,8 +429,14 @@ defmodule Platform.RepoLookupBoundaryTest do
      "emit/1 reads user_id from a valid Inbox.Item changeset, whose Ecto.UUID cast rejects malformed ids before Repo.get"},
     {"platform/inbox.ex", :get, "~schema", 1, :safe_internal,
      "resource_for/2 is called by emit/1 with source_id from a valid Inbox.Item Ecto.UUID changeset; its schema is one of Message, ReviewRequest or Meeting"},
-    {"platform/inbox.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "fetch_owned/2, the one owned-row lookup behind mark_read/2, mark_dismissed/2 and open_item/2 (task 01a11703), checks Platform.UUID.valid?/1 on both item_id and user_id before `where: i.id == ^item_id and i.user_id == ^user_id`. item_id arrives from InboxLive's client \"open\"/\"dismiss\" events, so a malformed id folds into the existing {:error, :not_found} instead of raising Ecto.Query.CastError"},
+    {"platform/inbox.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "2 -> 3 for task 01a1af00 stage 3: resource_for(\"ux_finding\", id) guards its Repo.get on the id. fetch_owned/2, the one owned-row lookup behind mark_read/2, mark_dismissed/2 and open_item/2 (task 01a11703), checks Platform.UUID.valid?/1 on both item_id and user_id before `where: i.id == ^item_id and i.user_id == ^user_id`. item_id arrives from InboxLive's client \"open\"/\"dismiss\" events, so a malformed id folds into the existing {:error, :not_found} instead of raising Ecto.Query.CastError"},
+    {"platform/inbox.ex", :get, "Platform.Ux.Finding", 1, :safe_internal,
+     "task 01a1af00 stage 3: resource_for(\"ux_finding\", id) checks Platform.UUID.valid?/1 on the id before Repo.get; its caller emit/1 passes source_id from a valid Inbox.Item Ecto.UUID changeset as well"},
+    {"platform/ux/digest.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a1af00 stage 4: digest_space/1 checks Platform.UUID.valid?/1 on the agent's metadata[\"ux_digest_space_id\"] (an admin-edited string) before Chat.get_agent_participant/2, and org_scope/2 checks the trigger meta's org_id before `where: f.org_id == ^org_id`, so a malformed value is {:skipped, :no_digest_space} / no org filter, never Ecto.Query.CastError"},
+    {"platform/ux/decisions.ex", :platform_uuid_guard, "-", 10, :safe_internal,
+     "task 01a1af00 stage 3: every lookup in Platform.Ux.Decisions that pins an id arriving from a LiveView param (/inbox/ux/:finding_id), a click payload or a finding's citation/mockup strings goes through Platform.UUID.valid?/1 first (get_for_recipient/2, list_for_recipient/2, lock_for_recipient/2, inbox_row_stale?/1, parse_citation/1, mockup_src/1), so a malformed id is nil / not_found / dropped instead of Ecto.Query.CastError"},
     # ── Lifecycle ──────────────────────────────────────────────────────
     {"platform/lifecycle/executor.ex", :get, "TaskSchema", 1, :safe_internal,
      "task 019fe1b6 stage 4 — `maybe_notify/3` loads the task to read `sponsor_user_id` before emitting a `lifecycle_step_failed` inbox row. The id is `run.task_id`, read off a `%StepRun{}` this function just loaded from `lifecycle_step_runs`, so it is a persisted column value constrained by a NOT NULL FK to `tasks`; it cannot be malformed without the FK having admitted a malformed row. Note the module deliberately calls `Repo.get/2` and NOT `Platform.Tasks.get_task/1` — that name belongs to the artifacts-summary reader and returns `{:ok, %Detail{}} | {:error, :not_found}`, a different concept that compiles fine here and fails at the field access"},
@@ -1457,6 +1463,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `i.user_id` and `i.source_id` to a loaded `%Briefing{}` row's `user_id`
     # and `id` (uuid column values), so no boundary value reaches it.
     "platform/inbox.ex" => 3,
+    # Task 01a1af00 stage 3: `get_for_recipient/2` and `lock_for_recipient/2`
+    # pin `f.id` and `f.recipient_user_id`, both behind Platform.UUID.valid?/1
+    # guards (the finding id is a LiveView path param), so a malformed value
+    # is nil, never a cast error.
+    "platform/ux/decisions.ex" => 2,
+    # Task 01a1af00 stage 4: `Platform.Ux.Digest.decision_count/3` pins only
+    # `f.org_id`, behind the Platform.UUID.valid?/1 guard in `org_scope/2`,
+    # and two DateTimes.
+    "platform/ux/digest.ex" => 1,
     # Task 019fe1b6 stage 1 — `Runs.next_run_seq/2` and `Runs.run_count/2`.
     # Triaged by hand as this map asks: both `where:` clauses pin
     # `r.task_id == ^task_id` against a `:binary_id` column, so a malformed

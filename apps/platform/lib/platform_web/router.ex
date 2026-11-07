@@ -546,6 +546,12 @@ defmodule PlatformWeb.Router do
       # Dev stand-in agent host (task 01a10315 stage 4, BURROW_FAKE_AGENT_HOST=1):
       # POST /dev/fake-agent-host/<agent_id>/complete finishes a fake Codex login.
       forward("/fake-agent-host", Dev.FakeAgentHost)
+
+      # Walkable UX role on an empty dev DB (task 01a1af00 stage 4): seed a
+      # friction chat, fire ux.friction_watch, read back what it filed.
+      post("/ux_fixture/seed", DevUxFixtureController, :seed)
+      post("/ux_fixture/fire", DevUxFixtureController, :fire)
+      get("/ux_fixture/status", DevUxFixtureController, :status)
     end
   end
 
@@ -949,6 +955,7 @@ defmodule PlatformWeb.Router do
       # The day's briefing, opened from its Inbox row (task 01a15ee1 stage 4).
       live("/inbox/briefing/:date", InboxLive, :briefing)
       live("/inbox/meeting/:meeting_id", InboxLive, :meeting_briefing)
+      live("/inbox/ux/:finding_id", InboxLive, :ux_decision)
       live("/tasks", TasksLive, :index)
       # Keep the static module-admin route above the task-id catch-all.
       live("/tasks/pipeline", PipelineLive, :index)

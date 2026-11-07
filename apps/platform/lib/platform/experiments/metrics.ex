@@ -135,6 +135,16 @@ defmodule Platform.Experiments.Metrics do
           "(accepted / (accepted + rejected + flagged)), over a variant's dreaming runs.",
       direction: :higher_is_better
     },
+    # Task 01a1af00 stage 1, for the `ux.friction_detection` surface.
+    # Counts workspace subjects' resolved UX decisions, per variant (stage 4).
+    "ux_finding_keep_rate" => %{
+      module: Platform.Experiments.Metrics.UxFindingKeepRate,
+      label: "UX finding keep rate",
+      description:
+        "Share of UX decisions a human kept (Build it, Try the other option) rather than " <>
+          "dismissed (Not now, or the Inbox row dismissed), over a variant's workspaces.",
+      direction: :higher_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

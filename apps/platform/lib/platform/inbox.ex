@@ -95,7 +95,11 @@ defmodule Platform.Inbox do
   # reason: opening a meeting's after-action briefing is reading it. It is
   # NOT in `@action_kinds` — it is not an approval and Mobile cannot act on
   # it.
-  @listed_on_open ~w(briefing meeting_briefing)
+  # `ux_decision` (task 01a1af00 stage 3) is listed on open too: opening the
+  # question is reading it, and the row stays until it is answered
+  # (`Platform.Ux.Decisions.answer/4` dismisses it) or dismissed. NOT an
+  # approval, so never in `@action_kinds`.
+  @listed_on_open ~w(briefing meeting_briefing ux_decision)
 
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
@@ -177,6 +181,20 @@ defmodule Platform.Inbox do
   def resource_for("task_review", id), do: {:task, id}
   def resource_for("review_request", id), do: resource_id(ReviewRequest, id, :task_id, :task)
   def resource_for("meeting", id), do: resource_id(Meeting, id, :chat_space_id, :space)
+
+  # A UX finding linked to a task is guarded by that task's read permission;
+  # an unlinked finding has no resource (its recipient is the only reader,
+  # enforced by `Platform.Ux.Decisions`' owner-scoped reads).
+  def resource_for("ux_finding", id) do
+    with true <- Platform.UUID.valid?(id),
+         %Platform.Ux.Finding{task_id: task_id} when is_binary(task_id) <-
+           Repo.get(Platform.Ux.Finding, id) do
+      {:task, task_id}
+    else
+      _ -> nil
+    end
+  end
+
   def resource_for(_, _), do: nil
 
   defp resource_id(schema, id, field, type) do
@@ -1410,6 +1428,11 @@ defmodule Platform.Inbox do
          source_id: briefing_id
        }) do
     Platform.Meetings.MeetingBriefings.inbox_row_stale?(briefing_id)
+  end
+
+  # Task 01a1af00 stage 3: a UX question answered or dismissed elsewhere.
+  defp row_stale?(%Item{kind: "ux_decision", source_type: "ux_finding", source_id: finding_id}) do
+    Platform.Ux.Decisions.inbox_row_stale?(finding_id)
   end
 
   # DELIBERATE DECISION — do not add a `task_sponsor_assigned` clause without

@@ -623,6 +623,9 @@ defmodule Platform.Responsibilities do
       `Platform.Responsibilities.Router.dispatch_native/6`); there was
       nothing to do, so the native hand-off was skipped entirely.
     * `{:ok, :unknown_responsibility}` — no row is seeded for the key.
+    * `{:ok, :handled}` — an assignee was resolved and the provider did
+      the whole job server-side in `gather_context/2` (today only
+      `ux.friction_watch`); nothing was dispatched.
     * `{:error, term}` — an assignee existed and the dispatch failed.
 
   The three middle values are progressive-enhancement states, NOT
@@ -655,6 +658,8 @@ defmodule Platform.Responsibilities do
   `failed` are never conflated:
 
       iex> Platform.Responsibilities.outcome({:ok, :dispatched})
+      :complete
+      iex> Platform.Responsibilities.outcome({:ok, :handled})
       :complete
       iex> Platform.Responsibilities.outcome({:ok, :unfilled})
       :not_applicable
@@ -692,6 +697,9 @@ defmodule Platform.Responsibilities do
   """
   @spec outcome(term()) :: :complete | :not_applicable | :failed
   def outcome({:ok, :dispatched}), do: :complete
+  # The provider did the whole job server-side (`{:handled, _}` from
+  # `gather_context/2`, task 01a1af00 stage 2): the step completed.
+  def outcome({:ok, :handled}), do: :complete
   def outcome({:ok, :unfilled}), do: :not_applicable
   # A declared-inert row (`metadata["dispatch"] == "inert"`) never
   # reached a dispatch, so the step did not fail — there was nothing

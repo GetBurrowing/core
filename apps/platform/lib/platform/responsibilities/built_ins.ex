@@ -81,7 +81,10 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.JanitorCronDrain,
       # Task 01a1aa47 stage 4: HR, the people-profile curator. Two keys in the
       # historian bundle; an input to dreaming, never a gate on it.
-      Handlers.Hr
+      Handlers.Hr,
+      # Task 01a1af00 stage 2: the UX friction watch, one key in the designer
+      # bundle. Runs server-side with a tool-less model call; never edits code.
+      Handlers.UxFrictionWatch
     ]
   end
 end

@@ -256,7 +256,9 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "meetings.brief_synthesis",
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
-                 "planner.stage_budget"
+                 "planner.stage_budget",
+                 # Task 01a1af00 stage 1: the UX friction surface.
+                 "ux.friction_detection"
                ]
     end
 

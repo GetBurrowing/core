@@ -1073,10 +1073,24 @@ defmodule Platform.InboxTest do
                "task_plan_review",
                "review_request_pending",
                "briefing",
-               "meeting_briefing"
+               "meeting_briefing",
+               # Task 01a1af00 stage 3: opening the UX question is reading
+               # it; it stays listed until answered.
+               "ux_decision"
              ]
 
       assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
+    end
+
+    # Task 01a1af00 stage 4: `ux_decision` is in `action_kinds/0` only
+    # through `@listed_on_open`. It is not an approval, so it stays out of
+    # `core_action_kinds/0` and Mobile's approval set
+    # (`test/platform/mobile/app_entities_test.exs` pins that set).
+    test "ux_decision is listed on open but is not a core (Mobile approval) action kind" do
+      assert "ux_decision" in Inbox.action_kinds()
+      refute "ux_decision" in Inbox.core_action_kinds()
+      refute "ux_decision" in Platform.Mobile.AppEntities.approval_kinds()
+      assert Inbox.core_action_kinds() == ~w(task_plan_review review_request_pending)
     end
 
     # Task 01a15ee1 stage 1: a briefing stays listed when opened, but it is

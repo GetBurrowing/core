@@ -115,7 +115,9 @@ defmodule Platform.Roles.CoverageTest do
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
-               "meetings.visual_adjust"
+               "meetings.visual_adjust",
+               # Task 01a1af00 stage 2: the UX friction watch.
+               "ux.friction_watch"
              ]
 
       # This used to be `Enum.all?(bundle, &String.starts_with?(&1, "design."))`
@@ -139,8 +141,15 @@ defmodule Platform.Roles.CoverageTest do
       assert designer_intent_keys != [],
              "no designer-owned routing rows — the check below would pass vacuously"
 
+      # Task 01a1af00 stage 2: the one other named exception. `ux.friction_watch`
+      # is the designer's UX job (the namespace records the product area, the
+      # bundle records who does it). Named exactly, never a `ux.` prefix rule,
+      # for the same reason as above.
+      named_exceptions = ["ux.friction_watch"]
+
       for key <- bundle do
-        assert String.starts_with?(key, "design.") or key in designer_intent_keys,
+        assert String.starts_with?(key, "design.") or key in designer_intent_keys or
+                 key in named_exceptions,
                "designer bundle key #{inspect(key)} is neither design-namespaced nor a " <>
                  "mid-meeting intent IntentRouting assigns to the designer"
       end
@@ -288,11 +297,13 @@ defmodule Platform.Roles.CoverageTest do
                  "design.spec_writer",
                  "design.task_direction",
                  "meetings.interaction_design",
-                 "meetings.visual_adjust"
+                 "meetings.visual_adjust",
+                 "ux.friction_watch"
                ]
 
-      # All overridden → empty. Six keys since the 2026-07-31 intent
-      # keys (four before that, since ADR-0046 stack member 7). Every
+      # All overridden → empty. Seven keys since task 01a1af00 stage 2 added
+      # `ux.friction_watch`; six since the 2026-07-31 intent keys (four
+      # before that, since ADR-0046 stack member 7). Every
       # key has to be listed here for the "all" case to mean "all" —
       # missing one would leave a non-empty remainder and redden the
       # assertion below, which is why this list is spelled out rather
@@ -303,6 +314,7 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 

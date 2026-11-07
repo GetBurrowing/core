@@ -3436,6 +3436,62 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Human-authored, digest-eligible messages in `[window_start, window_end)`,
+  restricted to `space_ids`. Task 01a1af00 stage 2 (the `ux.friction_watch`
+  responsibility).
+
+  This is `digest_eligible_messages_query/1` (so the same kinds, content
+  types, archive rule and `:scope` partition the Historian digest uses;
+  default `:internal`, which omits external and mixed spaces) INTERSECTED
+  with the caller's space ids. A space must pass both: being in `space_ids`
+  does not let an external or mixed space through, and being internal does
+  not let a space outside `space_ids` through. An empty `space_ids` returns
+  `[]` without querying.
+
+  Agent-authored rows are excluded: the friction watch reads what people
+  said, not what agents said back. Returns maps of
+  `%{id, space_id, content, inserted_at, author_display_name, author_user_id}`,
+  oldest first, at most `:limit` (default 500).
+  """
+  @spec list_human_digest_messages_in_spaces([binary()], DateTime.t(), DateTime.t(), keyword()) ::
+          [map()]
+  def list_human_digest_messages_in_spaces(space_ids, window_start, window_end, opts \\ [])
+
+  def list_human_digest_messages_in_spaces([], _window_start, _window_end, _opts), do: []
+
+  def list_human_digest_messages_in_spaces(
+        space_ids,
+        %DateTime{} = window_start,
+        %DateTime{} = window_end,
+        opts
+      )
+      when is_list(space_ids) do
+    limit = Keyword.get(opts, :limit, 500)
+
+    opts
+    |> Keyword.take([:scope, :include_kinds, :content_types])
+    |> digest_eligible_messages_query()
+    |> where([m, s], s.id in ^space_ids)
+    |> where([m], m.inserted_at >= ^window_start and m.inserted_at < ^window_end)
+    |> where(
+      [m],
+      is_nil(m.author_agent_id) and
+        (is_nil(m.author_participant_type) or m.author_participant_type != "agent")
+    )
+    |> order_by([m], asc: m.inserted_at, asc: m.id)
+    |> limit(^limit)
+    |> select([m, s], %{
+      id: m.id,
+      space_id: m.space_id,
+      content: m.content,
+      inserted_at: m.inserted_at,
+      author_display_name: m.author_display_name,
+      author_user_id: m.author_user_id
+    })
+    |> Repo.all()
+  end
+
   # ── External-space digest partition (stack member 12, rbac-external-users) ──
   #
   # The Historian's activity digest partitions message/transcript selection
