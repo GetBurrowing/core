@@ -2423,7 +2423,11 @@ defmodule Platform.Chat do
   conversation the user just heard never shows as unread: because the cursor
   lands before the broadcast, a shell that recomputes its badge on
   `{:new_message, _}` already sees it read. A single watermark cannot skip a
-  row, so an older unread message in the same space is marked read with it.
+  row, so the cursor moves ONLY when every row it would pass that counts as
+  unread for that participant (top-level, not deleted, authored by someone
+  else) is itself a voice record (metadata `"source" => "voice"`). If an older
+  unread typed message sits in between, the cursor stays put and that message
+  keeps its badge.
   """
   @spec post_message(map(), keyword()) ::
           {:ok, Message.t()}
@@ -2476,12 +2480,28 @@ defmodule Platform.Chat do
   end
 
   # `post_message/2`'s `:mark_read_for`: forward-only, scoped to the message's
-  # own space so a participant id from another space moves nothing.
+  # own space so a participant id from another space moves nothing, and held
+  # back when the rows it would pass include an unread non-voice message (the
+  # same rows `count_unread/3` counts), so that message's badge survives.
   defp mark_read_on_post(%Message{} = msg, participant_pk) when is_binary(participant_pk) do
+    passed_non_voice =
+      from(m in Message,
+        where: m.space_id == ^msg.space_id and m.id < ^msg.id,
+        where: is_nil(m.thread_id) and is_nil(m.deleted_at),
+        where: m.participant_id != parent_as(:p).id,
+        where:
+          is_nil(parent_as(:p).last_read_message_id) or
+            m.id > parent_as(:p).last_read_message_id,
+        where: fragment("coalesce(?->>'source', '') <> 'voice'", m.metadata),
+        select: 1
+      )
+
     {_count, _} =
       from(p in Participant,
+        as: :p,
         where: p.id == ^participant_pk and p.space_id == ^msg.space_id,
-        where: is_nil(p.last_read_message_id) or p.last_read_message_id < ^msg.id
+        where: is_nil(p.last_read_message_id) or p.last_read_message_id < ^msg.id,
+        where: not exists(passed_non_voice)
       )
       |> Repo.update_all(set: [last_read_message_id: msg.id])
 

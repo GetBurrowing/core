@@ -697,6 +697,39 @@ defmodule Platform.Meetings.VoiceSessionTest do
       assert Map.get(Chat.unread_counts_for_user(user.id), session.space_id, 0) == before
     end
 
+    test "an unread typed agent reply before a voice turn keeps its badge" do
+      user = user!()
+      {session, _agent} = started!(user)
+
+      {:ok, _typed} =
+        Chat.post_message(%{
+          space_id: session.space_id,
+          participant_id: session.agent_participant_id,
+          content_type: "text",
+          content: "a typed reply nobody has read"
+        })
+
+      assert Map.get(Chat.unread_counts_for_user(user.id), session.space_id) == 1
+
+      _ = turn!(session, user, :me, "a spoken question")
+
+      # The typed reply is still unread. The cursor did not jump over it, so
+      # the user's own voice turn adds nothing (it is their own row).
+      assert Map.get(Chat.unread_counts_for_user(user.id), session.space_id) == 1
+    end
+
+    test "with only voice rows past the cursor, the cursor still advances" do
+      user = user!()
+      {session, _agent} = started!(user)
+
+      session
+      |> turn!(user, :me, "q1")
+      |> turn!(user, :agent, "a1")
+      |> turn!(user, :agent, "a2")
+
+      assert Map.get(Chat.unread_counts_for_user(user.id), session.space_id, 0) == 0
+    end
+
     test "a voice row naming the user creates no inbox row; the same plain post does" do
       user = user!()
       {session, _agent} = started!(user)
