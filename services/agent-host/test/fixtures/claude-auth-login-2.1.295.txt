@@ -1,0 +1,104 @@
+# Claude Code 2.1.295 `claude auth login`, measured 2026-11-07 (task 01a1b365 stage 1).
+# Throwaway node:22 container (docker, image sha256:7702d8aa4d59), npm i -g @anthropic-ai/claude-code@2.1.295,
+# fresh HOME, no account, NO login completed. Codes typed were made up; every one was refused.
+# The authorize URL's state and code_challenge are replaced with [redacted]; nothing else is edited.
+# Script: (1) --help, (2) status on a fresh HOME, (3) a plain pipe (no tty) on stdin and stdout,
+# (4) a tmux pty, (5) more pipe cases. Lines between ==== markers are the CLI's own output.
+
+=== claude --version
+2.1.295 (Claude Code)
+=== claude auth login --help
+Usage: claude auth login [options]
+
+Sign in to your Anthropic account
+
+Options:
+  --claudeai       Use Claude subscription (default)
+  --console        Use Anthropic Console (API usage billing) instead of Claude
+                   subscription
+  --email <email>  Pre-populate email address on the login page
+  -h, --help       Display help for command
+  --sso            Force SSO login flow
+=== claude auth status --json (fresh)
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/freshhome/.claude/projects",
+  "configDirectory": "/tmp/freshhome/.claude"
+}
+exit=1
+=== PIPE: non-tty stdout+stdin, stdin held open 8s then a bogus code
+exit=124
+Opening browser to sign inM-bM-^@M-&$
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > Invalid code. Please make sure the full code was copied.$
+=== PTY: tmux session
+--- pane after start (1s)
+Opening browser to sign in…
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > 
+
+--- deliver bogus code via load-buffer stdin + paste-buffer -d + Enter
+--- pane after code
+Opening browser to sign in…
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > Login failed: Request failed with status code 400
+EXITED:1
+
+=== status after
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/freshhome/.claude/projects",
+  "configDirectory": "/tmp/freshhome/.claude"
+}
+exit=1
+=== claude auth logout (not logged in)
+Successfully logged out from your Anthropic account.
+exit=0
+
+=== PIPE 2: stdin pipe, a code shaped code#state after 6s
+exit=1
+Opening browser to sign inM-bM-^@M-&$
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > Login failed: Request failed with status code 400$
+=== PIPE 3: malformed code then a code#state on the same stdin
+exit=1
+Opening browser to sign inM-bM-^@M-&$
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > Invalid code. Please make sure the full code was copied.$
+Login failed: Request failed with status code 400$
+=== PIPE 4: stdin closed immediately (EOF)
+exit=124
+Opening browser to sign inM-bM-^@M-&$
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=[redacted]&code_challenge_method=S256&state=[redacted]
+Paste code here if prompted > === PIPE 5: SIGTERM while waiting
+exit=143
+=== status json keys
+exit=1
+=== ANTHROPIC_API_KEY set: status
+{
+  "loggedIn": true,
+  "authMethod": "api_key",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/freshhome/.claude/projects",
+  "configDirectory": "/tmp/freshhome/.claude",
+  "apiKeySource": "ANTHROPIC_API_KEY"
+}
+exit=0
+
+# What this shows:
+#  - No device-code or polling flag for claude.ai: login prints a claude.com authorize URL (PKCE: S256
+#    challenge, state) and waits at "Paste code here if prompted >". The code is bound to that process.
+#  - A PLAIN PIPE WORKS: with no tty on stdin or stdout the CLI still prints the URL and reads the code
+#    from stdin. A code shaped <code>#<state> is sent to the token endpoint (a made-up one gets
+#    "Login failed: Request failed with status code 400", exit 1). A line without '#' gets
+#    "Invalid code. Please make sure the full code was copied." and the CLI keeps waiting for another line.
+#  - EOF on stdin does not end it (still waiting at the 15 s timeout); SIGTERM does (exit 143).
+#  - `claude auth status --json` exits 1 with loggedIn false when not logged in, and an ANTHROPIC_API_KEY
+#    in the env reads as loggedIn true, authMethod "api_key": the login child's env must not carry one.

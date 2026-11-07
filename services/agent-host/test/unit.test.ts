@@ -511,11 +511,17 @@ describe("no path from Burrow into an agent's pane", () => {
     }
   });
 
-  test("the commands core can send are exactly start, restart, stop, logs, pane, file_read, check_auth, env_names and admin", () => {
+  // Task 01a1b365 added the three Claude login commands. None reaches a pane:
+  // claude_login.ts writes the code to its own `claude auth login` child's
+  // stdin (test/claude_login.test.ts pins that it names no tmux at all).
+  test("the commands core can send are exactly start, restart, stop, logs, pane, file_read, check_auth, the three claude login commands, env_names and admin", () => {
     const main = readFileSync(resolve(src, "main.ts"), "utf8");
     const events = [...main.matchAll(/channel\.on\("([^"]+)"/g)].map((m) => m[1]).sort();
     expect(events).toEqual([
       "agent.check_auth",
+      "agent.claude_login_code",
+      "agent.claude_login_start",
+      "agent.claude_logout",
       "agent.file_read",
       "agent.logs",
       "agent.pane",

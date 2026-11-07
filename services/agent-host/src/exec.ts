@@ -29,6 +29,10 @@ export class SecretRegistry {
   add(value: string): void {
     if (value !== "") this.held.add(value);
   }
+  /** Forget a value held only for one operation (claude_login.ts: a pasted code, once its submit ends). */
+  remove(value: string): void {
+    this.held.delete(value);
+  }
   values(): string[] {
     return [...this.held];
   }

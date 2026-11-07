@@ -5,13 +5,16 @@ defmodule PlatformWeb.AgentHostChannel do
 
   Events from the host are handed to `Platform.AgentHost.Reconciler`.
   Commands from core arrive as `{:agent_host_push, event, payload}` messages
-  and are pushed down unchanged. Payloads that carry a runtime token are never
-  logged here.
+  and are pushed down unchanged, except that a `Platform.AgentHost.LoginCode`
+  is unwrapped here, as the push is serialised, and nowhere earlier (task
+  01a1b365). Payloads that carry a runtime token or a login code are never
+  logged here, and incoming events are not logged at all (`log_handle_in:
+  false`): the `agent.claude_login` reply carries the sign-in URL.
   """
-  use Phoenix.Channel
+  use Phoenix.Channel, log_handle_in: false
 
   alias Platform.AgentHost
-  alias Platform.AgentHost.Reconciler
+  alias Platform.AgentHost.{LoginCode, Reconciler}
 
   @impl true
   def join("agent_host:control", payload, socket) do
@@ -96,6 +99,22 @@ defmodule PlatformWeb.AgentHostChannel do
     {:reply, :ok, socket}
   end
 
+  # The answer to `agent.claude_login_start` / `_code` / `agent.claude_logout`
+  # (task 01a1b365). It never carries the code. Only the known results pass,
+  # the URL only on a start and only on Anthropic's sign-in hosts, account and
+  # plan only on an `ok`. Broadcast on the ref's own reply topic, which only
+  # the caller waiting on that ref subscribes to; never on the status topic.
+  def handle_in("agent.claude_login", %{"ref" => ref, "result" => result} = payload, socket)
+      when is_binary(ref) and is_binary(result) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      AgentHost.reply_topic(ref),
+      {:agent_host_claude_login, ref, claude_login_reply(result, payload)}
+    )
+
+    {:reply, :ok, socket}
+  end
+
   # The answer to `host.env_names` / `host.admin` (task 01a17b10 stage 3).
   # Env names only; never logged here.
   def handle_in("host.reply", %{"ref" => ref, "result" => result}, socket)
@@ -113,11 +132,54 @@ defmodule PlatformWeb.AgentHostChannel do
 
   @impl true
   def handle_info({:agent_host_push, event, payload}, socket) do
-    push(socket, event, payload)
+    push(socket, event, unwrap_login_code(payload))
     {:noreply, socket}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # The one place a login code becomes a string again: the push to the host.
+  defp unwrap_login_code(%{"code" => %LoginCode{} = code} = payload),
+    do: %{payload | "code" => LoginCode.reveal(code)}
+
+  defp unwrap_login_code(payload), do: payload
+
+  @login_results ~w(ok bad_code no_subscription no_session failed)
+
+  @doc false
+  # The sanitised `agent.claude_login` reply. Public for the stand-in hosts.
+  def claude_login_reply("url", %{"url" => url}) when is_binary(url) do
+    if anthropic_sign_in_url?(url),
+      do: %{"result" => "url", "url" => url},
+      else: %{"result" => "failed"}
+  end
+
+  def claude_login_reply("ok", %{"account" => account, "plan" => plan})
+      when is_binary(account) and is_binary(plan) do
+    %{
+      "result" => "ok",
+      "account" => String.slice(account, 0, 320),
+      "plan" => String.slice(plan, 0, 32)
+    }
+  end
+
+  # A logout's `ok`, or a login's `ok` without its account (which
+  # `AgentHost.claude_login_submit/4` then reads as `failed`).
+  def claude_login_reply(result, _payload) when result in @login_results,
+    do: %{"result" => result}
+
+  def claude_login_reply(_result, _payload), do: %{"result" => "failed"}
+
+  # The host sends only claude.com / claude.ai https URLs (claude_login.ts
+  # LOGIN_URL); anything else is dropped here too.
+  defp anthropic_sign_in_url?(url) do
+    byte_size(url) <= 4096 and
+      match?(
+        %URI{scheme: "https", host: host, userinfo: nil, port: 443}
+        when host in ["claude.com", "claude.ai"],
+        URI.parse(url)
+      )
+  end
 
   @restart_outcomes ~w(ready needs_login gone timeout)
   defp restart_outcome(o) when o in @restart_outcomes, do: o

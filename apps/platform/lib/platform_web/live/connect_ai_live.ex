@@ -6,27 +6,45 @@ defmodule PlatformWeb.ConnectAiLive do
 
   The owner picks the subscription their agent uses, and the screen connects
   ONE native agent named Burrow (`Platform.Agents.Burrow`) with it, on the
-  provider chosen here (task 01a19505):
+  provider chosen here (task 01a19505). Both subscriptions are one card of two
+  numbered steps (task 01a1b365; design canvas
+  01a1b366-20c1-7000-955d-92234ae5dc57):
 
     * **ChatGPT (Codex)**: Codex's own device login. Step 1 opens OpenAI's
       sign-in page in a new tab; step 2 shows the one-time code the agent host
       read from `codex login --device-auth` (`NativeLogin.login_view/1`). The
       screen subscribes to agent-host state, so it turns to "connected" by
       itself: the person never comes back to press a button.
-    * **API key**: an Anthropic API key, saved through
+    * **Claude Pro or Max**: the owner's own Claude sign-in, for their own
+      agent on this install. Choosing it starts the agent's own `claude auth
+      login` on the agent host (`AgentHost.claude_login_start/3`), so step 1
+      is one click on a plain link to Anthropic's page, in a new tab. Step 2
+      takes the code that page shows: a `phx-submit`-only form (no keystroke
+      reaches the server) whose masked field never has a `value`. The `code`
+      param (filtered from logs by `:filter_parameters`) is wrapped in a
+      `Platform.AgentHost.LoginCode` at once and never assigned, the field is
+      cleared in the browser (`ConnectAiCode` hook), and
+      `AgentHost.claude_login_submit/4` hands it to the pending login.
+      The pending login is bound to the process that started it, so start and
+      submit both run in this view's own process, each after the screen has
+      rendered its "waiting" line (`send(self(), ...)`). Every submit ends the
+      pending login, so a failure fetches a fresh sign-in link. An agent with
+      a saved API key stays on the key (`NativeLogin.login_view/2` answers
+      `:api_key`).
+    * **API key**: not one of the choices; a quiet "Have an API key instead?"
+      link under them shows the form. An Anthropic API key is saved through
       `Platform.Agents.NativeLogin.put_api_key/3` exactly as the agent's
       Control Center pane does. The field has no `value` and the key never
       enters an assign; `api_key_shape/1` refuses anything else.
-    * **Claude Pro or Max**: needs a terminal today. Burrow never relays a
-      Claude login (task 01a17b10): the panel recommends ChatGPT or an API key
-      and shows, collapsed, the terminal steps on the server. There is no
-      input in that panel and no event that takes a Claude code.
 
   No provider page is ever framed (no iframe anywhere); sign-in opens in a new
-  tab (`target="_blank" rel="noopener noreferrer"`).
+  tab (`target="_blank" rel="noopener noreferrer"`). An event this page does
+  not handle is refused, and only its name is logged.
 
   The option order is `config :platform, PlatformWeb.ConnectAiLive,
-  provider_order:` (the experiment surface; default ChatGPT first).
+  provider_order:` (the experiment surface; default ChatGPT first). An
+  `:api_key` entry is accepted and ignored for the choices.
+  `claude_login_timeout_ms:` there shortens the waits on the agent host.
 
   When the agent is first seen running,
   `Burrow.GettingStarted.ensure_getting_started/2`
@@ -38,16 +56,21 @@ defmodule PlatformWeb.ConnectAiLive do
   The route sits in the `:admin` live_session (`ModuleGate` maps this view to
   the `:admin` module), and the mount re-checks `Tenancy.root_admin?/1`, as
   the first user of a new install is (the bootstrap-admin fallback in
-  `Platform.Tenancy`).
+  `Platform.Tenancy`). `AgentHost` checks `NativeAgents.can_manage?/2` again
+  on every Claude login call.
   """
   use PlatformWeb, :live_view
 
+  require Logger
+
   alias Platform.AgentHost
+  alias Platform.AgentHost.LoginCode
   alias Platform.Agents.{Burrow, NativeLogin}
   alias Platform.Agents.Burrow.GettingStarted
   alias Platform.Tenancy
 
   @default_order [:codex, :api_key, :claude_subscription]
+  @choices [:codex, :claude_subscription]
   @device_url "https://auth.openai.com/codex/device"
 
   @labels %{
@@ -55,6 +78,12 @@ defmodule PlatformWeb.ConnectAiLive do
     api_key: "API key",
     claude_subscription: "Claude Pro or Max"
   }
+
+  # The Claude card's state. `link`: :idle (no sign-in link asked for yet),
+  # :loading, :ready or :unavailable. `status`: :idle, :connecting,
+  # {:failed, :bad_code | :no_subscription | :server} or :connected. `login`
+  # is a submit's `%{account, plan}`. Never the code.
+  @claude_idle %{url: nil, link: :idle, opened?: false, status: :idle, login: nil}
 
   @doc "The configured option order, unknown entries dropped, missing ones appended."
   @spec provider_order() :: [atom()]
@@ -69,6 +98,10 @@ defmodule PlatformWeb.ConnectAiLive do
     configured ++ (@default_order -- configured)
   end
 
+  @doc "The subscriptions offered as choices, in `provider_order/0`: never `:api_key`."
+  @spec choices() :: [atom()]
+  def choices, do: Enum.filter(provider_order(), &(&1 in @choices))
+
   @doc "An option's label."
   def label(option), do: Map.fetch!(@labels, option)
 
@@ -77,7 +110,7 @@ defmodule PlatformWeb.ConnectAiLive do
     user = socket.assigns[:current_user_record]
 
     if Tenancy.root_admin?(user) do
-      order = provider_order()
+      order = choices()
       agent = Burrow.get()
       if connected?(socket), do: AgentHost.subscribe()
 
@@ -89,6 +122,7 @@ defmodule PlatformWeb.ConnectAiLive do
         |> assign(:agent, agent)
         |> assign(:key_error, nil)
         |> assign(:key_saved?, false)
+        |> assign(:claude, @claude_idle)
         |> assign(:space, nil)
         |> assign(:passkey_url, passkey_url(session))
         |> refresh()
@@ -119,21 +153,30 @@ defmodule PlatformWeb.ConnectAiLive do
   def passkey_url(_session), do: nil
 
   # An existing Burrow agent decides the option shown first; otherwise the
-  # first configured option.
+  # first choice. A Claude Code agent with a saved key shows the key, which
+  # wins over a subscription.
   defp initial_selection(nil, order), do: hd(order)
 
   defp initial_selection(agent, order) do
     case Burrow.harness(agent) do
-      "codex" -> :codex
-      "claude_code" -> if :api_key in order, do: :api_key, else: hd(order)
-      _ -> hd(order)
+      "codex" ->
+        :codex
+
+      "claude_code" ->
+        if NativeLogin.api_key_set?(agent), do: :api_key, else: :claude_subscription
+
+      _ ->
+        hd(order)
     end
   end
 
-  # Codex shows its code as soon as the agent is up, so a connected mount on
-  # the ChatGPT option starts it. The other options start it when chosen.
-  defp maybe_start_selected(%{assigns: %{selected: :codex}} = socket) do
-    if connected?(socket), do: ensure_agent(socket, :codex), else: socket
+  # Both subscriptions start the agent when shown on a connected mount: Codex
+  # for its code, Claude for its sign-in link. An API key waits for the key.
+  defp maybe_start_selected(%{assigns: %{selected: option}} = socket)
+       when option in @choices do
+    if connected?(socket),
+      do: socket |> ensure_agent(option) |> maybe_start_claude(),
+      else: socket
   end
 
   defp maybe_start_selected(socket), do: socket
@@ -147,6 +190,26 @@ defmodule PlatformWeb.ConnectAiLive do
     end
   end
 
+  # Ask for a Claude sign-in link when the Claude card is showing, the agent
+  # is not running and no link has been asked for. The start itself runs in
+  # `handle_info(:claude_login_start, _)`, in this process (the pending login
+  # is bound to it), after this render.
+  defp maybe_start_claude(
+         %{
+           assigns: %{
+             selected: :claude_subscription,
+             running?: false,
+             login: %{kind: :claude_subscription},
+             claude: %{link: :idle} = claude
+           }
+         } = socket
+       ) do
+    send(self(), :claude_login_start)
+    assign(socket, :claude, %{claude | link: :loading})
+  end
+
+  defp maybe_start_claude(socket), do: socket
+
   @impl true
   def handle_event("select", %{"provider" => provider}, socket) do
     case Enum.find(socket.assigns.order, &(Atom.to_string(&1) == provider)) do
@@ -154,16 +217,20 @@ defmodule PlatformWeb.ConnectAiLive do
         {:noreply, socket}
 
       option ->
-        socket = socket |> assign(:selected, option) |> assign(:key_error, nil)
-        # ChatGPT starts the agent for its code; Claude Pro or Max starts it so
-        # the terminal steps can name its account. An API key waits for the key.
         socket =
-          if option in [:codex, :claude_subscription],
-            do: ensure_agent(socket, option),
-            else: socket
+          socket
+          |> assign(:selected, option)
+          |> assign(:key_error, nil)
+          |> assign(:claude, @claude_idle)
+          |> ensure_agent(option)
+          |> maybe_start_claude()
 
         {:noreply, socket}
     end
+  end
+
+  def handle_event("show_api_key", _params, socket) do
+    {:noreply, socket |> assign(:selected, :api_key) |> assign(:key_error, nil)}
   end
 
   def handle_event("save_api_key", params, socket) do
@@ -196,6 +263,65 @@ defmodule PlatformWeb.ConnectAiLive do
     end
   end
 
+  def handle_event("claude_opened", _params, socket) do
+    claude = socket.assigns.claude
+
+    claude =
+      if claude.link == :ready,
+        do: %{claude | opened?: true, status: idle_unless_failed(claude.status)},
+        else: claude
+
+    {:noreply, assign(socket, :claude, claude)}
+  end
+
+  # The pasted code. It is wrapped at once and handed to the submit in a
+  # message (a LoginCode prints as `#LoginCode<redacted>`); the raw param goes
+  # no further than `LoginCode.new/1` and is never assigned, logged or
+  # rendered. The field is cleared in the browser whatever happens.
+  def handle_event("claude_submit", params, socket) do
+    claude = socket.assigns.claude
+    socket = push_event(socket, "connect-ai-clear-code", %{})
+
+    if claude_step_two_active?(claude) and claude.status != :connecting do
+      case LoginCode.new(Map.get(params, "code")) do
+        {:ok, code} ->
+          send(self(), {:claude_submit, code})
+          {:noreply, assign(socket, :claude, %{claude | status: :connecting})}
+
+        {:error, :bad_code} ->
+          {:noreply, assign(socket, :claude, %{claude | status: {:failed, :bad_code}})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("claude_retry_link", _params, socket) do
+    claude = socket.assigns.claude
+
+    if claude.link == :unavailable do
+      send(self(), :claude_login_start)
+      {:noreply, assign(socket, :claude, %{claude | link: :loading})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("claude_disconnect", _params, %{assigns: %{agent: %{} = agent}} = socket) do
+    case AgentHost.claude_logout(socket.assigns.current_user_record, agent) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(:claude, @claude_idle)
+         |> refresh()
+         |> maybe_start_claude()}
+
+      {:error, _reason} ->
+        claude = socket.assigns.claude
+        {:noreply, assign(socket, :claude, %{claude | status: {:failed, :server}})}
+    end
+  end
+
   def handle_event("retry", _params, socket) do
     socket =
       case socket.assigns.agent do
@@ -210,12 +336,95 @@ defmodule PlatformWeb.ConnectAiLive do
     {:noreply, socket}
   end
 
+  # Any event this page does not handle is refused here, and only its NAME is
+  # logged (the control_center_live.ex pattern). Without this clause an
+  # unknown event crashed the view, and the crash report printed the event's
+  # params verbatim, `:filter_parameters` notwithstanding: a Claude code sent
+  # to a made-up event would have landed in the log.
+  def handle_event(event, _params, socket) do
+    Logger.warning("[ConnectAiLive] refused unknown event #{inspect(event)}")
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_info({:agent_host_status, _event}, socket) do
-    {:noreply, socket |> assign(:agent, socket.assigns.agent || Burrow.get()) |> refresh()}
+    {:noreply,
+     socket
+     |> assign(:agent, socket.assigns.agent || Burrow.get())
+     |> refresh()
+     |> maybe_start_claude()}
+  end
+
+  def handle_info(
+        :claude_login_start,
+        %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
+      ) do
+    claude = socket.assigns.claude
+
+    claude =
+      case AgentHost.claude_login_start(socket.assigns.current_user_record, agent, login_opts()) do
+        {:ok, url} -> %{claude | url: url, link: :ready}
+        {:error, _reason} -> %{claude | url: nil, link: :unavailable}
+      end
+
+    {:noreply, assign(socket, :claude, claude)}
+  end
+
+  def handle_info(
+        {:claude_submit, %LoginCode{} = code},
+        %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
+      ) do
+    claude = socket.assigns.claude
+
+    case AgentHost.claude_login_submit(
+           socket.assigns.current_user_record,
+           agent,
+           code,
+           login_opts()
+         ) do
+      {:ok, login} ->
+        claude = %{claude | status: :connected, login: login}
+        {:noreply, socket |> assign(:claude, claude) |> refresh()}
+
+      {:error, reason} ->
+        # The submit ended the pending login: fetch a fresh link for "Open
+        # Claude sign-in again".
+        send(self(), :claude_login_start)
+
+        claude = %{
+          claude
+          | status: {:failed, submit_failure(reason)},
+            opened?: false,
+            link: :loading,
+            url: nil
+        }
+
+        {:noreply, assign(socket, :claude, claude)}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # `claude_login_timeout_ms:` in this module's config shortens the wait on
+  # the agent host (tests); otherwise `AgentHost`'s own defaults apply.
+  defp login_opts do
+    case Keyword.get(Application.get_env(:platform, __MODULE__, []), :claude_login_timeout_ms) do
+      ms when is_integer(ms) and ms > 0 -> [timeout: ms]
+      _ -> []
+    end
+  end
+
+  defp submit_failure(reason) when reason in [:bad_code, :no_session], do: :bad_code
+  defp submit_failure(:no_subscription), do: :no_subscription
+  defp submit_failure(_reason), do: :server
+
+  defp idle_unless_failed({:failed, _} = status), do: status
+  defp idle_unless_failed(_status), do: :idle
+
+  defp claude_step_two_active?(%{opened?: true}), do: true
+  defp claude_step_two_active?(%{status: {:failed, _}}), do: true
+  defp claude_step_two_active?(%{status: :connecting}), do: true
+  defp claude_step_two_active?(_claude), do: false
 
   defp trim(value) when is_binary(value), do: String.trim(value)
   defp trim(value), do: value
@@ -231,8 +440,7 @@ defmodule PlatformWeb.ConnectAiLive do
     |> assign(:observed, observed)
     |> assign(:host_connected?, AgentHost.connected?())
     |> assign(:running?, running?)
-    |> assign(:login, agent && NativeLogin.login_view(agent))
-    |> assign(:os_user, agent && Burrow.os_user(agent))
+    |> assign(:login, agent && NativeLogin.login_view(agent, socket.assigns.claude.login))
     |> assign(:failure, failure(agent, observed))
     |> maybe_getting_started(agent, running?)
   end
@@ -262,16 +470,11 @@ defmodule PlatformWeb.ConnectAiLive do
 
   defp maybe_getting_started(socket, _agent, _running?), do: socket
 
-  defp ssh_host do
-    URI.parse(PlatformWeb.Endpoint.url()).host
-  end
-
   @impl true
   def render(assigns) do
     assigns =
       assigns
       |> assign(:agent_name, (assigns.agent && assigns.agent.name) || Burrow.name())
-      |> assign(:ssh_host, ssh_host())
       |> assign(:done?, assigns.running? and not is_nil(assigns.space))
 
     ~H"""
@@ -304,6 +507,18 @@ defmodule PlatformWeb.ConnectAiLive do
             <span class="hero-check-circle size-5 shrink-0 text-neutral" />
             {@agent_name} is connected.
           </p>
+          <.claude_connected
+            :if={@selected == :claude_subscription and match?(%{kind: :claude_subscription}, @login)}
+            login={@login}
+          />
+          <p
+            :if={@selected == :codex}
+            id="connect-ai-codex-connected"
+            class="flex items-center gap-2 text-base"
+          >
+            <span class="hero-check-circle size-5 shrink-0 text-success" />
+            <span class="font-medium text-success">Connected to ChatGPT</span>
+          </p>
           <p class="text-base text-subtle">
             {@agent_name} is waiting for you in Getting started, to help you finish setting up.
           </p>
@@ -319,81 +534,101 @@ defmodule PlatformWeb.ConnectAiLive do
         <div :if={!@done?} class="space-y-6">
           <h1 class="text-base font-semibold text-base-content">Which subscription do you use?</h1>
 
-          <form id="connect-ai-options" phx-change="select" class="space-y-3">
-            <label
-              :for={option <- @order}
-              id={"connect-ai-option-#{option}"}
-              data-provider={option}
-              class={[
-                "flex min-h-11 cursor-pointer items-center gap-3 rounded-box border bg-base-100 p-4 text-base text-base-content",
-                if(@selected == option,
-                  do: "border-primary ring-2 ring-primary",
-                  else: "border-edge"
-                )
-              ]}
+          <div class="space-y-2">
+            <form id="connect-ai-options" phx-change="select" class="space-y-3">
+              <label
+                :for={option <- @order}
+                id={"connect-ai-option-#{option}"}
+                data-provider={option}
+                class={[
+                  "flex min-h-11 cursor-pointer items-center gap-3 rounded-box border bg-base-100 p-4 text-base text-base-content",
+                  if(@selected == option,
+                    do: "border-primary ring-2 ring-primary",
+                    else: "border-edge"
+                  )
+                ]}
+              >
+                <input
+                  type="radio"
+                  name="provider"
+                  value={option}
+                  checked={@selected == option}
+                  class="radio radio-primary"
+                />
+                <span>{label(option)}</span>
+              </label>
+            </form>
+            <button
+              :if={@selected != :api_key}
+              id="connect-ai-api-key-link"
+              type="button"
+              phx-click="show_api_key"
+              class="min-h-11 cursor-pointer text-sm text-base-content underline underline-offset-2 hover:no-underline"
             >
-              <input
-                type="radio"
-                name="provider"
-                value={option}
-                checked={@selected == option}
-                class="radio radio-primary"
-              />
-              <span>{label(option)}</span>
-            </label>
-          </form>
+              Have an API key instead?
+            </button>
+          </div>
 
           <.failure_block :if={@failure} failure={@failure} agent_name={@agent_name} />
 
           <section :if={@selected == :codex} id="provider-panel-codex" class="space-y-4">
-            <ol class="space-y-4">
-              <li class="space-y-2">
-                <p class="text-base text-base-content">1. Sign in to ChatGPT.</p>
-                <a
-                  id="connect-ai-codex-open"
-                  href={device_href(@login)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="btn btn-primary min-h-11"
-                >
-                  Open ChatGPT sign-in
-                </a>
-                <p class="text-sm text-subtle">Opens in a new tab.</p>
-              </li>
-              <li class="space-y-2">
-                <p class="text-base text-base-content">2. Enter this code there:</p>
-                <div
-                  id="connect-ai-code-callout"
-                  class="flex items-center gap-2 rounded-box border border-info/40 bg-info/10 p-4 text-base-content"
-                >
-                  <%= if code = device_code(@login) do %>
-                    <span
-                      id="connect-ai-code"
-                      class="min-w-0 flex-1 font-mono text-sm tracking-widest"
-                    >
-                      {code}
-                    </span>
-                    <button
-                      type="button"
-                      id="connect-ai-code-copy"
-                      phx-hook="CopyToClipboard"
-                      data-clipboard-text={code}
-                      class="btn btn-ghost btn-sm min-h-11 shrink-0"
-                    >
-                      Copy
-                    </button>
-                  <% else %>
-                    <span id="connect-ai-code-pending" class="flex-1 text-sm text-base-content">
-                      Getting a fresh code...
-                    </span>
-                  <% end %>
+            <ol
+              id="connect-ai-codex-card"
+              class="divide-y divide-edge overflow-hidden rounded-box border border-edge bg-base-100"
+            >
+              <li id="connect-ai-codex-step-1" class="flex">
+                <.step_rail n={1} />
+                <div class="min-w-0 flex-1 space-y-2 p-4">
+                  <p class="text-base font-medium text-base-content">Sign in to ChatGPT.</p>
+                  <a
+                    id="connect-ai-codex-open"
+                    href={device_href(@login)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="btn btn-primary min-h-11"
+                  >
+                    Open ChatGPT sign-in
+                  </a>
+                  <p class="text-sm text-subtle">Opens in a new tab.</p>
                 </div>
-                <p class="text-sm text-subtle">
-                  A code lasts 15 minutes. A new one appears here by itself if it runs out.
-                </p>
+              </li>
+              <li id="connect-ai-codex-step-2" class="flex">
+                <.step_rail n={2} />
+                <div class="min-w-0 flex-1 space-y-2 p-4">
+                  <p class="text-base font-medium text-base-content">Enter this code there:</p>
+                  <div
+                    id="connect-ai-code-callout"
+                    class="flex items-center gap-2 rounded-box border border-info/40 bg-info/10 p-4 text-base-content"
+                  >
+                    <%= if code = device_code(@login) do %>
+                      <span
+                        id="connect-ai-code"
+                        class="min-w-0 flex-1 font-mono text-sm tracking-widest"
+                      >
+                        {code}
+                      </span>
+                      <button
+                        type="button"
+                        id="connect-ai-code-copy"
+                        phx-hook="CopyToClipboard"
+                        data-clipboard-text={code}
+                        class="btn btn-ghost btn-sm min-h-11 shrink-0"
+                      >
+                        Copy
+                      </button>
+                    <% else %>
+                      <span id="connect-ai-code-pending" class="flex-1 text-sm text-base-content">
+                        Getting a fresh code...
+                      </span>
+                    <% end %>
+                  </div>
+                  <p class="text-sm text-subtle">
+                    A code lasts 15 minutes. A new one appears here by itself if it runs out.
+                  </p>
+                  <.status_line :if={is_nil(@failure)} running?={@running?} agent_name={@agent_name} />
+                </div>
               </li>
             </ol>
-            <.status_line :if={is_nil(@failure)} running?={@running?} agent_name={@agent_name} />
           </section>
 
           <section :if={@selected == :api_key} id="provider-panel-api_key" class="space-y-3">
@@ -437,34 +672,243 @@ defmodule PlatformWeb.ConnectAiLive do
           <section
             :if={@selected == :claude_subscription}
             id="provider-panel-claude_subscription"
-            class="space-y-3"
+            class="space-y-4"
           >
-            <p class="text-base text-base-content">
-              Connecting a Claude Pro or Max subscription needs a terminal on this server today.
-              Burrow can't do that sign-in for you.
-            </p>
-            <p class="text-base text-base-content">
-              We recommend ChatGPT (Codex) or an API key instead: both connect right here.
-            </p>
-            <details id="connect-ai-claude-technical" class="group rounded-box border border-edge">
-              <summary class="flex min-h-11 cursor-pointer items-center gap-2 px-3 text-sm font-medium text-base-content">
-                <span class="hero-chevron-right size-4 transition-transform group-open:rotate-90" />
-                For technical users
-              </summary>
-              <div class="space-y-2 border-t border-edge p-3">
-                <p class="text-sm text-subtle">On your own computer, run these one at a time:</p>
-                <pre
-                  id="connect-ai-claude-steps"
-                  class="overflow-x-auto rounded-box bg-base-200 p-3 font-mono text-sm text-base-content"
-                >{claude_steps(@ssh_host, @os_user)}</pre>
-                <p class="text-sm text-subtle">
-                  Then follow Claude's own sign-in in your browser. Burrow never sees it.
+            <div class="space-y-1">
+              <h2
+                id="connect-ai-claude-heading"
+                class="text-base font-semibold text-base-content"
+              >
+                Connect your Claude subscription
+              </h2>
+              <p id="connect-ai-claude-subhead" class="text-base text-base-content">
+                Use your Claude Pro or Max plan. No API key needed.
+              </p>
+            </div>
+            <%= case @login do %>
+              <% %{kind: :claude_subscription} -> %>
+                <.claude_card claude={@claude} />
+              <% :api_key -> %>
+                <p id="connect-ai-claude-uses-key" class="text-base text-base-content">
+                  {@agent_name} is using the API key you saved, so it doesn't need your Claude plan.
                 </p>
-              </div>
-            </details>
+              <% :subscription_terminal_only -> %>
+                <p id="connect-ai-claude-operator" class="text-base text-base-content">
+                  The person who runs this server connects Claude Pro or Max for this install.
+                </p>
+              <% _ -> %>
+                <p id="connect-ai-claude-preparing" class="text-sm text-subtle">
+                  Getting {@agent_name} ready...
+                </p>
+            <% end %>
           </section>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  attr(:n, :integer, required: true)
+
+  defp step_rail(assigns) do
+    ~H"""
+    <div class="flex w-12 shrink-0 justify-center bg-base-200 pt-4" aria-hidden="true">
+      <span class="flex size-7 items-center justify-center rounded-full border border-edge bg-base-100 text-sm font-semibold text-base-content">
+        {@n}
+      </span>
+    </div>
+    """
+  end
+
+  attr(:claude, :map, required: true)
+
+  defp claude_card(%{claude: %{status: :connected}} = assigns) do
+    ~H"""
+    <div id="connect-ai-claude-card" class="rounded-box border border-edge bg-base-100">
+      <.claude_connected login={@claude.login} class="p-4" />
+    </div>
+    """
+  end
+
+  defp claude_card(assigns) do
+    assigns =
+      assigns
+      |> assign(:active?, claude_step_two_active?(assigns.claude))
+      |> assign(:connecting?, assigns.claude.status == :connecting)
+      |> assign(:failed, failed_reason(assigns.claude.status))
+
+    ~H"""
+    <ol
+      id="connect-ai-claude-card"
+      class="divide-y divide-edge overflow-hidden rounded-box border border-edge bg-base-100"
+    >
+      <li id="connect-ai-claude-step-1" class="flex">
+        <.step_rail n={1} />
+        <div class="min-w-0 flex-1 space-y-2 p-4">
+          <p class="text-base font-medium text-base-content">Sign in to Claude</p>
+          <p class="text-sm text-base-content">
+            Opens claude.ai in a new tab. Sign in with the account that has your Pro or Max plan.
+          </p>
+          <%= cond do %>
+            <% @claude.opened? and @claude.link == :ready -> %>
+              <p
+                id="connect-ai-claude-opened"
+                class="flex flex-wrap items-center gap-x-2 text-sm text-base-content"
+              >
+                <span class="hero-check size-4 shrink-0" /> Opened in a new tab
+                <a
+                  id="connect-ai-claude-open-again"
+                  href={@claude.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  phx-click="claude_opened"
+                  class="inline-flex min-h-11 items-center underline underline-offset-2"
+                >
+                  Open it again
+                </a>
+              </p>
+            <% @claude.link == :ready -> %>
+              <a
+                id="connect-ai-claude-open"
+                href={@claude.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                phx-click="claude_opened"
+                class="btn btn-primary min-h-11"
+              >
+                Open Claude sign-in ↗
+              </a>
+            <% @claude.link == :unavailable -> %>
+              <p id="connect-ai-claude-link-error" class="flex items-start gap-2 text-sm text-error">
+                <span class="hero-exclamation-circle mt-0.5 size-4 shrink-0" />
+                <span>{claude_failure_text(:server)}</span>
+              </p>
+              <button
+                id="connect-ai-claude-retry-link"
+                type="button"
+                phx-click="claude_retry_link"
+                class="btn btn-outline min-h-11"
+              >
+                Try again
+              </button>
+            <% true -> %>
+              <span
+                id="connect-ai-claude-open-pending"
+                class="btn btn-primary btn-disabled min-h-11"
+                aria-disabled="true"
+              >
+                Open Claude sign-in ↗
+              </span>
+          <% end %>
+        </div>
+      </li>
+      <li id="connect-ai-claude-step-2" class={["flex", !@active? && "opacity-60"]}>
+        <.step_rail n={2} />
+        <div class="min-w-0 flex-1 space-y-2 p-4">
+          <p class="text-base font-medium text-base-content">Paste the code Claude shows you</p>
+          <p :if={!@active?} id="connect-ai-claude-locked" class="text-sm text-base-content">
+            Do step 1 first.
+          </p>
+          <%!-- phx-submit only: no phx-change, so no keystroke reaches the
+               server. The field never has a `value`; ConnectAiCode does the
+               show toggle and clears it, in the browser. --%>
+          <form
+            id="connect-ai-claude-form"
+            phx-submit="claude_submit"
+            phx-hook="ConnectAiCode"
+            autocomplete="off"
+            class="space-y-2"
+          >
+            <div class="flex flex-wrap gap-2">
+              <label class="input input-bordered flex min-h-11 min-w-0 flex-1 basis-48 items-center gap-2">
+                <span class="sr-only">Code from Claude</span>
+                <input
+                  id="connect-ai-claude-code"
+                  type="password"
+                  name="code"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  class="min-w-0 grow font-mono"
+                  disabled={!@active? or @connecting?}
+                  required
+                />
+                <button
+                  id="connect-ai-claude-code-toggle"
+                  type="button"
+                  data-code-toggle
+                  aria-controls="connect-ai-claude-code"
+                  aria-pressed="false"
+                  class="btn btn-ghost btn-xs shrink-0"
+                  disabled={!@active? or @connecting?}
+                >
+                  Show
+                </button>
+              </label>
+              <button
+                id="connect-ai-claude-connect"
+                type="submit"
+                class="btn btn-primary min-h-11"
+                disabled={!@active? or @connecting?}
+              >
+                Connect
+              </button>
+            </div>
+            <p id="connect-ai-claude-reassurance" class="text-sm text-base-content">
+              The code goes straight to your Burrow's assistant on your server. Burrow doesn't keep it.
+            </p>
+          </form>
+          <p
+            :if={@active? and @claude.status == :idle}
+            id="connect-ai-claude-waiting"
+            class="flex items-center gap-2 text-sm text-info"
+          >
+            <span class="hero-arrow-path size-4 shrink-0 animate-spin" /> Waiting for the code…
+          </p>
+          <p
+            :if={@connecting?}
+            id="connect-ai-claude-connecting"
+            class="flex items-center gap-2 text-sm text-info"
+          >
+            <span class="hero-arrow-path size-4 shrink-0 animate-spin" /> Connecting…
+          </p>
+          <p
+            :if={@failed}
+            id="connect-ai-claude-error"
+            data-reason={@failed}
+            class="flex items-start gap-2 text-sm text-error"
+          >
+            <span class="hero-exclamation-circle mt-0.5 size-4 shrink-0" />
+            <span>{claude_failure_text(@failed)}</span>
+          </p>
+        </div>
+      </li>
+    </ol>
+    """
+  end
+
+  attr(:login, :map, required: true)
+  attr(:class, :string, default: nil)
+
+  defp claude_connected(assigns) do
+    ~H"""
+    <div
+      id="connect-ai-claude-connected"
+      class={["flex flex-wrap items-center gap-x-3 gap-y-1", @class]}
+    >
+      <p class="flex items-center gap-2 text-base">
+        <span class="hero-check-circle size-5 shrink-0 text-success" />
+        <span class="font-medium text-success">{claude_connected_text(@login)}</span>
+      </p>
+      <button
+        id="connect-ai-claude-disconnect"
+        type="button"
+        phx-click="claude_disconnect"
+        class="btn btn-ghost btn-sm min-h-11"
+      >
+        Disconnect
+      </button>
     </div>
     """
   end
@@ -527,6 +971,36 @@ defmodule PlatformWeb.ConnectAiLive do
   def failure_text({:crashed, _detail}, name),
     do: "#{name} stopped unexpectedly while starting."
 
+  @doc "What the Claude card says when a sign-in fails, by reason."
+  def claude_failure_text(:bad_code),
+    do:
+      "That code didn't work. Codes expire after a few minutes. Open Claude sign-in again and paste the new code."
+
+  def claude_failure_text(:no_subscription),
+    do: "This account doesn't have Claude Pro or Max. Sign in with the account that does."
+
+  def claude_failure_text(:server),
+    do:
+      "Your server didn't answer. Try again in a minute; if it keeps happening, ask Burrow support."
+
+  @doc "The Claude card's connected line: the account and plan when a submit returned them."
+  def claude_connected_text(%{account: account} = login) when is_binary(account) do
+    case plan_label(Map.get(login, :plan)) do
+      nil -> "Connected as #{account}"
+      plan -> "Connected as #{account} · #{plan}"
+    end
+  end
+
+  def claude_connected_text(_login), do: "Connected to Claude"
+
+  defp plan_label(plan) when is_binary(plan) and plan != "",
+    do: "Claude " <> String.capitalize(plan)
+
+  defp plan_label(_plan), do: nil
+
+  defp failed_reason({:failed, reason}), do: reason
+  defp failed_reason(_status), do: nil
+
   defp device_code(%{kind: :device_code, code: code}) when is_binary(code), do: code
   defp device_code(_), do: nil
 
@@ -534,16 +1008,4 @@ defmodule PlatformWeb.ConnectAiLive do
   # measured device page, so step 1 works before the code has arrived.
   defp device_href(%{kind: :device_code, url: href}) when is_binary(href), do: href
   defp device_href(_), do: @device_url
-
-  defp claude_steps(host, os_user) do
-    Enum.join(
-      [
-        "ssh root@#{host}",
-        "sudo -iu #{os_user || "agent-<id>"}",
-        "claude",
-        "/login"
-      ],
-      "\n"
-    )
-  end
 end

@@ -69,8 +69,9 @@ export interface Observation {
   files_drifted?: string[];
   /**
    * Only for needs_login: the step the status file named. Never a Claude
-   * login URL or code (core task 01a17b10): Burrow does not relay a Claude
-   * login; a human logs in at the agent's own pane.
+   * login URL or code (core task 01a17b10). Since core task 01a1b365 the
+   * claude.com sign-in URL travels only in the ref'd `agent.claude_login`
+   * reply (claude_login.ts), never in an observation.
    *
    * The one exception is step `device_code`, Codex's device login (core task
    * 01a10315 stage 4, codex_login.ts): its auth.openai.com URL and one-time

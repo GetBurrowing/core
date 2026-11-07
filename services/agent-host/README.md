@@ -17,12 +17,19 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
 - **Per-agent users stop agents from crossing into each other BY ACCIDENT.
   They are not a security boundary.** An install is one trust group, and an
   agent with sudo can read every other agent's home, env file and tokens.
-- This daemon never types into an agent's pane and never handles a Claude
-  login code. It relays what suite-cli's status file reports: that a login is
-  needed, and the step's name. Never a login URL or code: whatever else the
-  status file holds stays on this host (core task 01a17b10). Burrow does not
-  offer a Claude subscription login through its UI (it would need the
-  person's code relayed into the CLI, which Anthropic's terms forbid). By
+- This daemon never types into an agent's pane. It relays what suite-cli's
+  status file reports: that a login is needed, and the step's name. Never a
+  login URL or code: whatever else the status file holds stays on this host
+  (core task 01a17b10).
+- Claude subscription login (core task 01a1b365, `src/claude_login.ts`;
+  until then this daemon never handled a Claude login code). On
+  `agent.claude_login_start` it runs the agent's own `claude auth login` as
+  the agent, over a plain pipe (measured on 2.1.295: no tty is needed), and
+  answers with the claude.com sign-in URL in that ref'd reply only. On
+  `agent.claude_login_code` it writes the owner's pasted code to that child's
+  stdin and nowhere else (no argv, no log, no tmux, no status file), lets
+  `claude auth status --json` decide, and on `ok` restarts the agent's unit.
+  Whether core sends a code at all is core's side of that task. By
   default (`api_key` login mode) a native agent logs in with an Anthropic API
   key a manager saves in Burrow,
   which reaches ONLY that agent's 0600 env file as `ANTHROPIC_API_KEY`

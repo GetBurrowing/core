@@ -3,27 +3,46 @@ defmodule Platform.Agents.NativeLogin do
   How a native (install-managed) agent logs in to its model provider (task
   01a10322 stage 6).
 
-  ## What ships: an Anthropic API key, and nothing else
+  ## What ships: an Anthropic API key, or the owner's own Claude sign-in
 
   Claude Code 2.1.295 (the CLI the agent host pins) has no subscription login
   that finishes on its own. `claude auth login` prints a claude.com authorize
   URL whose redirect is Anthropic's code page, then waits at "Paste code here
   if prompted >". The only other variant redirects to `localhost:<port>`, so it
-  finishes only in a browser on the agent's own machine. (Measured on the test rig on
-  2026-10-09; see the org journal for that date.)
+  finishes only in a browser on the agent's own machine. (Measured on the test
+  rig on 2026-10-09 and again for task 01a1b365; see the org journal.)
 
-  Anthropic's Claude Code terms say developers "may not collect, store, or
-  intermediate Claude.ai credentials or session tokens", and that sign-in must
-  complete through Anthropic's own flow. A Burrow field that took the pasted
-  code and relayed it to the agent's pane would be exactly that. So Burrow
-  OFFERS NO SUBSCRIPTION LOGIN: the detail pane says it is not available yet,
-  and the way in is an Anthropic API key.
+  Anthropic's Claude Code terms
+  (code.claude.com/docs/en/legal-and-compliance) say developers "may not
+  collect, store, or intermediate Claude.ai credentials or session tokens",
+  and that sign-in must complete through Anthropic's own flow. Task 01a1b365
+  replaces task 01a17b10's "no Burrow surface accepts a Claude login code"
+  with this narrower rule, for an owner logging in THEIR OWN agent on the
+  same install:
 
-  **No Burrow surface accepts a Claude login code.** There is no paste field,
-  no event that takes one, and nothing in core, the agent host or suite-cli
-  that types into an agent's pane. `api_key_shape/1` refuses anything that is
-  not shaped like an Anthropic API key, so a login code cannot be stored as
-  one by mistake.
+    * sign-in itself happens on Anthropic's page, in the owner's browser. The
+      URL comes from the agent's own, unmodified `claude auth login` on the
+      agent host (`Platform.AgentHost.claude_login_start/3`), whose PKCE
+      verifier the code is bound to;
+    * the code that page shows is pasted once and passes through core's
+      process for ONE request, `agent.claude_login_code`, to the agent host on
+      the same install, over the install's agents network (core is reached as
+      `core-platform` only inside its container networks, config/prod.exs),
+      which writes it to that login's stdin
+      (`Platform.AgentHost.claude_login_submit/4`);
+    * it is held as a `Platform.AgentHost.LoginCode`, which never prints, and
+      is never persisted, logged, broadcast, audited, put in
+      `Platform.AgentHost.State` or returned by a tool. The reply carries the
+      account and plan only;
+    * only `NativeAgents.can_manage?/2` may start or finish one, checked in
+      core, and a code goes only into the login its own caller started.
+
+  `api_key_shape/1` still refuses anything that is not shaped like an
+  Anthropic API key, so a login code cannot be stored as one by mistake.
+
+  An API key saved for the agent wins over a subscription login (it is in the
+  agent's env file at its next start, and Claude Code prefers it), so an
+  agent with a saved key stays on `:api_key` in `login_view/1`.
 
   ## The API key
 
@@ -48,8 +67,8 @@ defmodule Platform.Agents.NativeLogin do
   unrecognised value means. `operator` is opt-in: the agent carries NO API key
   (`start_env/1` returns `%{}` without reading the Vault, even when a key is
   saved), its pane waits at Claude Code's own login, and a human operator
-  attaches to that pane and logs in there (README, "Operator login"). Burrow
-  never sees, relays or stores the login code or the login URL.
+  attaches to that pane and logs in there (README, "Operator login"). In this
+  mode Burrow never sees, relays or stores the login code or the login URL.
   """
 
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
@@ -113,8 +132,13 @@ defmodule Platform.Agents.NativeLogin do
   auth.openai.com URL and a one-time code, and finishes by itself once the
   person approves there. Burrow shows the code and relays nothing back.
 
-  Claude Code has no such login that finishes without a paste-back, and Burrow
-  never relays a Claude login (task 01a17b10): false.
+  Claude Code has no such login: its subscription login finishes only when
+  the code Anthropic's page shows is pasted back. Burrow takes that code from
+  the owner and passes it, for one request, to the agent's own login on the
+  agent host on the same install (task 01a1b365; the rule is in this
+  module's doc, under Anthropic's terms at
+  code.claude.com/docs/en/legal-and-compliance). That is not a device login:
+  false.
   """
   @spec device_login?(String.t() | nil) :: boolean()
   def device_login?("codex"), do: true
@@ -123,6 +147,7 @@ defmodule Platform.Agents.NativeLogin do
   @typedoc "What the owner is shown to log an agent in (`login_view/1`)."
   @type login_view ::
           %{kind: :device_code, url: String.t() | nil, code: String.t() | nil}
+          | %{kind: :claude_subscription, account: String.t() | nil, plan: String.t() | nil}
           | :api_key
           | :subscription_terminal_only
           | :unsupported
@@ -134,28 +159,46 @@ defmodule Platform.Agents.NativeLogin do
       `code` are the ones the agent host last observed
       (`Platform.AgentHost.State`, kept only in the shapes the reconciler
       accepts), or nil until the host has printed one. Display only.
-    * `:api_key` for Claude Code in the default `:api_key` login mode: an
-      Anthropic API key, through `put_api_key/3`.
+    * `%{kind: :claude_subscription, account: account, plan: plan}` for Claude
+      Code in the default `:api_key` login mode when no API key is saved: the
+      owner signs in on Anthropic's page and pastes the code
+      (`Platform.AgentHost.claude_login_start/3` and `claude_login_submit/4`).
+      `account` and `plan` come from the `login` given, the `{:ok, %{account,
+      plan}}` of a submit; nil until then. Nothing about a Claude login is
+      read from the host's observed state.
+    * `:api_key` for Claude Code in the `:api_key` login mode when an
+      Anthropic API key is saved (`put_api_key/3`): the key wins over a
+      subscription login.
     * `:subscription_terminal_only` for Claude Code in `:operator` mode: a
       Claude Pro or Max login happens at a terminal on the agent's machine,
       never through Burrow.
     * `:unsupported` for an agent this install does not run or a harness it
       does not know.
   """
-  @spec login_view(Agent.t()) :: login_view()
-  def login_view(%Agent{} = agent) do
+  @spec login_view(Agent.t(), %{account: String.t(), plan: String.t()} | nil) :: login_view()
+  def login_view(%Agent{} = agent, login \\ nil) do
     case NativeAgents.get_managed_runtime(agent) do
       %AgentRuntime{harness: harness} ->
-        login_view(harness, Platform.AgentHost.status(agent.id), login_mode())
+        key_set? = api_key_harness?(harness) and api_key_set?(agent)
+
+        login_view(harness, Platform.AgentHost.status(agent.id), login_mode(),
+          key_set?: key_set?,
+          login: login
+        )
 
       nil ->
         :unsupported
     end
   end
 
-  @doc "`login_view/1` from a harness, an observed entry and a login mode. Pure."
-  @spec login_view(String.t() | nil, map() | nil, :api_key | :operator) :: login_view()
-  def login_view(harness, observed, mode) do
+  @doc """
+  `login_view/1` from a harness, an observed entry, a login mode and `opts`:
+  `key_set?` (an Anthropic API key is saved; default false) and `login` (a
+  submit's `%{account, plan}`, or nil). Pure.
+  """
+  @spec login_view(String.t() | nil, map() | nil, :api_key | :operator, keyword()) ::
+          login_view()
+  def login_view(harness, observed, mode, opts \\ []) do
     cond do
       device_login?(harness) ->
         observed = observed || %{}
@@ -169,8 +212,17 @@ defmodule Platform.Agents.NativeLogin do
       api_key_harness?(harness) and mode == :operator ->
         :subscription_terminal_only
 
-      api_key_harness?(harness) ->
+      api_key_harness?(harness) and Keyword.get(opts, :key_set?, false) ->
         :api_key
+
+      api_key_harness?(harness) ->
+        login = Keyword.get(opts, :login) || %{}
+
+        %{
+          kind: :claude_subscription,
+          account: string_or_nil(Map.get(login, :account)),
+          plan: string_or_nil(Map.get(login, :plan))
+        }
 
       true ->
         :unsupported
@@ -298,6 +350,9 @@ defmodule Platform.Agents.NativeLogin do
   defp api_key_step(%{state: :starting}, true), do: :waiting
   defp api_key_step(%{state: :running}, true), do: :logged_in
   defp api_key_step(_observed, _key_set?), do: :idle
+
+  defp string_or_nil(value) when is_binary(value) and value != "", do: value
+  defp string_or_nil(_), do: nil
 
   defp managed_runtime(agent) do
     case NativeAgents.get_managed_runtime(agent) do

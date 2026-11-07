@@ -21,6 +21,7 @@ import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
 import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
+import ConnectAiCode from "./connect_ai_code"
 import CopyToClipboard from "./copy_to_clipboard"
 import DateEntryGuard from "./date_entry_guard"
 import DoneColumnState from "./done_column_state"
@@ -111,6 +112,7 @@ export default {
   CodeBlock,
   CommandPalette,
   ComposeInput,
+  ConnectAiCode,
   CopyToClipboard,
   DateEntryGuard,
   DoneColumnState,

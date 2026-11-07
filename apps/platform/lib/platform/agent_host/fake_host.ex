@@ -18,7 +18,18 @@ defmodule Platform.AgentHost.FakeHost do
     * a `claude_code` agent reports `running` when its start carried an API
       key (`env["ANTHROPIC_API_KEY"]`, which is never kept or logged here),
       and otherwise `needs_login` at step `login`. Never a Claude login URL or
-      code (task 01a17b10).
+      code in an observation (task 01a17b10).
+
+  A stubbed Claude subscription login (task 01a1b365 stage 2,
+  `claude_login_reply/3`): `agent.claude_login_start` is answered with a fake
+  claude.com URL; `agent.claude_login_code` with `ok`, account
+  `owner@example.com`, plan `max`, for the one known-good code
+  (`claude_login_code/0`), and `bad_code` for anything else. The switch
+  `set_claude_login/2` (dev route
+  `POST /dev/fake-agent-host/claude-login/<mode>`) makes a good code answer
+  `no_subscription`, or makes the fake host answer nothing (`timeout`). On
+  `ok` the agent then reports `running`, as the real host's restart would.
+  The code is compared here and dropped; it is never kept or logged.
 
   It joins only once `PlatformWeb.Endpoint` is running: it starts before the
   Endpoint in the supervision tree, so it waits and retries every second
@@ -34,10 +45,15 @@ defmodule Platform.AgentHost.FakeHost do
 
   require Logger
 
-  alias Platform.AgentHost.Reconciler
+  alias Platform.AgentHost.{LoginCode, Reconciler}
 
   @device_url "https://auth.openai.com/codex/device"
   @device_code "FAKE-1234"
+  @claude_url "https://claude.com/cai/oauth/authorize?code=true&state=fake-agent-host"
+  @claude_code "fake-claude-login-code#fake-state"
+  @claude_account "owner@example.com"
+  @claude_plan "max"
+  @claude_modes [:ok, :no_subscription, :timeout]
   @report_after_ms 500
   @rejoin_after_ms 1_000
 
@@ -50,6 +66,54 @@ defmodule Platform.AgentHost.FakeHost do
 
   @doc "The device URL a fake codex login shows."
   def device_url, do: @device_url
+
+  @doc "The one code a fake Claude login accepts."
+  def claude_login_code, do: @claude_code
+
+  @doc "The account and plan a fake Claude login reports."
+  def claude_login_account, do: %{account: @claude_account, plan: @claude_plan}
+
+  @doc "Every mode of the fake Claude login, the default first."
+  def claude_login_modes, do: @claude_modes
+
+  @doc """
+  The fake host's `agent.claude_login` reply to a Claude login command, before
+  the channel's sanitising, or nil for no reply at all. Pure; shared with the
+  test stand-in (`Platform.FakeAgentHost`). `mode` is one of
+  `claude_login_modes/0`.
+  """
+  @spec claude_login_reply(String.t(), map(), atom()) :: map() | nil
+  def claude_login_reply(_event, _payload, :timeout), do: nil
+
+  def claude_login_reply("agent.claude_login_start", _payload, _mode),
+    do: %{"result" => "url", "url" => @claude_url}
+
+  def claude_login_reply("agent.claude_login_code", %{"code" => %LoginCode{} = code}, mode) do
+    cond do
+      LoginCode.reveal(code) != @claude_code -> %{"result" => "bad_code"}
+      mode == :no_subscription -> %{"result" => "no_subscription"}
+      true -> %{"result" => "ok", "account" => @claude_account, "plan" => @claude_plan}
+    end
+  end
+
+  def claude_login_reply("agent.claude_login_code", _payload, _mode),
+    do: %{"result" => "bad_code"}
+
+  def claude_login_reply("agent.claude_logout", _payload, _mode), do: %{"result" => "ok"}
+
+  @doc """
+  Switch the fake Claude login (`claude_login_modes/0`). `:ok`, or
+  `{:error, :unknown_mode | :not_running}`.
+  """
+  @spec set_claude_login(atom(), GenServer.server()) ::
+          :ok | {:error, :unknown_mode | :not_running}
+  def set_claude_login(mode, server \\ __MODULE__) do
+    cond do
+      mode not in @claude_modes -> {:error, :unknown_mode}
+      GenServer.whereis(server) -> GenServer.call(server, {:claude_login_mode, mode})
+      true -> {:error, :not_running}
+    end
+  end
 
   @doc """
   Finish `agent_id`'s fake Codex login, as if its owner approved the code on
@@ -72,6 +136,7 @@ defmodule Platform.AgentHost.FakeHost do
     state = %{
       agents: %{},
       completed: MapSet.new(),
+      claude_login: :ok,
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
       endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
       reconciler: nil
@@ -84,6 +149,9 @@ defmodule Platform.AgentHost.FakeHost do
   def handle_continue(:join, state), do: {:noreply, join(state)}
 
   @impl true
+  def handle_call({:claude_login_mode, mode}, _from, state),
+    do: {:reply, :ok, %{state | claude_login: mode}}
+
   def handle_call({:complete, agent_id}, _from, state) do
     case Map.get(state.agents, agent_id) do
       nil ->
@@ -123,6 +191,27 @@ defmodule Platform.AgentHost.FakeHost do
       end
 
     report(id, %{"agent_id" => id, "state" => "stopped"})
+    {:noreply, state}
+  end
+
+  def handle_info({:agent_host_push, event, %{"agent_id" => id, "ref" => ref} = payload}, state)
+      when event in ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"] do
+    case claude_login_reply(event, payload, state.claude_login) do
+      nil ->
+        :ok
+
+      reply ->
+        # Through the real channel handler's sanitising, as the host's reply would be.
+        PlatformWeb.AgentHostChannel.handle_in(
+          "agent.claude_login",
+          Map.merge(%{"ref" => ref, "agent_id" => id}, reply),
+          %Phoenix.Socket{}
+        )
+
+        if reply["result"] == "ok" and event == "agent.claude_login_code",
+          do: report(id, %{"agent_id" => id, "state" => "running"})
+    end
+
     {:noreply, state}
   end
 

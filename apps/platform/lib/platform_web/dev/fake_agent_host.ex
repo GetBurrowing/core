@@ -6,7 +6,11 @@ defmodule PlatformWeb.Dev.FakeAgentHost do
 
     * `POST /dev/fake-agent-host/<agent_id>/complete` finishes that codex
       agent's fake device login, as if its owner approved the code on OpenAI's
-      page; the fake host then reports it `running`.
+      page; the fake host then reports it `running`;
+    * `POST /dev/fake-agent-host/claude-login/<mode>` switches the fake Claude
+      subscription login (task 01a1b365): `ok` (the default; the one good
+      code signs in as `owner@example.com` on `max`), `no_subscription` or
+      `timeout` (the fake host answers nothing).
 
   Answers JSON. 404 for an agent the fake host never started, 409 for a
   non-codex agent, 503 when the fake host is not running.
@@ -22,6 +26,16 @@ defmodule PlatformWeb.Dev.FakeAgentHost do
   def init(opts), do: opts
 
   @impl true
+  def call(%Plug.Conn{method: "POST", path_info: ["claude-login", mode]} = conn, _opts) do
+    mode = Enum.find(FakeHost.claude_login_modes(), &(Atom.to_string(&1) == mode))
+
+    case FakeHost.set_claude_login(mode) do
+      :ok -> json(conn, 200, %{"ok" => true, "mode" => Atom.to_string(mode)})
+      {:error, :unknown_mode} -> json(conn, 404, %{"error" => "unknown_mode"})
+      {:error, :not_running} -> json(conn, 503, %{"error" => "fake_agent_host_not_running"})
+    end
+  end
+
   def call(%Plug.Conn{method: "POST", path_info: [agent_id, "complete"]} = conn, _opts) do
     case FakeHost.complete(agent_id) do
       :ok -> json(conn, 200, %{"ok" => true})

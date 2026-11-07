@@ -11,8 +11,12 @@
  * or sent by anything here. This module only ever runs `codex login
  * --device-auth` and `codex login status`, and writes the agent's status file.
  *
- * This is NOT a Claude login. Burrow never relays a Claude login (core task
- * 01a17b10); nothing here is used for the `claude_code` harness.
+ * This is NOT a Claude login; nothing here is used for the `claude_code`
+ * harness. Until core task 01a1b365 Burrow never relayed a Claude login (core
+ * task 01a17b10). That task changed it: the owner signs in on Anthropic's
+ * page and pastes the code it shows, which reaches the agent's own `claude
+ * auth login` on its stdin (claude_login.ts). Unlike this module's device
+ * code, that code is never shown, written to a status file or reported.
  *
  * MEASURED, not remembered (codex-cli 0.162.0, a throwaway node:22 container,
  * fresh HOME and CODEX_HOME, 2026-10-30; the transcript, with the code
