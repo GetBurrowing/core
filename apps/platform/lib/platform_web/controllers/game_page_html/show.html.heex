@@ -189,10 +189,10 @@
               </div>
               <div class="gp-game-chat-body">
                 <div id="game-live-chat" class="gp-chat">
-                  {live_render(@conn, PlatformWeb.ChatLive.Embedded,
+                  {live_render(@conn, PlatformWeb.GameCommunityLive,
                     id: "game-community-chat",
                     session: %{
-                      "chat_space_slug" => @community.space.id,
+                      "game_slug" => @game["slug"],
                       "current_user_id" => @user.id
                     }
                   )}

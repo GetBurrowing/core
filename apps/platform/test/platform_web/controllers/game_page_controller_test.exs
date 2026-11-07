@@ -192,7 +192,10 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute html =~ "id=\"community-join\""
     joined = post(conn, "/games/voltron/community", %{})
     assert redirected_to(joined) == "/games/voltron?tab=community"
-    {:ok, view, _html} = live(conn, "/games/voltron?tab=community")
+    document = LazyHTML.from_document(html)
+    assert Enum.count(LazyHTML.query(document, "#game-community-chat[data-phx-session]")) == 1
+    {:ok, view, _html} = live_isolated(conn, PlatformWeb.GameCommunityLive,
+      session: %{"game_slug" => "voltron", "current_user_id" => user.id})
     assert has_element?(view, "#compose-form")
 
     render_submit(view, "send_message", %{
@@ -376,4 +379,17 @@ defmodule PlatformWeb.GamePageControllerTest do
       File.write!(Path.join(directory, name <> ".html"), html)
     end
   end
+
+  test "community socket refuses a stale or unjoined identity", %{conn: conn, game: game, community: community} do
+    user = Repo.insert!(User.changeset(%User{}, %{name: "Player", email: "player@example.net", oidc_sub: "socket-player"}))
+    session = %{"game_slug" => "voltron", "current_user_id" => user.id}
+    {:ok, refused, _} = live_isolated(conn, PlatformWeb.GameCommunityLive, session: session)
+    assert has_element?(refused, "#game-chat-access-denied")
+    refute has_element?(refused, "#compose-form")
+    assert {:ok, _} = Games.join_community(game, user)
+    Repo.delete_all(from p in Chat.Participant, where: p.space_id == ^community.id and p.participant_id == ^user.id)
+    {:ok, revoked, _} = live_isolated(conn, PlatformWeb.GameCommunityLive, session: session)
+    assert has_element?(revoked, "#game-chat-access-denied")
+  end
+
 end
