@@ -12,14 +12,14 @@ defmodule Platform.Repo.Migrations.CreateNativePlaySessions do
         primary_key: true
       )
 
-      add(:project_id, references(:projects, type: :binary_id), null: false)
+      add(:project_id, references(:projects, type: :binary_id, on_delete: :delete_all), null: false)
       add(:repo_url, :text, null: false)
       timestamps(type: :utc_datetime_usec)
     end
 
     create table(:native_game_builds, primary_key: false) do
       add(:id, :string, primary_key: true)
-      add(:project_id, references(:projects, type: :binary_id), null: false)
+      add(:project_id, references(:projects, type: :binary_id, on_delete: :delete_all), null: false)
       add(:manifest, :map, null: false)
       add(:published_at, :utc_datetime_usec, null: false)
     end
@@ -28,8 +28,8 @@ defmodule Platform.Repo.Migrations.CreateNativePlaySessions do
 
     create table(:native_play_sessions, primary_key: false) do
       add(:id, :binary_id, primary_key: true)
-      add(:channel_id, references(:chat_spaces, type: :binary_id), null: false)
-      add(:project_id, references(:projects, type: :binary_id), null: false)
+      add(:channel_id, references(:chat_spaces, type: :binary_id, on_delete: :delete_all), null: false)
+      add(:project_id, references(:projects, type: :binary_id, on_delete: :delete_all), null: false)
       add(:build_id, references(:native_game_builds, type: :string), null: false)
       add(:immutable_build, :map, null: false)
       add(:protocol_version, :integer, null: false)
