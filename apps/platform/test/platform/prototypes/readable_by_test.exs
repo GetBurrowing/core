@@ -166,6 +166,21 @@ defmodule Platform.Prototypes.ReadableByTest do
     assert readable?(member, bare)
   end
 
+  # Task 01a1b728 stage 2: external users reach entry and latest past
+  # `ExternalUserScope`, so org reach must be closed to them here, as in
+  # `CanvasAccess`. An external org member is not an org reader.
+  test "f: an external member of the org cannot read an org-located prototype", c do
+    bare = prototype!(c.other, [])
+    external = external_user!(c.other)
+
+    assert Tenancy.external_user?(external)
+    assert Tenancy.member_of?(external, c.other.id)
+    refute readable?(external, bare)
+
+    # Positive control: an internal member of the same org can.
+    assert readable?(member_of!(c.other), bare)
+  end
+
   test "g: a chat.read deny on the space refuses a participant", c do
     user = member_of!(c.other)
     add_user!(c.space.id, user.id)

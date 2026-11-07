@@ -155,6 +155,17 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {_, ["chat", slug]} ->
         gate_space(conn, user, slug)
 
+      # Prototype entry and latest (task 01a1b728 stage 2) are ADMITTED here,
+      # on the app host only, and nothing more: per-prototype authorization is
+      # `Platform.Prototypes.readable_by?/2` in `PrototypeController.entry/2`
+      # and `latest/2`, which caps external users at chat membership (the
+      # `:member` path, as `Platform.Chat.CanvasAccess` does) and answers a
+      # refused reader with the same 404 as an unknown id. This clause never
+      # reads or resolves the id, so the plug is no existence oracle. Same
+      # shape as the {:meet, ["meetings"]} clause deferring to its query.
+      {:app, ["proto", _id, _version | _]} ->
+        conn
+
       # The app host admits only a registry rail path whose module explicitly
       # permits guests. The LiveView mount gate then re-checks every view.
       {:app, [segment | _]} ->
