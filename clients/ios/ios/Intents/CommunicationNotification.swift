@@ -49,7 +49,7 @@ struct CommunicationPayload: Equatable {
         self.spaceID = spaceID
         self.messageID = messageID
         self.authorID = authorID
-        authorType = text("author_type")
+        authorType = nil
         authorName = text("author_name")
         spaceName = text("space_name")
         avatarURL = AvatarFetcher.usable(text("author_avatar_url"))
@@ -102,10 +102,10 @@ enum CommunicationNotification {
     /// `<host>|<uuid>` handle and an image, never nil) and the conversation.
     /// No content: the notification's own body is what shows.
     static func sendMessageIntent(_ payload: CommunicationPayload, image picture: Data? = nil) -> INSendMessageIntent {
-        _ = AvatarRenderer.senderImage(name: payload.authorName, tone: payload.effectiveTone, picture: picture)
+        let imageData = AvatarRenderer.senderImage(name: payload.authorName, tone: payload.effectiveTone, picture: picture)
         let sender = INPerson(
             personHandle: INPersonHandle(value: payload.senderID, type: .unknown), nameComponents: nil,
-            displayName: payload.authorName, image: nil, contactIdentifier: nil, customIdentifier: payload.senderID)
+            displayName: payload.authorName, image: INImage(imageData: imageData), contactIdentifier: nil, customIdentifier: payload.senderID)
         // A DM's conversation name is the other person's name: it has no
         // space name of its own (see `conversationName` for the install).
         let space = payload.spaceName.flatMap { $0 == payload.authorName ? nil : $0 }
