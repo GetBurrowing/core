@@ -1,6 +1,9 @@
 defmodule Platform.Chat.Canvas.Kinds.ImageTest do
   use ExUnit.Case, async: true
 
+  import Phoenix.Component, only: [sigil_H: 2]
+  import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
+
   alias Platform.Chat.Canvas.Kinds.Image
   alias Platform.Chat.CanvasDocument
 
@@ -96,6 +99,37 @@ defmodule Platform.Chat.Canvas.Kinds.ImageTest do
       }
 
       assert {:ok, _} = CanvasDocument.validate(doc)
+    end
+  end
+
+  describe "render/1" do
+    defp render_node(props) do
+      assigns = %{node: %{"id" => "img", "type" => "image", "props" => props}}
+
+      ~H"""
+      <Image.render node={@node} />
+      """
+      |> rendered_to_string()
+      |> LazyHTML.from_fragment()
+    end
+
+    # Task 01a1b67d: a same-install raw attachment link was navigated in place
+    # (a bare image document with no way back in the app shell). The anchor
+    # must route to the in-app image layer instead.
+    test "the full-size anchor carries data-image-viewer and keeps the href fallback" do
+      doc = render_node(%{"src" => @valid_src, "alt" => "a screenshot"})
+
+      assert [_] =
+               doc
+               |> LazyHTML.query("a[data-image-viewer][href='#{@valid_src}']")
+               |> Enum.to_list()
+
+      assert [_] =
+               doc
+               |> LazyHTML.query("a[data-image-viewer] > img[alt='a screenshot']")
+               |> Enum.to_list()
+
+      assert [] = doc |> LazyHTML.query("a[target]") |> Enum.to_list()
     end
   end
 end

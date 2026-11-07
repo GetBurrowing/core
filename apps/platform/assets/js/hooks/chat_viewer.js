@@ -21,6 +21,7 @@
 //     the server flash "Link copied".
 
 import { openLayer } from "../lib/dismissable_overlay"
+import { phoneShare, shareDownload } from "../lib/share_download"
 
 const HIGHLIGHT_MS = 1000
 const HIGHLIGHT_CLASSES = ["ring-2", "ring-base-300"]
@@ -288,31 +289,11 @@ const ChatViewer = {
   // ── Share ─────────────────────────────────────────────────────────────
 
   phoneShare() {
-    return !!(
-      typeof navigator !== "undefined" &&
-      navigator.share &&
-      window.matchMedia &&
-      window.matchMedia("(pointer: coarse)").matches
-    )
+    return phoneShare()
   },
 
   shareDownload(anchor) {
-    const href = anchor.getAttribute("href")
-    if (!href) return
-    const url = /^https?:\/\//i.test(href) ? href : window.location.origin + href
-    const name = anchor.getAttribute("download") || "attachment"
-    const byUrl = () => navigator.share({ url, title: name }).catch(() => {})
-    if (typeof fetch !== "function" || typeof File !== "function" || !navigator.canShare) return byUrl()
-    fetch(url, { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
-      .then((blob) => {
-        const file = new File([blob], name, { type: blob.type })
-        return navigator.canShare({ files: [file] }) ? navigator.share({ files: [file], title: name }) : byUrl()
-      })
-      .catch((err) => {
-        // A dismissed sheet is AbortError; only a failed fetch falls back.
-        if (!err || err.name !== "AbortError") byUrl()
-      })
+    shareDownload(anchor)
   },
 
   share() {

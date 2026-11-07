@@ -130,8 +130,8 @@ defmodule PlatformWeb.Components.ChatViewer do
           if(@dark?, do: "opacity-60", else: "text-subtle")
         ]}
       >
-        <span class="lg:hidden">swipe down or ← to go back</span>
-        <span class="hidden lg:inline">Esc or ← to go back</span>
+        <span class="lg:hidden">swipe down or back to close</span>
+        <span class="hidden lg:inline">Esc to close</span>
       </div>
     </div>
     """

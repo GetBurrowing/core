@@ -114,8 +114,9 @@ defmodule PlatformWeb.ChatViewerLiveTest do
         assert [_] = query(html, "#chat-viewer [data-role=viewer-share][aria-label=Share]")
         assert [] = query(html, "#chat-viewer .sheet-backdrop")
         assert [] = query(html, "#chat-viewer .sheet-handle")
-        assert html =~ "swipe down or ← to go back"
-        assert html =~ "Esc or ← to go back"
+        assert html =~ "swipe down or back to close"
+        assert html =~ "Esc to close"
+        refute html =~ "←"
       end
     end
 
