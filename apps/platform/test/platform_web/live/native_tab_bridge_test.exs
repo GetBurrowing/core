@@ -77,6 +77,52 @@ defmodule PlatformWeb.NativeTabBridgeTest do
     assert has_element?(view, "#native-tab-bridge[data-active-key='chat']")
     assert has_element?(view, "#native-tab-bridge[data-more-open='false']")
     assert has_element?(view, "#native-tab-bridge[data-inbox-unread='false']")
+    refute has_element?(view, "#native-tab-bridge[data-inbox-badge]")
+  end
+
+  # Task 01a1b673 stage 3: the native bar shows the web badge's label, so the
+  # bridge carries badge_text/1 of the count, and nothing at 0.
+  test "data-inbox-badge is the web badge's label, absent at 0" do
+    for {count, label} <- [{1, "1"}, {7, "7"}, {9, "9"}, {10, "9+"}, {12, "9+"}] do
+      assigns = %{count: count}
+
+      html =
+        rendered_to_string(~H"""
+        <IconRail.bottom_rail current_path="/chat" inbox_unread_count={@count} />
+        """)
+
+      doc = LazyHTML.from_fragment(html)
+
+      assert doc |> LazyHTML.query("#native-tab-bridge") |> LazyHTML.attribute("data-inbox-badge") ==
+               [label]
+
+      assert doc
+             |> LazyHTML.query("#native-tab-bridge")
+             |> LazyHTML.attribute("data-inbox-unread") ==
+               ["true"]
+
+      assert doc
+             |> LazyHTML.query("#bottom-nav [data-role='inbox-badge']")
+             |> LazyHTML.text()
+             |> String.trim() == label
+    end
+
+    for count <- [0, -1, nil] do
+      assigns = %{count: count}
+
+      html =
+        rendered_to_string(~H"""
+        <IconRail.bottom_rail current_path="/chat" inbox_unread_count={@count} />
+        """)
+
+      doc = LazyHTML.from_fragment(html)
+      assert doc |> LazyHTML.query("#native-tab-bridge[data-inbox-badge]") |> Enum.count() == 0
+
+      assert doc
+             |> LazyHTML.query("#native-tab-bridge")
+             |> LazyHTML.attribute("data-inbox-unread") ==
+               ["false"]
+    end
   end
 
   # Task 01a174e8 stage 1: the hook reads the bar's inks off these two probes.
@@ -128,7 +174,8 @@ defmodule PlatformWeb.NativeTabBridgeTest do
            )
   end
 
-  test "inbox unread above 0 sets data-inbox-unread true", %{conn: conn} do
+  test "inbox unread above 0 sets data-inbox-unread true and data-inbox-badge to the count",
+       %{conn: conn} do
     conn = authenticated_conn(conn)
     user_id = conn.private.plug_session["current_user_id"]
     {:ok, _} = Inbox.emit(inbox_attrs(user_id))
@@ -136,10 +183,15 @@ defmodule PlatformWeb.NativeTabBridgeTest do
     {:ok, view, _html} = live(conn, ~p"/tasks")
     assert has_element?(view, "#native-tab-bridge[data-inbox-unread='true']")
     refute has_element?(view, "#native-tab-bridge[data-inbox-unread='false']")
+    assert has_element?(view, "#native-tab-bridge[data-inbox-badge='1']")
+
+    {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+    assert render(view) =~ ~s(data-inbox-badge="2")
+    assert has_element?(view, "#native-tab-bridge[data-inbox-badge='2']")
 
     assert has_element?(
              view,
-             "#bottom-nav a[data-destination='inbox'] [data-role='inbox-unread-dot']"
+             "#bottom-nav a[data-destination='inbox'] [data-role='inbox-badge']"
            )
   end
 end

@@ -450,12 +450,15 @@ defmodule PlatformWeb.ShellLiveTest do
              |> LazyHTML.attribute("aria-expanded") == ["true"]
     end
 
-    test "the bar shows the Inbox dot when the viewer has an unread inbox item", %{conn: conn} do
+    test "the bar shows the Inbox count badge when the viewer has an unread inbox item", %{
+      conn: conn
+    } do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
-      refute html =~ ~s(data-role="inbox-unread-dot")
+      refute html =~ ~s(data-role="inbox-badge")
+      refute html =~ "inbox-unread-dot"
 
       {:ok, _} =
         Platform.Inbox.emit(%{
@@ -470,12 +473,15 @@ defmodule PlatformWeb.ShellLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      assert html
-             |> LazyHTML.from_fragment()
-             |> LazyHTML.query(
-               ~s([data-bottom-rail] [data-destination="inbox"] [data-role="inbox-unread-dot"])
-             )
-             |> Enum.count() == 1
+      badge =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(
+          ~s([data-bottom-rail] [data-destination="inbox"] [data-role="inbox-badge"])
+        )
+
+      assert badge |> LazyHTML.text() |> String.trim() == "1"
+      refute html =~ "inbox-unread-dot"
     end
 
     test "Admin is a Settings page, not a sidebar row, even for an admin", %{
@@ -572,10 +578,11 @@ defmodule PlatformWeb.ShellLiveTest do
       }
     end
 
+    # The desktop sidebar's badge; the phone bar renders the same node.
     defp inbox_badge_text(html) do
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s([data-role="inbox-badge"]))
+      |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
       |> LazyHTML.text()
       |> String.trim()
     end
@@ -745,11 +752,11 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do
       # ShellLive builds the label with IconRail.badge_text/1 rather than its
-      # own formatting, so this is the only place the "99+" grammar is
-      # defined. Pinned here because the function had to become public for
-      # the push to reuse it.
-      assert PlatformWeb.Components.IconRail.badge_text(99) == "99"
-      assert PlatformWeb.Components.IconRail.badge_text(100) == "99+"
+      # own formatting, so this is the only place the "9+" grammar is
+      # defined (task 01a1b673). Pinned here because the function had to
+      # become public for the push to reuse it.
+      assert PlatformWeb.Components.IconRail.badge_text(9) == "9"
+      assert PlatformWeb.Components.IconRail.badge_text(10) == "9+"
       assert PlatformWeb.Components.IconRail.badge_text(0) == nil
     end
 
@@ -771,6 +778,249 @@ defmodule PlatformWeb.ShellLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assert :sys.get_state(view.pid).socket.assigns.inbox_unread_count == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Task 01a1b673: the Inbox badge clears live on every path that deals
+  # with a row, with no remount. Reading a mention in chat is a PATCH
+  # inside ChatLive, so the shell's `:inbox_count_refresh` hook is the only
+  # thing that can move the number; these tests watch the assign AND the
+  # rendered sidebar badge, tab-bar badge and native bridge go to 0 in the
+  # same LiveView process.
+  # ---------------------------------------------------------------------
+  describe "inbox badge clears live (task 01a1b673)" do
+    alias Platform.Inbox
+
+    defp badge_count(view), do: :sys.get_state(view.pid).socket.assigns.inbox_unread_count
+
+    defp rendered_badge(html) do
+      doc = LazyHTML.from_fragment(html)
+
+      %{
+        text:
+          doc
+          |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
+          |> LazyHTML.text()
+          |> String.trim(),
+        tab:
+          doc
+          |> LazyHTML.query(~s(#bottom-nav [data-role="inbox-badge"]))
+          |> LazyHTML.text()
+          |> String.trim(),
+        native:
+          doc
+          |> LazyHTML.query("#native-tab-bridge")
+          |> LazyHTML.attribute("data-inbox-unread")
+          |> List.first()
+      }
+    end
+
+    defp mention_rows!(user, space, n) do
+      for i <- 1..n do
+        msg = chat_unread_post_from_a_stranger(space, "mention #{i}")
+
+        {:ok, row} =
+          Inbox.emit(%{
+            user_id: user.id,
+            kind: "chat_mention",
+            source_type: "chat_message",
+            source_id: msg.id,
+            title: "You were mentioned",
+            url: "/chat/#{Chat.space_path_segment(space)}?message=#{msg.id}"
+          })
+
+        row
+      end
+    end
+
+    defp plain_row!(user, kind \\ "chat_mention", source_type \\ "chat_message") do
+      {:ok, row} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: kind,
+          source_type: source_type,
+          source_id: Ecto.UUID.generate(),
+          title: "Row",
+          url: "/inbox"
+        })
+
+      row
+    end
+
+    defp sponsored_task!(user) do
+      {:ok, project} =
+        Platform.Tasks.create_project(%{name: "Badge #{System.unique_integer([:positive])}"})
+
+      {:ok, task} = Platform.Tasks.create_task(%{project_id: project.id, title: "Badge task"})
+
+      # Stamped directly so the sponsor-assigned producer adds no row.
+      task |> Ecto.Changeset.change(sponsor_user_id: user.id) |> Repo.update!()
+    end
+
+    test "reading N mentions in chat takes the badge N -> 0 inside the same LiveView", %{
+      conn: conn
+    } do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      landing = chat_unread_channel!("landing")
+      chat_unread_join!(landing, user)
+      mentions = chat_unread_channel!("mentions")
+      chat_unread_join!(mentions, user)
+      _rows = mention_rows!(user, mentions, 3)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{Chat.space_path_segment(landing)}")
+      chat_unread_settle(view)
+
+      assert badge_count(view) == 3
+      before = rendered_badge(render(view))
+      assert before.text == "3"
+      assert before.tab == "3"
+      assert before.native == "true"
+
+      :ok = Inbox.subscribe(user.id)
+      pid = view.pid
+
+      # A patch, not a remount: the same LiveView process enters the space,
+      # which is the read-cursor path (`mark_read_at_channel_tip/2`).
+      render_patch(view, ~p"/chat/#{Chat.space_path_segment(mentions)}")
+      assert_receive {:inbox_changed, _}
+      chat_unread_barrier(view)
+
+      assert view.pid == pid
+      assert badge_count(view) == 0
+      after_read = rendered_badge(render(view))
+      assert after_read.text == ""
+      assert after_read.tab == ""
+      assert after_read.native == "false"
+      assert Inbox.list_unread_for_user(user.id) == []
+    end
+
+    test "Mark all read in chat takes the badge to 0 without a remount", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      landing = chat_unread_channel!("landing")
+      chat_unread_join!(landing, user)
+      a = chat_unread_channel!("alpha")
+      chat_unread_join!(a, user)
+      b = chat_unread_channel!("beta")
+      chat_unread_join!(b, user)
+      mention_rows!(user, a, 1)
+      mention_rows!(user, b, 2)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{Chat.space_path_segment(landing)}")
+      chat_unread_settle(view)
+      assert badge_count(view) == 3
+
+      render_click(view, "mark_all_read", %{})
+      chat_unread_barrier(view)
+
+      assert badge_count(view) == 0
+      assert rendered_badge(render(view)).tab == ""
+    end
+
+    test "opening, dismissing and Clear all on /inbox each move the badge live", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      to_open = plain_row!(user)
+      to_dismiss = plain_row!(user)
+      _rest = for _ <- 1..2, do: plain_row!(user)
+
+      {:ok, view, _html} = live(conn, ~p"/inbox")
+      assert badge_count(view) == 4
+
+      # Viewing the list marks nothing: every non-action row keeps its dot.
+      html = render(view)
+      assert badge_count(view) == 4
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-role="inbox-item-unread-dot"]))
+             |> Enum.count() >= 4
+
+      render_click(view, "open", %{"id" => to_open.id})
+      _ = render(view)
+      assert badge_count(view) == 3
+
+      render_click(view, "dismiss", %{"id" => to_dismiss.id})
+      _ = render(view)
+      assert badge_count(view) == 2
+
+      render_click(view, "clear_all", %{})
+      _ = render(view)
+      assert badge_count(view) == 0
+      assert rendered_badge(render(view)).text == ""
+    end
+
+    test "approving or rejecting a plan moves the badge live", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      plans =
+        for _ <- 1..2 do
+          task = sponsored_task!(user)
+
+          plan =
+            %Platform.Tasks.Plan{}
+            |> Platform.Tasks.Plan.changeset(%{
+              task_id: task.id,
+              version: 1,
+              status: "pending_review"
+            })
+            |> Repo.insert!()
+
+          {:ok, _} =
+            Inbox.emit(%{
+              user_id: user.id,
+              kind: "task_plan_review",
+              source_type: "task",
+              source_id: task.id,
+              title: "Plan ready for review",
+              url: "/tasks/#{task.id}"
+            })
+
+          plan
+        end
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert badge_count(view) == 2
+
+      [to_approve, to_reject] = plans
+      assert {:ok, _} = Platform.Tasks.approve_plan(to_approve, user.id)
+      _ = render(view)
+      assert badge_count(view) == 1
+
+      assert {:ok, _} = Platform.Tasks.reject_plan(to_reject, user.id, "not yet")
+      _ = render(view)
+      assert badge_count(view) == 0
+    end
+
+    test "resolving the last review request moves the badge live", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      task = sponsored_task!(user)
+      {:ok, plan} = Platform.Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Platform.Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Review"})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      {:ok, validation} =
+        Platform.Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          items: [%{label: "Desktop"}],
+          submitted_by: "some-agent"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert badge_count(view) == 1
+
+      for item <- request.items,
+          do: {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(item.id, user.id)
+
+      _ = render(view)
+      assert badge_count(view) == 0
     end
   end
 
@@ -1874,15 +2124,18 @@ defmodule PlatformWeb.ShellLiveTest do
       ch
     end
 
-    test "an external user's stale mention is cleared by the mount and the badge DECREASES",
+    test "an external user's stale mention is cleared by the mount and the list DECREASES",
          %{conn: conn} do
       %{user: ext, org: org} = reconcile_external_user!()
       %{read_row: read_row, unread_row: unread_row} = mention_pair!(ext, org.id)
       landing = landing_channel!(ext, org.id)
 
-      # Pre-state: both rows live, so any decrease below is caused by the
-      # mount and not by the fixture.
-      assert Inbox.unread_count(ext.id) == 2
+      # Pre-state: both rows live on the LIST, so any decrease below is caused
+      # by the mount and not by the fixture. Since task 01a1b673 the badge
+      # already excludes the mention behind the watermark (read in chat), so
+      # the badge pre-state is 1 and the reconcile is what clears the ROW.
+      assert length(Inbox.list_unread_for_user(ext.id)) == 2
+      assert Inbox.unread_count(ext.id) == 1
 
       {:ok, view, _html} = live(external_chat_conn(conn, ext), "/chat/#{landing.slug}")
 
@@ -1891,7 +2144,8 @@ defmodule PlatformWeb.ShellLiveTest do
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.current_user_id == ext.id
 
-      # THE NUMBER, not "a function was called". 2 -> 1.
+      # THE NUMBER, not "a function was called". List 2 -> 1.
+      assert length(Inbox.list_unread_for_user(ext.id)) == 1
       assert Inbox.unread_count(ext.id) == 1
       assert assigns.inbox_unread_count == 1
 
@@ -1931,7 +2185,10 @@ defmodule PlatformWeb.ShellLiveTest do
       org = Tenancy.get_org_by_slug!("acme")
       %{read_row: read_row, unread_row: unread_row} = mention_pair!(user, org.id)
 
-      assert Inbox.unread_count(user_id) == 2
+      # Badge already 1 (task 01a1b673 excludes a mention read in chat); the
+      # list still holds both rows until the mount reconciles.
+      assert length(Inbox.list_unread_for_user(user_id)) == 2
+      assert Inbox.unread_count(user_id) == 1
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assigns = :sys.get_state(view.pid).socket.assigns
@@ -2000,7 +2257,7 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     defp badge_nodes(html) do
-      html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="inbox-badge"]))
+      html |> LazyHTML.from_fragment() |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
     end
 
     test "an external user whose ONLY row is unreachable gets count 0 and NO badge node",

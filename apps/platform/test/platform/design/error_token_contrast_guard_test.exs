@@ -64,6 +64,13 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
       measured on the same variant's base-100. Each is under 4.5, so the floor
       can fire on exactly these grounds.
 
+  The Inbox count badge (task 01a1b673 stage 2, canvas 01a1b674) is a
+  consumer: number `--color-error-content` on fill `--color-error` (the
+  "error-content on error" pair), cut out by an opaque 2px `--color-base-100`
+  ring, so its ground is base-100 on the phone bar's glass and on the
+  sidebar alike ("error on base-100"). The badge test below holds the rule
+  to exactly those slots.
+
   Mutations (task 01a160c4 stage 1, each on its own probe branch): sand dark
   back to `#e5484d`; Burrow light content back to black; Burrow dark error
   collapsed to the light `#da1729`. Each turns this file red.
@@ -341,6 +348,28 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
       assert W.contrast(opaque(b, "--color-base-200"), opaque(b, "--color-base-300")) <
                @aa_non_text,
              "#{b.id} #{b.mode}"
+    end
+  end
+
+  test "the Inbox count badge paints only the error pair, a base-100 ring and --radius-selector",
+       %{app_css: app_css} do
+    rules = CssRules.rules(app_css)
+    badge = rule!(rules, ".inbox-badge", [])
+
+    assert decl(badge.body, "background") == "var(--color-error)"
+    assert decl(badge.body, "color") == "var(--color-error-content)"
+    assert decl(badge.body, "box-shadow") == "0 0 0 2px var(--color-base-100)"
+    assert decl(badge.body, "border-radius") == "var(--radius-selector)"
+    assert decl(badge.body, "height") == "16px"
+    assert decl(badge.body, "min-width") == "16px"
+
+    for r <- rules, r.selector =~ ~r/inbox-badge/ do
+      refute r.body =~ ~r/--color-(primary|info)\b/, "#{r.selector} reads primary or info"
+
+      refute r.body =~ ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\boklch\(/,
+             "#{r.selector} holds a colour literal"
+
+      refute r.selector =~ "data-theme", "#{r.selector} is qualified by data-theme"
     end
   end
 end

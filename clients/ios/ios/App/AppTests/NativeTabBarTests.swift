@@ -219,6 +219,33 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(NativeTabBarFactory.inboxBadge(next), "")
     }
 
+    /// `inbox_badge` (task 01a1b673 stage 3): the web badge's label is the
+    /// native badge value; `inbox_dot` alone (an older web build) is the bare
+    /// system dot; null, empty or a count of 0 is no badge at all.
+    func testInboxBadgeShowsTheWebLabelAndFallsBackToTheDot() {
+        for label in ["1", "7", "9", "9+"] {
+            let next = state(["items": five, "inbox_dot": true, "inbox_badge": label, "visible": true])
+            XCTAssertEqual(next.inboxBadge, label)
+            XCTAssertEqual(NativeTabBarFactory.inboxBadge(next), label)
+        }
+        let legacy = state(["items": five, "inbox_dot": true, "visible": true])
+        XCTAssertNil(legacy.inboxBadge)
+        XCTAssertEqual(NativeTabBarFactory.inboxBadge(legacy), "", "inbox_dot alone falls back to the system dot")
+
+        let zero = state(["items": five, "inbox_dot": false, "inbox_badge": NSNull(), "visible": true])
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(zero), "a count of 0 shows nothing")
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(state(["inbox_dot": false, "inbox_badge": ""])))
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(state(["inbox_badge": "  "])))
+
+        let seven = state(["inbox_dot": true, "inbox_badge": "7"])
+        XCTAssertEqual(state(["inbox_badge": 7], from: seven).inboxBadge, "7", "a number is the wrong type and keeps the label")
+        XCTAssertEqual(state(["visible": true], from: seven).inboxBadge, "7", "a payload without inbox_badge keeps it")
+        let cleared = state(["inbox_dot": false, "inbox_badge": NSNull()], from: seven)
+        XCTAssertNil(cleared.inboxBadge)
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(cleared))
+        XCTAssertNil(state(["inbox_badge": ""], from: seven).inboxBadge, "an empty label clears it")
+    }
+
     func testMissingOrGarbageFieldsLeaveTheStateUnchanged() {
         let start = state(["items": five, "selected": "inbox", "inbox_dot": true, "visible": true])
         XCTAssertEqual(state([:], from: start), start)
@@ -262,6 +289,11 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(NativeTabBarFactory.badge(for: "inbox", next), "")
         XCTAssertNil(NativeTabBarFactory.badge(for: "chat", next), "Chat never carries a native badge")
         next = state(["inbox_dot": false], from: next)
+        XCTAssertNil(NativeTabBarFactory.inboxBadge(next))
+        next = state(["inbox_dot": true, "inbox_badge": "4"], from: next)
+        XCTAssertEqual(NativeTabBarFactory.badge(for: "inbox", next), "4")
+        XCTAssertNil(NativeTabBarFactory.badge(for: "more", next), "More never carries a native badge")
+        next = state(["inbox_dot": false, "inbox_badge": NSNull()], from: next)
         XCTAssertNil(NativeTabBarFactory.inboxBadge(next))
         next = state(["visible": false], from: next)
         XCTAssertFalse(next.shown)
@@ -337,13 +369,17 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertEqual(host.bar.selectedItem, host.bar.items?[1])
         XCTAssertEqual(host.bar.items?.map(\.badgeValue), [nil, nil, ""])
 
+        next = state(["inbox_badge": "9+"], from: next)
+        host.render(next)
+        XCTAssertEqual(host.bar.items?.map(\.badgeValue), [nil, nil, "9+"], "the count label replaces the dot")
+
         var taps: [String] = []
         host.onTap = { taps.append($0) }
         host.tabBar(host.bar, didSelect: host.bar.items![2])
         XCTAssertEqual(taps, ["inbox"])
         XCTAssertEqual(host.bar.selectedItem, host.bar.items?[1], "a tap does not move the selection")
 
-        next = state(["selected": NSNull(), "inbox_dot": false], from: next)
+        next = state(["selected": NSNull(), "inbox_dot": false, "inbox_badge": NSNull()], from: next)
         host.render(next)
         XCTAssertNil(host.bar.selectedItem)
         XCTAssertEqual(host.bar.items?.compactMap(\.badgeValue), [])

@@ -132,14 +132,20 @@ struct NativeTabInkColors: Equatable {
 }
 
 /// What the web last said through `SuiteNative.tabBarState`
-/// (`{items, selected, inbox_dot, visible, ink, scheme}`). The bar is hidden,
-/// has no items and carries no badge until the first state arrives.
+/// (`{items, selected, inbox_dot, inbox_badge, visible, ink, scheme}`). The
+/// bar is hidden, has no items and carries no badge until the first state
+/// arrives. `inbox_badge` is the Inbox count label the web badge shows ("1"
+/// to "9", then "9+"), or null at 0; `inbox_dot` is true exactly when that
+/// count is above 0 and is what an older web build sends alone.
 struct NativeTabBarState: Equatable {
     /// The keys to draw, in the web's order: known keys only, no repeats, at
     /// most `NativeTab.maxItems`.
     var items: [String] = []
     var selected: String?
     var inboxDot = false
+    /// The Inbox count label from `inbox_badge`, nil at 0 or when the web
+    /// has not sent one (an older web build sends only `inbox_dot`).
+    var inboxBadge: String?
     var visible = false
     /// The web theme's tab inks. A key the web left out (it could not
     /// resolve that colour) keeps its previous value.
@@ -188,6 +194,12 @@ struct NativeTabBarState: Equatable {
             }
         }
         if let dot = payload["inbox_dot"] as? Bool { next.inboxDot = dot }
+        if let label = payload["inbox_badge"] as? String {
+            let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            next.inboxBadge = trimmed.isEmpty ? nil : trimmed
+        } else if payload["inbox_badge"] is NSNull {
+            next.inboxBadge = nil
+        }
         if let visible = payload["visible"] as? Bool { next.visible = visible }
         if let ink = payload["ink"] as? [String: Any] {
             if let selected = ink["selected"] as? String { next.ink.selected = selected }
@@ -341,11 +353,18 @@ enum NativeTabBarFactory {
         bar.overrideUserInterfaceStyle = style
     }
 
-    /// The badge for `key`: `""` (the system red dot) on Inbox while
-    /// `inbox_dot` is true, nil everywhere else (task 01a18d9f stage 5:
-    /// Inbox is a tab, so its unread dot moved there from More).
+    /// The badge for `key`. On Inbox: the `inbox_badge` label ("1" to "9",
+    /// then "9+", the same text as the web badge) when the web sent one;
+    /// else `""` (the system dot) while `inbox_dot` is true, which only an
+    /// older web build that predates `inbox_badge` produces; else nil, so a
+    /// count of 0 shows nothing. Nil on every other tab (task 01a18d9f
+    /// stage 5 moved the Inbox badge from More to the Inbox tab; task
+    /// 01a1b673 stage 3 made it a count). The system draws it in its badge
+    /// colours, red with white text.
     static func badge(for key: String, _ state: NativeTabBarState) -> String? {
-        key == "inbox" && state.inboxDot ? "" : nil
+        guard key == "inbox" else { return nil }
+        if let label = state.inboxBadge { return label }
+        return state.inboxDot ? "" : nil
     }
 
     /// The Inbox badge (nil before the first state).

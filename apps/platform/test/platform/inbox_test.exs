@@ -1300,6 +1300,243 @@ defmodule Platform.InboxTest do
     end
   end
 
+  # ── Task 01a1b673: reading a mention in chat clears it ───────────────────
+  #
+  # The badge counts what the viewer has not dealt with. Reading the mentioned
+  # message in chat deals with a `chat_mention`, so every chat read-cursor
+  # path dismisses the row (one write, one broadcast) and the badge scope
+  # excludes a read mention even when no path dismissed it.
+  describe "chat read cursor dismisses read mentions (task 01a1b673)" do
+    defp read_space!(name) do
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: name,
+          slug: "read-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      space
+    end
+
+    defp join!(space, user_id, type \\ "user") do
+      {:ok, participant} =
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: type,
+          participant_id: user_id,
+          display_name: "Fixture",
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    defp post!(space, author, body) do
+      {:ok, message} =
+        Platform.Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: body
+        })
+
+      message
+    end
+
+    defp mention!(user, message) do
+      {:ok, row} = Inbox.emit(valid_attrs(user, %{source_id: message.id}))
+      row
+    end
+
+    defp mention_live?(row), do: is_nil(Repo.get!(Item, row.id).dismissed_at)
+
+    # Three messages, the cursor moved to the middle one: the two at or below
+    # it clear, the one above survives. Exactly one broadcast for two rows.
+    test "mark_space_read/2 dismisses mentions at or below the cursor in one write and one broadcast" do
+      user = insert_user()
+      space = read_space!("Cursor")
+      me = join!(space, user.id)
+      author = join!(space, Ecto.UUID.generate())
+
+      [m1, m2, m3] = for n <- 1..3, do: post!(space, author, "message #{n}")
+      [r1, r2, r3] = Enum.map([m1, m2, m3], &mention!(user, &1))
+
+      assert Inbox.unread_count(user.id) == 3
+      :ok = Inbox.subscribe(user.id)
+
+      :ok = Platform.Chat.mark_space_read(me.id, m2.id)
+
+      assert_receive {:inbox_changed, uid}
+      assert uid == user.id
+      refute_receive {:inbox_changed, _}, 100
+      refute_received {:inbox_item_dismissed, _}
+
+      refute mention_live?(r1)
+      refute mention_live?(r2)
+      assert mention_live?(r3)
+
+      # Both rows dismissed by the same single write.
+      assert Repo.get!(Item, r1.id).dismissed_at == Repo.get!(Item, r2.id).dismissed_at
+      assert Inbox.unread_count(user.id) == 1
+    end
+
+    test "a cursor move that clears nothing writes nothing and broadcasts nothing" do
+      user = insert_user()
+      space = read_space!("Quiet")
+      me = join!(space, user.id)
+      author = join!(space, Ecto.UUID.generate())
+      m1 = post!(space, author, "first")
+      m2 = post!(space, author, "second")
+      _r2 = mention!(user, m2)
+
+      :ok = Inbox.subscribe(user.id)
+
+      # The only mention is above the cursor.
+      :ok = Platform.Chat.mark_space_read(me.id, m1.id)
+      refute_receive {:inbox_changed, _}, 100
+
+      # Already-dismissed rows are not re-dismissed or re-broadcast.
+      :ok = Platform.Chat.mark_space_read(me.id, m2.id)
+      assert_receive {:inbox_changed, _}
+      :ok = Platform.Chat.mark_space_read(me.id, m2.id)
+      refute_receive {:inbox_changed, _}, 100
+    end
+
+    test "only the reader's rows in that space clear; another user's row and another space stay" do
+      user = insert_user()
+      other = insert_user()
+      space = read_space!("Mine")
+      elsewhere = read_space!("Elsewhere")
+      me = join!(space, user.id)
+      _me_elsewhere = join!(elsewhere, user.id)
+      author = join!(space, Ecto.UUID.generate())
+      far_author = join!(elsewhere, Ecto.UUID.generate())
+
+      far = post!(elsewhere, far_author, "elsewhere, earlier")
+      here = post!(space, author, "here")
+
+      mine = mention!(user, here)
+      theirs = mention!(other, here)
+      far_row = mention!(user, far)
+
+      :ok = Platform.Chat.mark_space_read(me.id, here.id)
+
+      refute mention_live?(mine)
+      assert mention_live?(theirs)
+      # `far` has a SMALLER id than the cursor written here, but it lives in a
+      # space whose cursor did not move.
+      assert far.id < here.id
+      assert mention_live?(far_row)
+    end
+
+    test "an agent participant's cursor write dismisses nothing" do
+      user = insert_user()
+      space = read_space!("Agent")
+      _me = join!(space, user.id)
+      agent = join!(space, Ecto.UUID.generate(), "agent")
+      author = join!(space, Ecto.UUID.generate())
+      msg = post!(space, author, "hello")
+      row = mention!(user, msg)
+
+      :ok = Platform.Chat.mark_space_read(agent.id, msg.id)
+
+      assert mention_live?(row)
+      assert Inbox.unread_count(user.id) == 1
+    end
+
+    test "mark_all_chat_spaces_read/1 clears mentions in every advanced space with ONE broadcast" do
+      user = insert_user()
+      a = read_space!("Alpha")
+      b = read_space!("Beta")
+      _ = join!(a, user.id)
+      _ = join!(b, user.id)
+      author_a = join!(a, Ecto.UUID.generate())
+      author_b = join!(b, Ecto.UUID.generate())
+
+      row_a = mention!(user, post!(a, author_a, "in alpha"))
+      row_b = mention!(user, post!(b, author_b, "in beta"))
+
+      :ok = Inbox.subscribe(user.id)
+      assert {:ok, 2} = Platform.Chat.mark_all_chat_spaces_read(user)
+
+      assert_receive {:inbox_changed, _}
+      refute_receive {:inbox_changed, _}, 100
+      refute mention_live?(row_a)
+      refute mention_live?(row_b)
+
+      # Nothing left to advance: no write, no broadcast.
+      assert {:ok, 0} = Platform.Chat.mark_all_chat_spaces_read(user)
+      refute_receive {:inbox_changed, _}, 100
+    end
+
+    # Belt and braces: a cursor written by a path that never calls the
+    # dismissal (here a raw update) still takes the mention out of the badge,
+    # while the row stays on the list until something dismisses it.
+    test "the badge excludes a mention already read in chat even when nothing dismissed it" do
+      user = insert_user()
+      space = read_space!("Backstop")
+      me = join!(space, user.id)
+      author = join!(space, Ecto.UUID.generate())
+      read_msg = post!(space, author, "read")
+      unread_msg = post!(space, author, "unread")
+      read_row = mention!(user, read_msg)
+      unread_row = mention!(user, unread_msg)
+      # A mention whose message is gone is not positively read: it counts.
+      _orphan = mention!(user, %{id: Ecto.UUID.generate()})
+
+      import Ecto.Query
+
+      from(p in Platform.Chat.Participant, where: p.id == ^me.id)
+      |> Repo.update_all(set: [last_read_message_id: read_msg.id])
+
+      assert mention_live?(read_row)
+      assert Inbox.unread_count(user.id) == 2
+      assert Inbox.reachable_unread_count(user.id) == 2
+
+      badge_ids = user.id |> Inbox.badge_scope() |> Repo.all() |> MapSet.new(& &1.id)
+      list_ids = user.id |> Inbox.unread_scope() |> Repo.all() |> MapSet.new(& &1.id)
+
+      refute MapSet.member?(badge_ids, read_row.id)
+      assert MapSet.member?(badge_ids, unread_row.id)
+      assert MapSet.member?(list_ids, read_row.id)
+      # #589/#592: the badge is a subset of the list.
+      assert MapSet.subset?(badge_ids, list_ids)
+    end
+  end
+
+  describe "the badge definition (task 01a1b673)" do
+    test "non-action rows count until opened or dismissed; action rows count until opened" do
+      user = insert_user()
+
+      {:ok, untouched} = Inbox.emit(valid_attrs(user, %{title: "never opened"}))
+      {:ok, opened} = Inbox.emit(valid_attrs(user, %{title: "opened"}))
+      {:ok, dismissed} = Inbox.emit(valid_attrs(user, %{title: "dismissed"}))
+
+      {:ok, action_unread} =
+        Inbox.emit(valid_attrs(user, %{kind: "task_plan_review", source_type: "task"}))
+
+      {:ok, action_opened} =
+        Inbox.emit(valid_attrs(user, %{kind: "review_request_pending", source_type: "task"}))
+
+      assert Inbox.reachable_unread_count(user.id) == 5
+
+      {:ok, _} = Inbox.open_item(opened.id, user.id)
+      {:ok, _} = Inbox.mark_dismissed(dismissed.id, user.id)
+      {:ok, _} = Inbox.open_item(action_opened.id, user.id)
+
+      badge_ids = user.id |> Inbox.badge_scope() |> Repo.all() |> MapSet.new(& &1.id)
+      list_ids = user.id |> Inbox.unread_scope() |> Repo.all() |> MapSet.new(& &1.id)
+
+      assert badge_ids == MapSet.new([untouched.id, action_unread.id])
+      assert Inbox.reachable_unread_count(user.id) == 2
+
+      # Read-but-undecided action row: listed, not counted.
+      assert MapSet.member?(list_ids, action_opened.id)
+      refute MapSet.member?(badge_ids, action_opened.id)
+      # Opened non-action row: acknowledged off the list entirely.
+      refute MapSet.member?(list_ids, opened.id)
+    end
+  end
+
   describe "open_item/2" do
     test "a non-action kind is read AND dismissed in one write, with equal timestamps" do
       user = insert_user()

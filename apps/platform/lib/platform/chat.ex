@@ -8050,13 +8050,42 @@ defmodule Platform.Chat do
   defdelegate thread_activity_entry(participant, thread_id, opts \\ []),
     to: Platform.Chat.ThreadActivity
 
-  @doc "Persist the last-read cursor for a participant."
+  @doc """
+  Persist the last-read cursor for a participant.
+
+  `participant_id` is the `chat_participants` primary key, not a user id. For a
+  user participant the write is followed by
+  `Platform.Inbox.dismiss_read_mentions/2` for that space (task `01a1b673`), so
+  reading a mention in chat clears its inbox row and the shell badge
+  recomputes live. Agent participants have no inbox and are skipped.
+  """
   @spec mark_space_read(binary(), binary()) :: :ok
   def mark_space_read(participant_id, message_id) do
-    from(p in Participant, where: p.id == ^participant_id)
-    |> Repo.update_all(set: [last_read_message_id: message_id])
+    {_count, rows} =
+      from(p in Participant,
+        where: p.id == ^participant_id,
+        select: {p.participant_type, p.participant_id, p.space_id}
+      )
+      |> Repo.update_all(set: [last_read_message_id: message_id])
+
+    for {"user", user_id, space_id} <- rows, do: dismiss_read_mentions(user_id, [space_id])
 
     :ok
+  end
+
+  # Best-effort, like every other inbox side effect of a chat write: a cursor
+  # write that has already landed must not be undone or crash its caller
+  # because the inbox sweep raised. `Inbox.reachable_unread_count/1` excludes
+  # read mentions on its own, so a failed sweep cannot leave the badge up.
+  defp dismiss_read_mentions(_user_id, []), do: :ok
+
+  defp dismiss_read_mentions(user_id, space_ids) do
+    {:ok, _} = Platform.Inbox.dismiss_read_mentions(user_id, space_ids)
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Chat] read-mention inbox dismissal failed: #{Exception.message(e)}")
+      :ok
   end
 
   @doc """
@@ -8223,15 +8252,17 @@ defmodule Platform.Chat do
     rows = countable_participant_rows(user_id)
     tips = newest_top_level_message_ids(Enum.map(rows, & &1.space_id))
 
-    advanced =
-      Enum.count(rows, fn row ->
-        case Map.get(tips, row.space_id) do
-          nil -> false
-          tip_id -> advance_read_cursor(row, tip_id)
-        end
-      end)
+    advanced_space_ids =
+      for row <- rows,
+          tip_id = Map.get(tips, row.space_id),
+          not is_nil(tip_id),
+          advance_read_cursor(row, tip_id),
+          do: row.space_id
 
-    {:ok, advanced}
+    # One inbox sweep and one broadcast for the whole gesture, not one per space.
+    dismiss_read_mentions(user_id, advanced_space_ids)
+
+    {:ok, length(advanced_space_ids)}
   end
 
   def mark_all_chat_spaces_read(_user), do: {:ok, 0}
