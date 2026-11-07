@@ -47,6 +47,7 @@ defmodule Platform.GameStream.NativeAPITest do
       conn(:get, "/browser/csrf")
       |> init_test_session(%{})
       |> NativeAPI.call([])
+
     assert unauthenticated.status == 401
 
     csrf_conn =
