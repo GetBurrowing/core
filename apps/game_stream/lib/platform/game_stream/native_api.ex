@@ -5,6 +5,14 @@ defmodule Platform.GameStream.NativeAPI do
   alias Platform.GameStream.{NativeSessions, NativeBuild, JoinToken}
   def init(opts), do: opts
 
+  def call(%{path_info: ["browser" | rest]} = conn, _) do
+    if Platform.GameStream.enabled?() and conn.query_string == "" do
+      Platform.GameStream.NativeBrowserAPI.call(%{conn | path_info: rest}, [])
+    else
+      reply(conn, 401, %{error: "unauthorized"})
+    end
+  end
+
   def call(conn, _) do
     # Secrets in POST bodies/Authorization only. Never accept query credentials.
     if Platform.GameStream.enabled?() and conn.method == "POST" and conn.query_string == "" do
