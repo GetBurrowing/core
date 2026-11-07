@@ -803,8 +803,7 @@ defmodule PlatformWeb.SettingsLive do
 
       <.sheet id="settings-sharing-sheet" open={@sheet == :sharing} on_close="close_settings_sheet">
         <:title>Sharing with Burrow</:title>
-        <div :if={@sheet == :sharing} class="max-h-[75dvh] overflow-y-auto px-4 pb-6">
-          <h2 class="text-lg font-semibold mb-4">Sharing with Burrow</h2>
+        <div :if={@sheet == :sharing} class="px-4 pb-6">
           <.live_component
             module={PlatformWeb.InstructionPacksComponent}
             id="settings-instruction-packs"

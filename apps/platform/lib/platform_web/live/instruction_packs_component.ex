@@ -231,7 +231,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
               <dt>Last successful check</dt>
               <dd>{time(row.state.last_successful_check_at)}</dd>
             </dl>
-            <p class="whitespace-pre-wrap break-words" data-role="pack-changelog">
+            <p class="break-words" data-role="pack-changelog">
               {row.manifest["changelog"] || "No changelog received."}
             </p>
             <form
