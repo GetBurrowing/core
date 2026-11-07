@@ -1,0 +1,153 @@
+defmodule Platform.GameStream.NativeSessionsTest do
+  use ExUnit.Case, async: false
+  import Ecto.Query
+  alias Platform.{Repo, Federation, Tasks}
+  alias Platform.Accounts.User
+  alias Platform.Chat.Space
+  alias Platform.GameStream.{GameChannels, NativeBuild, NativeSessions, NativeSessionRecord, JoinToken}
+  alias Platform.Tenancy.OrgMembership
+
+  defmodule FakeProvider do
+    @behaviour Platform.GameStream.Provider
+    def start(id, build, limits) do
+      send(Application.fetch_env!(:game_stream, :native_test_owner), {:native_start, id, build, limits})
+      {:ok, %{session_id: id}}
+    end
+    def status(_), do: :ok
+    def stop(h, reason) do
+      send(Application.fetch_env!(:game_stream, :native_test_owner), {:native_stop, h.session_id, reason})
+      :ok
+    end
+    def reconcile(id) do
+      send(Application.fetch_env!(:game_stream, :native_test_owner), {:native_reconcile, id})
+      :ok
+    end
+  end
+
+  setup do
+    # Real committed rows + one connection per concurrent caller. A shared
+    # sandbox connection would serialize callers before they reach our locks.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo, sandbox: false)
+    saved = Map.new([:enabled, :native_provider, :native_test_owner], &{&1, Application.fetch_env(:game_stream, &1)})
+    Application.put_env(:game_stream, :enabled, true)
+    Application.put_env(:game_stream, :native_provider, FakeProvider)
+    Application.put_env(:game_stream, :native_test_owner, self())
+    n = System.unique_integer([:positive])
+    user = Repo.insert!(%User{email: "native-#{n}@example.com", name: "Native", oidc_sub: "native-#{n}"})
+    org = Platform.TenancyFixtures.acme_org_id()
+    membership = Repo.insert!(OrgMembership.changeset(%OrgMembership{}, %{user_id: user.id, org_id: org, role: "member"}))
+    {:ok, project} = Tasks.create_project(%{name: "Native #{n}", slug: "native-#{n}", org_id: org, repo_url: "https://github.com/example/native-#{n}"})
+    channel = Repo.insert!(Space.changeset(%Space{}, %{name: "Native #{n}", slug: "native-#{n}", org_id: org, kind: "channel"}))
+    {:ok, _} = GameChannels.configure(user, channel.id, project.id)
+    manifest = %{"id" => "native-#{n}", "repo_url" => project.repo_url, "engine" => "godot", "protocol_version" => 1, "capacity" => 4,
+      "server_image" => "registry.example/voltron@sha256:" <> String.duplicate("a", 64)}
+    {:ok, build} = NativeBuild.register(project.id, manifest)
+    {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: "native-test-#{n}", tool_profile: [],
+      agent_id: Platform.PrototypeFixtures.agent!().id})
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+    Platform.Federation.RuntimePresence.track(runtime.runtime_id)
+    # Discovery reads persisted client_info, not only Presence metadata.
+    runtime = Repo.update!(Ecto.Changeset.change(runtime, metadata: %{"client_info" => %{"features" => ["game_native_host"]}}))
+    on_exit(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(from t in JoinToken, where: t.channel_id == ^channel.id)
+        Repo.delete_all(from s in NativeSessionRecord, where: s.channel_id == ^channel.id)
+        Repo.delete_all(from b in GameChannels, where: b.id == ^channel.id)
+        Repo.delete_all(from b in NativeBuild, where: b.project_id == ^project.id)
+        Repo.delete_all(from s in Space, where: s.id == ^channel.id)
+        Repo.delete_all(from r in Platform.Agents.AgentRuntime, where: r.id == ^runtime.id)
+        Repo.delete_all(from p in Platform.Tasks.Project, where: p.id == ^project.id)
+        Repo.delete_all(from m in OrgMembership, where: m.id == ^membership.id)
+        Repo.delete_all(from u in User, where: u.id == ^user.id)
+      end)
+      Platform.Federation.RuntimePresence.untrack(runtime.runtime_id)
+      for {key, value} <- saved do
+        case value do
+          {:ok, v} -> Application.put_env(:game_stream, key, v)
+          :error -> Application.delete_env(:game_stream, key)
+        end
+      end
+    end)
+    %{user: user, project: project, channel: channel, build: build, runtime: runtime}
+  end
+
+  defp concurrent(n, fun) do
+    for _ <- 1..n do
+      Task.async(fn -> Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fun) end)
+    end |> Enum.map(&Task.await(&1, 15_000))
+  end
+
+  defp running(ctx) do
+    assert {:ok, status} = NativeSessions.play(ctx.user, ctx.channel.id)
+    credential = JoinToken.mint()
+    assert :ok = NativeSessions.host_status(ctx.runtime.runtime_id, %{"session_id" => status.id, "generation" => 1,
+      "state" => "running", "endpoint" => "native.example:24973", "credential_hash" => JoinToken.hash(credential), "admissions" => []})
+    {Repo.get!(NativeSessionRecord, status.id), credential}
+  end
+
+  test "concurrent Play persists one session and pins its build across latest changes and reconciler restart", ctx do
+    results = concurrent(8, fn -> NativeSessions.play(ctx.user, ctx.channel.id) end)
+    ids = Enum.map(results, fn {:ok, r} -> r.id end) |> Enum.uniq()
+    assert [id] = ids
+    assert Repo.aggregate(from(s in NativeSessionRecord, where: s.channel_id == ^ctx.channel.id), :count) == 1
+    {:ok, _} = NativeBuild.register(ctx.project.id, Map.put(ctx.build.manifest, "id", ctx.build.id <> "-new"))
+    assert {:ok, %{id: ^id, build_id: build_id}} = NativeSessions.play(ctx.user, ctx.channel.id)
+    assert build_id == ctx.build.id
+    assert :ok = NativeSessions.tick()
+    assert_receive {:native_reconcile, ^id}
+    assert Repo.get!(Space, ctx.channel.id).kind == "channel"
+  end
+
+  test "atomic consume permits one slot once and never returns secrets in status", ctx do
+    {row, credential} = running(ctx)
+    assert {:ok, handoff} = NativeSessions.mint(ctx.user, row.id)
+    claims = handoff |> Jason.encode!() |> Jason.decode!()
+    outcomes = concurrent(8, fn -> NativeSessions.consume(row.id, credential, claims) end)
+    assert Enum.count(outcomes, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(outcomes, &match?({:error, :unauthorized}, &1)) == 7
+    assert {:error, :already_reserved} = NativeSessions.mint(ctx.user, row.id)
+    {:ok, status} = NativeSessions.status(ctx.user, ctx.channel.id)
+    refute Jason.encode!(status) =~ handoff.token
+    refute Jason.encode!(status) =~ credential
+    refute Jason.encode!(status) =~ "digest"
+  end
+
+  test "false host, altered claims, expired token and revoked membership fail closed", ctx do
+    {row, credential} = running(ctx)
+    {:ok, handoff} = NativeSessions.mint(ctx.user, row.id)
+    claims = handoff |> Jason.encode!() |> Jason.decode!()
+    assert {:error, :unauthorized} = NativeSessions.consume(row.id, "wrong-host", claims)
+    for {key, value} <- [{"build_id", "wrong"}, {"channel_id", Ecto.UUID.generate()}, {"user_id", Ecto.UUID.generate()}, {"generation", 2}] do
+      assert {:error, :unauthorized} = NativeSessions.consume(row.id, credential, Map.put(claims, key, value))
+    end
+    token = Repo.one!(from t in JoinToken, where: t.session_id == ^row.id)
+    Repo.update!(Ecto.Changeset.change(token, expires_at: DateTime.add(DateTime.utc_now(), -1)))
+    assert {:error, :unauthorized} = NativeSessions.consume(row.id, credential, claims)
+    Repo.update!(Ecto.Changeset.change(token, expires_at: DateTime.add(DateTime.utc_now(), 60)))
+    Repo.delete_all(from m in OrgMembership, where: m.user_id == ^ctx.user.id)
+    assert {:error, :unauthorized} = NativeSessions.consume(row.id, credential, claims)
+  end
+
+  test "reservation protects idle session; expiry and no players allow stop; old token never joins successor", ctx do
+    {row, credential} = running(ctx)
+    {:ok, handoff} = NativeSessions.mint(ctx.user, row.id)
+    Repo.update!(Ecto.Changeset.change(row, idle_since: DateTime.add(DateTime.utc_now(), -601)))
+    assert :ok = NativeSessions.tick()
+    refute_received {:native_stop, _, _}
+    Repo.update_all(from(t in JoinToken, where: t.session_id == ^row.id), set: [expires_at: DateTime.add(DateTime.utc_now(), -1)])
+    NativeSessions.tick()
+    assert_receive {:native_stop, id, "idle"}
+    assert id == row.id
+    claims = handoff |> Jason.encode!() |> Jason.decode!()
+    assert {:error, :unauthorized} = NativeSessions.consume(id, credential, claims)
+  end
+
+  test "cross-org channel linking does not infer game access or change channel kind", ctx do
+    other = Platform.TenancyFixtures.tenant_org_id("native-other-#{System.unique_integer([:positive])}")
+    {:ok, project} = Tasks.create_project(%{name: "Other", org_id: other, repo_url: "https://github.com/private/game"})
+    assert {:error, :unauthorized} = GameChannels.configure(ctx.user, ctx.channel.id, project.id)
+    assert Repo.get!(GameChannels, ctx.channel.id).project_id == ctx.project.id
+    Repo.delete!(project)
+    assert {:error, :unauthorized} = GameChannels.authorize(ctx.user, "sixteen-char-xxx")
+  end
+end

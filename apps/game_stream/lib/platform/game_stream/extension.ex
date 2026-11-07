@@ -37,7 +37,7 @@ defmodule Platform.GameStream.Extension do
   alias Platform.Federation.PlayTools
   alias Platform.GameStream
 
-  @events ~w(play_session_status play_signal play_slot_activity play_peer_view)
+  @events ~w(play_session_status play_signal play_slot_activity play_peer_view play_native_status)
 
   @inert_text "game_stream is disabled (GAME_STREAM_ENABLED is unset); further play frames " <>
                 "on this channel are dropped silently"
@@ -88,6 +88,9 @@ defmodule Platform.GameStream.Extension do
     end
   end
 
+  defp dispatch("play_native_status", runtime_id, payload),
+    do: GameStream.NativeSessions.host_status(runtime_id, payload)
+
   defp dispatch("play_session_status", runtime_id, payload),
     do: GameStream.handle_host_status(runtime_id, payload)
 
@@ -126,7 +129,8 @@ defmodule Platform.GameStream.Extension do
       Platform.Experiments.Surfaces.GameStreamRoster,
       # Task 01a0fe45: touch forwarding's tap-vs-drag slop and move rate.
       # Same gating note as the encoder. No metric judges it yet.
-      Platform.Experiments.Surfaces.GameStreamTouch
+      Platform.Experiments.Surfaces.GameStreamTouch,
+      Platform.Experiments.Surfaces.NativeSessionIdle
     ]
   end
 
@@ -184,6 +188,9 @@ defmodule Platform.GameStream.Extension do
   def permissions do
     [%{module: "play", permissions: ["play.use"], bundles: %{"play" => "play.use"}}]
   end
+
+  @impl true
+  def routes, do: [%{prefix: "play", plug: Platform.GameStream.NativeAPI, opts: []}]
 
   # Play has no rail destination
   # (`0055-extension-contract-and-build-time-modules.md § 5. Rail items: which are core and which are module`).

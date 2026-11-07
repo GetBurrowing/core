@@ -483,8 +483,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1aa47 stage 4 adds hr.profile, a core surface appended after
     # memory.insight_synthesis, so it precedes the Play keys as well; stage 5
     # re-pins it here (the tool-definition digests did not move).
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile game_stream.encoder_preset game_stream.roster game_stream.touch)
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile game_stream.native_idle)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile game_stream.encoder_preset game_stream.roster game_stream.touch game_stream.native_idle)
 
     defp without_triage_item_schema(definitions) do
       Enum.map(definitions, fn

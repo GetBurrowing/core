@@ -8,6 +8,15 @@ defmodule Platform.GameStream.Protocol do
   implements this contract on the host side EXACTLY as written here; if the
   contract is wrong, it is fixed here first and the host follows.
 
+  ## Native mode
+
+  `game_native_host` runtimes receive `play_native_start` (session_id, mode=native,
+  immutable build, generation, capacity, idle_timeout_s), `play_native_stop` and
+  `play_native_reconcile`. They send `play_native_status` with session_id,
+  generation, state, endpoint, credential_hash and connected admission UUIDs.
+  Raw host credentials remain in a session-scoped secret file on the host.
+  Native mode has no encoder, repository checkout or WebRTC peer.
+
   ## Discovery
 
   A host is a PRESENT runtime (`Platform.Federation.RuntimePresence`) whose

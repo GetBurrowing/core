@@ -7,3 +7,7 @@ import Config
 import_config "../../platform/config/config.exs"
 
 config :platform, :extensions, [Platform.GameStream.Extension]
+
+if config_env() == :test do
+  config :game_stream, :native_reconcile, false
+end

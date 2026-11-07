@@ -29,7 +29,8 @@ defmodule Platform.GameStream.Supervisor do
   def init(_opts) do
     children = [
       {Registry, keys: :unique, name: @registry},
-      {DynamicSupervisor, strategy: :one_for_one, name: @sessions}
+      {DynamicSupervisor, strategy: :one_for_one, name: @sessions},
+      {Platform.GameStream.NativeReconciler, []}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

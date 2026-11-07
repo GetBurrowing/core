@@ -1,0 +1,21 @@
+# Reference only: Dalton installs/adapts this on moon. The provider creates
+# per-session units with exact digest/UDP mapping; never reuse stream ports.
+[Unit]
+Description=Burrow native game server (session-specific reference)
+After=network-online.target
+
+[Container]
+Image=REGISTRY/GAME@sha256:IMMUTABLE_DIGEST
+ContainerName=burrow-native-SESSION_UUID
+PublishPort=24973:24972/udp
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+Volume=/var/lib/burrow-native/SESSION_UUID/config.json:/run/native/config.json:ro
+Volume=/var/lib/burrow-native/SESSION_UUID/state:/run/native-state:rw
+Environment=GAME_NATIVE_CONFIG_FILE=/run/native/config.json
+
+[Service]
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=128

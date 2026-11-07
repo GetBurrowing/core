@@ -37,6 +37,7 @@ defmodule Platform.GameStream.RuntimeConfig do
   def read(env) when is_map(env) do
     [
       enabled: Map.get(env, "GAME_STREAM_ENABLED") in ["true", "1"],
+      native_publishers: publishers(env),
       turn: [
         urls: turn_urls(env),
         username: turn_username(env),
@@ -51,6 +52,19 @@ defmodule Platform.GameStream.RuntimeConfig do
     settings = read(env)
     Application.put_env(:game_stream, :enabled, Keyword.fetch!(settings, :enabled))
     Application.put_env(:game_stream, :turn, Keyword.fetch!(settings, :turn))
+    Application.put_env(:game_stream, :native_publishers, Keyword.fetch!(settings, :native_publishers))
+  end
+
+  # The file maps project UUIDs to SHA256 credential digests. No raw CI secret is kept in app env.
+  defp publishers(env) do
+    with path when is_binary(path) <- env["GAME_NATIVE_PUBLISHERS_FILE"],
+         {:ok, body} <- File.read(path),
+         {:ok, publishers} when is_map(publishers) <- Jason.decode(body),
+         true <- Enum.all?(publishers, fn {id, hash} -> Platform.UUID.valid?(id) and is_binary(hash) and Regex.match?(~r/\A[0-9a-f]{64}\z/, hash) end) do
+      publishers
+    else
+      _ -> %{}
+    end
   end
 
   defp turn_urls(env) do
