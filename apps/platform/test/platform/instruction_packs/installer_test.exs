@@ -261,6 +261,26 @@ defmodule Platform.InstructionPacks.InstallerTest do
     assert {:ok, _} = install(two, roots)
   end
 
+  test "later skill validation failure rolls back an already written prompt and all provenance",
+       %{owner: owner, skill: skill} do
+    {one, roots} = release(1)
+    assert {:ok, _} = install(one, roots)
+    adopt(owner)
+    previous = Repo.get!(State, "setup-guide")
+    # Targets sort prompt_template before skill_markdown. The prompt writes
+    # successfully; the later whitespace-only Skill fails its real changeset.
+    {two, _} =
+      release(2, Manifest.digest(one["manifest"]), " ", "prompt written then rolled back")
+
+    assert {:error, %Ecto.Changeset{}} = install(two, roots)
+    assert PromptTemplates.get_template_by_slug("pack.test").content == "vendor prompt"
+    assert Skills.get_skill(skill.id).content == "vendor skill"
+    assert Repo.get!(State, "setup-guide").history == previous.history
+    assert Repo.get!(State, "setup-guide").version == 1
+    assert Repo.aggregate(RetainedRelease, :count) == 1
+    assert Enum.all?(Repo.all(Entry), &(&1.effective_version == 1))
+  end
+
   test "missing target refuses whole pack without partial provenance or writes" do
     {e, roots} = release(1)
 
