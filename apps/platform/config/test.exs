@@ -265,6 +265,10 @@ config :platform, :start_habits_pruner, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_insight_disseminator, false
 
+# Secretary Scheduler (task 01a1b721 stage 3): its batches read and write the
+# DB from task processes. Tests start_supervised!/1 their own.
+config :platform, :start_secretary, false
+
 # CatalogEmitter (task 01a0008c stage 3): a globally-booted instance would
 # subscribe to `[:platform, :files, :ingested, :stop]` for the whole suite
 # and then run Repo queries from a process that owns no sandbox

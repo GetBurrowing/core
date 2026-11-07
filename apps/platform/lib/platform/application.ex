@@ -339,6 +339,7 @@ defmodule Platform.Application do
     |> maybe_add_insight_purger(flag)
     |> maybe_add_habits_pruner(flag)
     |> maybe_add_insight_disseminator(flag)
+    |> maybe_add_secretary_scheduler(flag)
     |> maybe_add_catalog_emitter(flag)
     |> maybe_add_deploy_merge_reconciler(flag)
     |> maybe_add_canvas_search_backfill(flag)
@@ -691,6 +692,20 @@ defmodule Platform.Application do
     if flag.(:platform, :start_insight_disseminator, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Memory.Insights.Disseminator)
+    else
+      children
+    end
+  end
+
+  # Secretary Scheduler (task 01a1b721 stage 3): debounces arrivals into
+  # per-person batches and runs each under Platform.TaskSupervisor. Attaches
+  # its own message_posted handler in init/1. Needs Repo, PubSub and the
+  # TaskSupervisor. Disabled in config/test.exs; tests start_supervised!/1
+  # their own.
+  defp maybe_add_secretary_scheduler(children, flag) do
+    if flag.(:platform, :start_secretary, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Secretary.Scheduler)
     else
       children
     end

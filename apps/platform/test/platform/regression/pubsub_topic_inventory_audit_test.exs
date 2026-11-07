@@ -160,6 +160,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"files:stars:<id>", :user},
     {"external_admission:<id>", :user},
     {"inbox:<id>", :user},
+    # Task 01a1b721 stage 3: one person's secretary view.
+    {"secretary:<id>", :user},
     {"meeting:state:<id>", :user},
     # Dormant on BOTH sides: broadcast_user/2 and subscribe_user/1 have no
     # caller anywhere in lib.

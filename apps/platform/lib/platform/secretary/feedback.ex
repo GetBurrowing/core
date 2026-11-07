@@ -24,6 +24,18 @@ defmodule Platform.Secretary.Feedback do
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 
+  @doc """
+  The kind key feedback is recorded and applied under: the input's kind
+  (`inbox:<kind>`, `chat:<space kind>`, `calendar:event`, ...), plus the
+  author for a chat message (`chat:channel:<author id>`), so "hide this
+  kind" on a chat row hides that person's posts of that kind, not all chat.
+  """
+  @spec kind_key(String.t(), String.t() | nil) :: String.t()
+  def kind_key("chat:" <> _ = kind, author_id) when is_binary(author_id),
+    do: kind <> ":" <> author_id
+
+  def kind_key(kind, _author_id) when is_binary(kind), do: kind
+
   @doc "Valid feedback actions."
   @spec actions() :: [String.t()]
   def actions, do: @actions

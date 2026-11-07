@@ -279,6 +279,10 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # task 01a13867 stage 3: daily insight briefing delivery. Tests call
     # `Platform.Memory.Insights.Disseminator.run/1` directly.
     :start_insight_disseminator,
+    # Task 01a1b721 stage 3 — the secretary Scheduler. Its batches read and
+    # write the DB from TaskSupervisor children. Tests start_supervised!/1
+    # their own and call `Platform.Secretary.Pass.run/2` directly.
+    :start_secretary,
     # Task 019fb978 stage 2 — the declarative TaskRouter watcher. This entry
     # is the audit test working exactly as designed: adding the gate to
     # application.ex failed this assertion on the first full-suite run, which

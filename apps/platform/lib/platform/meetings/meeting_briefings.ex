@@ -500,6 +500,11 @@ defmodule Platform.Meetings.MeetingBriefings do
           _ -> :ok
         end)
 
+        # Task 01a1b721 stage 3: the attendees' action items are arrivals.
+        for {user_id, status, _} <- outcomes,
+            status != :error,
+            do: Platform.Secretary.note_arrival(user_id)
+
         {:ok,
          %{
            created: Enum.count(outcomes, &(elem(&1, 1) == :created)),

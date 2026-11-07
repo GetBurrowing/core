@@ -278,6 +278,8 @@ defmodule Platform.Role do
     Platform.Memory.Insights.Purger,
     Platform.Habits.Pruner,
     Platform.Memory.Insights.Disseminator,
+    # Task 01a1b721 stage 3: runs the secretary's batches.
+    Platform.Secretary.Scheduler,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,
     Platform.Orchestration.TaskRouterWatcher,
@@ -305,7 +307,9 @@ defmodule Platform.Role do
     Platform.Agents.SystemEventScheduler,
     Platform.Responsibilities.Router,
     Platform.Mail.Outbox,
-    Platform.Memory.Insights.Disseminator
+    Platform.Memory.Insights.Disseminator,
+    # Would run every person's batch twice.
+    Platform.Secretary.Scheduler
   ]
 
   # ── stage 4 tables ─────────────────────────────────────────────────────

@@ -15,6 +15,9 @@ defmodule Platform.Secretary.Evaluation do
   @foreign_key_type :binary_id
 
   @tags ~w(decide waiting fyi not_in_space todo suggested quiet)
+  # The brief line's tag (task 01a1b721 stage 3): "You may not know", "Risk",
+  # "Nobody flagged this", "Family".
+  @brief_tags ~w(may_not_know risk nobody_flagged family)
   @unique_index :secretary_evaluations_user_id_ref_type_ref_id_index
 
   @type t :: %__MODULE__{}
@@ -51,6 +54,10 @@ defmodule Platform.Secretary.Evaluation do
   @spec tags() :: [String.t()]
   def tags, do: @tags
 
+  @doc "Valid brief-line tags."
+  @spec brief_tags() :: [String.t()]
+  def brief_tags, do: @brief_tags
+
   @doc "The fields `Platform.Secretary.Store.upsert_evaluation/2` writes."
   @spec fields() :: [atom()]
   def fields, do: @fields
@@ -65,7 +72,7 @@ defmodule Platform.Secretary.Evaluation do
     |> cast(attrs, @fields)
     |> validate_required([:user_id, :ref_type, :ref_id, :tag, :group_key])
     |> validate_inclusion(:tag, @tags)
-    |> validate_inclusion(:brief_tag, @tags)
+    |> validate_inclusion(:brief_tag, @brief_tags)
     |> validate_inclusion(:previous_tag, @tags)
     |> validate_length(:reason, max: 200)
     |> validate_format(:model_version, ~r/\A(fallback|host:[^:]+:[^:]+)\z/)

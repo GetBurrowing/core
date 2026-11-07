@@ -167,6 +167,8 @@ defmodule Platform.Inbox do
       with :ok <- resource_check(recipient, resource),
            {:ok, item} <- Repo.insert(changeset) do
         Phoenix.PubSub.broadcast(Platform.PubSub, topic(item.user_id), {:inbox_item_added, item})
+        # Task 01a1b721 stage 3: a cast that never raises or blocks.
+        Platform.Secretary.note_arrival(item.user_id)
         maybe_push(item)
         {:ok, item}
       end

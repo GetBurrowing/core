@@ -149,6 +149,24 @@ defmodule Platform.Secretary.Store do
     end
   end
 
+  @doc """
+  The viewer's refs that hit the retry cap: `%{{ref_type, ref_id} =>
+  evaluated_at}` for every evaluation with `failed_attempts >= cap`.
+  """
+  @spec capped_refs(binary(), pos_integer()) :: %{{String.t(), binary()} => DateTime.t()}
+  def capped_refs(user_id, cap) when is_integer(cap) do
+    if ids_valid?([user_id]) do
+      from(e in Evaluation,
+        where: e.user_id == ^user_id and e.failed_attempts >= ^cap,
+        select: {{e.ref_type, e.ref_id}, e.evaluated_at}
+      )
+      |> Repo.all()
+      |> Map.new()
+    else
+      %{}
+    end
+  end
+
   # ── Feedback ────────────────────────────────────────────────────────────
 
   @doc "Records a piece of the viewer's feedback."
@@ -192,6 +210,32 @@ defmodule Platform.Secretary.Store do
           select: f.action
         )
       ) == "hide_kind"
+  end
+
+  @doc """
+  The viewer's standing kind overrides among `kind_keys`: `%{kind_key =>
+  "hide_kind" | "this_matters"}`, from the latest `hide_kind`,
+  `this_matters` or `undo` per kind (an `undo` clears it).
+  """
+  @spec kind_overrides(binary(), [String.t()]) :: %{String.t() => String.t()}
+  def kind_overrides(user_id, kind_keys) when is_list(kind_keys) do
+    keys = kind_keys |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    if ids_valid?([user_id]) and keys != [] do
+      from(f in Feedback,
+        where:
+          f.user_id == ^user_id and f.kind_key in ^keys and
+            f.action in ["hide_kind", "this_matters", "undo"],
+        distinct: f.kind_key,
+        order_by: [asc: f.kind_key, desc: f.inserted_at, desc: f.id],
+        select: {f.kind_key, f.action}
+      )
+      |> Repo.all()
+      |> Enum.reject(fn {_key, action} -> action == "undo" end)
+      |> Map.new()
+    else
+      %{}
+    end
   end
 
   # ── Reach-outs ──────────────────────────────────────────────────────────

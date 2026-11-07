@@ -224,8 +224,13 @@ defmodule Platform.Secretary.Inputs do
       order_by: [desc: b.updated_at]
     )
     |> Repo.all()
-    |> Enum.filter(&meeting_readable?(&1, scope))
-    |> Enum.flat_map(fn %MeetingBriefing{} = briefing ->
+    |> Enum.flat_map(fn briefing ->
+      case meeting_space(briefing, scope) do
+        {:ok, space_id} -> [{briefing, space_id}]
+        :error -> []
+      end
+    end)
+    |> Enum.flat_map(fn {%MeetingBriefing{} = briefing, space_id} ->
       items = get_in(briefing.items || %{}, ["_content", "unfiled_action_items"]) || []
 
       for %{"id" => id} = item <- items, Platform.UUID.valid?(id) do
@@ -235,6 +240,7 @@ defmodule Platform.Secretary.Inputs do
           kind: "meeting:action_item",
           title: nil,
           text: item["text"],
+          space_id: space_id,
           member?: true,
           mentioned?: false,
           at: briefing.updated_at
@@ -243,19 +249,20 @@ defmodule Platform.Secretary.Inputs do
     end)
   end
 
-  defp meeting_readable?(%MeetingBriefing{meeting_id: meeting_id}, scope) do
+  # The meeting's chat space when the viewer may read it, else :error.
+  defp meeting_space(%MeetingBriefing{meeting_id: meeting_id}, scope) do
     case Inbox.resource_for("meeting", meeting_id) do
       {:space, space_id} when is_binary(space_id) ->
-        Access.can?(scope, "chat.read", {:space, space_id})
+        if Access.can?(scope, "chat.read", {:space, space_id}), do: {:ok, space_id}, else: :error
 
       _ ->
-        false
+        :error
     end
   end
 
   # ── (d) calendar ────────────────────────────────────────────────────────
 
-  defp calendar(%{scope: scope, opts: opts}) do
+  defp calendar(%{user: user, scope: scope, opts: opts}) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     to = DateTime.add(now, @calendar_horizon_hours * 3600, :second)
 
@@ -270,7 +277,9 @@ defmodule Platform.Secretary.Inputs do
         text: event.description,
         member?: true,
         at: event.starts_at,
-        deadline_at: event.starts_at
+        deadline_at: event.starts_at,
+        # The person's own event kept to "busy" for everyone else.
+        private?: event.visibility == "busy" and event.owner_id == user.id
       }
     end)
   end

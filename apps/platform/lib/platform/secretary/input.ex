@@ -5,6 +5,11 @@ defmodule Platform.Secretary.Input do
   `channel | dm | group` for a chat message and nil otherwise; `member?`
   says whether the person is a participant of the space (an open channel
   they are not in is readable and arrives with `member?: false`).
+
+  `private?` marks an item from the person's own private tier: today a
+  calendar event whose visibility is `busy` (others see only that the time
+  is taken). The prompt hands it to the model as `family`, and nothing about
+  it leaves the person's own view.
   """
 
   @type t :: %__MODULE__{
@@ -20,7 +25,8 @@ defmodule Platform.Secretary.Input do
           author_id: Ecto.UUID.t() | nil,
           author_label: String.t() | nil,
           at: DateTime.t() | nil,
-          deadline_at: DateTime.t() | nil
+          deadline_at: DateTime.t() | nil,
+          private?: boolean()
         }
 
   @enforce_keys [:ref_type, :ref_id, :kind]
@@ -36,5 +42,6 @@ defmodule Platform.Secretary.Input do
             author_id: nil,
             author_label: nil,
             at: nil,
-            deadline_at: nil
+            deadline_at: nil,
+            private?: false
 end

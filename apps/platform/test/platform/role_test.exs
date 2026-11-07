@@ -198,6 +198,7 @@ defmodule Platform.RoleTest do
                Platform.Memory.Insights.Purger,
                Platform.Habits.Pruner,
                Platform.Memory.Insights.Disseminator,
+               Platform.Secretary.Scheduler,
                Platform.Files.CatalogEmitter,
                Platform.Tasks.DeployMergeReconciler,
                PlatformWeb.Endpoint,
