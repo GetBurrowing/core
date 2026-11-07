@@ -172,17 +172,33 @@ defmodule Platform.Agents.MannersTest do
     :ok
   end
 
+  # A running stage, so `DispatchPhase` resolves `dispatch.in_progress`
+  # (with no plan and stage it would render `dispatch.planning`).
   defp in_progress_dispatch do
+    stage = %{
+      id: "01a1b733-0000-4000-8000-0000000000b1",
+      position: 1,
+      name: "Do the work",
+      description: "The stage's own description.",
+      status: "running",
+      validations: [
+        %{id: "01a1b733-0000-4000-8000-0000000000c1", kind: "test_pass", status: "pending"}
+      ]
+    }
+
     HeartbeatScheduler.dispatch_prompt(
       %{
         id: "01a1b733-0000-4000-8000-0000000000a1",
         title: "Handoff rule probe",
         description: "Probe task for the handoff rule",
         status: "in_progress",
-        priority: "medium"
+        priority: "medium",
+        project_id: nil,
+        epic_id: nil,
+        inserted_at: ~U[2026-11-07 08:00:00Z]
       },
-      nil,
-      nil
+      %{version: 1, stages: [stage]},
+      stage
     )
   end
 
@@ -214,7 +230,10 @@ defmodule Platform.Agents.MannersTest do
 
     test "rendered into dispatch.in_progress, default and edited row" do
       :ok = PromptTemplates.seed_defaults()
-      assert_rule_once(in_progress_dispatch(), "dispatch.in_progress")
+      dispatch = in_progress_dispatch()
+      # The in_progress body, not the planning one.
+      assert dispatch =~ "The stage's own description."
+      assert_rule_once(dispatch, "dispatch.in_progress")
 
       :ok = edit_preamble_row!("## Operator preamble\n\nOperator text.")
       dispatch = in_progress_dispatch()

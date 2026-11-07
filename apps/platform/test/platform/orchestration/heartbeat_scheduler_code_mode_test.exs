@@ -55,7 +55,11 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # `planning_parallel_ui_rule/0` plus its line break, computed from the
     # source; measured on the test rig at 97c7e037. in_progress / in_review
     # unchanged.
-    planning: {"bea0daec5f6be9285c81df807c096a019ec80717e55ad5fee0a5df35ef42da48", 29_695},
+    #
+    # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
+    # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
+    # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
+    planning: {"a9358b84e7ea11da6787859b4a191478f988f3559223e1f5c8095485aa110103", 30_366},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.
@@ -69,13 +73,21 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     #
     # Repinned by task 01a14b9e-c802 stage 3: -142 bytes, the preamble's two
     # neutral sentences, as for planning (predicted, then measured at 42e6c6ee).
-    in_progress: {"9789faf4015fcea775eea45039746aec6f0e441c5521b5fe25cecf6d538ab942", 17_122},
+    #
+    # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
+    # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
+    # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
+    in_progress: {"ab33e60e843b63594a111a123f493d6c887ad65467b6df76d4a6583a040fb0a9", 17_793},
     # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
     # preamble): +2 bytes, as for planning.
     #
     # Repinned by task 01a14b9e-c802 stage 3: -142 bytes, the preamble's two
     # neutral sentences, as for planning (predicted, then measured at the wip tip).
-    in_review: {"82c7b2bb69de50fcbefa02e05cbce681d0ce1f48f52ceb1055000abeb9a2923a", 19_000}
+    #
+    # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
+    # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
+    # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
+    in_review: {"0c5abff32ed21018d40b1c26657a6441d9466bbd695c77c4e75a91daa5960fe9", 19_671}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>
