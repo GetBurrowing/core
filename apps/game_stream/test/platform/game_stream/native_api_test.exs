@@ -1,5 +1,5 @@
 defmodule Platform.GameStream.NativeAPITest do
-  use ExUnit.Case, async: false
+  use Platform.DataCase, async: false
   alias Platform.GameStream.NativeAPI
   import Plug.Test
   import Plug.Conn
@@ -36,4 +36,28 @@ defmodule Platform.GameStream.NativeAPITest do
              %{prefix: "play", plug: NativeAPI, opts: []}
            ]
   end
+  test "browser handoff requires a real session and CSRF token" do
+    previous = Application.get_env(:game_stream, :enabled)
+    Application.put_env(:game_stream, :enabled, true)
+    on_exit(fn -> Application.put_env(:game_stream, :enabled, previous) end)
+    user = Platform.PrototypeFixtures.user!()
+
+    unauthenticated = conn(:get, "/browser/csrf") |> NativeAPI.call([])
+    assert unauthenticated.status == 401
+
+    csrf_conn = conn(:get, "/browser/csrf") |> init_test_session(current_user_id: user.id) |> NativeAPI.call([])
+    assert csrf_conn.status == 200
+    assert get_resp_header(csrf_conn, "cache-control") == ["no-store"]
+    csrf = Jason.decode!(csrf_conn.resp_body)["csrf_token"]
+    session = %{"current_user_id" => user.id, "_csrf_token" => get_session(csrf_conn, "_csrf_token")}
+
+    assert_raise Plug.CSRFProtection.InvalidCSRFTokenError, fn ->
+      conn(:post, "/browser/sessions/not-a-uuid/join", %{}) |> init_test_session(session) |> NativeAPI.call([])
+    end
+
+    accepted = conn(:post, "/browser/sessions/not-a-uuid/join", %{}) |> init_test_session(session) |> put_req_header("x-csrf-token", csrf) |> NativeAPI.call([])
+    assert accepted.status == 403
+    assert accepted.resp_body == ~s({"error":"unauthorized"})
+  end
+
 end
