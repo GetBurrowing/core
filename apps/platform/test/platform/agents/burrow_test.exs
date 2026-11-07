@@ -395,6 +395,205 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  # ── task 01a1b741 stage 3: roles and splitting them off, at start ──────
+
+  describe "roles section and splitting guidance at start (task 01a1b741 stage 3)" do
+    setup do
+      for role <- Role.valid_keys(), do: :ok = Platform.Roles.unassign_role(role)
+      :ok
+    end
+
+    defp count(text, needle), do: length(:binary.matches(text, needle))
+
+    defp assert_sections_once(content, label) do
+      assert count(content, Burrow.guidance_marker()) == 1, "#{label}: guidance once"
+      assert count(content, Burrow.roles_marker()) == 1, "#{label}: roles section once"
+      assert Burrow.guidance_marker() == "## Splitting roles off"
+      assert Burrow.roles_marker() == "## Roles you hold (as of your last start)"
+    end
+
+    # The roles section as rendered into the start-time instructions file.
+    defp started_roles(agent, key) do
+      [_, rest] = String.split(file_content(agent, key), Burrow.roles_marker(), parts: 2)
+      rest |> String.split("\n## ", parts: 2) |> hd()
+    end
+
+    @old_template "# Burrow\n\nAn instructions file written before roles guidance existed.\n"
+
+    for {harness, key} <- [{"claude_code", "CLAUDE.md"}, {"codex", "AGENTS.md"}] do
+      test "EXISTING-AGENT: a #{harness} Burrow on the old stored file gets both sections once" do
+        owner = admin!()
+        {:ok, agent} = Burrow.ensure(owner.id, unquote(harness))
+        key = unquote(key)
+
+        {:ok, _} =
+          Platform.Agents.MemoryContext.upsert_workspace_file(agent.id, key, @old_template)
+
+        stored = Platform.Agents.MemoryContext.get_workspace_file(agent.id, key)
+        refute stored.content =~ Burrow.guidance_marker()
+
+        files = NativeAgents.start_files(agent)
+        file = Enum.find(files, &(&1["key"] == key))
+        assert String.starts_with?(file["content"], @old_template)
+        assert_sections_once(file["content"], "old #{key}")
+
+        # Both sit before the admins section, which stays the tail.
+        [before_admins, _] = String.split(file["content"], "## Owner and admins", parts: 2)
+        assert before_admins =~ Burrow.guidance_marker()
+        assert before_admins =~ Burrow.roles_marker()
+
+        # Generated, never stored: the row, its version and drift are untouched.
+        assert file["version"] == stored.version
+
+        assert Platform.Agents.MemoryContext.get_workspace_file(agent.id, key).content ==
+                 @old_template
+
+        applied = Map.new(files, &{&1["key"], &1["version"]})
+
+        assert NativeAgents.pending_file_keys(NativeAgents.list_files(agent), %{
+                 state: :running,
+                 files_applied: applied
+               }) == []
+      end
+
+      test "a freshly seeded #{harness} Burrow gets both sections once" do
+        owner = admin!()
+        {:ok, agent} = Burrow.ensure(owner.id, unquote(harness))
+        assert_sections_once(file_content(agent, unquote(key)), "fresh #{unquote(key)}")
+      end
+    end
+
+    test "the roles section lists what Burrow holds and names the other holder" do
+      owner = admin!()
+      other = other_agent!()
+      {:ok, _} = Platform.Roles.assign_role("architect", other.id)
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+
+      [held, others] = String.split(started_roles(agent, "CLAUDE.md"), "Held by other agents:")
+
+      for role <- Platform.Roles.roles_for(agent.id) do
+        assert held =~ "- #{role.name}: #{Platform.Roles.plain_line(role.key)}"
+      end
+
+      assert length(Platform.Roles.roles_for(agent.id)) == 9
+      refute held =~ "- Architect:"
+      assert others =~ "- Architect: #{other.name}"
+
+      n = length(Platform.Roles.bundle_for("historian"))
+      assert held =~ "(#{n} kind#{if n == 1, do: "", else: "s"} of work)"
+      refute Burrow.roles_section(agent) =~ ~r/recurring jobs/i
+    end
+
+    test "after a handover, the re-rendered section lists designer under its new holder" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "codex")
+
+      assert started_roles(agent, "AGENTS.md") |> String.split("Held by other agents:") |> hd() =~
+               "- Designer:"
+
+      specialist = other_agent!()
+      {:ok, _} = Platform.Roles.reassign_role("designer", specialist.id)
+
+      [held, others] = String.split(started_roles(agent, "AGENTS.md"), "Held by other agents:")
+      refute held =~ "- Designer:"
+      assert held =~ "- Historian:"
+      assert others =~ "- Designer: #{specialist.name}"
+    end
+
+    test "the section says how long Burrow has run here" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      at = DateTime.add(DateTime.utc_now(), -8 * 86_400, :second)
+
+      Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^agent.id),
+        set: [inserted_at: at]
+      )
+
+      agent = Repo.get!(Platform.Agents.Agent, agent.id)
+      assert Burrow.roles_section(agent) =~ "running on this install for 8 days"
+      assert Burrow.roles_section() == Burrow.roles_section(agent)
+    end
+
+    test "the guidance gives the reasons, which role first, how, and when" do
+      g = Burrow.role_guidance()
+      assert String.starts_with?(g, "## Splitting roles off\n")
+      assert g =~ "You hold every role"
+      assert g =~ "runs from day one"
+      # why
+      assert g =~ "different model or tools"
+      assert g =~ "context focused on one kind of work"
+      assert g =~ "works at the same time as you"
+      # which first
+      assert g =~ "Which role first, and one at a time"
+      assert g =~ "architect or the security guard"
+      # how
+      assert g =~ "Control Center"
+      assert g =~ ~s("Hand to a specialist")
+      assert g =~ "external-agent form"
+      assert g =~ "character builder"
+      assert g =~ "/control?create=1&cls="
+      assert g =~ "Builder for the architect"
+
+      # The classes it names are real character-builder classes.
+      for {name, id} <- [
+            {"Builder", "builder"},
+            {"Scribe", "scribe"},
+            {"Producer", "producer"},
+            {"Scout", "scout"}
+          ] do
+        assert g =~ "#{name} for "
+        assert id in Platform.Agents.Archetypes.ids()
+      end
+
+      assert g =~ "native agent creation has a role field, so don't tell the owner"
+      # when: once, then only when asked
+      assert g =~ "raise this yourself at most once; after that, explain it only when asked."
+      assert g =~ "about a week"
+      assert g =~ "never in the middle of another task"
+      assert g =~ "earlier explanation of yours"
+      assert g =~ "asks what you can do"
+    end
+
+    test "the guidance says the role list is a start-time snapshot and names the gates it runs" do
+      g = Burrow.role_guidance()
+      assert g =~ "is from your last start"
+      assert g =~ "confirm in Control Center, or ask the owner, before you act on it"
+      assert g =~ "architect on every plan submit"
+      assert g =~ "pre-plan design direction"
+      assert g =~ "janitor's weekly chore drain"
+      assert g =~ "scientist's experiments"
+      assert g =~ "architect's weekly sweep"
+    end
+
+    test "neither section calls the roster missing, incomplete, unfilled or a gap" do
+      owner = admin!()
+      {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+
+      for text <- [Burrow.role_guidance(), Burrow.roles_section(agent)] do
+        refute text =~ ~r/missing|incomplete|unfilled|\bgaps?\b/i
+      end
+    end
+
+    test "the seed's role section points at both sections in one line" do
+      for t <- templates() do
+        assert t =~
+                 ~s(You hold every role on this install that no other agent holds; see "Roles you hold" and "Splitting roles off" near the end of this file.)
+
+        refute t =~ Burrow.guidance_marker()
+      end
+    end
+
+    test "a non-Burrow native agent's start files carry neither section" do
+      owner = admin!()
+      {:ok, agent, _} = NativeAgents.create(owner.id, %{name: "Sam", harness: "claude_code"})
+
+      for f <- NativeAgents.start_files(agent) do
+        refute f["content"] =~ Burrow.guidance_marker()
+        refute f["content"] =~ Burrow.roles_marker()
+      end
+    end
+  end
+
   describe "channels started from a first goal (task 01a19948 stage 3)" do
     # Pins that the instruction EXISTS and names the real signals and tool.
     # Burrow is an LLM, so nothing here asserts the wording it produces.

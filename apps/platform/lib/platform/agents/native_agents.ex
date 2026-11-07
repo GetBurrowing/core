@@ -405,8 +405,10 @@ defmodule Platform.Agents.NativeAgents do
   The files `agent.start` carries: every file with a valid key, as
   `%{"key", "content", "version"}`. Every agent's instructions file carries
   the handoff rule (`Platform.Agents.Manners.ensure/1`, added only if
-  absent). For the Burrow agent (`Platform.Agents.Burrow`) it also carries a
-  generated owner / admins section, read from the database on every call.
+  absent). For the Burrow agent (`Platform.Agents.Burrow`) it also carries
+  its roles and the guidance on splitting them off
+  (`Platform.Agents.Burrow.start_blocks/1`, through `Manners.ensure/2`) and a
+  generated owner / admins section, all read from the database on every call.
   """
   @spec start_files(Agent.t()) :: [map()]
   def start_files(%Agent{} = agent) do
@@ -414,6 +416,9 @@ defmodule Platform.Agents.NativeAgents do
     section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
     # The instructions file of the harness the agent actually runs (task 01a19505).
     key = runtime_instructions_key(agent)
+    # Burrow's roles and the splitting-roles guidance (task 01a1b741), added
+    # before the admins section so that section stays the tail.
+    burrow_blocks = if burrow?, do: Platform.Agents.Burrow.start_blocks(agent), else: []
 
     for %WorkspaceFile{} = f <- list_files(agent), valid_file_key?(f.file_key) do
       # Every native agent's instructions file carries the handoff rule, so an
@@ -422,7 +427,7 @@ defmodule Platform.Agents.NativeAgents do
       content =
         cond do
           f.file_key != key -> f.content
-          burrow? -> Manners.ensure(f.content) <> section
+          burrow? -> Manners.ensure(Manners.ensure(f.content), burrow_blocks) <> section
           true -> Manners.ensure(f.content)
         end
 

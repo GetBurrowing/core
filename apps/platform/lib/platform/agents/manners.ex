@@ -79,4 +79,24 @@ defmodule Platform.Agents.Manners do
       {:federation_preamble, Platform.Orchestration.PromptTemplates, :federation_preamble}
     ]
   end
+
+  @doc """
+  `content` with each `{marker, text}` block appended, in order, unless the
+  content already carries that block's marker heading. Idempotent, and the
+  content's trailing whitespace stays at the end, as with `ensure/1`.
+  """
+  @spec ensure(String.t(), [{String.t(), String.t()}]) :: String.t()
+  def ensure(content, blocks) when is_binary(content) and is_list(blocks) do
+    Enum.reduce(blocks, content, fn {marker, text}, acc ->
+      if String.contains?(acc, marker), do: acc, else: append_block(acc, text)
+    end)
+  end
+
+  defp append_block(content, text) do
+    body = String.trim_trailing(content)
+    tail = binary_part(content, byte_size(body), byte_size(content) - byte_size(body))
+    block = String.trim_trailing(text)
+
+    if body == "", do: block <> tail, else: body <> "\n\n" <> block <> tail
+  end
 end

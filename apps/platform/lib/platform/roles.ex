@@ -175,6 +175,46 @@ defmodule Platform.Roles do
     |> Repo.all()
   end
 
+  @plain_lines %{
+    "historian" =>
+      "Keeps the team's long-term memory: daily summaries, decisions from meetings, and people profiles.",
+    "meeting_scribe" =>
+      "Takes notes in meetings, writes the summary and action items, and follows up afterward.",
+    "meeting_producer" =>
+      "Listens to live meetings and passes each request to the agent best placed to handle it.",
+    "triage_officer" =>
+      "Keeps the task list in order: sorts new tasks, unblocks stuck ones, takes in outside feedback, and writes a weekly review.",
+    "designer" =>
+      "Reviews visual design, writes design direction for new work, and checks it against the brand.",
+    "security_guard" =>
+      "Scans regularly for vulnerable dependencies, risky code, drifted deploy settings, and leaked secrets.",
+    "architect" =>
+      "Reviews plans and code changes so work across tasks fits together, with a weekly check for drift.",
+    "agents_leader" => "Owns the agents space's goal and checks progress against it every day.",
+    "scientist" => "Runs experiments on how the platform makes decisions and reads the results.",
+    "janitor" =>
+      "Clears small internal chores once a week, including fixes the Architect's weekly sweep turns up."
+  }
+
+  @doc """
+  The one plain-language line that says what a role does, for people and for
+  Burrow's own instructions (task 01a1b741). This is the single copy: the
+  roles panel and `Platform.Agents.Burrow.roles_section/1` both read it.
+  Falls back to the role's stored description for a key with no line.
+
+  ## Examples
+
+      iex> Platform.Roles.plain_line("scientist")
+      "Runs experiments on how the platform makes decisions and reads the results."
+  """
+  @spec plain_line(String.t()) :: String.t() | nil
+  def plain_line(role_key) when is_binary(role_key) do
+    case Map.fetch(@plain_lines, role_key) do
+      {:ok, line} -> line
+      :error -> with %Role{description: d} <- get_role(role_key), do: d
+    end
+  end
+
   # ── Assignments ───────────────────────────────────────────────────────
 
   @doc """
