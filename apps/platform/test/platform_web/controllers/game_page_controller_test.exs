@@ -415,20 +415,51 @@ defmodule PlatformWeb.GamePageControllerTest do
   end
 
   test "game page does not display the signed-in account name or email", %{conn: conn} do
-    user = Repo.insert!(User.changeset(%User{}, %{name: "Private Legal Name", email: "private-account@example.net", oidc_sub: "private-page-player"}))
-    html = conn |> init_test_session(current_user_id: user.id) |> get("/games/voltron") |> html_response(200)
+    user =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Private Legal Name",
+          email: "private-account@example.net",
+          oidc_sub: "private-page-player"
+        })
+      )
+
+    html =
+      conn
+      |> init_test_session(current_user_id: user.id)
+      |> get("/games/voltron")
+      |> html_response(200)
+
     refute html =~ user.name
     refute html =~ user.email
   end
 
+  test "blank account names never expose email, snapshots or account avatars in the game room", %{
+    conn: conn,
+    game: game,
+    community: community
+  } do
+    user =
+      Repo.insert!(%User{
+        name: "",
+        email: "private-blank-player@example.net",
+        oidc_sub: "blank-public-label",
+        avatar_url: "https://private.example/real-face.jpg"
+      })
 
-  test "blank account names never expose email, snapshots or account avatars in the game room", %{conn: conn, game: game, community: community} do
-    user = Repo.insert!(%User{name: "", email: "private-blank-player@example.net", oidc_sub: "blank-public-label", avatar_url: "https://private.example/real-face.jpg"})
     assert {:ok, _} = Games.join_community(game, user)
     {:ok, participant} = Chat.SpaceAccess.authorize_writer(community.id, user)
-    {:ok, _message} = Chat.post_message(%{space_id: community.id, participant_id: participant.id,
-      content_type: "text", content: "Hello pilots", author_display_name: "Legacy Private Legal Name",
-      author_avatar_url: user.avatar_url})
+
+    {:ok, _message} =
+      Chat.post_message(%{
+        space_id: community.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: "Hello pilots",
+        author_display_name: "Legacy Private Legal Name",
+        author_avatar_url: user.avatar_url
+      })
+
     session = %{"game_slug" => "voltron", "current_user_id" => user.id}
     {:ok, view, html} = live_isolated(conn, PlatformWeb.GameCommunityLive, session: session)
     assert html =~ Games.player_display_name(user)
@@ -440,20 +471,39 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute render(view) =~ user.email
   end
 
-  test "an explicitly chosen player display name is shared by the game card and room", %{conn: conn, game: game} do
-    user = Repo.insert!(%User{name: "Private Account Name", email: "private-persona@example.net", oidc_sub: "chosen-public-label", preferences: %{"player_display_name" => "StarPilot"}})
+  test "an explicitly chosen player display name is shared by the game card and room", %{
+    conn: conn,
+    game: game
+  } do
+    user =
+      Repo.insert!(%User{
+        name: "Private Account Name",
+        email: "private-persona@example.net",
+        oidc_sub: "chosen-public-label",
+        preferences: %{"player_display_name" => "StarPilot"}
+      })
+
     assert {:ok, _} = Games.join_community(game, user)
-    page = conn |> init_test_session(current_user_id: user.id) |> get("/games/voltron") |> html_response(200)
+
+    page =
+      conn
+      |> init_test_session(current_user_id: user.id)
+      |> get("/games/voltron")
+      |> html_response(200)
+
     assert page =~ "StarPilot"
     refute page =~ user.name
     refute page =~ user.email
     assert Games.player_display_name(user) == "StarPilot"
-    {:ok, view, _} = live_isolated(conn, PlatformWeb.GameCommunityLive,
-      session: %{"game_slug" => "voltron", "current_user_id" => user.id})
+
+    {:ok, view, _} =
+      live_isolated(conn, PlatformWeb.GameCommunityLive,
+        session: %{"game_slug" => "voltron", "current_user_id" => user.id}
+      )
+
     html = render_submit(view, "send_message", %{"compose" => %{"text" => "Hello crew"}})
     assert html =~ "StarPilot"
     refute html =~ user.name
     refute html =~ user.email
   end
-
 end

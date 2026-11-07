@@ -39,15 +39,21 @@ server secret in a manifest. The public page's version and checksum refer to
 the ZIP, not its embedded PCK. Retain older version entries when changing the
 current pointer; do not repoint a version to different bytes.
 
-## Community — identity rollout gate
+## Community identity
 
-Do not enable a public player community until the persona projection is
-implemented and identity-leak regression tests pass. The canonical chat
-renderer currently falls back to account names, email and account avatars.
-A participant display-name cache alone does not prove this boundary safe.
-The game-page header displays only "You"; that does not make community chat
-persona-safe. No account profile is passed to the native game by this slice.
+The game header and embedded text conversation use only the explicit
+`preferences.player_display_name` (trimmed, at most 40 characters), or a stable
+opaque `pilot-…` handle. Account names, email and account avatars are never
+fallbacks. Old author snapshots are ignored by this renderer, including messages
+posted through other Burrow clients. A name-selection UI belongs to the broader
+persona work; this slice defaults to the generated handle.
 
+The embedded view uses Burrow's existing message store, permissions and PubSub.
+It is a text-only player surface, with no account profile links, attachments or
+thread UI. This protects the game-page rendering path; it does not replace
+identity projection in other Burrow clients or implement the future game SDK,
+voice effects or an operating-system microphone boundary. Do not advertise
+universal persona isolation on the strength of this slice.
 
 Create a NEW player-only channel in the game's org. Do not reuse Voltron's
 existing development conversation. Its metadata must contain
@@ -56,7 +62,12 @@ in the publication manifest. Without that setting the page says the community
 is not open yet. Joining is a CSRF-protected POST, idempotently adding only this
 channel. New game identities get an external membership; no internal org role
 or DM allowlist is created. Existing internal users retain their role.
-The Community tab embeds the existing Burrow chat surface after joining. Non-members see the room introduction and actual member count, not private messages or room codes. The voice link opens the existing Burrow chat/call controls; it does not create a native game voice client. Keep that call open while the game runs. Browser-only push-to-talk cannot reliably receive keys while the native game has focus; a future global hotkey bridge is separate from microphone setup.
+The Community tab embeds the player text view after joining. Non-members see
+the room introduction and actual member count, not private messages or room
+codes. No native game voice client is created. An existing Burrow call can stay
+open while the game runs. Browser-only push-to-talk cannot reliably receive
+keys while the native game has focus; a future global hotkey bridge is separate
+from microphone setup.
 
 ## Release and verification
 
