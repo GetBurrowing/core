@@ -80,6 +80,7 @@ defmodule Platform.ExternalAgents do
 
   alias Platform.Agents.Agent
   alias Platform.ExternalAgents.EphemeralCredentials
+  alias Platform.Federation
   alias Platform.Repo
 
   @external_kind "external"
@@ -187,7 +188,21 @@ defmodule Platform.ExternalAgents do
   """
   @spec delete_external_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def delete_external_agent(%Agent{kind: @external_kind} = agent) do
-    Repo.delete(agent)
+    # Revoke bound runtimes in the same transaction as the delete (task
+    # 01a1b34b): the agent_runtimes FK only nilifies agent_id, which would
+    # leave an active runtime holding a live token with no agent.
+    Ecto.Multi.new()
+    |> Federation.revoke_runtimes_for_agent_multi(agent)
+    |> Ecto.Multi.delete(:agent, agent)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{agent: deleted, revoke_runtimes: revoked}} ->
+        Federation.finalize_revoked_runtimes(revoked)
+        {:ok, deleted}
+
+      {:error, _step, reason, _changes} ->
+        {:error, reason}
+    end
   end
 
   @doc """

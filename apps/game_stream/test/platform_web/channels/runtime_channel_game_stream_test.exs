@@ -52,7 +52,9 @@ defmodule PlatformWeb.RuntimeChannelGameStreamTest do
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: "play-host-#{unique()}",
-        tool_profile: []
+        tool_profile: [],
+        # Auth refuses an active runtime with no agent (task 01a1b34b).
+        agent_id: Platform.PrototypeFixtures.agent!().id
       })
 
     {:ok, runtime, token} = Federation.activate_runtime(runtime)

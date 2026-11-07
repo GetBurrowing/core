@@ -24,6 +24,9 @@ defmodule PlatformWeb.MCPControllerTest do
       status: "active"
     }
 
+    # Auth refuses an active runtime with no agent (task 01a1b34b).
+    attrs = Map.put_new_lazy(attrs, :agent_id, fn -> Platform.PrototypeFixtures.agent!().id end)
+
     {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(Map.merge(base_attrs, attrs))

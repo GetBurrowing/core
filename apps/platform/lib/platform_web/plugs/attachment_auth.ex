@@ -4,7 +4,8 @@ defmodule PlatformWeb.Plugs.AttachmentAuth do
 
   A request is authorized as one of two principals:
 
-    - Bearer token matching an active `AgentRuntime` → `{:runtime, runtime}`
+    - Bearer token matching an active `AgentRuntime` bound to an agent →
+      `{:runtime, runtime}`
     - Session cookie with `current_user_id` → `{:user, user_id}`
 
   The resolved principal is assigned to `conn.assigns.principal`. Downstream
@@ -41,7 +42,9 @@ defmodule PlatformWeb.Plugs.AttachmentAuth do
 
   defp authenticate_bearer(conn, token) do
     case lookup_runtime(token) do
-      %AgentRuntime{status: "active"} = runtime ->
+      # An active runtime with no agent (task 01a1b34b) is refused.
+      %AgentRuntime{status: "active", agent_id: agent_id} = runtime
+      when is_binary(agent_id) ->
         conn
         |> assign(:runtime, runtime)
         |> assign(:principal, {:runtime, runtime})

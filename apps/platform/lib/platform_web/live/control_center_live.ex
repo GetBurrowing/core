@@ -89,6 +89,7 @@ defmodule PlatformWeb.ControlCenterLive do
      )
      |> assign(:show_create_agent, false)
      |> assign(:pending_delete_slug, nil)
+     |> assign(:pending_delete_runtimes, [])
      |> assign(:memory_form, to_form(AgentData.default_memory_entry(), as: :memory_entry))
      |> assign(:agent_status, :unknown)
      |> assign(:selected_agent_directory_entry, nil)
@@ -1016,6 +1017,7 @@ defmodule PlatformWeb.ControlCenterLive do
               federation_online?={@federation_online?}
               selected_agent_directory_entry={@selected_agent_directory_entry}
               pending_delete_slug={@pending_delete_slug}
+              pending_delete_runtimes={@pending_delete_runtimes}
               native={@native_header}
             />
 
@@ -1240,6 +1242,7 @@ defmodule PlatformWeb.ControlCenterLive do
     )
     |> assign(:show_create_agent, socket.assigns[:show_create_agent] || false)
     |> assign(:pending_delete_slug, nil)
+    |> assign(:pending_delete_runtimes, [])
     |> assign(:memory_form, to_form(AgentData.default_memory_entry(), as: :memory_entry))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
@@ -1321,6 +1324,7 @@ defmodule PlatformWeb.ControlCenterLive do
       AgentData.find_agent_directory_entry(socket.assigns.agents, agent.slug)
     )
     |> assign(:pending_delete_slug, pending_delete_slug(socket, agent.slug))
+    |> assign_pending_delete_runtimes(agent)
     |> assign(:memory_form, AgentData.build_memory_form(Keyword.get(opts, :memory_params)))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign_federation_data(agent)
@@ -1389,6 +1393,16 @@ defmodule PlatformWeb.ControlCenterLive do
   def reload_selected_agent(socket, _opts), do: socket
 
   # ── Private: small helpers ────────────────────────────────────────
+
+  # Re-read on reload so the confirm state never shows a stale list.
+  defp assign_pending_delete_runtimes(socket, agent) do
+    runtimes =
+      if socket.assigns.pending_delete_slug == agent.slug,
+        do: Federation.list_runtimes_to_revoke(agent),
+        else: []
+
+    assign(socket, :pending_delete_runtimes, runtimes)
+  end
 
   defp pending_delete_slug(socket, selected_slug) do
     case socket.assigns[:pending_delete_slug] do

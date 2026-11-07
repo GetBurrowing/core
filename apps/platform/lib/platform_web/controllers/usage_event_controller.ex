@@ -2,10 +2,7 @@ defmodule PlatformWeb.UsageEventController do
   use PlatformWeb, :controller
 
   alias Platform.Analytics
-  alias Platform.Agents.AgentRuntime
-  alias Platform.Repo
-
-  import Ecto.Query
+  alias Platform.Federation
 
   def create(conn, params) do
     with :ok <- verify_bearer_token(conn) do
@@ -33,13 +30,10 @@ defmodule PlatformWeb.UsageEventController do
   defp verify_bearer_token(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] ->
-        hashed = AgentRuntime.hash_token(token)
-
-        exists =
-          from(r in AgentRuntime, where: r.auth_token_hash == ^hashed, limit: 1)
-          |> Repo.exists?()
-
-        if exists do
+        # Same rule as socket/MCP/attachment auth (task 01a1b34b): only an
+        # `active` runtime bound to an agent may authenticate. A suspended,
+        # revoked or agentless runtime's token is refused.
+        if Federation.get_runtime_by_token(token) do
           :ok
         else
           conn

@@ -446,24 +446,34 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       end
     end
 
-    # The Scope, not `agent_id`, is the authorization subject. A runtime with
-    # no agent passes the task gate on its owner's standing and is then
-    # refused at the canvas conjunct, which has no principal to read with.
-    test "a runtime with no agent_id passes the task gate and has no canvas principal",
+    # Task 01a1b34b: an active runtime with no agent is refused at the bearer
+    # boundary (RuntimeBearerAuth), so it never reaches the task gate or the
+    # canvas conjunct. Before that change this test asserted it passed the
+    # task gate and was refused at the canvas conjunct; the boundary refusal
+    # supersedes that.
+    test "a runtime with no agent_id is refused before the task gate",
          %{org_a: org_a, conn: conn} do
       task = task!(project!(org_a))
       space = canvas_space!()
       canvas = canvas!(space)
       token = runtime_token!(nil)
 
-      assert {:error, envelope} = attach(conn, token, task, canvas)
-      assert envelope["error"] =~ "cannot read it"
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> token)
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "task_attach_canvas",
+            "arguments" => %{"task_id" => task.id, "canvas_id" => canvas.id}
+          }
+        })
+
+      assert conn.status == 401
       assert attachment_rows(task.id) == []
-
-      assert {:ok, %{"canvases" => []}} = list(conn, token, task.id)
-
-      assert {:error, %{"error" => "No attachment found" <> _}} =
-               detach(conn, token, task, canvas)
     end
   end
 

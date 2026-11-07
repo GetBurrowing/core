@@ -8,7 +8,7 @@ defmodule Platform.Federation do
   import Ecto.Query
   alias Ecto.Multi
 
-  alias Platform.Access.{Agents, RuntimeProfiles, Scope}
+  alias Platform.Access.{Agents, RuntimeProfile, RuntimeProfiles, Scope}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
@@ -27,6 +27,14 @@ defmodule Platform.Federation do
     end
   end
 
+  # A runtime_id belongs to one row forever (task 01a1b34b stage 3). When the
+  # row holding the requested id is `revoked`, it is reused in place: the
+  # runtime_id is a string key across the system (socket ids, `runtime:<id>`
+  # topics, presence, dead letters, execution leases) and
+  # `get_runtime_by_runtime_id/1` is `Repo.get_by`, so a second row per id
+  # would make all of those ambiguous. A `pending`, `active` or `suspended`
+  # holder is never reused: the insert hits the unique constraint and returns
+  # the "has already been taken" changeset, as before.
   def register_runtime(owner_user_id, attrs) do
     modules = Map.get(attrs, :tool_profile, Map.get(attrs, "tool_profile"))
     tool_profile = modules || AgentRuntime.default_tool_profile()
@@ -34,16 +42,38 @@ defmodule Platform.Federation do
     restriction =
       if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
 
+    runtime_attrs =
+      attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id)
+
+    runtime_id = Map.get(attrs, :runtime_id, Map.get(attrs, "runtime_id"))
+
     Multi.new()
-    |> Multi.insert(
-      :runtime,
-      AgentRuntime.changeset(
-        %AgentRuntime{},
-        attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id)
-      )
-    )
-    |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
+    |> Multi.run(:existing, fn repo, _changes ->
+      {:ok, lock_runtime_by_runtime_id(repo, runtime_id)}
+    end)
+    |> Multi.run(:runtime, fn repo, %{existing: existing} ->
+      case existing do
+        %AgentRuntime{status: "revoked"} = revoked ->
+          reuse_revoked_runtime(repo, revoked, runtime_attrs)
+
+        _none_or_held ->
+          repo.insert(AgentRuntime.changeset(%AgentRuntime{}, runtime_attrs))
+      end
+    end)
+    |> Multi.run(:profile, fn repo, %{runtime: runtime, existing: existing} ->
+      if match?(%AgentRuntime{status: "revoked"}, existing) do
+        # access_runtime_profiles is keyed by the runtime pk, so the old
+        # incarnation's profile must go before the new one is written.
+        repo.delete_all(from(p in RuntimeProfile, where: p.runtime_id == ^runtime.id))
+      end
+
       RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
+    end)
+    |> Multi.run(:audit, fn _repo, %{runtime: runtime, existing: existing} ->
+      case existing do
+        %AgentRuntime{status: "revoked"} = previous -> record_runtime_reused(previous, runtime)
+        _ -> {:ok, nil}
+      end
     end)
     |> Repo.transaction()
     |> case do
@@ -51,6 +81,102 @@ defmodule Platform.Federation do
       {:error, _step, reason, _changes} -> {:error, reason}
     end
   end
+
+  defp lock_runtime_by_runtime_id(_repo, runtime_id) when not is_binary(runtime_id), do: nil
+
+  defp lock_runtime_by_runtime_id(repo, runtime_id) do
+    repo.one(from(r in AgentRuntime, where: r.runtime_id == ^runtime_id, lock: "FOR UPDATE"))
+  end
+
+  # Turn a revoked row into a fresh `pending` incarnation for the new owner.
+  # Everything the old incarnation owned is cleared: token hash, agent binding,
+  # connection time, and metadata (replaced by the new request's, plus the
+  # appended `prior_incarnations` history).
+  defp reuse_revoked_runtime(repo, %AgentRuntime{status: "revoked"} = old, attrs) do
+    defaults = %AgentRuntime{}
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    prior = %{
+      "previous_owner_user_id" => old.owner_user_id,
+      "previous_agent_id" => meta(old, "revoked_agent_id") || old.agent_id,
+      "previous_display_name" => old.display_name,
+      # The row's inserted_at is the FIRST incarnation's; later incarnations
+      # record their own start in "incarnated_at".
+      "previous_inserted_at" => meta(old, "incarnated_at") || iso8601(old.inserted_at),
+      # A runtime revoked by agent delete carries revoked_at; one revoked by
+      # revoke_runtime/1 does not, and a revoked row is never written again,
+      # so its updated_at is the revoke time.
+      "revoked_at" => meta(old, "revoked_at") || iso8601(old.updated_at)
+    }
+
+    history = List.wrap(meta(old, "prior_incarnations")) ++ [prior]
+
+    metadata =
+      (attr(attrs, :metadata) || %{})
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("prior_incarnations", history)
+      |> Map.put("incarnated_at", now)
+
+    # An agent may still point at the revoked row (revoke_runtime/1 leaves the
+    # agent in place). It must not inherit the new incarnation.
+    repo.update_all(from(a in Agent, where: a.runtime_id == ^old.id), set: [runtime_id: nil])
+
+    # A revoked runtime's live dead letters belong to the old agent; never
+    # replay them to the new one. Agent delete already abandoned them (stage
+    # 1); this covers a runtime revoked any other way.
+    Platform.Federation.DeadLetters.abandon_live_for_runtime(old.runtime_id,
+      reason: "runtime_reused"
+    )
+
+    old
+    |> AgentRuntime.changeset(%{
+      owner_user_id: attr(attrs, :owner_user_id),
+      display_name: attr(attrs, :display_name),
+      transport: attr(attrs, :transport) || defaults.transport,
+      trust_level: attr(attrs, :trust_level) || defaults.trust_level,
+      managed_by: attr(attrs, :managed_by),
+      harness: attr(attrs, :harness),
+      desired_state: attr(attrs, :desired_state) || defaults.desired_state,
+      status: "pending",
+      # nil on the provision path (link_agent binds the new agent next).
+      agent_id: attr(attrs, :agent_id),
+      auth_token_hash: nil,
+      last_connected_at: nil,
+      metadata: metadata
+    })
+    |> repo.update()
+  end
+
+  defp record_runtime_reused(%AgentRuntime{} = previous, %AgentRuntime{} = runtime) do
+    [prior | _] = Enum.reverse(runtime.metadata["prior_incarnations"])
+
+    Platform.Audit.record(%{
+      event_type: "platform.federation.runtime_reused",
+      actor_id: runtime.owner_user_id,
+      actor_type: "user",
+      resource_type: "agent_runtime",
+      resource_id: runtime.id,
+      action: "runtime_reused",
+      metadata: %{
+        "runtime_pk" => runtime.id,
+        "runtime_id" => runtime.runtime_id,
+        "previous_owner_user_id" => previous.owner_user_id,
+        "new_owner_user_id" => runtime.owner_user_id,
+        "previous_agent_id" => prior["previous_agent_id"],
+        "incarnation" => length(runtime.metadata["prior_incarnations"]) + 1
+      }
+    })
+  end
+
+  defp meta(%AgentRuntime{metadata: metadata}, key) when is_map(metadata),
+    do: Map.get(metadata, key)
+
+  defp meta(_runtime, _key), do: nil
+
+  defp attr(attrs, key), do: Map.get(attrs, key, Map.get(attrs, Atom.to_string(key)))
+
+  defp iso8601(nil), do: nil
+  defp iso8601(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
 
   @doc "Fetch a runtime by its primary key."
   def get_runtime(id), do: Repo.get(AgentRuntime, id)
@@ -60,13 +186,19 @@ defmodule Platform.Federation do
     Repo.get_by(AgentRuntime, runtime_id: runtime_id)
   end
 
-  @doc "Fetch a runtime by verifying a raw auth token."
+  @doc """
+  Fetch a runtime by verifying a raw auth token.
+
+  Only an `active` runtime bound to an agent matches. A runtime whose
+  `agent_id` is NULL lost its agent (task 01a1b34b), and its token must not
+  authenticate.
+  """
   def get_runtime_by_token(raw_token) when is_binary(raw_token) do
     hash = AgentRuntime.hash_token(raw_token)
 
     Repo.one(
       from(r in AgentRuntime,
-        where: r.auth_token_hash == ^hash and r.status == "active"
+        where: r.auth_token_hash == ^hash and r.status == "active" and not is_nil(r.agent_id)
       )
     )
   end
@@ -128,7 +260,7 @@ defmodule Platform.Federation do
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
     runtime
-    |> AgentRuntime.changeset(%{status: "revoked", auth_token_hash: nil})
+    |> revoke_changeset(%{})
     |> Repo.update()
   end
 
@@ -138,6 +270,116 @@ defmodule Platform.Federation do
         do: revoke_runtime(runtime),
         else: {:error, :unauthorized}
       )
+
+  # The one definition of "revoked": status `revoked`, token hash cleared.
+  # `revoke_runtime/1` and `revoke_runtimes_for_agent_multi/2` both build on it.
+  defp revoke_changeset(%AgentRuntime{} = runtime, extra) do
+    AgentRuntime.changeset(runtime, Map.merge(extra, %{status: "revoked", auth_token_hash: nil}))
+  end
+
+  @doc """
+  Add a `:revoke_runtimes` step to `multi` that revokes every runtime bound to
+  `agent` (task 01a1b34b stage 1).
+
+  A runtime is bound when its `agent_id` is the agent's id, or when it is the
+  row `agents.runtime_id` points at (read from the database, not the struct).
+  Each row is revoked as `revoke_runtime/1` does, and also stamped with
+  `metadata["revoked_agent_id"]` and `metadata["revoked_at"]`: the
+  `agent_runtimes.agent_id` FK is `on_delete: :nilify_all`, so once the agent
+  row is gone this stamp is the only record of which agent the runtime served.
+
+  Put this step BEFORE the agent is deleted, inside the same transaction, so a
+  failed delete leaves every runtime as it was. The step's value is the list of
+  revoked runtimes; pass it to `finalize_revoked_runtimes/1` after commit.
+  """
+  @spec revoke_runtimes_for_agent_multi(Multi.t(), Agent.t()) :: Multi.t()
+  def revoke_runtimes_for_agent_multi(%Multi{} = multi, %Agent{id: agent_id}) do
+    Multi.run(multi, :revoke_runtimes, fn repo, _changes ->
+      revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      agent_id
+      |> bound_runtimes_query()
+      |> lock("FOR UPDATE")
+      |> repo.all()
+      |> Enum.reduce_while({:ok, []}, fn runtime, {:ok, acc} ->
+        metadata =
+          (runtime.metadata || %{})
+          |> Map.put("revoked_agent_id", agent_id)
+          |> Map.put("revoked_at", revoked_at)
+
+        case runtime |> revoke_changeset(%{metadata: metadata}) |> repo.update() do
+          {:ok, revoked} -> {:cont, {:ok, [revoked | acc]}}
+          {:error, changeset} -> {:halt, {:error, changeset}}
+        end
+      end)
+      |> case do
+        {:ok, revoked} -> {:ok, Enum.reverse(revoked)}
+        error -> error
+      end
+    end)
+  end
+
+  @doc """
+  The runtimes deleting `agent` will revoke and that are still live: every
+  runtime `revoke_runtimes_for_agent_multi/2` selects, less those already
+  `revoked` (task 01a1b34b stage 2). The Control Center delete confirmation
+  lists these. Both read `bound_runtimes_query/1`, so the list and the revoke
+  cannot drift apart. Ordered by `runtime_id`.
+  """
+  @spec list_runtimes_to_revoke(Agent.t()) :: [AgentRuntime.t()]
+  def list_runtimes_to_revoke(%Agent{id: agent_id}) do
+    agent_id
+    |> bound_runtimes_query()
+    |> where([r], r.status != "revoked")
+    |> order_by([r], asc: r.runtime_id)
+    |> Repo.all()
+  end
+
+  # Every runtime bound to the agent: rows with `agent_id` == the agent's id,
+  # plus the row `agents.runtime_id` points at (read from the database).
+  defp bound_runtimes_query(agent_id) do
+    pointer = from(a in Agent, where: a.id == ^agent_id, select: a.runtime_id)
+
+    from(r in AgentRuntime, where: r.agent_id == ^agent_id or r.id in subquery(pointer))
+  end
+
+  @doc """
+  Post-commit cleanup for runtimes revoked by
+  `revoke_runtimes_for_agent_multi/2`. Best-effort: each step is rescued and
+  logged so one failure cannot stop the rest.
+
+  For each runtime it broadcasts `"disconnect"` on the socket id
+  `"runtime:<runtime_id>"`, which drops a live socket, and marks the runtime's
+  live (`pending`/`replaying`) dead letters `abandoned`, so a runtime_id
+  federated again later does not replay the deleted agent's queue.
+
+  `:reason` names the abandon reason on the dead letters (default
+  `"agent_deleted"`); the orphan sweep (`Platform.Federation.OrphanRuntimes`)
+  passes its own.
+  """
+  @spec finalize_revoked_runtimes([AgentRuntime.t()], keyword()) :: :ok
+  def finalize_revoked_runtimes(runtimes, opts \\ []) when is_list(runtimes) do
+    reason = Keyword.get(opts, :reason, "agent_deleted")
+
+    Enum.each(runtimes, fn %AgentRuntime{runtime_id: runtime_id} ->
+      best_effort("disconnect #{runtime_id}", fn ->
+        PlatformWeb.Endpoint.broadcast("runtime:" <> runtime_id, "disconnect", %{})
+      end)
+
+      best_effort("abandon dead letters #{runtime_id}", fn ->
+        Platform.Federation.DeadLetters.abandon_live_for_runtime(runtime_id, reason: reason)
+      end)
+    end)
+  end
+
+  defp best_effort(label, fun) do
+    fun.()
+  rescue
+    error ->
+      Logger.warning("[Federation] revoke cleanup failed: #{label}: #{Exception.message(error)}")
+
+      :error
+  end
 
   @doc """
   Shallow-merge new top-level keys into a runtime's `metadata` map and
