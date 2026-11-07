@@ -296,15 +296,27 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   # On any deny, emit access-blocked telemetry and render the same standalone
   # page for every path. The root layout omits its per-response CSRF token
   # for a denial, giving known and missing resource URLs identical bytes.
+  #
+  # `:proto_browser` deliberately has no `plug :accepts` (bundle assets send
+  # their own Accept headers), so no format is negotiated there and `render/2`
+  # would raise. Default to html ONLY when nothing was negotiated: a
+  # `:blob_browser` request that negotiated json must keep its JSON 403.
   defp deny(conn, user, reason) do
     emit_access_blocked(conn, user, reason)
 
     conn
+    |> ensure_format()
     |> put_status(:forbidden)
     |> assign(:access_denied, true)
     |> Phoenix.Controller.put_view(html: PlatformWeb.ErrorHTML, json: PlatformWeb.ErrorJSON)
     |> Phoenix.Controller.render(:"403")
     |> halt()
+  end
+
+  defp ensure_format(conn) do
+    if Phoenix.Controller.get_format(conn),
+      do: conn,
+      else: Phoenix.Controller.put_format(conn, "html")
   end
 
   defp emit_access_blocked(conn, user, reason) do

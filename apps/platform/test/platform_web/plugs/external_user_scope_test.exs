@@ -272,6 +272,63 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
     end
   end
 
+  # ── No negotiated format (task 01a1b728 stage 1) ──────────────────────
+  #
+  # `:proto_browser` has no `plug :accepts` (bundle assets send their own
+  # Accept headers), so on `/proto/...` the deny path ran with no format set
+  # and `render(:"403")` raised. The deny must default to html ONLY when no
+  # format was negotiated: a json-negotiated deny (`:blob_browser`) keeps its
+  # JSON 403.
+  describe "external users — deny with no negotiated format" do
+    # The router fetches params before any pipeline runs, and
+    # `get_format/1` falls back to `params["_format"]`, so fetch them here too.
+    defp run_with_format(path, format, current_user, membership) do
+      conn = Phoenix.ConnTest.build_conn(:get, path) |> Plug.Conn.fetch_query_params()
+      conn = if format, do: Plug.Conn.put_private(conn, :phoenix_format, format), else: conn
+
+      conn
+      |> Plug.Conn.assign(:current_user, current_user)
+      |> Plug.Conn.assign(:current_user_org_membership, membership)
+      |> ExternalUserScope.call(ExternalUserScope.init([]))
+    end
+
+    test "no format set on /proto → halted html 403, not a raise", ctx do
+      id = Ecto.UUID.generate()
+
+      for path <- ["/proto/#{id}/1/", "/proto/#{id}/latest/"] do
+        conn = run_with_format(path, nil, ctx.ext_user, ctx.ext_membership)
+
+        assert conn.halted
+        assert conn.status == 403
+        assert [ct] = Plug.Conn.get_resp_header(conn, "content-type")
+        assert ct =~ "text/html"
+        assert conn.resp_body =~ "Access denied"
+      end
+    end
+
+    test "a json-negotiated deny stays a JSON 403", ctx do
+      conn = run_with_format("/tasks", "json", ctx.ext_user, ctx.ext_membership)
+
+      assert conn.halted
+      assert conn.status == 403
+      assert [ct] = Plug.Conn.get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      assert Jason.decode!(conn.resp_body) == %{"errors" => %{"detail" => "Forbidden"}}
+    end
+
+    test "an html-negotiated deny is byte-identical to the no-format deny", ctx do
+      path = "/proto/#{Ecto.UUID.generate()}/1/"
+      none = run_with_format(path, nil, ctx.ext_user, ctx.ext_membership)
+      html = run_with_format(path, "html", ctx.ext_user, ctx.ext_membership)
+
+      assert none.status == html.status
+      assert none.resp_body == html.resp_body
+
+      assert Plug.Conn.get_resp_header(none, "content-type") ==
+               Plug.Conn.get_resp_header(html, "content-type")
+    end
+  end
+
   describe "external users — DM allowlist branch" do
     test "allowed to open a DM with a counterpart whose org is allowlisted", ctx do
       counterpart_org = tenant_org!()

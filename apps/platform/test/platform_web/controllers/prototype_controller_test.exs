@@ -114,6 +114,47 @@ defmodule PlatformWeb.PrototypeControllerTest do
     end
   end
 
+  # Task 01a1b728 stage 1. `:proto_browser` negotiates no format, so the
+  # external-scope deny on entry and latest used to raise ("Please set plug
+  # :accepts") instead of rendering its 403. The deny depends only on the
+  # path, so a real id, an unknown id and a non-UUID id must be identical.
+  describe "an external non-participant on entry and latest" do
+    setup ctx do
+      org = Repo.get!(Platform.Tenancy.Org, ctx.org_id)
+      {:ok, external: Platform.ExternalUserFixtures.external_user!(org)}
+    end
+
+    defp snapshot(conn),
+      do: {conn.status, get_resp_header(conn, "content-type"), conn.resp_body}
+
+    test "real, unknown and non-UUID ids get one identical response, no raise", ctx do
+      for suffix <- ["1/", "latest/"] do
+        [real, unknown, non_uuid] =
+          for id <- [ctx.prototype.id, Ecto.UUID.generate(), "not-a-uuid"] do
+            build_conn() |> authed(ctx.external) |> get("/proto/#{id}/#{suffix}") |> snapshot()
+          end
+
+        assert {403, [ct], body} = real
+        assert ct =~ "text/html"
+        assert body =~ "Access denied"
+        assert unknown == real
+        assert non_uuid == real
+      end
+    end
+
+    test "a :browser-route denial is unchanged: html 403, identical across routes", ctx do
+      [settings, tasks] =
+        for path <- ["/settings", "/tasks"] do
+          build_conn() |> authed(ctx.external) |> get(path) |> snapshot()
+        end
+
+      assert {403, [ct], body} = settings
+      assert ct =~ "text/html"
+      assert body =~ "Access denied"
+      assert tasks == settings
+    end
+  end
+
   describe "bundle files under a grant" do
     test "serves the entry with the sandbox CSP appended, not replacing", ctx do
       conn = get(build_conn(), grant_url(ctx, 1))
