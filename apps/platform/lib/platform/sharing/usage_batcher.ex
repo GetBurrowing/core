@@ -17,6 +17,10 @@ defmodule Platform.Sharing.UsageBatcher do
        to the same broker base every feedback submission uses. No host is
        written here.
 
+  Each timed cycle also runs `Platform.Feedback.ShippedNotices.run/0`
+  (task 01a1b678 stage 4), which checks this install's own filed
+  fingerprints. It follows the feedback switch, not the usage-counts one.
+
   A failed POST keeps the counts and the window start, so the next flush
   carries them. A successful one subtracts exactly what it sent.
 
@@ -83,6 +87,8 @@ defmodule Platform.Sharing.UsageBatcher do
   @impl true
   def handle_info(:flush, state) do
     {_result, state} = do_flush(state, [])
+    # Same cycle (task 01a1b678 stage 4): this install's own shipped notices.
+    _ = Platform.Feedback.ShippedNotices.run()
     schedule(state.interval)
     {:noreply, state}
   end

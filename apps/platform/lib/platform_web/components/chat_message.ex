@@ -118,6 +118,38 @@ defmodule PlatformWeb.Components.ChatMessage do
     """
   end
 
+  # The "Shipped" notice (task 01a1b678 stage 4,
+  # `Platform.Feedback.ShippedNotices`): a system row like the reply-failure
+  # one, in `--color-info` only (the direction canvas's one slot for it). A
+  # 2px info rule and icon carry the colour; the text stays base-content.
+  def chat_message(
+        %{msg: %{content_type: "system", metadata: %{"kind" => "feedback_shipped"}}} = assigns
+      ) do
+    ~H"""
+    <div id={@dom_id} data-message-id={@msg.id} data-participant-id={@msg.participant_id}>
+      <div
+        :if={Map.get(@msg, :day_label)}
+        class="js-date-separator flex items-center gap-3 my-4 -mx-2"
+        data-date={@msg.day_label}
+      >
+        <div class="flex-1 border-t border-edge"></div>
+        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
+          {format_day_label(@msg.day_label)}
+        </span>
+        <div class="flex-1 border-t border-edge"></div>
+      </div>
+      <div
+        role="status"
+        data-role="feedback-shipped-notice"
+        class="mx-2 my-2 flex items-start gap-2 rounded-lg border-l-2 border-info bg-info/10 px-3 py-2 text-sm text-base-content"
+      >
+        <span class="hero-check-circle size-4 shrink-0 text-info mt-0.5" aria-hidden="true"></span>
+        <p class="min-w-0 flex-1 break-words">{@msg.content}</p>
+      </div>
+    </div>
+    """
+  end
+
   def chat_message(assigns) do
     ~H"""
     <div

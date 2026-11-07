@@ -44,6 +44,9 @@ defmodule Platform.Feedback.SubmissionRecord do
     field(:error_code, :string)
     field(:published_at, :utc_datetime_usec)
     field(:attempted_at, :utc_datetime_usec)
+    # Task 01a1b678 stage 4: the reporting install's shipped-notice state.
+    field(:notice_space_id, :binary_id)
+    field(:shipped_notified_at, :utc_datetime_usec)
 
     timestamps()
   end
@@ -54,7 +57,14 @@ defmodule Platform.Feedback.SubmissionRecord do
   @doc false
   def reserve_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:fingerprint, :category, :actor_agent_id, :actor_user_id, :attempted_at])
+    |> cast(attrs, [
+      :fingerprint,
+      :category,
+      :actor_agent_id,
+      :actor_user_id,
+      :notice_space_id,
+      :attempted_at
+    ])
     |> validate_required([:fingerprint, :category, :attempted_at])
     |> put_change(:status, "pending")
     |> unique_constraint(:fingerprint)

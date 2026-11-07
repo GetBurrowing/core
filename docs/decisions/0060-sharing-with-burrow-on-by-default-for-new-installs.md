@@ -95,6 +95,37 @@ install id, and refuses any body with an unpinned name, a non-integer, or an ext
 in that family. A new pinned event means one entry in `UsageEvents`, one literal in
 `Platform.Sharing.UsageEventsTest` and one row in this table.
 
+## The feedback inbox and shipped notices (stage 4)
+
+The inbox is `/admin/feedback-inbox` on the broker-host install. It answers 404 unless the node
+runs the broker (`FEEDBACK_BROKER_SERVER`) and the viewer is a root-org admin.
+
+- **Distinct installs.** Each install's broker request carries its random `sharing_install_id`.
+  The broker records one row per (fingerprint, sharing install id) in `feedback_inbox_installs`,
+  so the same install sending a report twice counts once. A missing or malformed id counts no
+  install. The id never leaves the broker host.
+- **Titles.** `feedback_inbox_requests` keeps the sanitized title per fingerprint: the same
+  redacted text the public issue already carries.
+- **Shipped.** A signed GitHub `issues` delivery that closes a feedback-repository issue as
+  `completed` marks its requests shipped. `reopened` clears it. `GET /issues/:fingerprint` answers
+  `shipped`.
+- **The notice.** On each usage-batch cycle a reporting install asks about its own published
+  fingerprints only, and posts one in-app notice (a system row in `--color-info`) to whoever filed:
+  the person, in their conversation with Burrow, or the agent, in the space it filed from. It
+  follows the feedback switch.
+
+## Who asked, decided by the server (stage 4)
+
+A tool call carries only what the agent chose to send. So `Platform.Federation.DispatchOrigin`
+remembers, for each runtime, the space and the person behind every chat attention sent to it in the
+last ten minutes. The tool context gets both:
+
+- `sharing_set` authorizes the person who asked, not the agent's owner. The one person whose message
+  reached the agent in the window must be a root-org admin. With no one, or with two different
+  people, the call is refused. The audit row names that person and the agent.
+- The Help & feedback gate on `feedback_submit` checks every recent originating space as well as the
+  optional `space_id`, so leaving `space_id` out cannot skip the gate.
+
 ## Revisit trigger
 
 When the install count reaches 20, revisit every sharing and access default. This trigger lives

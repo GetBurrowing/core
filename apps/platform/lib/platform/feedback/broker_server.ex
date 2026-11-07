@@ -21,7 +21,10 @@ defmodule Platform.Feedback.BrokerServer do
     * it runs `Platform.Feedback.Submission.submit/3` on `params["submission"]`
       ONLY, so the allowlist, redaction, bounds, fencing (the issue is built
       here, from scratch), dedupe and caps all run on this node. Any
-      top-level `title`, `body`, `labels` or other key is ignored;
+      top-level `title`, `body`, `labels` or other key is ignored, except
+      `sharing_install_id` (task 01a1b678 stage 4), which only feeds the
+      inbox's distinct-install count (`Platform.Feedback.Inbox.record/3`)
+      and is dropped when it is not a UUID;
     * it answers only `%{repository, issue_number}` or a bounded error atom.
 
   The actor is an agent-kind actor whose `agent_id` is a UUIDv5 of the
@@ -44,6 +47,7 @@ defmodule Platform.Feedback.BrokerServer do
 
   alias Platform.Feedback.GithubPublisher
   alias Platform.Feedback.GithubPublisher.GithubApp
+  alias Platform.Feedback.Inbox
   alias Platform.Feedback.Submission
   alias Platform.Feedback.SubmissionRecord
   alias Platform.Repo
@@ -87,7 +91,19 @@ defmodule Platform.Feedback.BrokerServer do
       opts = [source: source_hint(submission["source"]), installation: label]
 
       case Submission.submit(submission, actor, opts) do
-        {:ok, %{status: status, issue: %{repository: repo, issue_number: number}}} ->
+        {:ok,
+         %{
+           status: status,
+           fingerprint: fingerprint,
+           issue: %{repository: repo, issue_number: number}
+         }} ->
+          :ok =
+            Inbox.record(fingerprint, params["sharing_install_id"], %{
+              title: inbox_title(submission, opts[:source]),
+              repository: repo,
+              issue_number: number
+            })
+
           {:ok, status, %{repository: repo, issue_number: number}}
 
         {:error, %{code: code}} when is_atom(code) ->
@@ -103,10 +119,13 @@ defmodule Platform.Feedback.BrokerServer do
 
   @doc """
   The published issue a fingerprint produced, or nil. Answers only when the
-  broker is serving; nothing but the bounded identity is returned.
+  broker is serving; nothing but the bounded identity and whether the
+  request has shipped (`Platform.Feedback.Inbox.shipped?/1`, task 01a1b678
+  stage 4) is returned.
   """
   @spec find(term()) ::
-          {:ok, %{repository: String.t(), issue_number: pos_integer()} | nil} | {:error, atom()}
+          {:ok, %{repository: String.t(), issue_number: pos_integer(), shipped: boolean()} | nil}
+          | {:error, atom()}
   def find(fingerprint) do
     with :ok <- serving() do
       if is_binary(fingerprint) and Regex.match?(@fingerprint_format, fingerprint) do
@@ -116,7 +135,7 @@ defmodule Platform.Feedback.BrokerServer do
                )
              ) do
           %SubmissionRecord{external_repository: repo, external_issue_number: number} ->
-            {:ok, %{repository: repo, issue_number: number}}
+            {:ok, %{repository: repo, issue_number: number, shipped: Inbox.shipped?(fingerprint)}}
 
           nil ->
             {:ok, nil}
@@ -158,6 +177,15 @@ defmodule Platform.Feedback.BrokerServer do
 
   defp submission(%{} = submission), do: {:ok, submission}
   defp submission(_), do: {:error, :invalid_arguments}
+
+  # The sanitized title for the inbox: the same redacted, bounded text the
+  # public issue carries. Nil when it does not normalize.
+  defp inbox_title(submission, source) do
+    case Submission.normalize(Map.put(submission, "source", source || "agent")) do
+      {:ok, %{title: title}, _report} when is_binary(title) -> title
+      _ -> nil
+    end
+  end
 
   defp source_hint(value) when value in ["agent", "person"], do: value
   defp source_hint(_), do: nil

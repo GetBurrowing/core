@@ -9,7 +9,9 @@ defmodule PlatformWeb.FeedbackBrokerController do
       201 `{repository, issue_number}` when created, 200 with the same keys
       for a duplicate.
     * `GET /api/feedback-broker/v1/issues/:fingerprint`: 200
-      `{repository, issue_number}` or 404 `{"error": "not_found"}`.
+      `{repository, issue_number, shipped}` or 404 `{"error": "not_found"}`.
+      `shipped` (task 01a1b678 stage 4) is true once the issue closed as
+      completed.
     * `POST /api/feedback-broker/v1/usage` (task 01a1b678 stage 2), body
       `{sharing_install_id, window, counts}`: 202 `{"accepted": n}`, or 422
       `{"error": "invalid_usage"}`. See `Platform.Sharing.UsageReceiver`.
@@ -42,8 +44,12 @@ defmodule PlatformWeb.FeedbackBrokerController do
 
   def show(conn, %{"fingerprint" => fingerprint}) do
     case BrokerServer.find(fingerprint) do
-      {:ok, %{repository: repo, issue_number: number}} ->
-        json(conn, %{repository: repo, issue_number: number})
+      {:ok, %{repository: repo, issue_number: number} = found} ->
+        json(conn, %{
+          repository: repo,
+          issue_number: number,
+          shipped: Map.get(found, :shipped, false)
+        })
 
       {:ok, nil} ->
         refuse(conn, :not_found)

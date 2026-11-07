@@ -188,10 +188,13 @@ defmodule Platform.Feedback.GithubPublisherTest do
       assert {"idempotency-key", @fp} in headers
       refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
 
+      # Task 01a1b678 stage 4: plus the install's random sharing id. This
+      # case runs without a database, so it is null here.
       assert body == %{
                "repository" => "GetBurrowing/core",
                "fingerprint" => @fp,
                "installation" => "burrow-7",
+               "sharing_install_id" => nil,
                "submission" => @wire
              }
 
