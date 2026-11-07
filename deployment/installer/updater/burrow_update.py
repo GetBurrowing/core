@@ -16,8 +16,8 @@ Core writes only request.json {action, request_id, requested_at} and
 settings.json {auto_update}, staging -> inbox. No request can name an image:
 the forward target is updater.env's, the rollback target only
 state/previous_digest. Out of scope: on full_machine installs the agent host
-runs as root and native agents have sudo, so a core admin already reaches the
-host through agents; this does not widen that.
+runs as root and each native agent has sudo, so a core admin already reaches
+the host through an agent; this does not widen that.
 
 Test-only env: BURROW_UPDATE_ROOT (prefix of every path), BURROW_UPDATE_DOCKER,
 BURROW_UPDATE_SYSTEMCTL, BURROW_UPDATE_REGISTRY_URL, BURROW_UPDATE_NOW (epoch s).

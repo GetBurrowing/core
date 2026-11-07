@@ -599,6 +599,29 @@ def stack_unit(plan):
     return "\n".join(lines) + "\n"
 
 
+# Shipped compressed (cloud-init write_files encoding gz+b64): DigitalOcean
+# caps user_data at 64 KiB, and the largest hosted plan (meetings on, an
+# s3-compatible backup) only fits with the embedded migrate script, the host
+# updater and the two backup scripts compressed. cloud-init decodes each to
+# the same bytes and mode.
+COMPRESSED_FILES = (
+    "bin/burrow-migrate",
+    "bin/burrow-update",
+    "bin/burrow-backup",
+    "bin/burrow-restore-drill",
+)
+
+
+def gzip_b64(text):
+    """Deterministic gzip (fixed header: no name, mtime 0, OS unknown), base64."""
+    data = text.encode("utf-8")
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15, 9)
+    body = deflate.compress(data) + deflate.flush()
+    header = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+    trailer = struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
+    return base64.b64encode(header + body + trailer).decode("ascii")
+
+
 # ---------------------------------------------------------------------------
 # The host updater (core task 01a1b7b6 stage 1): bin/burrow-update, its
 # updater.env, three units and /var/lib/burrow-updater. Delivered by
@@ -620,10 +643,6 @@ UPDATER_PATH_NAME = "burrow-updater.path"
 PUBLISHED_CORE_REPO = "ghcr.io/getburrowing/" + registry.REGISTRY_IMAGES["core"]
 UPDATER_HEALTH_TIMEOUT_S = 600
 UPDATER_MEETING_STALE_HOURS = 12
-# Shipped compressed (cloud-init write_files encoding gz+b64): DigitalOcean
-# caps user_data at 64 KiB, and a hosted install with an s3-compatible backup
-# only fits with the updater and the two backup scripts compressed.
-COMPRESSED_FILES = (UPDATER_BIN, "bin/burrow-backup", "bin/burrow-restore-drill")
 
 
 def updater_module():
@@ -775,16 +794,6 @@ def updater_runcmd():
         ["install", "-d", *owned, "-m", "0700", upd.STATE, upd.CONSUMED],
         ["install", "-d", *core, "-m", "0700", upd.CORE_DIR, upd.STAGING, upd.INBOX],
     ]
-
-
-def gzip_b64(text):
-    """Deterministic gzip (fixed header: no name, mtime 0, OS unknown), base64."""
-    data = text.encode("utf-8")
-    deflate = zlib.compressobj(9, zlib.DEFLATED, -15, 9)
-    body = deflate.compress(data) + deflate.flush()
-    header = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
-    trailer = struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
-    return base64.b64encode(header + body + trailer).decode("ascii")
 
 
 # ---------------------------------------------------------------------------
