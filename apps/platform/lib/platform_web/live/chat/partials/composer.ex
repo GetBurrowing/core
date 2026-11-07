@@ -764,7 +764,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             aria-controls="compose-mention-list"
             aria-multiline="true"
             aria-label="Message"
-            enterkeyhint="send"
+            enterkeyhint="enter"
             data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
             data-placeholder={
               if @staged?,

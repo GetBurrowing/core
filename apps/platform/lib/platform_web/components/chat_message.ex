@@ -667,7 +667,8 @@ defmodule PlatformWeb.Components.ChatMessage do
               <%!-- Thread composer — absent on read-only snapshots. The
                    reply box is the same chip field as the space composer
                    (redesign rung 10, stage 4): contenteditable, chips,
-                   Enter sends, its own draft (`thread-draft:<id>`, apart
+                   Enter sends on a fine pointer and Return is a new line on touch
+                   (task 01a1b671), its own draft (`thread-draft:<id>`, apart
                    from the space's `chat-draft:<id>`). ComposeInput clears
                    it after a send (`data-clear-on-submit`): the reply
                    handler pushes no `compose_reset`. --%>
@@ -728,7 +729,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                       aria-controls={"inline-thread-mention-list-#{@msg.id}"}
                       aria-multiline="true"
                       aria-label="Reply in thread"
-                      enterkeyhint="send"
+                      enterkeyhint="enter"
                       data-draft-key={"thread-draft:#{@msg.id}"}
                       data-placeholder="Reply in thread"
                       data-value-input={"inline-thread-compose-value-#{@msg.id}"}

@@ -188,7 +188,7 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       assert count(html, field <> "[aria-expanded=false][aria-controls=compose-mention-list]") ==
                1
 
-      assert count(html, field <> "[enterkeyhint=send][aria-multiline=true]") == 1
+      assert count(html, field <> "[enterkeyhint=enter][aria-multiline=true]") == 1
       assert count(html, field <> "[data-value-input=compose_text_value]") == 1
       assert count(html, field <> ~s([data-draft-key="chat-draft:#{space.id}"])) == 1
 

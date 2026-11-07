@@ -164,7 +164,7 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
              "No one matches “zzqx”"
   end
 
-  test "the field is the chip combobox, Enter sends, with its own draft key" do
+  test "the field is the chip combobox, Return key hint, with its own draft key" do
     html = thread_html([])
     field = "#inline-thread-compose-msg-1"
 
@@ -173,7 +173,7 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     assert attr_of(html, field, "phx-update") == "ignore"
     assert attr_of(html, field, "role") == "combobox"
     assert attr_of(html, field, "aria-controls") == "inline-thread-mention-list-msg-1"
-    assert attr_of(html, field, "enterkeyhint") == "send"
+    assert attr_of(html, field, "enterkeyhint") == "enter"
     assert attr_of(html, field, "data-placeholder") == "Reply in thread"
     assert attr_of(html, field, "data-draft-key") == "thread-draft:msg-1"
     refute attr_of(html, field, "data-draft-key") =~ "chat-draft:"
