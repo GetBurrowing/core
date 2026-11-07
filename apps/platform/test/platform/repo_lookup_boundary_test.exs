@@ -1426,6 +1426,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # entry above).
     "platform/experiments/signals/mail_source.ex" => 1,
     "platform/federation.ex" => 1,
+    # 0 → 1 for task 01a1b34b stage 4's `OrphanRuntimes.revoke_one/2`, which
+    # re-locks one orphan row before revoking it. Triaged by hand: it pins
+    # `r.id == ^id`, where the id was read from `agent_runtimes` by
+    # `list_orphans/1` in the same call, never supplied by a caller.
+    # `--runtime-id` values match the plain string `runtime_id` column. No
+    # `Platform.UUID.valid?/1` guard applies.
+    "platform/federation/orphan_runtimes.ex" => 1,
     "platform/federation/tool_surface.ex" => 2,
     # 1 → 3 for task 01a091b7 stage 1: `Files.get_by_storage_key/1` and
     # `Files.get_pending_by_storage_key/1`. Triaged by hand: both `where:`
