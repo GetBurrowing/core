@@ -344,6 +344,7 @@ defmodule Platform.GameStream.NativeSessionsTest do
       Repo.delete_all(from(u in User, where: u.id in ^ids))
     end
   end
+
   test "native records do not block normal channel deletion", ctx do
     {row, credential} = running(ctx)
     assert {:ok, _handoff} = NativeSessions.mint(ctx.user, row.id)
@@ -352,5 +353,4 @@ defmodule Platform.GameStream.NativeSessionsTest do
     refute Repo.exists?(from(t in JoinToken, where: t.session_id == ^row.id))
     assert {:error, :unauthorized} = NativeSessions.control(row.id, credential)
   end
-
 end
