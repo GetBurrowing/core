@@ -1124,6 +1124,14 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # task 01a1b6de stage 1: `Lead.agent/0` pins `a.id` to the id
+    # `Roles.agent_id_for_role/1` read from role_assignments.agent_id (a
+    # binary_id FK column), never to caller input.
+    "platform/agents/lead.ex" => 1,
+    # task 01a1b6de stage 1: `team_channel/0`'s `root_general/1` pins
+    # `s.org_id` to `Tenancy.get_root_org/0`'s primary key and the slug to
+    # the module attribute; no caller input reaches the where clause.
+    "platform/chat/default_space.ex" => 1,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
