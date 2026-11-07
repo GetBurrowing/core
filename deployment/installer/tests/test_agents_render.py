@@ -23,6 +23,8 @@ property of podman/docker, not of this renderer, and is measured on test-host by
 services/agent-host/test/contained/reachability.sh.
 """
 
+import base64
+import gzip
 import os
 import re
 import shutil
@@ -77,6 +79,11 @@ def write_files(user_data):
         lines = entry.split("\n")
         path = lines[0].strip('"')
         perms = re.search(r'^    permissions: "(\d+)"$', entry, flags=re.MULTILINE).group(1)
+        if '    encoding: "gz+b64"' in lines:
+            # A compressed entry (templates.COMPRESSED_FILES): one quoted base64 line.
+            b64 = next(ln for ln in lines if ln.startswith("    content: "))[13:].strip('"')
+            out[path] = (perms, gzip.decompress(base64.b64decode(b64)).decode("utf-8"))
+            continue
         start = lines.index("    content: |") + 1
         body = []
         for line in lines[start:]:

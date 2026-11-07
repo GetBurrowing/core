@@ -241,6 +241,9 @@ class EmbeddingsRenderTest(unittest.TestCase):
 
     def check(self, files, row):
         compose, user_data = files["compose.yaml"][0], files["user-data"][0]
+        # From the host copy of compose.yaml on (compose.override.yaml, which
+        # sorts before it, names core-platform too).
+        user_data = user_data.split('\n  - path: "/opt/burrow/compose.yaml"', 1)[1]
         for text, indent in ((compose, "  "), (user_data, "        ")):
             emb = service_block(text, "embeddings", indent)
             self.assertEqual(list_under(emb, "command"), expected_command(row))
