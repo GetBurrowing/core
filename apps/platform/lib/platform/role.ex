@@ -435,16 +435,10 @@ defmodule Platform.Role do
     },
     %{
       kind: :http,
-      file: "lib/platform/accounts/user_avatar_cache.ex",
-      class: :request,
-      note: "read-only avatar GET on render"
-    },
-    %{
-      kind: :http,
-      file: "lib/platform/chat/link_unfurls/fetcher.ex",
+      file: "lib/platform/net/guarded_fetch.ex",
       class: :follows_caller,
       note:
-        "SSRF-guarded GET of an outside link's page or fixed oEmbed endpoint; caller is LinkUnfurls.ensure/2's supervised fetch (task 01a1a944 stage 2)"
+        "the one SSRF-guarded Req.request site, shared by UserAvatarCache (avatar GET on render, request path) and LinkUnfurls fetch (supervised, follows caller)"
     },
     %{
       kind: :http,
