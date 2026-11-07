@@ -1,0 +1,135 @@
+defmodule Platform.Games do
+  @moduledoc """
+  Explicitly published game manifests. Nothing in chat becomes public implicitly.
+
+  Operators configure `:game_publications` with string-keyed manifests. Each
+  release is pinned to an attachment and digest; changing `current_version`
+  does not change older release URLs. No game-specific secret belongs here.
+  """
+  import Ecto.Query
+
+  alias Platform.Accounts
+  alias Platform.Chat.Attachment
+  alias Platform.Repo
+
+  def get(slug) when is_binary(slug) do
+    Application.get_env(:platform, :game_publications, [])
+    |> List.wrap()
+    |> Enum.find(fn game -> valid?(game) and game["slug"] == slug and game["published"] == true end)
+  end
+
+  def valid?(game) when is_map(game) do
+    releases = game["releases"]
+    is_binary(game["slug"]) and Regex.match?(~r/^[a-z0-9][a-z0-9-]{0,63}$/, game["slug"]) and
+      match?({:ok, _}, Ecto.UUID.cast(game["org_id"])) and
+      is_binary(game["title"]) and is_binary(game["summary"]) and
+      is_list(releases) and releases != [] and Enum.all?(releases, &valid_release?/1) and
+      length(Enum.uniq_by(releases, & &1["version"])) == length(releases) and
+      Enum.any?(releases, &(&1["version"] == game["current_version"])) and
+      (is_nil(game["community_space_id"]) or match?({:ok, _}, Ecto.UUID.cast(game["community_space_id"]))) and
+      (is_nil(game["image_path"]) or
+        (is_binary(game["image_path"]) and String.starts_with?(game["image_path"], "/images/") and
+          not String.contains?(game["image_path"], ["..", "?", "#", "\\"])))
+  end
+
+  def valid?(_), do: false
+
+  defp valid_release?(release) when is_map(release) do
+    is_binary(release["version"]) and Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/, release["version"]) and
+      match?({:ok, _}, Ecto.UUID.cast(release["attachment_id"])) and
+      is_binary(release["sha256"]) and Regex.match?(~r/^[a-f0-9]{64}$/, release["sha256"]) and
+      is_integer(release["byte_size"]) and release["byte_size"] > 0
+  end
+
+  defp valid_release?(_), do: false
+
+  def get(_), do: nil
+
+  def release(game, version) when is_map(game) and is_binary(version) do
+    Enum.find(game["releases"] || [], &(&1["version"] == version))
+  end
+
+  def release(_, _), do: nil
+
+  def current_release(game), do: release(game, game["current_version"])
+
+  def user(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} ->
+        case Accounts.get_user(id) do
+          %{archived_at: nil} = user -> user
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def user(_), do: nil
+
+  # Publication authorizes exactly this artifact. It does not widen the
+  # original chat attachment route or grant access to the attachment's space.
+  def artifact(game, version) do
+    with %{} = release <- release(game, version),
+         {:ok, id} <- Ecto.UUID.cast(release["attachment_id"]),
+         %Attachment{state: "ready"} = attachment <- Repo.get(Attachment, id),
+         true <- attachment.content_hash == release["sha256"],
+         true <- attachment.byte_size == release["byte_size"],
+         true <- attachment.content_type in ["application/zip", "application/octet-stream"] do
+      {:ok, attachment}
+    else
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  def admit_oidc(game, claims) do
+    Repo.transaction(fn ->
+      with {:ok, user} <- Accounts.find_or_create_game_player(claims),
+           :ok <- admit_player(game, user) do
+        user
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # A game login may create only an external membership, never a full org
+  # membership. Preserve existing internal identities unchanged.
+  def admit_player(game, %{id: user_id}) do
+    internal? = Repo.exists?(from m in Platform.Tenancy.OrgMembership,
+      where: m.user_id == ^user_id and m.external == false)
+
+    if internal? do
+      :ok
+    else
+      case Platform.Tenancy.mark_membership_external(%{
+        user_id: user_id, org_id: game["org_id"], role: "member"
+      }) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def join_community(game, user) do
+    with id when is_binary(id) <- game["community_space_id"],
+         %Platform.Chat.Space{kind: "channel", archived_at: nil} = space <- Platform.Chat.get_space(id),
+         true <- space.org_id == game["org_id"],
+         true <- space.metadata["public_game_slug"] == game["slug"] do
+      Repo.transaction(fn ->
+        with :ok <- admit_player(game, user),
+             :ok <- Platform.Tenancy.ExternalGrants.add_space_participants(user, [
+               %{"space_id" => id, "role" => "member"}
+             ]) do
+          id
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    else
+      _ -> {:error, :unavailable}
+    end
+  end
+
+end

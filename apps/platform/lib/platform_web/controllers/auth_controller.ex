@@ -16,7 +16,20 @@ defmodule PlatformWeb.AuthController do
   # refused up front. Without the param this is today's login, except that a
   # challenge left behind by an abandoned app login is cleared so it cannot
   # turn a later web login into an app redirect.
+  def login(conn, %{"game" => slug} = params) when not is_map_key(params, "app_challenge") do
+    if Platform.Games.get(slug) do
+      conn
+      |> delete_session(:app_challenge)
+      |> put_session(:game_login, %{slug: slug, expires_at: System.system_time(:second) + 600})
+      |> start_login()
+    else
+      conn |> put_status(:not_found) |> text("Game not found")
+    end
+  end
+
   def login(conn, %{"app_challenge" => challenge}) do
+    conn = delete_session(conn, :game_login)
+
     case Mobile.begin_app_login(challenge) do
       {:ok, challenge} ->
         conn
@@ -33,6 +46,7 @@ defmodule PlatformWeb.AuthController do
   def login(conn, _params) do
     conn
     |> delete_session(:app_challenge)
+    |> delete_session(:game_login)
     |> start_login()
   end
 
@@ -194,7 +208,7 @@ defmodule PlatformWeb.AuthController do
          {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
          {:ok, %ExternalAdmission.Result{} = result} <-
-           admit_capturing_email(oidc_user, surface) do
+           admit_callback(conn, oidc_user, surface) do
       user = result.user
 
       :telemetry.execute(
@@ -222,7 +236,7 @@ defmodule PlatformWeb.AuthController do
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
-      |> land_callback(result, post_login_path(conn))
+      |> land_game_or_callback(result, post_login_path(conn))
     else
       false ->
         emit_callback_failure(conn, :invalid_state)
@@ -262,6 +276,50 @@ defmodule PlatformWeb.AuthController do
   # custom scheme. The scheme and path are fixed here, never taken from a
   # parameter, so this is not an open redirect. Anything else, including a
   # holding user, lands exactly as before.
+  defp admit_callback(conn, oidc_user, surface) do
+    if game = game_login(conn) do
+      case Platform.Games.admit_oidc(game, oidc_user) do
+        {:ok, user} -> {:ok, %ExternalAdmission.Result{user: user, state: :full,
+          external?: Platform.Tenancy.external_user?(user)}}
+        {:error, :user_archived} -> {:error, {:user_archived, oidc_user.email}}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      # An expired game login must not fall through to ordinary org admission.
+      if get_session(conn, :game_login) do
+        {:error, :game_login_expired}
+      else
+        admit_capturing_email(oidc_user, surface)
+      end
+    end
+  end
+
+  defp game_login(conn) do
+    case get_session(conn, :game_login) do
+      %{slug: slug, expires_at: expires_at} when is_integer(expires_at) ->
+        if expires_at > System.system_time(:second), do: Platform.Games.get(slug)
+      _ -> nil
+    end
+  end
+
+  defp land_game_or_callback(conn, result, full_path) do
+    if game = game_login(conn) do
+      case Platform.Games.admit_player(game, result.user) do
+        :ok ->
+          conn
+          |> delete_session(:game_login)
+          |> delete_session(:app_challenge)
+          |> LoginOrigin.clear()
+          |> redirect(to: "/games/" <> game["slug"])
+        {:error, _} ->
+          conn |> delete_session(:game_login) |> put_status(503)
+          |> text("Game sign-in is temporarily unavailable. Please try again.")
+      end
+    else
+      conn |> delete_session(:game_login) |> land_callback(result, full_path)
+    end
+  end
+
   @app_callback_url "burrow://auth/callback"
 
   defp land_callback(
@@ -325,7 +383,7 @@ defmodule PlatformWeb.AuthController do
   # rbac-external-users M2 stage 3: `:external` when the request arrives on
   # the `chat.` host, else `:app`. (M4 owns the real external live_session.)
   defp login_surface(conn) do
-    if String.starts_with?(to_string(conn.host), "chat."), do: :external, else: :app
+    if game_login(conn) || String.starts_with?(to_string(conn.host), "chat."), do: :external, else: :app
   end
 
   # Land the session on the right surface. `:full` keeps the caller's normal

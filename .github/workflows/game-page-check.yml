@@ -1,0 +1,73 @@
+name: Game page smoke
+on:
+  push:
+    branches: [feat/voltron-game-page]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      postgres:
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: apps/platform
+    steps:
+      - name: Tools
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
+          update-ca-certificates
+      - uses: actions/checkout@v5
+      - name: Hex
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - uses: actions/cache@v5
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}
+      - name: Dependencies
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+      - name: Format changed Elixir and HEEx
+        run: |
+          mix format lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs
+          git diff --binary > "$GITHUB_WORKSPACE/game-page-format.patch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-page-format
+          path: game-page-format.patch
+      - name: Compile and exercise game and existing auth/attachment boundaries
+        run: |
+          mix compile --warnings-as-errors
+          mix ecto.create
+          mix ecto.migrate
+          mix test test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs

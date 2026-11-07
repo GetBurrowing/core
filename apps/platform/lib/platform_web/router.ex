@@ -487,6 +487,14 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb do
     pipe_through(:browser)
 
+    # Published game pages deliberately answer on every host, like auth.
+    # Only operator-published manifests are exposed; downloads authenticate
+    # separately and never widen chat attachment permissions.
+    get("/games/:slug", GamePageController, :show)
+    get("/games/:slug/sign-in", GamePageController, :sign_in)
+    post("/games/:slug/community", GamePageController, :join_community)
+    get("/games/:slug/releases/:version/download", GamePageController, :download)
+
     get("/health", HealthController, :index)
     get("/auth/login", AuthController, :login)
     get("/auth/oidc/callback", AuthController, :callback)
