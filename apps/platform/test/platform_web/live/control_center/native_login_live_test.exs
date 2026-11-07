@@ -398,7 +398,7 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
       assert Vault.list(scope: {:agent, agent.id}) == []
     end
 
-    test "the only commands core sends the host are lifecycle, logs, the read-only pane, the read-only file read and the key check" do
+    test "the only commands core sends the host are lifecycle, logs, the read-only pane, the read-only file read, the key check and the owner's Claude login" do
       source = File.read!(Path.join(File.cwd!(), "lib/platform/agent_host/reconciler.ex"))
 
       pushed =
@@ -418,9 +418,19 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
       # the host checks the agent's OWN stored API key and answers ok,
       # rejected or unknown. It never carries, and never asks for, a login
       # code; a subscription login is not checked at all (auth.ts).
+      #
+      # The `agent.claude_login_*` / `agent.claude_logout` commands (task
+      # 01a1b365) are the owner's own Claude sign-in: one pasted code, as a
+      # `Platform.AgentHost.LoginCode`, for one request, gated on
+      # `can_manage?/2` and the caller that started the login
+      # (Platform.AgentHost.ClaudeLoginTest, NoLoginRelayTest). Nothing types
+      # into an agent's pane.
       assert Enum.sort(Enum.uniq(pushed ++ starts ++ ["agent.start"])) ==
                [
                  "agent.check_auth",
+                 "agent.claude_login_code",
+                 "agent.claude_login_start",
+                 "agent.claude_logout",
                  "agent.file_read",
                  "agent.logs",
                  "agent.pane",
