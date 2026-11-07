@@ -339,7 +339,7 @@ defmodule Platform.Sharing.Friction do
 
       _ ->
         with id when is_binary(id) <- Map.get(context, :agent_id),
-             {:ok, uuid} <- Ecto.UUID.cast(id) do
+             {:ok, uuid} <- Platform.UUID.cast(id) do
           Repo.get(Agent, uuid)
         else
           _ -> runtime_agent(Map.get(context, :runtime_id))
