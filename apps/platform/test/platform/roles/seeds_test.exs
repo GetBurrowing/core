@@ -109,7 +109,7 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts ten roles and thirty-four bundle rows on a fresh DB" do
+    test "inserts ten roles and thirty-five bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 10 roles: designer, historian, meeting_producer, meeting_scribe,
@@ -169,7 +169,9 @@ defmodule Platform.Roles.SeedsTest do
       # roster is CLOSED by a DB CHECK; people profiles are org memory).
       # 34 -> 35 in task 01a1af00 stage 2: `ux.friction_watch` joined the
       # EXISTING `designer` bundle; the role count stays at 10.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 35
+      # 35 -> 36 in task 01a1b6de stage 3: `agents.team_check` joined the
+      # EXISTING `agents_leader` bundle; the lead agent checks its team.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 36
     end
 
     test "is idempotent — calling twice does not duplicate rows" do

@@ -101,6 +101,10 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   # exist and would go red the moment anyone read the migration.
   @closed_roster_template_slugs [
     "agents.goal_heartbeat.v1",
+    # Task 01a1b6de stage 3: `agents.team_check` (agents_leader bundle);
+    # descriptor in `default_templates/0`, row seeded by
+    # `20261107193000_seed_agents_team_check_template_and_bundle.exs`.
+    "agents.team_check.v1",
     "architecture.audit_diff.v1",
     "architecture.cron_sweep.v1",
     "architecture.review_plan.v1",
