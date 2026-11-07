@@ -207,7 +207,7 @@ defmodule PlatformWeb.RuntimeChannelGameStreamTest do
     test "a game_stream_per_slot host's play_peer_view reaches the roster (01a1a34c)", ctx do
       # The extension lists four runtime events since task 01a1a34c.
       assert Enum.sort(Platform.GameStream.Extension.runtime_channel_events()) ==
-               ~w(play_peer_view play_session_status play_signal play_slot_activity)
+               ~w(play_native_status play_peer_view play_session_status play_signal play_slot_activity)
 
       socket = join_host(ctx, ["game_stream_host", "game_stream_multi", "game_stream_per_slot"])
 
