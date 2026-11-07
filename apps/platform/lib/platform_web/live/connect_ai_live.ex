@@ -49,7 +49,9 @@ defmodule PlatformWeb.ConnectAiLive do
   When the agent is first seen running,
   `Burrow.GettingStarted.ensure_getting_started/2`
   opens the "Getting started" space (once per agent) and the screen offers
-  "Go to Getting started" as its next step.
+  Continue, to the setup goal question on `/setup/goals`
+  (`PlatformWeb.SetupGoalsLive`, task 01a1b6de), which then goes on to
+  Getting started.
 
   ## Authorization — defence in depth
 
@@ -524,10 +526,10 @@ defmodule PlatformWeb.ConnectAiLive do
           </p>
           <.link
             id="connect-ai-getting-started"
-            navigate={~p"/chat/#{@space.slug}"}
+            navigate={~p"/setup/goals"}
             class="btn btn-primary min-h-11"
           >
-            Go to Getting started
+            Continue
           </.link>
         </div>
 

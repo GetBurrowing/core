@@ -54,6 +54,50 @@ defmodule Platform.Chat.DefaultSpace do
     end
   end
 
+  @doc """
+  The install's default team channel (task 01a1b6de stage 1): the root
+  org's non-archived `#general`, created when it is missing. The setup goal
+  question writes the owner's goals here when no space carries a goal yet.
+  Returns `{:ok, space}` or `{:error, reason}`.
+  """
+  @spec team_channel() :: {:ok, Space.t()} | {:error, term()}
+  def team_channel do
+    case Tenancy.get_root_org() do
+      nil ->
+        {:error, :no_root_org}
+
+      root ->
+        case root_general(root) do
+          %Space{} = space ->
+            {:ok, space}
+
+          nil ->
+            case Chat.create_space(%{name: @name, slug: @slug, kind: "channel", org_id: root.id}) do
+              {:ok, space} ->
+                {:ok, space}
+
+              {:error, reason} ->
+                # Lost a race, or an archived #general holds the slug.
+                case root_general(root) do
+                  %Space{} = space -> {:ok, space}
+                  nil -> {:error, reason}
+                end
+            end
+        end
+    end
+  end
+
+  defp root_general(root) do
+    Repo.one(
+      from(s in Space,
+        where:
+          s.org_id == ^root.id and s.slug == @slug and s.kind == "channel" and
+            is_nil(s.archived_at),
+        limit: 1
+      )
+    )
+  end
+
   @doc "`ensure/0` for the boot task: logs and returns `:ok`, never raises."
   @spec run_at_boot() :: :ok
   def run_at_boot do

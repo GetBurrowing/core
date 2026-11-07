@@ -41,6 +41,11 @@ defmodule Platform.Chat.Space do
     field(:goal, :string)
     field(:leader_agent_id, :binary_id)
 
+    # The install's goals in the owner's words, 0 to 3 (task 01a1b6de stage
+    # 1). `goal` is always `goals[0]`: `changeset/2` mirrors the two in the
+    # same write (`mirror_goal/1`), so readers of `goal` see the first goal.
+    field(:goals, {:array, :string}, default: [])
+
     # Virtual: the newest non-deleted message's `inserted_at`, falling back to
     # the space's own `inserted_at` when nothing has been said yet. Populated
     # only by `Platform.Chat.list_user_conversations/2`, which already computes
@@ -71,9 +76,13 @@ defmodule Platform.Chat.Space do
       :deletion_scheduled_at,
       :archived_cascade_org_id,
       :goal,
+      :goals,
       :leader_agent_id
     ])
     |> validate_required([:kind])
+    |> normalize_goals()
+    |> mirror_goal()
+    |> validate_goals()
     |> validate_length(:goal, max: 500)
     |> validate_inclusion(:kind, @kinds)
     |> validate_channel_fields()
@@ -85,6 +94,79 @@ defmodule Platform.Chat.Space do
     |> foreign_key_constraint(:primary_agent_id)
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:leader_agent_id)
+  end
+
+  @max_goals 3
+  @goal_max_length 500
+
+  @doc "How many goals a space may carry."
+  @spec max_goals() :: pos_integer()
+  def max_goals, do: @max_goals
+
+  # Trim each goal and drop the blank ones; the words are otherwise kept
+  # exactly as the owner typed them.
+  defp normalize_goals(changeset) do
+    case fetch_change(changeset, :goals) do
+      {:ok, goals} when is_list(goals) ->
+        put_change(
+          changeset,
+          :goals,
+          goals |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+        )
+
+      _ ->
+        changeset
+    end
+  end
+
+  # One write keeps `goal == goals[0]`. A write that names `goals` sets `goal`
+  # to its first item (nil when empty); a write that names only `goal` (the
+  # chat goal editor) replaces `goals[0]`, and a blank `goal` clears both.
+  defp mirror_goal(changeset) do
+    cond do
+      Map.has_key?(changeset.params || %{}, "goals") ->
+        put_change(changeset, :goal, List.first(get_field(changeset, :goals) || []))
+
+      Map.has_key?(changeset.params || %{}, "goal") ->
+        case get_field(changeset, :goal) do
+          goal when is_binary(goal) ->
+            case String.trim(goal) do
+              "" ->
+                put_change(changeset, :goals, [])
+
+              trimmed ->
+                rest = Enum.drop(get_field(changeset, :goals) || [], 1)
+
+                changeset
+                |> put_change(:goal, trimmed)
+                |> put_change(:goals, [trimmed | rest])
+            end
+
+          _ ->
+            put_change(changeset, :goals, [])
+        end
+
+      true ->
+        changeset
+    end
+  end
+
+  defp validate_goals(changeset) do
+    goals = get_field(changeset, :goals) || []
+
+    changeset
+    |> validate_length(:goals,
+      max: @max_goals,
+      message: "can have at most %{count} goals"
+    )
+    |> then(fn cs ->
+      if Enum.any?(goals, &(String.length(&1) > @goal_max_length)),
+        do:
+          add_error(cs, :goals, "each goal can be at most %{count} characters",
+            count: @goal_max_length
+          ),
+        else: cs
+    end)
   end
 
   @doc "The stored values `agent_attention_policy` accepts."

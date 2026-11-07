@@ -1139,6 +1139,9 @@ defmodule PlatformWeb.Router do
       # Task 01a10315 stage 5: "Connect your AI", where a new install's
       # hand-over lands ("Open Burrow"). The view re-checks root admin.
       live("/setup/connect-ai", ConnectAiLive, :index)
+      # Task 01a1b6de stage 1: the setup goal question, after Connect AI.
+      # The view re-checks root admin.
+      live("/setup/goals", SetupGoalsLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

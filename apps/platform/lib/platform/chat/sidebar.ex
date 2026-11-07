@@ -944,6 +944,35 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
+  Save `space`'s goals, the owner's words for what the team should get done
+  first (task 01a1b6de stage 1), in ONE update.
+
+  The sibling of `save_goal/3`, with the same discipline: the space is
+  RE-READ with `Chat.get_space/1` and written once. `goals` is a list of
+  strings; each is trimmed and blanks are dropped, more than
+  `Chat.Space.max_goals/0` is refused whole (`{:error, changeset}`, nothing
+  written), and `goal` is set to `goals[0]` in the same write
+  (`Chat.Space.changeset/2`), so `AgentsGoalHeartbeat.agents_space/0` keeps
+  working. `metadata` is not touched, so the heartbeat's baseline and the
+  goal scope survive.
+
+  `opts`: `leader_agent_id:` is written only when the space has none.
+  """
+  @spec save_goals(Chat.Space.t(), [String.t()], keyword()) ::
+          {:ok, Chat.Space.t()} | {:error, :not_found} | {:error, Ecto.Changeset.t()}
+  def save_goals(%Chat.Space{id: id}, goals, opts \\ []) when is_list(goals) do
+    with %Chat.Space{} = fresh <- Chat.get_space(id) || {:error, :not_found} do
+      attrs =
+        case {fresh.leader_agent_id, Keyword.get(opts, :leader_agent_id)} do
+          {nil, leader} when is_binary(leader) -> %{goals: goals, leader_agent_id: leader}
+          _ -> %{goals: goals}
+        end
+
+      Chat.update_space(fresh, attrs)
+    end
+  end
+
+  @doc """
   Whether `space` may be offered its FIRST goal.
 
   True only when ALL hold: the space is a non-archived `kind: "channel"`
