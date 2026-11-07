@@ -9,7 +9,7 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       01a17b10, stays a step name only);
     * `Platform.AgentHost.State` round-trips `login_code` and `device_url`,
       and a later observation without them clears them;
-    * `NativeLogin.login_view/1,3` per harness and login mode;
+    * `NativeLogin.login_view/1,3,4` per harness and login mode;
     * `Platform.AgentHost.FakeHost`: codex waits at FAKE-1234 until
       `complete/1` (and its dev route), then runs; Claude Code runs once a key
       is saved.
@@ -180,7 +180,10 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       assert NativeLogin.login_view("codex", nil, :operator) ==
                %{kind: :device_code, url: nil, code: nil}
 
-      assert NativeLogin.login_view("claude_code", observed, :api_key) == :api_key
+      assert NativeLogin.login_view("claude_code", observed, :api_key, key_set?: true) == :api_key
+
+      assert NativeLogin.login_view("claude_code", observed, :api_key) ==
+               %{kind: :claude_subscription, account: nil, plan: nil}
 
       assert NativeLogin.login_view("claude_code", observed, :operator) ==
                :subscription_terminal_only
@@ -197,7 +200,9 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       :ok = Reconciler.agent_state(host, needs_login(codex.id, login))
 
       assert NativeLogin.login_view(codex) == %{kind: :device_code, url: @url, code: "AB12-CD34E"}
-      assert NativeLogin.login_view(claude) == :api_key
+      # No API key saved: the owner's own Claude sign-in (task 01a1b365).
+      assert NativeLogin.login_view(claude) ==
+               %{kind: :claude_subscription, account: nil, plan: nil}
     end
   end
 

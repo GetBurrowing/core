@@ -40,18 +40,38 @@ defmodule Platform.AgentHost.Reconciler do
 
   An install has one agent host. A second host joining while one is connected
   is refused.
+
+  ## Claude subscription login: one pending login per agent (task 01a1b365)
+
+  `claude_login_start/4` records a pending login for the agent, bound to the
+  user who started it AND the process that asked (the owner's LiveView), and
+  pushes `agent.claude_login_start`. While it is pending, a start by anyone
+  else is refused `:busy`, and `claude_login_code/5` takes a code only from
+  that same user and process (`:forbidden` otherwise, `:no_session` when
+  nothing is pending). The pending login ends when its code is pushed, when
+  the starter's process exits, when `claude_login_end/2` is called, on logout,
+  or after 10 minutes, the host's own idle limit
+  (services/agent-host/src/claude_login.ts `IDLE_MS`).
+
+  The pending record holds ids, a pid, a monitor and a ref: never the sign-in
+  URL or the code. The code (a `Platform.AgentHost.LoginCode`) passes through
+  this process inside one call and is put into the push to the host channel,
+  which unwraps it as it serialises the push. Nothing here stores, logs or
+  broadcasts it.
   """
 
   use GenServer
 
   require Logger
 
-  alias Platform.AgentHost.State
+  alias Platform.AgentHost.{LoginCode, State}
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents, NativeLogin}
   alias Platform.Federation
   alias Platform.Role.Peer
 
   @status_topic "agent_host:status"
+  # The host ends a login nobody finished after 10 minutes (claude_login.ts IDLE_MS).
+  @login_ttl_ms 10 * 60_000
 
   # ── Client ─────────────────────────────────────────────────────────
 
@@ -144,6 +164,43 @@ defmodule Platform.AgentHost.Reconciler do
   def host_call(event, payload) when is_binary(event) and is_map(payload),
     do: GenServer.call(server(), {:host_call, event, payload})
 
+  @doc """
+  Record a pending Claude login for `agent_id`, bound to `actor_id` and
+  `caller`, and ask the host to start one, answered under `ref`. `:ok`, or
+  `{:error, :busy}` while someone else's login is pending for that agent, or
+  `{:error, :not_connected}`.
+  """
+  @spec claude_login_start(binary(), binary(), pid(), String.t()) ::
+          :ok | {:error, :busy | :not_connected}
+  def claude_login_start(agent_id, actor_id, caller, ref),
+    do: GenServer.call(server(), {:claude_login_start, agent_id, actor_id, caller, ref})
+
+  @doc """
+  Push `code` into `agent_id`'s pending Claude login, answered under `ref`.
+  Taken only from the user and process that started that login; the pending
+  login then ends. `:ok`, or `{:error, :no_session | :forbidden |
+  :not_connected}`.
+  """
+  @spec claude_login_code(binary(), binary(), pid(), String.t(), LoginCode.t()) ::
+          :ok | {:error, :no_session | :forbidden | :not_connected}
+  def claude_login_code(agent_id, actor_id, caller, ref, %LoginCode{} = code),
+    do: GenServer.call(server(), {:claude_login_code, agent_id, actor_id, caller, ref, code})
+
+  @doc "End `agent_id`'s pending Claude login if it is the one started under `ref`."
+  @spec claude_login_end(binary(), String.t()) :: :ok
+  def claude_login_end(agent_id, ref),
+    do: GenServer.call(server(), {:claude_login_end, agent_id, ref})
+
+  @doc "End any pending Claude login for `agent_id` and ask the host to log it out, answered under `ref`."
+  @spec claude_logout(binary(), String.t()) :: :ok | {:error, :not_connected}
+  def claude_logout(agent_id, ref), do: GenServer.call(server(), {:claude_logout, agent_id, ref})
+
+  @doc false
+  # Whether a Claude login is pending for `agent_id` (tests).
+  @spec claude_login_pending?(binary()) :: boolean()
+  def claude_login_pending?(agent_id),
+    do: GenServer.call(server(), {:claude_login_pending?, agent_id})
+
   @doc "The connected host's channel pid, or nil."
   @spec host_pid() :: pid() | nil
   def host_pid do
@@ -165,7 +222,7 @@ defmodule Platform.AgentHost.Reconciler do
   def init(_opts) do
     State.init_table()
     State.clear()
-    {:ok, %{host: nil}}
+    {:ok, %{host: nil, logins: %{}}}
   end
 
   @impl true
@@ -285,6 +342,85 @@ defmodule Platform.AgentHost.Reconciler do
     {:reply, :ok, state}
   end
 
+  defp do_call({:claude_login_pending?, agent_id}, _from, state) do
+    {:reply, live_login(state, agent_id) != nil, state}
+  end
+
+  defp do_call(
+         {:claude_login_start, _agent_id, _actor, _caller, _ref},
+         _from,
+         %{host: nil} = state
+       ),
+       do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:claude_login_start, agent_id, actor_id, caller, ref}, _from, state) do
+    case live_login(state, agent_id) do
+      %{actor_id: other_actor, caller: other_caller}
+      when other_actor != actor_id or other_caller != caller ->
+        {:reply, {:error, :busy}, state}
+
+      _mine_or_none ->
+        # A second start by the same caller replaces the first; so does the
+        # host, which ends a running login on a new start.
+        state = drop_login(state, agent_id)
+
+        login = %{
+          actor_id: actor_id,
+          caller: caller,
+          monitor: Process.monitor(caller),
+          ref: ref,
+          started_at: System.monotonic_time(:millisecond)
+        }
+
+        push(state.host, "agent.claude_login_start", %{"agent_id" => agent_id, "ref" => ref})
+        {:reply, :ok, put_in(state.logins[agent_id], login)}
+    end
+  end
+
+  defp do_call(
+         {:claude_login_code, _agent_id, _actor, _caller, _ref, _code},
+         _from,
+         %{host: nil} = state
+       ),
+       do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:claude_login_code, agent_id, actor_id, caller, ref, code}, _from, state) do
+    case live_login(state, agent_id) do
+      nil ->
+        {:reply, {:error, :no_session}, drop_login(state, agent_id)}
+
+      %{actor_id: ^actor_id, caller: ^caller} ->
+        # The host ends its login after one code, whatever the outcome, so the
+        # pending login ends here too.
+        push(state.host, "agent.claude_login_code", %{
+          "agent_id" => agent_id,
+          "ref" => ref,
+          "code" => code
+        })
+
+        {:reply, :ok, drop_login(state, agent_id)}
+
+      _someone_else ->
+        {:reply, {:error, :forbidden}, state}
+    end
+  end
+
+  defp do_call({:claude_login_end, agent_id, ref}, _from, state) do
+    case Map.get(state.logins, agent_id) do
+      %{ref: ^ref} -> {:reply, :ok, drop_login(state, agent_id)}
+      _ -> {:reply, :ok, state}
+    end
+  end
+
+  defp do_call({:claude_logout, _agent_id, _ref}, _from, %{host: nil} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  defp do_call({:claude_logout, agent_id, ref}, _from, state) do
+    state = drop_login(state, agent_id)
+    push(state.host, "agent.claude_logout", %{"agent_id" => agent_id, "ref" => ref})
+    {:reply, :ok, state}
+  end
+
   defp do_call({:pane, _agent_id, _lines, _ref}, _from, %{host: nil} = state),
     do: {:reply, {:error, :not_connected}, state}
 
@@ -296,6 +432,14 @@ defmodule Platform.AgentHost.Reconciler do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{host: %{ref: ref}} = state) do
     {:noreply, drop_host(state)}
+  end
+
+  # The process that started a pending Claude login went away: so does the login.
+  def handle_info({:DOWN, mref, :process, _pid, _reason}, state) do
+    case Enum.find(state.logins, fn {_agent_id, login} -> login.monitor == mref end) do
+      {agent_id, _login} -> {:noreply, %{state | logins: Map.delete(state.logins, agent_id)}}
+      nil -> {:noreply, state}
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -324,7 +468,32 @@ defmodule Platform.AgentHost.Reconciler do
     Process.demonitor(host.ref, [:flush])
     State.clear()
     broadcast(:host_disconnected)
-    %{state | host: nil}
+    # A host that goes away takes its running logins with it.
+    for {_agent_id, login} <- state.logins, do: Process.demonitor(login.monitor, [:flush])
+    %{state | host: nil, logins: %{}}
+  end
+
+  # The pending login for `agent_id`, or nil when there is none or it outlived
+  # the host's idle limit.
+  defp live_login(state, agent_id) do
+    case Map.get(state.logins, agent_id) do
+      %{started_at: at} = login ->
+        if System.monotonic_time(:millisecond) - at < @login_ttl_ms, do: login, else: nil
+
+      nil ->
+        nil
+    end
+  end
+
+  defp drop_login(state, agent_id) do
+    case Map.pop(state.logins, agent_id) do
+      {nil, _} ->
+        state
+
+      {login, logins} ->
+        Process.demonitor(login.monitor, [:flush])
+        %{state | logins: logins}
+    end
   end
 
   defp host?(%{host: %{pid: pid}}, pid), do: true

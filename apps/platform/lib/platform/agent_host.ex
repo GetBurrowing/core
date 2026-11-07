@@ -40,7 +40,11 @@ defmodule Platform.AgentHost do
       snapshots (`restart_with_tools/2`);
     * `agent.check_auth` `{agent_id, ref}`: does the agent's API key still
       work? Asked by the no-reply watchdog (stage 7 round 2,
-      `Platform.Chat.ReplyFailure.Watchdog`).
+      `Platform.Chat.ReplyFailure.Watchdog`);
+    * `agent.claude_login_start` `{agent_id, ref}`, `agent.claude_login_code`
+      `{agent_id, ref, code}` and `agent.claude_logout` `{agent_id, ref}`: the
+      owner's Claude subscription login (task 01a1b365,
+      `claude_login_start/3`, `claude_login_submit/4`, `claude_logout/3`).
 
   ## Events (host to core)
 
@@ -56,13 +60,16 @@ defmodule Platform.AgentHost do
       `lines` empty) while the pane shows a login screen;
     * `agent.auth` `{ref, agent_id, result}`: `"ok"`, `"rejected"` (the API
       answered 401; the host then also reports the agent `needs_login`) or
-      `"unknown"` (no API key, as with a subscription login, or no answer).
+      `"unknown"` (no API key, as with a subscription login, or no answer);
+    * `agent.claude_login` `{ref, agent_id, result, url? | account?, plan?}`:
+      `url` (a start), `ok` with account and plan, `bad_code`,
+      `no_subscription`, `no_session` or `failed`. It never carries the code.
 
   Observed state is broadcast on `"agent_host:status"` as
   `{:agent_host_status, event}`.
   """
 
-  alias Platform.AgentHost.{Reconciler, Redact, State}
+  alias Platform.AgentHost.{LoginCode, Reconciler, Redact, State}
   alias Platform.Agents.{Agent, NativeAgents}
 
   @logs_timeout_ms 5_000
@@ -70,6 +77,11 @@ defmodule Platform.AgentHost do
   @restart_timeout_ms 120_000
   # The host's own request to the API times out at 8 s (auth.ts).
   @auth_timeout_ms 10_000
+  # The host waits up to 30 s for the sign-in URL (claude_login.ts URL_WAIT_MS).
+  @login_start_timeout_ms 35_000
+  # The host waits up to 30 s for the login to end, then reads `claude auth status`.
+  @login_submit_timeout_ms 45_000
+  @logout_timeout_ms 15_000
 
   @doc "The token the host must present, or nil when none is configured."
   @spec token() :: String.t() | nil
@@ -351,6 +363,181 @@ defmodule Platform.AgentHost do
   defp parse_auth("ok"), do: :ok
   defp parse_auth("rejected"), do: :rejected
   defp parse_auth(_), do: :unknown
+
+  # ── Claude subscription login (task 01a1b365 stage 2) ────────────────
+
+  @typedoc "Why a Claude login command was refused before anything reached the host."
+  @type login_refusal :: :not_managed | :forbidden | :unsupported_harness
+
+  @doc """
+  Start `agent`'s own `claude auth login` on the host, as `actor`, and wait for
+  the sign-in URL: `{:ok, url}`. The owner opens it, signs in on Anthropic's
+  page and pastes the code that page shows into `claude_login_submit/4`.
+
+  Refused, sending nothing, with `{:error, :not_managed}` for an agent this
+  install does not run, `{:error, :forbidden}` unless
+  `NativeAgents.can_manage?(actor, agent)` (checked here, whatever the screen
+  already checked) and `{:error, :unsupported_harness}` for anything but
+  Claude Code.
+
+  One pending login per agent (`Platform.AgentHost.Reconciler`): it is bound
+  to `actor` and to the calling process, and a start by anyone else while it
+  is pending is `{:error, :busy}`. Otherwise `{:error, :not_connected}`,
+  `{:error, :timeout}`, or `{:error, :refused}` when the host printed no URL.
+
+  The URL is returned to the caller only: it is never put in
+  `Platform.AgentHost.State`, broadcast on the status topic, audited or
+  logged.
+  """
+  @spec claude_login_start(map() | binary() | nil, Agent.t(), keyword()) ::
+          {:ok, String.t()}
+          | {:error, login_refusal() | :busy | :not_connected | :timeout | :refused}
+  def claude_login_start(actor, %Agent{} = agent, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @login_start_timeout_ms)
+
+    with {:ok, actor_id} <- login_gate(actor, agent) do
+      ref = new_ref()
+
+      result =
+        await_claude_login(ref, timeout, fn ->
+          Reconciler.claude_login_start(agent.id, actor_id, self(), ref)
+        end)
+
+      case result do
+        {:ok, %{"result" => "url", "url" => url}} ->
+          {:ok, url}
+
+        other ->
+          # No URL, no login: the next start begins clean.
+          _ = Reconciler.claude_login_end(agent.id, ref)
+
+          case other do
+            {:error, reason} -> {:error, reason}
+            {:ok, _} -> {:error, :refused}
+          end
+      end
+    end
+  end
+
+  @doc """
+  Hand `code`, the one the owner pasted from Anthropic's page, to `agent`'s
+  pending login on the host, as `actor`, and wait for the outcome, which
+  `claude auth status --json` on the host decides: `{:ok, %{account, plan}}`
+  (the agent's unit then restarts, logged in), or `{:error, :bad_code |
+  :no_subscription | :no_session | :failed | :timeout | :not_connected}`.
+  `no_subscription` means the account has no Pro or Max plan; the host has
+  logged the agent out again.
+
+  Refused like `claude_login_start/3`, and with `{:error, :no_session}` when no
+  login is pending or `{:error, :forbidden}` when the pending login was
+  started by another user or another process: a code goes only into the
+  login its own caller started. The pending login ends with this call,
+  whatever the outcome (the host's ends too), so a retry starts again.
+
+  The code stays a `Platform.AgentHost.LoginCode` up to the channel push that
+  serialises it. It passes through core's process for this one request to the
+  agent host on the same install and is never stored, logged or broadcast; the
+  reply does not carry it.
+  """
+  @spec claude_login_submit(map() | binary() | nil, Agent.t(), LoginCode.t(), keyword()) ::
+          {:ok, %{account: String.t(), plan: String.t()}}
+          | {:error,
+             login_refusal()
+             | :bad_code
+             | :no_subscription
+             | :no_session
+             | :failed
+             | :timeout
+             | :not_connected}
+  def claude_login_submit(actor, %Agent{} = agent, %LoginCode{} = code, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @login_submit_timeout_ms)
+
+    with {:ok, actor_id} <- login_gate(actor, agent) do
+      ref = new_ref()
+
+      result =
+        await_claude_login(ref, timeout, fn ->
+          Reconciler.claude_login_code(agent.id, actor_id, self(), ref, code)
+        end)
+
+      case result do
+        {:ok, %{"result" => "ok", "account" => account, "plan" => plan}} ->
+          {:ok, %{account: account, plan: plan}}
+
+        {:ok, %{"result" => r}} when r in ["bad_code", "no_subscription", "no_session"] ->
+          {:error, String.to_existing_atom(r)}
+
+        {:ok, _} ->
+          {:error, :failed}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Log `agent` out of its Claude subscription, as `actor`: ends any pending
+  login and runs `claude auth logout` as the agent. `:ok` once the host's
+  `claude auth status` reads logged out, else `{:error, :failed | :timeout |
+  :not_connected}`, or refused like `claude_login_start/3`.
+
+  Logout does not restart the agent's unit on the host, so a running agent
+  keeps its session until it restarts. With `restart: true` (the default) a
+  successful logout is followed by `restart_agent/1`.
+  """
+  @spec claude_logout(map() | binary() | nil, Agent.t(), keyword()) ::
+          :ok | {:error, login_refusal() | :failed | :timeout | :not_connected | term()}
+  def claude_logout(actor, %Agent{} = agent, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @logout_timeout_ms)
+
+    with {:ok, _actor_id} <- login_gate(actor, agent) do
+      ref = new_ref()
+
+      case await_claude_login(ref, timeout, fn -> Reconciler.claude_logout(agent.id, ref) end) do
+        {:ok, %{"result" => "ok"}} ->
+          if Keyword.get(opts, :restart, true), do: restart_agent(agent), else: :ok
+
+        {:ok, _} ->
+          {:error, :failed}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp login_gate(actor, agent) do
+    with %Platform.Agents.AgentRuntime{harness: harness} <-
+           NativeAgents.get_managed_runtime(agent) || {:error, :not_managed},
+         true <- NativeAgents.can_manage?(actor, agent) || {:error, :forbidden},
+         true <- harness == "claude_code" || {:error, :unsupported_harness} do
+      {:ok, actor_id(actor)}
+    end
+  end
+
+  defp actor_id(id) when is_binary(id), do: id
+  defp actor_id(%{id: id}) when is_binary(id), do: id
+
+  defp new_ref, do: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+
+  # The ref'd request/reply pattern `check_auth/2` uses, on `reply_topic/1`.
+  defp await_claude_login(ref, timeout, send_fun) do
+    topic = reply_topic(ref)
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic)
+
+    try do
+      with :ok <- send_fun.() do
+        receive do
+          {:agent_host_claude_login, ^ref, reply} -> {:ok, reply}
+        after
+          timeout -> {:error, :timeout}
+        end
+      end
+    after
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, topic)
+    end
+  end
 
   @doc "True when the connected host advertised `full_root` in its hello."
   @spec full_root?() :: boolean()

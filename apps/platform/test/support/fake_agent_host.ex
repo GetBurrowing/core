@@ -8,10 +8,17 @@ defmodule Platform.FakeAgentHost do
   `agent.restart` with a ref (stage 4) is answered `agent.restarted` with the
   `:restart` option: `{outcome, before_tools | nil, after_tools | nil}`
   (default `{"ready", [], []}`).
+
+  A stubbed Claude subscription login (task 01a1b365), the same stub the dev
+  fake host runs (`Platform.AgentHost.FakeHost.claude_login_reply/3`): the
+  one good code (`FakeHost.claude_login_code/0`) answers `ok` with
+  `owner@example.com` / `max`, anything else `bad_code`. The `:claude_login`
+  option or `set_claude_login/2` switches a good code to `:no_subscription`,
+  or the host to answering nothing (`:timeout`).
   """
   use GenServer
 
-  alias Platform.AgentHost.Reconciler
+  alias Platform.AgentHost.{FakeHost, Reconciler}
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -19,15 +26,24 @@ defmodule Platform.FakeAgentHost do
   def report(pid, agent_id, state, extra \\ %{}),
     do: GenServer.call(pid, {:report, agent_id, state, extra})
 
+  @doc "Switch the stubbed Claude login: `:ok`, `:no_subscription` or `:timeout`."
+  def set_claude_login(pid, mode), do: GenServer.call(pid, {:claude_login, mode})
+
   @impl true
   def init(opts) do
     :ok = Reconciler.host_joined(self(), %{"profile" => "contained"})
 
     {:ok,
-     %{root: Keyword.fetch!(opts, :root), restart: Keyword.get(opts, :restart, {"ready", [], []})}}
+     %{
+       root: Keyword.get(opts, :root),
+       restart: Keyword.get(opts, :restart, {"ready", [], []}),
+       claude_login: Keyword.get(opts, :claude_login, :ok)
+     }}
   end
 
   @impl true
+  def handle_call({:claude_login, mode}, _from, s), do: {:reply, :ok, %{s | claude_login: mode}}
+
   def handle_call({:report, agent_id, state, extra}, _from, s) do
     payload = Map.merge(%{"agent_id" => agent_id, "state" => state}, extra)
     {:reply, Reconciler.agent_state(self(), payload), s}
@@ -80,6 +96,23 @@ defmodule Platform.FakeAgentHost do
       },
       %Phoenix.Socket{}
     )
+
+    {:noreply, s}
+  end
+
+  def handle_info({:agent_host_push, event, %{"agent_id" => id, "ref" => ref} = payload}, s)
+      when event in ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"] do
+    case FakeHost.claude_login_reply(event, payload, s.claude_login) do
+      nil ->
+        :ok
+
+      reply ->
+        PlatformWeb.AgentHostChannel.handle_in(
+          "agent.claude_login",
+          Map.merge(%{"ref" => ref, "agent_id" => id}, reply),
+          %Phoenix.Socket{}
+        )
+    end
 
     {:noreply, s}
   end

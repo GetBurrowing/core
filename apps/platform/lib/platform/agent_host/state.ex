@@ -17,9 +17,10 @@ defmodule Platform.AgentHost.State do
                    observed_at: DateTime.t()}}
 
   There is deliberately no Claude login page or login code here (task
-  01a17b10): a `needs_login` Claude agent is a state and a step name only.
-  Burrow never relays or handles a Claude login; a human logs in at the
-  agent's own pane.
+  01a17b10, kept by task 01a1b365): a `needs_login` Claude agent is a state
+  and a step name only. The owner's Claude sign-in URL and pasted code travel
+  only in the ref'd request and reply of `Platform.AgentHost.claude_login_start/3`
+  and `claude_login_submit/4`, never through this table.
 
   The one login value kept is Codex's DEVICE login (task 01a10315 stage 4):
   `login_code` and `device_url` are set only for step `device_code`, when the
