@@ -25,6 +25,16 @@ defmodule Platform.GameStream.NativeAPI do
     end
   end
 
+  defp dispatch(%{path_info: ["control", session_id]} = conn) do
+    with true <- Platform.UUID.valid?(session_id),
+         ["Bearer " <> credential] <- get_req_header(conn, "authorization"),
+         {:ok, status} <- NativeSessions.control(session_id, credential) do
+      reply(conn, 200, status)
+    else
+      _ -> reply(conn, 401, %{error: "unauthorized"})
+    end
+  end
+
   defp dispatch(%{path_info: ["builds", project_id]} = conn) do
     with true <- Platform.UUID.valid?(project_id),
          ["Bearer " <> credential] <- get_req_header(conn, "authorization"),

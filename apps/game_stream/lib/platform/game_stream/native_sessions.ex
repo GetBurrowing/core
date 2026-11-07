@@ -76,6 +76,10 @@ defmodule Platform.GameStream.NativeSessions do
   end
 
   def mint(user, session_id) do
+    if Platform.GameStream.enabled?(), do: reserve(user, session_id), else: {:error, :disabled}
+  end
+
+  defp reserve(user, session_id) do
     transaction(fn ->
       unless Platform.UUID.valid?(session_id), do: Repo.rollback(:not_found)
       row = locked(session_id)
@@ -130,8 +134,20 @@ defmodule Platform.GameStream.NativeSessions do
     end)
   end
 
+  def control(session_id, credential) when is_binary(credential) do
+    with true <- Platform.GameStream.enabled?(),
+         true <- Platform.UUID.valid?(session_id),
+         %NativeSessionRecord{} = row <- Repo.get(NativeSessionRecord, session_id),
+         true <- row.state == "running" and fresh?(row) and host_authorized?(row, credential) do
+      {:ok, %{session_id: row.id, generation: row.generation, state: "running"}}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
   def consume(session_id, credential, claims) when is_binary(credential) and is_map(claims) do
     transaction(fn ->
+      unless Platform.GameStream.enabled?(), do: Repo.rollback(:unauthorized)
       unless Platform.UUID.valid?(session_id), do: Repo.rollback(:not_found)
       row = locked(session_id)
 
@@ -152,7 +168,8 @@ defmodule Platform.GameStream.NativeSessions do
                token.build_id == row.build_id &&
                token.generation == row.generation && claims["build_id"] == row.build_id &&
                claims["channel_id"] == row.channel_id && claims["user_id"] == token.user_id &&
-               claims["generation"] == row.generation,
+               claims["generation"] == row.generation and
+                 claims["protocol_version"] == row.protocol_version,
              do: Repo.rollback(:unauthorized)
 
       user = Repo.get(User, token.user_id) || Repo.rollback(:unauthorized)

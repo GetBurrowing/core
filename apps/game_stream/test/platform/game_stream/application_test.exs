@@ -13,7 +13,7 @@ defmodule Platform.GameStream.ApplicationTest do
   alias Platform.GameStream.RuntimeConfig
 
   setup do
-    saved = Map.new([:enabled, :turn], &{&1, Application.fetch_env(:game_stream, &1)})
+    saved = Map.new([:enabled, :turn, :native_publishers], &{&1, Application.fetch_env(:game_stream, &1)})
 
     on_exit(fn ->
       for {key, value} <- saved do
