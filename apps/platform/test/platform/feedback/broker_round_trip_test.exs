@@ -126,7 +126,7 @@ defmodule Platform.Feedback.BrokerRoundTripTest do
     refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
 
     assert raw |> Jason.decode!() |> Map.keys() |> Enum.sort() ==
-             ~w(fingerprint installation repository submission)
+             ~w(agent fingerprint installation repository submission)
 
     assert [gh] = github_issues()
     refute gh["body"] =~ "ghp_QQQQ"

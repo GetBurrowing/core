@@ -12,9 +12,15 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       (the hosted Burrow broker) when it is unset or blank (task 01a1a6a5
       stage 3).
     * `POST <base>/issues` with JSON
-      `%{repository, fingerprint, installation, submission}` and the
+      `%{repository, fingerprint, installation, agent, submission}` and the
       fingerprint as the `idempotency-key` header. `installation` is the
-      configured installation label or `null`. `submission` is
+      configured installation label or `null`. `agent` is the sanitized
+      submitting-agent slug (`GithubPublisher.sanitize_slug/1` of the
+      caller's label), ALWAYS present: `null` when there is nothing to send
+      (the same precedent as `installation`) and ALWAYS `null` for a person's
+      submission. It is a display hint only — the broker never uses it for
+      identity, caps or dedupe (identity is the fingerprint; caps key on the
+      agent id and installation). `submission` is
       `Platform.Feedback.Submission.wire_fields/1` of the sanitized
       structure: the allowlisted fields in the raw-argument shape.
     * NO `title`, `body` or `labels` are sent (task 01a1a6a5 stage 1). The
@@ -51,6 +57,7 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       repository: Keyword.fetch!(opts, :repository),
       fingerprint: fingerprint,
       installation: installation_label(),
+      agent: agent_label(opts),
       submission: Keyword.fetch!(opts, :submission)
     }
 
@@ -92,6 +99,18 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
       _ ->
         nil
+    end
+  end
+
+  # `agent` is a display hint only: the broker never uses it for identity,
+  # caps or dedupe. A person's submission is attributed to the installation
+  # alone, so the label is dropped even when one was passed — a person must
+  # never be named on a public issue (task 01a1b2cc stage 1).
+  defp agent_label(opts) do
+    if Keyword.fetch!(opts, :submission)["source"] == "person" do
+      nil
+    else
+      GithubPublisher.sanitize_slug(Keyword.get(opts, :agent))
     end
   end
 

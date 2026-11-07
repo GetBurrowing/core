@@ -73,7 +73,33 @@ defmodule Platform.Feedback.GithubPublisherTest do
     "observed_behavior" => "Badge vanishes."
   }
 
+  @person_wire Map.put(@wire, "source", "person")
+
   defp publish(built), do: GithubPublisher.publish(built, fingerprint: @fp, submission: @wire)
+
+  defp publish_agent(built, agent, submission \\ @wire) do
+    test_pid = self()
+
+    Req.Test.stub(Broker, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:broker_body, Jason.decode!(raw)})
+
+      Req.Test.json(Plug.Conn.put_status(conn, 201), %{
+        "repository" => "GetBurrowing/core",
+        "issue_number" => 21
+      })
+    end)
+
+    assert {:ok, %{issue_number: 21}} =
+             GithubPublisher.publish(built,
+               fingerprint: @fp,
+               submission: submission,
+               agent: agent
+             )
+
+    assert_received {:broker_body, body}
+    body
+  end
 
   defp put_publisher(kw) do
     current = Application.get_env(:platform, GithubPublisher, [])
@@ -192,10 +218,41 @@ defmodule Platform.Feedback.GithubPublisherTest do
                "repository" => "GetBurrowing/core",
                "fingerprint" => @fp,
                "installation" => "burrow-7",
+               "agent" => nil,
                "submission" => @wire
              }
 
       refute Jason.encode!(body) =~ "Submitted by agent"
+    end
+
+    # The named mutation for task 01a1b2cc stage 1: an implementation that
+    # forwards `opts[:agent]` unconditionally fails both asserts here.
+    test "a person submission never carries an agent label on the wire" do
+      person_issue =
+        GithubPublisher.build_issue(sanitized(), %{
+          fingerprint: @fp,
+          actor: "Ryan Garcia",
+          installation: "burrow-7",
+          source: "person"
+        })
+
+      body = publish_agent(person_issue, "Ryan Garcia", @person_wire)
+
+      assert body["agent"] == nil
+      refute Jason.encode!(body) =~ "Ryan Garcia"
+    end
+
+    test "an agent label reaches the wire as a sanitized bare slug, never markdown" do
+      body = publish_agent(issue(), "evil`]( http://x )")
+
+      assert body["agent"] == "evilhttpx"
+      refute Jason.encode!(body) =~ "Submitted by agent"
+    end
+
+    test "a 200-character agent label reaches the wire as the 64-character slice" do
+      body = publish_agent(issue(), String.duplicate("x", 200))
+
+      assert body["agent"] == String.duplicate("x", 64)
     end
 
     test "an unset or blank installation label is sent as null" do

@@ -251,7 +251,9 @@ defmodule Platform.Feedback.SubmissionTest do
       refute raw =~ "ENV-SENTINEL"
 
       assert Map.keys(body) |> Enum.sort() ==
-               ~w(fingerprint installation repository submission)
+               ~w(agent fingerprint installation repository submission)
+
+      assert body["agent"] == nil
 
       assert Map.keys(body["submission"]) |> Enum.sort() ==
                ~w(category expected_behavior observed_behavior reproduction_steps source title version_environment)
@@ -356,7 +358,7 @@ defmodule Platform.Feedback.SubmissionTest do
     # `ghp_` + 36 alphanumerics: a GitHub personal-token shape.
     @canary "ghp_" <> "Zq7Lm2Xc9Vb4Nn1Kk8Jj3Hh6Gg5Ff0Dd2Ss4Aa"
 
-    test "sends only repository, fingerprint, installation and the sanitized submission",
+    test "sends only repository, fingerprint, installation, agent and the sanitized submission",
          %{agent: agent} do
       args = valid(%{"observed_behavior" => "Push failed with #{@canary} in the output."})
 
@@ -367,7 +369,7 @@ defmodule Platform.Feedback.SubmissionTest do
       body = Jason.decode!(raw)
 
       assert body |> Map.keys() |> Enum.sort() ==
-               ~w(fingerprint installation repository submission)
+               ~w(agent fingerprint installation repository submission)
 
       refute Map.has_key?(body, "body")
       refute Map.has_key?(body, "title")
@@ -375,6 +377,8 @@ defmodule Platform.Feedback.SubmissionTest do
       assert body["repository"] == "GetBurrowing/core"
       assert body["fingerprint"] == fingerprint
       assert body["installation"] == nil
+      # Stage 2 plumbs the agent label into the opts; until then it is null.
+      assert body["agent"] == nil
       assert {"idempotency-key", fingerprint} in headers
       refute Enum.any?(headers, fn {k, _} -> k == "authorization" end)
 

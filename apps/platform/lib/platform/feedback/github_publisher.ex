@@ -108,6 +108,27 @@ defmodule Platform.Feedback.GithubPublisher do
   def fingerprint_marker(fingerprint), do: "<!-- #{@fingerprint_marker}: #{fingerprint} -->"
 
   @doc """
+  Reduce a display label to the safe slug charset: every character outside
+  `[A-Za-z0-9._-]` is dropped, the result is sliced to 64 characters, and
+  `nil` is returned for a non-binary or an empty result. The ONE label rule
+  the direct publisher's attribution, the area line and (task 01a1b2cc
+  stage 3) the broker share.
+
+  The result is a display hint only — a label is always printed inside a code
+  span in an issue body, and the broker re-sanitizes anything that arrives
+  over the wire before it is ever shown (task 01a1b2cc stage 3).
+  """
+  @spec sanitize_slug(term()) :: String.t() | nil
+  def sanitize_slug(value) when is_binary(value) do
+    case value |> String.replace(~r/[^A-Za-z0-9._-]/, "") |> String.slice(0, 64) do
+      "" -> nil
+      clean -> clean
+    end
+  end
+
+  def sanitize_slug(_value), do: nil
+
+  @doc """
   Build the issue from the sanitized structure ONLY.
 
   `sanitized` is `Platform.Feedback.Submission`'s normalized map; `meta`
@@ -278,15 +299,14 @@ defmodule Platform.Feedback.GithubPublisher do
   end
 
   # A slug or label is printed inside a code span, so it is reduced to a
-  # conservative character set and bounded.
-  defp label(value, default) when is_binary(value) do
-    case value |> String.replace(~r/[^A-Za-z0-9._-]/, "") |> String.slice(0, 64) do
-      "" -> default
+  # conservative character set and bounded. `sanitize_slug/1` is the ONE
+  # label rule; the default is applied here, at the call sites.
+  defp label(value, default) do
+    case sanitize_slug(value) do
+      nil -> default
       clean -> clean
     end
   end
-
-  defp label(_value, default), do: default
 
   defp diagnostics_section(%{scope: scope, content: content}),
     do: [{"Diagnostics (scope: #{scope})", content}]
