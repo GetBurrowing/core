@@ -30,7 +30,7 @@ defmodule Platform.GameStream.NativeSessions do
              else
                build = NativeBuild.latest(current.project_id) || Repo.rollback(:no_build)
                host = pick_host() || Repo.rollback(:no_native_host)
-               {experiment, variant, timeout} = resolve_idle(channel_id, current.project_id)
+               {experiment, variant, timeout} = resolve_idle(channel_id, current.project_id, current.org_id)
                now = DateTime.utc_now()
 
                Repo.insert!(%NativeSessionRecord{
@@ -454,14 +454,15 @@ defmodule Platform.GameStream.NativeSessions do
         {:native_session, public(row)}
       )
 
-  defp resolve_idle(channel_id, project_id) do
-    subject = Platform.Experiments.Subject.new("channel", channel_id, %{project_id: project_id})
+  defp resolve_idle(channel_id, project_id, org_id) do
+    subject = Platform.Experiments.Subject.new("channel", channel_id, %{project_id: project_id, org_id: org_id})
 
     result =
       Platform.Experiments.Surfaces.resolve(
         "game_stream.native_idle",
         "native_session.start",
-        subject
+        subject,
+        org_id: org_id
       )
 
     case result do

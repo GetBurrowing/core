@@ -10,6 +10,7 @@ defmodule Platform.GameStream.GameChannels do
   schema "game_channel_bindings" do
     field(:project_id, :binary_id)
     field(:repo_url, :string)
+    field(:org_id, :binary_id, virtual: true)
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -55,7 +56,7 @@ defmodule Platform.GameStream.GameChannels do
            Repo.get(Project, binding.project_id),
          true <- binding.repo_url == repo,
          :ok <- repository_access(user, project) do
-      {:ok, binding}
+      {:ok, %{binding | org_id: project.org_id}}
     else
       _ -> {:error, :unauthorized}
     end

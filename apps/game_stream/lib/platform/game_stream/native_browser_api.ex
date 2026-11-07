@@ -10,9 +10,9 @@ defmodule Platform.GameStream.NativeBrowserAPI do
     conn =
       conn
       |> fetch_session()
-      |> PlatformWeb.Plugs.RequireAuthAPI.call([])
       |> put_resp_header("cache-control", "no-store")
       |> put_resp_header("referrer-policy", "no-referrer")
+      |> PlatformWeb.Plugs.RequireAuthAPI.call([])
 
     if conn.halted do
       conn

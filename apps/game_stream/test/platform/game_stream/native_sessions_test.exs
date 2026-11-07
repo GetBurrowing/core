@@ -353,4 +353,23 @@ defmodule Platform.GameStream.NativeSessionsTest do
     refute Repo.exists?(from(t in JoinToken, where: t.session_id == ^row.id))
     assert {:error, :unauthorized} = NativeSessions.control(row.id, credential)
   end
+  test "org-scoped idle data resolves once and remains pinned", ctx do
+    alias Platform.Experiments.SurfaceDefault
+    base = %{surface_key: "game_stream.native_idle", surface_target: "native_session.start", org_id: ctx.project.org_id, kind: "promote"}
+    first = Repo.insert!(SurfaceDefault.changeset(%SurfaceDefault{}, Map.merge(base, %{seq: 1, payload: %{"idle_timeout_s" => 300}})))
+    second_id = Ecto.UUID.generate()
+
+    try do
+      assert {:ok, status} = NativeSessions.play(ctx.user, ctx.channel.id)
+      assert status.idle_timeout_s == 300
+      Repo.insert!(SurfaceDefault.changeset(%SurfaceDefault{id: second_id}, Map.merge(base, %{seq: 2, payload: %{"idle_timeout_s" => 900}})))
+      assert {:ok, reused} = NativeSessions.play(ctx.user, ctx.channel.id)
+      assert reused.id == status.id
+      assert reused.idle_timeout_s == 300
+    after
+      ids = [first.id, second_id]
+      Repo.delete_all(from(d in SurfaceDefault, where: d.id in ^ids))
+    end
+  end
+
 end
