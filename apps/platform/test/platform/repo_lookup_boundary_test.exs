@@ -159,6 +159,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10315 stage 5 (moved here by task 01a19505): getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/burrow/getting_started.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5 (moved here by task 01a19505): system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    {"platform/sharing/friction.ex", :get, "Agent", 1, :must_cast,
+     "task 01a1b678 stage 3: context_agent/1 reads a tool call's context agent_id, which a transport built from a runtime row; it is guarded with Platform.UUID.cast/1 first and a malformed id records nothing"},
+    {"platform/sharing/friction.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 3: context_agent/1 casts context agent_id with Platform.UUID.cast/1 before Repo.get; a malformed id falls through to the runtime lookup"},
+    {"platform/sharing/friction.ex", :get_by, "Agent", 1, :safe_internal,
+     "task 01a1b678 stage 3: runtime_agent/1 looks up runtime_id: with the id field of the AgentRuntime row get_by_runtime_id/1 just loaded, a UUIDv7 primary key"},
+    {"platform/sharing/help_channel.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 3: help_space?/1 casts a tool call's space_id (from MCP args) with Platform.UUID.cast/1; a malformed id answers false before any query"},
+    {"platform/federation/tool_surface.ex", :get_by, "Agent", 1, :safe_internal,
+     "task 01a1b678 stage 3: sharing_runtime_agent/1 looks up runtime_id: with the id field of the AgentRuntime row get_runtime_by_runtime_id/1 just loaded, a UUIDv7 primary key"},
     {"platform/sharing/usage_receiver.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1b678 stage 2: validate/1 casts sharing_install_id from an unauthenticated broker POST body with Platform.UUID.cast/1; a malformed id refuses the batch as :invalid_usage before insert_all"},
     {"platform_web/live/meeting_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
@@ -1897,6 +1907,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a1b678 stage 1: `read/0` loads the `install_sharing` singleton
     # with `limit: 1` and no `where:` at all, so no id is cast.
     "platform/sharing.ex" => 1,
+    # Task 01a1b678 stage 3: `space/0` selects by the constant slug and kind,
+    # `limit: 1`; no id is cast.
+    "platform/sharing/help_channel.ex" => 1,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
     # TaskRouter's `{:stage_transitioned, stage}` clause (`stage.plan_id`, an

@@ -187,8 +187,10 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       set_policy("quarantined")
       [tool] = Enum.filter(ToolSurface.tool_definitions(), &(&1.name == @tool))
 
+      # Plus the transport key `space_id` (task 01a1b678 stage 3), which gates
+      # Help & feedback reports and is stripped before Submission reads args.
       assert tool.parameters |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort() ==
-               Enum.sort(Platform.Feedback.Submission.allowed_keys())
+               Enum.sort(["space_id" | Platform.Feedback.Submission.allowed_keys()])
 
       for p <- [:category, :title, :expected_behavior, :observed_behavior],
           do: assert(tool.parameters[p].required)
@@ -206,7 +208,9 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
                url: "https://github.com/GetBurrowing/core/issues/7"
              }
 
-      assert first.ignored_fields == ["space_id"]
+      # `space_id` is the transport key, stripped before Submission (task
+      # 01a1b678 stage 3), so it is no longer reported as ignored.
+      assert first.ignored_fields == []
 
       assert {:ok, %{status: "duplicate"}} =
                ToolArguments.dispatch(@tool, args(), %{agent_id: agent.id})
