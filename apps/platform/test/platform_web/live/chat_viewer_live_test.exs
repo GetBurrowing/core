@@ -237,6 +237,39 @@ defmodule PlatformWeb.ChatViewerLiveTest do
       assert has_element?(view, "#chat-viewer[data-state=closed]")
     end
 
+    test "task 01a1b67d: back and the hook's viewer_close both close; the bar clears the inset",
+         ctx do
+      msg = post!(ctx.room, ctx.p_a, "one shot")
+      img = attach!(msg, "shot.png", "image/png", 1200)
+      {:ok, view, _html} = live(ctx.conn, "/chat/#{ctx.room.slug}")
+
+      view |> element("#gallery-#{msg.id}-#{img.id}") |> render_click()
+      assert viewer_open?(view)
+
+      # The shared close-bar contract (assets/js/lib/dismissable_overlay.js):
+      # the bar is 3.5rem plus the top safe-area inset, the back control 44x44.
+      assert has_element?(view, "#chat-viewer [data-role=viewer-bar].overlay-close-bar")
+      refute has_element?(view, "#chat-viewer [data-role=viewer-bar].h-14")
+
+      assert has_element?(
+               view,
+               ~s(#chat-viewer button[data-role=viewer-back][phx-click=viewer_close][aria-label="Back to chat"].overlay-close-control.size-11)
+             )
+
+      refute has_element?(view, "#chat-viewer [data-role=viewer-back].btn-sm")
+
+      view |> element("#chat-viewer [data-role=viewer-back]") |> render_click()
+      assert has_element?(view, "#chat-viewer[data-state=closed]")
+
+      # The phone's back: the overlay module's popstate runs the hook's close,
+      # which pushes viewer_close.
+      view |> element("#gallery-#{msg.id}-#{img.id}") |> render_click()
+      assert viewer_open?(view)
+      render_hook(view, "viewer_close", %{})
+      assert has_element?(view, "#chat-viewer[data-state=closed]")
+      refute viewer_open?(view)
+    end
+
     test "a PDF opens in a frame, a zip opens the file panel", ctx do
       msg = post!(ctx.room, ctx.p_a, "docs")
       pdf = attach!(msg, "spec-final.pdf", "application/pdf", 2_100_000)

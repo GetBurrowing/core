@@ -196,13 +196,15 @@ function kebab(s) {
   return s.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())
 }
 
-// Selector support: `tag`, `#id`, `[attr]`, `[attr="v"]`, `tag[attr="v"]`.
+// Selector support: `tag`, `#id`, `.class`, `[attr]`, `[attr="v"]`,
+// `tag[attr="v"]`.
 function matches(el, selector) {
-  const m = selector.match(/^([a-z]*)(#[\w-]+)?(?:\[([\w-]+)(?:="?([^"\]]*)"?)?\])?$/i)
+  const m = selector.match(/^([a-z]*)(#[\w-]+)?(\.[\w-]+)?(?:\[([\w-]+)(?:="?([^"\]]*)"?)?\])?$/i)
   if (!m) return false
-  const [, tag, id, attr, value] = m
+  const [, tag, id, cls, attr, value] = m
   if (tag && el.nodeName !== tag.toUpperCase()) return false
   if (id && el.getAttribute("id") !== id.slice(1)) return false
+  if (cls && !(el.getAttribute("class") || "").split(/\s+/).includes(cls.slice(1))) return false
   if (attr && !el.hasAttribute(attr)) return false
   if (attr && value !== undefined && el.getAttribute(attr) !== value) return false
   return true

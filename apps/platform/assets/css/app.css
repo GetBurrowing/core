@@ -1031,6 +1031,31 @@ html {
   }
 }
 
+/* Overlay close bar (lib/dismissable_overlay.js CLOSE_BAR_CLASS /
+   CLOSE_CONTROL_CLASS), shared by every full-window overlay with a way out.
+   The bar is 3.5rem of controls PLUS the top safe-area inset, padded down
+   by that inset, so under border-box the controls' row keeps its full 3.5rem
+   and sits wholly below the status bar. (`safe-area-top h-14` collapsed the
+   row: a 59px inset ate the 56px height and left the back button half under
+   the status bar.) The iOS shell draws no scrim or top bar over the web view;
+   it is edge to edge and the status bar is the only native chrome on top, so
+   env(safe-area-inset-top) is the whole clearance. The close control is at
+   least 44x44. Colour comes from the overlay's ground (bg-viewer /
+   text-on-viewer, or base-100 / base-content) and is inherited here. */
+.overlay-close-bar {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  height: calc(3.5rem + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+.overlay-close-control {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  color: inherit;
+}
+
 .sidebar-resizing {
   user-select: none;
   cursor: col-resize;
