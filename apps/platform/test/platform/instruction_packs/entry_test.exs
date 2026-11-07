@@ -2,6 +2,23 @@ defmodule Platform.InstructionPacks.EntryTest do
   use ExUnit.Case, async: true
   alias Platform.InstructionPacks.Entry
 
+  test "conflict token binds the exact base, local, incoming and version shown to the owner" do
+    entry = %Entry{
+      conflict: %{
+        "base" => "old",
+        "local" => "mine",
+        "incoming" => "new",
+        "incoming_version" => 2
+      }
+    }
+
+    assert Entry.conflict_token(entry) ==
+             "7f08758ac14aa2582716bcefd26aeb23c5d72ee087987a1b81a448eda83a8278"
+
+    changed = %{entry | conflict: Map.put(entry.conflict, "incoming", "unseen")}
+    refute Entry.conflict_token(changed) == Entry.conflict_token(entry)
+  end
+
   test "local collision remains local even if byte-identical to vendor" do
     assert {:keep, "same", %{effective_version: nil, conflict: %{"local" => "same"}}} =
              Entry.reconcile(nil, "same", "same", 1)

@@ -23,6 +23,14 @@ defmodule Platform.InstructionPacks.Entry do
   def hash(nil), do: nil
   def hash(text), do: :crypto.hash(:sha256, text) |> Base.encode16(case: :lower)
 
+  def conflict_token(%__MODULE__{conflict: conflict}) when is_map(conflict) do
+    [conflict["base"], conflict["local"], conflict["incoming"], conflict["incoming_version"]]
+    |> Jason.encode!()
+    |> hash()
+  end
+
+  def conflict_token(_), do: nil
+
   @doc "Return a write decision and provenance; never treat equal local/default strings as consent."
   def reconcile(previous, local, incoming, version) do
     owned =
