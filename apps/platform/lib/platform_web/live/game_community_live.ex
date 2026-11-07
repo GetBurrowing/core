@@ -52,6 +52,7 @@ defmodule PlatformWeb.GameCommunityLive do
 
   def handle_event("send_message", %{"compose" => %{"text" => text}}, socket) do
     with {:ok, _game, user, _space, participant} <- authorized(socket.assigns.game_slug, socket.assigns.player_id),
+         :ok <- Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.write", {:space, socket.assigns.space_id}),
          text when is_binary(text) <- text,
          text <- String.trim(text),
          true <- text != "" and String.length(text) <= 2000,
