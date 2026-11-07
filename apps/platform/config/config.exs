@@ -32,6 +32,9 @@ config :platform, Platform.Mail.Inbound,
 # own per-case instance.
 config :platform, :start_responsibilities_registry, true
 
+# Usage counts (task 01a1b678 stage 2): how often the batcher flushes, as data.
+config :platform, Platform.Sharing.UsageBatcher, interval_ms: 3_600_000
+
 # Scheduled channel deletion (task 019e95ea stage 3): days a
 # deletion-flagged channel is retained (still cancellable) before
 # Platform.Chat.SpacePurger hard-deletes it. Read at sweep time via

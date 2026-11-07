@@ -28,6 +28,8 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       created.
     * `GET <base>/issues/<fingerprint>` answers the issue a
       fingerprint produced (200) or 404.
+    * `POST <base>/usage` carries an anonymous usage-count batch
+      (`post_usage/1`, task 01a1b678 stage 2).
     * A 200/201 body must carry `repository` and `issue_number`; everything
       else in it is ignored. `GithubPublisher.publish/2` rebuilds the
       identity from those two validated values.
@@ -77,6 +79,23 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       case status do
         200 -> parse_identity(response)
         404 -> {:ok, nil}
+        status -> GithubPublisher.http_error(status)
+      end
+    end
+  end
+
+  @doc """
+  `POST <base>/usage` with an anonymous usage-count batch (task 01a1b678
+  stage 2), to the same base as every feedback request. `body` is built and
+  scrubbed by `Platform.Sharing.UsageEvents`; this adapter only carries it.
+  `:ok` on 200/201/202.
+  """
+  @spec post_usage(map()) :: :ok | {:error, atom()}
+  def post_usage(body) when is_map(body) do
+    with {:ok, base} <- base_url(),
+         {:ok, status, _response} <- request(:post, base <> "/usage", "post_usage", json: body) do
+      case status do
+        status when status in [200, 201, 202] -> :ok
         status -> GithubPublisher.http_error(status)
       end
     end

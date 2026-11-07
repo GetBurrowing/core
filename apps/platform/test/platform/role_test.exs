@@ -192,6 +192,7 @@ defmodule Platform.RoleTest do
                Platform.Security.Sweeper,
                Platform.Chat.SpacePurger,
                Platform.Experiments.Signals.MailSubscriber,
+               Platform.Sharing.UsageBatcher,
                Platform.Tenancy.ContainerPurger,
                Platform.Files.Purger,
                Platform.Prototypes.Purger,

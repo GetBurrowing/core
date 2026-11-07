@@ -316,6 +316,8 @@ defmodule PlatformWeb.Router do
     # install (or a hostile caller) sends may reach the broker's log.
     post("/issues", FeedbackBrokerController, :create, log: false)
     get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
+    # Anonymous usage counts (task 01a1b678 stage 2).
+    post("/usage", FeedbackBrokerController, :usage, log: false)
   end
 
   scope "/api/app", PlatformWeb do

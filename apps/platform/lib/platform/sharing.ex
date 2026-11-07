@@ -184,27 +184,36 @@ defmodule Platform.Sharing do
     row = get()
     previous = Map.fetch!(row, key)
 
-    Repo.transaction(fn ->
-      with {:ok, updated} <- Repo.update(InstallSharing.switch_changeset(row, key, value)),
-           {:ok, _event} <-
-             Audit.record(%{
-               event_type: "platform.sharing.switch_set",
-               actor_type: actor_type,
-               actor_id: actor_id,
-               resource_type: "install_sharing",
-               resource_id: to_string(updated.id),
-               action: "switch_set",
-               metadata: %{
-                 "key" => Atom.to_string(key),
-                 "value" => value,
-                 "previous" => previous
-               }
-             }) do
-        updated
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    result =
+      Repo.transaction(fn ->
+        with {:ok, updated} <- Repo.update(InstallSharing.switch_changeset(row, key, value)),
+             {:ok, _event} <-
+               Audit.record(%{
+                 event_type: "platform.sharing.switch_set",
+                 actor_type: actor_type,
+                 actor_id: actor_id,
+                 resource_type: "install_sharing",
+                 resource_id: to_string(updated.id),
+                 action: "switch_set",
+                 metadata: %{
+                   "key" => Atom.to_string(key),
+                   "value" => value,
+                   "previous" => previous
+                 }
+               }) do
+          updated
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    # The usage-counts collector reads a node-local flag, never the row
+    # (stage 2). Turning the switch off also drops what is pending.
+    with {:ok, _} <- result, :usage_counts <- key do
+      Platform.Sharing.UsageEvents.set_counting(value)
+    end
+
+    result
   end
 
   @doc """

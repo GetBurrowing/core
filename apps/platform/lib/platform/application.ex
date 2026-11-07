@@ -333,6 +333,7 @@ defmodule Platform.Application do
     |> maybe_add_security_sweeper(flag)
     |> maybe_add_space_purger(flag)
     |> maybe_add_experiments_mail_subscriber(flag)
+    |> maybe_add_usage_batcher(flag)
     |> maybe_add_container_purger(flag)
     |> maybe_add_file_purger(flag)
     |> maybe_add_prototype_purger(flag)
@@ -611,6 +612,20 @@ defmodule Platform.Application do
     if flag.(:platform, :start_experiments_mail_subscriber, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Experiments.Signals.MailSubscriber)
+    else
+      children
+    end
+  end
+
+  # Usage counts batcher (task 01a1b678 stage 2): owns the collector's ETS
+  # table, attaches the collector, and POSTs scrubbed batches to the feedback
+  # broker on a timer. Needs Repo (the install_sharing row), so it goes ahead
+  # of the Endpoint. Off in test and dev (`:start_usage_batcher`); its tests
+  # start it with start_supervised/1.
+  defp maybe_add_usage_batcher(children, flag) do
+    if flag.(:platform, :start_usage_batcher, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Sharing.UsageBatcher)
     else
       children
     end
