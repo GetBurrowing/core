@@ -1,6 +1,13 @@
 defmodule PlatformWeb.InstructionPackController do
   use PlatformWeb, :controller
 
+  def index(conn, _) do
+    case Platform.InstructionPacks.catalog() do
+      {:ok, ids} -> json(conn, %{packs: ids})
+      {:error, _} -> send_resp(conn, 503, "")
+    end
+  end
+
   def show(conn, %{"pack_id" => id, "version" => version}) do
     release =
       with {number, ""} <- Integer.parse(version),

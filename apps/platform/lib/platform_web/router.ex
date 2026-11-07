@@ -316,6 +316,7 @@ defmodule PlatformWeb.Router do
     # install (or a hostile caller) sends may reach the broker's log.
     post("/issues", FeedbackBrokerController, :create, log: false)
     get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
+    get("/instruction-packs", InstructionPackController, :index, log: false)
     get("/instruction-packs/:pack_id/:version", InstructionPackController, :show, log: false)
   end
 

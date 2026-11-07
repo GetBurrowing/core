@@ -51,6 +51,27 @@ defmodule Platform.InstructionPacks.DownloadTest do
              Download.fetch("setup-guide", 1, roots, plug: {Req.Test, __MODULE__})
   end
 
+  test "bounded catalog accepts only unique pack ids, never URLs or release authority" do
+    plug = fn conn ->
+      assert conn.request_path == "/api/feedback-broker/v1/instruction-packs"
+      Plug.Conn.send_resp(conn, 200, ~s({"packs":["guide","roles"]}))
+    end
+
+    assert {:ok, ["guide", "roles"]} = Download.catalog(plug: plug)
+
+    for invalid <- [
+          %{"packs" => ["guide", "guide"]},
+          %{"packs" => ["https://other.example"]},
+          %{"packs" => ["guide"], "url" => "https://other.example"},
+          %{"packs" => Enum.map(1..101, &"pack-#{&1}")}
+        ] do
+      assert {:error, :invalid_catalog} =
+               Download.catalog(
+                 plug: fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(invalid)) end
+               )
+    end
+  end
+
   test "valid signed bytes cannot substitute a different requested version" do
     {e, roots} = envelope()
     Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(e)) end)

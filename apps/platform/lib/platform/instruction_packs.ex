@@ -42,4 +42,11 @@ defmodule Platform.InstructionPacks do
       do: Repo.get_by(Release, pack_id: pack_id, version: version)
 
   def get_release(_, _), do: nil
+
+  # Catalog is discovery metadata only; every fetched release still requires
+  # the pinned signature, compatibility and sequential-chain checks.
+  def catalog do
+    ids = Repo.all(from(p in Pack, order_by: p.id, select: p.id, limit: 101))
+    if length(ids) <= 100, do: {:ok, ids}, else: {:error, :catalog_too_large}
+  end
 end

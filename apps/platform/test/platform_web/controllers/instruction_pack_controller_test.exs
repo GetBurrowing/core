@@ -24,4 +24,13 @@ defmodule PlatformWeb.InstructionPackControllerTest do
     Application.put_env(:platform, :feedback_broker_server, enabled: false)
     assert json_response(get(conn, @path), 404) == %{"error" => "not_found"}
   end
+
+  test "broker catalog discovers published ids but contains no prompt text", %{conn: conn} do
+    {e, roots} = envelope()
+    {:ok, _} = Platform.InstructionPacks.publish(e, roots)
+
+    assert json_response(get(conn, "/api/feedback-broker/v1/instruction-packs"), 200) == %{
+             "packs" => ["setup-guide"]
+           }
+  end
 end
