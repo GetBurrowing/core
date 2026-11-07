@@ -60,6 +60,14 @@ defmodule Platform.Sharing.SharingToolsTest do
              {"sharing_set", "federation"}
            ]
 
+    sharing_set = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "sharing_set"))
+
+    assert sharing_set.parameters.key.schema.enum ==
+             ~w(feedback usage_counts friction_reports help_channel_reports instruction_updates learned_default_shapes)
+
+    assert sharing_set.parameters.key.description ==
+             "The part to change, one of: feedback, usage_counts, friction_reports, help_channel_reports, instruction_updates, learned_default_shapes"
+
     assert ToolPermissions.for_tool("sharing_list") == "agents.manage_own"
     assert ToolPermissions.for_tool("sharing_set") == "agents.manage_own"
   end

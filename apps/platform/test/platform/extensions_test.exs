@@ -991,6 +991,26 @@ defmodule Platform.ExtensionsTest do
 
     # Preserve the previous byte oracle after removing ONLY this task's
     # independently named enum values and generated disclosure suffixes.
+    # Stage 4 adds precisely one common-transport switch. Its complete enum
+    # is pinned literally in SharingToolsTest; preserve the older byte oracle
+    # after removing only that independently approved additive field/copy.
+    defp without_learned_shapes(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "learned_default_shapes"))
+            |> Map.update!(
+              :description,
+              &String.replace_suffix(&1, ", learned_default_shapes", "")
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
     defp without_instruction_updates(definitions) do
       Enum.map(definitions, fn
         %{name: "sharing_set"} = tool ->
@@ -1135,7 +1155,7 @@ defmodule Platform.ExtensionsTest do
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
       # canvas_create embeds the kind union. Strip only the two additive
       # consent-card properties, preserving the legacy definition oracle.
-      assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
+      assert digest(without_learned_shapes(legacy_kind_props(legacy))) == @main_tool_digest_off
 
       assert digest(without_instruction_updates(legacy_kind_props(legacy))) ==
                "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"

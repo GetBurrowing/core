@@ -530,6 +530,26 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
     # Preserve the previous byte oracle after removing ONLY this task's
     # independently named enum values and generated disclosure suffixes.
+    # Stage 4 adds precisely one common-transport switch. Its complete enum
+    # is pinned literally in SharingToolsTest; preserve the older byte oracle
+    # after removing only that independently approved additive field/copy.
+    defp without_learned_shapes(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "learned_default_shapes"))
+            |> Map.update!(
+              :description,
+              &String.replace_suffix(&1, ", learned_default_shapes", "")
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
     defp without_instruction_updates(definitions) do
       Enum.map(definitions, fn
         %{name: "sharing_set"} = tool ->
@@ -586,8 +606,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
       # core extensions_test).
       defs = Enum.reject(pre_calendar_tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
       assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
-      assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_off
-      assert digest(defs) == @main_tool_digest_off
+
+      assert digest(without_learned_shapes(without_triage_item_schema(defs))) ==
+               @previous_tool_digest_off
+
+      assert digest(without_learned_shapes(defs)) == @main_tool_digest_off
 
       assert digest(without_instruction_updates(defs)) ==
                "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
@@ -605,8 +628,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
                    {"play_session_status", "play"}
                  ]
 
-      assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_on
-      assert digest(defs) == @main_tool_digest_on
+      assert digest(without_learned_shapes(without_triage_item_schema(defs))) ==
+               @previous_tool_digest_on
+
+      assert digest(without_learned_shapes(defs)) == @main_tool_digest_on
 
       assert digest(without_instruction_updates(defs)) ==
                "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
