@@ -28,6 +28,11 @@ const HIGHLIGHT_CLASSES = ["ring-2", "ring-base-300"]
 const DOUBLE_TAP_MS = 300
 const ZOOM_STEP = 2.5
 const ZOOM_MAX = 5
+// The browser's PDF viewer focuses itself ~100ms after its iframe loads, and
+// a focused PDF plugin keeps every keydown, so Esc stopped closing. Focus
+// that lands in the frame before load or within this long after it is the
+// plugin's, not the user's, and goes back to the back control.
+const PDF_FOCUS_GUARD_MS = 1500
 
 function chatScroller() {
   const list = document.getElementById("message-list")
@@ -74,6 +79,20 @@ const ChatViewer = {
       }
     }
     document.addEventListener("click", this.onCaptureClick, true)
+
+    // An opener that is not a native control (the gallery item is a
+    // role=button div) opens on Enter or Space exactly as a tap does: the
+    // synthesized click runs the capture above and the opener's phx-click.
+    this.onOpenerKey = (e) => {
+      if ((e.key !== "Enter" && e.key !== " ") || e.repeat || this.isOpen()) return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const t = e.target
+      if (!t || !t.hasAttribute || !t.hasAttribute("data-viewer-open")) return
+      if (t.getAttribute("role") !== "button" || typeof t.click !== "function") return
+      e.preventDefault()
+      t.click()
+    }
+    document.addEventListener("keydown", this.onOpenerKey)
 
     // Back and Share are handled here so a close can animate first; the
     // back button keeps phx-click="viewer_close" for a client without JS.
@@ -138,6 +157,8 @@ const ChatViewer = {
 
   destroyed() {
     document.removeEventListener("click", this.onCaptureClick, true)
+    document.removeEventListener("keydown", this.onOpenerKey)
+    this.releasePdfGuard()
     // Gone without a close (a navigation): forget the layer, do not go back.
     if (this.layer) this.layer.release()
     this.layer = null
@@ -162,8 +183,40 @@ const ChatViewer = {
       canSwipe: (e) => this.canSwipe(e),
       returnFocusTo: source,
     })
+    this.guardPdfFocus()
     this.animateOpen()
   },
+
+  // See PDF_FOCUS_GUARD_MS. A click into the PDF after the guard window
+  // keeps its focus (the back control and the phone's back still close).
+  guardPdfFocus() {
+    this.releasePdfGuard()
+    const frame = this.el.querySelector("[data-role=viewer-pdf]")
+    const back = this.el.querySelector("[data-role=viewer-back]")
+    if (!frame || !back) return
+    let deadline = null
+    const onLoad = () => {
+      deadline = Date.now() + PDF_FOCUS_GUARD_MS
+    }
+    const onBlur = () => {
+      if (deadline !== null && Date.now() > deadline) return
+      // Not inside the blur itself: focus moved there mid-transfer is
+      // overridden as the transfer completes and the PDF keeps the keys.
+      setTimeout(() => {
+        if (!this.isOpen() || document.activeElement !== frame) return
+        back.focus({ preventScroll: true })
+      }, 0)
+    }
+    frame.addEventListener("load", onLoad)
+    window.addEventListener("blur", onBlur)
+    this.releasePdfGuard = () => {
+      frame.removeEventListener("load", onLoad)
+      window.removeEventListener("blur", onBlur)
+      this.releasePdfGuard = () => {}
+    }
+  },
+
+  releasePdfGuard() {},
 
   // Rule 5: where a swipe-down may start. The module owns the gesture.
   canSwipe(e) {
@@ -257,6 +310,7 @@ const ChatViewer = {
   },
 
   restore() {
+    this.releasePdfGuard()
     const saved = this.saved
     this.saved = null
     this.closing = false

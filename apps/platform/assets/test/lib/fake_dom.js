@@ -164,6 +164,10 @@ export class FakeElement extends FakeNode {
     this.ownerDocument.activeElement = this
   }
 
+  matches(selector) {
+    return matches(this, selector)
+  }
+
   closest(selector) {
     for (let n = this; n && n.nodeType === 1; n = n.parentNode) {
       if (matches(n, selector)) return n
@@ -197,16 +201,23 @@ function kebab(s) {
 }
 
 // Selector support: `tag`, `#id`, `.class`, `[attr]`, `[attr="v"]`,
-// `tag[attr="v"]`.
+// `tag[attr="v"]`, several `[...]` groups on one compound, and a
+// comma-separated list of those (matches if any member does).
 function matches(el, selector) {
-  const m = selector.match(/^([a-z]*)(#[\w-]+)?(\.[\w-]+)?(?:\[([\w-]+)(?:="?([^"\]]*)"?)?\])?$/i)
+  return selector.split(",").some((part) => matchesOne(el, part.trim()))
+}
+
+function matchesOne(el, selector) {
+  const m = selector.match(/^([a-z]*)(#[\w-]+)?(\.[\w-]+)?((?:\[[\w-]+(?:="?[^"\]]*"?)?\])*)$/i)
   if (!m) return false
-  const [, tag, id, cls, attr, value] = m
+  const [, tag, id, cls, attrs] = m
   if (tag && el.nodeName !== tag.toUpperCase()) return false
   if (id && el.getAttribute("id") !== id.slice(1)) return false
   if (cls && !(el.getAttribute("class") || "").split(/\s+/).includes(cls.slice(1))) return false
-  if (attr && !el.hasAttribute(attr)) return false
-  if (attr && value !== undefined && el.getAttribute(attr) !== value) return false
+  for (const [, attr, value] of attrs.matchAll(/\[([\w-]+)(?:="?([^"\]]*)"?)?\]/g)) {
+    if (!el.hasAttribute(attr)) return false
+    if (value !== undefined && el.getAttribute(attr) !== value) return false
+  }
   return true
 }
 

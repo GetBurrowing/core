@@ -174,4 +174,131 @@ describe("ChatViewer hook on the shared overlay module", () => {
     await flush()
     expect(hook.pushEvent).toHaveBeenCalledWith("viewer_close", {})
   })
+  // The gallery opener exactly as chat_message.ex renders it (the ExUnit
+  // render test pins these attributes). focus() behaves as a browser's: an
+  // element without tabindex that is not a native control takes no focus.
+  function galleryItem(doc) {
+    const item = doc.createElement("div")
+    item.setAttribute("id", "gallery-m1-a1")
+    item.setAttribute("data-role", "gallery-item")
+    item.setAttribute("data-viewer-open", "")
+    item.setAttribute("role", "button")
+    item.setAttribute("tabindex", "0")
+    item.setAttribute("aria-label", "Open image 1 of 2: red.png")
+    item.setAttribute("phx-click", "viewer_open")
+    item.focus = () => {
+      if (item.hasAttribute("tabindex")) doc.activeElement = item
+    }
+    item.getBoundingClientRect = () => ({ left: 10, top: 300, width: 120, height: 90 })
+    item.classList = { add: vi.fn(), remove: vi.fn() }
+    item.clicks = 0
+    // A real click: the hook's capture listener, then the opener's phx-click.
+    item.click = () => {
+      doc.fire("click", { target: item })
+      item.clicks += 1
+    }
+    doc.getElementById = (id) => (id === "gallery-m1-a1" ? item : null)
+    return item
+  }
+
+  const key = (k, target, extra = {}) => ({
+    key: k,
+    target,
+    preventDefault: vi.fn(),
+    stopImmediatePropagation: vi.fn(),
+    ...extra,
+  })
+
+  it("Enter and Space on the gallery opener open it as a tap does; nothing else does", () => {
+    mount()
+    const item = galleryItem(document)
+    const enter = key("Enter", item)
+    document.fire("keydown", enter)
+    expect(item.clicks).toBe(1)
+    expect(enter.preventDefault).toHaveBeenCalled()
+    document.fire("keydown", key(" ", item))
+    expect(item.clicks).toBe(2)
+    // Held keys, modified keys and other keys do not open.
+    document.fire("keydown", key("Enter", item, { repeat: true }))
+    document.fire("keydown", key("Enter", item, { metaKey: true }))
+    document.fire("keydown", key("a", item))
+    expect(item.clicks).toBe(2)
+    // A native button opener already clicks on Enter; the hook must not add one.
+    const btn = document.createElement("button")
+    btn.setAttribute("data-viewer-open", "")
+    btn.click = vi.fn()
+    document.fire("keydown", key("Enter", btn))
+    expect(btn.click).not.toHaveBeenCalled()
+  })
+
+  it("Escape closes a viewer opened from the gallery and focus returns to the gallery item", async () => {
+    const { hook, root } = mount()
+    const item = galleryItem(document)
+    item.focus()
+    document.fire("keydown", key("Enter", item))
+    const back = openViewer(document, root)
+    hook.updated()
+    expect(document.activeElement).toBe(back)
+
+    window.fire("keydown", key("Escape", back))
+    await flush()
+    expect(hook.pushEvent).toHaveBeenCalledWith("viewer_close", {})
+    // The close patch.
+    root.setAttribute("data-state", "closed")
+    hook.updated()
+    await flush()
+    expect(document.activeElement).toBe(item)
+  })
+
+  // The PDF viewer as chat_viewer.ex renders it: an iframe on the stage.
+  function openPdf(doc, root) {
+    const back = openViewer(doc, root)
+    root.setAttribute("data-mode", "file")
+    const frame = doc.createElement("iframe")
+    frame.setAttribute("data-role", "viewer-pdf")
+    root.appendChild(frame)
+    return { back, frame }
+  }
+
+  it("the PDF plugin taking focus on load is undone, so Escape still closes", async () => {
+    const { hook, root } = mount()
+    const { back, frame } = openPdf(document, root)
+    hook.updated()
+    expect(document.activeElement).toBe(back)
+    frame.fire("load")
+    // The browser's PDF viewer focuses itself: the window blurs into the frame.
+    document.activeElement = frame
+    window.fire("blur")
+    await flush()
+    expect(document.activeElement).toBe(back)
+    window.fire("keydown", key("Escape", back))
+    await flush()
+    expect(hook.pushEvent).toHaveBeenCalledWith("viewer_close", {})
+  })
+
+  it("a click into the PDF after load keeps its focus, and the guard ends on close", async () => {
+    const { hook, root } = mount()
+    const { frame } = openPdf(document, root)
+    hook.updated()
+    const now = Date.now()
+    const spy = vi.spyOn(Date, "now").mockReturnValue(now)
+    try {
+      frame.fire("load")
+      spy.mockReturnValue(now + 5000)
+      document.activeElement = frame
+      window.fire("blur")
+      await flush()
+      expect(document.activeElement).toBe(frame)
+    } finally {
+      spy.mockRestore()
+    }
+    root.setAttribute("data-state", "closed")
+    hook.updated()
+    await flush()
+    // Closed: a later blur into some other frame is not the viewer's business.
+    document.activeElement = frame
+    window.fire("blur")
+    await flush()
+    expect(document.activeElement).toBe(frame)
+  })
 })
