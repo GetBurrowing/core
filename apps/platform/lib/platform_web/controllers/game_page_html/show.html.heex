@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" class="public-game-document">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,7 +17,7 @@
   >
     <header class="gp-bar">
       <a href={"/games/#{@game["slug"]}"} aria-label="Game home">
-        <img class="gp-logo" src={~p"/images/voltron-page-1.png"} alt="Burrow" />
+        <img class="gp-logo" src={~p"/images/voltron-page-1.svg"} alt="Burrow" />
       </a>
       <span class="gp-sep"></span><span class="gp-game">{@game["title"]}</span>
       <nav class="gp-tabs" aria-label="Game page">
@@ -49,12 +49,11 @@
       <div :if={!@community?} class="gp-grid">
         <div>
           <div :if={@game["image_path"]} class="gp-media">
-            <img src={@game["image_path"]} alt={@game["image_alt"] || @game["title"]} /><span class="gp-chip">
+            <img src={@game["image_path"]} alt={@game["image_alt"] || @game["title"]} />
+            <span class="gp-chip">
               Early build
             </span>
           </div>
-          
-          
         </div>
         <aside class="gp-card">
           <div class="gp-eyebrow">
@@ -148,22 +147,25 @@
           </noscript>
         </aside>
       </div>
-      <div :if={!@community?}><section class="gp-section">
-            <h2>Four pilots. One robot.</h2>
-            <p>{@game["summary"]}</p>
-            <p>
-              Pick a foot or a fist. Coordinate your next move, explore the city, and see how much destruction your crew can cause.
-            </p>
-          </section><section class="gp-section" id="game-instructions">
-            <h2>Good to know</h2>
-            <div class="gp-known">
-              <div><b>It’s early</b><span>Expect rough edges and frequent updates.</span></div>
-              <div><b>Room codes, for now</b><span>{@game["multiplayer_note"]}</span></div>
-              <div>
-                <b>Release details</b><span>{@release["version"]} · portable ZIP<br /><code>SHA-256 {@release["sha256"]}</code></span>
-              </div>
+      <div :if={!@community?}>
+        <section class="gp-section">
+          <h2>Four pilots. One robot.</h2>
+          <p>{@game["summary"]}</p>
+          <p>
+            Pick a foot or a fist. Coordinate your next move, explore the city, and see how much destruction your crew can cause.
+          </p>
+        </section>
+        <section class="gp-section" id="game-instructions">
+          <h2>Good to know</h2>
+          <div class="gp-known">
+            <div><b>It’s early</b><span>Expect rough edges and frequent updates.</span></div>
+            <div><b>Room codes, for now</b><span>{@game["multiplayer_note"]}</span></div>
+            <div>
+              <b>Release details</b><span>{@release["version"]} · portable ZIP<br /><code>SHA-256 {@release["sha256"]}</code></span>
             </div>
-          </section></div>
+          </div>
+        </section>
+      </div>
       <div :if={@community?} class="gp-grid" id="game-community">
         <div class="gp-ccol">
           <section class="gp-room">
@@ -221,7 +223,8 @@
                     </a>
                   <% true -> %>
                     <form method="post" action={"/games/#{@game["slug"]}/community"}>
-                      <input type="hidden" name="_csrf_token" value={@csrf_token} /><button
+                      <input type="hidden" name="_csrf_token" value={@csrf_token} />
+                      <button
                         id="community-join"
                         class="gp-btn gp-primary"
                         type="submit"
@@ -249,7 +252,7 @@
         </aside>
       </div>
       <p class="gp-foot">
-        <img src={~p"/images/voltron-page-1.png"} alt="Burrow" />Hosted on Burrow. Downloads are Windows only for now.
+        <img src={~p"/images/voltron-page-1.svg"} alt="Burrow" />Hosted on Burrow. Downloads are Windows only for now.
       </p>
     </main>
   </body>

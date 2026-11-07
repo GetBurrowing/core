@@ -48,7 +48,7 @@ in the publication manifest. Without that setting the page says the community
 is not open yet. Joining is a CSRF-protected POST, idempotently adding only this
 channel. New game identities get an external membership; no internal org role
 or DM allowlist is created. Existing internal users retain their role.
-The Community tab hands off to the existing Burrow chat surface after joining.
+The Community tab embeds the existing Burrow chat surface after joining. Non-members see the room introduction and actual member count, not private messages or room codes. The voice link opens the existing Burrow chat/call controls; it does not create a native game voice client. Keep that call open while the game runs. Browser-only push-to-talk cannot reliably receive keys while the native game has focus; a future global hotkey bridge is separate from microphone setup.
 
 ## Release and verification
 
@@ -75,3 +75,19 @@ The Community tab hands off to the existing Burrow chat surface after joining.
 Core checks run on GitHub-hosted CI or the approved test rig, never on the
 personal workstation. `Game page smoke` runs the scoped regression suite and
 exports formatter changes; the normal CI suite remains authoritative.
+
+## Download and device UI
+
+The orange action progresses from sign-in to download to setup. The browser
+shows setup only after the download endpoint acknowledges this exact package
+request with a short-lived, non-authentication cookie. This acknowledges the
+start of the response, never completion of a file on disk. A missing response
+keeps a retry path.
+
+Phone/Mac/Linux detection is advisory. Those visitors can copy the public game
+page link, with a visible copy fallback when clipboard access is refused, or
+choose the Windows download manually. No email is sent or claimed. Emailing a
+link will require a configured sender and the existing audited mail outbox.
+
+UI checks use the actual controller-rendered fixture and compiled CSS/JS on a
+GitHub-hosted browser, never a Core browser session on the personal workstation.

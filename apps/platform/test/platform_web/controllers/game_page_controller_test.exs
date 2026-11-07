@@ -364,5 +364,4 @@ defmodule PlatformWeb.GamePageControllerTest do
       File.write!(Path.join(directory, name <> ".html"), html)
     end
   end
-
 end

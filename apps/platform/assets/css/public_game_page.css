@@ -2,8 +2,8 @@
 /* Burrow dark tokens — verbatim from designs/burrow/theme.gp-js BURROW_DARK */
 .public-game{
   --ground:#111214;--surface:#191b20;--raised:#25272b;--edge:#383b42;
-  --ink:#eeeff1;--muted:#a9abb2;--faint:#6f727a;
-  --accent:#f47721;--interactive:#ff9b55;--on-accent:#fff;
+  --ink:#eeeff1;--muted:#a9abb2;--faint:#9397a2;
+  --accent:#f47721;--interactive:#ff9b55;--on-accent:#111214;
   --active:#6bae75;--active-dim:#314936;--info:#22d3ee;--warning:#e5a33d;--warning-dim:#5b4522;
   /* the four pilot seats = the robot's four limb colours, mapped to Burrow palette slots */
   --seat-red:#ef806f;--seat-green:#6bae75;--seat-blue:#59bbfb;--seat-gold:#e5a33d;
@@ -15,8 +15,8 @@
 }
 .public-game *{box-sizing:border-box}
 .public-game{margin:0;background:var(--ground);color:var(--ink);font:15px/1.5 var(--font);-webkit-font-smoothing:antialiased}
-.public-game a:not(#game-live-chat, #game-live-chat *){color:var(--interactive);text-decoration:none}
-.public-game button:not(#game-live-chat, #game-live-chat *){font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+.public-game a:not(:where(#game-live-chat, #game-live-chat *)){color:var(--interactive);text-decoration:none}
+.public-game button:not(:where(#game-live-chat, #game-live-chat *)){font:inherit;color:inherit;border:0;background:none;cursor:pointer}
 .public-game [hidden]{display:none!important}
 
 /* ── top bar: Burrow's public chrome, hosting one game ── */
@@ -203,3 +203,6 @@
 .gp-tabs a{position:relative;padding:0 14px;height:100%;color:var(--muted);font-weight:600;font-size:14px;display:flex;align-items:center;gap:7px}.gp-tabs a[aria-selected="true"]{color:var(--ink)}.gp-tabs a[aria-selected="true"]::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;background:var(--ink)}@media(max-width:760px){.gp-mtabs a{flex:1;justify-content:center}}
 
 .gp-chat > [data-phx-session]{height:100%;min-height:0}
+
+html.public-game-document{height:auto;min-height:100%;overflow-y:auto;overscroll-behavior:auto;background:#111214!important}
+body.public-game{height:auto;min-height:100dvh;overflow:visible;overscroll-behavior:auto}

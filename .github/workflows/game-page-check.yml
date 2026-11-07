@@ -93,7 +93,7 @@ jobs:
           npm install --prefix /tmp/game-page-playwright playwright@1.58.2
           /tmp/game-page-playwright/node_modules/.bin/playwright install --with-deps chromium
           mkdir -p /tmp/game-page-screenshots
-          node -e 'const h=require("node:http"),f=require("node:fs"),p=require("node:path");h.createServer((q,r)=>{const x=p.join("/tmp/game-page-browser",new URL(q.url,"http://localhost").pathname);f.readFile(x,(e,b)=>{if(e){r.writeHead(404);return r.end()}r.setHeader("Content-Type",x.endsWith(".css")?"text/css":x.endsWith(".js")?"text/javascript":x.endsWith(".png")?"image/png":x.endsWith(".jpg")?"image/jpeg":"text/html");r.end(b)})}).listen(8765,"127.0.0.1")' &
+          node -e 'const h=require("node:http"),f=require("node:fs"),p=require("node:path");h.createServer((q,r)=>{const x=p.join("/tmp/game-page-browser",new URL(q.url,"http://localhost").pathname);f.readFile(x,(e,b)=>{if(e){r.writeHead(404);return r.end()}r.setHeader("Content-Type",x.endsWith(".css")?"text/css":x.endsWith(".js")?"text/javascript":x.endsWith(".svg")?"image/svg+xml":x.endsWith(".png")?"image/png":x.endsWith(".jpg")?"image/jpeg":"text/html");r.end(b)})}).listen(8765,"127.0.0.1")' &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           GAME_PAGE_PLAYWRIGHT=/tmp/game-page-playwright/node_modules/playwright GAME_PAGE_SCREENSHOTS=/tmp/game-page-screenshots node "$GITHUB_WORKSPACE/.github/scripts/game-page-layout.cjs"
