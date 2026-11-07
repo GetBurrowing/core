@@ -33,6 +33,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   attr(:responsibility_rows, :list, default: [])
   attr(:selectable_agents, :list, default: [])
   attr(:access_scope, :any, default: nil)
+  attr(:can_create_ownerless?, :boolean, default: false)
 
   def panel(assigns) do
     ~H"""
@@ -98,6 +99,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
               agent={Map.get(@role_assignments_by_key, role.key)}
               selectable_agents={@selectable_agents}
               access_scope={@access_scope}
+              can_create_ownerless?={@can_create_ownerless?}
             />
           </div>
         </li>
@@ -200,6 +202,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   attr(:agent, :any, default: nil)
   attr(:selectable_agents, :list, default: [])
   attr(:access_scope, :any, default: nil)
+  attr(:can_create_ownerless?, :boolean, default: false)
 
   defp assignee_cell(%{agent: nil} = assigns) do
     ~H"""
@@ -218,7 +221,10 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
         <option :for={agent <- @selectable_agents} value={agent.id}>
           {agent.name} ({AgentData.agent_kind_pill(agent)})
         </option>
-        <option value="__new_external__">+ Create new external agent…</option>
+        <%!-- Only for users who may create an ownerless agent (task 01a1ae4b). --%>
+        <option :if={@can_create_ownerless?} value="__new_external__">
+          + Create new external agent…
+        </option>
       </select>
     </form>
     """

@@ -4,6 +4,16 @@ defmodule PlatformWeb.TranscriptController do
 
   The download endpoint is linked from the meeting summary message posted
   to the space after a meeting ends.
+
+  ## Access
+
+  A transcript is served only to a viewer who could open its meeting
+  (`Platform.Meetings.get_transcript_for_user/2`, which reuses the meeting
+  viewer rule `get_meeting_for_user/2`; a meeting-less transcript falls back
+  to space participation). Everyone else gets the same 404 body as a
+  nonexistent id, so transcript ids are not probeable. External users are
+  already refused upstream by `PlatformWeb.Plugs.ExternalUserScope`; this
+  check is defense in depth behind it.
   """
 
   use PlatformWeb, :controller
@@ -16,22 +26,24 @@ defmodule PlatformWeb.TranscriptController do
   Returns the transcript segments formatted as:
     [HH:MM:SS] Speaker: text
 
-  Responds with 404 if the transcript doesn't exist, or 422 if the
-  transcript has no segments yet (still recording).
+  Responds with 404 if the transcript doesn't exist OR the current user
+  could not open its meeting (the access check runs first, so a non-viewer
+  gets 404 even for a recording transcript), or 422 if a viewer asks for a
+  transcript that is still recording.
   """
   def show(conn, %{"id" => id}) do
-    case Meetings.get_transcript(id) do
-      nil ->
+    case Meetings.get_transcript_for_user(conn.assigns.current_user, id) do
+      {:error, :not_found} ->
         conn
         |> put_status(:not_found)
         |> json(%{error: "Transcript not found"})
 
-      %{status: "recording"} ->
+      {:ok, %{status: "recording"}} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "Transcript is still being recorded"})
 
-      transcript ->
+      {:ok, transcript} ->
         formatted = format_transcript(transcript)
         filename = transcript_filename(transcript)
 

@@ -88,6 +88,12 @@ defmodule Platform.Chat.CanvasAccess do
        space) AND `kind == "channel"` AND `org_id` is non-nil AND the viewer is
        `Tenancy.root_admin?/1` or `Tenancy.member_of?/2` that org.
 
+  `space_readable_by?/2` exposes the space half of this rule (`:member` or
+  `:org_reader`, external users capped at `:member`) for a resource that lives
+  in a space but has no canvas: `Platform.Prototypes.readable_by?/2` (task
+  01a1b70c stage 1). It is assembled from the same private predicates as
+  `grant_level/2`, so it cannot drift from the canvas answer.
+
   ## Deliberate inversions and exclusions
 
   **A null `org_id` DENIES.** `PlatformWeb.FileBlobController` (:83-103) treats
@@ -311,6 +317,44 @@ defmodule Platform.Chat.CanvasAccess do
 
   def fetch_for_writer(_canvas_id, _actor), do: {:error, :not_found}
 
+  @doc """
+  May USER `viewer` read space `space_id` under the rule this module applies
+  to a canvas's parent space? (Task 01a1b70c stage 1.)
+
+  The space half of `fetch_for_viewer/3`, without a canvas: the `:member` path
+  (`Chat.participant?/2`) OR, for a non-external user, the `:org_reader` path
+  (the space passes `Chat.space_accessible?/1`, is a `"channel"` with a
+  non-nil `org_id`, and the viewer is `Tenancy.root_admin?/1` or
+  `Tenancy.member_of?/2` that org). External users keep `:member` only.
+
+  It is built from the same private predicates `grant_level/2` uses, so a
+  change to either path changes both answers. There is no `:task_reader` or
+  `:task_agent` half: those are keyed on a canvas's task attachments, and a
+  bare space has none. `Platform.Prototypes.readable_by?/2` uses this for a
+  prototype that has a space and no canvas.
+
+  USER principals only (`{:user, id}` or a `%{id: _}` map). An agent,
+  `:system`, `nil` or anything unrecognised answers `false`. This is a
+  boolean, not a resolver: it emits no audit event and applies no
+  `Platform.Access` scope, so a caller that must honour a `chat.read` deny
+  checks that itself (`Platform.Access.check/3` is conjunctive and only
+  narrows).
+  """
+  @spec space_readable_by?(term(), actor()) :: boolean()
+  def space_readable_by?(space_id, viewer) when is_binary(space_id) do
+    case normalize_actor(viewer) do
+      {:user, _} = user ->
+        space_member?(space_id, user) or
+          (not Tenancy.external_user?(user_map(user)) and
+             space_org_reader?(space_id, user_map(user)))
+
+      _ ->
+        false
+    end
+  end
+
+  def space_readable_by?(_space_id, _viewer), do: false
+
   # ── Loading ───────────────────────────────────────────────────────────────
 
   # `canvas_id` is a URL segment / raw MCP tool argument — whatever the caller
@@ -385,10 +429,8 @@ defmodule Platform.Chat.CanvasAccess do
 
   # ── 1. :member ────────────────────────────────────────────────────────────
 
-  defp member?(%Canvas{space_id: space_id}, {:user, user_id})
-       when is_binary(space_id) and is_binary(user_id) do
-    Chat.participant?(space_id, user_id)
-  end
+  defp member?(%Canvas{space_id: space_id}, {:user, _} = viewer),
+    do: space_member?(space_id, viewer)
 
   # An agent is a `participant_type == "agent"` row, which `Chat.participant?/2`
   # deliberately does NOT match. Without this clause every MCP canvas write
@@ -399,6 +441,13 @@ defmodule Platform.Chat.CanvasAccess do
   end
 
   defp member?(_canvas, _viewer), do: false
+
+  defp space_member?(space_id, {:user, user_id})
+       when is_binary(space_id) and is_binary(user_id) do
+    Chat.participant?(space_id, user_id)
+  end
+
+  defp space_member?(_space_id, _viewer), do: false
 
   # ── 2. :task_agent ────────────────────────────────────────────────────────
   #
@@ -493,13 +542,15 @@ defmodule Platform.Chat.CanvasAccess do
 
   # ── 4. :org_reader ────────────────────────────────────────────────────────
 
-  defp org_reader?(%Canvas{space_id: space_id}, viewer) when is_binary(space_id) do
+  defp org_reader?(%Canvas{space_id: space_id}, viewer), do: space_org_reader?(space_id, viewer)
+
+  defp space_org_reader?(space_id, viewer) when is_binary(space_id) do
     # `space_accessible?/1` is the documented access gate for cross-space
     # surfaces: exists, not archived, not an execution space.
     Chat.space_accessible?(space_id) and org_readable_space?(space_id, viewer)
   end
 
-  defp org_reader?(_canvas, _viewer), do: false
+  defp space_org_reader?(_space_id, _viewer), do: false
 
   defp org_readable_space?(space_id, viewer) do
     case Repo.one(from(s in Space, where: s.id == ^space_id, select: {s.kind, s.org_id})) do

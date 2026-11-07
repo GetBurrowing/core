@@ -4841,6 +4841,57 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ ~s|data-mention-clear-event="steering_mention_clear"|
   end
 
+  # Task 01a1b67d: a task-feed image anchor was a same-install raw
+  # /chat/attachments link that in_app_links.js navigated in place. It must
+  # carry data-image-viewer so the tap opens the in-app image layer; a
+  # non-image attachment chip carries no image marker (file mode).
+  test "task-feed image attachments carry data-image-viewer; file chips do not", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Feed Image Task", status: "in_progress"})
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+    {:ok, msg} = ExecutionSpace.post_log(space.id, "screenshot attached")
+
+    attach = fn filename, content_type ->
+      {:ok, att} =
+        Chat.create_attachment(%{
+          space_id: space.id,
+          message_id: msg.id,
+          filename: filename,
+          content_type: content_type,
+          byte_size: 2048,
+          storage_key: "feed-#{System.unique_integer([:positive])}"
+        })
+
+      att
+    end
+
+    image = attach.("shot.png", "image/png")
+    pdf = attach.("notes.pdf", "application/pdf")
+
+    {conn, _user} = authenticated_conn_with_user(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+    doc = LazyHTML.from_fragment(html)
+
+    assert [_] =
+             doc
+             |> LazyHTML.query(
+               ~s(#tasks-steering a[data-image-viewer][href="/chat/attachments/#{image.id}"])
+             )
+             |> Enum.to_list()
+
+    assert [_] =
+             doc
+             |> LazyHTML.query(~s(#tasks-steering a[href="/chat/attachments/#{pdf.id}"]))
+             |> Enum.to_list()
+
+    assert [] =
+             doc
+             |> LazyHTML.query(
+               ~s(#tasks-steering a[data-image-viewer][href="/chat/attachments/#{pdf.id}"])
+             )
+             |> Enum.to_list()
+  end
+
   test "send_steering_message posts engagement metadata and shows success feedback", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Steerable Task", status: "in_progress"})

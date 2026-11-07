@@ -37,6 +37,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
+  alias PlatformWeb.ExternalSurface
   alias PlatformWeb.Plugs.ExternalUserScope
 
   # ── Helpers ────────────────────────────────────────────────────────────
@@ -269,6 +270,107 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
       assert_receive {:access_blocked, meta}
       assert meta.reason == "external_non_chat_route"
       detach_telemetry(ref)
+    end
+  end
+
+  # ── No negotiated format (task 01a1b728 stage 1) ──────────────────────
+  #
+  # `:proto_browser` has no `plug :accepts` (bundle assets send their own
+  # Accept headers), so on `/proto/...` the deny path ran with no format set
+  # and `render(:"403")` raised. The deny must default to html ONLY when no
+  # format was negotiated: a json-negotiated deny (`:blob_browser`) keeps its
+  # JSON 403.
+  describe "external users — deny with no negotiated format" do
+    # The router fetches params before any pipeline runs, and
+    # `get_format/1` falls back to `params["_format"]`, so fetch them here too.
+    defp run_with_format(path, format, current_user, membership, host \\ "chat.localhost") do
+      conn =
+        Phoenix.ConnTest.build_conn(:get, path)
+        |> Map.put(:host, host)
+        |> Plug.Conn.fetch_query_params()
+
+      conn = if format, do: Plug.Conn.put_private(conn, :phoenix_format, format), else: conn
+
+      conn
+      |> Plug.Conn.assign(:current_user, current_user)
+      |> Plug.Conn.assign(:current_user_org_membership, membership)
+      |> ExternalUserScope.call(ExternalUserScope.init([]))
+    end
+
+    # Since stage 2 the APP host admits /proto entry and latest (see below),
+    # so the no-format deny is exercised on the chat and meet hosts, which
+    # keep their terminal deny for /proto.
+    test "no format set on /proto on the chat and meet hosts → halted html 403, not a raise",
+         ctx do
+      prev = Application.get_env(:platform, :meet_host)
+      Application.put_env(:platform, :meet_host, "meet.example.com")
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:platform, :meet_host, prev),
+          else: Application.delete_env(:platform, :meet_host)
+      end)
+
+      id = Ecto.UUID.generate()
+
+      for host <- ["chat.localhost", "meet.example.com"],
+          path <- ["/proto/#{id}/1/", "/proto/#{id}/latest/"] do
+        conn = run_with_format(path, nil, ctx.ext_user, ctx.ext_membership, host)
+
+        assert ExternalSurface.for_conn(conn) in [:chat, :meet]
+        assert conn.halted
+        assert conn.status == 403
+        assert [ct] = Plug.Conn.get_resp_header(conn, "content-type")
+        assert ct =~ "text/html"
+        assert conn.resp_body =~ "Access denied"
+      end
+    end
+
+    test "a json-negotiated deny stays a JSON 403", ctx do
+      conn = run_with_format("/tasks", "json", ctx.ext_user, ctx.ext_membership)
+
+      assert conn.halted
+      assert conn.status == 403
+      assert [ct] = Plug.Conn.get_resp_header(conn, "content-type")
+      assert ct =~ "application/json"
+      assert Jason.decode!(conn.resp_body) == %{"errors" => %{"detail" => "Forbidden"}}
+    end
+
+    test "an html-negotiated deny is byte-identical to the no-format deny", ctx do
+      path = "/proto/#{Ecto.UUID.generate()}/1/"
+      none = run_with_format(path, nil, ctx.ext_user, ctx.ext_membership)
+      html = run_with_format(path, "html", ctx.ext_user, ctx.ext_membership)
+
+      assert none.status == html.status
+      assert none.resp_body == html.resp_body
+
+      assert Plug.Conn.get_resp_header(none, "content-type") ==
+               Plug.Conn.get_resp_header(html, "content-type")
+    end
+  end
+
+  # ── /proto entry and latest on the app host (task 01a1b728 stage 2) ───
+  #
+  # Surface ADMISSION only: `Prototypes.readable_by?/2` in
+  # `PrototypeController` decides per prototype. The clause never reads the
+  # id, so a real id, an unknown id and a non-UUID id are admitted alike.
+  describe "external users — /proto entry and latest" do
+    test "admitted on the app host for any id, never resolved here", ctx do
+      for id <- [Ecto.UUID.generate(), "not-a-uuid"],
+          suffix <- ["1/", "latest/", "1/sub/page.html"] do
+        conn = run("/proto/#{id}/#{suffix}", ctx.ext_user, ctx.ext_membership)
+        assert ExternalSurface.for_conn(conn) == :app
+        refute conn.halted
+        assert conn.status == nil
+      end
+    end
+
+    test "only entry and latest shapes: a bare /proto or /proto/:id is still denied", ctx do
+      for path <- ["/proto", "/proto/#{Ecto.UUID.generate()}"] do
+        conn = run(path, ctx.ext_user, ctx.ext_membership)
+        assert conn.halted
+        assert conn.status == 403
+      end
     end
   end
 

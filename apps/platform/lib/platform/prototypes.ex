@@ -3,8 +3,12 @@ defmodule Platform.Prototypes do
   Versioned, multi-file prototype bundles, served sealed behind org login
   (ADR 0057 Decision 1; task 01a1316b-4e46 stage 1).
 
-    * A prototype belongs to exactly one org. Only that org's members can
-      open it (`PlatformWeb.PrototypeController`).
+    * A prototype belongs to exactly one org, and who can open it
+      (`PlatformWeb.PrototypeController`, `readable_by?/2`) follows where it
+      lives: a canvas-owned prototype follows its canvas
+      (`Platform.Chat.CanvasAccess`), a space-bound one follows its space
+      (participants, plus the canvas `:org_reader` reach), and one with
+      neither is open to that org's members only.
     * Every publish creates version N+1 and never rewrites an older version.
       N is one more than the highest version EVER written for the prototype
       (removed ones included), so a number is never reused.
@@ -36,6 +40,7 @@ defmodule Platform.Prototypes do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Chat.CanvasAccess
   alias Platform.Prototypes.Bundle
   alias Platform.Prototypes.Prototype
   alias Platform.Prototypes.Settings
@@ -61,17 +66,40 @@ defmodule Platform.Prototypes do
   @doc """
   May `user` open `prototype`? The one check the serve routes
   (`PlatformWeb.PrototypeController`) and the chat prototype card
-  (`Platform.Chat.LinkCards`) share, so a card and the route cannot drift.
+  (`Platform.Chat.LinkCards`, through `list_readable/2`) share, so a card and
+  the route cannot drift.
 
-  Membership of the prototype's org, then RBAC v2 (task 01a1386e-45a5 stage
-  1): `canvas.read` on the prototype's canvas and, when set, `chat.read` on
-  its space, through `Platform.Access.check/3`. With no grants the access
-  half is `:ok`. A nil user is refused.
+  The positive rule follows where the prototype lives (task 01a1b70c stage 1),
+  not an `org_memberships` row in its org. A tenant org can own spaces and
+  have no member rows at all, and membership there said nothing about who
+  can read the space:
+
+    * `canvas_id` set: `Platform.Chat.CanvasAccess.fetch_for_viewer/3` must
+      resolve (`:member`, `:task_reader` or `:org_reader`; external users get
+      `:member` only), with the viewer's `Platform.Access.Scope` so a
+      `canvas.read` deny refuses, and `audit: false` because a card render or
+      a bundle-file fetch is not a canvas page view.
+    * `space_id` set, no canvas: `CanvasAccess.space_readable_by?/2`, the
+      same rule applied to a canvas's parent space: a participant, or a
+      non-external root admin or member of the space's org when the space is
+      an accessible (not archived, not execution) `"channel"` with an org.
+      A root admin gets no other bypass: not a DM, a group, an execution
+      space or an archived space unless they are a participant.
+    * neither: membership of the prototype's org (`Tenancy.member_of?/2`),
+      closed to external users (`Tenancy.external_user?/1`), so an external
+      org member reaches a prototype only through a space or canvas they
+      are a member of.
+
+  Then, in every case, RBAC v2 (task 01a1386e-45a5 stage 1): `canvas.read` on
+  the canvas and `chat.read` on the space through `Platform.Access.check/3`.
+  That check is CONJUNCTIVE and is `:ok` for a scope with no grants, so it
+  only narrows the positive rule above and can never stand in for it. A nil
+  user, or one without a binary id, is refused.
   """
   @spec readable_by?(struct() | map() | nil, Prototype.t()) :: boolean()
   def readable_by?(%{id: user_id} = user, %Prototype{org_id: org_id} = prototype)
       when is_binary(user_id) and is_binary(org_id) do
-    Tenancy.member_of?(user, org_id) and access_check(user, prototype) == :ok
+    located_readable?(user, prototype) and access_check(user, prototype) == :ok
   end
 
   def readable_by?(_user, _prototype), do: false
@@ -99,6 +127,26 @@ defmodule Platform.Prototypes do
       q -> q |> Repo.all() |> Enum.filter(&readable_by?(user, &1))
     end
   end
+
+  # The positive half of `readable_by?/2`: where the prototype lives decides.
+  defp located_readable?(user, %Prototype{canvas_id: canvas_id}) when is_binary(canvas_id) do
+    match?(
+      {:ok, _canvas, _level},
+      CanvasAccess.fetch_for_viewer(canvas_id, user,
+        access_scope: Platform.Access.Scope.for_user(user),
+        audit: false
+      )
+    )
+  end
+
+  defp located_readable?(user, %Prototype{space_id: space_id}) when is_binary(space_id),
+    do: CanvasAccess.space_readable_by?(space_id, user)
+
+  # Org-located: org reach is closed to external users, as in
+  # `CanvasAccess` (task 01a1b728 stage 2), since external users reach
+  # entry and latest past `ExternalUserScope`.
+  defp located_readable?(user, %Prototype{org_id: org_id}),
+    do: not Tenancy.external_user?(user) and Tenancy.member_of?(user, org_id)
 
   defp access_check(user, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
     scope = Platform.Access.Scope.for_user(user)

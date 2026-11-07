@@ -414,6 +414,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   # authorized server-side (ControlCenterLive :access_admin, then RoleAdmin).
 
   attr(:panel, :map, required: true)
+  attr(:sheet_refusal, :string, default: nil)
 
   def grant_panel(assigns) do
     ~H"""
@@ -442,6 +443,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           phx-submit="grant_capped_permission"
           class="space-y-4 text-sm"
         >
+          <PlatformWeb.ControlCenter.SheetRefusal.alert message={@sheet_refusal} />
           <input type="hidden" name="bundle" value={@panel.bundle} />
           <input type="hidden" name="permission" value={@panel.permission} />
           <h3 id="grant-panel-title" class="font-semibold text-base-content">

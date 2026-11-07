@@ -5685,10 +5685,58 @@ defmodule Platform.Meetings do
   """
   @spec get_transcript(term()) :: Transcript.t() | nil
   def get_transcript(id) do
-    # Reached with `trigger_meta[:transcript_id]` off responsibility payloads
-    # AND with a URL path segment (controllers/transcript_controller.ex:23).
+    # Reached with `trigger_meta[:transcript_id]` off responsibility payloads.
+    # UNSCOPED: it does not look at a viewer. The download route goes through
+    # `get_transcript_for_user/2` instead (task 01a1b288).
     if Platform.UUID.valid?(id), do: Repo.get(Transcript, id), else: nil
   end
+
+  @doc """
+  Get a transcript by id for a VIEWER — the read behind
+  `GET /api/transcripts/:id/download` (task 01a1b288).
+
+  A transcript is readable by exactly the viewers who could open its meeting:
+
+    * `meeting_id` set — the meeting viewer rule, `get_meeting_for_user/2`
+      (root admin sees all; an external user sees meetings they hold a live
+      invite for; an internal user sees meetings of their orgs' projects).
+      This is ORG isolation, not a per-participant ACL.
+    * `meeting_id` nil (a call with no covering meeting) — a root admin, or a
+      user participant of the transcript's space who can also see that space
+      under `ExternalScope`. A nil `space_id` fails closed.
+
+  A malformed or missing id, a nil or id-less user, and an out-of-scope
+  transcript all answer `{:error, :not_found}`, so ids are not probeable.
+  """
+  # Transcript reads must stay readable for soft-deleted meetings (task 01a1b281) and must not inherit a deleted filter.
+  @spec get_transcript_for_user(map() | nil, term()) ::
+          {:ok, Transcript.t()} | {:error, :not_found}
+  def get_transcript_for_user(%{id: user_id} = user, transcript_id) when is_binary(user_id) do
+    case get_transcript(transcript_id) do
+      %Transcript{} = transcript ->
+        if transcript_viewable?(transcript, user),
+          do: {:ok, transcript},
+          else: {:error, :not_found}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  def get_transcript_for_user(_user, _transcript_id), do: {:error, :not_found}
+
+  defp transcript_viewable?(%Transcript{meeting_id: meeting_id}, user)
+       when is_binary(meeting_id) do
+    match?({:ok, _}, get_meeting_for_user(user, meeting_id))
+  end
+
+  defp transcript_viewable?(%Transcript{space_id: space_id}, user) when is_binary(space_id) do
+    Platform.Tenancy.root_admin?(user) or
+      (Chat.participant?(space_id, user.id) and
+         ExternalScope.visible_space_id?(space_id, Access.Scope.for_user(user)))
+  end
+
+  defp transcript_viewable?(_transcript, _user), do: false
 
   @doc """
   Get the active (recording-status) transcript for a room.

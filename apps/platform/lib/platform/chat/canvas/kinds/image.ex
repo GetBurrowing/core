@@ -71,18 +71,20 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
       <%!-- Wrapped in a link to the full-size blob. A design screenshot is
            usually captured at 1280-1440px and rendered into a much narrower
            canvas column, so `max-w-full` scales it down to the point of being
-           unreadable — and a bare <img> offers no way back out. `target`
-           opens the original at native size in a new tab, which needs no
-           JS, no chat viewer dependency, and keeps working on the standalone
-           canvas page as well as inside chat.
+           unreadable. Tapping it opens the full-size image in the in-app
+           image layer (assets/js/lib/image_layer.js, on the shared
+           dismissable-overlay module), which closes with the X, Escape,
+           swipe-down or the phone's back, on the standalone canvas page and
+           inside chat alike.
 
-           Deliberately NOT a click-to-expand overlay: canvases render in two
-           different surfaces and an overlay would need its own z-index and
-           dismissal behaviour in each. Same reasoning as the drawer scroll
-           fix — reuse the mechanism the browser already has. --%>
+           `data-image-viewer` is what routes the tap there: in_app_links.js
+           never navigates the app to a raw /chat/attachments URL (a
+           same-window load of a bare image document has no way back inside
+           the iOS shell). The href stays as the no-JS fallback. --%>
       <a
         href={Platform.Chat.LinkTargets.open_href(@props["src"] || "")}
         {Platform.Chat.LinkTargets.open_attrs(@props["src"] || "")}
+        data-image-viewer
         title="Open full size"
         class="block cursor-zoom-in"
       >

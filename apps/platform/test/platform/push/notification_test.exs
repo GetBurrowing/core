@@ -554,6 +554,26 @@ defmodule Platform.Push.NotificationTest do
       assert data["author_type"] == "agent"
     end
 
+    test "chat/1 seals author_type and the space's thread id for an agent and a user (task 01a1b700)" do
+      for {type, space_id} <- [{"agent", Ecto.UUID.generate()}, {"user", Ecto.UUID.generate()}] do
+        n =
+          Notification.chat(%{
+            author: "Sender Placeholder",
+            author_id: Ecto.UUID.generate(),
+            author_type: type,
+            space_id: space_id,
+            space_name: "launch",
+            message_id: Ecto.UUID.generate(),
+            content: "hi"
+          })
+
+        # The FCM data map is the inner map the relay path seals.
+        data = Notification.to_fcm_payload(n)["data"]
+        assert data["author_type"] == type
+        assert data["thread_id"] == space_id
+      end
+    end
+
     test "a bare sender name carries no author identity" do
       n = AttentionRouter.push_notification("Sam", message("hi"), :all, space(), [])
       assert n.author_id == nil
