@@ -68,6 +68,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:federation_online?, :boolean, required: true)
   attr(:selected_agent_directory_entry, :map, default: nil)
   attr(:pending_delete_slug, :string, default: nil)
+  attr(:pending_delete_runtimes, :list, default: [])
   attr(:can_manage?, :boolean, default: false)
   attr(:native, :map, default: nil)
 
@@ -270,7 +271,35 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
       </div>
 
-      <div :if={@pending_delete_slug == @agent.slug} class="mt-3">
+      <div :if={@pending_delete_slug == @agent.slug} class="mt-3 space-y-3">
+        <div
+          :if={@pending_delete_runtimes != []}
+          id="delete-agent-runtime-warning"
+          role="alert"
+          class="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm text-base-content"
+        >
+          <div class="flex items-start gap-2">
+            <span class="hero-exclamation-triangle mt-0.5 h-5 w-5 shrink-0 text-warning" />
+            <div class="min-w-0 flex-1 space-y-2">
+              <p class="font-semibold">
+                Deleting this agent revokes these runtimes:
+              </p>
+              <ul class="space-y-1">
+                <li
+                  :for={runtime <- @pending_delete_runtimes}
+                  id={"delete-agent-runtime-#{runtime.id}"}
+                  class="flex flex-wrap items-center gap-x-2 gap-y-1"
+                >
+                  <code class="break-all font-mono text-xs">{runtime.runtime_id}</code>
+                  <span class="badge badge-ghost badge-sm border-warning">{runtime.status}</span>
+                </li>
+              </ul>
+              <p class="text-xs text-subtle">
+                Their tokens stop working immediately, and connected gateways are disconnected.
+              </p>
+            </div>
+          </div>
+        </div>
         <button type="button" phx-click="cancel_delete_agent" class="btn btn-ghost btn-xs">
           Cancel delete
         </button>

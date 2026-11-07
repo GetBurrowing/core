@@ -9,6 +9,7 @@ defmodule PlatformWeb.ControlCenter.AgentCrudEvents do
   import PlatformWeb.ControlCenter.Helpers, only: [changeset_error_summary: 1]
 
   alias Platform.Agents.Agent
+  alias Platform.Federation
   alias Platform.Repo
   alias PlatformWeb.ControlCenter.AgentData
 
@@ -43,8 +44,8 @@ defmodule PlatformWeb.ControlCenter.AgentCrudEvents do
 
   def handle("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
     case AgentData.find_agent_directory_entry(socket.assigns.agents, slug) do
-      %{agent: %Agent{}, workspace_managed?: false} ->
-        {:noreply, assign(socket, :pending_delete_slug, slug)}
+      %{agent: %Agent{} = agent, workspace_managed?: false} ->
+        {:noreply, assign_pending_delete(socket, agent)}
 
       %{workspace_managed?: true} ->
         {:noreply,
@@ -73,14 +74,14 @@ defmodule PlatformWeb.ControlCenter.AgentCrudEvents do
          "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
        )}
     else
-      {:noreply, assign(socket, :pending_delete_slug, agent.slug)}
+      {:noreply, assign_pending_delete(socket, agent)}
     end
   end
 
   def handle("request_delete_agent", _params, socket), do: {:noreply, socket}
 
   def handle("cancel_delete_agent", _params, socket) do
-    {:noreply, assign(socket, :pending_delete_slug, nil)}
+    {:noreply, clear_pending_delete(socket)}
   end
 
   def handle("delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
@@ -137,7 +138,7 @@ defmodule PlatformWeb.ControlCenter.AgentCrudEvents do
           socket
           |> put_flash(:info, "Deleted #{agent.name}.")
           |> assign(:agents, AgentData.list_agents())
-          |> assign(:pending_delete_slug, nil)
+          |> clear_pending_delete()
           |> assign(:selected_agent, nil)
           |> assign(:selected_agent_directory_entry, nil)
 
@@ -146,5 +147,19 @@ defmodule PlatformWeb.ControlCenter.AgentCrudEvents do
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not delete agent: #{inspect(reason)}")}
     end
+  end
+
+  # Enter the confirm state. The runtimes listed are exactly the ones the
+  # delete will revoke (task 01a1b34b stage 2): the same query backs both.
+  defp assign_pending_delete(socket, %Agent{} = agent) do
+    socket
+    |> assign(:pending_delete_slug, agent.slug)
+    |> assign(:pending_delete_runtimes, Federation.list_runtimes_to_revoke(agent))
+  end
+
+  defp clear_pending_delete(socket) do
+    socket
+    |> assign(:pending_delete_slug, nil)
+    |> assign(:pending_delete_runtimes, [])
   end
 end

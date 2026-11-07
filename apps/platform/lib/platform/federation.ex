@@ -171,12 +171,9 @@ defmodule Platform.Federation do
     Multi.run(multi, :revoke_runtimes, fn repo, _changes ->
       revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
-      pointer = from(a in Agent, where: a.id == ^agent_id, select: a.runtime_id)
-
-      from(r in AgentRuntime,
-        where: r.agent_id == ^agent_id or r.id in subquery(pointer),
-        lock: "FOR UPDATE"
-      )
+      agent_id
+      |> bound_runtimes_query()
+      |> lock("FOR UPDATE")
       |> repo.all()
       |> Enum.reduce_while({:ok, []}, fn runtime, {:ok, acc} ->
         metadata =
@@ -194,6 +191,30 @@ defmodule Platform.Federation do
         error -> error
       end
     end)
+  end
+
+  @doc """
+  The runtimes deleting `agent` will revoke and that are still live: every
+  runtime `revoke_runtimes_for_agent_multi/2` selects, less those already
+  `revoked` (task 01a1b34b stage 2). The Control Center delete confirmation
+  lists these. Both read `bound_runtimes_query/1`, so the list and the revoke
+  cannot drift apart. Ordered by `runtime_id`.
+  """
+  @spec list_runtimes_to_revoke(Agent.t()) :: [AgentRuntime.t()]
+  def list_runtimes_to_revoke(%Agent{id: agent_id}) do
+    agent_id
+    |> bound_runtimes_query()
+    |> where([r], r.status != "revoked")
+    |> order_by([r], asc: r.runtime_id)
+    |> Repo.all()
+  end
+
+  # Every runtime bound to the agent: rows with `agent_id` == the agent's id,
+  # plus the row `agents.runtime_id` points at (read from the database).
+  defp bound_runtimes_query(agent_id) do
+    pointer = from(a in Agent, where: a.id == ^agent_id, select: a.runtime_id)
+
+    from(r in AgentRuntime, where: r.agent_id == ^agent_id or r.id in subquery(pointer))
   end
 
   @doc """
