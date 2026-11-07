@@ -413,4 +413,12 @@ defmodule PlatformWeb.GamePageControllerTest do
     {:ok, revoked, _} = live_isolated(conn, PlatformWeb.GameCommunityLive, session: session)
     assert has_element?(revoked, "#game-chat-access-denied")
   end
+
+  test "game page does not display the signed-in account name or email", %{conn: conn} do
+    user = Repo.insert!(User.changeset(%User{}, %{name: "Private Legal Name", email: "private-account@example.net", oidc_sub: "private-page-player"}))
+    html = conn |> init_test_session(current_user_id: user.id) |> get("/games/voltron") |> html_response(200)
+    refute html =~ user.name
+    refute html =~ user.email
+  end
+
 end

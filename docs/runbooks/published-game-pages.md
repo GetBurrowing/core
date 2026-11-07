@@ -39,7 +39,15 @@ server secret in a manifest. The public page's version and checksum refer to
 the ZIP, not its embedded PCK. Retain older version entries when changing the
 current pointer; do not repoint a version to different bytes.
 
-## Community
+## Community — identity rollout gate
+
+Do not enable a public player community until the persona projection is
+implemented and identity-leak regression tests pass. The canonical chat
+renderer currently falls back to account names, email and account avatars.
+A participant display-name cache alone does not prove this boundary safe.
+The game-page header displays only "You"; that does not make community chat
+persona-safe. No account profile is passed to the native game by this slice.
+
 
 Create a NEW player-only channel in the game's org. Do not reuse Voltron's
 existing development conversation. Its metadata must contain
