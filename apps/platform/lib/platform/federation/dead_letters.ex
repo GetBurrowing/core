@@ -212,6 +212,27 @@ defmodule Platform.Federation.DeadLetters do
     |> Repo.all()
   end
 
+  @doc """
+  Mark every live (`pending`/`replaying`) row for one runtime `abandoned`.
+
+  Used when the runtime is revoked because its agent was deleted (task
+  01a1b34b): a runtime_id federated again later must not replay the old
+  agent's queue. Each row goes through `mark/3`, so the cumulative counters
+  stay balanced. Options are passed to `mark/3` (`:reason`).
+  Returns `{:ok, count}`.
+  """
+  @spec abandon_live_for_runtime(String.t(), keyword()) :: {:ok, non_neg_integer()}
+  def abandon_live_for_runtime(runtime_id, opts \\ []) when is_binary(runtime_id) do
+    count =
+      DeadLetter
+      |> where([d], d.runtime_id == ^runtime_id)
+      |> where([d], d.disposition in ^DeadLetter.live_dispositions())
+      |> Repo.all()
+      |> Enum.count(fn row -> match?({:ok, _}, mark(row, "abandoned", opts)) end)
+
+    {:ok, count}
+  end
+
   @doc "Most recent rows across all runtimes and dispositions, newest first."
   @spec recent(pos_integer()) :: [DeadLetter.t()]
   def recent(limit \\ @default_recent_limit) do

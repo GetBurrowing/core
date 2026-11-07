@@ -57,6 +57,8 @@ defmodule Platform.Federation.ModuleLockToolsTest do
       |> AgentRuntime.changeset(%{
         runtime_id: "locktools-rt-#{uniq()}",
         owner_user_id: owner.id,
+        # Auth refuses an active runtime with no agent (task 01a1b34b).
+        agent_id: Platform.PrototypeFixtures.agent!().id,
         auth_token_hash: AgentRuntime.hash_token(token),
         status: "active"
       })

@@ -351,7 +351,8 @@ defmodule Platform.FederationTest do
 
       {:ok, runtime} =
         Federation.register_runtime(user.id, %{
-          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}",
+          agent_id: create_agent().id
         })
 
       {:ok, _activated, raw_token} = Federation.activate_runtime(runtime)
@@ -359,6 +360,22 @@ defmodule Platform.FederationTest do
       found = Federation.get_runtime_by_token(raw_token)
       assert found != nil
       assert found.id == runtime.id
+    end
+
+    # Task 01a1b34b: a runtime that lost its agent must not authenticate.
+    test "refuses an active runtime whose agent_id is nil" do
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, activated, raw_token} = Federation.activate_runtime(runtime)
+      assert activated.status == "active"
+      assert activated.agent_id == nil
+
+      assert Federation.get_runtime_by_token(raw_token) == nil
     end
 
     test "returns nil for invalid token" do
@@ -401,7 +418,8 @@ defmodule Platform.FederationTest do
 
       {:ok, runtime} =
         Federation.register_runtime(owner.id, %{
-          runtime_id: "unsuspend-#{System.unique_integer([:positive])}"
+          runtime_id: "unsuspend-#{System.unique_integer([:positive])}",
+          agent_id: create_agent().id
         })
 
       %{runtime: runtime, scope: Platform.Access.Scope.for_user(owner)}

@@ -16,9 +16,12 @@ defmodule PlatformWeb.RuntimeSocket do
   # ride `runtime:*`.
   channel "terminal:*", PlatformWeb.TerminalCliChannel
 
+  # Only an active runtime bound to an agent may connect. A runtime whose
+  # agent_id is NULL lost its agent (task 01a1b34b) and its token is refused.
   @impl true
   def connect(%{"runtime_id" => runtime_id, "token" => token}, socket, _connect_info) do
-    with %AgentRuntime{status: "active"} = runtime <-
+    with %AgentRuntime{status: "active", agent_id: agent_id} = runtime
+         when is_binary(agent_id) <-
            Federation.get_runtime_by_runtime_id(runtime_id),
          true <- AgentRuntime.verify_token(token, runtime.auth_token_hash) do
       socket =

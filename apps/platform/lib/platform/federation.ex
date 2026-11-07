@@ -60,13 +60,19 @@ defmodule Platform.Federation do
     Repo.get_by(AgentRuntime, runtime_id: runtime_id)
   end
 
-  @doc "Fetch a runtime by verifying a raw auth token."
+  @doc """
+  Fetch a runtime by verifying a raw auth token.
+
+  Only an `active` runtime bound to an agent matches. A runtime whose
+  `agent_id` is NULL lost its agent (task 01a1b34b), and its token must not
+  authenticate.
+  """
   def get_runtime_by_token(raw_token) when is_binary(raw_token) do
     hash = AgentRuntime.hash_token(raw_token)
 
     Repo.one(
       from(r in AgentRuntime,
-        where: r.auth_token_hash == ^hash and r.status == "active"
+        where: r.auth_token_hash == ^hash and r.status == "active" and not is_nil(r.agent_id)
       )
     )
   end
@@ -128,7 +134,7 @@ defmodule Platform.Federation do
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
     runtime
-    |> AgentRuntime.changeset(%{status: "revoked", auth_token_hash: nil})
+    |> revoke_changeset(%{})
     |> Repo.update()
   end
 
@@ -138,6 +144,91 @@ defmodule Platform.Federation do
         do: revoke_runtime(runtime),
         else: {:error, :unauthorized}
       )
+
+  # The one definition of "revoked": status `revoked`, token hash cleared.
+  # `revoke_runtime/1` and `revoke_runtimes_for_agent_multi/2` both build on it.
+  defp revoke_changeset(%AgentRuntime{} = runtime, extra) do
+    AgentRuntime.changeset(runtime, Map.merge(extra, %{status: "revoked", auth_token_hash: nil}))
+  end
+
+  @doc """
+  Add a `:revoke_runtimes` step to `multi` that revokes every runtime bound to
+  `agent` (task 01a1b34b stage 1).
+
+  A runtime is bound when its `agent_id` is the agent's id, or when it is the
+  row `agents.runtime_id` points at (read from the database, not the struct).
+  Each row is revoked as `revoke_runtime/1` does, and also stamped with
+  `metadata["revoked_agent_id"]` and `metadata["revoked_at"]`: the
+  `agent_runtimes.agent_id` FK is `on_delete: :nilify_all`, so once the agent
+  row is gone this stamp is the only record of which agent the runtime served.
+
+  Put this step BEFORE the agent is deleted, inside the same transaction, so a
+  failed delete leaves every runtime as it was. The step's value is the list of
+  revoked runtimes; pass it to `finalize_revoked_runtimes/1` after commit.
+  """
+  @spec revoke_runtimes_for_agent_multi(Multi.t(), Agent.t()) :: Multi.t()
+  def revoke_runtimes_for_agent_multi(%Multi{} = multi, %Agent{id: agent_id}) do
+    Multi.run(multi, :revoke_runtimes, fn repo, _changes ->
+      revoked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      pointer = from(a in Agent, where: a.id == ^agent_id, select: a.runtime_id)
+
+      from(r in AgentRuntime,
+        where: r.agent_id == ^agent_id or r.id in subquery(pointer),
+        lock: "FOR UPDATE"
+      )
+      |> repo.all()
+      |> Enum.reduce_while({:ok, []}, fn runtime, {:ok, acc} ->
+        metadata =
+          (runtime.metadata || %{})
+          |> Map.put("revoked_agent_id", agent_id)
+          |> Map.put("revoked_at", revoked_at)
+
+        case runtime |> revoke_changeset(%{metadata: metadata}) |> repo.update() do
+          {:ok, revoked} -> {:cont, {:ok, [revoked | acc]}}
+          {:error, changeset} -> {:halt, {:error, changeset}}
+        end
+      end)
+      |> case do
+        {:ok, revoked} -> {:ok, Enum.reverse(revoked)}
+        error -> error
+      end
+    end)
+  end
+
+  @doc """
+  Post-commit cleanup for runtimes revoked by
+  `revoke_runtimes_for_agent_multi/2`. Best-effort: each step is rescued and
+  logged so one failure cannot stop the rest.
+
+  For each runtime it broadcasts `"disconnect"` on the socket id
+  `"runtime:<runtime_id>"`, which drops a live socket, and marks the runtime's
+  live (`pending`/`replaying`) dead letters `abandoned`, so a runtime_id
+  federated again later does not replay the deleted agent's queue.
+  """
+  @spec finalize_revoked_runtimes([AgentRuntime.t()]) :: :ok
+  def finalize_revoked_runtimes(runtimes) when is_list(runtimes) do
+    Enum.each(runtimes, fn %AgentRuntime{runtime_id: runtime_id} ->
+      best_effort("disconnect #{runtime_id}", fn ->
+        PlatformWeb.Endpoint.broadcast("runtime:" <> runtime_id, "disconnect", %{})
+      end)
+
+      best_effort("abandon dead letters #{runtime_id}", fn ->
+        Platform.Federation.DeadLetters.abandon_live_for_runtime(runtime_id,
+          reason: "agent_deleted"
+        )
+      end)
+    end)
+  end
+
+  defp best_effort(label, fun) do
+    fun.()
+  rescue
+    error ->
+      Logger.warning("[Federation] revoke cleanup failed: #{label}: #{Exception.message(error)}")
+
+      :error
+  end
 
   @doc """
   Shallow-merge new top-level keys into a runtime's `metadata` map and

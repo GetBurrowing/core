@@ -701,16 +701,9 @@ defmodule PlatformWeb.ControlCenter.AgentData do
 
     now = DateTime.utc_now()
 
-    # Collect runtime_ids and participant space_ids before the transaction
-    # (needed for in-memory cleanup after commit)
-    runtime_ids =
-      Repo.all(
-        from(r in AgentRuntime,
-          where: r.agent_id == ^agent.id,
-          select: r.runtime_id
-        )
-      )
-
+    # Collect participant space_ids before the transaction (needed for
+    # in-memory cleanup after commit). Runtime ids come from the
+    # :revoke_runtimes step's result instead.
     participant_space_ids =
       Repo.all(
         from(p in Participant,
@@ -772,13 +765,21 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       )
       # 5. Clean up sessions (existing)
       |> Multi.delete_all(:sessions, from(s in Session, where: s.agent_id == ^agent.id))
+      # 5b. Revoke every runtime bound to the agent (task 01a1b34b). The FK
+      #     is on_delete: :nilify_all, so without this the runtime stays
+      #     active with a live token and no agent. Must run before step 6.
+      |> Federation.revoke_runtimes_for_agent_multi(agent)
       # 6. Delete the agent record
       |> Multi.delete(:agent, agent)
       |> Repo.transaction()
 
     case result do
-      {:ok, _changes} ->
-        # Post-commit: clean up in-memory runtime/presence state (best-effort)
+      {:ok, %{revoke_runtimes: revoked_runtimes}} ->
+        # Post-commit, best-effort: drop live sockets and abandon queued
+        # dead letters for the revoked runtimes, then clean up in-memory
+        # runtime/presence state.
+        Federation.finalize_revoked_runtimes(revoked_runtimes)
+        runtime_ids = Enum.map(revoked_runtimes, & &1.runtime_id)
         cleanup_in_memory_state(agent.id, runtime_ids, participant_space_ids)
         :ok
 

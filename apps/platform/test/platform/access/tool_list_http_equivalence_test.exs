@@ -21,7 +21,9 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
           runtime_id: "http-equivalence-#{key}",
           owner_user_id: owner.id,
           auth_token_hash: AgentRuntime.hash_token(token),
-          status: "active"
+          status: "active",
+          # Auth refuses an active runtime with no agent (task 01a1b34b).
+          agent_id: Platform.PrototypeFixtures.agent!().id
         })
 
       Repo.insert!(%RuntimeProfile{

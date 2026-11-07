@@ -37,6 +37,8 @@ defmodule Platform.Federation.SkillMCPParityTest do
     attrs = %{
       runtime_id: "rt-#{product}-#{System.unique_integer([:positive])}",
       owner_user_id: user.id,
+      # Auth refuses an active runtime with no agent (task 01a1b34b).
+      agent_id: Platform.PrototypeFixtures.agent!().id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
       status: "active",
       metadata: %{"client_info" => %{"product" => product}}

@@ -3,7 +3,9 @@ defmodule PlatformWeb.Plugs.RuntimeBearerAuth do
   Authenticates a request against a federated `AgentRuntime` via a Bearer token.
 
   The raw token is SHA256-hashed and compared against `AgentRuntime.auth_token_hash`.
-  Only runtimes in the `active` status are accepted. On success the runtime is
+  Only runtimes in the `active` status that are bound to an agent are
+  accepted; an active runtime whose `agent_id` is NULL lost its agent (task
+  01a1b34b) and is refused. On success the runtime is
   assigned to `conn.assigns.runtime`. On failure the connection is halted with
   `401 Unauthorized` and a JSON-RPC style error body.
   """
@@ -18,7 +20,8 @@ defmodule PlatformWeb.Plugs.RuntimeBearerAuth do
   def call(conn, _opts) do
     with [auth_header] <- get_req_header(conn, "authorization"),
          "Bearer " <> token <- auth_header,
-         %AgentRuntime{status: "active"} = runtime <- lookup_runtime(token) do
+         %AgentRuntime{status: "active", agent_id: agent_id} = runtime
+         when is_binary(agent_id) <- lookup_runtime(token) do
       assign(conn, :runtime, runtime)
     else
       _ -> unauthorized(conn)

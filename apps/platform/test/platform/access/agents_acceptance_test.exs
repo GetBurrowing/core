@@ -73,7 +73,12 @@ defmodule Platform.Access.AgentsAcceptanceTest do
       RuntimeProfileFixtures.runtime!(
         owner_id,
         modules,
-        %{status: "active", auth_token_hash: AgentRuntime.hash_token(token)},
+        # Auth refuses an active runtime with no agent (task 01a1b34b).
+        %{
+          status: "active",
+          auth_token_hash: AgentRuntime.hash_token(token),
+          agent_id: Platform.PrototypeFixtures.agent!().id
+        },
         nil
       )
 

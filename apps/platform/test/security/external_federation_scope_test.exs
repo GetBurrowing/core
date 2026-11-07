@@ -123,6 +123,8 @@ defmodule Platform.Security.ExternalFederationScopeTest do
       |> AgentRuntime.changeset(%{
         runtime_id: "m15-rt-#{System.unique_integer([:positive])}",
         owner_user_id: owner_user_id,
+        # Auth refuses an active runtime with no agent (task 01a1b34b).
+        agent_id: Platform.PrototypeFixtures.agent!().id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
         status: "active"
       })

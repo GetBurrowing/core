@@ -276,6 +276,13 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
       })
       |> Repo.insert()
 
+    # Bind both directions, as `Federation.link_agent/2` does: auth refuses an
+    # active runtime with no agent (task 01a1b34b).
+    runtime =
+      runtime
+      |> Platform.Agents.AgentRuntime.changeset(%{agent_id: agent.id})
+      |> Repo.update!()
+
     {agent, runtime}
   end
 end
