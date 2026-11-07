@@ -80,17 +80,7 @@ defmodule PlatformWeb.Components.ChatMessage do
       ) do
     ~H"""
     <div id={@dom_id} data-message-id={@msg.id} data-participant-id={@msg.participant_id}>
-      <div
-        :if={Map.get(@msg, :day_label)}
-        class="js-date-separator flex items-center gap-3 my-4 -mx-2"
-        data-date={@msg.day_label}
-      >
-        <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
-          {format_day_label(@msg.day_label)}
-        </span>
-        <div class="flex-1 border-t border-edge"></div>
-      </div>
+      <.day_separator :if={Map.get(@msg, :day_label)} day_label={@msg.day_label} />
       <ReplyFailureRow.row msg={@msg} viewer_user_id={@viewer_user_id} />
     </div>
     """
@@ -118,17 +108,7 @@ defmodule PlatformWeb.Components.ChatMessage do
       data-voice-kind={@msg.metadata["voice_kind"]}
       data-participant-id=""
     >
-      <div
-        :if={Map.get(@msg, :day_label)}
-        class="js-date-separator flex items-center gap-3 my-4 -mx-2"
-        data-date={@msg.day_label}
-      >
-        <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
-          {format_day_label(@msg.day_label)}
-        </span>
-        <div class="flex-1 border-t border-edge"></div>
-      </div>
+      <.day_separator :if={Map.get(@msg, :day_label)} day_label={@msg.day_label} />
       <VoiceSessionBlock.header :if={voice_head(@msg)} head={voice_head(@msg)} />
       <VoiceSessionBlock.system_body
         msg={@msg}
@@ -877,6 +857,22 @@ defmodule PlatformWeb.Components.ChatMessage do
         session_id={voice_block(@msg).session_id}
         count={voice_block(@msg).show_all}
       />
+    </div>
+    """
+  end
+
+  # The day separator the two system-row clauses draw (the reply-failure
+  # notice and the Voice chat pointer/summary row), as the bubble row does.
+  attr(:day_label, :string, required: true)
+
+  defp day_separator(assigns) do
+    ~H"""
+    <div class="js-date-separator flex items-center gap-3 my-4 -mx-2" data-date={@day_label}>
+      <div class="flex-1 border-t border-edge"></div>
+      <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
+        {format_day_label(@day_label)}
+      </span>
+      <div class="flex-1 border-t border-edge"></div>
     </div>
     """
   end
