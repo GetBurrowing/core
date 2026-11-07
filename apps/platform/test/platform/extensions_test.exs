@@ -940,7 +940,7 @@ defmodule Platform.ExtensionsTest do
     # `federation` and feedback_submit's `space_id`. Measured locally.
     # Task 01a1b6e1: instruction_updates adds one Sharing key to sharing_set
     # enum/disclosure copy. Names, bundles and all other schemas stay pinned.
-    # Measured by Moon extensions_test on 5b1d04b64 (30/31; digest alone changed).
+    # Measured by test-rig extensions_test on 5b1d04b64 (30/31; digest alone changed).
     @main_tool_digest_off "ebf9d60d436909e48e0704be88cc07283330e8bd9bbcd2ab9a5d744f0341d586"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
