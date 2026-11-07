@@ -68,6 +68,9 @@ defmodule Platform.InstructionPacks.Download do
         {:ok, %{status: 200, body: body}} ->
           {:ok, body}
 
+        {:ok, %{status: 404}} ->
+          {:error, :release_unavailable}
+
         _ ->
           {:error, :download_failed}
       end

@@ -53,8 +53,14 @@ defmodule Platform.InstructionPacks.Installer do
 
         attrs =
           case result do
-            {:ok, _} -> %{checked_at: now, last_successful_check_at: now, check_error: nil}
-            {:error, reason} -> %{checked_at: now, check_error: check_error(reason)}
+            {:ok, _} ->
+              %{checked_at: now, last_successful_check_at: now, check_error: nil}
+
+            {:error, :release_unavailable} ->
+              %{checked_at: now, last_successful_check_at: now, check_error: nil}
+
+            {:error, reason} ->
+              %{checked_at: now, check_error: check_error(reason)}
           end
 
         Repo.update!(Ecto.Changeset.change(state, attrs))

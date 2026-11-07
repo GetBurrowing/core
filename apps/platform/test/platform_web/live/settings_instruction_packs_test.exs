@@ -192,5 +192,17 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
     view |> element("button[phx-click=refresh]") |> render_click()
     assert render(view) =~ "Network failure"
     assert Repo.get!(State, "setup-guide").version == 1
+
+    assert {:error, :release_unavailable} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 404, "not published") end
+             )
+
+    state = Repo.get!(State, "setup-guide")
+    assert state.check_error == nil
+    assert state.last_successful_check_at != nil
+    assert state.version == 1
+    view |> element("button[phx-click=refresh]") |> render_click()
+    refute render(view) =~ "Network failure"
   end
 end
