@@ -31,14 +31,14 @@ defmodule Platform.InstructionPacks.Entry do
 
     cond do
       owned and is_nil(incoming) ->
-        # Retiring guidance stops managing it without deleting content or
-        # attachments. Local administrators can remove it deliberately later.
-        {:keep, local,
+        # Retire guidance by clearing only text, preserving row identity and
+        # attachments. The empty-value hash retains trusted tombstone ownership.
+        {:write, "",
          %{
            vendor_content: nil,
            vendor_hash: nil,
-           applied_hash: nil,
-           effective_version: previous.effective_version,
+           applied_hash: hash(""),
+           effective_version: version,
            conflict: nil,
            retired: true
          }}

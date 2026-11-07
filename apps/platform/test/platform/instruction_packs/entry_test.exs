@@ -31,7 +31,7 @@ defmodule Platform.InstructionPacks.EntryTest do
       effective_version: 1
     }
 
-    assert {:keep, "old", %{retired: true, conflict: nil}} =
+    assert {:write, "", %{retired: true, conflict: nil}} =
              Entry.reconcile(baseline, "old", nil, 2)
 
     assert {:keep, "my edit", %{retired: true}} = Entry.reconcile(baseline, "my edit", nil, 2)
