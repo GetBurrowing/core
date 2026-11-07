@@ -685,7 +685,12 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # (`ChatListHooks.float_on_open/2`, before `clear_unread/2` zeroes the
   # count it reads) and clears it on `/chat` (`ChatListHooks.clear_floated/1`),
   # one pipeline line each; the logic lives in `ChatListHooks`.
-  @chat_live_code_line_count 2034
+  # Task 01a1b741 stage 4 (2034 -> 2035): `handle_params/3` pipes the
+  # `?draft=` link param into `MessagesHooks.maybe_prefill_draft/3`, so the
+  # roles panel's "Ask Burrow about splitting roles" opens Burrow's DM with
+  # the composer pre-filled (never sent). One pipeline line; the logic lives
+  # in MessagesHooks.
+  @chat_live_code_line_count 2035
 
   @doc """
   Count the CODE lines of a source file.

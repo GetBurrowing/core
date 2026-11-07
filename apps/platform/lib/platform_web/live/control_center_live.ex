@@ -304,6 +304,10 @@ defmodule PlatformWeb.ControlCenterLive do
     "toggle_role_advanced" => :ui,
     "assign_role" => :responsibility,
     "clear_role_assignment" => :responsibility,
+    "hand_role" => :responsibility,
+    # Opens (or creates) the user's own DM with Burrow; `Chat.find_or_create_dm/4`
+    # enforces who may DM whom, and nothing is sent (task 01a1b741 stage 4).
+    "ask_burrow_about_roles" => :ui,
     "set_responsibility_override" => :responsibility,
     "clear_responsibility_override" => :responsibility,
     "start_runtime" => :manage_selected,
@@ -532,16 +536,87 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
+  # Clear on a specialist's row hands the role straight back to Burrow (task
+  # 01a1b741 stage 4). With no Burrow, or for Burrow's own row (the panel
+  # offers no Clear there), it unassigns as before.
   defp handle_control_event("clear_role_assignment", %{"role_key" => role_key}, socket) do
-    case Platform.Roles.unassign_role(role_key, actor: socket.assigns.access_scope) do
-      :ok ->
-        {:noreply,
+    burrow = socket.assigns[:burrow]
+    holder_id = Platform.Roles.agent_id_for_role(role_key)
+
+    if burrow && holder_id && holder_id != burrow.id do
+      case Platform.Roles.reassign_role(role_key, burrow.id, actor: socket.assigns.access_scope) do
+        {:ok, _assignment} ->
+          {:noreply,
+           socket
+           |> assign_roles_panel()
+           |> put_flash(:info, "#{role_name(role_key)} is back with Burrow.")}
+
+        {:error, :unauthorized} ->
+          {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+
+        {:error, _changeset} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not hand #{role_name(role_key)} back to Burrow.")}
+      end
+    else
+      case Platform.Roles.unassign_role(role_key, actor: socket.assigns.access_scope) do
+        :ok ->
+          {:noreply,
+           socket
+           |> assign_roles_panel()
+           |> put_flash(:info, "Cleared assignment for #{role_key}.")}
+
+        {:error, :unauthorized} ->
+          {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+      end
+    end
+  end
+
+  # "Hand to a specialist" on a Burrow row (task 01a1b741 stage 4): one
+  # transactional move from Burrow to the chosen agent.
+  defp handle_control_event("hand_role", %{"role_key" => _key, "agent_id" => ""}, socket) do
+    {:noreply, socket}
+  end
+
+  defp handle_control_event(
+         "hand_role",
+         %{"role_key" => _role_key, "agent_id" => "__new_external__"} = params,
          socket
-         |> assign_roles_panel()
-         |> put_flash(:info, "Cleared assignment for #{role_key}.")}
+       ) do
+    handle_control_event("assign_role", params, socket)
+  end
+
+  defp handle_control_event(
+         "hand_role",
+         %{"role_key" => role_key, "agent_id" => agent_id},
+         socket
+       )
+       when is_binary(agent_id) do
+    case Platform.Roles.reassign_role(role_key, agent_id, actor: socket.assigns.access_scope) do
+      {:ok, _assignment} ->
+        socket = assign_roles_panel(socket)
+        agent = Map.get(socket.assigns.role_assignments_by_key, role_key)
+        agent_name = (agent && agent.name) || "the agent"
+
+        {:noreply, put_flash(socket, :info, "Handed #{role_name(role_key)} to #{agent_name}.")}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not hand over #{role_name(role_key)}.")}
+    end
+  end
+
+  # "Ask Burrow about splitting roles": open the user's DM with Burrow
+  # (created if absent) with the composer pre-filled. It is never sent.
+  defp handle_control_event("ask_burrow_about_roles", _params, socket) do
+    with %{id: burrow_id} <- socket.assigns[:burrow],
+         {:ok, space} <-
+           Platform.Chat.find_or_create_dm(socket.assigns.current_user_id, "agent", burrow_id) do
+      {:noreply, push_navigate(socket, to: ask_burrow_path(space))}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Could not open your conversation with Burrow.")}
     end
   end
 
@@ -1292,6 +1367,7 @@ defmodule PlatformWeb.ControlCenterLive do
             selectable_agents={@selectable_agents}
             access_scope={@access_scope}
             can_create_ownerless?={@can_create_ownerless?}
+            burrow={@burrow}
           />
         </main>
       </div>
@@ -1377,8 +1453,28 @@ defmodule PlatformWeb.ControlCenterLive do
     assign(socket, :can_create_ownerless?, Platform.Access.Agents.may_create_ownerless?(scope))
   end
 
+  @ask_burrow_roles_draft "Why might I split some of your roles off, and how would I do it?"
+
+  @doc false
+  # The chat path the "Ask Burrow about splitting roles" link opens: the DM
+  # with the composer pre-filled through `?draft=` (read by ChatLive).
+  def ask_burrow_path(space) do
+    ~p"/chat/#{space.slug || space.id}?#{[draft: @ask_burrow_roles_draft]}"
+  end
+
+  @doc false
+  def ask_burrow_roles_draft, do: @ask_burrow_roles_draft
+
+  defp role_name(role_key) do
+    case Platform.Roles.get_role(role_key) do
+      %{name: name} -> name
+      _ -> role_key
+    end
+  end
+
   defp assign_roles_panel(socket) do
     socket
+    |> assign(:burrow, Platform.Agents.Burrow.get())
     |> assign(:roles, AgentData.list_roles())
     |> assign(:role_bundles, AgentData.role_bundles())
     |> assign(:role_assignments_by_key, AgentData.role_assignments_by_key())

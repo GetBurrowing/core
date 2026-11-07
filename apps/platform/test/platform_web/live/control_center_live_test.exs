@@ -1583,7 +1583,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 10 role rows + UNFILLED pills", %{
+    test "GET /control with no agent selected renders 10 role rows, none badged UNFILLED", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
@@ -1617,22 +1617,21 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "hero-clipboard-document-check"
       assert html =~ "hero-shield-check"
 
-      # Bundle keys render as <code> chips for at least one role.
-      assert html =~ "design.critique"
-      assert html =~ "memory.daily_summary"
-      assert html =~ "meetings.intent_classify"
-      assert html =~ "meetings.summarize"
-      assert html =~ "tasks.triage"
+      # Bundle keys: the first two of each role render (task 01a1b741 stage 4
+      # shows two plus "+N"; the full list is in Show advanced).
+      for key <- ~w(designer historian meeting_producer meeting_scribe triage_officer),
+          bundle_key <- Enum.take(Platform.Roles.bundle_for(key), 2) do
+        assert html =~ bundle_key
+      end
 
-      # Every row starts UNFILLED. With no agents, there is no picker to fill.
-      assert html =~ "UNFILLED"
+      # No agent holds a role here (no Burrow). Task 01a1b741 stage 4 dropped
+      # the UNFILLED badge and the dash cost chips; with no agents there is
+      # no picker to fill.
+      refute html =~ "UNFILLED"
+      assert html =~ "Not held by any agent"
       refute html =~ ~s(data-role="fill-role-picker")
-
-      # Cost stats stub chips render literal em-dash placeholders.
-      assert html =~ "runs —"
-      assert html =~ "last —"
-      assert html =~ "avg —"
-      assert html =~ "$/run —"
+      refute html =~ "runs —"
+      refute html =~ "$/run —"
 
       # Show advanced footer present (stage 6 owns the toggle behaviour).
       assert html =~ "Show advanced"
@@ -1647,7 +1646,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
-      # The picker itself is present on every UNFILLED row.
+      # The picker itself is present on every unheld row.
       assert html =~ ~s(data-role="fill-role-picker")
 
       # A seeded active agent renders as an <option>.
@@ -1659,7 +1658,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "Create new external agent"
     end
 
-    test "assigning a role swaps the row to show the agent name + kind pill", %{conn: conn} do
+    test "assigning a role moves the row under Held by specialists with the agent name", %{
+      conn: conn
+    } do
       agent =
         create_agent(%{
           name: "Pixel Picasso",
@@ -1674,12 +1675,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
-      # Designer row now shows the agent's name + EXT pill (kind == external).
+      # Designer row now shows the agent's name under "Held by specialists".
       assert html =~ "Pixel Picasso"
-      assert html =~ "EXT"
-
-      # Other three roles still UNFILLED.
-      assert html =~ "UNFILLED"
+      assert html =~ "Held by specialists"
+      refute html =~ "UNFILLED"
     end
 
     test "toggle_role_advanced flips the advanced label", %{conn: conn} do
@@ -1768,7 +1767,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
     end
 
-    test "clear_role_assignment removes the pin and re-renders the row as UNFILLED",
+    test "clear_role_assignment with no Burrow removes the pin and re-renders the row as not held",
          %{conn: conn} do
       agent = create_agent(%{name: "Cleared Pal"})
       {:ok, _} = Platform.Roles.assign_role("designer", agent.id)
@@ -1782,7 +1781,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       html = render_click(view, "clear_role_assignment", %{"role_key" => "designer"})
 
       refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
-      assert html =~ "UNFILLED"
+      assert html =~ "Not held by any agent"
+      refute html =~ "UNFILLED"
       assert html =~ "Cleared assignment for designer"
     end
   end
