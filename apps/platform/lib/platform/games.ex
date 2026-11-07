@@ -133,6 +133,23 @@ defmodule Platform.Games do
     end
   end
 
+  @doc "Public game label. Account name, email and avatar are never fallbacks."
+  def player_display_name(%{id: id} = user) do
+    case (Map.get(user, :preferences) || %{})["player_display_name"] do
+      label when is_binary(label) ->
+        label = String.trim(label)
+        if label != "" and String.length(label) <= 40, do: label, else: generated_handle(id)
+      _ -> generated_handle(id)
+    end
+  end
+
+  def generated_handle(id) when is_binary(id) do
+    key = PlatformWeb.Endpoint.config(:secret_key_base)
+    suffix = :crypto.mac(:hmac, :sha256, key, "public-game-player:" <> id)
+      |> Base.encode16(case: :lower) |> binary_part(0, 12)
+    "pilot-" <> suffix
+  end
+
   def community(game, user) do
     with id when is_binary(id) <- game["community_space_id"],
          true <- Platform.UUID.valid?(id),
@@ -181,6 +198,10 @@ defmodule Platform.Games do
                Platform.Tenancy.ExternalGrants.add_space_participants(user, [
                  %{"space_id" => id, "role" => "member"}
                ]) do
+          # Keep new author snapshots public in this player-only channel.
+          from(p in Platform.Chat.Participant,
+            where: p.space_id == ^id and p.participant_type == "user" and p.participant_id == ^user.id)
+          |> Repo.update_all(set: [display_name: player_display_name(user), avatar_url: nil])
           id
         else
           {:error, reason} -> Repo.rollback(reason)

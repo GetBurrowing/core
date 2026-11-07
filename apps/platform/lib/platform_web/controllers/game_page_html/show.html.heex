@@ -33,7 +33,7 @@
         </a>
       </nav>
       <div class="gp-right">
-        <span :if={@user} class="gp-me">You</span><span
+        <span :if={@user} class="gp-me">{Platform.Games.player_display_name(@user)}</span><span
           :if={!@user}
           class="gp-ghost"
         >Come play.</span>
@@ -178,15 +178,7 @@
               </div>
             </header>
             <%= if @community && @community.joined? do %>
-              <div class="gp-voice">
-                <a
-                  id="game-voice"
-                  href={PlatformWeb.GamePageHTML.voice_url(@user, @community.space.id)}
-                >
-                  Open Burrow chat & voice ↗
-                </a>
-                <p>Keep your Burrow call open while you play. It stays the same conversation.</p>
-              </div>
+              <div class="gp-voice">Keep your existing Burrow call open while you play.</div>
               <div class="gp-game-chat-body">
                 <div id="game-live-chat" class="gp-chat">
                   {live_render(@conn, PlatformWeb.GameCommunityLive,
