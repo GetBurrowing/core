@@ -83,6 +83,66 @@ defmodule PlatformWeb.ChatLive.ChatListDataTest do
            |> ChatListData.order_rows(excerpts, ["e", "a"], & &1.space.name)
            |> Enum.map(& &1.space.id) == ["e", "a", "d", "b", "c"]
   end
+
+  # ── unread first (task 01a1b6fd stage 1) ─────────────────────────────
+
+  # Manual order m1..m5. m5 has the NEWEST excerpt of all and is quiet, so a
+  # recency sort would lift it; unread first must leave it last.
+  defp manual_rows, do: Enum.map(1..5, &space("m#{&1}", "Row #{&1}"))
+
+  defp manual_excerpts do
+    %{
+      "m1" => %{inserted_at: at("2026-11-07T08:00:00Z")},
+      "m2" => %{inserted_at: at("2026-11-07T09:00:00Z")},
+      "m3" => %{inserted_at: at("2026-11-07T10:00:00Z")},
+      "m4" => %{inserted_at: at("2026-11-07T07:00:00Z")},
+      "m5" => %{inserted_at: at("2026-11-07T12:00:00Z")}
+    }
+  end
+
+  defp unread_ids(unread, floated \\ MapSet.new(), opts \\ []) do
+    manual_rows()
+    |> ChatListData.unread_first(manual_excerpts(), unread, floated, & &1.name, opts)
+    |> Enum.map(& &1.id)
+  end
+
+  test "unread_first: active rows sit above quiet ones, newest active first" do
+    # m2 (09:00) and m4 (07:00) are unread: m2 is newer, so it leads.
+    assert unread_ids(%{"m2" => 1, "m4" => 3}) == ["m2", "m4", "m1", "m3", "m5"]
+  end
+
+  test "unread_first: quiet rows keep the input order even when a lower one is newer" do
+    # m5 is the newest of all and quiet, m1 the oldest quiet: input order holds.
+    assert unread_ids(%{"m3" => 1}) == ["m3", "m1", "m2", "m4", "m5"]
+    # Nothing unread: exactly the manual order, not recency.
+    assert unread_ids(%{}) == ["m1", "m2", "m3", "m4", "m5"]
+
+    assert ChatListData.sort_by_recency(manual_rows(), manual_excerpts(), & &1.name)
+           |> Enum.map(& &1.id) == ["m5", "m3", "m2", "m1", "m4"]
+  end
+
+  test "unread_first: with the setting off the order is the input order, unread or not" do
+    assert unread_ids(%{"m4" => 2, "m5" => 1}, MapSet.new(["m3"]), enabled: false) ==
+             ["m1", "m2", "m3", "m4", "m5"]
+
+    # Positive control on the same fixture: ON floats them.
+    assert unread_ids(%{"m4" => 2, "m5" => 1}, MapSet.new(["m3"]), enabled: true) ==
+             ["m5", "m3", "m4", "m1", "m2"]
+  end
+
+  test "unread_first: a floated row with unread 0 stays active" do
+    assert unread_ids(%{"m4" => 0}, MapSet.new(["m4"])) == ["m4", "m1", "m2", "m3", "m5"]
+  end
+
+  test "unread_first: a restricted row with unread is quiet" do
+    restricted = MapSet.new(["m4"])
+
+    assert unread_ids(%{"m4" => 5, "m2" => 1}, MapSet.new(), restricted: restricted) ==
+             ["m2", "m1", "m3", "m4", "m5"]
+
+    # Positive control: unrestricted, m4 floats.
+    assert unread_ids(%{"m4" => 5, "m2" => 1}) == ["m2", "m4", "m1", "m3", "m5"]
+  end
 end
 
 defmodule PlatformWeb.ChatLive.ChatListDataIdentitiesTest do

@@ -358,6 +358,76 @@ defmodule PlatformWeb.SettingsLiveTest do
     end
   end
 
+  # Task 01a1b6fd stage 2: Settings -> Chat, "Move new messages to the top".
+  describe "chat: move new messages to the top" do
+    test "one switch under a Chat label, between Appearance and Account, on by default" do
+      {:ok, view, html} = live(authed(member!()), "/settings")
+
+      labels =
+        query(html, "#settings p")
+        |> Enum.map(&(LazyHTML.text(&1) |> String.trim()))
+        |> Enum.filter(&(&1 in ["Appearance", "Chat", "Account"]))
+
+      assert labels == ["Appearance", "Chat", "Account"]
+
+      assert [switch] = query(html, "[data-role=settings-float-new-messages]") |> Enum.to_list()
+      assert LazyHTML.attribute(switch, "role") == ["switch"]
+      assert LazyHTML.attribute(switch, "aria-checked") == ["true"]
+
+      assert has_element?(
+               view,
+               "[data-role=settings-float-new-messages] span.block:not(.text-xs)",
+               "Move new messages to the top"
+             )
+
+      assert html =~ "Off keeps your own order."
+      assert html =~ ~r/settings-chat-label.*settings-float-new-messages.*>Account</s
+    end
+
+    test "a click stores false, reads back off, and survives a remount" do
+      member = member!()
+      {:ok, view, _html} = live(authed(member), "/settings")
+
+      view |> element("[data-role=settings-float-new-messages]") |> render_click()
+
+      assert Accounts.get_user(member.id).preferences["chat_float_new_messages"] == false
+      refute Accounts.float_new_messages?(member.id)
+      assert has_element?(view, "[data-role=settings-float-new-messages][aria-checked=false]")
+
+      {:ok, fresh, _} = live(authed(member), "/settings")
+      assert has_element?(fresh, "[data-role=settings-float-new-messages][aria-checked=false]")
+
+      fresh |> element("[data-role=settings-float-new-messages]") |> render_click()
+      assert Accounts.float_new_messages?(member.id)
+      assert has_element?(fresh, "[data-role=settings-float-new-messages][aria-checked=true]")
+    end
+
+    test "a failed write keeps the stored state and says so" do
+      member = member!()
+      {:ok, view, _html} = live(authed(member), "/settings")
+
+      # The write targets a user row that does not exist, so
+      # `Accounts.put_float_new_messages/2` answers {:error, :not_found}.
+      :sys.replace_state(view.pid, fn state ->
+        socket = state.socket
+        ghost = %{socket.assigns.current_user_record | id: Ecto.UUID.generate()}
+        %{state | socket: Phoenix.Component.assign(socket, :current_user_record, ghost)}
+      end)
+
+      view |> element("[data-role=settings-float-new-messages]") |> render_click()
+
+      assert has_element?(view, "[data-role=settings-float-new-messages][aria-checked=true]")
+
+      assert has_element?(
+               view,
+               "[data-role=settings-float-new-messages-error]",
+               "Couldn't save. Your setting hasn't changed."
+             )
+
+      assert Accounts.float_new_messages?(member.id)
+    end
+  end
+
   describe "mask names" do
     test "aria-checked follows the stored state, and a click writes it and flips" do
       member = member!()

@@ -448,7 +448,8 @@ defmodule Platform.VaultTest do
 
       {:ok, cred} = Vault.put_inline(slug, "secret")
 
-      assert_receive {[:platform, :vault, :credential_created], ^ref, _measurements, meta}
+      event = [:platform, :vault, :credential_created]
+      assert_receive {^event, ^ref, _measurements, %{slug: ^slug} = meta}
       assert meta.credential_id == cred.id
       assert meta.slug == slug
       assert meta.scope_type == "platform"
