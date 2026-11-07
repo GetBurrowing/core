@@ -13,6 +13,7 @@ defmodule PlatformWeb.GamePageController do
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,
         game: game,
+        signup?: not is_nil(Games.signup_url(game)),
         release: release,
         user: Games.user(get_session(conn, :current_user_id)),
         community?: params["tab"] == "community",
@@ -28,6 +29,15 @@ defmodule PlatformWeb.GamePageController do
       redirect(conn, to: "/auth/login?" <> URI.encode_query(%{game: slug}))
     else
       send_resp(conn, 404, "Game not found")
+    end
+  end
+
+  def create_account(conn, %{"slug" => slug}) do
+    with %{} = game <- Games.get(slug),
+         url when is_binary(url) <- Games.signup_url(game) do
+      redirect(conn, external: url)
+    else
+      _ -> conn |> put_status(503) |> text("Account registration is not available yet. Return to the game page to sign in with an existing account.")
     end
   end
 

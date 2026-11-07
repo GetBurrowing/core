@@ -93,4 +93,41 @@ defmodule PlatformWeb.GamePageControllerTest do
     conn = init_test_session(conn, current_user_id: user.id)
     assert conn |> get("/games/voltron/releases/one/download") |> redirected_to() == "/games/voltron/sign-in"
   end
+
+  test "expired game login cannot fall through into ordinary internal admission", %{conn: conn} do
+    claims = %{"sub" => "expired-player", "email" => "expired@example.net", "name" => "Expired"}
+    Application.put_env(:platform, :oidc_mock_response, {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "test"}}})
+    conn = init_test_session(conn, oidc_session_params: %{state: "expected-state", nonce: "n"},
+      game_login: %{slug: "voltron", expires_at: 0})
+    conn = get(conn, "/auth/oidc/callback?code=test&state=expected-state")
+    assert response(conn, 401) =~ "game_login_expired"
+    assert Repo.get_by(User, oidc_sub: "expired-player") == nil
+  end
+
+  test "existing internal identities keep their memberships on game login", %{game: game} do
+    {:ok, user} = Accounts.find_or_create_from_oidc(%{sub: "internal-player", email: "internal@example.net", name: "Internal"})
+    before = Repo.all(from m in OrgMembership, where: m.user_id == ^user.id, select: {m.org_id, m.external, m.role})
+    assert :ok = Games.admit_player(game, user)
+    assert Repo.all(from m in OrgMembership, where: m.user_id == ^user.id, select: {m.org_id, m.external, m.role}) == before
+  end
+
+  test "changing current release leaves the old release downloadable", %{conn: conn, game: game} do
+    second = game["releases"] |> hd() |> Map.put("version", "two")
+    game = game |> Map.put("current_version", "two") |> Map.put("releases", game["releases"] ++ [second])
+    Application.put_env(:platform, :game_publications, [game])
+    user = Repo.insert!(User.changeset(%User{}, %{name: "Player", email: "player@example.net", oidc_sub: "game-player"}))
+    conn = init_test_session(conn, current_user_id: user.id)
+    assert conn |> get("/games/voltron/releases/one/download") |> response(200) == "PK-game-fixture"
+    assert conn |> get("/games/voltron/releases/two/download") |> response(200) == "PK-game-fixture"
+  end
+
+  test "account creation uses only an explicitly configured issuer-host link", %{conn: conn, game: game} do
+    assert conn |> get("/games/voltron/create-account") |> response(503) =~ "not available"
+    assert Games.signup_url(Map.put(game, "signup_url", "https://other.example/signup")) == nil
+    assert Games.signup_url(Map.put(game, "signup_url", "javascript:alert(1)")) == nil
+    signup = Platform.OIDC.issuer() <> "/signup/example"
+    Application.put_env(:platform, :game_publications, [Map.put(game, "signup_url", signup)])
+    assert conn |> get("/games/voltron/create-account") |> redirected_to() == signup
+  end
+
 end

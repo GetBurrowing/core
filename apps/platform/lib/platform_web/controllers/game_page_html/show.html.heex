@@ -24,6 +24,9 @@
             <a :if={!@user} id="game-sign-in" class="btn btn-primary btn-lg" href={"/games/#{@game["slug"]}/sign-in"}>Sign in to download</a>
             <a :if={@user} id="game-download" class="btn btn-primary btn-lg" href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}>Download for Windows</a>
           </div>
+          <div :if={!@user && @signup?} class="mt-4 text-sm">
+            New here? <a id="game-create-account" href={"/games/#{@game["slug"]}/create-account"} target="_blank" rel="noopener" class="link link-primary">Create your Burrow account</a>, then return here to sign in.
+          </div>
           <p class="mt-4 text-sm opacity-70">On your phone? Browse here, then open this page on your Windows PC to play.</p>
         </section>
       </div>

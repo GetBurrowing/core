@@ -60,11 +60,11 @@ jobs:
       - name: Format changed Elixir and HEEx
         run: |
           mix format lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs
-          git diff --binary > "$GITHUB_WORKSPACE/game-page-format.patch"
+          tar -czf "$GITHUB_WORKSPACE/game-page-formatted.tar.gz" lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs
       - uses: actions/upload-artifact@v4
         with:
           name: game-page-format
-          path: game-page-format.patch
+          path: game-page-formatted.tar.gz
       - name: Compile and exercise game and existing auth/attachment boundaries
         run: |
           mix compile --warnings-as-errors

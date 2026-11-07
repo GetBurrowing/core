@@ -73,6 +73,7 @@ defmodule PlatformWeb.AuthController do
          {:ok, interaction} <- OIDC.begin_interaction(url) do
       conn
       |> delete_session(:app_challenge)
+      |> delete_session(:game_login)
       |> put_session(:oidc_session_params, session_params)
       |> put_session(:post_login_path, @handover_landing)
       |> put_session(:signed_in_with_link, true)
@@ -304,17 +305,14 @@ defmodule PlatformWeb.AuthController do
 
   defp land_game_or_callback(conn, result, full_path) do
     if game = game_login(conn) do
-      case Platform.Games.admit_player(game, result.user) do
-        :ok ->
-          conn
-          |> delete_session(:game_login)
-          |> delete_session(:app_challenge)
-          |> LoginOrigin.clear()
-          |> redirect(to: "/games/" <> game["slug"])
-        {:error, _} ->
-          conn |> delete_session(:game_login) |> put_status(503)
-          |> text("Game sign-in is temporarily unavailable. Please try again.")
-      end
+      conn
+      |> configure_session(renew: true)
+      |> delete_session(:game_login)
+      |> delete_session(:app_challenge)
+      |> delete_session(:post_login_path)
+      |> delete_session(:external_admission)
+      |> LoginOrigin.clear()
+      |> redirect(to: "/games/" <> game["slug"])
     else
       conn |> delete_session(:game_login) |> land_callback(result, full_path)
     end

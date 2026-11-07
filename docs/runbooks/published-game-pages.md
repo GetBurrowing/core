@@ -8,29 +8,31 @@ The chat attachment's original permissions are unchanged.
 ## Operator publication
 
 Set `GAME_PUBLICATIONS_JSON` on the serving install to a JSON array of manifests.
-Absent configuration means no published games. For Voltron, the manifest is:
+Absent configuration means no published games. Keep install-specific manifests in the private ops repository. Example shape:
 
 ```json
 [{
-  "slug": "voltron",
+  "slug": "my-game",
   "published": true,
-  "org_id": "01a003e1-3ccf-7df0-b8b3-dbf0c9186a40",
-  "title": "Voltron",
-  "summary": "Four friends. One giant robot. Walk together, kick cars, and make a spectacular mess.",
-  "image_path": "/images/voltron-game.png",
-  "image_alt": "A giant Voltron mech above a city street",
-  "multiplayer_note": "The server address is included. This build still requires a private room code; automatic Burrow admission is not available yet.",
-  "current_version": "61fcce7",
+  "org_id": "<game-org-uuid>",
+  "title": "My Game",
+  "summary": "A little chaos with friends.",
+  "image_path": "/images/my-game.png",
+  "image_alt": "Gameplay screenshot",
+  "multiplayer_note": "Describe the verified launch and admission instructions here.",
+  "current_version": "v1",
   "releases": [{
-    "version": "61fcce7",
-    "attachment_id": "01a1b6bd-0935-7000-b72c-23aa0726861d",
-    "sha256": "7ed62fb5932c30eac9295e8a67738458e1154ec25c93d2d16c359d900a1fec07",
+    "version": "v1",
+    "attachment_id": "<approved-release-attachment-uuid>",
+    "sha256": "<64-lowercase-hex-sha256-of-zip>",
     "byte_size": 89458340
   }]
 }]
 ```
 
-This is an explicit publication of the portable ZIP, not an installer. Confirm
+Publishing an existing attachment explicitly permits ANY signed-in, non-archived
+identity to download that artifact. This is not a chat-space membership grant.
+A portable ZIP is not an installer. Confirm
 that it contains no private configs and that the attachment is ready with the
 same digest and size. Never put a room code, OIDC credential, user config or
 server secret in a manifest. The public page's version and checksum refer to
@@ -41,7 +43,7 @@ current pointer; do not repoint a version to different bytes.
 
 Create a NEW player-only channel in the game's org. Do not reuse Voltron's
 existing development conversation. Its metadata must contain
-`{"public_game_slug": "voltron"}`. Set `community_space_id` to that channel ID
+`{"public_game_slug": "my-game"}`. Set `community_space_id` to that channel ID
 in the publication manifest. Without that setting the page says the community
 is not open yet. Joining is a CSRF-protected POST, idempotently adding only this
 channel. New game identities get an external membership; no internal org role
@@ -53,7 +55,11 @@ The Community tab hands off to the existing Burrow chat surface after joining.
 1. Deploy reviewed code and configure the manifest on the serving install.
 2. Verify the OIDC provider allows public account creation. This application
    reuses that provider; it does not add its own password store or enable
-   provider registration automatically.
+   provider registration automatically. Set optional `signup_url` to an HTTPS
+   registration/invitation link on the configured OIDC issuer host. Only then
+   does the page show Create account. That link opens the provider in a new
+   tab; after registration players return to the game to sign in. Never claim
+   fresh-user onboarding is live until that provider journey has been tested.
 3. Open `/games/voltron` in a signed-out mobile browser. The game must be visible
    and download must ask for sign-in. Unpublished slugs must be 404.
 4. Use a NEW identity. Sign in and verify return to `/games/voltron`; check only

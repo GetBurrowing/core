@@ -492,6 +492,7 @@ defmodule PlatformWeb.Router do
     # separately and never widen chat attachment permissions.
     get("/games/:slug", GamePageController, :show)
     get("/games/:slug/sign-in", GamePageController, :sign_in)
+    get("/games/:slug/create-account", GamePageController, :create_account)
     post("/games/:slug/community", GamePageController, :join_community)
     get("/games/:slug/releases/:version/download", GamePageController, :download)
 

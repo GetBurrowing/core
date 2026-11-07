@@ -45,6 +45,16 @@ defmodule Platform.Games do
 
   def get(_), do: nil
 
+  def signup_url(game) do
+    with url when is_binary(url) <- game["signup_url"],
+         %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) <- URI.parse(url),
+         true <- host == URI.parse(Platform.OIDC.issuer()).host do
+      url
+    else
+      _ -> nil
+    end
+  end
+
   def release(game, version) when is_map(game) and is_binary(version) do
     Enum.find(game["releases"] || [], &(&1["version"] == version))
   end
