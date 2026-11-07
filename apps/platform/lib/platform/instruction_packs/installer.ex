@@ -44,6 +44,28 @@ defmodule Platform.InstructionPacks.Installer do
     result
   end
 
+  @doc "Fetch availability even while pinned, without applying content or adding applied history."
+  def pull_available(pack_id, roots, options \\ []) do
+    with {:ok, consent} <- consent_snapshot(),
+         true <- Keyword.get(options, :consent_snapshot, consent) == consent,
+         {:ok, envelope} <- Download.fetch_latest(pack_id, roots, options),
+         {:ok, manifest} <- Signature.verify(envelope, roots),
+         :ok <- compatible(manifest) do
+      Repo.transaction(fn ->
+        lock_and_check_consent!(consent)
+        state = locked_state(pack_id)
+
+        if retain_release!(pack_id, envelope, manifest, Manifest.digest(manifest)),
+          do: audit!(pack_id, "available", nil, %{"version" => manifest["version"]})
+
+        state
+      end)
+    else
+      false -> {:error, :sharing_changed}
+      error -> error
+    end
+  end
+
   defp record_check(pack_id, result) do
     # Fixed labels only: transport errors and pack text must never become UI HTML.
     if is_binary(pack_id) and Regex.match?(~r/\A[a-z0-9][a-z0-9_.-]{0,127}\z/, pack_id) do
@@ -212,21 +234,7 @@ defmodule Platform.InstructionPacks.Installer do
       end
     end
 
-    case Repo.get_by(RetainedRelease, pack_id: state.pack_id, version: version) do
-      nil ->
-        Repo.insert!(%RetainedRelease{
-          pack_id: state.pack_id,
-          version: version,
-          digest: digest,
-          envelope: Jason.encode!(envelope)
-        })
-
-      %{digest: ^digest} ->
-        :ok
-
-      _ ->
-        Repo.rollback(:release_collision)
-    end
+    retain_release!(state.pack_id, envelope, manifest, digest)
 
     # Replays must not turn previously resolved local ownership into conflicts.
     if mode == :advance and state.version == version and state.digest == digest do
@@ -307,6 +315,28 @@ defmodule Platform.InstructionPacks.Installer do
 
       audit!(state.pack_id, to_string(mode), actor, %{"version" => version})
       result
+    end
+  end
+
+  defp retain_release!(pack_id, envelope, manifest, digest) do
+    version = manifest["version"]
+
+    case Repo.get_by(RetainedRelease, pack_id: pack_id, version: version) do
+      nil ->
+        Repo.insert!(%RetainedRelease{
+          pack_id: pack_id,
+          version: version,
+          digest: digest,
+          envelope: Jason.encode!(envelope)
+        })
+
+        true
+
+      %{digest: ^digest} ->
+        false
+
+      _ ->
+        Repo.rollback(:release_collision)
     end
   end
 

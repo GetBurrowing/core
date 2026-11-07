@@ -43,6 +43,12 @@ defmodule Platform.InstructionPacks do
 
   def get_release(_, _), do: nil
 
+  def latest_release(pack_id) when is_binary(pack_id),
+    do:
+      Repo.one(
+        from(r in Release, where: r.pack_id == ^pack_id, order_by: [desc: r.version], limit: 1)
+      )
+
   # Catalog is discovery metadata only; every fetched release still requires
   # the pinned signature, compatibility and sequential-chain checks.
   def catalog do

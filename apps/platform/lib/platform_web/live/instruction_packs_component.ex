@@ -251,7 +251,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
               <dt>Effective content</dt>
               <dd data-role="pack-effective">{Enum.map_join(row.versions, ", ", &effective/1)}</dd>
               <dt>Available version</dt>
-              <dd>
+              <dd data-role="pack-available">
                 {if row.available,
                   do: "v#{row.available.version} (verified and received)",
                   else: "Not yet verified"}
@@ -267,6 +267,9 @@ defmodule PlatformWeb.InstructionPacksComponent do
             </dl>
             <p class="break-words" data-role="pack-changelog">
               {row.manifest["changelog"] || "No changelog received."}
+            </p>
+            <p class="text-subtle">
+              Pin a version you have already used. Resume updates to receive a newer published version.
             </p>
             <form
               :if={row.releases != []}

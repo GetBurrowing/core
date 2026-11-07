@@ -28,6 +28,18 @@ defmodule Platform.InstructionPacks.Download do
     _ -> {:error, :invalid_catalog}
   end
 
+  def fetch_latest(pack_id, roots, options \\ []) do
+    with true <- slug?(pack_id),
+         {:ok, body} <- request("/instruction-packs/" <> pack_id <> "/latest", options),
+         {:ok, %{"pack_id" => ^pack_id}} <- Signature.decode(body, roots) do
+      Jason.decode(body)
+    else
+      false -> {:error, :invalid_pack_source}
+      {:ok, _} -> {:error, :unexpected_release}
+      error -> error
+    end
+  end
+
   def fetch_envelope(pack_id, version, roots, options \\ []) do
     with true <- slug?(pack_id) and is_integer(version) and version > 0,
          {:ok, body} <-

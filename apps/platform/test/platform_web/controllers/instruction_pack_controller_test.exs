@@ -20,6 +20,27 @@ defmodule PlatformWeb.InstructionPackControllerTest do
              ""
   end
 
+  test "latest is a broker-gated non-cached signed head, not an apply endpoint", %{conn: conn} do
+    {one, roots} = envelope()
+    {:ok, _} = Platform.InstructionPacks.publish(one, roots)
+
+    {two, _} =
+      envelope(
+        manifest(%{
+          "version" => 2,
+          "previous_digest" => Platform.InstructionPacks.Manifest.digest(one["manifest"])
+        })
+      )
+
+    {:ok, release} = Platform.InstructionPacks.publish(two, roots)
+    path = "/api/feedback-broker/v1/instruction-packs/setup-guide/latest"
+    result = get(conn, path)
+    assert response(result, 200) == release.envelope
+    assert get_resp_header(result, "cache-control") == ["no-store"]
+    Application.put_env(:platform, :feedback_broker_server, enabled: false)
+    assert json_response(get(build_conn(), path), 404) == %{"error" => "not_found"}
+  end
+
   test "normal installs do not expose pack downloads", %{conn: conn} do
     Application.put_env(:platform, :feedback_broker_server, enabled: false)
     assert json_response(get(conn, @path), 404) == %{"error" => "not_found"}

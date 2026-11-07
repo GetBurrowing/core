@@ -354,6 +354,7 @@ defmodule Platform.InstructionPacks.InstallerTest do
         case conn.request_path do
           "/api/feedback-broker/v1/instruction-packs" -> Jason.encode!(%{packs: ["setup-guide"]})
           "/api/feedback-broker/v1/instruction-packs/setup-guide/1" -> Jason.encode!(e)
+          "/api/feedback-broker/v1/instruction-packs/setup-guide/latest" -> Jason.encode!(e)
         end
 
       Plug.Conn.send_resp(conn, 200, body)
@@ -362,6 +363,10 @@ defmodule Platform.InstructionPacks.InstallerTest do
     assert :ok = Poller.poll(plug: plug)
     assert_received {:pack_request, "/api/feedback-broker/v1/instruction-packs"}
     assert_received {:pack_request, "/api/feedback-broker/v1/instruction-packs/setup-guide/1"}
+
+    assert_received {:pack_request,
+                     "/api/feedback-broker/v1/instruction-packs/setup-guide/latest"}
+
     assert Repo.get!(State, "setup-guide").version == 1
     {:ok, _} = Sharing.set(:instruction_updates, false, :system)
     assert :ok = Poller.poll(plug: plug)

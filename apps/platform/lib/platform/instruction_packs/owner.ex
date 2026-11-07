@@ -35,16 +35,21 @@ defmodule Platform.InstructionPacks.Owner do
                   Enum.any?(releases, &(&1.version == h["version"]))
               end)
 
-            current = Enum.find(releases, &(&1.version == state.version))
-            manifest = if current, do: Jason.decode!(current.envelope)["manifest"], else: %{}
+            available = List.first(releases)
+            manifest = if available, do: Jason.decode!(available.envelope)["manifest"], else: %{}
+
+            used_releases =
+              Enum.filter(releases, fn release ->
+                Enum.any?(state.history, &(&1["version"] == release.version))
+              end)
 
             %{
               state: state,
               versions: versions,
               conflicts: conflicts,
-              releases: releases,
+              releases: used_releases,
               previous: previous && previous["version"],
-              available: List.first(releases),
+              available: available,
               manifest: manifest
             }
           end)

@@ -8,6 +8,19 @@ defmodule PlatformWeb.InstructionPackController do
     end
   end
 
+  def latest(conn, %{"pack_id" => id}) do
+    case Platform.InstructionPacks.latest_release(id) do
+      %Platform.InstructionPacks.Release{} = release ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> put_resp_header("cache-control", "no-store")
+        |> send_resp(200, release.envelope)
+
+      _ ->
+        send_resp(conn, 404, "")
+    end
+  end
+
   def show(conn, %{"pack_id" => id, "version" => version}) do
     release =
       with {number, ""} <- Integer.parse(version),

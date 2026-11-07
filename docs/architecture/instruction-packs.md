@@ -151,3 +151,12 @@ runtime's existing prompt/context rendering; no runtime restart, filesystem writ
 permission change or new client executable is performed by applying a pack.
 Local instructions retain precedence over supplemental guidance. Removing a
 saved guidance row is a local deletion, and pack application will not recreate it.
+
+
+## Owner status and pinned availability
+
+Settings → Sharing with Burrow uses the existing Sharing singleton for every consent choice. The separate `instruction_pack_checks` singleton stores only pending/check/error timestamps, so a catalog outage is visible before the first pack exists. A missing next immutable version is a successful no-update check, not a transport failure.
+
+The same gated broker exposes `/instruction-packs/:pack_id/latest`, returning pre-signed release bytes with `Cache-Control: no-store`. Clients verify this head with the configured trust roots and compatibility checks. Availability is fetched while pinned, but it never applies content or appends applied history. Consent is checked again under the install lock before caching. Replayed older heads cannot lower the highest retained verified version.
+
+`instruction_pack_downloads` therefore includes verified **unapplied** availability releases. Running-version feedback must use `State.version` and entry effective provenance, never the largest downloaded version. Rollback and the owner version selector admit only versions in applied history; a cached future release is not rollback eligible. Owners can resume updates to advance through the signed chain, and local edits remain protected.

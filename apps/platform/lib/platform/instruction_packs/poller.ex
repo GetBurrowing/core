@@ -37,21 +37,21 @@ defmodule Platform.InstructionPacks.Poller do
             for pack_id <- packs do
               state = Repo.get(State, pack_id)
 
+              opts = Keyword.put(options, :consent_snapshot, snapshot)
+
               if state && state.pinned_version do
-                :ok
+                [Installer.pull_available(pack_id, roots, opts)]
               else
                 next = if state && state.version, do: state.version + 1, else: 1
 
-                Installer.pull(
-                  pack_id,
-                  next,
-                  roots,
-                  Keyword.put(options, :consent_snapshot, snapshot)
-                )
+                [
+                  Installer.pull(pack_id, next, roots, opts),
+                  Installer.pull_available(pack_id, roots, opts)
+                ]
               end
             end
 
-          Enum.find(results, fn
+          Enum.find(List.flatten(results), fn
             {:error, reason} -> reason not in [:release_unavailable, :pinned]
             _ -> false
           end) || :ok

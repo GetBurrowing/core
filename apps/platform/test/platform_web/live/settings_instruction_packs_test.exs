@@ -5,7 +5,16 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
   import Platform.TenancyFixtures
   import Platform.InstructionPackFixtures
   alias Platform.{Repo, Sharing, Skills}
-  alias Platform.InstructionPacks.{Check, Installer, Manifest, Owner, Poller, State}
+
+  alias Platform.InstructionPacks.{
+    Check,
+    Installer,
+    Manifest,
+    Owner,
+    Poller,
+    RetainedRelease,
+    State
+  }
 
   setup do
     owner = root_admin!()
@@ -154,6 +163,86 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
     assert view |> element("[data-role=pack-status]") |> render() =~ "Local overrides"
   end
 
+  test "pinned installs see a newer signed release without applying or making it rollback eligible",
+       %{owner: owner} do
+    {skill, one} = fixture()
+    {:ok, view, _} = open(owner)
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    {:ok, _} = Installer.pin("setup-guide", 1, owner)
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    {two, roots} = pack(2, Manifest.digest(one["manifest"]))
+
+    tampered = put_in(two, ["manifest", "changelog"], "unsigned availability text")
+
+    assert {:error, :untrusted_pack} =
+             Installer.pull_available("setup-guide", roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(tampered)) end
+             )
+
+    refute Repo.get_by(RetainedRelease, pack_id: "setup-guide", version: 2)
+
+    receiver = self()
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 send(receiver, {:pinned_request, conn.request_path})
+
+                 case conn.request_path do
+                   "/api/feedback-broker/v1/instruction-packs" ->
+                     Plug.Conn.send_resp(conn, 200, ~s({"packs":["setup-guide"]}))
+
+                   "/api/feedback-broker/v1/instruction-packs/setup-guide/latest" ->
+                     Plug.Conn.send_resp(conn, 200, Jason.encode!(two))
+
+                   _other ->
+                     Plug.Conn.send_resp(conn, 503, "unexpected request")
+                 end
+               end
+             )
+
+    assert_received {:pinned_request, "/api/feedback-broker/v1/instruction-packs"}
+
+    assert_received {:pinned_request,
+                     "/api/feedback-broker/v1/instruction-packs/setup-guide/latest"}
+
+    refute_received {:pinned_request, _}
+    state = Repo.get!(State, "setup-guide")
+    assert state.version == 1
+    assert state.pinned_version == 1
+    assert length(state.history) == 1
+    assert Repo.get_by(RetainedRelease, pack_id: "setup-guide", version: 2)
+    assert Skills.get_skill(skill.id).content =~ "published 1"
+    view |> element("button[phx-click=refresh]") |> render_click()
+    assert view |> element("[data-role=pack-available]") |> render() =~ "v2"
+    refute has_element?(view, "select option[value='2']")
+    assert {:error, :not_previously_applied} = Installer.rollback("setup-guide", 2, roots, owner)
+    # Consent changed during availability IO also wins before the cache commit.
+    {:ok, _} = Sharing.set(:instruction_updates_stopped, false, :system)
+
+    assert {:error, :sharing_changed} =
+             Installer.pull_available("setup-guide", roots,
+               plug: fn conn ->
+                 {:ok, _} = Installer.stop_updates(true, owner)
+                 Plug.Conn.send_resp(conn, 200, Jason.encode!(two))
+               end
+             )
+
+    assert Repo.get!(State, "setup-guide").version == 1
+  end
+
   test "catalog failure is visible before first pack and successful discovery clears it", %{
     owner: owner
   } do
@@ -170,14 +259,17 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
         else: Application.delete_env(:platform, publisher)
     end)
 
+    receiver = self()
+
     assert :ok =
              Poller.poll(
                plug: fn conn ->
-                 assert Check.get().pending
+                 send(receiver, {:catalog_pending, Check.get().pending})
                  Plug.Conn.send_resp(conn, 503, "unavailable")
                end
              )
 
+    assert_received {:catalog_pending, true}
     refute Check.get().pending
     assert Repo.all(State) == []
     {:ok, view, html} = open(owner)
@@ -193,7 +285,16 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
              "Last update check succeeded"
 
     {:ok, _} = Installer.stop_updates(true, owner)
-    assert :ok = Poller.poll(plug: fn _conn -> flunk("stop must prevent catalog fetch") end)
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 send(receiver, :unexpected_discovery_after_stop)
+                 Plug.Conn.send_resp(conn, 503, "unexpected request")
+               end
+             )
+
+    refute_received :unexpected_discovery_after_stop
     view |> element("button[phx-click=refresh]") |> render_click()
 
     assert view |> element("[data-role=instruction-check-status]") |> render() =~
