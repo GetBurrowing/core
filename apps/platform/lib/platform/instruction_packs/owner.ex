@@ -76,7 +76,7 @@ defmodule Platform.InstructionPacks.Owner do
     end
   end
 
-  def pin(pack, version, actor) do
+  def pin(pack, version, actor) when is_binary(pack) do
     with :ok <- authorize(actor), %State{} = state <- Repo.get(State, pack) do
       if version == state.version,
         do: Installer.pin(pack, version, actor),
@@ -85,6 +85,8 @@ defmodule Platform.InstructionPacks.Owner do
       _ -> {:error, :not_installed}
     end
   end
+
+  def pin(_pack, _version, _actor), do: {:error, :not_installed}
 
   # Local edits can occur outside the pack APIs. Never report stored provenance
   # as current ownership without comparing the physical row and live bytes.

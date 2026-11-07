@@ -112,6 +112,8 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/instruction_packs/owner.ex", :get, "State", 1, :safe_internal,
+     "State primary key pack_id is a string, not UUID; Owner.pin guards pack with is_binary before the Repo.get lookup"},
     {"platform/instruction_packs/guidance.ex", :get, "Agent", 1, :safe_internal,
      "guidance resolves only the server-selected dispatch recipient; the UUID branch checks Platform.UUID.valid? before Repo.get, while slugs use SlugLookup"},
     {"platform/instruction_packs/guidance.ex", :platform_uuid_guard, "-", 1, :safe_internal,

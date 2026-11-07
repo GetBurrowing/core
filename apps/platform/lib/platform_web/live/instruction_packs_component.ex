@@ -135,7 +135,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
           :if={@notice}
           role="status"
           aria-live="polite"
-          class="rounded-box border border-base-300 bg-base-200 p-3"
+          class="rounded-box border border-edge bg-base-200 p-3"
         >
           {@notice}
         </p>
@@ -150,7 +150,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
         </button>
         <section
           :for={entry <- Platform.Sharing.registry()}
-          class="rounded-box border border-base-300 bg-base-100 p-3 space-y-2"
+          class="rounded-box border border-edge bg-base-100 p-3 space-y-2"
         >
           <button
             type="button"
@@ -177,7 +177,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
           </details>
         </section>
         <section
-          class="rounded-box border border-base-300 bg-base-100 p-3 space-y-3"
+          class="rounded-box border border-edge bg-base-100 p-3 space-y-3"
           aria-label="Instruction update controls"
         >
           <h3 class="font-semibold">Agent instruction updates</h3>
@@ -205,7 +205,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
           <article
             :for={row <- @data.packs}
             id={"pack-" <> row.state.pack_id}
-            class="border-t border-base-300 pt-4 space-y-3 min-w-0"
+            class="border-t border-edge pt-4 space-y-3 min-w-0"
           >
             <h4 class="font-semibold break-words">{row.state.pack_id}</h4>
             <p data-role="pack-status" class="font-medium text-primary">
@@ -341,7 +341,7 @@ defmodule PlatformWeb.InstructionPacksComponent do
           <p class="text-subtle">Latest 100 instruction and sharing changes, newest first.</p>
           <p :if={@data.events == []}>No changes recorded.</p>
           <ol class="space-y-2 mt-2">
-            <li :for={event <- @data.events} class="border-b border-base-300 py-2 break-words">
+            <li :for={event <- @data.events} class="border-b border-edge py-2 break-words">
               <time>{time(event.inserted_at)}</time><span class="block">{event.action} · {event.metadata["pack_id"] || event.metadata["key"] || "install"} {if event.metadata["version"], do: "· v#{event.metadata["version"]}"}
                   {if Map.has_key?(event.metadata, "value"), do: "· #{event.metadata["value"]}"}
                   {event.metadata["choice"]} {event.metadata["target"]}</span>
