@@ -46,6 +46,12 @@ defmodule PlatformWeb.ConnectAiLive do
   `:api_key` entry is accepted and ignored for the choices.
   `claude_login_timeout_ms:` there shortens the waits on the agent host.
 
+  Above the choices sits the "Sharing with Burrow" disclosure
+  (`PlatformWeb.Components.SharingCard`, task 01a1b678 stage 5): the same
+  switches as Settings → Help, on for a new install, under "This install
+  shares a little with Burrow." with one Continue that folds it to a line.
+  It is inline: no Accept step, no modal, and the choices work without it.
+
   When the agent is first seen running,
   `Burrow.GettingStarted.ensure_getting_started/2`
   opens the "Getting started" space (once per agent) and the screen offers
@@ -68,6 +74,7 @@ defmodule PlatformWeb.ConnectAiLive do
   alias Platform.Agents.{Burrow, NativeLogin}
   alias Platform.Agents.Burrow.GettingStarted
   alias Platform.Tenancy
+  alias PlatformWeb.Components.SharingCard
 
   @default_order [:codex, :api_key, :claude_subscription]
   @choices [:codex, :claude_subscription]
@@ -102,6 +109,15 @@ defmodule PlatformWeb.ConnectAiLive do
   @spec choices() :: [atom()]
   def choices, do: Enum.filter(provider_order(), &(&1 in @choices))
 
+  @doc """
+  The folded disclosure's line: "Sharing with Burrow: 4 of 4 parts on."
+  """
+  @spec sharing_summary(%{atom() => boolean()}) :: String.t()
+  def sharing_summary(switches) do
+    on = Enum.count(switches, fn {_key, on?} -> on? end)
+    "Sharing with Burrow: #{on} of #{map_size(switches)} parts on."
+  end
+
   @doc "An option's label."
   def label(option), do: Map.fetch!(@labels, option)
 
@@ -125,6 +141,10 @@ defmodule PlatformWeb.ConnectAiLive do
         |> assign(:claude, @claude_idle)
         |> assign(:space, nil)
         |> assign(:passkey_url, passkey_url(session))
+        |> assign(:sharing_switches, Platform.Sharing.switches())
+        |> assign(:sharing_admin?, Platform.Sharing.admin?(user))
+        |> assign(:sharing_open?, true)
+        |> assign(:sharing_error, nil)
         |> refresh()
 
       {:ok, maybe_start_selected(socket)}
@@ -341,6 +361,22 @@ defmodule PlatformWeb.ConnectAiLive do
   # unknown event crashed the view, and the crash report printed the event's
   # params verbatim, `:filter_parameters` notwithstanding: a Claude code sent
   # to a made-up event would have landed in the log.
+  # The setup disclosure (task 01a1b678 stage 5): the same switches as
+  # Settings → Help, already on for a new install, and one Continue that
+  # folds the card to a line. Nothing here blocks connecting the AI.
+  def handle_event("set_sharing", params, socket) do
+    case SharingCard.set(params, socket.assigns[:current_user_record]) do
+      {:ok, switches} ->
+        {:noreply, socket |> assign(:sharing_switches, switches) |> assign(:sharing_error, nil)}
+
+      {:error, message} ->
+        {:noreply, assign(socket, :sharing_error, message)}
+    end
+  end
+
+  def handle_event("sharing_continue", _params, socket),
+    do: {:noreply, assign(socket, :sharing_open?, false)}
+
   def handle_event(event, _params, socket) do
     Logger.warning("[ConnectAiLive] refused unknown event #{inspect(event)}")
     {:noreply, socket}
@@ -536,6 +572,18 @@ defmodule PlatformWeb.ConnectAiLive do
         </div>
 
         <div :if={!@done?} class="space-y-6">
+          <SharingCard.sharing_card
+            :if={@sharing_open?}
+            id="connect-ai-sharing"
+            variant={:setup}
+            switches={@sharing_switches}
+            editable={@sharing_admin?}
+            error={@sharing_error}
+            class="border border-edge"
+          />
+          <p :if={!@sharing_open?} data-role="sharing-summary" class="text-sm text-subtle">
+            {sharing_summary(@sharing_switches)} You can change this in Settings → Help.
+          </p>
           <h1 class="text-base font-semibold text-base-content">Which subscription do you use?</h1>
 
           <div class="space-y-2">

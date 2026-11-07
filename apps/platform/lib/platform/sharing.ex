@@ -99,7 +99,8 @@ defmodule Platform.Sharing do
         "If an agent hits the same problem 3 or more times in a week, it reports it for you.",
       exactly_sent: [
         "A short description of the problem the agent kept hitting, after emails and secrets are removed",
-        "How many times it happened that week"
+        "How many times it happened that week",
+        "For a question asked again and again, only a hash of it and the count, never the words"
       ],
       default_for_new_installs: true
     },
@@ -165,6 +166,31 @@ defmodule Platform.Sharing do
         read() || raise "install_sharing row missing after seed"
     end
   end
+
+  @doc """
+  Every switch as `%{key => boolean}`, in one read of the row. The owner UI
+  (`PlatformWeb.Components.SharingCard`) renders from this and `registry/0`.
+  """
+  @spec switches() :: %{key() => boolean()}
+  def switches do
+    row = get()
+    Map.new(keys(), fn key -> {key, Map.fetch!(row, key) == true} end)
+  end
+
+  @doc """
+  Whether `user` may change a switch: an admin of the root org, the same
+  rule the `sharing_set` agent tool applies to the person who asked. Anyone
+  else sees the switches read-only.
+  """
+  @spec admin?(term()) :: boolean()
+  def admin?(%{id: user_id} = user) when is_binary(user_id) do
+    case Platform.Tenancy.get_root_org() do
+      %{id: root_id} -> Platform.Tenancy.org_admin?(user, root_id)
+      _ -> false
+    end
+  end
+
+  def admin?(_user), do: false
 
   @doc "Whether the owner's switch for `key` is on. Reads the row."
   @spec enabled?(key()) :: boolean()
