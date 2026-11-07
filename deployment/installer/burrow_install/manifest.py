@@ -72,6 +72,9 @@ AGENT_LOGINS = ("api_key", "operator")
 # "generate-on-host" makes the host generate a VAPID key pair at first start
 # (bin/burrow-vapid), so the private key never exists anywhere but the box.
 VAPID_MODES = ("off", "generate-on-host")
+# [sharing] keys (core task 01a1b678): Platform.Sharing.registry/0, in order.
+# `setup init` writes each as explicit true into a NEW manifest.
+SHARING_KEYS = ("feedback", "usage_counts", "friction_reports", "help_channel_reports")
 # Where the local embeddings model comes from (core task 01a10315 stage 6).
 # "operator" (the default, every manifest written before this knob): the
 # operator places models/<file> on the host before the stack starts.
@@ -218,6 +221,13 @@ SCHEMA = {
     "feedback": {
         "enabled": Field("bool"),
     },
+    # Sharing with Burrow (core task 01a1b678 stage 1): one switch per
+    # `Platform.Sharing.registry/0` key. NO defaults: an absent key renders
+    # exactly what it rendered before this table existed, so an existing
+    # manifest is unchanged. `setup init` writes all four as explicit true
+    # into a NEW manifest only. Each value seeds the install's row once;
+    # after that the owner's switch in Settings wins.
+    "sharing": {key: Field("bool") for key in SHARING_KEYS},
     # Web Push (VAPID) keys for core (core task 01a10315 stage 1).
     "push": {
         "vapid": _enum(VAPID_MODES, "off"),

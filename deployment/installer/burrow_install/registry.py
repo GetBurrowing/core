@@ -778,12 +778,37 @@ class Service:
         return self.mem_limit(ctx) if callable(self.mem_limit) else self.mem_limit
 
 
+# [sharing] key -> the core env name that seeds that switch (core task
+# 01a1b678 stage 1, Platform.Sharing.seed_env_names/0). `feedback` is not
+# here: it renders FEEDBACK_POLICY through feedback_enabled/1.
+SHARING_ENV = {
+    "usage_counts": "USAGE_COUNTS",
+    "friction_reports": "FRICTION_REPORTS",
+    "help_channel_reports": "HELP_CHANNEL_REPORTS",
+}
+
+
 def feedback_enabled(m):
-    """``[feedback] enabled`` if set, otherwise ``install.hosted``."""
+    """``[sharing] feedback`` if set, else ``[feedback] enabled`` if set,
+    otherwise ``install.hosted``."""
+    shared = m.get("sharing", {}).get("feedback")
+    if shared is not None:
+        return shared is True
     explicit = m.get("feedback", {}).get("enabled")
     if explicit is not None:
         return explicit is True
     return m["install"]["hosted"] is True
+
+
+def sharing_env(m):
+    """The core env for each ``[sharing]`` key the manifest sets explicitly.
+    An absent key renders nothing (core reads unset as off)."""
+    sharing = m.get("sharing", {})
+    return {
+        name: "true" if sharing[key] is True else "false"
+        for key, name in SHARING_ENV.items()
+        if sharing.get(key) is not None
+    }
 
 
 def _core_env(ctx):
@@ -823,6 +848,8 @@ def _core_env(ctx):
         # and an install never holds a GitHub or broker credential, so this
         # is the ONE feedback variable an install is ever rendered.
         env["FEEDBACK_POLICY"] = "quarantined"
+    # Core task 01a1b678 stage 1: seeds the install's sharing switches once.
+    env.update(sharing_env(ctx.m))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]
