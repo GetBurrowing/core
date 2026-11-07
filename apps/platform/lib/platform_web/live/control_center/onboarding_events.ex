@@ -18,6 +18,10 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   alias Platform.Vault
   alias PlatformWeb.ControlCenter.AgentData
 
+  # Onboarding flows that create an ownerless agent, gated like their submit
+  # events on :create_ownerless (task 01a1ae4b).
+  @ownerless_flows ~w(external import template create)
+
   @role_templates [
     %{
       id: "designer",
@@ -157,45 +161,22 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
      |> assign(:probe_result, nil)}
   end
 
-  def handle("choose_onboarding", %{"flow" => flow}, socket) do
-    socket =
-      socket
-      |> assign(:show_onboarding_chooser, true)
-      |> then(fn socket ->
-        case flow do
-          "import" ->
-            agents =
-              case WorkspaceBootstrap.list_configured_agents() do
-                {:ok, list} -> list
-                {:error, _} -> []
-              end
-
-            socket
-            |> assign(:onboarding_flow, :import)
-            |> assign(:import_agents, agents)
-            |> assign(:import_selected, MapSet.new())
-
-          "create" ->
-            socket
-            |> assign(:onboarding_flow, :create)
-            |> assign(:show_create_agent, true)
-
-          "native" ->
-            assign(socket, :onboarding_flow, :native)
-
-          "external" ->
-            socket
-            |> assign(:onboarding_flow, :external)
-            |> assign(:external_agent_form, AgentData.build_external_agent_form())
-            |> assign(:probe_result, nil)
-
-          _ ->
-            assign(socket, :onboarding_flow, String.to_existing_atom(flow))
-        end
-      end)
-
-    {:noreply, socket}
+  # The create paths need agents.manage_all (task 01a1ae4b). The chooser shows
+  # them locked to members and sends no event; a forged one keeps the chooser
+  # open on the locked cards rather than opening a form the member cannot save.
+  def handle("choose_onboarding", %{"flow" => flow}, socket)
+      when flow in @ownerless_flows do
+    if Platform.Access.Agents.may_create_ownerless?(socket.assigns[:access_scope]) do
+      choose_flow(flow, socket)
+    else
+      {:noreply,
+       socket
+       |> assign(:show_onboarding_chooser, true)
+       |> assign(:onboarding_flow, nil)}
+    end
   end
+
+  def handle("choose_onboarding", %{"flow" => flow}, socket), do: choose_flow(flow, socket)
 
   def handle("select_template", %{"template_id" => template_id}, socket) do
     template = Enum.find(@role_templates, &(&1.id == template_id))
@@ -622,6 +603,46 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   defp truthy?("false"), do: false
   defp truthy?(nil), do: false
   defp truthy?(_), do: false
+
+  defp choose_flow(flow, socket) do
+    socket =
+      socket
+      |> assign(:show_onboarding_chooser, true)
+      |> then(fn socket ->
+        case flow do
+          "import" ->
+            agents =
+              case WorkspaceBootstrap.list_configured_agents() do
+                {:ok, list} -> list
+                {:error, _} -> []
+              end
+
+            socket
+            |> assign(:onboarding_flow, :import)
+            |> assign(:import_agents, agents)
+            |> assign(:import_selected, MapSet.new())
+
+          "create" ->
+            socket
+            |> assign(:onboarding_flow, :create)
+            |> assign(:show_create_agent, true)
+
+          "native" ->
+            assign(socket, :onboarding_flow, :native)
+
+          "external" ->
+            socket
+            |> assign(:onboarding_flow, :external)
+            |> assign(:external_agent_form, AgentData.build_external_agent_form())
+            |> assign(:probe_result, nil)
+
+          _ ->
+            assign(socket, :onboarding_flow, String.to_existing_atom(flow))
+        end
+      end)
+
+    {:noreply, socket}
+  end
 
   defp current_external_agent_params(socket) do
     case socket.assigns[:external_agent_form] do

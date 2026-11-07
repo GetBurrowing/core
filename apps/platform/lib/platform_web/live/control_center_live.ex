@@ -51,6 +51,7 @@ defmodule PlatformWeb.ControlCenterLive do
      socket
      |> assign(:page_title, "Agents")
      |> assign(:current_user_id, current_user_id)
+     |> assign_create_permission(Platform.Access.Scope.for_user(%{id: current_user_id}))
      |> assign(:agent_host_connected?, AgentHost.connected?())
      |> assign(:restarting_agent_id, nil)
      |> assign(:manageable_agent_ids, MapSet.new())
@@ -297,7 +298,10 @@ defmodule PlatformWeb.ControlCenterLive do
     "federate_done" => :ui,
     "toggle_import_agent" => :create_ownerless,
     "submit_import" => :create_ownerless,
-    "external_agent_change" => :create_ownerless,
+    # Field validation only (slug re-derivation, form round-trip; no DB or
+    # network), so it is :ui: refusing it fired a refusal on every keystroke
+    # (task 01a1ae4b). The create itself is submit_external, still gated.
+    "external_agent_change" => :ui,
     "submit_external" => :create_ownerless,
     "set_vault_mode" => :vault,
     "suspend_federated_runtime" => :manage_selected,
@@ -333,7 +337,7 @@ defmodule PlatformWeb.ControlCenterLive do
   @impl true
   def handle_event(name, params, socket) do
     scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
-    socket = assign(socket, :access_scope, scope)
+    socket = socket |> assign(:access_scope, scope) |> assign_create_permission(scope)
 
     permitted? =
       case Map.get(@event_policy, name) do
@@ -401,6 +405,21 @@ defmodule PlatformWeb.ControlCenterLive do
   # External Agent onboarding flow with the role_key pre-bound so the
   # form's role <select> renders that role pre-selected and the submit
   # handler picks it up (stage 6 wiring, reused here).
+  defp handle_control_event(
+         "assign_role",
+         %{"role_key" => _role_key, "agent_id" => "__new_external__"},
+         %{assigns: %{can_create_ownerless?: false}} = socket
+       ) do
+    # A member cannot create an ownerless agent (task 01a1ae4b): the picker
+    # does not offer this sentinel to them, and a forged one lands on the
+    # chooser, where the create paths are shown disabled with the reason.
+    {:noreply,
+     socket
+     |> assign(:show_onboarding_chooser, true)
+     |> assign(:onboarding_flow, nil)
+     |> assign(:probe_result, nil)}
+  end
+
   defp handle_control_event(
          "assign_role",
          %{"role_key" => role_key, "agent_id" => "__new_external__"},
@@ -898,6 +917,7 @@ defmodule PlatformWeb.ControlCenterLive do
         roles={@roles}
         role_assignments_by_key={@role_assignments_by_key}
         agent_host_connected?={@agent_host_connected?}
+        can_create_ownerless?={@can_create_ownerless?}
       />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
@@ -958,8 +978,9 @@ defmodule PlatformWeb.ControlCenterLive do
                 </p>
               </div>
 
-              <div class="grid w-full max-w-sm grid-cols-2 gap-3">
+              <div id="empty-state-add-grid" class="grid w-full max-w-sm grid-cols-2 gap-3">
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="template"
@@ -968,6 +989,14 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-briefcase h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Template</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-template"
+                  icon="hero-briefcase"
+                  title="Template"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
                 <button
                   type="button"
                   phx-click="choose_onboarding"
@@ -978,6 +1007,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="text-xs font-semibold">Federate</span>
                 </button>
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="import"
@@ -986,7 +1016,16 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-arrow-down-tray h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Import</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-import"
+                  icon="hero-arrow-down-tray"
+                  title="Import"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
                 <button
+                  :if={@can_create_ownerless?}
                   type="button"
                   phx-click="choose_onboarding"
                   phx-value-flow="create"
@@ -995,7 +1034,19 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class="hero-wrench-screwdriver h-6 w-6 text-primary" />
                   <span class="text-xs font-semibold">Custom</span>
                 </button>
+                <Onboarding.locked_card
+                  :if={!@can_create_ownerless?}
+                  id="empty-state-create"
+                  icon="hero-wrench-screwdriver"
+                  title="Custom"
+                  line_id="empty-state-admin-line"
+                  compact
+                />
               </div>
+              <Onboarding.admin_line_note
+                :if={!@can_create_ownerless?}
+                id="empty-state-admin-line"
+              />
             </div>
           </nav>
         </aside>
@@ -1173,6 +1224,7 @@ defmodule PlatformWeb.ControlCenterLive do
             responsibility_rows={@responsibility_rows}
             selectable_agents={@selectable_agents}
             access_scope={@access_scope}
+            can_create_ownerless?={@can_create_ownerless?}
           />
         </main>
       </div>
@@ -1196,6 +1248,14 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   # ── Private: panel assignment ─────────────────────────────────────
+
+  # Whether this user may create an ownerless agent (External Agent, Import,
+  # template, Create Custom). The chooser, the empty-state grid and the roles
+  # picker read it so a member sees those paths closed before typing
+  # (task 01a1ae4b); the event policy stays the enforcement.
+  defp assign_create_permission(socket, scope) do
+    assign(socket, :can_create_ownerless?, Platform.Access.Agents.may_create_ownerless?(scope))
+  end
 
   defp assign_roles_panel(socket) do
     socket
