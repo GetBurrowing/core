@@ -1,0 +1,9 @@
+caddy
+core-platform
+core-postgres
+embeddings
+files-service
+livekit
+meeting-transcriber
+memory-service
+pocket-id

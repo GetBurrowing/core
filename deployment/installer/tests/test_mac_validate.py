@@ -263,10 +263,24 @@ class MacRuleTest(PositiveControlMixin, unittest.TestCase):
         raw["domain"]["tls"] = "internal"
         self.assertEqual(pairs(raw), [("field_not_applicable", "domain.tls")])
 
-    def test_meetings_knob_is_mac_only(self):
+    def test_meetings_on_single_host_requires_public_media_reach(self):
+        # Task 01a19505: a droplet has a public IPv4, so "public" is the only reach.
         raw = load(SINGLE_HOST)
         raw["services"]["meetings"] = True
-        self.assertEqual(pairs(raw), [("field_not_applicable", "services.meetings")])
+        raw["meetings"] = {"media_reach": "public"}
+        self.assertEqual(pairs(raw), [])  # positive control
+        raw["meetings"] = {}
+        self.assertEqual(pairs(raw), [("meetings_media_reach_required", "meetings.media_reach")])
+        for reach in ("lan", "tailnet"):
+            with self.subTest(reach=reach):
+                raw["meetings"] = {"media_reach": reach}
+                self.assertEqual(pairs(raw), [("field_not_applicable", "meetings.media_reach")])
+        raw["meetings"] = {"media_reach": "public", "node_ip": "192.0.2.10"}
+        self.assertEqual(pairs(raw), [("field_not_applicable", "meetings.node_ip")])
+        # The stt_endpoint rule is the mac one, unchanged.
+        raw["meetings"] = {"media_reach": "public", "transcription": True, "stt_endpoint": "x"}
+        raw["images"].setdefault("refs", {})["meeting-transcriber"] = "ghcr.io/example/mt:v1"
+        self.assertEqual(pairs(raw), [("stt_endpoint_unknown", "meetings.stt_endpoint")])
 
     def test_access_table_is_mac_only(self):
         raw = load(SINGLE_HOST)
