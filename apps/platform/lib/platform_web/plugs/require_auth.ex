@@ -60,6 +60,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
 
   alias Platform.Accounts
   alias Platform.Access.Scope
+  alias Platform.SupportAccess
   alias Platform.Tenancy
 
   def init(opts), do: opts
@@ -87,9 +88,20 @@ defmodule PlatformWeb.Plugs.RequireAuth do
             |> deny(:user_archived)
 
           user ->
-            conn
-            |> assign(:current_user, user)
-            |> assign_membership(user)
+            # Vendor support user (task 01a1b362 stage 1, ADR 0059): signed
+            # out unless its support session is active, checked on every
+            # request, not only at sign-in.
+            if SupportAccess.session_allows?(user, get_session(conn, :support_session_id)) do
+              conn
+              |> assign(:current_user, user)
+              |> assign_membership(user)
+            else
+              emit_access_blocked(conn, :support_session_ended, user_id)
+
+              conn
+              |> configure_session(drop: true)
+              |> deny(:support_session_ended)
+            end
         end
 
       _ ->
@@ -125,6 +137,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   defp message(:no_session), do: "Authentication required."
   defp message(:stale_session), do: "Session is stale; sign in again."
   defp message(:user_archived), do: "Account is archived."
+  defp message(:support_session_ended), do: "Support session has ended."
 
   # Pure-function derivation of MT/RBAC assigns from an already-preloaded
   # user struct (task 019e3c4a stage 2). `Accounts.get_user/1` preloaded

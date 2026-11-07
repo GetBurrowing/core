@@ -156,6 +156,13 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.VerifyPeerEnvelope)
   end
 
+  # Vendor support grants (task 01a1b362 stage 1, ADR 0059). 404 unless a
+  # vendor key is configured; the controller reads and verifies the raw body.
+  pipeline :support_grant do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.SupportGrantGate)
+  end
+
   pipeline :mcp do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.RuntimeBearerAuth)
@@ -186,8 +193,12 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.FeedbackBrokerGate)
   end
 
+  # `SupportActionAudit` (task 01a1b362 stage 1, ADR 0059) records every
+  # non-GET request a vendor support user makes. It must run AFTER the auth
+  # plug that assigns `:current_user`.
   pipeline :require_auth do
     plug(PlatformWeb.Plugs.RequireAuth)
+    plug(PlatformWeb.Plugs.SupportActionAudit)
   end
 
   # Authorization gate for external users (rbac-external-users M6, task
@@ -237,6 +248,7 @@ defmodule PlatformWeb.Router do
     plug(:accepts, ["json"])
     plug(:fetch_session)
     plug(PlatformWeb.Plugs.RequireAuthAPI)
+    plug(PlatformWeb.Plugs.SupportActionAudit)
   end
 
   # Attachment reads accept either a browser session or a runtime bearer
@@ -502,6 +514,11 @@ defmodule PlatformWeb.Router do
     # `:filter_parameters`, which filters "code". A path segment would put a
     # live login code in the production log.
     get("/auth/app/handoff", AuthController, :app_handoff)
+
+    # Vendor support sign-in (task 01a1b362 stage 1, ADR 0059): redeems the
+    # single-use code a support grant minted. Query string for the same
+    # log-filter reason as the handoff above.
+    get("/auth/support", AuthController, :support)
 
     # One-click install hand-over (task 01a10315 stage 6): the new install's
     # sign-in link. Starts OIDC here and hands pocket-id's one-time code to
@@ -1207,6 +1224,14 @@ defmodule PlatformWeb.Router do
   scope "/federation/v1", PlatformWeb do
     pipe_through(:peer_envelope)
     post("/inbox", FederationInboxController, :create)
+  end
+
+  # Vendor support grants (task 01a1b362 stage 1, ADR 0059). HOST-AGNOSTIC
+  # and SESSIONLESS: the vendor's support system calls it server to server,
+  # and every request authenticates on its own Ed25519 signature.
+  scope "/api/support-access/v1", PlatformWeb do
+    pipe_through(:support_grant)
+    post("/grants", SupportGrantController, :create)
   end
 
   scope "/api/internal", PlatformWeb do

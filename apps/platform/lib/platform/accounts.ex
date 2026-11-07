@@ -195,7 +195,7 @@ defmodule Platform.Accounts do
 
   @doc """
   The install's root-org admins as `%{id, name}`, earliest membership first.
-  Archived users are excluded. The `id` is the user's principal id.
+  Archived users and vendor support users are excluded. The `id` is the user's principal id.
   """
   @spec install_admins() :: [%{id: String.t(), name: String.t()}]
   def install_admins do
@@ -207,7 +207,11 @@ defmodule Platform.Accounts do
         from(m in Platform.Tenancy.OrgMembership,
           join: u in User,
           on: u.id == m.user_id,
-          where: m.org_id == ^org.id and m.role == "admin" and is_nil(u.archived_at),
+          # A vendor support user (task 01a1b362, ADR 0059) holds admin only
+          # for a support session and is never the install owner.
+          where:
+            m.org_id == ^org.id and m.role == "admin" and is_nil(u.archived_at) and
+              not u.support_vendor,
           order_by: [asc: m.inserted_at, asc: m.id],
           select: %{id: u.id, name: u.name}
         )

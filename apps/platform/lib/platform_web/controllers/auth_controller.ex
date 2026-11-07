@@ -308,6 +308,31 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
+  @doc """
+  Redeem a vendor support sign-in code (task 01a1b362 stage 1, ADR 0059) the
+  way `app_handoff/2` redeems a handoff code: renew the session, then write
+  `:current_user_id`, `:support_session_id` and the `live_socket_id` the
+  sweeper disconnects when the session ends. Every refusal (unknown, used or
+  expired code, ended session, switch off) answers the same 401 text. The
+  code is never echoed or logged.
+  """
+  def support(conn, params) do
+    case Platform.SupportAccess.consume_sign_in_code(params["code"]) do
+      {:ok, user, session} ->
+        conn
+        |> configure_session(renew: true)
+        |> put_session(:current_user_id, user.id)
+        |> put_session(:support_session_id, session.id)
+        |> put_session(:live_socket_id, Platform.SupportAccess.live_socket_id(session.id))
+        |> redirect(to: "/")
+
+      {:error, :invalid_code} ->
+        conn
+        |> put_status(:unauthorized)
+        |> text("Sign-in link is invalid or has expired")
+    end
+  end
+
   # Wrap `ExternalAdmission.admit/2` so the archived-user rejection carries
   # the OIDC-claim email through the `with` chain into the telemetry emitter.
   # The email isn't on the (nonexistent) session yet, and the OIDC callback
