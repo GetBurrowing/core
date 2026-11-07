@@ -6,53 +6,60 @@ defmodule Platform.InstructionPacks.Owner do
 
   def snapshot(actor) do
     with :ok <- authorize(actor) do
-      packs = Repo.all(from(s in State, order_by: s.pack_id))
+      Repo.transaction(fn ->
+        Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          "instruction_pack_install"
+        ])
 
-      rows =
-        Enum.map(packs, fn state ->
-          releases =
-            Repo.all(
-              from(r in RetainedRelease,
-                where: r.pack_id == ^state.pack_id,
-                order_by: [desc: r.version]
+        packs = Repo.all(from(s in State, order_by: s.pack_id))
+
+        rows =
+          Enum.map(packs, fn state ->
+            releases =
+              Repo.all(
+                from(r in RetainedRelease,
+                  where: r.pack_id == ^state.pack_id,
+                  order_by: [desc: r.version]
+                )
               )
+
+            {:ok, conflicts} = Installer.conflicts(state.pack_id, actor)
+            entries = Repo.all(from(e in Entry, where: e.pack_id == ^state.pack_id))
+            versions = entries |> Enum.map(&effective_version/1) |> Enum.uniq() |> Enum.sort()
+
+            previous =
+              state.history
+              |> Enum.reverse()
+              |> Enum.find(fn h ->
+                h["version"] != state.version and
+                  Enum.any?(releases, &(&1.version == h["version"]))
+              end)
+
+            current = Enum.find(releases, &(&1.version == state.version))
+            manifest = if current, do: Jason.decode!(current.envelope)["manifest"], else: %{}
+
+            %{
+              state: state,
+              versions: versions,
+              conflicts: conflicts,
+              releases: releases,
+              previous: previous && previous["version"],
+              available: List.first(releases),
+              manifest: manifest
+            }
+          end)
+
+        events =
+          Repo.all(
+            from(e in Platform.Audit.Event,
+              where: e.resource_type in ["instruction_pack", "install_sharing"],
+              order_by: [desc: e.inserted_at],
+              limit: 100
             )
-
-          {:ok, conflicts} = Installer.conflicts(state.pack_id, actor)
-          entries = Repo.all(from(e in Entry, where: e.pack_id == ^state.pack_id))
-          versions = entries |> Enum.map(&effective_version/1) |> Enum.uniq() |> Enum.sort()
-
-          previous =
-            state.history
-            |> Enum.reverse()
-            |> Enum.find(fn h ->
-              h["version"] != state.version and Enum.any?(releases, &(&1.version == h["version"]))
-            end)
-
-          current = Enum.find(releases, &(&1.version == state.version))
-          manifest = if current, do: Jason.decode!(current.envelope)["manifest"], else: %{}
-
-          %{
-            state: state,
-            versions: versions,
-            conflicts: conflicts,
-            releases: releases,
-            previous: previous && previous["version"],
-            available: List.first(releases),
-            manifest: manifest
-          }
-        end)
-
-      events =
-        Repo.all(
-          from(e in Platform.Audit.Event,
-            where: e.resource_type in ["instruction_pack", "install_sharing"],
-            order_by: [desc: e.inserted_at],
-            limit: 100
           )
-        )
 
-      {:ok, %{sharing: Sharing.get(), packs: rows, events: events}}
+        %{sharing: Sharing.get(), packs: rows, events: events}
+      end)
     end
   end
 
