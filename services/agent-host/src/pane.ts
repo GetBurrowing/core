@@ -3,9 +3,11 @@
  * disclosure (core task 01a10322 stage 6).
  *
  * READ ONLY. This captures the pane; nothing in this daemon ever types into
- * it. There is no command from core that carries keystrokes, and there must
- * not be: a Claude login code typed into Burrow and relayed here would be Burrow
- * intermediating a Claude login, which Anthropic's terms forbid.
+ * it, and no command from core carries keystrokes. The one value core may
+ * now pass on for a Claude login (task 01a1b365: the code the owner pastes
+ * after signing in on Anthropic's page) goes to a separate `claude auth
+ * login` child's stdin (claude_login.ts), never to this pane or any tmux
+ * session.
  *
  * WHAT IT WITHHOLDS. A pane that shows a Claude login screen (the method
  * chooser, the sign-in URL and paste prompt, the API-key confirmation) is not

@@ -85,6 +85,12 @@ if (import.meta.main) {
   channel.on("agent.pane", (p) => void host.handlePane(p).catch((e: unknown) => log(`pane failed: ${String(e)}`)));
   channel.on("agent.file_read", (p) => void host.handleFileRead(p).catch((e: unknown) => log(`file read failed: ${String(e)}`)));
   channel.on("agent.check_auth", (p) => void host.handleCheckAuth(p));
+  // Claude subscription login (task 01a1b365, claude_login.ts). A failure is
+  // logged by its error NAME only: nothing from the payload or the child.
+  const named = (what: string) => (e: unknown) => log(`${what} failed: ${e instanceof Error ? e.name : "error"}`);
+  channel.on("agent.claude_login_start", (p) => void host.handleClaudeLoginStart(p).catch(named("claude login start")));
+  channel.on("agent.claude_login_code", (p) => void host.handleClaudeLoginCode(p).catch(named("claude login code")));
+  channel.on("agent.claude_logout", (p) => void host.handleClaudeLogout(p).catch(named("claude logout")));
   channel.on("host.env_names", (p) => void host.handleEnvNames(p).catch((e: unknown) => log(`env_names failed: ${String(e)}`)));
   channel.on("host.admin", (p) => void host.handleAdmin(p).catch((e: unknown) => log(`admin failed: ${String(e)}`)));
 

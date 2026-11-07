@@ -8,6 +8,9 @@
  *        agent.pane                   {agent_id, lines, ref}              read only (pane.ts)
  *        agent.file_read              {agent_id, key, ref}                one file, redacted (files.ts)
  *        agent.check_auth             {agent_id, ref}                     does its API key work? (auth.ts)
+ *        agent.claude_login_start     {agent_id, ref}                     start its own `claude auth login` (claude_login.ts)
+ *        agent.claude_login_code      {agent_id, ref, code}               the owner's pasted code, to that login's stdin only
+ *        agent.claude_logout          {agent_id, ref}                     `claude auth logout` as the agent
  *        host.env_names               {agent_id?, ref}                    env NAMES only, never values
  *        host.admin                   {op, service, tag?, ref}            restart|deploy|rollback, full_root only
  *   out  host.inventory               {profile, agents: [observation]}   on every join
@@ -17,6 +20,9 @@
  *        agent.file                   {ref, agent_id, content, sha256} | {ref, agent_id, error}
  *        agent.auth                   {ref, agent_id, result}             ok | rejected | unknown
  *        agent.restarted              {ref, agent_id, outcome, before, after}   tool snapshots, names only
+ *        agent.claude_login           {ref, agent_id, result, url?, account?, plan?}
+ *                                     url (start only) | ok (+ account, plan) | bad_code |
+ *                                     no_subscription | no_session | failed
  *        host.reply                   {ref, result}                       answer to host.env_names | host.admin
  *
  * An observation's `login` is `{step}`, except a Codex agent at its device
@@ -24,6 +30,15 @@
  * core shows the owner the auth.openai.com URL and the one-time code to
  * enter there (agents.ts `deviceLogin`, codex_login.ts). A new code is a
  * change, so it is reported like any other (`key` includes `login`).
+ *
+ * A Claude login (task 01a1b365; it reverses 01a17b10's "Burrow never relays
+ * a Claude login" for the owner's own agent on the same install): the
+ * claude.com sign-in URL goes ONLY into the ref'd `agent.claude_login` reply
+ * to the start that asked for it, never into an observation, `agent.state`
+ * or the inventory; the pasted code goes only to that login child's stdin
+ * and is never echoed, logged or put in an argv. `claude auth status --json`
+ * decides the reply, and an `ok` restarts the agent's unit so `burrow claude`
+ * starts logged in.
  *
  * An agent whose key a check found `rejected` reads `needs_login` (detail
  * `auth_error`) until its next start, which is the only thing that can give
@@ -53,6 +68,8 @@ import { isFileKey, readAgentFileRaw, redactForRead, sha256Hex } from "./files.t
 import { homeDir, isAgentId, userName, workDir } from "./ids.ts";
 import { snapshotTools, type ProbeUser, type ToolSnapshot } from "./tools.ts";
 import { agentPane } from "./pane.ts";
+import { ClaudeLogin, liveLoginSpawn, restartArgv } from "./claude_login.ts";
+import { assertNoSecretsInArgv } from "./exec.ts";
 import { deployService, restartService, rollbackService, type AdminResult, type DockerFetch } from "./docker.ts";
 import type { Payload } from "./phoenix.ts";
 
@@ -77,7 +94,11 @@ export class Host {
     private readonly fullRoot: boolean = false,
     private readonly docker: DockerFetch | null = null,
     restart?: Partial<RestartDeps>,
+    claude?: ClaudeLogin,
   ) {
+    this.claude =
+      claude ??
+      new ClaudeLogin({ spawn: liveLoginSpawn(deps.secrets, assertNoSecretsInArgv), runner: deps.runner, secrets: deps.secrets, log: deps.log });
     this.restartDeps = {
       snapshot: (user) => snapshotTools({ runner: deps.runner }, user),
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -89,6 +110,7 @@ export class Host {
   }
 
   private readonly restartDeps: RestartDeps;
+  private readonly claude: ClaudeLogin;
 
   /** The host's hello: its profile, and whether full root is on. */
   hello(): Payload {
@@ -321,9 +343,60 @@ export class Host {
       }
     });
   }
+
+  /**
+   * `agent.claude_login_start` (claude_login.ts): a fresh `claude auth
+   * login` as the agent, answered `agent.claude_login {ref, agent_id,
+   * result: "url", url}`. The URL is in that reply and nowhere else.
+   */
+  handleClaudeLoginStart(payload: Payload): Promise<void> {
+    const t = loginTarget(payload);
+    if (t === null) return Promise.resolve();
+    return this.enqueue(t.agentId, async () => {
+      const reply = await this.claude.start(t.agentId);
+      await this.transport.push("agent.claude_login", { ref: t.ref, agent_id: t.agentId, ...reply });
+    });
+  }
+
+  /**
+   * `agent.claude_login_code`: the code is taken out of the payload at once
+   * (nothing that later logs or inspects the payload can see it) and goes
+   * only to the waiting login's stdin. On `ok` the agent's unit restarts.
+   */
+  handleClaudeLoginCode(payload: Payload): Promise<void> {
+    const code = payload.code;
+    delete payload.code;
+    const t = loginTarget(payload);
+    if (t === null) return Promise.resolve();
+    return this.enqueue(t.agentId, async () => {
+      const reply = await this.claude.submit(t.agentId, code);
+      await this.transport.push("agent.claude_login", { ref: t.ref, agent_id: t.agentId, ...reply });
+      if (reply.result !== "ok") return;
+      const r = await this.deps.runner.run(restartArgv(t.agentId));
+      if (r.exitCode !== 0) this.deps.log(`agent ${t.agentId}: restart after claude login failed: ${r.stderr.trim()}`);
+      await this.report(await this.observe(t.agentId), true);
+    });
+  }
+
+  /** `agent.claude_logout`: `claude auth logout` as the agent; `claude auth status` decides the reply. */
+  handleClaudeLogout(payload: Payload): Promise<void> {
+    const t = loginTarget(payload);
+    if (t === null) return Promise.resolve();
+    return this.enqueue(t.agentId, async () => {
+      const reply = await this.claude.logout(t.agentId);
+      await this.transport.push("agent.claude_login", { ref: t.ref, agent_id: t.agentId, ...reply });
+    });
+  }
 }
 
 export const RESTART_WAIT_MS = 90_000;
+
+/** `{agent_id, ref}` of a Claude login command, or null when either is not there. */
+function loginTarget(payload: Payload): { agentId: string; ref: string } | null {
+  const { agent_id: agentId, ref } = payload;
+  if (!isAgentId(agentId) || typeof ref !== "string" || ref === "") return null;
+  return { agentId, ref };
+}
 
 export interface RestartDeps {
   snapshot(user: ProbeUser): Promise<ToolSnapshot>;
