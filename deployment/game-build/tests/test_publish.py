@@ -26,11 +26,15 @@ class Packages(unittest.TestCase):
             if name.endswith('.zip'):
                 with zipfile.ZipFile(path, 'w') as z:
                     z.writestr('game', b'native executable')
+                    z.writestr('game.pck', b'packaged resources')
             else:
                 with tarfile.open(path, 'w:gz') as t:
                     info = tarfile.TarInfo('game')
                     info.size, info.mode = 17, 0o755
                     t.addfile(info, io.BytesIO(b'native executable'))
+                    resources = tarfile.TarInfo('game.pck')
+                    resources.size, resources.mode = 18, 0o644
+                    t.addfile(resources, io.BytesIO(b'packaged resources'))
             data = path.read_bytes()
             artifacts.append(dict(os=os_name, arch=arch, role=role, filename=name, executable='game',
                                   sha256=hashlib.sha256(data).hexdigest(), size=len(data), asset_id=1))

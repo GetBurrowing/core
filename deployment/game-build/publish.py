@@ -19,7 +19,7 @@ SHA = re.compile(r'^[0-9a-f]{64}$')
 
 def safe_path(value):
     p = PurePosixPath(value)
-    return bool(value) and not p.is_absolute() and '..' not in p.parts and '\\' not in value
+    return bool(value) and not p.is_absolute() and '..' not in p.parts and '\\' not in value and ':' not in value
 
 
 def validate(manifest, directory=None):
@@ -38,6 +38,7 @@ def validate(manifest, directory=None):
         assert key not in seen
         seen.add(key)
         assert safe_path(a['executable']) and safe_path(a['filename'])
+        assert isinstance(a['asset_id'], int) and a['asset_id'] > 0
         assert '/' not in a['filename'] and SHA.fullmatch(a['sha256'])
         assert isinstance(a['size'], int) and a['size'] > 0
         if directory is not None:
@@ -49,12 +50,14 @@ def validate(manifest, directory=None):
                     assert all(safe_path(i.filename.rstrip('/')) for i in z.infolist())
                     assert a['executable'] in z.namelist()
                     assert z.getinfo(a['executable']).file_size > 0
+                    assert any(i.filename.endswith('.pck') and i.file_size > 0 for i in z.infolist()), 'missing game resources'
             else:
                 with tarfile.open(path, 'r:gz') as t:
                     members = t.getmembers()
                     assert all(safe_path(i.name) and not (i.issym() or i.islnk()) for i in members)
                     executable = t.getmember(a['executable'])
                     assert executable.isfile() and executable.size > 0 and executable.mode & 0o111
+                    assert any(i.name.endswith('.pck') and i.size > 0 for i in members), 'missing game resources'
     assert REQUIRED <= seen, 'incomplete platform matrix'
     return manifest
 
@@ -87,9 +90,12 @@ def main():
     args = parser.parse_args()
     manifest = validate(json.loads(Path(args.manifest).read_text()), args.directory)
     if args.verify_attestations:
+        workflow, signer_sha = manifest['publisher_workflow'].rsplit('@', 1)
+        assert re.fullmatch(r'[0-9a-f]{40}', signer_sha)
         for a in manifest['artifacts']:
             subprocess.run(['gh', 'attestation', 'verify', str(Path(args.directory) / a['filename']),
-                            '--repo', manifest['repository'], '--signer-workflow', manifest['publisher_workflow'],
+                            '--repo', manifest['repository'], '--signer-workflow', workflow, '--signer-digest', signer_sha,
+                            '--deny-self-hosted-runners', '--source-ref', 'refs/heads/main',
                             '--source-digest', manifest['source_sha']], check=True, stdout=subprocess.DEVNULL)
     if args.endpoint:
         assert args.verify_attestations, 'publication requires verified provenance'

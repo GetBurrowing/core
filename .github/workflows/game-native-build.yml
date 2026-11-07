@@ -14,7 +14,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: {lfs: true, persist-credentials: false}
       - name: Resolve the immutable reusable workflow source from GitHub workload identity
         id: workflow
@@ -32,16 +32,22 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('sha=' + sha + '\n')
           PYTHON
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: GetBurrowing/core
           ref: ${{ steps.workflow.outputs.sha }}
           path: .native-tools
           persist-credentials: false
+      - run: touch .native-tools/.gdignore
       - name: Install checksum-pinned Godot and matching templates
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          Path('deploy/native/build_identity.json').write_text(json.dumps({'source_sha': os.environ['GITHUB_SHA']}))
+          PYTHON
           base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
           curl -fL "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o /tmp/godot.zip
           echo 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  /tmp/godot.zip' | sha256sum -c
@@ -57,7 +63,7 @@ jobs:
           GAME_SOURCE: ${{ github.workspace }}
           GAME_OUTPUT: ${{ runner.temp }}/native
         run: bash .native-tools/deployment/game-build/godot.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-packages
           path: |
@@ -78,7 +84,7 @@ jobs:
           - {runner: ubuntu-24.04, package: linux-server-x86_64.tar.gz, executable: voltron-server.x86_64, platform: server}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: {name: native-packages, path: packages}
       - name: Launch packaged runtime on a clean player VM without an editor
         shell: bash
@@ -99,8 +105,9 @@ jobs:
             "player/$EXECUTABLE" --headless --quit-after 120 > player.log 2>&1
           fi
           cat player.log
+          grep -F "NATIVE_PACKAGE ready role=" player.log
           ! grep -E 'SCRIPT ERROR:|ERROR:' player.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: player-${{ matrix.runner }}-${{ matrix.platform }}
@@ -131,18 +138,18 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('sha=' + sha + '\n')
           PYTHON
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: GetBurrowing/core
           ref: ${{ steps.workflow.outputs.sha }}
           path: .native-tools
           persist-credentials: false
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: {path: game, persist-credentials: false}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with: {name: native-packages, path: packages}
       - name: Attest immutable archives
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with: {subject-path: 'packages/*'}
       - name: Publish immutable release assets and dedicated image
         env:

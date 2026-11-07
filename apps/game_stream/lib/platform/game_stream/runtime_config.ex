@@ -68,8 +68,10 @@ defmodule Platform.GameStream.RuntimeConfig do
          true <-
            Enum.all?(publishers, fn {id, policy} ->
              Platform.UUID.valid?(id) and is_map(policy) and
-               Enum.all?(~w(repository repository_id workflow_ref job_workflow_ref),
-                 &is_binary(policy[&1]))
+               Enum.all?(
+                 ~w(repository repository_id workflow_ref job_workflow_ref),
+                 &is_binary(policy[&1])
+               )
            end) do
       publishers
     else

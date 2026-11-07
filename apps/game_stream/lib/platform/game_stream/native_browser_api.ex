@@ -50,8 +50,11 @@ defmodule Platform.GameStream.NativeBrowserAPI do
   defp dispatch(%{method: "GET", path_info: ["channels", channel, "builds", build]} = conn),
     do: result(conn, NativeAssets.manifest(conn.assigns.current_user, channel, build))
 
-  defp dispatch(%{method: "POST", path_info: ["channels", channel, "builds", build, "assets", index]} = conn),
-    do: result(conn, NativeAssets.download(conn.assigns.current_user, channel, build, index))
+  defp dispatch(
+         %{method: "POST", path_info: ["channels", channel, "builds", build, "assets", index]} =
+           conn
+       ),
+       do: result(conn, NativeAssets.download(conn.assigns.current_user, channel, build, index))
 
   defp dispatch(conn), do: reply(conn, 404, %{error: "not_found"})
   defp result(conn, {:ok, value}), do: reply(conn, 200, value)

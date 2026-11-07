@@ -14,6 +14,6 @@ done
 "$GODOT" --headless --path "$GAME_SOURCE" --export-release 'Dedicated Linux' "$GAME_OUTPUT/server/voltron-server.x86_64"
 chmod +x "$GAME_OUTPUT/linux/voltron.x86_64" "$GAME_OUTPUT/server/voltron-server.x86_64"
 (cd "$GAME_OUTPUT/windows" && zip -q -r ../windows-x86_64.zip .)
-(cd "$GAME_OUTPUT/linux" && tar czf ../linux-x86_64.tar.gz ./*)
-(cd "$GAME_OUTPUT/server" && tar czf ../linux-server-x86_64.tar.gz ./*)
+(cd "$GAME_OUTPUT/linux" && tar --transform='s,^./,,' -czf ../linux-x86_64.tar.gz ./*)
+(cd "$GAME_OUTPUT/server" && tar --transform='s,^./,,' -czf ../linux-server-x86_64.tar.gz ./*)
 cp "$GAME_OUTPUT/macos/Voltron.zip" "$GAME_OUTPUT/macos-universal.zip"

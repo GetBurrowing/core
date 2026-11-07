@@ -24,8 +24,15 @@ defmodule Platform.GameStream.NativeAssets do
          {:ok, token} <- credential(repository),
          {:ok, %{status: 302, headers: headers}} <-
            Req.get("https://api.github.com/repos/#{repository}/releases/assets/#{asset}",
-             headers: [{"authorization", "Bearer " <> token}, {"accept", "application/octet-stream"}],
-             redirect: false, retry: false, decode_body: false, receive_timeout: 10_000),
+             headers: [
+               {"authorization", "Bearer " <> token},
+               {"accept", "application/octet-stream"}
+             ],
+             redirect: false,
+             retry: false,
+             decode_body: false,
+             receive_timeout: 10_000
+           ),
          [url] <- headers["location"],
          true <- signed_asset_url?(url) do
       {:ok, %{url: url, expires_in: 60, sha256: artifact["sha256"], size: artifact["size"]}}
@@ -40,7 +47,9 @@ defmodule Platform.GameStream.NativeAssets do
     case URI.parse(url) do
       %URI{scheme: "https", host: host, userinfo: nil} when is_binary(host) ->
         host == "release-assets.githubusercontent.com" or host == "objects.githubusercontent.com"
-      _ -> false
+
+      _ ->
+        false
     end
   end
 

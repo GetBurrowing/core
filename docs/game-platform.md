@@ -118,3 +118,8 @@ macOS packages use ad-hoc signing provided by Godot, with no generated signing k
 Public distribution without Gatekeeper friction requires the existing organization's
 Developer ID Application identity and notarization credentials, held by its Apple Developer
 account custodian (Ryan must identify the custodian); no agent creates a signing key.
+
+The reusable workflow source checkout is resolved from GitHub's `job_workflow_sha` claim,
+not a caller-supplied tools branch. Attestation verification separately pins signer workflow
+path AND signer commit digest and rejects self-hosted attestations; archives also require
+nonempty PCK resources. The publisher does not accept traversal paths or symbolic links.
