@@ -109,8 +109,9 @@ defmodule Platform.Sharing.UsageBatcher do
       {{:error, :exception}, state}
   end
 
-  defp send_body(%{"counts" => counts}, state, ended) when map_size(counts) == 0,
-    do: {:empty, %{state | window_start: ended}}
+  defp send_body(%{"counts" => counts} = body, state, ended)
+       when map_size(counts) == 0 and not is_map_key(body, "instruction_outcomes"),
+       do: {:empty, %{state | window_start: ended}}
 
   defp send_body(body, state, ended) do
     case UsageEvents.refusal(body) do
@@ -167,3 +168,4 @@ defmodule Platform.Sharing.UsageBatcher do
   defp schedule(:manual), do: :ok
   defp schedule(ms), do: Process.send_after(self(), :flush, ms)
 end
+

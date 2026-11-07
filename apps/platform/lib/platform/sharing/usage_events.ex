@@ -281,3 +281,4 @@ defmodule Platform.Sharing.UsageEvents do
   defp strings(n) when is_integer(n), do: []
   defp strings(other), do: [other]
 end
+

@@ -104,11 +104,18 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
   defp usage_consent(body) do
     cond do
-      not Platform.Sharing.enabled?(:usage_counts) -> {:error, :sharing_disabled}
+      not Platform.Sharing.enabled?(:usage_counts) ->
+        {:error, :sharing_disabled}
+
       Map.has_key?(body, "instruction_outcomes") and
-          Platform.Sharing.enabled?(:instruction_updates_stopped) -> {:error, :sharing_disabled}
-      Platform.Sharing.UsageEvents.refusal(body) != nil -> {:error, :invalid_usage}
-      true -> :ok
+          Platform.Sharing.enabled?(:instruction_updates_stopped) ->
+        {:error, :sharing_disabled}
+
+      Platform.Sharing.UsageEvents.refusal(body) != nil ->
+        {:error, :invalid_usage}
+
+      true ->
+        :ok
     end
   rescue
     _ -> {:error, :sharing_disabled}
@@ -214,3 +221,4 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
   defp parse_identity(_body), do: {:error, :publisher_bad_response}
 end
+

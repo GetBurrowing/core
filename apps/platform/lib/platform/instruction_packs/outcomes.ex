@@ -22,10 +22,17 @@ defmodule Platform.InstructionPacks.Outcomes do
       |> Enum.map(fn state ->
         entries = Repo.all(from(e in Entry, where: e.pack_id == ^state.pack_id))
         mixed = Enum.any?(entries, &local?/1)
+
         %{
           "pack_id" => state.pack_id,
           "selected_version" => state.version,
-          "effective_versions" => entries |> Enum.reject(&local?/1) |> Enum.map(& &1.effective_version) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort(),
+          "effective_versions" =>
+            entries
+            |> Enum.reject(&local?/1)
+            |> Enum.map(& &1.effective_version)
+            |> Enum.reject(&is_nil/1)
+            |> Enum.uniq()
+            |> Enum.sort(),
           "status" => if(mixed, do: "mixed_or_local", else: "vendor"),
           "habits_provenance" => "unavailable"
         }
@@ -42,7 +49,9 @@ defmodule Platform.InstructionPacks.Outcomes do
       {:ok, target} ->
         entry.conflict != nil or entry.applied_hash == nil or
           Entry.hash(Targets.content(target)) != entry.applied_hash
-      _ -> true
+
+      _ ->
+        true
     end
   end
 
@@ -51,17 +60,21 @@ defmodule Platform.InstructionPacks.Outcomes do
     Enum.all?(rows, &valid_row?/1) and
       length(Enum.uniq_by(rows, & &1["pack_id"])) == length(rows)
   end
+
   def valid?(_), do: false
 
   defp valid_row?(row) when is_map(row) do
     Enum.sort(Map.keys(row)) == Enum.sort(@keys) and
-      is_binary(row["pack_id"]) and Regex.match?(~r/\A[a-z0-9][a-z0-9._-]{0,99}\z/, row["pack_id"]) and
+      is_binary(row["pack_id"]) and
+      Regex.match?(~r/\A[a-z0-9][a-z0-9._-]{0,99}\z/, row["pack_id"]) and
       version?(row["selected_version"]) and
       is_list(row["effective_versions"]) and length(row["effective_versions"]) <= @max_versions and
       Enum.all?(row["effective_versions"], &version?/1) and
       Enum.uniq(row["effective_versions"]) == row["effective_versions"] and
       row["status"] in ["vendor", "mixed_or_local"] and row["habits_provenance"] == "unavailable"
   end
+
   defp valid_row?(_), do: false
   defp version?(n), do: is_integer(n) and n > 0 and n <= 2_147_483_647
 end
+
