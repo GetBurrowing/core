@@ -149,6 +149,17 @@ defmodule Platform.Onboarding.MemberWelcomeTest do
     refute text =~ "Adam Admin"
   end
 
+  test "the owner is not told to ask themself" do
+    owner = %{id: "o", name: "Olive Owner"}
+    admin = %{id: "a", name: "Adam Admin"}
+
+    text = MemberWelcome.welcome_text(owner, "Burrow", [owner, admin])
+    refute text =~ "Olive Owner"
+    assert text =~ "Adam Admin (admin)"
+
+    assert MemberWelcome.welcome_text(owner, "Burrow", [owner]) =~ "You run this install"
+  end
+
   test "the welcome lists the steps in order, in plain words, with no API key and no terminal" do
     text =
       MemberWelcome.welcome_text(%{id: "u", name: "Ada Person"}, "Burrow", [
