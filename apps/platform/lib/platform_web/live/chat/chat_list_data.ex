@@ -159,6 +159,47 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   end
 
   @doc """
+  Unread first (task 01a1b6fd stage 1): the order of Spaces and Direct when
+  no hold is in force.
+
+  `rows` arrive in their MANUAL order (Spaces: `Sidebar.flatten_sections/1`
+  of `@sidebar_sections`; Direct: `@channel_sections.dms`). `opts`:
+
+    * `:enabled` (default `true`): the user's `chat_float_new_messages`
+      setting (`Platform.Accounts.float_new_messages?/1`).
+    * `:restricted` (default empty): `@restricted_channel_ids`.
+
+  Enabled: ACTIVE rows first, newest top-level message first (the
+  `sort_by_recency/3` comparison), then QUIET rows in INPUT order, untouched.
+  A row is active when its unread count is above 0 and it is not restricted
+  (the predicate the list's fold markers count), or when its id is in
+  `floated` (`@list_floated`, the open conversation that was active when it
+  was opened). Disabled: `rows` exactly as given.
+
+  Pure: it reads only its arguments.
+  """
+  def unread_first(rows, excerpts, unread_counts, floated, name_fun, opts \\ [])
+      when is_function(name_fun, 1) do
+    if Keyword.get(opts, :enabled, true) do
+      restricted = Keyword.get(opts, :restricted) || MapSet.new()
+      floated = floated || MapSet.new()
+      unread_counts = unread_counts || %{}
+
+      {active, quiet} =
+        Enum.split_with(rows, fn row ->
+          id = row_space(row).id
+
+          (Map.get(unread_counts, id, 0) > 0 and not MapSet.member?(restricted, id)) or
+            MapSet.member?(floated, id)
+        end)
+
+      sort_by_recency(active, excerpts, name_fun) ++ quiet
+    else
+      rows
+    end
+  end
+
+  @doc """
   The order one section renders in (task 01a166bf stage 4): with no hold
   (`hold_ids` nil) exactly `sort_by_recency/3`; while the list is held,
   the order of `hold_ids` (the section's ids when the hold began), with any

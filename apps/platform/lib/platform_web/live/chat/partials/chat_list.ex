@@ -47,24 +47,46 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   conversations already removed, so no row appears twice) and ARCHIVED (only
   while `@archived_open`).
 
-  Inside Spaces, Direct and Archived rows sort by recency
-  (`ChatListData.sort_by_recency/3`, task 01a166bf stage 1): newest top-level
-  message first, rows with no message last by name. The sort runs here, in
-  the component, over `@list_excerpts`, which `ChatListData.put_message/2`
-  patches live, so an arriving message moves its row on the next render.
+  Inside Spaces and Direct the order is UNREAD FIRST
+  (`ChatListData.unread_first/6`, task 01a1b6fd stage 1) over each
+  section's MANUAL order: Spaces in `Sidebar.flatten_sections/1` order of
+  `@sidebar_sections` (the resolved `chat_section_order` and
+  `chat_channel_order`), Direct in `@channel_sections.dms` order.
 
-  Pinned is the exception (task 01a1557b): the Agents row stays FIRST (it is
+    * Setting ON (the default, `Accounts.float_new_messages?/1`): ACTIVE rows
+      first, newest top-level message first (the `sort_by_recency/3`
+      comparison), then QUIET rows in their manual order, stable and
+      untouched. A row is active when it has unread and is not in
+      `@restricted_channel_ids` (the predicate the fold markers count), or
+      when it is in `@list_floated`.
+    * Setting OFF: the manual order exactly, whatever is unread.
+
+  `@list_floated` is a session assign, never persisted: the open
+  conversation keeps its floated place while it is open, so reading a
+  floated row on desktop does not yank it from under the cursor. Opening a
+  space that is active by unread puts it there; opening another space or
+  going back to the list drops it, and it settles into its manual place.
+  An own message increments no unread, so it floats nothing. The sort runs
+  here, in the component, over `@list_excerpts` and `@unread_counts`, both
+  patched live (`ChatListData.put_message/2`), so an arriving message moves
+  its row on the next render, phone and desktop. A change to the setting
+  broadcasts `:sidebar_changed`, and every open session re-reads it.
+
+  Archived sorts by recency (`ChatListData.sort_by_recency/3`, task 01a166bf
+  stage 1) in both modes: newest top-level message first, rows with no
+  message last by name.
+
+  Pinned is the exception (task 01a1557b), unchanged in both modes, so pins
+  always sit above: the Agents row stays FIRST (it is
   a derived entry, not a pin), then the pinned TASK conversations by recency,
   then the pinned conversations in the user's SAVED order
   (`chat_pinned_spaces`, exactly as `ChatLive.pinned_rail_entries/2` returns
   it). A message in a pinned conversation never moves it, and the hold does
   not re-order that run. A new pin appends at its end.
 
-  The only manual order is that saved Pinned order, written by
-  `PlatformWeb.ChatLive.PinnedReorderHooks` on desktop. Everything else is
-  recency. The desktop rail's curated order and edit mode went with the rail
-  in Burrow redesign 22 stage 2, and the phone shows the saved order with no
-  reorder control.
+  The saved Pinned order is written by `PlatformWeb.ChatLive.PinnedReorderHooks`
+  on desktop. No control on the list reorders the non-pinned rows; their
+  manual order is the one the resolver computes.
 
   ## Holding the order (task 01a166bf stage 4)
 
@@ -252,6 +274,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:list_collapsed, :any, required: true)
   # The held order, or nil (stage 4, `## Holding the order`).
   attr(:list_order_hold, :any, default: nil)
+  # Unread first (task 01a1b6fd, `## Order`): the user's setting and the
+  # open conversation that keeps its floated place while it is open.
+  attr(:float_new_messages?, :boolean, default: true)
+  attr(:list_floated, :any, default: nil)
   attr(:push_permission, :any, required: true)
   attr(:notification_banner_dismissed, :boolean, required: true)
   # The sheets (stage 3): `ChatListHooks` owns all three.
@@ -1733,6 +1759,30 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       ChatListData.order_rows(rows, excerpts, hold && hold[section], name_fun)
     end
 
+    # Spaces and Direct (`## Order`): unread first over the manual order,
+    # unless a hold is in force, which keeps `order_rows/4` unchanged.
+    float_opts = [
+      enabled: Map.get(assigns, :float_new_messages?, true) != false,
+      restricted: assigns[:restricted_channel_ids]
+    ]
+
+    unread_first = fn rows, section, name_fun ->
+      case hold && hold[section] do
+        nil ->
+          ChatListData.unread_first(
+            rows,
+            excerpts,
+            assigns[:unread_counts],
+            assigns[:list_floated],
+            name_fun,
+            float_opts
+          )
+
+        ids ->
+          ChatListData.order_rows(rows, excerpts, ids, name_fun)
+      end
+    end
+
     pinned =
       ChatLive.pinned_rail_entries(assigns.channel_sections.pinned, assigns.pinned_task_spaces)
 
@@ -1747,8 +1797,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
     %{
       pinned: order.(tasks, :pinned, &row_name(&1.kind, &1.space, identities)) ++ conversations,
-      spaces: order.(spaces, :spaces, & &1.name),
-      direct: order.(assigns.channel_sections.dms, :direct, &row_name(:dm, &1, identities)),
+      spaces: unread_first.(spaces, :spaces, & &1.name),
+      direct:
+        unread_first.(assigns.channel_sections.dms, :direct, &row_name(:dm, &1, identities)),
       archived: order.(assigns.archived_channels, :archived, & &1.name)
     }
   end

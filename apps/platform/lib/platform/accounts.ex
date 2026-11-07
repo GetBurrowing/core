@@ -605,6 +605,83 @@ defmodule Platform.Accounts do
     update_user_preference(user_id, @email_notifications_key, enabled)
   end
 
+  # ── Chat: move new messages to the top (task 01a1b6fd stage 1) ─────────
+
+  @float_new_messages_key "chat_float_new_messages"
+
+  @doc """
+  The `users.preferences` key the chat list's unread-first setting lives
+  under (`PlatformWeb.ChatLive.Partials.ChatList`, `## Order`).
+  """
+  @spec float_new_messages_key() :: String.t()
+  def float_new_messages_key, do: @float_new_messages_key
+
+  @doc """
+  True unless the user has turned "Move new messages to the top" off.
+  Default ON: only a literal `false` is off; a missing key or an unknown user
+  is `true`. Accepts a loaded `%User{}` (no query) or a user id.
+  """
+  @spec float_new_messages?(User.t() | binary() | nil) :: boolean()
+  def float_new_messages?(%User{preferences: prefs}),
+    do: Map.get(prefs || %{}, @float_new_messages_key) != false
+
+  def float_new_messages?(user_id) when is_binary(user_id) do
+    Map.get(get_user_preferences(user_id), @float_new_messages_key) != false
+  end
+
+  def float_new_messages?(_user), do: true
+
+  @doc """
+  Turn "Move new messages to the top" on (`true`) or off (`false`).
+
+  Writes the ONE key atomically with `jsonb_set`, never the whole map, so a
+  sibling key written concurrently survives (unlike
+  `update_user_preference/3`, which reads, modifies and writes the map).
+  Then broadcasts `:sidebar_changed` so every open chat session of the user
+  re-reads it. Returns `{:ok, user}` or `{:error, :not_found}`.
+
+  Why this does not worsen cross-device sync (backlog 01a1b689-c4c7): that
+  ticket is about the LIST keys (`chat_pinned_spaces`, `chat_channel_order`,
+  `chat_section_order`), written whole and last-write-wins. A boolean has no
+  element-level merge, so the last toggle winning is the correct semantics.
+  A single-key `jsonb_set` cannot erase other keys. It adds no list and no
+  device-local (localStorage) shadow.
+  """
+  @spec put_float_new_messages(binary(), boolean()) :: {:ok, User.t()} | {:error, :not_found}
+  def put_float_new_messages(user_id, enabled) when is_binary(user_id) and is_boolean(enabled) do
+    with {:ok, uuid} <- Ecto.UUID.cast(user_id) do
+      now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+      query =
+        from(u in User,
+          where: u.id == ^uuid,
+          select: u,
+          update: [
+            set: [
+              preferences:
+                fragment(
+                  "jsonb_set(coalesce(?, '{}'::jsonb), '{chat_float_new_messages}', to_jsonb(?::boolean))",
+                  u.preferences,
+                  ^enabled
+                ),
+              updated_at: ^now
+            ]
+          ]
+        )
+
+      case Repo.update_all(query, []) do
+        {1, [user]} ->
+          Platform.Chat.PubSub.broadcast_sidebar_changed(user.id)
+          {:ok, user}
+
+        {0, _} ->
+          {:error, :not_found}
+      end
+    else
+      :error -> {:error, :not_found}
+    end
+  end
+
   # ── Tasks project and epic (task 01a161fd stage 2) ─────────────────────
   #
   # Stored as `preferences["tasks_project"] = %{"project_id" => uuid | nil,
