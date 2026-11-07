@@ -1229,16 +1229,25 @@ defmodule PlatformWeb.ShellLive do
   # Every signed-in viewer sees the banner while a session is live: it is the
   # honesty mechanism, so it is not limited to admins. "Details" links to
   # Settings → Support only for a viewer who can see that card.
+  # Only on an install with a vendor key configured: without one no session
+  # can be issued, and every other install's shell mount stays one query
+  # lighter (tasks_live_switch_budget_test).
   defp assign_support_banner(socket, %Accounts.User{} = user) do
-    socket
-    |> assign(:support_sessions, Platform.SupportAccess.active_sessions_all())
-    |> assign(:support_details?, PlatformWeb.SettingsLive.support_admin?(user))
+    if Platform.SupportAccess.Config.configured?(),
+      do: assign_live_support_banner(socket, user),
+      else: assign_support_banner(socket, nil)
   end
 
   defp assign_support_banner(socket, _user) do
     socket
     |> assign(:support_sessions, [])
     |> assign(:support_details?, false)
+  end
+
+  defp assign_live_support_banner(socket, user) do
+    socket
+    |> assign(:support_sessions, Platform.SupportAccess.active_sessions_all())
+    |> assign(:support_details?, PlatformWeb.SettingsLive.support_admin?(user))
   end
 
   defp mask_zone(socket) do

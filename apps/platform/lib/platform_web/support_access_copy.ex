@@ -4,8 +4,8 @@ defmodule PlatformWeb.SupportAccessCopy do
   2; design canvas 01a1b362-e9b9). One module, so a wording change is one
   edit.
 
-  The wording is ADVISORY: Ryan confirms it, and it is checked against the
-  customer terms. Those are human decisions, not gates in code.
+  The wording is ADVISORY: the product owner confirms it, and it is checked
+  against the customer terms. Those are human decisions, not gates in code.
 
   ## The vendor's name
 
@@ -33,7 +33,7 @@ defmodule PlatformWeb.SupportAccessCopy do
   @spec who() :: String.t()
   def who, do: Config.vendor_name() || @fallback
 
-  # "Kobo support" / "Vendor support".
+  # "<name> support" / "Vendor support".
   defp support_noun do
     case Config.vendor_name() do
       nil -> @fallback
