@@ -83,6 +83,5 @@ defmodule Platform.Sharing.UsageReceiver do
 
   def validate(_params), do: {:error, :invalid_usage}
 
-  defp cast_uuid(value) when is_binary(value), do: Ecto.UUID.cast(value)
-  defp cast_uuid(_value), do: :error
+  defp cast_uuid(value), do: Platform.UUID.cast(value)
 end
