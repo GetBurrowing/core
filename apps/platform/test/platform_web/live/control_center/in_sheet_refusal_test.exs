@@ -123,13 +123,13 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
     render_click(view, "choose_onboarding", %{"flow" => "external"})
 
     view
-    |> form("#external-agent-form", external_agent: external_params("Kobo bot"))
+    |> form("#external-agent-form", external_agent: external_params("Relay bot"))
     |> render_change()
 
     demote!(admin)
 
     view
-    |> form("#external-agent-form", external_agent: external_params("Kobo bot"))
+    |> form("#external-agent-form", external_agent: external_params("Relay bot"))
     |> render_submit()
 
     assert has_element?(
@@ -142,7 +142,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
     # The form is not rebuilt: what was typed is still in the fields.
     assert has_element?(
              view,
-             ~s(#external-agent-form input[name="external_agent[name]"][value="Kobo bot"])
+             ~s(#external-agent-form input[name="external_agent[name]"][value="Relay bot"])
            )
 
     assert has_element?(
@@ -150,7 +150,7 @@ defmodule PlatformWeb.ControlCenter.InSheetRefusalTest do
              ~s(#external-agent-form input[name="external_agent[base_url]"][value="https://api.example.test/v1"])
            )
 
-    refute Repo.get_by(Agent, slug: "kobo-bot")
+    refute Repo.get_by(Agent, slug: "relay-bot")
   end
 
   test "ownership: a refusal with the Add-to-Space modal open renders inside the modal", %{
