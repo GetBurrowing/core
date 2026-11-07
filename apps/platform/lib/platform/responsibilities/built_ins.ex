@@ -71,6 +71,8 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.ArchitectureAuditDiff,
       Handlers.ArchitectureCronSweep,
       Handlers.AgentsGoalHeartbeat,
+      # Task 01a1b6de stage 3: the lead agent's daily agent capability check.
+      Handlers.AgentsTeamCheck,
       Handlers.ExperimentsLabelSignal,
       Handlers.ExperimentsScientist,
       # Task 01a11ec3 stage 3: external-feedback intake. A dedicated

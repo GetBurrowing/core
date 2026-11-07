@@ -196,7 +196,11 @@ defmodule Platform.Roles.Seeds do
       description: "Accountable for the agents space's declared goal and its daily measurement",
       icon: "hero-flag",
       bundle: [
-        "agents.goal_heartbeat"
+        "agents.goal_heartbeat",
+        # Task 01a1b6de stage 3: the daily agent capability check. Existing
+        # DBs get the row from
+        # `20261107193000_seed_agents_team_check_template_and_bundle.exs`.
+        "agents.team_check"
       ]
     },
     %{

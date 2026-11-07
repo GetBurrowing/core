@@ -99,6 +99,8 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.ArchitectureAuditDiff,
     Platform.Responsibilities.Handlers.ArchitectureCronSweep,
     Platform.Responsibilities.Handlers.AgentsGoalHeartbeat,
+    # Task 01a1b6de stage 3: the lead agent's daily agent capability check.
+    Platform.Responsibilities.Handlers.AgentsTeamCheck,
     Platform.Responsibilities.Handlers.ExperimentsLabelSignal,
     Platform.Responsibilities.Handlers.ExperimentsScientist,
     # Task 01a11ec3 stage 3: external-feedback intake (never the janitor).

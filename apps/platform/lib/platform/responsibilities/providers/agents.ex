@@ -30,6 +30,9 @@ defmodule Platform.Responsibilities.Providers.Agents do
   Keys owned here:
 
     * `agents.goal_heartbeat` → `Handlers.AgentsGoalHeartbeat`
+    * `agents.team_check` → `Handlers.AgentsTeamCheck` (task `01a1b6de` stage 3).
+      Its `build_prompt/1` also refuses on purpose,
+      `{:error, {:nothing_to_raise, reason}}`, when no stuck agent is due.
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -40,7 +43,7 @@ defmodule Platform.Responsibilities.Providers.Agents do
   alias Platform.Responsibilities.Responsibility
 
   @impl true
-  def register, do: AgentsGoalHeartbeat.register()
+  def register, do: AgentsGoalHeartbeat.register() ++ Handlers.AgentsTeamCheck.register()
 
   @doc """
   Return the concrete handler module for a responsibility (or key), or
@@ -51,6 +54,7 @@ defmodule Platform.Responsibilities.Providers.Agents do
   def handler_for(%Responsibility{key: key}), do: handler_for(key)
   def handler_for(%{key: key}), do: handler_for(key)
   def handler_for("agents.goal_heartbeat"), do: Handlers.AgentsGoalHeartbeat
+  def handler_for("agents.team_check"), do: Handlers.AgentsTeamCheck
   def handler_for(_), do: nil
 
   @impl true

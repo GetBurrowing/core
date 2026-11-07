@@ -1578,6 +1578,33 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "agents.team_check.v1",
+        name: "Agents — Team Check",
+        description:
+          "User turn for `agents.team_check` (task 01a1b6de stage 3): the lead agent's daily " <>
+            "check. The SERVER classifies every agent (offline, access, credentials, " <>
+            "toolchain, spend_consent, ok) from presence and runtime events; the model only " <>
+            "asks the named fixer. Seeded by " <>
+            "`20261107193000_seed_agents_team_check_template_and_bundle.exs`.",
+        # Every name here is supplied by `Handlers.AgentsTeamCheck.build_prompt/1`.
+        variables: ["team_status", "raise_list", "reask_after_hours"],
+        content: """
+        Your daily team check. The server has looked at every agent on this install and classified each one from real signals: whether it is connected, and the failures it recorded that have not been cleared.
+
+        ## Every agent
+
+        {{team_status}}
+
+        ## Stuck agents to raise now
+
+        {{raise_list}}
+
+        For each agent under "Stuck agents to raise now", send the named person one short message: which agent, what is blocking it in plain words, and the one thing they should do. Name them directly. Do not raise an agent that is not in that list; it was either fine or already raised within the last {{reask_after_hours}} hours.
+
+        You may not grant access, change credentials, install tools or approve spend yourself. Ask the person who can.
+        """
+      },
+      %{
         slug: "memory.dreaming.v1",
         name: "Memory Dreaming Dispatch Prompt (legacy slug)",
         description:
