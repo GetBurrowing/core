@@ -30,14 +30,16 @@ defmodule Platform.InstructionPacks.Installer do
   end
 
   def pull(pack_id, version, roots, options \\ []) do
-    result = with {:ok, consent} <- consent_snapshot(),
-         true <- Keyword.get(options, :consent_snapshot, consent) == consent,
-         {:ok, envelope} <- Download.fetch_envelope(pack_id, version, roots, options) do
-      install(envelope, roots, consent)
-    else
-      false -> {:error, :sharing_changed}
-      error -> error
-    end
+    result =
+      with {:ok, consent} <- consent_snapshot(),
+           true <- Keyword.get(options, :consent_snapshot, consent) == consent,
+           {:ok, envelope} <- Download.fetch_envelope(pack_id, version, roots, options) do
+        install(envelope, roots, consent)
+      else
+        false -> {:error, :sharing_changed}
+        error -> error
+      end
+
     record_check(pack_id, result)
     result
   end
@@ -48,10 +50,13 @@ defmodule Platform.InstructionPacks.Installer do
       Repo.transaction(fn ->
         state = locked_state(pack_id)
         now = DateTime.utc_now()
-        attrs = case result do
-          {:ok, _} -> %{checked_at: now, last_successful_check_at: now, check_error: nil}
-          {:error, reason} -> %{checked_at: now, check_error: check_error(reason)}
-        end
+
+        attrs =
+          case result do
+            {:ok, _} -> %{checked_at: now, last_successful_check_at: now, check_error: nil}
+            {:error, reason} -> %{checked_at: now, check_error: check_error(reason)}
+          end
+
         Repo.update!(Ecto.Changeset.change(state, attrs))
       end)
     end

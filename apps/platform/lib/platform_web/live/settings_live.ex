@@ -182,7 +182,10 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> assign(:feedback_enabled, Policy.enabled?())
-     |> assign(:install_owner?, Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok)
+     |> assign(
+       :install_owner?,
+       Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok
+     )
      |> reset_feedback()
      |> open_from_params(params)}
   end

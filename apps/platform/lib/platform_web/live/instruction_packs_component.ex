@@ -19,31 +19,71 @@ defmodule PlatformWeb.InstructionPacksComponent do
   def handle_event(event, params, socket) do
     actor = socket.assigns.actor
     result = with :ok <- Owner.authorize(actor), do: act(event, params, actor)
-    notice = case result do
-      {:ok, _} -> "Saved. Local changes stay protected."
-      {:error, :stale_conflict} -> "This content changed since you reviewed it. Review the refreshed conflict before choosing again."
-      {:error, :unauthorized} -> "Only an install owner or authorized install administrator can change these settings."
-      {:error, :sharing_disabled} -> "Instruction updates are off. Enable them before applying a version."
-      {:error, :sharing_changed} -> "Sharing settings changed. Review the current settings and try again."
-      _ -> "Couldn't save. Your current instructions are unchanged."
-    end
+
+    notice =
+      case result do
+        {:ok, _} ->
+          "Saved. Local changes stay protected."
+
+        {:error, :stale_conflict} ->
+          "This content changed since you reviewed it. Review the refreshed conflict before choosing again."
+
+        {:error, :unauthorized} ->
+          "Only an install owner or authorized install administrator can change these settings."
+
+        {:error, :sharing_disabled} ->
+          "Instruction updates are off. Enable them before applying a version."
+
+        {:error, :sharing_changed} ->
+          "Sharing settings changed. Review the current settings and try again."
+
+        _ ->
+          "Couldn't save. Your current instructions are unchanged."
+      end
+
     {:noreply, socket |> reload() |> assign(:notice, notice)}
   end
 
   defp act("sharing", %{"key" => key, "enabled" => value}, actor) when value in ["true", "false"],
     do: Owner.set_sharing(key, value == "true", actor)
+
   defp act("stop", %{"enabled" => value}, actor) when value in ["true", "false"],
     do: Installer.stop_updates(value == "true", actor)
+
   defp act("refresh", _, _actor), do: {:ok, :refreshed}
   defp act("resume", %{"pack" => pack}, actor), do: Installer.pin(pack, nil, actor)
+
   defp act("pin", %{"pack" => pack, "version" => version}, actor) do
     with {version, ""} <- Integer.parse(version), do: Owner.pin(pack, version, actor)
   end
+
   defp act("rollback", %{"pack" => pack, "version" => version}, actor) do
-    with {version, ""} <- Integer.parse(version), do: Installer.rollback(pack, version, Owner.roots(), actor)
+    with {version, ""} <- Integer.parse(version),
+         do: Installer.rollback(pack, version, Owner.roots(), actor)
   end
-  defp act("resolve", %{"pack" => pack, "type" => type, "target" => target, "choice" => choice, "token" => token}, actor) when choice in ["local", "incoming"],
-    do: Installer.resolve_conflict(pack, type, target, if(choice == "local", do: :local, else: :incoming), token, actor)
+
+  defp act(
+         "resolve",
+         %{
+           "pack" => pack,
+           "type" => type,
+           "target" => target,
+           "choice" => choice,
+           "token" => token
+         },
+         actor
+       )
+       when choice in ["local", "incoming"],
+       do:
+         Installer.resolve_conflict(
+           pack,
+           type,
+           target,
+           if(choice == "local", do: :local, else: :incoming),
+           token,
+           actor
+         )
+
   defp act(_, _, _), do: {:error, :invalid_action}
 
   defp time(nil), do: "Not yet"
@@ -51,16 +91,32 @@ defmodule PlatformWeb.InstructionPacksComponent do
   defp time(value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
   defp effective(nil), do: "Local version"
   defp effective(v), do: "v#{v}"
+
   defp status(row, sharing) do
     cond do
-      sharing.instruction_updates_stopped or not sharing.instruction_updates -> "Disabled"
-      row.state.pinned_version -> "Pinned"
-      row.state.check_error == "verification" -> "Verification failure — last good instructions remain active"
-      row.state.check_error == "network" -> "Network failure — last good instructions remain active"
-      row.conflicts != [] -> "Local overrides / conflicts"
-      Enum.any?(row.versions, &is_nil/1) -> "Local overrides"
-      is_nil(row.state.version) -> "Pending first verified pack"
-      true -> "Up to date with the latest verified release received"
+      sharing.instruction_updates_stopped or not sharing.instruction_updates ->
+        "Disabled"
+
+      row.state.pinned_version ->
+        "Pinned"
+
+      row.state.check_error == "verification" ->
+        "Verification failure — last good instructions remain active"
+
+      row.state.check_error == "network" ->
+        "Network failure — last good instructions remain active"
+
+      row.conflicts != [] ->
+        "Local overrides / conflicts"
+
+      Enum.any?(row.versions, &is_nil/1) ->
+        "Local overrides"
+
+      is_nil(row.state.version) ->
+        "Pending first verified pack"
+
+      true ->
+        "Up to date with the latest verified release received"
     end
   end
 
