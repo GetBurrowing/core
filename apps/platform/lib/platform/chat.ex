@@ -2515,7 +2515,9 @@ defmodule Platform.Chat do
   `"source" => "voice"` with a `"voice_session_id"`) in `space_ids`, oldest
   first by id.
 
-  Options: `:voice_session_id` narrows to one session; `:since`
+  Options: `:voice_session_id` narrows to one session, `:voice_session_ids`
+  to a list of them (the DM's session bracket reads every row of the sessions
+  on screen in one query); `:since`
   (`DateTime`) drops rows inserted before it. Thread replies and deleted rows
   are excluded. Read by `Platform.Meetings.VoiceSession.finish/1` to count a
   session's turns and to find the sessions a room left unfinished.
@@ -2537,6 +2539,15 @@ defmodule Platform.Chat do
       case Keyword.get(opts, :voice_session_id) do
         id when is_binary(id) ->
           where(query, [m], fragment("?->>'voice_session_id' = ?", m.metadata, ^id))
+
+        _ ->
+          query
+      end
+
+    query =
+      case Keyword.get(opts, :voice_session_ids) do
+        ids when is_list(ids) ->
+          where(query, [m], fragment("?->>'voice_session_id'", m.metadata) in ^ids)
 
         _ ->
           query

@@ -520,9 +520,18 @@ defmodule Platform.Meetings.VoiceSession do
 
   @doc false
   def summary_content(turns, duration_ms) do
-    minutes = max(div(duration_ms + 30_000, 60_000), 1)
-    noun = if turns == 1, do: "turn", else: "turns"
-    "Voice chat · #{turns} #{noun} · #{minutes} min"
+    "Voice chat · #{turns_label(turns)} · #{minutes_label(duration_ms)}"
+  end
+
+  @doc "`\"18 turns\"` / `\"1 turn\"`: the count as the summary row words it."
+  @spec turns_label(non_neg_integer()) :: String.t()
+  def turns_label(1), do: "1 turn"
+  def turns_label(n) when is_integer(n), do: "#{n} turns"
+
+  @doc "`\"12 min\"`: a duration as the summary row words it (rounded, at least 1)."
+  @spec minutes_label(non_neg_integer()) :: String.t()
+  def minutes_label(duration_ms) when is_integer(duration_ms) do
+    "#{max(div(duration_ms + 30_000, 60_000), 1)} min"
   end
 
   # The `room_finished` fallback has only the DM: its one user and one agent

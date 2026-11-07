@@ -1663,7 +1663,7 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns_schema: ReturnSchemas.for_tool("space_get_messages"),
         returns:
-          "%{messages: [...], total, limit, has_more} — an ENVELOPE, not a bare array. `messages` is newest first; each is a message object with id, participant_id, content_type, content, content_truncated, thread_id, inserted_at, attachments. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments. " <>
+          "%{messages: [...], total, limit, has_more} — an ENVELOPE, not a bare array. `messages` is newest first; each is a message object with id, participant_id, content_type, content, content_truncated, thread_id, inserted_at, attachments, voice. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments. `voice` is null except on a Voice tab record, where it is %{voice_session_id, voice_turn, voice_kind, input}: rows sharing a voice_session_id are one spoken conversation, voice_turn its 1-based turn order. " <>
             "`total` is the number of top-level messages this call could reach — same space, not deleted, older than `before_id` when one is given, and not earlier than your history grant — counted independent of `limit`; `has_more` is true exactly when such messages remain beyond the ones returned. " <>
             "Read `has_more` rather than comparing `messages` against `limit`; to page back, pass the OLDEST returned id as `before_id`.",
         limitations:
@@ -4979,7 +4979,8 @@ defmodule Platform.Federation.ToolSurface do
             content_truncated: truncated?,
             thread_id: m.thread_id,
             inserted_at: format_datetime(m.inserted_at),
-            attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, []))
+            attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, [])),
+            voice: voice_tag(m)
           }
         end)
 
@@ -9759,6 +9760,21 @@ defmodule Platform.Federation.ToolSurface do
        }
      end)}
   end
+
+  # A Voice tab record (task 01a1b6c3): which spoken conversation a row
+  # belongs to, so an agent reading its DM can tell what was said by voice.
+  # nil for every other row.
+  defp voice_tag(%{metadata: %{"source" => "voice", "voice_session_id" => sid} = meta})
+       when is_binary(sid) and sid != "" do
+    %{
+      voice_session_id: sid,
+      voice_turn: if(is_integer(meta["voice_turn"]), do: meta["voice_turn"]),
+      voice_kind: if(is_binary(meta["voice_kind"]), do: meta["voice_kind"]),
+      input: if(is_binary(meta["input"]), do: meta["input"])
+    }
+  end
+
+  defp voice_tag(_message), do: nil
 
   defp cap_content(content) when is_binary(content) do
     if String.length(content) > @message_content_cap do

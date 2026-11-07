@@ -1475,6 +1475,24 @@ body, .font-suite {
   background-color: transparent;
 }
 
+/* Voice chat bracket (task 01a1b6c3 stage 3). An agent row that also draws
+   the session header or the "Show all" band keeps those bands OUTSIDE its
+   bubble: the slot rule and tint move from the row to its padding box, so
+   the base-200 band reads as the bracket, not as part of the agent's turn. */
+.msg-agent:has(> [data-role="voice-session-header"], > [data-role="voice-show-all"]) {
+  border-left: 0;
+  background: transparent;
+  padding-left: 0;
+}
+
+.msg-agent:has(> [data-role="voice-session-header"], > [data-role="voice-show-all"])
+  > .message-row-inner {
+  border-left: 3px solid var(--ag);
+  background: var(--ag-tint);
+  border-radius: 0 0.5rem 0.5rem 0;
+  padding-left: calc(1.25rem + 3px);
+}
+
 /* Avatar ring: 2px at full hue. The 10px hue glow is dropped: it was a
    translucent mix nobody measured, and the ring is the identity cue. */
 .msg-agent-avatar {
