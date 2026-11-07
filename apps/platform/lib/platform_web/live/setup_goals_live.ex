@@ -164,7 +164,7 @@ defmodule PlatformWeb.SetupGoalsLive do
               value={goal}
               maxlength="500"
               aria-label={"Goal #{index + 1}"}
-              placeholder={if index == 0, do: "e.g. Launch the new booking site by December"}
+              placeholder={if index == 0, do: "e.g. Launch the new site by December"}
               class="block min-h-11 w-full rounded-[var(--radius-field)] border border-edge bg-base-100 px-4 py-2 text-base text-base-content placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-focus-ring"
             />
           </div>
