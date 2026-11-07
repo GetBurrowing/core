@@ -149,7 +149,12 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
                         {[], ".sidebar-row--current[data-nav-yielded]"},
                         {[], ".sidebar-row--current[data-nav-yielded]::before"},
                         {["@media (prefers-reduced-motion: reduce)"],
-                         ".sidebar-row[data-nav-pending]::before"}
+                         ".sidebar-row[data-nav-pending]::before"},
+                        # Task 01a1b673 stage 2: the Inbox count badge rides
+                        # 2px higher on the row so its ring clears the label.
+                        # Geometry only; its paint is held by
+                        # error_token_contrast_guard_test.exs.
+                        {[], ".sidebar-row .inbox-badge"}
                       ])
 
   @colour_literal ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(|\blab\(|\blch\(|\bhwb\(/
