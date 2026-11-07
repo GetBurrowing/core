@@ -679,9 +679,13 @@ def updater_settings(plan):
 
 
 def updater_env(plan):
-    values, why = updater_settings(plan)
+    return updater_env_text(plan.name, *updater_settings(plan))
+
+
+def updater_env_text(name, values, why):
+    """updater.env for install ``name``; the render and bin/burrow-updater-bootstrap share it."""
     lines = [
-        f"# {HEADER.format(name=plan.name)}",
+        f"# {HEADER.format(name=name)}",
         f"# Read by {INSTALL_ROOT}/{UPDATER_BIN} only. Core cannot write it; no secrets.",
         "# CHANNEL = day2.upgrade_channel. The update target is always",
         "# <CORE_REPO>:<FLAVOUR>-<CHANNEL>; a request from core can never name an image.",

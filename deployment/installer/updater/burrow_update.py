@@ -2,7 +2,8 @@
 """burrow-update: the core updater of a single-host install (stdlib only).
 
 Rendered byte for byte to /opt/burrow/bin/burrow-update (root 0755) by
-burrow_install templates.updater_entries; run by burrow-updater.service from
+burrow_install templates.updater_entries (an install that predates it gets
+it from updater/bootstrap.sh, stage 4); run by burrow-updater.service from
 its .timer (hourly) and .path (core's inbox). Moves core-platform between
 digests of `<CORE_REPO>:<FLAVOUR>-<CHANNEL>` (updater.env only), holds while a
 meeting is live, records the previous digest before it switches and rolls
@@ -370,6 +371,37 @@ def resolve_digest(repo, tag):
     raise RegistryError("registry refused the anonymous token")
 
 
+def live_meetings_args(stale_hours):
+    """docker argv (after ``docker``) counting live meetings within the stale bound.
+
+    bin/burrow-updater-bootstrap (task 01a1b7b6 stage 4) runs the same query.
+    """
+    sql = (
+        "select count(*) from meetings where status = 'live' and started_at > now() - "
+        f"interval '{int(stale_hours)} hours'"
+    )
+    return [
+        "exec", PG_CONTAINER, "psql", "-U", PG_USER, "-d", PG_DB,
+        "-tAqX", "-v", "ON_ERROR_STOP=1", "-c", sql,
+    ]  # fmt: skip
+
+
+def full_ref(ref):
+    """``ref`` with its Docker Hub repository written out in full.
+
+    docker shows a Docker Hub RepoDigest by its familiar name
+    (``example/core@sha256:..``, ``nginx@sha256:..``), while updater.env
+    and the override spell it ``docker.io/example/core``.
+    """
+    name, sep, rest = ref.partition("@")
+    first = name.split("/", 1)[0]
+    if "/" not in name:
+        name = "docker.io/library/" + name
+    elif not ("." in first or ":" in first or first == "localhost"):
+        name = "docker.io/" + name
+    return name + sep + rest
+
+
 # ---------------------------------------------------------------------------
 # The inbox: everything core writes is untrusted.
 # ---------------------------------------------------------------------------
@@ -536,7 +568,8 @@ class Updater:
             digests = json.loads(out)
         except ValueError:
             return None
-        matching = [d for d in digests or [] if isinstance(d, str) and self.cfg["ref_re"].match(d)]
+        refs = [full_ref(d) for d in digests or [] if isinstance(d, str)]
+        matching = [d for d in refs if self.cfg["ref_re"].match(d)]
         for repo in [self.cfg["repo"], *self.cfg["rollback_repos"]]:
             for ref in matching:
                 if ref.startswith(repo + "@"):
@@ -562,14 +595,7 @@ class Updater:
 
     def live_meetings(self):
         """Count of live meetings (started within the stale bound); None on ANY error."""
-        sql = (
-            "select count(*) from meetings where status = 'live' and started_at > now() - "
-            f"interval '{int(self.cfg['stale_hours'])} hours'"
-        )
-        rc, out, _ = docker(
-            "exec", PG_CONTAINER, "psql", "-U", PG_USER, "-d", PG_DB,
-            "-tAqX", "-v", "ON_ERROR_STOP=1", "-c", sql,
-        )  # fmt: skip
+        rc, out, _ = docker(*live_meetings_args(self.cfg["stale_hours"]))
         if rc != 0 or not re.fullmatch(r"\d+", out.strip()):
             return None
         return int(out.strip())

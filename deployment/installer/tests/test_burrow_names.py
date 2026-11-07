@@ -185,6 +185,21 @@ ALLOWLIST = (
         None,
         "builds a pre-rename host and runs the migration and rollback against it",
     ),
+    # The updater bootstrap (task 01a1b7b6 stage 4) refuses a pre-rename root,
+    # named once on a MIGRATE_MARK line; its test builds such hosts.
+    Allow("burrow_install/updater_bootstrap.py", MIGRATE_MARK, MIGRATE),
+    Allow("updater/bootstrap.sh", MIGRATE_MARK, MIGRATE),
+    Allow(
+        "tests/fixtures/bootstrap/",
+        MIGRATE_MARK,
+        "a frozen copy of origin/main's do-droplet golden, which embedded burrow-migrate inline",
+    ),
+    Allow("tests/fixtures/bootstrap/", "_AGENT_SESSION=suite-agent", CLI_SESSION),
+    Allow(
+        "tests/test_bootstrap.py",
+        None,
+        "builds pre-rename and legacy-image hosts and runs the bootstrap against them",
+    ),
     # This guard spells the patterns it looks for.
     Allow("tests/test_burrow_names.py", None, "the guard's own patterns and allowlist"),
 )

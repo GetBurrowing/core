@@ -224,6 +224,12 @@ COPY --from=build --chown=app:app /app/apps/burrow_release/_build/prod/rel/platf
 # and to refuse an automatic rollback past it. Identical in every image.
 COPY deployment/release/irreversible-migrations.txt /app/release/irreversible-migrations.txt
 
+# The host updater's bootstrap for an install rendered before it (task
+# 01a1b7b6 stage 4): `docker run --rm --entrypoint cat <core image>
+# /app/updater/bootstrap.sh | sudo sh`. Core's repository is private and the
+# image is public, so the script ships here. Identical in every image.
+COPY deployment/installer/updater/bootstrap.sh /app/updater/bootstrap.sh
+
 EXPOSE 4000
 
 CMD ["/bin/sh", "-c", "/app/bin/platform eval 'Platform.Release.migrate()' && /app/bin/platform start"]
