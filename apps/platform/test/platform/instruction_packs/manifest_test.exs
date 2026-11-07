@@ -12,12 +12,21 @@ defmodule Platform.InstructionPacks.ManifestTest do
 
   test "reject unknown fields, unsupported types, paths, duplicates and excessive bounds" do
     e = hd(manifest()["entries"])
+    distinct = for n <- 1..101, do: %{e | "target" => "welcome#{n}"}
+    assert {:ok, _} = Manifest.validate(manifest(%{"entries" => Enum.take(distinct, 100)}))
+
+    large =
+      for n <- 1..17,
+          do: %{e | "target" => "large#{n}", "content" => String.duplicate("x", 65_536)}
+
+    assert {:ok, _} = Manifest.validate(manifest(%{"entries" => Enum.take(large, 15)}))
 
     bad = [
       Map.put(manifest(), "tools", []),
       manifest(%{"schema_version" => 2}),
       manifest(%{"entries" => [e, e]}),
-      manifest(%{"entries" => List.duplicate(e, 101)}),
+      manifest(%{"entries" => distinct}),
+      manifest(%{"entries" => large}),
       manifest(%{"changelog" => String.duplicate("x", 4097)}),
       manifest(%{"version" => 2}),
       manifest(%{"published_at" => "not a time"}),
