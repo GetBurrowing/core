@@ -111,6 +111,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       socket
       |> assign(:in_meeting, false)
       |> assign(:meetings_enabled, Meetings.enabled?())
+      |> assign(:captions_available, Meetings.transcription_available?())
       |> assign(:mic_enabled, true)
       |> assign(:camera_enabled, true)
       # Task 01a08d5a stage 3: the two literal seeds above are the
@@ -300,6 +301,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     socket
     |> assign(:in_meeting, false)
     |> assign(:meetings_enabled, Meetings.enabled?())
+    |> assign(:captions_available, Meetings.transcription_available?())
     # `assign_new`, NOT `assign` (task 01a07410 / FE-17 stage 4). This
     # runs twice on the guest surface: once at mount, and again from
     # `enter_meeting_as_guest/3` on the `:name_entry -> :in_meeting`

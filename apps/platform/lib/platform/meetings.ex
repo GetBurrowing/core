@@ -250,6 +250,19 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  True when meetings are on AND a transcriber is attached, so captions can
+  reach a meeting. An install with meetings but no STT key yet renders
+  `MEETING_TRANSCRIPTION=off` (core task 01a1b7ed stage 3), which sets
+  `config :platform, :meeting_transcription, false`: the transcript pane
+  then says captions are unavailable instead of "lines appear here as
+  people talk", which would imply something is listening.
+  """
+  @spec transcription_available?() :: boolean()
+  def transcription_available? do
+    enabled?() and Application.get_env(:platform, :meeting_transcription, true) != false
+  end
+
+  @doc """
   Returns the LiveKit connection config, or `nil` when disabled.
   """
   @spec config() :: map() | nil

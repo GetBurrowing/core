@@ -818,6 +818,7 @@ defmodule PlatformWeb.ChatLive do
         socket
         |> assign(:in_meeting, false)
         |> assign(:meetings_enabled, false)
+        |> assign(:captions_available, false)
         |> assign(:mic_enabled, false)
         |> assign(:camera_enabled, false)
         |> assign(:screen_share_enabled, false)

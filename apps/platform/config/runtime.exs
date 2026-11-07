@@ -851,6 +851,13 @@ if livekit_api_key && livekit_api_secret do
     url: livekit_url || "wss://localhost:7880"
 end
 
+# Meetings without a transcriber (an install with no STT key yet): the
+# installer renders MEETING_TRANSCRIPTION=off, and the transcript pane says
+# captions are unavailable. Unset keeps transcription assumed on.
+if System.get_env("MEETING_TRANSCRIPTION") == "off" do
+  config :platform, :meeting_transcription, false
+end
+
 # LiveKit agent name core dispatches the meeting transcriber as, on both the
 # JWT `roomConfig.agents` path and the CreateRoom body. The LiveKit server can
 # be shared by several Burrow installs; each install needs its OWN transcriber

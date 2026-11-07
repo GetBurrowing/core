@@ -939,6 +939,11 @@ def _core_env(ctx):
         # and an install never holds a GitHub or broker credential, so this
         # is the ONE feedback variable an install is ever rendered.
         env["FEEDBACK_POLICY"] = "quarantined"
+    if ctx.m["services"]["meetings"] and not ctx.m["meetings"]["transcription"]:
+        # Core task 01a1b7ed stage 3: meetings without a transcriber (no STT
+        # key yet). Core then says captions are off instead of an empty
+        # "lines appear here as people talk" pane that implies one listens.
+        env["MEETING_TRANSCRIPTION"] = "off"
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]

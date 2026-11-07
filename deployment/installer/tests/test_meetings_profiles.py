@@ -157,5 +157,27 @@ class MeetingsProfileTest(unittest.TestCase):
         self.assertNotIn("NUM_IDLE_PROCESSES", blocks["meeting-transcriber"])
 
 
+class TranscriptionOffCoreEnvTest(unittest.TestCase):
+    """Meetings on, transcription off: core is told, so it can say captions are off."""
+
+    def core_block(self, transcription):
+        raw = load(DO_MEETINGS)
+        raw["install"]["size_tier"] = "small"
+        raw["meetings"]["transcription"] = transcription
+        rendered = build(valid(raw), registry_auth=DO_AUTH, customer_secrets=DO_MEETINGS_CUSTOMER)
+        return compose_blocks(rendered.files["compose.yaml"][0])
+
+    def test_transcription_off_sets_core_env_and_drops_the_transcriber(self):
+        blocks = self.core_block(False)
+        self.assertIn("livekit", blocks)  # meetings still on
+        self.assertNotIn("meeting-transcriber", blocks)
+        self.assertEqual(scalar(blocks["core-platform"], "  MEETING_TRANSCRIPTION"), "off")
+
+    def test_transcription_on_leaves_core_env_alone(self):
+        blocks = self.core_block(True)
+        self.assertIn("meeting-transcriber", blocks)
+        self.assertNotIn("MEETING_TRANSCRIPTION", blocks["core-platform"])
+
+
 if __name__ == "__main__":
     unittest.main()
