@@ -127,11 +127,18 @@ defmodule PlatformWeb.ShellLiveExternalBadgeTest do
       space_b = create_channel!()
       author_b = add_user!(space_b.id, author, "Mention Author")
 
+      # Landing space — the external user participates but is mentioned
+      # nowhere here. The mount must NOT sit in space A: since task 01a1b673
+      # a mention posted into the space the viewer is reading is read in chat
+      # on arrival (the cursor moves past it), so it never counts.
+      landing = create_channel!()
+      _ = add_user!(landing.id, external, @external_display_name)
+
       {:ok, view, _html} =
         conn
         |> authenticated_conn(external)
         |> with_chat_host()
-        |> live_settled("/chat/#{space_a.slug}")
+        |> live_settled("/chat/#{landing.slug}")
 
       # Baseline: mount always seeds the hook, even at zero.
       assert_push_event(view, "app_badge", %{count: 0})
