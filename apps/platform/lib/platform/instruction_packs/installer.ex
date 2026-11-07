@@ -30,7 +30,7 @@ defmodule Platform.InstructionPacks.Installer do
   end
 
   def pull(pack_id, version, roots, options \\ []) do
-    with {:ok, consent} <- consent_snapshot(),
+    result = with {:ok, consent} <- consent_snapshot(),
          true <- Keyword.get(options, :consent_snapshot, consent) == consent,
          {:ok, envelope} <- Download.fetch_envelope(pack_id, version, roots, options) do
       install(envelope, roots, consent)
@@ -38,7 +38,29 @@ defmodule Platform.InstructionPacks.Installer do
       false -> {:error, :sharing_changed}
       error -> error
     end
+    record_check(pack_id, result)
+    result
   end
+
+  defp record_check(pack_id, result) do
+    # Fixed labels only: transport errors and pack text must never become UI HTML.
+    if is_binary(pack_id) and Regex.match?(~r/\A[a-z0-9][a-z0-9_.-]{0,127}\z/, pack_id) do
+      Repo.transaction(fn ->
+        state = locked_state(pack_id)
+        now = DateTime.utc_now()
+        attrs = case result do
+          {:ok, _} -> %{checked_at: now, last_successful_check_at: now, check_error: nil}
+          {:error, reason} -> %{checked_at: now, check_error: check_error(reason)}
+        end
+        Repo.update!(Ecto.Changeset.change(state, attrs))
+      end)
+    end
+  end
+
+  defp check_error(reason) when reason in [:sharing_disabled, :sharing_changed], do: "disabled"
+  defp check_error(:pinned), do: "pinned"
+  defp check_error(reason) when reason in [:download_failed, :invalid_pack_source], do: "network"
+  defp check_error(_), do: "verification"
 
   def consent_snapshot do
     row = Sharing.get()

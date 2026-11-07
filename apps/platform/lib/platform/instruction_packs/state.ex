@@ -10,6 +10,8 @@ defmodule Platform.InstructionPacks.State do
     field(:history, {:array, :map}, default: [])
     field(:applied_at, :utc_datetime_usec)
     field(:checked_at, :utc_datetime_usec)
+    field(:last_successful_check_at, :utc_datetime_usec)
+    field(:check_error, :string)
     timestamps(type: :utc_datetime_usec)
   end
 end

@@ -182,6 +182,7 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> assign(:feedback_enabled, Policy.enabled?())
+     |> assign(:install_owner?, Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok)
      |> reset_feedback()
      |> open_from_params(params)}
   end
@@ -195,6 +196,9 @@ defmodule PlatformWeb.SettingsLive do
 
   defp open_from_params(%{assigns: %{feedback_enabled: true}} = socket, %{"sheet" => "feedback"}),
     do: assign(socket, :sheet, :feedback)
+
+  defp open_from_params(%{assigns: %{install_owner?: true}} = socket, %{"sheet" => "sharing"}),
+    do: assign(socket, :sheet, :sharing)
 
   defp open_from_params(socket, %{"sheet" => "appearance"}),
     do: assign(socket, :theme_picker_open, true)
@@ -325,6 +329,12 @@ defmodule PlatformWeb.SettingsLive do
 
   def handle_event("open_admin_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :admin)}
+
+  def handle_event("open_sharing_sheet", _params, socket) do
+    if Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok,
+      do: {:noreply, assign(socket, :sheet, :sharing)},
+      else: {:noreply, socket}
+  end
 
   def handle_event("open_sign_out_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :sign_out)}
@@ -545,6 +555,8 @@ defmodule PlatformWeb.SettingsLive do
           </span>
         </button>
 
+        <p :if={@install_owner?} class={section_label_class()}>Sharing with Burrow</p>
+        <button :if={@install_owner?} type="button" phx-click="open_sharing_sheet" data-role="settings-sharing" class={row_class()}><span>Sharing with Burrow</span><span class="hero-chevron-right size-4 text-subtle" aria-hidden="true"></span></button>
         <%= if @feedback_enabled do %>
           <p class={section_label_class()} data-role="settings-help-label">Help</p>
           <button
@@ -775,6 +787,13 @@ defmodule PlatformWeb.SettingsLive do
         </.form>
       </.sheet>
 
+      <.sheet id="settings-sharing-sheet" open={@sheet == :sharing} on_close="close_settings_sheet">
+        <:title>Sharing with Burrow</:title>
+        <div :if={@sheet == :sharing} class="max-h-[75dvh] overflow-y-auto px-4 pb-6">
+          <h2 class="text-lg font-semibold mb-4">Sharing with Burrow</h2>
+          <.live_component module={PlatformWeb.InstructionPacksComponent} id="settings-instruction-packs" actor={@current_user_record} />
+        </div>
+      </.sheet>
       <.sheet
         id="settings-sign-out-sheet"
         open={@sheet == :sign_out}
