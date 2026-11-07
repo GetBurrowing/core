@@ -1,0 +1,178 @@
+name: Native Godot packages
+on:
+  workflow_call:
+    inputs:
+      project_id: {type: string, required: true}
+      burrow_url: {type: string, required: true}
+      publish: {type: boolean, default: true}
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with: {lfs: true, persist-credentials: false}
+      - name: Resolve the immutable reusable workflow source from GitHub workload identity
+        id: workflow
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, json, os, urllib.request
+          request = urllib.request.Request(os.environ['ACTIONS_ID_TOKEN_REQUEST_URL'] + '&audience=burrow-native-builds', headers={'Authorization': 'Bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              token = json.load(response)['value']
+          payload = token.split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+          sha = claims['job_workflow_sha']
+          assert len(sha) == 40 and all(c in '0123456789abcdef' for c in sha)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha=' + sha + '\n')
+          PYTHON
+      - uses: actions/checkout@v5
+        with:
+          repository: GetBurrowing/core
+          ref: ${{ steps.workflow.outputs.sha }}
+          path: .native-tools
+          persist-credentials: false
+      - name: Install checksum-pinned Godot and matching templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+          curl -fL "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o /tmp/godot.zip
+          echo 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  /tmp/godot.zip' | sha256sum -c
+          curl -fL "$base/Godot_v4.7.2-stable_export_templates.tpz" -o /tmp/templates.zip
+          echo 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  /tmp/templates.zip' | sha256sum -c
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          unzip -q /tmp/templates.zip -d /tmp/godot
+          mkdir -p ~/.local/share/godot/export_templates
+          mv /tmp/godot/templates ~/.local/share/godot/export_templates/4.7.2.stable
+          echo "GODOT=/tmp/godot/Godot_v4.7.2-stable_linux.x86_64" >> "$GITHUB_ENV"
+      - name: Export all native clients and dedicated server from the same checkout
+        env:
+          GAME_SOURCE: ${{ github.workspace }}
+          GAME_OUTPUT: ${{ runner.temp }}/native
+        run: bash .native-tools/deployment/game-build/godot.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-packages
+          path: |
+            ${{ runner.temp }}/native/*.zip
+            ${{ runner.temp }}/native/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+  player-smoke:
+    needs: export
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-2025, package: windows-x86_64.zip, executable: voltron.exe, platform: windows}
+          - {runner: ubuntu-24.04, package: linux-x86_64.tar.gz, executable: voltron.x86_64, platform: linux}
+          - {runner: macos-14, package: macos-universal.zip, executable: Voltron.app/Contents/MacOS/Voltron, platform: macos}
+          - {runner: macos-15-intel, package: macos-universal.zip, executable: Voltron.app/Contents/MacOS/Voltron, platform: macos}
+          - {runner: ubuntu-24.04, package: linux-server-x86_64.tar.gz, executable: voltron-server.x86_64, platform: server}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: native-packages, path: packages}
+      - name: Launch packaged runtime on a clean player VM without an editor
+        shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+          EXECUTABLE: ${{ matrix.executable }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          ! command -v godot
+          mkdir player
+          if [[ "$PACKAGE" == *.zip ]]; then unzip -q "packages/$PACKAGE" -d player; else tar xzf "packages/$PACKAGE" -C player; fi
+          chmod +x "player/$EXECUTABLE"
+          if [[ "$PLATFORM" == macos ]]; then lipo -verify_arch x86_64 arm64 "player/$EXECUTABLE"; fi
+          if [[ "$PLATFORM" == server ]]; then
+            VOLTRON_ROOM_CODE=ci-smoke "player/$EXECUTABLE" --headless --quit-after 120 -- --dedicated --port=24974 > player.log 2>&1
+          else
+            "player/$EXECUTABLE" --headless --quit-after 120 > player.log 2>&1
+          fi
+          cat player.log
+          ! grep -E 'SCRIPT ERROR:|ERROR:' player.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: player-${{ matrix.runner }}-${{ matrix.platform }}
+          path: player.log
+  publish:
+    needs: [export, player-smoke]
+    if: inputs.publish && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Resolve the immutable reusable workflow source from GitHub workload identity
+        id: workflow
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, json, os, urllib.request
+          request = urllib.request.Request(os.environ['ACTIONS_ID_TOKEN_REQUEST_URL'] + '&audience=burrow-native-builds', headers={'Authorization': 'Bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              token = json.load(response)['value']
+          payload = token.split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+          sha = claims['job_workflow_sha']
+          assert len(sha) == 40 and all(c in '0123456789abcdef' for c in sha)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha=' + sha + '\n')
+          PYTHON
+      - uses: actions/checkout@v5
+        with:
+          repository: GetBurrowing/core
+          ref: ${{ steps.workflow.outputs.sha }}
+          path: .native-tools
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with: {path: game, persist-credentials: false}
+      - uses: actions/download-artifact@v4
+        with: {name: native-packages, path: packages}
+      - name: Attest immutable archives
+        uses: actions/attest-build-provenance@v3
+        with: {subject-path: 'packages/*'}
+      - name: Publish immutable release assets and dedicated image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="native-$GITHUB_SHA"
+          # Never clobber an artifact. Reruns must reuse exactly the same source release.
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$tag" --notes 'Immutable native packages. Keep while installed or session-referenced.' --prerelease
+          fi
+          gh release upload "$tag" packages/* --repo "$GITHUB_REPOSITORY"
+          mkdir server
+          tar xzf packages/linux-server-x86_64.tar.gz -C server
+          cp game/deploy/native/Dockerfile server/Dockerfile
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/native:$GITHUB_SHA"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --tag "$image" server
+          docker push "$image"
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$image")
+          python3 .native-tools/deployment/game-build/package.py --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --number "$GITHUB_RUN_NUMBER" --image "$digest" --workflow "GetBurrowing/core/.github/workflows/game-native-build.yml@$WORKFLOW_SHA" --directory packages
+        # Source SHA comes from GitHub-issued job_workflow_sha, never a caller input.
+      - name: Validate provenance and atomically register the complete build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BURROW_URL: ${{ inputs.burrow_url }}
+          PROJECT_ID: ${{ inputs.project_id }}
+        run: python3 .native-tools/deployment/game-build/publish.py packages/manifest.json --directory packages --verify-attestations --endpoint "$BURROW_URL" --project "$PROJECT_ID"
+      - name: Retain manifest beside immutable packages
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: gh release upload "native-$GITHUB_SHA" packages/manifest.json --repo "$GITHUB_REPOSITORY"

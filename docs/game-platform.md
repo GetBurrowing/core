@@ -63,11 +63,58 @@ reachability evidence. Existing public Voltron 24972 must remain untouched. Stag
 a remote :24973 server plus native clients on two independent networks; that is not proof of this provider's container.
 Stage 2 deployment/test evidence must identify its own image digest and native host revision.
 
-## Build publisher identity
+## Immutable package publication (task 01a1b287 stage 3)
 
-`GAME_NATIVE_PUBLISHERS_FILE` points to 0600 JSON mapping project UUID to SHA256 of its CI
-publisher credential. CI stores the raw credential in its repository secret, sends it only
-as Authorization bearer to POST `/api/ext/play/builds/:project_id`. It cannot publish another
-project. Manifests bind id/repo/engine/protocol/capacity/server-image digest. Existing IDs are
-immutable and conflicting content is rejected. Native build packaging is stage 3, Godot first;
-Unreal will reuse the shared play-host runner rather than a second packager.
+`deployment/game-build/godot.sh` exports Windows x86_64, Linux x86_64, macOS Universal 2
+(arm64 and x86_64), and Linux dedicated-server packages using exactly Godot 4.7.2 and its
+checksum-pinned matching templates. Export presets add the `native` feature, selecting the
+native lobby without changing the streamed default. Server images execute the exported
+runtime, not an editor. Clean Actions player VMs execute the archives without installing
+an engine; macOS checks both Mach-O slices. Archive entries retain PCK/resources and mode.
+
+The engine-neutral `publish.py` builds nothing. It validates archives, hashes, sizes,
+relative executable paths and the complete matrix, then verifies GitHub provenance with
+`gh attestation verify` bound to repository, source SHA and the immutable reusable workflow.
+Main pushes only register after every clean-player test and attestation succeeds. Immutable
+`native-<source SHA>` releases are never overwritten, and are retained indefinitely in this
+version (including installed rollback versions and active-session artifacts). CI reruns
+that conflict fail rather than replacing an archive. A failed partial release is never latest.
+
+`GAME_NATIVE_PUBLISHERS_FILE` now contains project UUID -> identity policy (NOT a secret):
+`repository`, numeric-string `repository_id`, full caller `workflow_ref` at
+`refs/heads/main`, and `job_workflow_ref` at a reviewed 40-character reusable workflow SHA.
+Core verifies RS256 against the fixed GitHub issuer's HTTPS JWKS, audience
+`burrow-native-builds`, validity, repo id, main push, caller/reusable identity, source SHA,
+and run number. A caller's repo string is never proof. GitHub rotates signing keys; the
+trust anchor is the fixed issuer/JWKS origin plus the pinned workload policy. Old static
+publisher credentials are refused. This is a publisher-auth replacement, not a parallel UI.
+The publisher obtains short-lived OIDC only in memory and sends it in Authorization.
+
+Latest is selected atomically among fully validated immutable rows by signed workflow run
+number, not finish time. Older finishing runs cannot overwrite a newer main build. Running
+sessions retain their original stored manifest. Rollback installers can fetch an older build
+by its immutable id without rewinding latest. A workflow replacement must preserve this
+sequence or be explicitly migrated; do not silently reset its counter.
+
+Private artifacts: authenticated channel readers with current repository access request
+`GET /api/ext/play/browser/channels/:channel/builds/:build` and CSRF-protected
+`POST .../assets/:artifact_index`. Core exchanges its repository-scoped asset credential
+for GitHub's short-lived HTTPS asset URL and returns it with no-store/no-referrer headers.
+`GAME_NATIVE_ASSET_CREDENTIALS_FILE` is a 0600 JSON map of repository -> read-only GitHub
+App token/fine-grained credential; rotate it through the existing operator secret path.
+No repository PAT is returned to a launcher/browser. The signed asset URL is a bearer
+secret: do not put it in chat, logs or telemetry, and verify the manifest checksum after
+fetch. GitHub controls actual URL expiry (the response's 60 seconds is the client reuse
+limit, not a promise that GitHub revokes at exactly 60 seconds).
+
+Unreal integration boundary: task 01a17b51 stage 3 owns play-host's BuildCookRun runner,
+LFS handling, DDC cache and archive-and-launch. There are no Unreal scripts, fixture or
+workflow jobs here. After that runner lands, a follow-up can pass its archive metadata
+through `publish.py`: source SHA, engine identifier, platform/architecture/role, bytes,
+SHA256, executable-relative path, immutable asset id, protocol/capacity and server image
+digest. An open engine field proves metadata extensibility, not Unreal packaging/execution.
+
+macOS packages use ad-hoc signing provided by Godot, with no generated signing key.
+Public distribution without Gatekeeper friction requires the existing organization's
+Developer ID Application identity and notarization credentials, held by its Apple Developer
+account custodian (Ryan must identify the custodian); no agent creates a signing key.

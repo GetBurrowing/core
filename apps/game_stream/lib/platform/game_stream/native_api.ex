@@ -2,7 +2,7 @@ defmodule Platform.GameStream.NativeAPI do
   @moduledoc "Session-scoped host admission and project-scoped CI publishing. No browser/session auth is inherited."
   @behaviour Plug
   import Plug.Conn
-  alias Platform.GameStream.{NativeSessions, NativeBuild, JoinToken}
+  alias Platform.GameStream.{NativeSessions, NativeBuild, BuildIdentity}
   def init(opts), do: opts
 
   def call(%{path_info: ["browser" | rest]} = conn, _) do
@@ -46,8 +46,8 @@ defmodule Platform.GameStream.NativeAPI do
   defp dispatch(%{path_info: ["builds", project_id]} = conn) do
     with true <- Platform.UUID.valid?(project_id),
          ["Bearer " <> credential] <- get_req_header(conn, "authorization"),
-         true <- publisher?(project_id, credential),
          manifest when is_map(manifest) <- conn.body_params,
+         :ok <- publisher(project_id, credential, manifest),
          {:ok, row} <- NativeBuild.register(project_id, manifest) do
       reply(conn, 200, %{id: row.id})
     else
@@ -57,11 +57,9 @@ defmodule Platform.GameStream.NativeAPI do
 
   defp dispatch(conn), do: reply(conn, 404, %{error: "not_found"})
 
-  defp publisher?(id, credential) do
-    expected = Application.get_env(:game_stream, :native_publishers, %{})[id]
-
-    is_binary(expected) and byte_size(expected) == 64 and
-      Plug.Crypto.secure_compare(expected, JoinToken.hash(credential))
+  defp publisher(id, credential, manifest) do
+    policy = Application.get_env(:game_stream, :native_publishers, %{})[id]
+    BuildIdentity.verify(credential, policy, manifest)
   end
 
   defp reply(conn, status, body),

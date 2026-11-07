@@ -2,7 +2,7 @@ defmodule Platform.GameStream.NativeBrowserAPI do
   @moduledoc "Session-authenticated native Play handoff. Explicit CSRF protection; no inherited extension auth."
   @behaviour Plug
   import Plug.Conn
-  alias Platform.GameStream.{GameChannels, NativeSessions}
+  alias Platform.GameStream.{GameChannels, NativeSessions, NativeAssets}
 
   def init(opts), do: opts
 
@@ -46,6 +46,12 @@ defmodule Platform.GameStream.NativeBrowserAPI do
 
   defp dispatch(%{method: "POST", path_info: ["sessions", id, "join"]} = conn),
     do: result(conn, NativeSessions.mint(conn.assigns.current_user, id))
+
+  defp dispatch(%{method: "GET", path_info: ["channels", channel, "builds", build]} = conn),
+    do: result(conn, NativeAssets.manifest(conn.assigns.current_user, channel, build))
+
+  defp dispatch(%{method: "POST", path_info: ["channels", channel, "builds", build, "assets", index]} = conn),
+    do: result(conn, NativeAssets.download(conn.assigns.current_user, channel, build, index))
 
   defp dispatch(conn), do: reply(conn, 404, %{error: "not_found"})
   defp result(conn, {:ok, value}), do: reply(conn, 200, value)

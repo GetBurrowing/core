@@ -393,4 +393,26 @@ defmodule Platform.GameStream.NativeSessionsTest do
       Repo.delete_all(from(d in SurfaceDefault, where: d.id in ^ids))
     end
   end
+  test "complete immutable packages publish atomically and delayed older workflow cannot replace latest", ctx do
+    artifacts = for {os, arch, role} <- [{"windows", "x86_64", "client"}, {"linux", "x86_64", "client"}, {"macos", "universal", "client"}, {"linux", "x86_64", "server"}] do
+      %{"os" => os, "arch" => arch, "role" => role, "size" => 20, "asset_id" => 1, "sha256" => String.duplicate("a", 64), "executable" => "game", "filename" => os <> role <> ".zip"}
+    end
+    complete = Map.merge(ctx.build.manifest, %{"schema_version" => 1, "source_sha" => String.duplicate("b", 40), "build_number" => 42, "artifacts" => artifacts})
+    newer = Map.put(complete, "id", ctx.build.id <> "-42")
+    older = complete |> Map.put("id", ctx.build.id <> "-41") |> Map.put("build_number", 41)
+    assert {:ok, _} = NativeBuild.register(ctx.project.id, newer)
+    assert {:ok, _} = NativeBuild.register(ctx.project.id, older)
+    assert NativeBuild.latest(ctx.project.id).id == newer["id"]
+    assert {:ok, _} = NativeBuild.register(ctx.project.id, newer)
+    assert {:error, :immutable_conflict} = NativeBuild.register(ctx.project.id, Map.put(newer, "engine", "other"))
+    incomplete = complete |> Map.put("id", ctx.build.id <> "-43") |> Map.put("build_number", 43) |> Map.put("artifacts", tl(artifacts))
+    assert {:error, :invalid_build} = NativeBuild.register(ctx.project.id, incomplete)
+    assert NativeBuild.latest(ctx.project.id).id == newer["id"]
+    assert Repo.get!(NativeBuild, older["id"]).manifest == older
+    assert {:ok, _} = Platform.GameStream.NativeAssets.manifest(ctx.user, ctx.channel.id, older["id"])
+    assert {:error, :unauthorized} = Platform.GameStream.NativeAssets.manifest(ctx.user, Ecto.UUID.generate(), older["id"])
+    # Rollback can install the retained older immutable package without rewriting latest.
+    assert NativeBuild.latest(ctx.project.id).id == newer["id"]
+  end
+
 end
