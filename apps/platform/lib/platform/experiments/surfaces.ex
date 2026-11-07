@@ -88,7 +88,11 @@ defmodule Platform.Experiments.Surfaces do
     # and decay (0061-learned-defaults.md). Nothing is seeded; the control
     # is prefill_threshold 0.6, min_signals 3, act_after_accepts 5,
     # half_life_days 30.
-    Platform.Experiments.Surfaces.LearnedDefaults
+    Platform.Experiments.Surfaces.LearnedDefaults,
+    # Task 01a1b6ff stage 1: the voice block a Burrow-run agent's prompt
+    # carries and its banned-phrase list. Subject: the agent. The control is
+    # VoiceBlock.text/0 and VoiceCheck.default_banned/0; nothing is seeded.
+    Platform.Experiments.Surfaces.AgentVoiceBlock
   ]
 
   @prompt_surface "dispatch.prompt"

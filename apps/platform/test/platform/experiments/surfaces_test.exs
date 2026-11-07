@@ -94,6 +94,17 @@ defmodule Platform.Experiments.SurfacesTest do
       assert ChatContextSummary.targets() == ["chat.context_summary"]
     end
 
+    test "agents.voice_block is registered on the :dispatch path with its one target" do
+      alias Platform.Experiments.Surfaces.AgentVoiceBlock
+
+      # Task 01a1b6ff stage 1.
+      assert Surfaces.get("agents.voice_block") == AgentVoiceBlock
+      assert AgentVoiceBlock in Surfaces.core_surfaces()
+      assert AgentVoiceBlock.path() == :dispatch
+      assert AgentVoiceBlock.subject_type() == "agent"
+      assert AgentVoiceBlock.targets() == ["agents.voice_block"]
+    end
+
     test "chat.context_summary validates its payload" do
       alias Platform.Experiments.Surfaces.ChatContextSummary, as: S
 

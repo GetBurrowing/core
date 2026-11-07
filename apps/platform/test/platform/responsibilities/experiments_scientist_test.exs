@@ -246,6 +246,8 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
       assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
                [
                  "agents.tool_profile",
+                 # Task 01a1b6ff stage 1: the voice block surface.
+                 "agents.voice_block",
                  "chat.context_summary",
                  "dispatch.code_mode",
                  "dispatch.product_docs_preamble",
