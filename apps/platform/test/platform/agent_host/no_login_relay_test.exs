@@ -49,7 +49,10 @@ defmodule Platform.AgentHost.NoLoginRelayTest do
 
   # The only lib modules whose CODE may name `Platform.AgentHost.LoginCode`
   # (task 01a1b365), and the only ones that may call `LoginCode.reveal/1`.
+  # Connect AI (stage 3) wraps the pasted code and hands it on; it never
+  # unwraps one.
   @login_code_allowlist [
+    "apps/platform/lib/platform_web/live/connect_ai_live.ex",
     "apps/platform/lib/platform/agent_host/login_code.ex",
     "apps/platform/lib/platform/agent_host.ex",
     "apps/platform/lib/platform/agent_host/reconciler.ex",
