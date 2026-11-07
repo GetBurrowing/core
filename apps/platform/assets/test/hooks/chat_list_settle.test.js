@@ -4,6 +4,7 @@ import ChatListSettle, {
   FLIP_MS,
   HIGHLIGHT_MS,
   FADE_MS,
+  FLOAT_COLOR,
   REHOLD_MS,
   ROW_SELECTOR,
 } from "../../js/hooks/chat_list_settle.js"
@@ -31,27 +32,27 @@ function target() {
   }
 }
 
-function fakeClassList() {
-  const set = new Set()
-  return {
-    set,
-    add: (...cs) => cs.forEach((c) => set.add(c)),
-    remove: (...cs) => cs.forEach((c) => set.delete(c)),
-    contains: (c) => set.has(c),
-  }
-}
-
+// A row with a fake Web Animations `animate`: each call is recorded with its
+// keyframes and options.
 function fakeRow(spaceId, top, floated = false) {
-  return {
+  const row = {
     dataset: floated ? { spaceId, floated: "true" } : { spaceId },
     top,
-    style: {},
-    classList: fakeClassList(),
+    animations: [],
     getBoundingClientRect() {
       return { top: this.top }
     },
   }
+  row.animate = vi.fn((keyframes, options) => {
+    const anim = { keyframes, options, cancel: vi.fn(), onfinish: null }
+    row.animations.push(anim)
+    return anim
+  })
+  return row
 }
+
+const slides = (row) => row.animations.filter((a) => "transform" in a.keyframes[0])
+const highlights = (row) => row.animations.filter((a) => "backgroundColor" in a.keyframes[0])
 
 let doc
 
@@ -273,54 +274,100 @@ describe("ChatListSettle", () => {
     el.rows = [b, a]
     hook.updated()
 
-    expect(b.style.transform).toBe("translateY(60px)")
-    expect(a.style.transform).toBe("translateY(-60px)")
+    expect(slides(b)).toHaveLength(1)
+    expect(slides(b)[0].keyframes).toEqual([
+      { transform: "translateY(60px)" },
+      { transform: "none" },
+    ])
+    expect(slides(b)[0].options).toEqual({ duration: 150, easing: "ease-out" })
+    expect(slides(a)[0].keyframes[0]).toEqual({ transform: "translateY(-60px)" })
+  })
 
-    vi.advanceTimersByTime(0)
-    expect(b.style.transition).toBe("transform 150ms ease-out")
-    expect(b.style.transform).toBe("")
-    vi.advanceTimersByTime(150)
-    expect(b.style.transition).toBe("")
+  it("a shift with no re-sort (a fold) animates nothing", () => {
+    const a = fakeRow("a", 100)
+    const b = fakeRow("b", 160)
+    const { hook, el } = mount([a, b])
+
+    hook.beforeUpdate()
+    a.top = 40
+    b.top = 100
+    el.rows = [a, b]
+    hook.updated()
+
+    expect(a.animate).not.toHaveBeenCalled()
+    expect(b.animate).not.toHaveBeenCalled()
+  })
+
+  it("reduced motion starts no animation", () => {
+    stubMotion(true)
+    const a = fakeRow("a", 0)
+    const b = fakeRow("b", 60)
+    const { hook, el } = mount([a, b])
+
+    hook.beforeUpdate()
+    b.top = 0
+    a.top = 60
+    el.rows = [b, a]
+    hook.updated()
+
+    expect(a.animate).not.toHaveBeenCalled()
+    expect(b.animate).not.toHaveBeenCalled()
   })
 
   describe("float highlight (task 01a1b6fd stage 2)", () => {
-    it("at lg, a row that floated up gets bg-base-200 for 600ms, then fades and clears", () => {
+    it("at lg, a row that floated up holds base-100 for 600ms, then fades to its own surface", () => {
       const { a, b, c } = floatC()
 
-      expect(c.classList.contains("bg-base-200")).toBe(true)
-      expect(a.classList.set.size).toBe(0)
-      expect(b.classList.set.size).toBe(0)
+      expect(highlights(c)).toHaveLength(1)
+      const { keyframes, options } = highlights(c)[0]
+      expect(FLOAT_COLOR).toBe("var(--color-base-100)")
+      // Held at the token from 0 to 600ms of a 900ms run; the implicit end
+      // keyframe is the row's own surface, so the last 300ms is the fade.
+      expect(keyframes).toEqual([
+        { backgroundColor: "var(--color-base-100)", offset: 0 },
+        {
+          backgroundColor: "var(--color-base-100)",
+          offset: HIGHLIGHT_MS / (HIGHLIGHT_MS + FADE_MS),
+          easing: "ease-out",
+        },
+      ])
+      // Linear over the run (no effect-level easing), so the hold is a true
+      // 600ms: an effect easing would compress it.
+      expect(options).toEqual({ duration: HIGHLIGHT_MS + FADE_MS })
+      expect(keyframes[1].offset * options.duration).toBe(600)
+      expect(highlights(a)).toHaveLength(0)
+      expect(highlights(b)).toHaveLength(0)
+    })
 
-      vi.advanceTimersByTime(HIGHLIGHT_MS - 1)
-      expect(c.classList.contains("bg-base-200")).toBe(true)
+    it("the highlight is removed when it finishes, and cancelled on destroy", () => {
+      const { hook, c } = floatC()
+      const anim = highlights(c)[0]
+      expect(hook.highlights.get("c")).toBe(anim)
+      anim.onfinish()
+      expect(hook.highlights.has("c")).toBe(false)
 
-      vi.advanceTimersByTime(1)
-      expect(c.classList.contains("bg-base-200")).toBe(false)
-      expect(c.classList.contains("transition-colors")).toBe(true)
-
-      vi.advanceTimersByTime(FADE_MS)
-      expect(c.classList.set.size).toBe(0)
+      const again = floatC()
+      const pending = highlights(again.c)[0]
+      again.hook.destroyed()
+      expect(pending.cancel).toHaveBeenCalled()
     })
 
     it("the slide still runs alongside the highlight", () => {
       const { c } = floatC()
-      expect(c.style.transform).toBe("translateY(120px)")
+      expect(slides(c)[0].keyframes[0]).toEqual({ transform: "translateY(120px)" })
+      expect(slides(c)[0].options.duration).toBe(150)
     })
 
     it("on the phone: the slide, no highlight", () => {
       const { c } = floatC({ desktop: false })
-      expect(c.style.transform).toBe("translateY(120px)")
-      vi.advanceTimersByTime(0)
-      expect(c.style.transition).toBe("transform 150ms ease-out")
-      expect(c.classList.set.size).toBe(0)
+      expect(slides(c)).toHaveLength(1)
+      expect(slides(c)[0].options.duration).toBe(150)
+      expect(highlights(c)).toHaveLength(0)
     })
 
     it("under reduced motion: no slide and no highlight, at lg too", () => {
       const { c } = floatC({ reduce: true })
-      vi.advanceTimersByTime(HIGHLIGHT_MS + FADE_MS)
-      expect(c.style.transform).toBeUndefined()
-      expect(c.style.transition).toBeUndefined()
-      expect(c.classList.set.size).toBe(0)
+      expect(c.animate).not.toHaveBeenCalled()
     })
 
     it("an unmarked row that moves up is not highlighted", () => {
@@ -333,7 +380,8 @@ describe("ChatListSettle", () => {
       a.top = 60
       el.rows = [b, a]
       hook.updated()
-      expect(b.classList.set.size).toBe(0)
+      expect(slides(b)).toHaveLength(1)
+      expect(highlights(b)).toHaveLength(0)
     })
 
     it("a marked row that passes another marked row floats; one that rises only because its neighbour left does not", () => {
@@ -348,53 +396,20 @@ describe("ChatListSettle", () => {
       a.top = 60
       el.rows = [b, a, q]
       hook.updated()
-      expect(b.classList.contains("bg-base-200")).toBe(true)
-      expect(a.classList.set.size).toBe(0)
+      expect(highlights(b)).toHaveLength(1)
+      expect(highlights(a)).toHaveLength(0)
 
       // b leaves the run and settles below a: a rises, but floated nothing.
-      vi.advanceTimersByTime(HIGHLIGHT_MS + FADE_MS)
       hook.beforeUpdate()
       delete b.dataset.floated
       a.top = 0
       b.top = 60
       el.rows = [a, b, q]
       hook.updated()
-      expect(a.classList.set.size).toBe(0)
-      expect(b.classList.set.size).toBe(0)
+      expect(slides(a)).toHaveLength(2)
+      expect(highlights(a)).toHaveLength(0)
+      expect(highlights(b)).toHaveLength(1)
     })
-  })
-
-  it("a shift with no re-sort (a fold) animates nothing", () => {
-    const a = fakeRow("a", 100)
-    const b = fakeRow("b", 160)
-    const { hook, el } = mount([a, b])
-
-    hook.beforeUpdate()
-    a.top = 40
-    b.top = 100
-    el.rows = [a, b]
-    hook.updated()
-
-    expect(a.style.transform).toBeUndefined()
-    expect(b.style.transform).toBeUndefined()
-  })
-
-  it("reduced motion applies no transform", () => {
-    stubMotion(true)
-    const a = fakeRow("a", 0)
-    const b = fakeRow("b", 60)
-    const { hook, el } = mount([a, b])
-
-    hook.beforeUpdate()
-    b.top = 0
-    a.top = 60
-    el.rows = [b, a]
-    hook.updated()
-    vi.advanceTimersByTime(FLIP_MS * 2)
-
-    expect(a.style.transform).toBeUndefined()
-    expect(b.style.transform).toBeUndefined()
-    expect(a.style.transition).toBeUndefined()
   })
 
   it("listens passively and cleans up on destroy", () => {

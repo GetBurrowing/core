@@ -20,11 +20,11 @@
  *     re-sorts once.
  *   - On the update after a re-sort, rows that moved slide from their old
  *     place over FLIP_MS (150ms, task 01a1b6fd stage 2). Under
- *     prefers-reduced-motion they jump: no transform is ever applied.
+ *     prefers-reduced-motion they jump: no animation is ever started.
  *   - FLOAT HIGHLIGHT (task 01a1b6fd stage 2), at lg only (DESKTOP_QUERY):
  *     a row the server marks `data-floated` (the unread-first active run)
  *     that just moved UP, and either was not marked before or passed a row
- *     that is still marked, gets FLOAT_CLASSES (bg-base-200) for
+ *     that is still marked, gets FLOAT_COLOR (var(--color-base-100)) for
  *     HIGHLIGHT_MS (600ms), then fades to its normal surface over FADE_MS.
  *     Never on the phone and never under prefers-reduced-motion. A row that
  *     rises only because a marked row above it left the run is not a float.
@@ -45,9 +45,12 @@ export const FLIP_MS = 150
 export const HIGHLIGHT_MS = 600
 export const FADE_MS = 300
 export const DESKTOP_QUERY = "(min-width: 1024px)"
-// Token-only classes (the Palette's base-200 highlight).
-export const FLOAT_CLASSES = ["bg-base-200"]
-export const FADE_CLASSES = ["transition-colors", "duration-300", "ease-out"]
+// The highlight is a token, never a literal colour. The design direction
+// names base-200 over base-100 rows, but this list's ground IS base-200
+// (`Partials.ChatList`, `## Paint`), where base-200 paints nothing: measured
+// rgb(17, 18, 20) on rgb(17, 18, 20) in dark (task 01a1b6fd stage 2). So the
+// row lifts to base-100, the same one-step surface as its pressed fill.
+export const FLOAT_COLOR = "var(--color-base-100)"
 // Re-hold throttle while held: comfortably under the server's 10s timeout.
 export const REHOLD_MS = 2500
 export const ROW_SELECTOR = '[data-role="chat-list-row-wrap"]'
@@ -118,8 +121,11 @@ const touchPointer = (e) => !!e && e.pointerType === "touch"
 // A touchend that leaves another finger on the glass is not a release.
 const fingersLeft = (e) => !!e && !!e.touches && e.touches.length > 0
 
-const nextFrame = (fn) =>
-  (globalThis.requestAnimationFrame || ((cb) => setTimeout(cb, 0)))(fn)
+// The slide and the highlight are Web Animations, never inline styles or
+// classes: a LiveView patch rewrites `style` and `class` from the server's
+// markup, and a second patch inside the 150ms (an arrival renders more than
+// once) was measured stripping both mid-flight (task 01a1b6fd stage 2).
+// Animations are not attributes, so a patch cannot cancel them.
 
 export default {
   mounted() {
@@ -168,7 +174,7 @@ export default {
 
   destroyed() {
     this.clearTimer()
-    for (const timers of this.highlights.values()) timers.forEach(clearTimeout)
+    for (const anim of this.highlights.values()) anim.cancel()
     this.highlights.clear()
     this.el.removeEventListener("pointerdown", this.onDown, PASSIVE)
     this.el.removeEventListener("touchstart", this.onDown, PASSIVE)
@@ -216,22 +222,23 @@ export default {
     this.wasFloated = floatedIds(this.el)
   },
 
-  // The desktop float highlight: FLOAT_CLASSES for HIGHLIGHT_MS, then a
-  // FADE_MS colour transition back to the row's own surface.
+  // The desktop float highlight: FLOAT_COLOR for HIGHLIGHT_MS, then a FADE_MS
+  // fade back to the row's own surface (the implicit end keyframe).
   highlight(row) {
     const id = row.dataset.spaceId
-    for (const t of this.highlights.get(id) || []) clearTimeout(t)
-    row.classList.remove(...FADE_CLASSES)
-    row.classList.add(...FLOAT_CLASSES)
-    const fade = setTimeout(() => {
-      row.classList.add(...FADE_CLASSES)
-      row.classList.remove(...FLOAT_CLASSES)
-    }, HIGHLIGHT_MS)
-    const done = setTimeout(() => {
-      row.classList.remove(...FADE_CLASSES)
-      this.highlights.delete(id)
-    }, HIGHLIGHT_MS + FADE_MS)
-    this.highlights.set(id, [fade, done])
+    const prior = this.highlights.get(id)
+    if (prior) prior.cancel()
+    const total = HIGHLIGHT_MS + FADE_MS
+    const anim = row.animate(
+      [
+        { backgroundColor: FLOAT_COLOR, offset: 0 },
+        // The easing is per segment: flat for the hold, ease-out for the fade.
+        { backgroundColor: FLOAT_COLOR, offset: HIGHLIGHT_MS / total, easing: "ease-out" },
+      ],
+      { duration: total },
+    )
+    this.highlights.set(id, anim)
+    anim.onfinish = () => this.highlights.delete(id)
   },
 
   updated() {
@@ -244,28 +251,23 @@ export default {
     const rows = [...this.el.querySelectorAll(ROW_SELECTOR)]
     if (!reordered(before, rows)) return
 
-    if (isDesktop()) for (const row of floatedUp(before, wasFloated, rows)) this.highlight(row)
+    // Measured BEFORE any slide starts: a running slide's transform puts the
+    // row back at its old top, so it would read as not having moved.
+    const floated = isDesktop() ? floatedUp(before, wasFloated, rows) : []
 
-    const moved = []
     for (const row of rows) {
       const id = row.dataset.spaceId
-      if (!before.has(id)) continue
+      if (!before.has(id) || typeof row.animate !== "function") continue
       const delta = before.get(id) - row.getBoundingClientRect().top
       if (delta === 0) continue
-      row.style.transition = "none"
-      row.style.transform = `translateY(${delta}px)`
-      moved.push(row)
+      row.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], {
+        duration: FLIP_MS,
+        easing: "ease-out",
+      })
     }
-    if (moved.length === 0) return
 
-    nextFrame(() => {
-      for (const row of moved) {
-        row.style.transition = `transform ${FLIP_MS}ms ease-out`
-        row.style.transform = ""
-      }
-      setTimeout(() => {
-        for (const row of moved) row.style.transition = ""
-      }, FLIP_MS)
-    })
+    for (const row of floated) {
+      if (typeof row.animate === "function") this.highlight(row)
+    }
   },
 }

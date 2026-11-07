@@ -74,8 +74,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
   Motion (task 01a1b6fd stage 2): `ChatListSettle` slides a re-sorted row
   over 150ms on phone and desktop. A row in the active run carries
-  `data-floated`; at lg only, one that just floated up gets a 600ms base-200
-  highlight that fades to its normal surface. Under prefers-reduced-motion
+  `data-floated`; at lg only, one that just floated up holds a base-100
+  highlight for 600ms, then fades to its normal surface (base-100, not the
+  design direction's base-200: on this base-200 ground base-200 paints
+  nothing). Under prefers-reduced-motion
   rows jump, with no slide and no highlight. Unread is the semibold name,
   never a row tint.
 
