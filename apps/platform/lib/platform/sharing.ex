@@ -14,8 +14,8 @@ defmodule Platform.Sharing do
   switch or switched without being shown. Owner-facing copy never says
   "telemetry" or "analytics"; `Platform.SharingTest` pins that.
 
-  Five entries ship today: `feedback`, `usage_counts`, `friction_reports`,
-  `help_channel_reports` and `instruction_updates`. More are expected, each added as ONE entry here
+  Six entries ship today: `feedback`, `usage_counts`, `friction_reports`,
+  `help_channel_reports`, `instruction_updates` and `learned_default_shapes`. More are expected, each added as ONE entry here
   plus ONE boolean column on `install_sharing` and ONE env name for the seed:
 
     * support access (task 01a1b362) adds an entry when it lands;
@@ -69,6 +69,7 @@ defmodule Platform.Sharing do
           | :friction_reports
           | :help_channel_reports
           | :instruction_updates
+          | :learned_default_shapes
           | :instruction_updates_stopped
 
   @type entry :: %{
@@ -100,7 +101,8 @@ defmodule Platform.Sharing do
         "How often features are used and where people stop. No messages, names or emails.",
       exactly_sent: [
         "A count per named event, for example meeting.started or composer.sent",
-        "Your random install id"
+        "Your random install id",
+        "Applied instruction pack ids and versions, and whether local edits are active; never instruction text"
       ],
       default_for_new_installs: true
     },
@@ -133,12 +135,24 @@ defmodule Platform.Sharing do
         "Instruction pack ids and versions are requested from the existing broker; instruction text is received, not sent"
       ],
       default_for_new_installs: true
+    },
+    %{
+      key: :learned_default_shapes,
+      title: "Anonymous learned defaults",
+      description:
+        "Share anonymous patterns of suggestions accepted or changed. Only groups of at least five people are sent.",
+      exactly_sent: [
+        "Action and suggestion rung, bucketed counts and accept rates, anonymous group size and threshold settings",
+        "Pack-attributed rates are unavailable when observation-time provenance is unknown; no raw signals or identities are sent"
+      ],
+      default_for_new_installs: true
     }
   ]
 
   @never_sent ["message text", "names", "emails", "space or agent names"]
 
   @seed_env %{
+    learned_default_shapes: "LEARNED_DEFAULT_SHAPES",
     instruction_updates: "INSTRUCTION_UPDATES",
     usage_counts: "USAGE_COUNTS",
     friction_reports: "FRICTION_REPORTS",

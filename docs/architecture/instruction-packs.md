@@ -186,8 +186,14 @@ current contract aggregates historic signals without observation-time instructio
 pack provenance. Pack-attributed rates therefore remain **unavailable**, never
 zero and never labelled with today's pack version. A future provenance-aware
 contract must capture it when observations happen and preserve unknown historical
-observations. Shape transport remains the common-batch task 01a1b6a5; instruction
-updates do not create another raw-signal query or a duplicate shape sender.
+observations. The prerequisite shape transport from task 01a1b6a5 is implemented as the same
+common usage request: optional `learned_default_shapes`, produced only by
+`Sharing.LearnedShapes.snapshot/0` calling `Habits.Shapes.aggregate/0`. Each shape
+is explicitly marked `pack_provenance: unavailable`; historic rates are not
+joined to current inventory. Both `usage_counts` and `learned_default_shapes`
+consents, plus the instruction-wide stop, apply at final send. Receiver repeats
+the literal field/variant/bucket bounds and the five-user floor. No raw-signal
+query or duplicate shape sender is introduced.
 
 A signed adversarial instruction can ask for export or a grant; it remains text.
 The protected sharing, feedback and role-grant APIs enforce their existing owner,

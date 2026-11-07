@@ -157,4 +157,3 @@ defmodule Platform.InstructionPacks.OutcomesTest do
     refute_receive {:wire, _}
   end
 end
-

@@ -941,7 +941,7 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a1b678 stage 3: sharing_list and sharing_set in
     # `federation` and feedback_submit's `space_id`. Measured locally.
     # Task 01a1b6e1: instruction_updates adds one Sharing key to sharing_set
-    # enum/disclosure copy. Names, bundles and all other schemas stay pinned.
+    # and learned_default_shapes enum/disclosure copy. Names, bundles and all other schemas stay pinned.
     # Measured by test-rig extensions_test on 5b1d04b64 (30/31; digest alone changed).
     @main_tool_digest_off "ebf9d60d436909e48e0704be88cc07283330e8bd9bbcd2ab9a5d744f0341d586"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
@@ -990,14 +990,24 @@ defmodule Platform.ExtensionsTest do
     defp canon(x), do: x
 
     # Preserve the previous byte oracle after removing ONLY this task's
-    # independently named enum value and its generated disclosure suffix.
+    # independently named enum values and generated disclosure suffixes.
     defp without_instruction_updates(definitions) do
       Enum.map(definitions, fn
         %{name: "sharing_set"} = tool ->
           update_in(tool, [:parameters, :key], fn key ->
             key
-            |> update_in([:schema, :enum], &List.delete(&1, "instruction_updates"))
-            |> Map.update!(:description, &String.replace_suffix(&1, ", instruction_updates", ""))
+            |> update_in(
+              [:schema, :enum],
+              &Enum.reject(&1, fn value ->
+                value in ~w(instruction_updates learned_default_shapes)
+              end)
+            )
+            |> Map.update!(
+              :description,
+              &(&1
+                |> String.replace_suffix(", learned_default_shapes", "")
+                |> String.replace_suffix(", instruction_updates", ""))
+            )
           end)
 
         tool ->

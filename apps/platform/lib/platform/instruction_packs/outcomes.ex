@@ -82,4 +82,3 @@ defmodule Platform.InstructionPacks.Outcomes do
   defp valid_row?(_), do: false
   defp version?(n), do: is_integer(n) and n > 0 and n <= 9_223_372_036_854_775_807
 end
-

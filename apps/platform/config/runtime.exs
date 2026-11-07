@@ -494,6 +494,7 @@ if config_env() != :test do
 
   config :platform, :sharing_seed,
     instruction_updates: sharing_on?.("INSTRUCTION_UPDATES"),
+    learned_default_shapes: sharing_on?.("LEARNED_DEFAULT_SHAPES"),
     usage_counts: sharing_on?.("USAGE_COUNTS"),
     friction_reports: sharing_on?.("FRICTION_REPORTS"),
     help_channel_reports: sharing_on?.("HELP_CHANNEL_REPORTS")

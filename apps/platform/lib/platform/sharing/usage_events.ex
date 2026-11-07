@@ -251,11 +251,25 @@ defmodule Platform.Sharing.UsageEvents do
     case Jason.encode(body) do
       {:ok, encoded} ->
         cond do
-          elem(Redaction.redact(encoded), 1) > 0 -> :redaction_hit
-          Regex.match?(@email, encoded) -> :email_sentinel
-          not valid_outcomes?(body) -> :unknown_string
-          not only_known_strings?(Map.delete(body, "instruction_outcomes")) -> :unknown_string
-          true -> nil
+          elem(Redaction.redact(encoded), 1) > 0 ->
+            :redaction_hit
+
+          Regex.match?(@email, encoded) ->
+            :email_sentinel
+
+          not valid_outcomes?(body) ->
+            :unknown_string
+
+          not valid_shapes?(body) ->
+            :unknown_string
+
+          not only_known_strings?(
+            Map.drop(body, ["instruction_outcomes", "learned_default_shapes"])
+          ) ->
+            :unknown_string
+
+          true ->
+            nil
         end
 
       {:error, _} ->
@@ -266,6 +280,11 @@ defmodule Platform.Sharing.UsageEvents do
   defp valid_outcomes?(body) do
     not Map.has_key?(body, "instruction_outcomes") or
       Platform.InstructionPacks.Outcomes.valid?(body["instruction_outcomes"])
+  end
+
+  defp valid_shapes?(body) do
+    not Map.has_key?(body, "learned_default_shapes") or
+      Platform.Sharing.LearnedShapes.valid?(body["learned_default_shapes"])
   end
 
   defp only_known_strings?(body) do
@@ -281,4 +300,3 @@ defmodule Platform.Sharing.UsageEvents do
   defp strings(n) when is_integer(n), do: []
   defp strings(other), do: [other]
 end
-

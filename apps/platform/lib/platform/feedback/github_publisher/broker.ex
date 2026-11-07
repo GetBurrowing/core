@@ -111,6 +111,11 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
           Platform.Sharing.enabled?(:instruction_updates_stopped) ->
         {:error, :sharing_disabled}
 
+      Map.has_key?(body, "learned_default_shapes") and
+          (not Platform.Sharing.enabled?(:learned_default_shapes) or
+             Platform.Sharing.enabled?(:instruction_updates_stopped)) ->
+        {:error, :sharing_disabled}
+
       Platform.Sharing.UsageEvents.refusal(body) != nil ->
         {:error, :invalid_usage}
 
@@ -221,4 +226,3 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
 
   defp parse_identity(_body), do: {:error, :publisher_bad_response}
 end
-

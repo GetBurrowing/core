@@ -99,7 +99,7 @@ defmodule Platform.Sharing.UsageBatcher do
     if on? do
       counts = Map.merge(UsageEvents.pending(), Keyword.get(opts, :inject_counts, %{}))
       body = UsageEvents.build_body(install_id(), started, DateTime.diff(ended, started), counts)
-      send_body(with_outcomes(body), state, ended)
+      send_body(body |> with_outcomes() |> with_shapes(), state, ended)
     else
       {:off, %{state | window_start: ended}}
     end
@@ -110,7 +110,8 @@ defmodule Platform.Sharing.UsageBatcher do
   end
 
   defp send_body(%{"counts" => counts} = body, state, ended)
-       when map_size(counts) == 0 and not is_map_key(body, "instruction_outcomes"),
+       when map_size(counts) == 0 and not is_map_key(body, "instruction_outcomes") and
+              not is_map_key(body, "learned_default_shapes"),
        do: {:empty, %{state | window_start: ended}}
 
   defp send_body(body, state, ended) do
@@ -143,6 +144,15 @@ defmodule Platform.Sharing.UsageBatcher do
     end
   end
 
+  defp with_shapes(body) do
+    if Sharing.enabled?(:learned_default_shapes) and
+         not Sharing.enabled?(:instruction_updates_stopped) do
+      Map.put(body, "learned_default_shapes", Platform.Sharing.LearnedShapes.snapshot())
+    else
+      body
+    end
+  end
+
   # A queued batch grants no enduring consent. Drop the whole request at the
   # last boundary; switching off never emits a farewell request.
   defp final_send(body) do
@@ -168,4 +178,3 @@ defmodule Platform.Sharing.UsageBatcher do
   defp schedule(:manual), do: :ok
   defp schedule(ms), do: Process.send_after(self(), :flush, ms)
 end
-

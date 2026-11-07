@@ -529,14 +529,24 @@ defmodule Platform.GameStream.ExtensionParityTest do
     defp canon(x), do: x
 
     # Preserve the previous byte oracle after removing ONLY this task's
-    # independently named enum value and its generated disclosure suffix.
+    # independently named enum values and generated disclosure suffixes.
     defp without_instruction_updates(definitions) do
       Enum.map(definitions, fn
         %{name: "sharing_set"} = tool ->
           update_in(tool, [:parameters, :key], fn key ->
             key
-            |> update_in([:schema, :enum], &List.delete(&1, "instruction_updates"))
-            |> Map.update!(:description, &String.replace_suffix(&1, ", instruction_updates", ""))
+            |> update_in(
+              [:schema, :enum],
+              &Enum.reject(&1, fn value ->
+                value in ~w(instruction_updates learned_default_shapes)
+              end)
+            )
+            |> Map.update!(
+              :description,
+              &(&1
+                |> String.replace_suffix(", learned_default_shapes", "")
+                |> String.replace_suffix(", instruction_updates", ""))
+            )
           end)
 
         tool ->

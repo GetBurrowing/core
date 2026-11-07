@@ -47,14 +47,15 @@ defmodule Platform.Sharing.UsageReceiver do
 
       {:ok, written} =
         Repo.transaction(fn ->
-          if Map.has_key?(params, "instruction_outcomes") do
+          if Map.has_key?(params, "instruction_outcomes") or
+               Map.has_key?(params, "learned_default_shapes") do
             Repo.insert_all(
               "sharing_instruction_outcomes",
               [
                 %{
                   sharing_install_id: Ecto.UUID.dump!(install_id),
                   window_start: start,
-                  payload: %{"packs" => params["instruction_outcomes"]},
+                  payload: Map.take(params, ["instruction_outcomes", "learned_default_shapes"]),
                   inserted_at: now,
                   updated_at: now
                 }
@@ -89,8 +90,11 @@ defmodule Platform.Sharing.UsageReceiver do
     pinned = UsageEvents.events()
 
     with true <-
-           Enum.sort(Map.keys(Map.delete(params, "instruction_outcomes"))) == Enum.sort(@keys),
+           Enum.sort(
+             Map.keys(Map.drop(params, ["instruction_outcomes", "learned_default_shapes"]))
+           ) == Enum.sort(@keys),
          true <- outcomes_valid?(params),
+         true <- shapes_valid?(params),
          true <- map_size(window) == 2,
          {:ok, install_id} <- cast_uuid(params["sharing_install_id"]),
          %{} = counts <- params["counts"],
@@ -112,6 +116,10 @@ defmodule Platform.Sharing.UsageReceiver do
       Platform.InstructionPacks.Outcomes.valid?(params["instruction_outcomes"])
   end
 
+  defp shapes_valid?(params) do
+    not Map.has_key?(params, "learned_default_shapes") or
+      Platform.Sharing.LearnedShapes.valid?(params["learned_default_shapes"])
+  end
+
   defp cast_uuid(value), do: Platform.UUID.cast(value)
 end
-

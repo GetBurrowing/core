@@ -61,3 +61,4 @@ usage_counts = true
 friction_reports = true
 help_channel_reports = true
 instruction_updates = true
+learned_default_shapes = true

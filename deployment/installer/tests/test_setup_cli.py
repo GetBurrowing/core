@@ -215,6 +215,7 @@ class InitSharingTest(Base):
         "friction_reports": True,
         "help_channel_reports": True,
         "instruction_updates": True,
+        "learned_default_shapes": True,
     }
 
     def manifest(self):

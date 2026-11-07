@@ -1433,8 +1433,9 @@ class SharingRenderTest(PositiveControlMixin, unittest.TestCase):
         'FRICTION_REPORTS: "true"',
         'HELP_CHANNEL_REPORTS: "true"',
         'INSTRUCTION_UPDATES: "true"',
+        'LEARNED_DEFAULT_SHAPES: "true"',
     )
-    NAMES = ("USAGE_COUNTS", "FRICTION_REPORTS", "HELP_CHANNEL_REPORTS", "INSTRUCTION_UPDATES")
+    NAMES = ("USAGE_COUNTS", "FRICTION_REPORTS", "HELP_CHANNEL_REPORTS", "INSTRUCTION_UPDATES", "LEARNED_DEFAULT_SHAPES")
     SHARING_ON = os.path.join(RENDER_FIXTURES, "single-host-sharing-on.toml")
 
     def render(self, sharing=None, hosted=False, path=EXAMPLE):

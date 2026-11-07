@@ -41,13 +41,14 @@ defmodule Platform.SharingTest do
   defp row_count, do: Repo.aggregate(InstallSharing, :count)
 
   describe "registry/0" do
-    test "is four entries of exactly the documented shape, in display order" do
+    test "is six entries of exactly the documented shape, in display order" do
       assert Sharing.keys() == [
                :feedback,
                :usage_counts,
                :friction_reports,
                :help_channel_reports,
-               :instruction_updates
+               :instruction_updates,
+               :learned_default_shapes
              ]
 
       for entry <- Sharing.registry() do
@@ -100,6 +101,7 @@ defmodule Platform.SharingTest do
 
       assert Sharing.seed_env_names() == %{
                feedback: "FEEDBACK_POLICY",
+               learned_default_shapes: "LEARNED_DEFAULT_SHAPES",
                instruction_updates: "INSTRUCTION_UPDATES",
                usage_counts: "USAGE_COUNTS",
                friction_reports: "FRICTION_REPORTS",

@@ -34,6 +34,7 @@ services:
       FRICTION_REPORTS: "true"
       HELP_CHANNEL_REPORTS: "true"
       INSTRUCTION_UPDATES: "true"
+      LEARNED_DEFAULT_SHAPES: "true"
       MEMORY_SERVICE_INGEST_TIMEOUT_MS: "2700000"
       MEMORY_SERVICE_URL: "http://memory-service:8100"
       OIDC_CLIENT_ID: "suite-core"

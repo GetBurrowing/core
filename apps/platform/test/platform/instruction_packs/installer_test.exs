@@ -467,4 +467,3 @@ defmodule Platform.InstructionPacks.InstallerTest do
     assert agent.id == runtime.agent_id
   end
 end
-

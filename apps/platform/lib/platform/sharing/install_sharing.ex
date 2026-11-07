@@ -26,7 +26,8 @@ defmodule Platform.Sharing.InstallSharing do
     :usage_counts,
     :friction_reports,
     :help_channel_reports,
-    :instruction_updates
+    :instruction_updates,
+    :learned_default_shapes
   ]
 
   @type t :: %__MODULE__{}
@@ -38,6 +39,7 @@ defmodule Platform.Sharing.InstallSharing do
     field(:usage_counts, :boolean, default: false)
     field(:friction_reports, :boolean, default: false)
     field(:help_channel_reports, :boolean, default: false)
+    field(:learned_default_shapes, :boolean, default: false)
     field(:instruction_updates, :boolean, default: false)
     field(:instruction_updates_stopped, :boolean, default: false)
 

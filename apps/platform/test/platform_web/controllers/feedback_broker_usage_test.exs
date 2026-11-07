@@ -105,4 +105,40 @@ defmodule PlatformWeb.FeedbackBrokerUsageTest do
 
     assert stored() == %{}
   end
+
+  test "common route accepts bounded anonymous shapes, dedupes windows and rejects forged fields",
+       %{conn: conn} do
+    shape = %{
+      "action" => "chat.message_attention",
+      "rung" => "rank",
+      "signal_count_bucket" => "0-9",
+      "accept_rate_bucket" => 1.0,
+      "user_count" => 5,
+      "variant" => %{
+        "prefill_threshold" => 0.6,
+        "min_signals" => 3,
+        "act_after_accepts" => 5,
+        "half_life_days" => 30
+      },
+      "pack_provenance" => "unavailable"
+    }
+
+    payload = body(%{"learned_default_shapes" => [shape]})
+    assert json_response(post_json(conn, payload), 202) == %{"accepted" => 2}
+    assert json_response(post_json(build_conn(), payload), 202) == %{"accepted" => 2}
+    assert Repo.aggregate("sharing_instruction_outcomes", :count) == 1
+
+    for forged <- [
+          Map.put(shape, "content", "SENTINEL_PRIVATE_BODY sentinel@example.test"),
+          %{shape | "user_count" => 4},
+          %{shape | "variant" => Map.put(shape["variant"], "actor_id", "SENTINEL")}
+        ] do
+      assert json_response(
+               post_json(build_conn(), body(%{"learned_default_shapes" => [forged]})),
+               422
+             ) == %{"error" => "invalid_usage"}
+    end
+
+    assert Repo.aggregate("sharing_instruction_outcomes", :count) == 1
+  end
 end
