@@ -85,7 +85,10 @@ defmodule Platform.Prototypes do
       an accessible (not archived, not execution) `"channel"` with an org.
       A root admin gets no other bypass: not a DM, a group, an execution
       space or an archived space unless they are a participant.
-    * neither: membership of the prototype's org (`Tenancy.member_of?/2`).
+    * neither: membership of the prototype's org (`Tenancy.member_of?/2`),
+      closed to external users (`Tenancy.external_user?/1`), so an external
+      org member reaches a prototype only through a space or canvas they
+      are a member of.
 
   Then, in every case, RBAC v2 (task 01a1386e-45a5 stage 1): `canvas.read` on
   the canvas and `chat.read` on the space through `Platform.Access.check/3`.
@@ -139,7 +142,11 @@ defmodule Platform.Prototypes do
   defp located_readable?(user, %Prototype{space_id: space_id}) when is_binary(space_id),
     do: CanvasAccess.space_readable_by?(space_id, user)
 
-  defp located_readable?(user, %Prototype{org_id: org_id}), do: Tenancy.member_of?(user, org_id)
+  # Org-located: org reach is closed to external users, as in
+  # `CanvasAccess` (task 01a1b728 stage 2), since external users reach
+  # entry and latest past `ExternalUserScope`.
+  defp located_readable?(user, %Prototype{org_id: org_id}),
+    do: not Tenancy.external_user?(user) and Tenancy.member_of?(user, org_id)
 
   defp access_check(user, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
     scope = Platform.Access.Scope.for_user(user)
