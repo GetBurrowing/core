@@ -5485,6 +5485,16 @@ body, .font-suite {
   animation: inbox-badge-in 120ms cubic-bezier(0, 0, 0.2, 1);
 }
 
+/* Desktop: the sidebar row's label sits BESIDE the icon (the phone's sits
+   under it), 8px after the glyph and vertically centred on it. At 4px up
+   the ring's lower edge met the label's cap height and cut the "I" of
+   Inbox (measured at 1280x800, both modes), so on the row the badge rides
+   2px higher: its ring now ends above the label's cap line. Recorded as a
+   design deviation (canvas 01a1b674 asks ~4px up). */
+.sidebar-row .inbox-badge {
+  top: -6px;
+}
+
 @keyframes inbox-badge-in {
   from {
     scale: 0.8;
