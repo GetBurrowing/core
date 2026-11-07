@@ -417,22 +417,135 @@ defmodule PlatformWeb.Components.ChatMessageTest do
            end)
   end
 
-  test "below lg each pill button carries a hit area 44px tall" do
-    [btn | _] = agent_row_html(@with_context, []) |> pill_buttons()
-    [{tag, attrs, _}] = LazyHTML.to_tree(btn)
-    el = Platform.Design.CssRules.element(tag, attrs)
+  @coarse ["@media (pointer: coarse)"]
+  @narrow_fine ["@media (width < 64rem) and (not (pointer: coarse))"]
 
-    [hit] =
-      Enum.filter(css_rules(), fn r ->
-        r.at == ["@media (width < 64rem)"] and String.ends_with?(r.selector, "::after") and
-          Platform.Design.CssRules.matches?(r.selector, el)
-      end)
+  defp pill_button_elements do
+    for btn <- agent_row_html(@with_context, []) |> pill_buttons() do
+      [{tag, attrs, _}] = LazyHTML.to_tree(btn)
+      {Platform.Design.CssRules.element(tag, attrs), Map.new(attrs)}
+    end
+  end
 
-    assert hit.body =~ ~r/position:\s*absolute/
-    assert hit.body =~ ~r/content:\s*""/
-    # The button is a 28px circle (`size-7`) below lg.
-    assert "size-7" in (attrs |> Map.new() |> Map.fetch!("class") |> String.split())
-    assert 28 - px(hit.body, "top") - px(hit.body, "bottom") >= 44
+  defp decls(body) do
+    body
+    |> String.split(";")
+    |> Enum.flat_map(fn d ->
+      case String.split(d, ":", parts: 2) do
+        [k, v] -> [{String.trim(k), String.trim(v)}]
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  # The declarations a resting (not pressed, no pseudo-element) element gets
+  # from the rules under `at`, later rules winning, as in the stylesheet.
+  defp resting_decls(el, at) do
+    css_rules()
+    |> Enum.filter(fn r ->
+      r.at == at and not String.contains?(r.selector, ":") and
+        Platform.Design.CssRules.matches?(r.selector, el)
+    end)
+    |> Enum.reduce(%{}, fn r, acc -> Map.merge(acc, decls(r.body)) end)
+  end
+
+  test "a narrow fine-pointer window keeps the 44px-tall hit area; a coarse pointer drops it" do
+    for {el, attrs} <- pill_button_elements() do
+      hits =
+        Enum.filter(css_rules(), fn r ->
+          String.ends_with?(r.selector, "::after") and
+            String.starts_with?(r.selector, ".message-pill-btn") and
+            Platform.Design.CssRules.matches?(r.selector, el)
+        end)
+
+      # Exactly one, and only where the pointer is not coarse: under a coarse
+      # pointer the hit area is the visible 44px button and nothing more.
+      assert [hit] = hits
+      assert hit.at == @narrow_fine
+      assert hit.body =~ ~r/position:\s*absolute/
+      assert hit.body =~ ~r/content:\s*""/
+      # The button is a 28px circle (`size-7` / `h-7`) below lg on a fine pointer.
+      classes = String.split(attrs["class"])
+      assert "size-7" in classes or "h-7" in classes
+      assert 28 - px(hit.body, "top") - px(hit.body, "bottom") >= 44
+    end
+  end
+
+  test "on a coarse pointer every pill button is a 44x44 target with a 20px glyph" do
+    els = pill_button_elements()
+    assert length(els) == 5
+
+    for {el, attrs} <- els do
+      d = resting_decls(el, @coarse)
+      label = attrs["aria-label"]
+
+      assert d["height"] == "44px", "#{label}: #{inspect(d)}"
+      assert d["font-size"] == "20px", "#{label}: #{inspect(d)}"
+
+      if attrs["data-role"] == "message-pill-attention" do
+        assert d["width"] == "auto" and d["min-width"] == "44px", "#{label}: #{inspect(d)}"
+      else
+        assert d["width"] == "44px", "#{label}: #{inspect(d)}"
+      end
+    end
+
+    # The copy confirmation check is drawn at the glyph size too.
+    check =
+      rendered_element(agent_row_html(@with_context, []), ".message-pill-copy-check")
+
+    assert %{"width" => "20px", "height" => "20px"} = resting_decls(check, @coarse)
+
+    # Positive control: the same predicate says no to a button that is not
+    # a pill button, so the assertions above are not a match-everything.
+    other = Platform.Design.CssRules.element("button", [{"class", "size-7 text-sm"}])
+    assert resting_decls(other, @coarse) == %{}
+  end
+
+  test "on a coarse pointer the pill row spaces its actions 4px apart" do
+    p = rendered_element(agent_row_html(@with_context, []), ~s([data-role="message-pill"]))
+    assert resting_decls(p, @coarse)["gap"] == "4px"
+  end
+
+  test "pressing a pill action on a coarse pointer fills the whole target with base-200" do
+    {el, _} = hd(pill_button_elements())
+
+    assert [pressed] =
+             Enum.filter(css_rules(), fn r ->
+               r.at == @coarse and String.ends_with?(r.selector, ":active") and
+                 Platform.Design.CssRules.matches?(r.selector, el)
+             end)
+
+    d = decls(pressed.body)
+    assert d["background-color"] == "var(--color-base-200)"
+    assert d["border-radius"] == "var(--radius-field)"
+
+    # Semantic tokens only in the touch block: no raw colours.
+    for r <- css_rules(), r.at == @coarse, String.contains?(r.selector, "message-pill") do
+      refute r.body =~ ~r/#[0-9a-fA-F]{3,8}\b|rgb|hsl|oklch/, r.selector
+    end
+  end
+
+  test "desktop keeps its pill size, spacing and hover fill" do
+    html = agent_row_html(@with_context, [])
+    pill_classes = html |> pill() |> LazyHTML.attribute("class") |> hd() |> String.split()
+    assert "gap-0.5" in pill_classes
+
+    for {_el, attrs} <- pill_button_elements() do
+      classes = String.split(attrs["class"])
+
+      if attrs["data-role"] == "message-pill-attention" do
+        assert Enum.all?(~w(h-7 lg:h-[26px] min-w-7 lg:min-w-[26px] text-xs), &(&1 in classes))
+      else
+        assert Enum.all?(~w(size-7 lg:size-[26px] text-sm), &(&1 in classes))
+      end
+    end
+
+    assert Enum.any?(css_rules(), fn r ->
+             r.at == ["@media (hover: hover) and (min-width: 1024px)"] and
+               r.selector == ".message-pill-btn:hover" and
+               r.body =~ "var(--color-base-100)"
+           end)
   end
 
   # ── Agent identity slot (task 01a1557a rung 3 stage 2) ──────────────
