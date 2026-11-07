@@ -442,6 +442,10 @@ defmodule PlatformWeb.ConnectAiClaudeLoginLeakTest do
     blind = for {name, text} <- sinks, not found?(text, control), do: name
     assert blind == [], "the positive control was not found in #{inspect(blind)}"
 
+    # The log's control came by the page's own path: the catch-all logged the
+    # refused event's name.
+    assert log =~ ~s(refused unknown event "#{control}")
+
     # Each watched topic and telemetry event carried the control.
     received = Sink.received(sink)
 
