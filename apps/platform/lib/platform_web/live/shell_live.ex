@@ -1409,7 +1409,7 @@ defmodule PlatformWeb.ShellLive do
   #
   # `count` is the raw integer because `setAppBadge` takes a Number and the
   # platform formats large values itself. `label` is `IconRail.badge_text/1`
-  # — the same "99+" cap the rail pill renders, reused rather than
+  # — the same "9+" cap the Inbox badge renders, reused rather than
   # reimplemented, so the two markers can never show different numbers.
   # Both are sent in one event so the client never has to derive one from
   # the other.

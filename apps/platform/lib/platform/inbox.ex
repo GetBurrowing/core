@@ -481,7 +481,8 @@ defmodule Platform.Inbox do
   VIEWER HAS NO WAY TO ACT ON. If nothing reachable remains the count is 0, and
   the rail's `badge_text/1` already returns nil at 0 — so no badge renders at
   all, not a zero and not a dot. Nothing in the badge's LOOK changes here
-  (same treatment, same `99+` cap); only what the number counts changes.
+  (same treatment, same cap, then `99+`; task 01a1b673 later moved it to
+  `9+`); only what the number counts changes.
 
   * external viewer → `#{inspect(@external_reachable_kinds)}` only. An external
     user is fenced off `/inbox` by `PlatformWeb.Plugs.ExternalUserScope`, so

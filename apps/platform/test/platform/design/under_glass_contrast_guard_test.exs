@@ -32,7 +32,6 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
   | typed text (base-content)  | pill glass | 4.5   |
   | typing indicator text      | band glass | 4.5   |
   | inactive / active tab icon | bar glass  | 3     |
-  | More dot                   | bar glass  | 3     |
   | attach icon                | pill glass | 3     |
   | chip text (base-content)   | chip fill (base-300, opaque) | 4.5 |
   | mention list name / subtle | list glass (= pill glass) | 4.5 |
@@ -87,7 +86,6 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
     {"typing text", :typing, :band_glass, 4.5},
     {"inactive icon", :inactive_icon, :bar_glass, 3.0},
     {"active icon", :active_icon, :bar_glass, 3.0},
-    {"More dot", :dot, :bar_glass, 3.0},
     {"attach icon", :attach, :pill_glass, 3.0}
   ]
 
@@ -154,6 +152,12 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
     [inputs | others] = Enum.map(G.under_builds(), &G.under_paint_inputs/1)
     assert Enum.all?(others, &(&1 == inputs)), "the two fixtures name different paint inputs"
     assert length(inputs) == 10, inspect(inputs)
+
+    # The bar's bare unread dot is retired (task 01a1b673 stage 2); its
+    # fixture line stays as the record of what was painted, and the bar guard
+    # (bottom_nav_glass_guard_test.exs) holds the rule absent from app.css.
+    {retired, inputs} = Enum.split_with(inputs, fn {sel, _, _} -> sel == ".bottom-nav-dot" end)
+    assert length(retired) == 1
 
     # Every declaration of the property on that selector, outside the
     # prefers-reduced-transparency fallback (which is opaque by design and
