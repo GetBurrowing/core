@@ -352,18 +352,22 @@ defmodule Platform.Federation do
   `"runtime:<runtime_id>"`, which drops a live socket, and marks the runtime's
   live (`pending`/`replaying`) dead letters `abandoned`, so a runtime_id
   federated again later does not replay the deleted agent's queue.
+
+  `:reason` names the abandon reason on the dead letters (default
+  `"agent_deleted"`); the orphan sweep (`Platform.Federation.OrphanRuntimes`)
+  passes its own.
   """
-  @spec finalize_revoked_runtimes([AgentRuntime.t()]) :: :ok
-  def finalize_revoked_runtimes(runtimes) when is_list(runtimes) do
+  @spec finalize_revoked_runtimes([AgentRuntime.t()], keyword()) :: :ok
+  def finalize_revoked_runtimes(runtimes, opts \\ []) when is_list(runtimes) do
+    reason = Keyword.get(opts, :reason, "agent_deleted")
+
     Enum.each(runtimes, fn %AgentRuntime{runtime_id: runtime_id} ->
       best_effort("disconnect #{runtime_id}", fn ->
         PlatformWeb.Endpoint.broadcast("runtime:" <> runtime_id, "disconnect", %{})
       end)
 
       best_effort("abandon dead letters #{runtime_id}", fn ->
-        Platform.Federation.DeadLetters.abandon_live_for_runtime(runtime_id,
-          reason: "agent_deleted"
-        )
+        Platform.Federation.DeadLetters.abandon_live_for_runtime(runtime_id, reason: reason)
       end)
     end)
   end
