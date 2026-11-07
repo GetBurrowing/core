@@ -281,6 +281,8 @@ defmodule Platform.Role do
     Platform.Tasks.DeployMergeReconciler,
     # Hourly outbound POST of usage counts (task 01a1b678 stage 2).
     Platform.Sharing.UsageBatcher,
+    # Scheduled pack application belongs to the full node only.
+    Platform.InstructionPacks.Poller,
     Platform.Orchestration.TaskRouterWatcher,
     Platform.Federation.NodeClient,
     :meetings_sender_seed,
@@ -308,7 +310,8 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     Platform.Memory.Insights.Disseminator,
     # Each node would send its own batch under one install id.
-    Platform.Sharing.UsageBatcher
+    Platform.Sharing.UsageBatcher,
+    Platform.InstructionPacks.Poller
   ]
 
   # ── stage 4 tables ─────────────────────────────────────────────────────

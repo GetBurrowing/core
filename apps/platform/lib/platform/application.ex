@@ -95,10 +95,6 @@ defmodule Platform.Application do
        List.flatten([
          Platform.Vault.Encryption,
          Platform.Repo,
-         if(flag.(:platform, :start_instruction_pack_poller, true),
-           do: Platform.InstructionPacks.Poller,
-           else: []
-         ),
          if(flag.(:platform, :start_calendar_refresh, true),
            do: Platform.Calendar.RefreshWorker,
            else: []
@@ -334,6 +330,7 @@ defmodule Platform.Application do
     |> maybe_add_space_purger(flag)
     |> maybe_add_experiments_mail_subscriber(flag)
     |> maybe_add_usage_batcher(flag)
+    |> maybe_add_instruction_pack_poller(flag)
     |> maybe_add_container_purger(flag)
     |> maybe_add_file_purger(flag)
     |> maybe_add_prototype_purger(flag)
@@ -625,6 +622,16 @@ defmodule Platform.Application do
     if flag.(:platform, :start_usage_batcher, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Sharing.UsageBatcher)
+    else
+      children
+    end
+  end
+
+  # Pull only on the full node, after Repo/PubSub and content services exist.
+  defp maybe_add_instruction_pack_poller(children, flag) do
+    if flag.(:platform, :start_instruction_pack_poller, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.InstructionPacks.Poller)
     else
       children
     end
