@@ -1,4 +1,10 @@
 defmodule Platform.Repo.Migrations.CreateSharingInstructionOutcomes do
+  @moduledoc """
+  Task 01a1b6e1-4995-7000-b918-fb305d219275: stores bounded anonymous
+  instruction inventory and learned-default shape windows in the shared broker.
+  Adds the learned-default sharing switch to the existing install singleton,
+  defaulting existing rows off; only new installer manifests explicitly opt in.
+  """
   use Ecto.Migration
 
   def change do
