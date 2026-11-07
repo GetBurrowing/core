@@ -274,7 +274,9 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
-               "meetings.visual_adjust"
+               "meetings.visual_adjust",
+               # Six → seven, task 01a1af00 stage 1.
+               "ux.friction_watch"
              ]
 
       after_first = Repo.aggregate(RoleResponsibility, :count, :id)

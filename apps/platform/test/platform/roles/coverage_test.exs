@@ -115,7 +115,9 @@ defmodule Platform.Roles.CoverageTest do
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
-               "meetings.visual_adjust"
+               "meetings.visual_adjust",
+               # Task 01a1af00 stage 1: the UX friction watch.
+               "ux.friction_watch"
              ]
 
       # This used to be `Enum.all?(bundle, &String.starts_with?(&1, "design."))`
@@ -288,11 +290,13 @@ defmodule Platform.Roles.CoverageTest do
                  "design.spec_writer",
                  "design.task_direction",
                  "meetings.interaction_design",
-                 "meetings.visual_adjust"
+                 "meetings.visual_adjust",
+                 "ux.friction_watch"
                ]
 
-      # All overridden → empty. Six keys since the 2026-07-31 intent
-      # keys (four before that, since ADR-0046 stack member 7). Every
+      # All overridden → empty. Seven keys since task 01a1af00 added
+      # `ux.friction_watch`; six since the 2026-07-31 intent keys (four
+      # before that, since ADR-0046 stack member 7). Every
       # key has to be listed here for the "all" case to mean "all" —
       # missing one would leave a non-empty remainder and redden the
       # assertion below, which is why this list is spelled out rather
@@ -303,6 +307,7 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 

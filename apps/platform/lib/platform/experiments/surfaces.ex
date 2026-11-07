@@ -79,7 +79,11 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a1aa47 stage 4: the HR responsibility's directive, lookback and
     # name-resolution threshold. Nothing is seeded; the control is the
     # handler's defaults.
-    Platform.Experiments.Surfaces.HrProfile
+    Platform.Experiments.Surfaces.HrProfile,
+    # Task 01a1af00 stage 1: the UX friction watch's detection directive,
+    # grouping threshold and minimum occurrences. Nothing is seeded; the
+    # control is the handler's defaults.
+    Platform.Experiments.Surfaces.UxFrictionDetection
   ]
 
   @prompt_surface "dispatch.prompt"
