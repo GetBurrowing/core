@@ -608,7 +608,11 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       swipe_dismiss
     >
       <:title>{@open_message_attention.title}</:title>
-      <p class="px-4 pb-2 text-base font-semibold text-base-content" aria-hidden="true">
+      <p
+        data-role="message-attention-title"
+        class="px-4 pb-2 text-base font-semibold text-base-content"
+        aria-hidden="true"
+      >
         {@open_message_attention.title}
       </p>
       <.message_attention_content id_prefix="message-attention" attention={@open_message_attention} />
@@ -626,7 +630,10 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       data-anchor-message-id={@open_message_attention.message_id}
       class="fixed left-1/2 top-24 z-40 hidden w-80 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-1.5 shadow-lg focus:outline-none lg:block"
     >
-      <p class="px-2 pb-1.5 pt-1 text-[13px] font-semibold text-base-content">
+      <p
+        data-role="message-attention-title"
+        class="px-2 pb-1.5 pt-1 text-[13px] font-semibold text-base-content"
+      >
         {@open_message_attention.title}
       </p>
       <.message_attention_content
@@ -641,14 +648,105 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   attr(:attention, :map, required: true)
 
   defp message_attention_content(assigns) do
+    prefill = assigns.attention[:prefill]
+
+    assigns =
+      assigns
+      |> assign(:prefill, prefill)
+      |> assign(:prefill_name, prefill && learned_name(prefill))
+      |> assign(:rows, list_rows(assigns.attention.suggestions, prefill))
+      |> assign(
+        :placeholder,
+        if(prefill, do: "Search for someone else…", else: "Search agents and people")
+      )
+
     ~H"""
-    <div id={"#{@id_prefix}-content"} class="flex flex-col" data-role="message-attention-picker">
+    <div
+      id={"#{@id_prefix}-content"}
+      class="flex flex-col"
+      data-role="message-attention-picker"
+      data-rung={@attention[:rung] || "none"}
+    >
       <p
         data-role="message-attention-preview"
         class="mx-1 mb-2 truncate rounded-box border border-edge bg-base-200 px-3 py-2 text-[13px] text-subtle"
       >
         {@attention.preview}
       </p>
+      <%!-- Rung 2, pre-filled (task 01a1b6a1 stage 4; direction canvas
+           01a1b6a2 node `layout`, mockup 01a1b6ad section B): the learned
+           person already chosen, one orange tap to confirm, "Not <name>" as a
+           quiet text button that clears the pre-fill (an override) and
+           focuses search. Search and the rest of the list stay below it. --%>
+      <div :if={@prefill} data-role="learned-prefill" class="mx-1 mb-2.5">
+        <div
+          data-role="learned-prefill-row"
+          aria-selected="true"
+          class="flex items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-2.5 lg:gap-2.5 lg:px-2.5 lg:py-2"
+        >
+          <PlatformWeb.AvatarComponents.human_avatar
+            :if={@prefill[:participant_type] != "agent"}
+            name={@prefill.name}
+            avatar_url={@prefill[:avatar_url]}
+            seed={@prefill[:avatar_seed]}
+            size="md"
+            class="flex-shrink-0"
+          />
+          <PlatformWeb.AvatarComponents.agent_avatar
+            :if={@prefill[:participant_type] == "agent"}
+            name={@prefill.name}
+            avatar_url={@prefill[:avatar_url]}
+            size="md"
+            class="flex-shrink-0"
+          />
+          <span class="mention-list-text">
+            <span class="mention-list-line">
+              <span class="mention-list-name">{@prefill.name}</span>
+              <span class="mention-list-kind">
+                {if @prefill[:participant_type] == "agent", do: "agent", else: "person"}
+              </span>
+            </span>
+            <PlatformWeb.ChatLive.Partials.MentionList.reason_line suggestion={
+              Map.put_new(@prefill, :reason, {:usually, @prefill_name})
+            } />
+          </span>
+          <span
+            class="ml-auto flex size-[22px] flex-none items-center justify-center rounded-full bg-base-content text-base-100"
+            aria-hidden="true"
+          >
+            <span class="hero-check size-3.5"></span>
+          </span>
+        </div>
+        <PlatformWeb.ChatLive.Partials.MentionList.why_line
+          :if={@attention[:why] == @prefill[:principal_id]}
+          suggestion={Map.put_new(@prefill, :reason, {:usually, @prefill_name})}
+        />
+        <div class="mt-2.5 flex items-center gap-2 lg:mt-2">
+          <button
+            type="button"
+            data-role="learned-prefill-confirm"
+            phx-click={
+              Phoenix.LiveView.JS.push("add_message_attention",
+                value: %{"message-id" => @attention.message_id, "ids" => [@prefill[:principal_id]]}
+              )
+            }
+            class="min-h-11 min-w-0 flex-1 rounded-[var(--radius-field)] bg-primary px-4 py-1.5 text-[15px] font-semibold leading-tight text-primary-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:min-h-9 lg:px-3 lg:text-[13px]"
+          >
+            Get {@prefill_name}'s attention
+          </button>
+          <button
+            type="button"
+            data-role="learned-prefill-decline"
+            phx-click={
+              Phoenix.LiveView.JS.push("decline_attention_prefill")
+              |> Phoenix.LiveView.JS.focus(to: "##{@id_prefix}-search-input")
+            }
+            class="h-11 flex-none rounded-[var(--radius-field)] px-3 text-[15px] font-semibold text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:h-9 lg:text-[13px]"
+          >
+            Not {@prefill_name}
+          </button>
+        </div>
+      </div>
       <form
         id={"#{@id_prefix}-search"}
         phx-change="attention_query"
@@ -656,11 +754,12 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         class="mx-1 mb-1"
       >
         <input
+          id={"#{@id_prefix}-search-input"}
           type="search"
           name="query"
           value={@attention.query}
-          placeholder="Search agents and people"
-          aria-label="Search agents and people"
+          placeholder={@placeholder}
+          aria-label={@placeholder}
           autocomplete="off"
           phx-debounce="100"
           data-role="message-attention-search"
@@ -669,14 +768,26 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       </form>
       <PlatformWeb.ChatLive.Partials.MentionList.mention_list
         id={"#{@id_prefix}-list"}
-        suggestions={@attention.suggestions}
+        suggestions={@rows}
         query={@attention.query}
         pick={@attention.message_id}
         added={@attention.added}
+        why={@attention[:why]}
       />
     </div>
     """
   end
+
+  # The name the learned copy uses: the reason's display name, else the row's.
+  defp learned_name(%{reason: {:usually, name}}) when is_binary(name), do: name
+  defp learned_name(row), do: row[:display_name] || row[:name]
+
+  # With a pre-fill up, its person sits in the card above, so the list below
+  # holds everyone else (mockup 01a1b6ad section B).
+  defp list_rows(suggestions, nil), do: suggestions
+
+  defp list_rows(suggestions, prefill),
+    do: Enum.reject(suggestions, &(&1[:principal_id] == prefill[:principal_id]))
 
   defp message_link(nil, _id), do: nil
   defp message_link(_space, nil), do: nil

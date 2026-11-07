@@ -890,7 +890,8 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       Platform.Meetings.TelemetryHandler,
       Platform.Meetings.IntentCorrections.TelemetryHandler,
       Platform.Memory.TelemetryHandler,
-      Platform.Accounts.ExternalAdmissionNotifier
+      Platform.Accounts.ExternalAdmissionNotifier,
+      Platform.Habits.TelemetryHandler
     ]
 
     test "attach/0 returns :ok when the handler is already attached" do
