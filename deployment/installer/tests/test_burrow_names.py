@@ -170,17 +170,10 @@ ALLOWLIST = (
     Allow("tests/golden/do-droplet-8gb/", "_AGENT_SESSION=suite-agent", CLI_SESSION),
     Allow("tests/golden/do-droplet-meetings/", "_AGENT_SESSION=suite-agent", CLI_SESSION),
     # The pre-rename upgrade (stage 4). The scripts define each legacy name once,
-    # on a line carrying MIGRATE_MARK; every render embeds the script, so the
-    # goldens carry the same lines.
+    # on a line carrying MIGRATE_MARK. Every render embeds the script, but gz+b64
+    # (templates.COMPRESSED_FILES), so the goldens carry none of those lines.
     Allow("migrate/suite-to-burrow.sh", MIGRATE_MARK, MIGRATE),
     Allow("migrate/burrow-to-suite-rollback.sh", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/single-host/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/single-host-agents-contained/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/single-host-agents-full/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/single-host-memory-off/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/do-droplet/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/do-droplet-8gb/", MIGRATE_MARK, MIGRATE),
-    Allow("tests/golden/do-droplet-meetings/", MIGRATE_MARK, MIGRATE),
     Allow(
         "burrow_install/setup/migrate.py",
         'LEGACY_BACKUP_ROOT = "SuiteBackups"',

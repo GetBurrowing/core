@@ -41,7 +41,7 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits, planted_term
-from migrate_embed import cut_migrate_script
+from migrate_embed import cut_migrate_script, expand_compressed
 
 from burrow_install import registry, templates
 from burrow_install.__main__ import main
@@ -1263,7 +1263,8 @@ class FreshRenderNamesTest(TempDirMixin, unittest.TestCase):
     def test_the_cut_is_needed_positive_control(self):
         # Without the cut the scan finds the script's legacy names: the cut is
         # what the test above relies on, so it must be shown to matter.
-        user_data = self.renders()["single-host"]["user-data"]
+        # The script ships gz+b64, so the scan reads it expanded.
+        user_data = expand_compressed(self.renders()["single-host"]["user-data"])
         self.assertTrue(self.LEGACY.findall(user_data))
         self.assertEqual(self.LEGACY.findall(self.without_migrate_script(user_data)[0]), [])
 
