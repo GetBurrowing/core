@@ -1122,7 +1122,7 @@ defmodule PlatformWeb.InboxLiveTest do
         view
         |> render()
         |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-role="inbox-badge"]))
+        |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
         |> LazyHTML.text()
         |> String.trim()
 

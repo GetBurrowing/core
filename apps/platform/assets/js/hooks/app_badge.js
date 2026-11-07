@@ -43,7 +43,7 @@
  * its own.
  */
 
-// A badge prefix written by this hook: "(3) " or the capped "(99+) ".
+// A badge prefix written by this hook: "(3) " or the capped "(9+) ".
 const BADGE_PREFIX_RE = /^\(\d+\+?\)\s+/
 
 /**
@@ -103,8 +103,8 @@ const AppBadge = {
     const count = payload && payload.count
     this.badgeCount = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0
 
-    // `label` is the server's already-capped string ("99+" past 99), so the
-    // Dock badge, the title prefix and the sidebar Inbox pill share one cap.
+    // `label` is the server's already-capped string ("9+" past 9), so the
+    // title prefix and the Inbox badge share one cap.
     const label = payload && payload.label
     this.badgeLabel = typeof label === "string" && label.length > 0 ? label : null
 

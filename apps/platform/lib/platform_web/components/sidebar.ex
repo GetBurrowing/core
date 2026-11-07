@@ -10,7 +10,8 @@ defmodule PlatformWeb.Components.Sidebar do
   The module rows are prototype 01a178d2 v4's rail
   (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar,
   Meetings), then a "More" label, then `IconRail.desktop_more_rows/2`:
-  Inbox with its count badge, the extension rows, then the rest of the More
+  Inbox with its count badge (`IconRail.inbox_badge/1`, the phone tab's
+  badge on the row's icon: 1-9, then 9+, nothing at 0), the extension rows, then the rest of the More
   sheet's order. The phone bar keeps its own four tabs (the product lead's rule, task
   01a18d9f stage 5), so the two lists are split, but they go through the
   same Scope filter and cover the same destinations: a module the actor may
@@ -90,7 +91,6 @@ defmodule PlatformWeb.Components.Sidebar do
       |> assign(:more, more)
       |> assign(:current_key, IconRail.more_sheet_current_key(tabs ++ more, assigns.current_path))
       |> assign(:chat_badge, IconRail.chat_badge_text(assigns.chat_unread_count))
-      |> assign(:inbox_badge, IconRail.badge_text(assigns.inbox_unread_count))
       |> assign(:resolved_mode, resolved)
       |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
 
@@ -167,17 +167,8 @@ defmodule PlatformWeb.Components.Sidebar do
           dest={dest}
           icon={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
           current?={dest.key == @current_key}
-        >
-          <span
-            :if={dest.key == :inbox and @inbox_badge}
-            id="inbox-badge"
-            data-role="inbox-badge"
-            class="ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-primary px-[5px] text-xs font-bold leading-none tabular-nums text-primary-content"
-            aria-label={"#{@inbox_unread_count} unread"}
-          >
-            {@inbox_badge}
-          </span>
-        </.row>
+          inbox_count={if dest.key == :inbox, do: @inbox_unread_count}
+        />
       </nav>
 
       <div class="flex shrink-0 flex-col gap-0.5 pt-2">
@@ -281,6 +272,11 @@ defmodule PlatformWeb.Components.Sidebar do
   attr :dest, :map, required: true
   attr :icon, :string, required: true
   attr :current?, :boolean, default: false
+
+  attr :inbox_count, :any,
+    default: nil,
+    doc: "set on the Inbox row only: its count badge and its 'Inbox, N need you' name"
+
   slot :inner_block
 
   defp row(assigns) do
@@ -297,9 +293,13 @@ defmodule PlatformWeb.Components.Sidebar do
       data-destination={@dest.key}
       data-module-id={@dest.key}
       data-nav-label={@dest.label}
+      aria-label={@inbox_count && IconRail.inbox_aria_label(@dest.label, @inbox_count)}
       aria-current={if @current?, do: "page"}
     >
-      <.icon name={@icon} class="size-[18px] shrink-0" />
+      <span class="icon-badge-anchor">
+        <.icon name={@icon} class="size-[18px] shrink-0" />
+        <IconRail.inbox_badge :if={@inbox_count} id_prefix="inbox-badge" count={@inbox_count} />
+      </span>
       <span class="min-w-0 truncate">{@dest.label}</span>
       {render_slot(@inner_block)}
     </.link>

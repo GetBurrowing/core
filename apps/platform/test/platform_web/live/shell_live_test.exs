@@ -450,12 +450,15 @@ defmodule PlatformWeb.ShellLiveTest do
              |> LazyHTML.attribute("aria-expanded") == ["true"]
     end
 
-    test "the bar shows the Inbox dot when the viewer has an unread inbox item", %{conn: conn} do
+    test "the bar shows the Inbox count badge when the viewer has an unread inbox item", %{
+      conn: conn
+    } do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
-      refute html =~ ~s(data-role="inbox-unread-dot")
+      refute html =~ ~s(data-role="inbox-badge")
+      refute html =~ "inbox-unread-dot"
 
       {:ok, _} =
         Platform.Inbox.emit(%{
@@ -470,12 +473,15 @@ defmodule PlatformWeb.ShellLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      assert html
-             |> LazyHTML.from_fragment()
-             |> LazyHTML.query(
-               ~s([data-bottom-rail] [data-destination="inbox"] [data-role="inbox-unread-dot"])
-             )
-             |> Enum.count() == 1
+      badge =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(
+          ~s([data-bottom-rail] [data-destination="inbox"] [data-role="inbox-badge"])
+        )
+
+      assert badge |> LazyHTML.text() |> String.trim() == "1"
+      refute html =~ "inbox-unread-dot"
     end
 
     test "Admin is a Settings page, not a sidebar row, even for an admin", %{
@@ -572,10 +578,11 @@ defmodule PlatformWeb.ShellLiveTest do
       }
     end
 
+    # The desktop sidebar's badge; the phone bar renders the same node.
     defp inbox_badge_text(html) do
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s([data-role="inbox-badge"]))
+      |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
       |> LazyHTML.text()
       |> String.trim()
     end
@@ -745,11 +752,11 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do
       # ShellLive builds the label with IconRail.badge_text/1 rather than its
-      # own formatting, so this is the only place the "99+" grammar is
-      # defined. Pinned here because the function had to become public for
-      # the push to reuse it.
-      assert PlatformWeb.Components.IconRail.badge_text(99) == "99"
-      assert PlatformWeb.Components.IconRail.badge_text(100) == "99+"
+      # own formatting, so this is the only place the "9+" grammar is
+      # defined (task 01a1b673). Pinned here because the function had to
+      # become public for the push to reuse it.
+      assert PlatformWeb.Components.IconRail.badge_text(9) == "9"
+      assert PlatformWeb.Components.IconRail.badge_text(10) == "9+"
       assert PlatformWeb.Components.IconRail.badge_text(0) == nil
     end
 
@@ -779,7 +786,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # with a row, with no remount. Reading a mention in chat is a PATCH
   # inside ChatLive, so the shell's `:inbox_count_refresh` hook is the only
   # thing that can move the number; these tests watch the assign AND the
-  # rendered sidebar badge, tab-bar dot and native bridge go to 0 in the
+  # rendered sidebar badge, tab-bar badge and native bridge go to 0 in the
   # same LiveView process.
   # ---------------------------------------------------------------------
   describe "inbox badge clears live (task 01a1b673)" do
@@ -792,8 +799,15 @@ defmodule PlatformWeb.ShellLiveTest do
 
       %{
         text:
-          doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> LazyHTML.text() |> String.trim(),
-        tab_dot?: doc |> LazyHTML.query(~s([data-role="inbox-unread-dot"])) |> Enum.count() > 0,
+          doc
+          |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
+          |> LazyHTML.text()
+          |> String.trim(),
+        tab:
+          doc
+          |> LazyHTML.query(~s(#bottom-nav [data-role="inbox-badge"]))
+          |> LazyHTML.text()
+          |> String.trim(),
         native:
           doc
           |> LazyHTML.query("#native-tab-bridge")
@@ -861,7 +875,7 @@ defmodule PlatformWeb.ShellLiveTest do
       assert badge_count(view) == 3
       before = rendered_badge(render(view))
       assert before.text == "3"
-      assert before.tab_dot?
+      assert before.tab == "3"
       assert before.native == "true"
 
       :ok = Inbox.subscribe(user.id)
@@ -877,7 +891,7 @@ defmodule PlatformWeb.ShellLiveTest do
       assert badge_count(view) == 0
       after_read = rendered_badge(render(view))
       assert after_read.text == ""
-      refute after_read.tab_dot?
+      assert after_read.tab == ""
       assert after_read.native == "false"
       assert Inbox.list_unread_for_user(user.id) == []
     end
@@ -902,7 +916,7 @@ defmodule PlatformWeb.ShellLiveTest do
       chat_unread_barrier(view)
 
       assert badge_count(view) == 0
-      refute rendered_badge(render(view)).tab_dot?
+      assert rendered_badge(render(view)).tab == ""
     end
 
     test "opening, dismissing and Clear all on /inbox each move the badge live", %{conn: conn} do
@@ -2243,7 +2257,7 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     defp badge_nodes(html) do
-      html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="inbox-badge"]))
+      html |> LazyHTML.from_fragment() |> LazyHTML.query(~s(#sidebar [data-role="inbox-badge"]))
     end
 
     test "an external user whose ONLY row is unreachable gets count 0 and NO badge node",

@@ -139,7 +139,7 @@ defmodule PlatformWeb.NativeTabBridgeTest do
 
     assert has_element?(
              view,
-             "#bottom-nav a[data-destination='inbox'] [data-role='inbox-unread-dot']"
+             "#bottom-nav a[data-destination='inbox'] [data-role='inbox-badge']"
            )
   end
 end

@@ -181,7 +181,9 @@ defmodule PlatformWeb.Components.SidebarTest do
       icon = fn key ->
         [class] =
           d
-          |> q(~s(#sidebar-nav .sidebar-row[data-destination="#{key}"] > span:first-child))
+          |> q(
+            ~s(#sidebar-nav .sidebar-row[data-destination="#{key}"] > .icon-badge-anchor > span:first-child)
+          )
           |> LazyHTML.attribute("class")
 
         class |> String.split() |> Enum.find(&String.starts_with?(&1, "hero-"))
@@ -251,31 +253,64 @@ defmodule PlatformWeb.Components.SidebarTest do
                ["files"]
     end
 
-    test "Chat and Inbox badges: absent at 0, the capped label above, primary fill" do
+    test "Chat badge: absent at 0, the capped label above, primary fill" do
       d = render_sidebar(%{}) |> doc()
       assert d |> q("#chat-badge") |> Enum.count() == 0
-      assert d |> q("#inbox-badge") |> Enum.count() == 0
-      # Positive control: the rows themselves rendered.
-      assert d |> q(~s(.sidebar-row[data-destination="inbox"])) |> Enum.count() == 1
+      # Positive control: the row itself rendered.
+      assert d |> q(~s(.sidebar-row[data-destination="chat"])) |> Enum.count() == 1
 
-      d = render_sidebar(%{chat_unread_count: 150, inbox_unread_count: 3}) |> doc()
+      d = render_sidebar(%{chat_unread_count: 150}) |> doc()
 
       assert d |> q(~s(.sidebar-row[data-destination="chat"] #chat-badge)) |> Enum.map(&text/1) ==
                ["99+"]
 
-      assert d |> q(~s(.sidebar-row[data-destination="inbox"] #inbox-badge)) |> Enum.map(&text/1) ==
-               ["3"]
-
-      for id <- ~w(#chat-badge #inbox-badge) do
-        [class] = d |> q(id) |> LazyHTML.attribute("class")
-        assert class =~ "bg-primary"
-        assert class =~ "text-primary-content"
-        refute class =~ ~r/#[0-9a-fA-F]{3,6}/
-      end
+      [class] = d |> q("#chat-badge") |> LazyHTML.attribute("class")
+      assert class =~ "bg-primary"
+      assert class =~ "text-primary-content"
+      refute class =~ ~r/#[0-9a-fA-F]{3,6}/
 
       assert d |> q("#chat-badge") |> LazyHTML.attribute("aria-label") == ["150 unread messages"]
       # No email unread count exists in the shell, so no #email-badge.
       assert d |> q("#email-badge") |> Enum.count() == 0
+    end
+
+    # Task 01a1b673 stage 2 (canvas 01a1b674): the Inbox row carries the
+    # phone tab's badge on its icon, not the old inline primary pill.
+    test "Inbox badge: absent at 0, on the row's icon above, 1-9 then 9+" do
+      d = render_sidebar(%{inbox_unread_count: 0}) |> doc()
+      assert d |> q(~s([data-role="inbox-badge"])) |> Enum.count() == 0
+      inbox = q(d, ~s(.sidebar-row[data-destination="inbox"]))
+      assert Enum.count(inbox) == 1
+      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox"]
+
+      for {count, label} <- [{1, "1"}, {7, "7"}, {9, "9"}, {10, "9+"}, {12, "9+"}] do
+        d = render_sidebar(%{inbox_unread_count: count}) |> doc()
+
+        badge =
+          q(
+            d,
+            ~s(.sidebar-row[data-destination="inbox"] .icon-badge-anchor [data-role="inbox-badge"])
+          )
+
+        assert Enum.map(badge, &text/1) == [label], "count #{count}"
+        assert LazyHTML.attribute(badge, "class") == ["inbox-badge"]
+        assert LazyHTML.attribute(badge, "aria-hidden") == ["true"]
+
+        assert d
+               |> q(~s(.sidebar-row[data-destination="inbox"]))
+               |> LazyHTML.attribute("aria-label") ==
+                 ["Inbox, #{count} need you"]
+
+        # The old inline pill and its primary fill are gone.
+        assert d |> q("#inbox-badge") |> Enum.count() == 0
+
+        refute d |> q(~s([data-role="inbox-badge"])) |> LazyHTML.attribute("class") |> hd() =~
+                 "primary"
+      end
+
+      # Only the Inbox row is named for a count.
+      d = render_sidebar(%{inbox_unread_count: 3}) |> doc()
+      assert d |> q(~s(.sidebar-row[aria-label$="need you"])) |> Enum.count() == 1
     end
 
     test "the live-call dot is on Meetings only while a meeting is active" do

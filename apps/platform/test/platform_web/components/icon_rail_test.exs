@@ -375,30 +375,75 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
   end
 
-  describe "bottom_rail/1 Inbox unread dot (task 01a18d9f stage 5)" do
-    test "present on the Inbox tab at 1 unread, with the Inbox aria-label naming it" do
-      html = render_bottom_rail(%{inbox_unread_count: 1})
-      doc = LazyHTML.from_fragment(html)
+  # Task 01a1b673 stage 2, design canvas 01a1b674: a count badge on the
+  # Inbox tab's icon, 1-9 then 9+, and nothing at 0. No bare dot anywhere.
+  describe "bottom_rail/1 Inbox count badge" do
+    for {count, label} <- [{1, "1"}, {7, "7"}, {9, "9"}, {10, "9+"}, {12, "9+"}] do
+      test "#{count} unread shows #{label} on the Inbox icon and names the tab" do
+        html = render_bottom_rail(%{inbox_unread_count: unquote(count)})
+        doc = LazyHTML.from_fragment(html)
 
-      assert doc
-             |> LazyHTML.query(
-               ~s([data-destination="inbox"] .bottom-nav-dot[data-role="inbox-unread-dot"])
-             )
-             |> Enum.count() == 1
+        badge =
+          LazyHTML.query(
+            doc,
+            ~s([data-bottom-rail] a[data-destination="inbox"] .icon-badge-anchor [data-role="inbox-badge"])
+          )
 
-      inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
-      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox, unread"]
-      [more] = more_button(html)
-      assert LazyHTML.attribute(more, "aria-label") == ["More"]
-      # The dot carries no count, and never reuses the desktop rail's role.
-      refute html =~ "inbox-badge"
-      refute html =~ "more-unread-dot"
+        assert badge |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) == [unquote(label)]
+        assert LazyHTML.attribute(badge, "class") == ["inbox-badge"]
+        assert LazyHTML.attribute(badge, "aria-hidden") == ["true"]
+        # Exactly one badge in the bar, and only on Inbox.
+        assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
+
+        inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
+        assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox, #{unquote(count)} need you"]
+        [more] = more_button(html)
+        assert LazyHTML.attribute(more, "aria-label") == ["More"]
+        refute html =~ "inbox-unread-dot"
+        refute html =~ "bottom-nav-dot"
+      end
     end
 
-    test "absent from the DOM at 0" do
+    test "absent from the DOM at 0 (no dot, no 0), and the tab is plain Inbox" do
       html = render_bottom_rail(%{inbox_unread_count: 0})
+      doc = LazyHTML.from_fragment(html)
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 0
       refute html =~ "inbox-unread-dot"
       refute html =~ "bottom-nav-dot"
+
+      inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
+      assert Enum.count(inbox) == 1
+      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox"]
+      # Positive control: the anchor is there, only the badge is not.
+      assert doc
+             |> LazyHTML.query(~s(a[data-destination="inbox"] .icon-badge-anchor))
+             |> Enum.count() == 1
+    end
+
+    test "the phone tab and the desktop row render the same badge node" do
+      shape = fn html ->
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(.icon-badge-anchor > [data-role="inbox-badge"]))
+        |> Enum.map(fn n ->
+          {LazyHTML.tag(n), LazyHTML.attribute(n, "class"), LazyHTML.attribute(n, "aria-hidden"),
+           n |> LazyHTML.text() |> String.trim()}
+        end)
+      end
+
+      phone = shape.(render_bottom_rail(%{inbox_unread_count: 12}))
+
+      assigns = %{}
+
+      desktop =
+        shape.(
+          rendered_to_string(~H"""
+          <PlatformWeb.Components.Sidebar.sidebar current_path="/chat" inbox_unread_count={12} />
+          """)
+        )
+
+      assert phone == [{["span"], ["inbox-badge"], ["true"], "9+"}]
+      assert desktop == phone
     end
   end
 
@@ -441,24 +486,31 @@ defmodule PlatformWeb.Components.IconRailTest do
   # ShellLive's AppBadge read these; the rendered badges are pinned in
   # sidebar_test.exs.
   describe "badge labels" do
-    # Task 01a00066 stage 4 pins the badge's LOOK as unchanged: the count is
-    # filtered upstream (`Inbox.reachable_unread_count/1`), so `badge_text/1`
-    # keeps exactly one cap at 99. A second cap introduced for external users
-    # would detonate here.
-    test "badge_text/1 caps at 99+ and has NO second cap" do
-      assert badge_text(99) == "99"
-      assert badge_text(100) == "99+"
-      assert badge_text(1_000) == "99+"
-      assert badge_text(10_000) == "99+"
-
-      # Exactly one threshold in 1..250: the value stops changing after 99.
-      distinct = 1..250 |> Enum.map(&badge_text/1) |> Enum.uniq()
-      assert Enum.count(distinct) == 100
-      assert List.last(distinct) == "99+"
-
-      # Nothing below the cap is rewritten, and 0 still renders no badge.
-      assert badge_text(1) == "1"
+    # Task 01a1b673 stage 2 (canvas 01a1b674): 1-9, then 9+. One cap, the
+    # count is filtered upstream (`Inbox.reachable_unread_count/1`, task
+    # 01a00066 stage 4), so a second cap for any viewer would detonate here.
+    test "badge_text/1 is 1-9 then 9+, nil at 0 or below, with NO second cap" do
       assert badge_text(0) == nil
+      assert badge_text(-3) == nil
+      assert badge_text(nil) == nil
+      assert badge_text(1) == "1"
+      assert badge_text(7) == "7"
+      assert badge_text(9) == "9"
+      assert badge_text(10) == "9+"
+      assert badge_text(12) == "9+"
+      assert badge_text(100) == "9+"
+      assert badge_text(10_000) == "9+"
+
+      # Exactly one threshold in 1..250: the value stops changing after 9.
+      distinct = 1..250 |> Enum.map(&badge_text/1) |> Enum.uniq()
+      assert distinct == Enum.map(1..9, &Integer.to_string/1) ++ ["9+"]
+    end
+
+    test "inbox_aria_label/2 names the real count, and is the plain label at 0" do
+      assert inbox_aria_label("Inbox", 0) == "Inbox"
+      assert inbox_aria_label("Inbox", nil) == "Inbox"
+      assert inbox_aria_label("Inbox", 1) == "Inbox, 1 need you"
+      assert inbox_aria_label("Inbox", 12) == "Inbox, 12 need you"
     end
 
     test "chat_badge_text/1 caps at 99+ and has NO second cap below it" do
@@ -483,17 +535,14 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert List.last(distinct) == "99+"
     end
 
-    # Both caps are 99+, so the two functions agree at every input and the
-    # obvious next move is to collapse them into one. This test is what stops
-    # that refactor moving Inbox by accident: `badge_text/1` also feeds
-    # ShellLive's `AppBadge` document-title label, so its contract has to be
-    # pinned independently of Chat's.
-    test "badge_text/1 is unmoved at the inputs chat_badge_text/1 changed on" do
-      assert badge_text(0) == nil
-      assert badge_text(40) == "40"
-      assert badge_text(99) == "99"
-      assert badge_text(100) == "99+"
-      assert badge_text(150) == "99+"
+    # The two caps differ since task 01a1b673 (Inbox 9+, Chat 99+). This
+    # holds them apart: `badge_text/1` also feeds ShellLive's `AppBadge`
+    # document-title label, so neither may move with the other.
+    test "badge_text/1 and chat_badge_text/1 keep separate caps" do
+      assert badge_text(40) == "9+"
+      assert chat_badge_text(40) == "40"
+      assert badge_text(150) == "9+"
+      assert chat_badge_text(150) == "99+"
     end
   end
 end
