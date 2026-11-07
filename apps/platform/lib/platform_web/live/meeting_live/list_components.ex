@@ -22,6 +22,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
   import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+  import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   @sections [{:live, "Live now"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]
 
@@ -281,6 +282,12 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
     doc: "`%{can_edit}` for the selected row (task 01a1b281); nil draws no Edit"
   )
 
+  attr(:delete, :map,
+    default: nil,
+    doc:
+      "`%{can_delete, state}` for the selected row (task 01a1b281 stage 4); nil draws no Delete"
+  )
+
   def detail(assigns) do
     ~H"""
     <section
@@ -417,6 +424,14 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
           can_cancel={@cancel.can_cancel}
           state={@cancel.state}
           audience={@cancel.audience}
+          id_prefix="meetings-detail"
+        />
+        <%!-- Delete (task 01a1b281 stage 4) for a meeting that is over, on
+           its own rule under Cancel; Edit is never drawn with it. --%>
+        <.delete_meeting
+          :if={@delete}
+          can_delete={@delete.can_delete}
+          state={@delete.state}
           id_prefix="meetings-detail"
         />
       </div>

@@ -99,6 +99,7 @@
       }
     }
     cancel={%{state: @meeting_cancel_state}}
+    delete={%{state: @meeting_delete_state}}
   />
 
   <.edit_meeting :if={@meeting_edit} edit={@meeting_edit} escape={false} />

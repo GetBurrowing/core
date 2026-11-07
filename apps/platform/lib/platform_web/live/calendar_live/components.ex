@@ -26,6 +26,7 @@ defmodule PlatformWeb.CalendarLive.Components do
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
   import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+  import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   alias PlatformWeb.CalendarLive, as: Cal
   alias PlatformWeb.Components.NewKindToggle
@@ -809,6 +810,12 @@ defmodule PlatformWeb.CalendarLive.Components do
     doc: "`%{state}` for the selected meeting's Cancel control (task 01a19e7f); nil draws none"
   )
 
+  attr(:delete, :map,
+    default: nil,
+    doc:
+      "`%{state}` for the selected meeting's Delete control (task 01a1b281 stage 4); nil draws none"
+  )
+
   @doc """
   The details: a 320px right column at `lg`, a bottom sheet over a scrim
   below it (index.html `.details` / `@media (max-width:899px) .details`).
@@ -851,6 +858,13 @@ defmodule PlatformWeb.CalendarLive.Components do
           audience={@detail.audience}
           escape={false}
           id_prefix="calendar-detail-cancel"
+        />
+        <.delete_meeting
+          :if={@detail.kind == "meeting" and @delete}
+          can_delete={@detail[:can_delete] == true}
+          state={@delete.state}
+          escape={false}
+          id_prefix="calendar-detail-delete"
         />
       </div>
       <div :if={footer?(@detail)} class="cal-dfoot">

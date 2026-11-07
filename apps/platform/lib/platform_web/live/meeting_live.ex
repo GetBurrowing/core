@@ -2175,6 +2175,21 @@ defmodule PlatformWeb.MeetingLive do
 
   def edit_attrs(_cancel, _meeting), do: nil
 
+  @doc """
+  The Delete action's attrs for `meeting` (task 01a1b281 stage 4), or nil.
+  `can_delete` is `Meetings.can_delete_meeting?/2` for the selection,
+  computed with the cancel state when the selection changes: cancelled,
+  ended, or scheduled with its time past. A live or future scheduled
+  meeting never gets the row.
+  """
+  def delete_attrs(%{meeting_id: id} = cancel, %Meeting{id: id}),
+    do: %{
+      can_delete: Map.get(cancel, :can_delete, false),
+      state: Map.get(cancel, :delete_state, :idle)
+    }
+
+  def delete_attrs(_cancel, _meeting), do: nil
+
   defp sync_meeting_cancel(socket) do
     target = cancel_target_id(socket.assigns)
 
@@ -2185,7 +2200,15 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp build_meeting_cancel(_socket, nil),
-    do: %{meeting_id: nil, can_cancel: false, can_edit: false, audience: 0, state: :idle}
+    do: %{
+      meeting_id: nil,
+      can_cancel: false,
+      can_edit: false,
+      can_delete: false,
+      audience: 0,
+      state: :idle,
+      delete_state: :idle
+    }
 
   defp build_meeting_cancel(socket, id) do
     meeting =
@@ -2202,12 +2225,37 @@ defmodule PlatformWeb.MeetingLive do
           meeting_id: id,
           can_cancel: can_cancel,
           can_edit: can_cancel and Meetings.can_edit_meeting?(meeting, viewer),
+          can_delete: can_cancel and Meetings.can_delete_meeting?(meeting, viewer),
           audience: if(can_cancel, do: Meetings.cancellation_audience_count(meeting), else: 0),
-          state: :idle
+          state: :idle,
+          delete_state: :idle
         }
 
       nil ->
-        %{meeting_id: id, can_cancel: false, can_edit: false, audience: 0, state: :idle}
+        %{
+          meeting_id: id,
+          can_cancel: false,
+          can_edit: false,
+          can_delete: false,
+          audience: 0,
+          state: :idle,
+          delete_state: :idle
+        }
+    end
+  end
+
+  # The Delete inset's state (task 01a1b281 stage 4), beside the cancel
+  # inset's on the same selection map. Opening is gated on `can_delete`;
+  # `:idle` and `:working` are always writable so a refused delete can
+  # settle.
+  defp put_meeting_delete_state(socket, state) do
+    socket = sync_meeting_cancel(socket)
+    cancel = socket.assigns.meeting_cancel
+
+    if cancel.can_delete or state == :idle or state == :working do
+      assign(socket, :meeting_cancel, %{cancel | delete_state: state})
+    else
+      socket
     end
   end
 
@@ -2221,6 +2269,39 @@ defmodule PlatformWeb.MeetingLive do
       socket
     end
   end
+
+  defp drop_deleted_selection(%{assigns: %{meetings_view: :list}} = socket) do
+    socket
+    |> assign(:list_meeting_id, nil)
+    |> push_patch(to: ~p"/meetings")
+  end
+
+  defp drop_deleted_selection(%{assigns: %{meetings_view: :calendar}} = socket) do
+    socket
+    |> assign(:selected_meeting_id, nil)
+    |> LiveInvites.seed()
+    |> MeetingEdit.seed()
+    |> sync_meeting_cancel()
+  end
+
+  defp drop_deleted_selection(socket), do: socket
+
+  # The archive half re-runs its search on the same broadcasts (task
+  # 01a1b281 stage 4), so a meeting deleted in another window leaves this
+  # one's archive rows too. A page not on the archive pays nothing:
+  # `archive_result` is nil there and the search is not run.
+  defp refresh_archive(%{assigns: %{meetings_view: :archive, archive_result: %{}}} = socket) do
+    assign_archive_result(
+      socket,
+      :archive,
+      socket.assigns[:archive_query] || "",
+      socket.assigns[:archive_types],
+      socket.assigns[:archive_person_id],
+      socket.assigns[:archive_project_id]
+    )
+  end
+
+  defp refresh_archive(socket), do: socket
 
   defp reload_index_meetings(socket) do
     meetings = Meetings.list_meetings_for_user(socket.assigns[:current_user_record])
@@ -3843,6 +3924,49 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # ── Delete meeting (task 01a1b281 stage 4) ──────────────────────────────
+  #
+  # `PlatformWeb.Components.Meetings.DeleteMeeting`'s three events, under the
+  # cancel row's rule: no meeting id is carried or read, the target is the
+  # viewer's own SELECTION, and `Meetings.delete_meeting_for_user/2` reloads
+  # it through the viewer scope and re-checks `can_delete_meeting?/2` before
+  # it writes. `can_delete` here only decides whether the row is drawn.
+  def handle_event("delete_meeting_open", _params, socket) do
+    {:noreply, put_meeting_delete_state(socket, :confirming)}
+  end
+
+  def handle_event("delete_meeting_keep", _params, socket) do
+    case socket.assigns[:meeting_cancel] do
+      %{delete_state: :working} -> {:noreply, socket}
+      _ -> {:noreply, put_meeting_delete_state(socket, :idle)}
+    end
+  end
+
+  def handle_event("delete_meeting_confirm", _params, socket) do
+    socket = sync_meeting_cancel(socket)
+
+    case {cancel_target_id(socket.assigns), socket.assigns.meeting_cancel} do
+      {nil, _} ->
+        {:noreply, socket}
+
+      {_id, %{delete_state: :working}} ->
+        {:noreply, socket}
+
+      {_id, %{can_delete: false}} ->
+        {:noreply, socket}
+
+      {id, _} ->
+        viewer = socket.assigns[:current_user_record]
+
+        {:noreply,
+         socket
+         |> put_meeting_delete_state(:working)
+         |> start_async(:delete_meeting, fn ->
+           Meetings.delete_meeting_for_user(id, viewer)
+         end)}
+    end
+  end
+
   # ── Live invites (detail panel + sheet, task 019fb955-1d7b stage 5) ──────
   #
   # `:live` mode of `PlatformWeb.Components.Meetings.InviteControl`. The
@@ -4911,6 +5035,32 @@ defmodule PlatformWeb.MeetingLive do
   # meeting's project topic (the `{:meeting_cancelled, _}` broadcast does the
   # same for every other open window). A refusal writes nothing and says so
   # in a flash; any other failure keeps the inset open with its error line.
+  # A deleted meeting has no row left to stand on, so the selection is
+  # dropped with it: the list view patches back to the bare index (the
+  # `?meeting=` param IS the selection there) and the calendar view clears
+  # its selected id. The `{:meeting_deleted, _}` broadcast redraws the lists
+  # for every viewer, this process included.
+  def handle_async(:delete_meeting, result, socket) do
+    socket =
+      case result do
+        {:ok, {:ok, _meeting}} ->
+          socket
+          |> put_meeting_delete_state(:idle)
+          |> drop_deleted_selection()
+          |> reload_index_meetings()
+
+        {:ok, {:error, reason}} when reason in [:forbidden, :not_found, :not_deletable] ->
+          socket
+          |> put_meeting_delete_state(:idle)
+          |> put_flash(:error, "You can't delete this meeting.")
+
+        _other ->
+          put_meeting_delete_state(socket, :error)
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_async(:cancel_meeting, result, socket) do
     socket =
       case result do
@@ -5542,6 +5692,7 @@ defmodule PlatformWeb.MeetingLive do
        |> assign(:meetings, meetings)
        |> assign(:grouped_meetings, group_meetings_by_status(meetings))
        |> refresh_calendar_week()
+       |> refresh_archive()
        |> sync_meeting_cancel()}
     else
       {:noreply, socket}

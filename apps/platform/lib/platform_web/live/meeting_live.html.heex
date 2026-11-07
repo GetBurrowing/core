@@ -3691,6 +3691,7 @@
           calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
           cancel={cancel_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
           edit={edit_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
+          delete={delete_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
         />
       </div>
       <PlatformWeb.MeetingLive.ListComponents.new_room_modal
@@ -4738,6 +4739,7 @@
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
               edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
+              delete={delete_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-panel"
             />
           </div>
@@ -4828,6 +4830,7 @@
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
               edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
+              delete={delete_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-sheet"
             />
           </div>

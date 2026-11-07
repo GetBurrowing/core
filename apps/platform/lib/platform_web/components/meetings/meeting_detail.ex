@@ -97,6 +97,7 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
 
   import PlatformWeb.Components.Meetings.CancelMeeting, only: [cancel_meeting: 1]
   import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+  import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   alias Platform.Meetings.CalendarLink
   alias Platform.Meetings.Meeting
@@ -227,6 +228,12 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
     doc: "`%{can_edit}` for this meeting (task 01a1b281); nil or `can_edit` false draws no Edit"
   )
 
+  attr(:delete, :map,
+    default: nil,
+    doc:
+      "`%{can_delete, state}` for this meeting (task 01a1b281 stage 4); nil or `can_delete` false draws no Delete"
+  )
+
   attr(:cancel_id_prefix, :string, default: "meeting-detail")
 
   def meeting_detail_actions(assigns) do
@@ -264,6 +271,16 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
       can_cancel={@cancel.can_cancel}
       state={@cancel.state}
       audience={@cancel.audience}
+      id_prefix={@cancel_id_prefix}
+      class="mt-3"
+    />
+    <%!-- Delete (task 01a1b281 stage 4): only for a meeting that is over
+       (cancelled, ended, or scheduled with its time past), on its own rule
+       below Cancel. Never beside Edit: the two predicates are disjoint. --%>
+    <.delete_meeting
+      :if={@delete}
+      can_delete={@delete.can_delete}
+      state={@delete.state}
       id_prefix={@cancel_id_prefix}
       class="mt-3"
     />
