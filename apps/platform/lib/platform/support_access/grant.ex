@@ -200,7 +200,7 @@ defmodule Platform.SupportAccess.Grant do
     {count, _} =
       Repo.insert_all(
         GrantNonce,
-        [%{nonce: nonce, expires_at: DateTime.from_unix!(expires_at)}],
+        [%{nonce: nonce, expires_at: DateTime.from_unix!(expires_at * 1_000_000, :microsecond)}],
         on_conflict: :nothing,
         conflict_target: :nonce
       )
