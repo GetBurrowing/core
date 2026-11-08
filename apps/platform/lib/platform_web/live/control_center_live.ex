@@ -344,6 +344,9 @@ defmodule PlatformWeb.ControlCenterLive do
     "suspend_federated_runtime" => :manage_selected,
     "unsuspend_federated_runtime" => :manage_selected,
     "revoke_federated_runtime" => :manage_selected,
+    # Unattached runtimes (task 01a1b84c): no selected agent, so the gate is
+    # admin (agents.manage_all anywhere); the handler re-checks the row.
+    "revoke_unattached_runtime" => :unattached_runtimes,
     "regenerate_federated_token" => :manage_selected,
     "dismiss_regenerated_token" => :ui,
     "save_tool_profile" => :manage_selected,
@@ -372,6 +375,7 @@ defmodule PlatformWeb.ControlCenterLive do
   }
 
   @create_refused_message "You don't have permission to add agents to this org."
+  @unattached_refused_message "Only admins can revoke unattached runtimes."
 
   @impl true
   def handle_event(name, params, socket) do
@@ -402,6 +406,9 @@ defmodule PlatformWeb.ControlCenterLive do
         :create_ownerless ->
           Platform.Access.Agents.may_create_ownerless?(scope)
 
+        :unattached_runtimes ->
+          Platform.Access.Agents.may_create_ownerless?(scope)
+
         :responsibility ->
           Platform.Access.Agents.may_federate?(scope)
 
@@ -421,6 +428,9 @@ defmodule PlatformWeb.ControlCenterLive do
 
           :create_ownerless ->
             @create_refused_message
+
+          :unattached_runtimes ->
+            @unattached_refused_message
 
           _ownership ->
             if NativeAgents.managed?(socket.assigns[:selected_agent]),
@@ -849,6 +859,9 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp handle_control_event("revoke_federated_runtime", params, socket),
     do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
+
+  defp handle_control_event("revoke_unattached_runtime", params, socket),
+    do: RuntimeEvents.handle("revoke_unattached_runtime", params, socket)
 
   defp handle_control_event("regenerate_federated_token", params, socket),
     do: RuntimeEvents.handle("regenerate_federated_token", params, socket)

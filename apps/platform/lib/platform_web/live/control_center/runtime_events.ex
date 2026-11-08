@@ -79,6 +79,42 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
 
   def handle("revoke_federated_runtime", _params, socket), do: {:noreply, socket}
 
+  # Task 01a1b84c: revoke a runtime no agent can reach, by primary key. The
+  # policy gate (admin) ran before this; the row must still be unattached,
+  # whatever id was sent, and revoke_runtime/2 re-checks manage? per row.
+  def handle("revoke_unattached_runtime", %{"id" => id}, socket) when is_binary(id) do
+    runtime = if Platform.UUID.valid?(id), do: Federation.get_runtime(id)
+
+    cond do
+      is_nil(runtime) ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+
+      not Federation.unattached_runtime?(runtime) ->
+        {:noreply,
+         put_flash(socket, :error, "That runtime is attached to an agent. Manage it there.")}
+
+      true ->
+        case Federation.revoke_runtime(socket.assigns.access_scope, runtime) do
+          {:ok, revoked} ->
+            Federation.finalize_revoked_runtimes([revoked], reason: "orphan_runtime_revoked")
+
+            {:noreply,
+             socket
+             |> assign(
+               :unattached_runtimes,
+               Federation.list_unattached_runtimes(socket.assigns.access_scope)
+             )
+             |> put_flash(:info, "Runtime revoked.")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not revoke runtime.")}
+        end
+    end
+  end
+
+  def handle("revoke_unattached_runtime", _params, socket),
+    do: {:noreply, put_flash(socket, :error, "Runtime not found.")}
+
   def handle(
         "regenerate_federated_token",
         _params,
