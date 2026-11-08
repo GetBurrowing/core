@@ -1565,10 +1565,35 @@ defmodule Platform.Meetings.CompletionIndependentConnectionsTest do
             where: e.resource_type == "meeting_transcript" and e.resource_id in ^transcript_ids
           )
 
+        # The meeting fixture and scribe canvas emit chat telemetry
+        # (`chat.space.created`, `chat.participant.added`, `chat.canvas.created`,
+        # `chat.canvas.updated`) which commits audit rows on this test's real
+        # (unboxed) connection. They carry no `meeting_id` metadata key, so the
+        # `owned_audit` delete above cannot see them; scope by the chat space id
+        # and the ids of every canvas created in that space, exactly as
+        # duplicate_groups_test.exs does for its participant telemetry rows.
+        # Query the canvas ids before the space row is deleted below.
+        canvas_ids =
+          Repo.all(
+            from(c in Platform.Chat.Canvas,
+              where: c.space_id == ^ctx.meeting.chat_space_id,
+              select: c.id
+            )
+          )
+
+        chat_audit =
+          from(e in Platform.Audit.Event,
+            where:
+              e.resource_type == "chat" and
+                (e.resource_id == ^ctx.meeting.chat_space_id or e.resource_id in ^canvas_ids)
+          )
+
         Repo.delete_all(owned_audit)
         Repo.delete_all(transcript_audit)
+        Repo.delete_all(chat_audit)
         assert Repo.aggregate(owned_audit, :count) == 0
         assert Repo.aggregate(transcript_audit, :count) == 0
+        assert Repo.aggregate(chat_audit, :count) == 0
 
         Repo.delete_all(from(t in Platform.Tasks.Task, where: t.project_id == ^ctx.project.id))
         Repo.delete_all(from(m in Platform.Meetings.Meeting, where: m.id == ^ctx.meeting.id))

@@ -109,6 +109,21 @@ defmodule Platform.Chat.MemberRoleConcurrencyTest do
     after
       Repo.delete_all(from(p in Participant, where: p.space_id == ^space.id))
       Repo.delete_all(from(s in Space, where: s.id == ^space.id))
+
+      # This test deliberately runs outside the shared sandbox: the
+      # `Sandbox.mode(Repo, :auto)` flip checks the shared connection back in,
+      # so the chat telemetry audit rows emitted for this space
+      # (`chat.space.created`, `chat.participant.added`) commit to the real
+      # database and are NOT rolled back at teardown. Delete them here too,
+      # scoped to this test's space, so a later Platform.AuditTest run does not
+      # see orphans that flip its count/ordering assertions. See
+      # test/platform/chat/duplicate_groups_test.exs for the same pattern.
+      Repo.delete_all(
+        from(e in Platform.Audit.Event,
+          where: e.resource_type == "chat" and e.resource_id == ^space.id
+        )
+      )
+
       Repo.delete!(a)
       Repo.delete!(b)
       Sandbox.mode(Repo, :manual)
