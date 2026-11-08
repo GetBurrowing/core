@@ -949,7 +949,7 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
     # limitations now say the server-side requester is authorized. Measured
     # locally.
-    @main_tool_digest_off "31537fe4282a55f2f670a802434ca7185a35a000fec4a4139dd99249ba7f6d4a"
+    @main_tool_digest_off "55e1400d6b361653b05e16488a5732dd642c3c0b4d6ab2f5ca695b1968694ae6"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

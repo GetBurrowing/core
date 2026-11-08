@@ -440,10 +440,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
     # limitations say the server-side requester is authorized. All four
     # values measured locally on the stage's branch.
-    @previous_tool_digest_off "b9de2985dea38512d2819d23561b4472a615cd61e2feef2680b27bf4f6e7aacb"
-    @previous_tool_digest_on "2b40a09d0eff350e8474a5106d21735e0015ceb2d900d2f7a9e75e0d8c6bb838"
-    @main_tool_digest_off "722768536ec6e2503251d60dcdd12e86f8ddfeb8c728b6dbd4a7ac75773626af"
-    @main_tool_digest_on "74994e9fb86fbcafdfa39a4ab3c27d6de65cff94be70d7e8c3bd379d5f100ccd"
+    @previous_tool_digest_off "02c35b809b6b11d53f1a5215514ca957e9f813e5ae1baa12300f1f3867853fb4"
+    @previous_tool_digest_on "711619f1d0bb761b3439f3e9f20944083b0060a4baeb80580bcabdc4aafa10ce"
+    @main_tool_digest_off "cb5750c3b3fef6e235dcb1cf0dfe92326dc72223ef950737a69c0a1781790851"
+    @main_tool_digest_on "c6fe0f3bd07d64e4fbf5dcd1253959806180d8633345812ec1408ede8c65468f"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
