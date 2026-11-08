@@ -91,7 +91,7 @@ defmodule Platform.Agents.UnblockAsksTest do
   defp online(agent), do: [%{agent_id: agent.id, online: true, last_seen_at: @now}]
 
   defp offline(agent),
-    do: [%{agent_id: agent.id, online: false, last_seen_at: DateTime.add(@now, -86_400 * 3)}]
+    do: [%{agent_id: agent.id, online: false, last_seen_at: DateTime.add(@now, -3 * 3600)}]
 
   defp sync(row, federation, now) do
     [row: row, now: now, federation: federation]
@@ -217,6 +217,9 @@ defmodule Platform.Agents.UnblockAsksTest do
 
       assert [{:asked, ask, _}] = sync(ctx.row, offline(agent), hours(1))
       assert ask.class == "offline"
+      assert ask.evidence =~ "last seen 4h ago"
+
+      # The evidence line now reads "8h ago"; the state did not change.
       assert sync(ctx.row, offline(agent), hours(5)) == []
       assert [same] = asks_for(agent)
       assert same.state_fingerprint == ask.state_fingerprint
@@ -236,6 +239,31 @@ defmodule Platform.Agents.UnblockAsksTest do
 
       assert [{:asked, %{class: "offline"}, _}] = sync(ctx.row, offline(agent), hours(1))
       refute Enum.any?(asks_for(agent), &(&1.class == "access"))
+    end
+  end
+
+  describe "the table keeps one live ask per subject and class" do
+    test "a second live ask is refused; a resolved one leaves room for a new episode" do
+      owner = user!("owner")
+      first = ask!(owner, "access")
+
+      dup =
+        UnblockAsk.changeset(%UnblockAsk{}, %{
+          subject_type: "agent",
+          subject_id: first.subject_id,
+          class: "access",
+          state_fingerprint: "fp2",
+          owner_user_id: owner.id,
+          status: "open",
+          asked_at: @now,
+          last_asked_at: @now
+        })
+
+      assert {:error, changeset} = Repo.insert(dup)
+      assert {_, [constraint: :unique, constraint_name: _]} = changeset.errors[:subject_type]
+
+      Repo.update!(Ecto.Changeset.change(first, status: "resolved"))
+      assert {:ok, _} = Repo.insert(dup)
     end
   end
 

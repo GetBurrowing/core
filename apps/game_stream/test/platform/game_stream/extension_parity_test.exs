@@ -440,7 +440,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1af00 stage 1 adds ux_finding_keep_rate, re-pinned from the
     # previous 1a76c535... value; stage 4 rewords its description (decisions
     # only), re-pinned from bfd76bb5...
-    @main_metrics_catalog_digest "45f696290efb30925a2e5b302bf1da348cd29baa8ad9e0339f53d8b7bd4f4ba4"
+    # Task 01a1b6de stage 4 adds unblock_asks_resolved_per_sent, re-pinned
+    # from the previous 45f69629... value.
+    @main_metrics_catalog_digest "1f54216cd218c71da7e8fbc96a8c435a1743c3ca3e8022e42376a94ee7f87e90"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
