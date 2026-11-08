@@ -25,6 +25,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.Components.ReplyFailureRow
+  alias PlatformWeb.Components.VoiceSessionBlock
 
   attr(:dom_id, :string, required: true)
   attr(:msg, :map, required: true)
@@ -79,18 +80,40 @@ defmodule PlatformWeb.Components.ChatMessage do
       ) do
     ~H"""
     <div id={@dom_id} data-message-id={@msg.id} data-participant-id={@msg.participant_id}>
-      <div
-        :if={Map.get(@msg, :day_label)}
-        class="js-date-separator flex items-center gap-3 my-4 -mx-2"
-        data-date={@msg.day_label}
-      >
-        <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
-          {format_day_label(@msg.day_label)}
-        </span>
-        <div class="flex-1 border-t border-edge"></div>
-      </div>
+      <.day_separator :if={Map.get(@msg, :day_label)} day_label={@msg.day_label} />
       <ReplyFailureRow.row msg={@msg} viewer_user_id={@viewer_user_id} />
+    </div>
+    """
+  end
+
+  # A Voice chat pointer or summary row (task 01a1b6c3 stage 3) is part of
+  # the session bracket, not a chat bubble: no avatar, no hover toolbar, and
+  # an EMPTY `data-participant-id`, so the list's grouping sees it and treats
+  # it as its own run (the turns either side never group across it).
+  # See `PlatformWeb.Components.VoiceSessionBlock`.
+  def chat_message(
+        %{
+          msg: %{
+            content_type: "system",
+            metadata: %{"source" => "voice", "voice_kind" => kind}
+          }
+        } = assigns
+      )
+      when kind in ["summary", "context_pointer"] do
+    ~H"""
+    <div
+      id={@dom_id}
+      data-message-id={@msg.id}
+      data-voice-session={@msg.metadata["voice_session_id"]}
+      data-voice-kind={@msg.metadata["voice_kind"]}
+      data-participant-id=""
+    >
+      <.day_separator :if={Map.get(@msg, :day_label)} day_label={@msg.day_label} />
+      <VoiceSessionBlock.header :if={voice_head(@msg)} head={voice_head(@msg)} />
+      <VoiceSessionBlock.system_body
+        msg={@msg}
+        context_path={voice_block(@msg) && voice_block(@msg).context_path}
+      />
     </div>
     """
   end
@@ -101,6 +124,7 @@ defmodule PlatformWeb.Components.ChatMessage do
       id={@dom_id}
       class={[
         "group relative rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        voice_block(@msg) && voice_block(@msg).hidden? && "hidden",
         MapSet.member?(@agent_participant_ids, @msg.participant_id) && "msg-agent",
         @highlighted_message_id == @msg.id && "bg-primary/5 ring-1 ring-primary/20",
         @current_participant && @msg.participant_id == @current_participant.id &&
@@ -116,6 +140,9 @@ defmodule PlatformWeb.Components.ChatMessage do
           Platform.Chat.message_ordered_at(@msg) |> DateTime.to_date() |> Date.to_iso8601()
       }
       data-message-id={@msg.id}
+      data-voice-session={voice_block(@msg) && voice_block(@msg).session_id}
+      data-voice-middle={voice_block(@msg) && voice_block(@msg).hidden? && "true"}
+      data-voice-head={voice_head(@msg) && "true"}
       data-is-own-message={
         if(@current_participant && @msg.participant_id == @current_participant.id,
           do: "true",
@@ -140,6 +167,10 @@ defmodule PlatformWeb.Components.ChatMessage do
         </span>
         <div class="flex-1 border-t border-edge"></div>
       </div>
+
+      <%!-- The Voice chat session header, on a session's first DM row
+           (task 01a1b6c3 stage 3, `VoiceSessionBlock`). --%>
+      <VoiceSessionBlock.header :if={voice_head(@msg)} head={voice_head(@msg)} />
 
       <%!-- `message-row-inner` is the padding box. It carries a stable class
            because a grouped continuation row needs tighter vertical padding
@@ -213,6 +244,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               timestamp={Platform.Chat.message_ordered_at(@msg)}
               class="text-[10px] text-subtle"
             />
+            <VoiceSessionBlock.mic :if={voice_turn?(@msg)} id={"voice-mic-#{@msg.id}"} />
           </div>
 
           <%!-- The main-log reply quote (task 01a174f5 stage 3): the one
@@ -820,9 +852,40 @@ defmodule PlatformWeb.Components.ChatMessage do
         <%!-- end message body --%>
       </div>
       <%!-- end inner flex row --%>
+      <VoiceSessionBlock.show_all
+        :if={voice_block(@msg) && voice_block(@msg).show_all}
+        session_id={voice_block(@msg).session_id}
+        count={voice_block(@msg).show_all}
+      />
     </div>
     """
   end
+
+  # The day separator the two system-row clauses draw (the reply-failure
+  # notice and the Voice chat pointer/summary row), as the bubble row does.
+  attr(:day_label, :string, required: true)
+
+  defp day_separator(assigns) do
+    ~H"""
+    <div class="js-date-separator flex items-center gap-3 my-4 -mx-2" data-date={@day_label}>
+      <div class="flex-1 border-t border-edge"></div>
+      <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
+        {format_day_label(@day_label)}
+      </span>
+      <div class="flex-1 border-t border-edge"></div>
+    </div>
+    """
+  end
+
+  defp voice_block(msg), do: Map.get(msg, :voice_block)
+
+  defp voice_turn?(%{metadata: %{"source" => "voice", "voice_turn" => n}}) when is_integer(n),
+    do: true
+
+  defp voice_turn?(_msg), do: false
+
+  defp voice_head(%{voice_block: %{head: %{} = head}}), do: head
+  defp voice_head(_msg), do: nil
 
   attr(:msg, :map, required: true)
   attr(:quick_emojis, :list, required: true)

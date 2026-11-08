@@ -270,6 +270,21 @@ defmodule PlatformWeb.LivekitWebhookController do
   # `:meeting_finished` broadcast (the responsibility router's second summary
   # path). Nothing is left in `processing`, so SummarizerSweeper has nothing
   # to post a fallback for. The mode is cleared last.
+  # The fallback summary (task 01a1b6c3): a Voice tab session the LiveView
+  # never closed (tab killed, crash) gets its one summary row here.
+  # `VoiceSession.finish/1` is idempotent per session, so a session the
+  # LiveView already closed posts nothing. Never fails the webhook.
+  defp finish_voice_sessions(%Meetings.Room{space_id: space_id}) when is_binary(space_id) do
+    {:ok, posted} = Platform.Meetings.VoiceSession.finish_unfinished(space_id)
+    posted
+  rescue
+    e ->
+      Logger.warning("[LiveKit] voice summary fallback failed: #{Exception.message(e)}")
+      0
+  end
+
+  defp finish_voice_sessions(_room_row), do: 0
+
   defp discard_voice_1to1_transcripts(conn, room_row, room_id) do
     since = Meetings.session_mode_started_at(room_row)
 
@@ -288,10 +303,11 @@ defmodule PlatformWeb.LivekitWebhookController do
       end)
 
     {:ok, _} = Meetings.clear_session_mode(room_row)
+    summaries = finish_voice_sessions(room_row)
 
     Logger.info(
       "[LiveKit] room_finished for voice_1to1 room #{inspect(room_id)}: no meeting " <>
-        "finalization (deleted=#{deleted} failed=#{failed})"
+        "finalization (deleted=#{deleted} failed=#{failed} voice_summaries=#{summaries})"
     )
 
     conn

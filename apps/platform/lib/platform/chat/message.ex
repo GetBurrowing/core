@@ -87,6 +87,12 @@ defmodule Platform.Chat.Message do
     # nil = not annotated (thread panel, search), which renders plain links.
     field(:link_cards, {:array, :map}, virtual: true, default: nil)
 
+    # The Voice chat session bracket this row draws in the DM (task 01a1b6c3
+    # stage 3): nil for every non-voice row, else the map
+    # `PlatformWeb.ChatLive.VoiceBlocks.annotate/2` sets at stream-insert
+    # time (header, collapsed, Show all). Never stored.
+    field(:voice_block, :map, virtual: true, default: nil)
+
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 

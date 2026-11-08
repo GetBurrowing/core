@@ -935,7 +935,13 @@ defmodule Platform.ExtensionsTest do
     # `space` bundle, and `space_get_context`'s `returns` now names the
     # space map's `origin` field. Measured on the test rig at the stage's
     # branch rebased onto e978e422 (dd4084948).
-    @main_tool_digest_off "6206113144e7e8420d2911610b95cb6f15b4059a4f0c0fad17c6f537185008cc"
+    #
+    # Re-pinned by task 01a1b6c3 stage 3: `space_get_messages` rows carry a
+    # nullable `voice` object (its returns_schema and `returns` text), so an
+    # agent can tell a Voice tab record in its DM. Names, bundles, summaries
+    # and parameter schemas are unchanged. Measured on the test rig at the
+    # stage's branch.
+    @main_tool_digest_off "557dba2378186c61e36b356459448cb5fabaf6b6e4e7ad46d0522dade251c8c1"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

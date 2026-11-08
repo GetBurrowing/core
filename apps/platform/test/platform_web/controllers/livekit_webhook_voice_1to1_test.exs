@@ -240,6 +240,69 @@ defmodule PlatformWeb.LivekitWebhookVoice1to1Test do
     end
   end
 
+  # ── The Voice DM summary fallback (task 01a1b6c3 stage 2) ─────────────
+
+  describe "room_finished posts the Voice DM summary a session left unposted" do
+    defp voice_summaries(space_id) do
+      from(m in Message, where: m.space_id == ^space_id and m.content_type == "system")
+      |> Repo.all()
+      |> Enum.filter(&(&1.metadata["voice_kind"] == "summary"))
+    end
+
+    defp recorded_session!(user, dm) do
+      {:ok, up} = Platform.Chat.SpaceAccess.authorize_writer(dm.id, user)
+      [ap] = Chat.list_participants(dm.id, participant_type: "agent")
+
+      session = %{
+        id: Platform.Types.UUIDv7.generate(),
+        started_at: DateTime.utc_now(),
+        space_id: dm.id,
+        agent_id: ap.participant_id,
+        user_participant_id: up.id,
+        agent_participant_id: ap.id
+      }
+
+      {:ok, session, _} = Meetings.VoiceSession.record_turn(session, user, :me, "q")
+      {:ok, session, _} = Meetings.VoiceSession.record_turn(session, user, :agent, "a")
+      session
+    end
+
+    test "once, and never again after the LiveView already finished it",
+         %{conn: conn, user: user, dm: dm, room: room, room_name: room_name} do
+      unfinished = recorded_session!(user, dm)
+      {:ok, _} = Meetings.set_session_mode(room, "voice_1to1")
+
+      assert %{"reason" => "voice_1to1_session"} =
+               conn |> event("room_finished", room_name) |> json_response(200)
+
+      assert [summary] = voice_summaries(dm.id)
+      assert summary.metadata["voice_session_id"] == unfinished.id
+      assert summary.metadata["turns"] == 2
+
+      # A second session the LiveView closed itself, then room_finished again.
+      closed = recorded_session!(user, dm)
+      assert {:ok, %Message{}} = Meetings.VoiceSession.finish(closed)
+      {:ok, _} = Meetings.set_session_mode(room, "voice_1to1")
+
+      build_conn() |> event("room_finished", room_name) |> json_response(200)
+
+      assert dm.id
+             |> voice_summaries()
+             |> Enum.map(& &1.metadata["voice_session_id"])
+             |> Enum.sort() ==
+               Enum.sort([unfinished.id, closed.id])
+    end
+
+    test "a room that is not voice_1to1 posts no voice summary",
+         %{conn: conn, user: user, dm: dm, room_name: room_name} do
+      _ = recorded_session!(user, dm)
+
+      conn |> event("room_finished", room_name) |> json_response(200)
+
+      assert voice_summaries(dm.id) == []
+    end
+  end
+
   # ── A DM call ───────────────────────────────────────────────────────────
 
   describe "room_finished on a DM call" do

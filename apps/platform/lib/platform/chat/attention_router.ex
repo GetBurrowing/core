@@ -9,6 +9,8 @@ defmodule Platform.Chat.AttentionRouter do
      `"federation_inbound"`) — no agent decision in any space kind, ahead of
      every rule below. See `untrusted_inbound?/1`.
   1. **Execution spaces** — `log_only` messages are silently skipped.
+     **Voice tab records in a DM** (`dm_voice_record?/2`) are skipped too:
+     no agent decision, no mutex, no push (reason `:voice_record`).
   2. **DM spaces** — always route to the single agent participant (`:directed`).
   3. **Single @mention or reply** — route (`:mention`, or `:reply` when the
      agent is addressed only as the REPLY TARGET, below) and set the agent as
@@ -402,6 +404,17 @@ defmodule Platform.Chat.AttentionRouter do
       meeting_notice?(message) ->
         empty_attention_route(space, message, attention, :meeting_notice)
 
+      # A Voice tab record in a DM (the user's turns, the agent's turns, the
+      # context pointer and the session summary) is a transcript of a
+      # conversation that already happened out loud. It is never a turn: in a
+      # DM every message routes to the agent as `:directed`, so routing it
+      # would make the agent answer its own voice conversation by text. No
+      # agent decision, no mutex, no human push (the user just heard it);
+      # PubSub delivery to open screens happens in `Chat` and is unaffected.
+      # See `voice_record?/1` and `dm_voice_record?/2`.
+      dm_voice_record?(message, space.kind) ->
+        empty_attention_route(space, message, attention, :voice_record)
+
       true ->
         route_in_space(space, message, attention)
     end
@@ -711,6 +724,34 @@ defmodule Platform.Chat.AttentionRouter do
   @doc "The `metadata[\"source\"]` values `meeting_notice?/1` recognises."
   @spec meeting_notice_sources() :: [String.t()]
   def meeting_notice_sources, do: @meeting_notice_sources
+
+  @doc """
+  True for a message the Voice tab recorded: `metadata["source"] == "voice"`
+  AND a non-blank `metadata["voice_session_id"]`. Both keys are set only by
+  server-side voice code; no client post path (composer, app API, runtime
+  reply, MCP post tools) lets a caller choose message metadata.
+
+  This alone does not suppress routing: a voice line posted into a CHANNEL
+  (the Voice tab's context post) still routes as a normal message. The
+  exclusion is `dm_voice_record?/2`, which also requires the space kind to be
+  `"dm"`.
+  """
+  @spec voice_record?(Message.t() | map()) :: boolean()
+  def voice_record?(%{metadata: %{"source" => "voice", "voice_session_id" => id}})
+      when is_binary(id) and id != "",
+      do: true
+
+  def voice_record?(_), do: false
+
+  @doc """
+  True for a `voice_record?/1` message in a space of kind `"dm"`. Such a
+  message never produces an agent routing decision (reason `:voice_record`)
+  and never fires a chat-pattern responsibility
+  (`Platform.Responsibilities.Router`).
+  """
+  @spec dm_voice_record?(Message.t() | map(), String.t() | nil) :: boolean()
+  def dm_voice_record?(message, "dm"), do: voice_record?(message)
+  def dm_voice_record?(_message, _space_kind), do: false
 
   @untrusted_inbound_sources ~w(email_inbound federation_inbound)
 
@@ -1075,7 +1116,15 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp execution_space_task_id(_space), do: nil
 
+  # Every early exit emits `[:platform, :chat, :attention_skipped]` with its
+  # reason, so a caller (and a test) can see WHY a message routed to nobody.
   defp empty_attention_route(space, message, attention, reason) do
+    :telemetry.execute(
+      [:platform, :chat, :attention_skipped],
+      %{system_time: System.system_time()},
+      %{space_id: message.space_id, message_id: message.id, reason: reason}
+    )
+
     log_added_attention(space, message, attention, [], [], reason)
     []
   end

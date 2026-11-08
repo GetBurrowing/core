@@ -400,6 +400,37 @@ describe("ScrollToBottom — deep-link anchor holds the arrival position", () =>
     expect(groupings(el)).toEqual([false, true, true, false, false]);
   });
 
+  it("a voice session head starts a run; collapsed rows are skipped", () => {
+    // Voice chat bracket (task 01a1b6c3 stage 3).
+    const head = fakeRow("m-2", "p-1");
+    head.dataset.voiceHead = "true";
+    const hidden = fakeRow("m-4", "p-2");
+    hidden.classList.toggle("hidden", true);
+    const el = fakeList({
+      rows: [
+        fakeRow("m-1", "p-1"),
+        head,
+        fakeRow("m-3", "p-1"),
+        hidden,
+        fakeRow("m-5", "p-1"),
+      ],
+    });
+    const hook = buildHook(el);
+
+    hook.mounted();
+
+    // m-2 opens the session: not grouped under m-1, and m-1 ends its run.
+    // m-4 is collapsed, so m-5 continues m-3 directly.
+    expect(groupings(el)).toEqual([false, false, true, false, true]);
+    expect(runEnds(el)).toEqual([true, false, false, false, true]);
+
+    // Expanding the session (the JS toggle) dispatches `chat:regroup`.
+    hidden.classList.toggle("hidden", false);
+    el.emit("chat:regroup");
+    expect(groupings(el)).toEqual([false, false, true, false, false]);
+    expect(runEnds(el)).toEqual([true, false, true, true, true]);
+  });
+
   it("clears a stale run-end once a later row joins the run", () => {
     // The re-render case: `toggle` must UNmark a row that has stopped being
     // the end of its run, exactly as it already does for `--grouped`.

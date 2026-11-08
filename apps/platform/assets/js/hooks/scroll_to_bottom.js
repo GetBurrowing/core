@@ -317,6 +317,13 @@ const ScrollToBottom = {
       window.addEventListener("chat:dock-resized", this._onDockResized);
     }
 
+    // A voice session's Show all / Collapse toggle (see `applyGrouping`).
+    // (Guarded like the window listener: some callers' elements have none.)
+    if (typeof this.el.addEventListener === "function") {
+      this._onRegroup = () => this.applyGrouping();
+      this.el.addEventListener("chat:regroup", this._onRegroup);
+    }
+
     // Defined so the first `updated()` and every non-patch caller
     // (ResizeObserver, settle timer, mount) read a defined value. `null`
     // means "no pre-patch capture" and selects the live measurement.
@@ -1054,6 +1061,12 @@ const ScrollToBottom = {
     });
   },
   destroyed() {
+    if (this._onRegroup) {
+      if (typeof this.el.removeEventListener === "function") {
+        this.el.removeEventListener("chat:regroup", this._onRegroup);
+      }
+      this._onRegroup = null;
+    }
     if (this._onDockResized) {
       if (typeof window !== "undefined" && window.removeEventListener) {
         window.removeEventListener("chat:dock-resized", this._onDockResized);
@@ -1266,13 +1279,23 @@ const ScrollToBottom = {
   //
   // Anything that needs to reclaim layout — not just conceal it — belongs in
   // the stylesheet where the collapsed geometry is written down once.
+  //
+  // Voice chat bracket (task 01a1b6c3 stage 3): a row the server collapsed
+  // (`hidden`) is not on screen, so it neither continues a run nor is
+  // continued; and a row opening a voice session (`data-voice-head`) carries
+  // the session header above it, so it starts a fresh run with its avatar.
+  // Expanding or collapsing a session dispatches `chat:regroup` on this
+  // element (a `Phoenix.LiveView.JS` toggle, no patch), which re-runs this.
   applyGrouping() {
-    const rows = Array.from(this.el.querySelectorAll("[data-participant-id]"));
+    const rows = Array.from(
+      this.el.querySelectorAll("[data-participant-id]"),
+    ).filter((row) => !row.classList.contains("hidden"));
     let prevParticipantId = null;
 
     rows.forEach((row, i) => {
       const pid = row.dataset.participantId;
-      const grouped = Boolean(pid) && pid === prevParticipantId;
+      const grouped =
+        Boolean(pid) && pid === prevParticipantId && !row.dataset.voiceHead;
 
       // Look one row ahead rather than back-patching the previous row, so
       // this stays a single forward pass. A row with no participant id is
@@ -1280,7 +1303,11 @@ const ScrollToBottom = {
       // continues it, so it always ends a run.
       const next = rows[i + 1];
       const nextPid = next?.dataset.participantId;
-      const runEnd = !(Boolean(pid) && nextPid === pid);
+      const runEnd = !(
+        Boolean(pid) &&
+        nextPid === pid &&
+        !next?.dataset.voiceHead
+      );
 
       row.classList.toggle("message-row--grouped", grouped);
       row.classList.toggle("message-row--run-end", runEnd);

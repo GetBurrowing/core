@@ -1046,6 +1046,12 @@ defmodule Platform.Responsibilities.Router do
         # any more than it may route an agent.
         :ok
 
+      Platform.Chat.AttentionRouter.dm_voice_record?(message, space_kind) ->
+        # A Voice tab record in a DM is a transcript of a spoken
+        # conversation, not a request: it must not fire a responsibility
+        # dispatch, any more than it routes the DM's agent.
+        :ok
+
       not is_binary(message.content) or message.content == "" ->
         :ok
 

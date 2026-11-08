@@ -21,10 +21,20 @@ defmodule PlatformWeb.VoiceLive do
       short": no turn, the line returns to idle. Otherwise the agent is
       thinking until a final agent caption arrives, or, after 20s, "Didn't get
       an answer." with "Try again".
-    * `voice_turn` `%{who, text}`: a FINAL caption. `who: "me"` is inserted
-      and, with a context set, posted there with `VoiceSession.post_transcript/3`
-      (the bubble's meta gains " · posted to {ctx}"); with no context nothing
-      is posted. `who: "agent"` is inserted and never posted.
+    * `voice_turn` `%{who, text, final, segment_id}`: a FINAL caption. Both
+      sides are recorded in the user<->agent DM with
+      `VoiceSession.record_turn/5` (task 01a1b6c3; the rules are in
+      `VoiceSession`'s moduledoc): `who: "agent"` as the agent, `who: "me"`
+      as the user, or, with a context set, into that context only (the
+      bubble's meta gains " · posted to {ctx}") with one pointer row in the
+      DM. An explicit `"final" => false` and a segment id already recorded in
+      this session insert and post nothing. Typed turns (`voice_type`) are
+      recorded with `input: "typed"`. With no session (the mic was refused
+      before one started) a typed turn is only posted to the context, as
+      before.
+    * The session's one summary row is posted by `VoiceSession.finish/1` when
+      the session ends here (`end_session/1`, `terminate/2`); the
+      `room_finished` webhook is the fallback.
     * `voice_mic_blocked`: the browser refused the microphone. The line reads
       "Microphone is blocked. Allow it in your browser or app settings." with "Type
       instead", whose input submits through the same path as `who: "me"`.
@@ -91,6 +101,8 @@ defmodule PlatformWeb.VoiceLive do
   use PlatformWeb, :live_view
 
   import PlatformWeb.Components.Voice
+
+  require Logger
 
   alias Platform.Agents.ColorPalette
   alias Platform.Chat
@@ -351,10 +363,14 @@ defmodule PlatformWeb.VoiceLive do
 
   def handle_event("voice_turn", %{"who" => who, "text" => text} = params, socket)
       when who in ["me", "agent"] and is_binary(text) do
+    # `final` is passed through: `VoiceSession.record_turn/5` refuses an
+    # explicit false (and the no-session clauses below drop it).
+    caption = %{final: params["final"] != false, segment_id: params["segment_id"]}
+
     case String.trim(text) do
       "" -> {:noreply, socket}
-      text when who == "me" -> {:noreply, my_turn(socket, text, :voice, params["at"])}
-      text -> {:noreply, agent_turn(socket, text)}
+      text when who == "me" -> {:noreply, my_turn(socket, text, :voice, params["at"], caption)}
+      text -> {:noreply, agent_turn(socket, text, caption)}
     end
   end
 
@@ -388,14 +404,20 @@ defmodule PlatformWeb.VoiceLive do
         {:noreply, socket}
 
       text ->
-        {:noreply, socket |> my_turn(text, :typed, nil) |> assign(:type_form, type_form())}
+        {:noreply,
+         socket |> my_turn(text, :typed, nil, %{final: true}) |> assign(:type_form, type_form())}
     end
   end
 
   def handle_event("voice_type", _params, socket), do: {:noreply, socket}
 
   @impl true
+  def terminate(_reason, socket) do
+    finish_session(socket)
+    :ok
+  end
 
+  @impl true
   def handle_info({:answer_timeout, ref}, %{assigns: %{answer_ref: ref}} = socket)
       when is_reference(ref) do
     socket = assign(socket, :answer_ref, nil)
@@ -448,6 +470,7 @@ defmodule PlatformWeb.VoiceLive do
 
   defp end_session(socket) do
     if socket.assigns.mic_state in [:listening, :toggled], do: release_floor(socket)
+    finish_session(socket)
 
     socket
     |> cancel_answer_timer()
@@ -484,9 +507,25 @@ defmodule PlatformWeb.VoiceLive do
 
   defp cancel_answer_timer(socket), do: assign(socket, :answer_ref, nil)
 
-  # The user's own final turn. Posted only when a context is set, and only
-  # as the user (VoiceSession.post_transcript/3 checks write access).
-  defp my_turn(socket, text, source, at) do
+  # Best effort: a summary that fails here is posted by the `room_finished`
+  # fallback (`VoiceSession.finish_unfinished/1`).
+  defp finish_session(%{assigns: %{session: %{} = session}}) do
+    VoiceSession.finish(session)
+  rescue
+    e ->
+      Logger.warning("[VoiceLive] voice summary failed: #{Exception.message(e)}")
+      :error
+  end
+
+  defp finish_session(_socket), do: :ok
+
+  # The user's own final turn, recorded through `VoiceSession.record_turn/5`
+  # (DM, or the context with a pointer in the DM). A skipped caption (not
+  # final, a repeated segment) inserts no bubble either.
+  defp my_turn(%{assigns: %{session: nil}} = socket, _text, _source, _at, %{final: false}),
+    do: socket
+
+  defp my_turn(%{assigns: %{session: nil}} = socket, text, source, at, _caption) do
     user = socket.assigns[:current_user_record]
 
     posted_to =
@@ -497,14 +536,58 @@ defmodule PlatformWeb.VoiceLive do
         _ -> nil
       end
 
+    insert_my_turn(socket, text, source, at, posted_to)
+  end
+
+  defp my_turn(socket, text, source, at, caption) do
+    user = socket.assigns[:current_user_record]
+
+    opts = [
+      input: source,
+      context: socket.assigns.context,
+      segment_id: caption[:segment_id],
+      final: caption[:final]
+    ]
+
+    case VoiceSession.record_turn(socket.assigns.session, user, :me, text, opts) do
+      {:ok, session, %{posted_to: posted_to}} ->
+        socket |> assign(:session, session) |> insert_my_turn(text, source, at, posted_to)
+
+      {:skip, session, _reason} ->
+        assign(socket, :session, session)
+
+      {:error, _reason, session} ->
+        socket |> assign(:session, session) |> insert_my_turn(text, source, at, nil)
+    end
+  end
+
+  defp insert_my_turn(socket, text, source, at, posted_to) do
     socket
     |> assign(:heard?, true)
     |> insert_turn(%{kind: :me, text: text, meta: me_meta(source, at, posted_to)})
   end
 
-  defp agent_turn(%{assigns: %{partner: nil}} = socket, _text), do: socket
+  defp agent_turn(%{assigns: %{partner: nil}} = socket, _text, _caption), do: socket
 
-  defp agent_turn(socket, text) do
+  defp agent_turn(%{assigns: %{session: nil}} = socket, _text, %{final: false}), do: socket
+
+  defp agent_turn(%{assigns: %{session: nil}} = socket, text, _caption),
+    do: insert_agent_turn(socket, text)
+
+  defp agent_turn(socket, text, caption) do
+    user = socket.assigns[:current_user_record]
+    opts = [segment_id: caption[:segment_id], final: caption[:final]]
+
+    case VoiceSession.record_turn(socket.assigns.session, user, :agent, text, opts) do
+      {:skip, session, _reason} ->
+        assign(socket, :session, session)
+
+      {_posted_or_error, session, _} ->
+        socket |> assign(:session, session) |> insert_agent_turn(text)
+    end
+  end
+
+  defp insert_agent_turn(socket, text) do
     %{partner: partner, mic_state: state} = socket.assigns
 
     socket =

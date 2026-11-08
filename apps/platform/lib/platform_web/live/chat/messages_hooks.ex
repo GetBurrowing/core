@@ -115,6 +115,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias PlatformWeb.ChatLive.ReplyQuoteHooks
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.ThreadActivityHooks
+  alias PlatformWeb.ChatLive.VoiceBlocks
   alias PlatformWeb.NativeDonation
 
   @message_limit 50
@@ -1300,6 +1301,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
          |> mount_live_canvas(enriched)
          |> stream_insert_with_day_label(enriched)
          |> put_attachment_map_entry(msg.id, attachments)
+         |> restamp_voice_session(msg)
          |> SearchHooks.maybe_refresh()}
       else
         socket = maybe_update_inline_thread(socket, msg)
@@ -1775,6 +1777,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
+  # A Voice chat summary closes its session (task 01a1b6c3 stage 3): the
+  # session's rows already on screen re-render, so the header learns its
+  # length and count and a long session collapses (`VoiceBlocks`).
+  defp restamp_voice_session(socket, msg) do
+    if VoiceBlocks.summary?(msg) do
+      rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+      ids = msg |> VoiceBlocks.restamp_ids() |> Enum.filter(&MapSet.member?(rendered, &1))
+      reinsert_stream_messages(socket, ids, space_id: msg.space_id)
+    else
+      socket
+    end
+  end
+
   defp maybe_update_inline_thread(socket, %{thread_id: thread_id} = msg)
        when is_binary(thread_id) do
     msg_id =
@@ -1877,6 +1892,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end)
     |> LinkCards.annotate(viewer_user_id(socket))
     |> annotate_learned_notices(socket)
+    |> VoiceBlocks.annotate(time_zone: socket.assigns[:goal_time_zone])
   end
 
   # The acted-for-you notices (learned defaults, task 01a1b6a1 stage 4) for
@@ -1970,6 +1986,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     [%{msg | reactions: groups, attention: Chat.list_message_attention(msg.id)}]
     |> LinkCards.annotate(viewer_user_id(socket))
     |> annotate_learned_notices(socket)
+    |> VoiceBlocks.annotate(time_zone: socket.assigns[:goal_time_zone])
     |> hd()
   end
 
