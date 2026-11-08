@@ -211,6 +211,11 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
       # The reconciler holds one host; whatever a previous test joined is gone
       # with its process, and this one goes with the test.
       pid = start_supervised!({FakeHost, report_after_ms: 0})
+      # start_link returns before handle_continue finishes its inventory call.
+      # Even the endpoint-wait test must finish that initial join before it
+      # stops this host, so its DB work cannot outlive this sandbox owner.
+      assert %{reconciler: monitor} = :sys.get_state(pid)
+      assert is_reference(monitor)
       %{fake: pid}
     end
 
