@@ -385,6 +385,25 @@ defmodule Platform.Accounts do
 
   def find_or_create_from_oidc(_attrs), do: {:error, :invalid_oidc_user}
 
+  @doc "Refresh an OIDC game identity without creating or promoting an org membership."
+  def find_or_create_game_player(%{sub: sub, email: email, name: name} = oidc_user)
+      when is_binary(sub) and is_binary(email) and is_binary(name) do
+    attrs = build_oidc_user_attrs(oidc_user)
+
+    case Repo.get_by(User, oidc_sub: sub) do
+      %User{archived_at: %DateTime{}} ->
+        {:error, :user_archived}
+
+      %User{} = user ->
+        user |> User.changeset(refresh_oidc_user_attrs(user, attrs)) |> Repo.update()
+
+      nil ->
+        %User{} |> User.changeset(attrs) |> Repo.insert()
+    end
+  end
+
+  def find_or_create_game_player(_), do: {:error, :invalid_oidc_user}
+
   # INSERT path: write the user, then upsert a root-org membership at the
   # derived role. Both writes share one transaction.
   defp insert_user_with_membership(attrs) do

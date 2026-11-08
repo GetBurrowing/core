@@ -981,3 +981,9 @@ end
 if config_env() == :dev and System.get_env("BURROW_FAKE_AGENT_HOST") == "1" do
   config :platform, :fake_agent_host, true
 end
+
+# Explicitly published game pages; absence exposes no games. Release URLs
+# remain stable while retained manifests keep their version entries.
+if manifest = System.get_env("GAME_PUBLICATIONS_JSON") do
+  config :platform, :game_publications, Jason.decode!(manifest)
+end

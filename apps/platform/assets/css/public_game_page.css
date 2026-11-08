@@ -1,0 +1,210 @@
+
+/* Burrow dark palette, with accessible player-page text and action colors. */
+.public-game{
+  --ground:#111214;--surface:#191b20;--raised:#25272b;--edge:#383b42;
+  --ink:#eeeff1;--muted:#a9abb2;--player-text-subtle:#9397a2;
+  --accent:#f47721;--interactive:#ff9b55;--on-accent:#111214;
+  --active:#6bae75;--active-dim:#314936;--info:#22d3ee;--warning:#e5a33d;--warning-dim:#5b4522;
+  /* the four pilot seats = the robot's four limb colours, mapped to Burrow palette slots */
+  --seat-red:#ef806f;--seat-green:#6bae75;--seat-blue:#59bbfb;--seat-gold:#e5a33d;
+  --stage:#0b0b10;
+  --r-xs:6px;--r-sm:10px;--r-md:12px;--radius:14px;--r-lg:18px;--r-xl:22px;--r-pill:999px;
+  --glass:rgba(25,27,32,.78);--glass-edge:rgba(255,255,255,.09);
+  --shadow:0 10px 30px rgba(0,0,0,.35);
+  --font:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.public-game *{box-sizing:border-box}
+.public-game{margin:0;background:var(--ground);color:var(--ink);font:15px/1.5 var(--font);-webkit-font-smoothing:antialiased}
+.public-game a:not(:where(#game-live-chat, #game-live-chat *)){color:var(--interactive);text-decoration:none}
+.public-game button:not(:where(#game-live-chat, #game-live-chat *)){font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+.public-game [hidden]{display:none!important}
+
+/* ── top bar: Burrow's public chrome, hosting one game ── */
+.gp-bar{position:sticky;top:0;z-index:20;height:56px;display:flex;align-items:center;gap:14px;padding:0 24px;
+  background:rgba(17,18,20,.86);backdrop-filter:blur(18px);border-bottom:1px solid var(--edge)}
+.gp-bar .gp-logo{height:20px;display:block}
+.gp-bar .gp-sep{width:1px;height:22px;background:var(--edge)}
+.gp-bar .gp-game{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em}
+.gp-bar .gp-game img{width:26px;height:26px;border-radius:7px;object-fit:cover;object-position:50% 22%;background:#3b3b3b;border:1px solid var(--edge)}
+.gp-tabs{display:flex;gap:2px;margin-left:10px;height:100%}
+.gp-tabs button{position:relative;padding:0 14px;height:100%;color:var(--muted);font-weight:600;font-size:14px;display:flex;align-items:center;gap:7px}
+.gp-tabs button[aria-selected="true"]{color:var(--ink)}
+.gp-tabs button[aria-selected="true"]::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
+.gp-tabs .gp-count{font-size:11px;font-weight:700;color:var(--muted);background:var(--raised);border-radius:var(--r-pill);padding:1px 7px}
+.gp-tabs .gp-live{width:7px;height:7px;border-radius:50%;background:var(--active);box-shadow:0 0 0 3px rgba(107,174,117,.18)}
+.gp-bar .gp-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:14px}
+.gp-ghost{color:var(--muted);font-weight:600;padding:7px 12px;border-radius:var(--r-sm)}
+.gp-me{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.gp-av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#15161a;flex:none}
+.gp-me .gp-av{background:var(--seat-gold)}
+
+/* ── page grid ── */
+.gp-wrap{max-width:1232px;margin:0 auto;padding:24px 24px 120px}
+.gp-grid{display:grid;grid-template-columns:minmax(0,1fr) 384px;gap:28px;align-items:start}
+
+/* hero media: the game's own art carries the page */
+.gp-media{position:relative;border-radius:var(--r-xl);overflow:hidden;background:var(--stage);border:1px solid var(--edge);aspect-ratio:16/9}
+.gp-media img{width:100%;height:100%;object-fit:cover;display:block}
+.gp-media .gp-chip{position:absolute;left:14px;top:14px;background:rgba(0,0,0,.55);backdrop-filter:blur(10px);color:#fff;font-size:12px;font-weight:600;padding:5px 10px;border-radius:var(--r-pill);display:flex;gap:6px;align-items:center}
+.gp-media .gp-chip i{width:7px;height:7px;border-radius:50%;background:var(--warning)}
+.gp-thumbs{display:flex;gap:10px;margin-top:10px}
+.gp-thumbs div{flex:0 0 150px;height:84px;border-radius:var(--r-md);overflow:hidden;border:1px solid var(--edge);background:#3b3b3b;opacity:.72}
+.gp-thumbs div.gp-on{opacity:1;outline:2px solid var(--ink);outline-offset:2px}
+.gp-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
+.gp-thumbs .gp-r img{object-fit:contain}
+
+/* ── the action card: the only thing that changes between Game-tab states ── */
+.gp-card{position:sticky;top:80px;background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-xl);padding:24px;box-shadow:var(--shadow)}
+.gp-eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.gp-seats{display:inline-flex;gap:3px}
+.gp-seats i{width:10px;height:10px;border-radius:3px;display:block}
+.gp-s-r{background:var(--seat-red)}.gp-s-g{background:var(--seat-green)}.gp-s-b{background:var(--seat-blue)}.gp-s-y{background:var(--seat-gold)}
+.public-game h1{font-size:46px;line-height:1;margin:10px 0 6px;font-weight:900;letter-spacing:-.035em}
+.gp-by{color:var(--muted);font-size:13px;margin:0 0 14px}
+.gp-pitch{font-size:17px;line-height:1.45;margin:0 0 16px;color:var(--ink)}
+.gp-facts{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 20px}
+.gp-facts span{font-size:12.5px;font-weight:600;color:var(--muted);background:var(--raised);border-radius:var(--r-pill);padding:4px 10px;display:flex;align-items:center;gap:6px}
+.gp-facts svg{width:13px;height:13px}
+.gp-btn{display:flex;width:100%;align-items:center;justify-content:center;gap:10px;height:52px;border-radius:var(--radius);font-size:16px;font-weight:700;letter-spacing:-.005em}
+.gp-btn.gp-primary{background:var(--accent);color:var(--on-accent);box-shadow:0 6px 18px rgba(244,119,33,.28)}
+.gp-btn.gp-outline{border:1px solid var(--edge);background:var(--raised);color:var(--ink);height:46px;font-size:15px}
+.gp-btn svg{width:19px;height:19px;flex:none}
+.gp-btn .gp-arch{width:22px;height:17px}
+.gp-under{font-size:13px;color:var(--muted);margin:10px 0 0;text-align:center}
+.gp-under b{color:var(--ink);font-weight:600}
+.gp-then{margin:18px 0 0;padding:14px 0 0;border-top:1px solid var(--edge);font-size:13px;color:var(--muted);display:flex;gap:10px;align-items:center}
+.gp-then ol{margin:0;padding:0;list-style:none;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.gp-then li{display:flex;align-items:center;gap:6px}
+.gp-then li+li::before{content:"→";color:var(--player-text-subtle)}
+.gp-then b{color:var(--ink);font-weight:600}
+.gp-notice{display:flex;gap:12px;align-items:flex-start;background:var(--raised);border:1px solid var(--edge);border-radius:var(--radius);padding:12px 14px;margin:0 0 14px;font-size:14px}
+.gp-notice svg{width:22px;height:22px;flex:none;color:var(--muted);margin-top:1px}
+.gp-notice b{display:block;font-weight:700}
+.gp-notice span{color:var(--muted);font-size:13px}
+.gp-textlink{display:block;text-align:center;margin-top:12px;font-size:14px;font-weight:600;color:var(--interactive)}
+
+/* after download: the card becomes the setup guide */
+.gp-done{display:flex;align-items:center;gap:12px;margin:0 0 4px}
+.gp-done .gp-tick{width:36px;height:36px;border-radius:50%;background:var(--active-dim);color:var(--active);display:grid;place-items:center;flex:none}
+.gp-done .gp-tick svg{width:20px;height:20px}
+.gp-done b{font-size:17px;display:block}
+.gp-done span{font-size:13px;color:var(--muted)}
+.gp-steps{list-style:none;margin:16px 0 18px;padding:0;counter-reset:s}
+.gp-steps li{counter-increment:s;position:relative;padding:0 0 16px 42px}
+.gp-steps li::before{content:counter(s);position:absolute;left:0;top:0;width:28px;height:28px;border-radius:50%;background:var(--raised);border:1px solid var(--edge);display:grid;place-items:center;font-size:13px;font-weight:800}
+.gp-steps li:not(:last-child)::after{content:"";position:absolute;left:14px;top:32px;bottom:4px;width:1px;background:var(--edge)}
+.gp-steps b{display:block;font-size:15px}
+.gp-steps span{display:block;font-size:13px;color:var(--muted);line-height:1.45}
+.gp-steps code{font:600 12.5px var(--font);color:var(--ink);background:var(--raised);padding:1px 6px;border-radius:5px}
+.gp-steps .gp-warn{margin-top:6px;display:flex;gap:7px;font-size:12.5px;color:var(--warning);line-height:1.4}
+.gp-steps .gp-warn svg{width:14px;height:14px;flex:none;margin-top:2px}
+
+/* ── below the fold, Game tab ── */
+.gp-section{margin-top:34px}
+.gp-section h2{font-size:22px;letter-spacing:-.02em;margin:0 0 6px}
+.gp-section p{color:var(--muted);margin:0 0 14px;max-width:62ch}
+.gp-pilots{display:grid;grid-template-columns:260px 1fr;gap:22px;align-items:center;background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-xl);padding:18px 22px}
+.gp-pilots .gp-render{aspect-ratio:1;border-radius:var(--r-lg);background:#3b3b3b;overflow:hidden}
+.gp-pilots .gp-render img{width:100%;height:100%;object-fit:cover}
+.gp-seatlist{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.gp-seatlist div{display:flex;gap:10px;align-items:center;background:var(--raised);border-radius:var(--r-md);padding:10px 12px;font-size:14px}
+.gp-seatlist i{width:14px;height:14px;border-radius:4px;flex:none}
+.gp-seatlist small{display:block;color:var(--muted);font-size:12px}
+.gp-known{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.gp-known div{background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-lg);padding:14px 16px;font-size:14px}
+.gp-known b{display:block;margin-bottom:3px}
+.gp-known span{color:var(--muted);font-size:13px}
+.gp-known code{font:12px ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all}
+.gp-foot{margin-top:40px;color:var(--player-text-subtle);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.gp-foot img{height:14px;opacity:.7}
+
+/* ── Community tab ── */
+.gp-room{display:flex;flex-direction:column;height:calc(var(--game-viewport-height, 100dvh) - 56px - 48px);min-height:540px;background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-xl);overflow:hidden}
+.gp-room header{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--edge)}
+.gp-room header .gp-hash{width:34px;height:34px;border-radius:var(--r-sm);background:var(--raised);display:grid;place-items:center;font-weight:800;color:var(--muted)}
+.gp-room header b{display:block;font-size:16px}
+.gp-room header span{font-size:12.5px;color:var(--muted)}
+.gp-room header .gp-on{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.gp-room header .gp-on i{width:7px;height:7px;border-radius:50%;background:var(--active)}
+.gp-pin{margin:12px 18px 0;background:var(--raised);border-left:3px solid var(--accent);border-radius:var(--r-sm);padding:10px 14px;font-size:13.5px}
+.gp-pin small{display:block;color:var(--muted);font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px}
+.gp-msgs{flex:1;overflow:hidden;padding:6px 18px 10px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 36px);mask-image:linear-gradient(to bottom,transparent 0,#000 36px)}
+.gp-msg{display:flex;gap:11px;padding:7px 0}
+.gp-msg .gp-av{width:32px;height:32px;font-size:13px}
+.gp-msg .gp-who{font-size:14px;font-weight:700}
+.gp-msg .gp-who time{font-weight:500;font-size:12px;color:var(--player-text-subtle);margin-left:6px}
+.gp-msg .gp-who .gp-team{font-size:10.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;background:rgba(244,119,33,.16);color:var(--interactive);padding:1px 6px;border-radius:5px;margin-left:6px;vertical-align:1px}
+.gp-msg p{margin:1px 0 0;font-size:14.5px;line-height:1.45}
+.gp-msg .gp-seat{display:inline-block;font-size:11.5px;font-weight:700;padding:0 7px;border-radius:5px;color:#15161a;margin-left:2px}
+.gp-composer{margin:0 14px 14px;display:flex;align-items:center;gap:10px;background:var(--raised);border:1px solid var(--edge);border-radius:var(--radius);padding:8px 8px 8px 16px;color:var(--player-text-subtle);font-size:14.5px}
+.gp-composer .gp-send{margin-left:auto;width:36px;height:36px;border-radius:var(--r-sm);background:var(--accent);display:grid;place-items:center;color:#fff}
+.gp-composer .gp-send svg{width:17px;height:17px}
+/* not-yet-member: the room is visible, faded; the join bar sits exactly where the composer will be */
+.public-game[data-community-joined="false"] .gp-msgs::before{content:"";position:absolute;inset:0;background:linear-gradient(to bottom,var(--surface) 0%,rgba(25,27,32,.55) 45%,rgba(25,27,32,.1) 100%);z-index:1;pointer-events:none}
+.gp-joinbar{margin:0 14px 14px;background:var(--raised);border:1px solid var(--edge);border-radius:var(--r-lg);padding:16px;display:flex;align-items:center;gap:16px}
+.gp-joinbar .gp-txt{flex:1;font-size:13.5px;color:var(--muted)}
+.gp-joinbar .gp-txt b{display:block;color:var(--ink);font-size:15.5px;margin-bottom:1px}
+.gp-joinbar .gp-btn{width:auto;padding:0 22px;height:48px;flex:none}
+.gp-side{position:sticky;top:80px;display:flex;flex-direction:column;gap:14px}
+.gp-side .gp-box{background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-xl);padding:18px}
+.gp-side h3{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.gp-online{display:flex;flex-direction:column;gap:9px}
+.gp-online div{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600}
+.gp-online .gp-av{width:26px;height:26px;font-size:11px;position:relative}
+.gp-online .gp-av::after{content:"";position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;border-radius:50%;background:var(--active);border:2px solid var(--surface)}
+.gp-online small{margin-left:auto;font-size:12px;color:var(--muted);font-weight:500}
+.gp-mini{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.gp-mini img{width:54px;height:54px;border-radius:var(--r-md);object-fit:cover;object-position:50% 25%;background:#333;border:1px solid var(--edge)}
+.gp-mini b{display:block;font-size:16px}
+.gp-mini span{font-size:12.5px;color:var(--muted)}
+.gp-scope{font-size:13px;color:var(--muted);display:flex;gap:9px;line-height:1.45}
+.gp-scope svg{width:16px;height:16px;flex:none;margin-top:2px}
+
+/* ── phone ── */
+@media (max-width:760px){
+  .gp-bar{height:52px;padding:0 14px;gap:10px}
+  .gp-bar .gp-tabs,.gp-bar .gp-sep,.gp-bar .gp-game{display:none}
+  .gp-bar .gp-logo{height:18px}
+  .gp-me > span:first-child{display:none}
+  .gp-mtabs{display:flex!important;position:sticky;top:52px;z-index:19;background:rgba(17,18,20,.9);backdrop-filter:blur(18px);border-bottom:1px solid var(--edge);height:46px;padding:0 6px}
+  .gp-mtabs.gp-tabs{margin:0}
+  .gp-mtabs button{flex:1;justify-content:center}
+  .gp-wrap{padding:0 0 110px}
+  .gp-grid{grid-template-columns:1fr;gap:0}
+  .gp-media{border-radius:0;border-width:0 0 1px}
+  .gp-thumbs{display:none}
+  .gp-card{position:static;border-radius:0;border:0;box-shadow:none;padding:18px 18px 8px;background:var(--ground)}
+  h1{font-size:38px;margin-top:8px}
+  .gp-pitch{font-size:16px}
+  .gp-section{margin:26px 18px 0}
+  .gp-pilots{grid-template-columns:1fr;padding:14px}
+  .gp-pilots .gp-render{max-width:220px;margin:0 auto}
+  .gp-known{grid-template-columns:1fr}
+  .gp-foot{margin:30px 18px 0}
+  .gp-ccol{order:2}
+  .gp-room{border-radius:0;border-width:0;height:calc(var(--game-viewport-height, 100dvh) - 52px - 46px);min-height:0}
+  .gp-room header{padding:12px 14px}
+  .gp-pin{margin:10px 12px 0}
+  .gp-msgs{padding:4px 14px 8px}
+  .gp-composer,.gp-joinbar{margin:0 10px 10px}
+  .gp-joinbar{flex-direction:column;align-items:stretch;gap:12px}
+  .gp-joinbar .gp-btn{width:100%}
+  .gp-side{display:none}
+  .public-game[data-download-state="started"] .gp-media,.public-game[data-download-state="started"] .gp-pitch{display:none}
+  .gp-switch{left:8px;right:8px;transform:none;overflow-x:auto;border-radius:14px}
+  .gp-switch .gp-lbl{display:none}
+}
+.gp-mtabs{display:none}
+
+.public-game a:focus-visible,.public-game button:focus-visible{outline:3px solid var(--interactive);outline-offset:3px}
+.gp-chat{height:100%;min-height:0;overflow:hidden}.gp-game-chat-body{flex:1;min-height:0}.gp-copy-fallback{width:100%;background:var(--raised);color:var(--ink);border:1px solid var(--edge);padding:10px;border-radius:8px}.gp-copy-status{min-height:20px;color:var(--muted);font-size:13px;text-align:center;margin-top:10px}.gp-voice{margin:12px 18px;font-size:13px;color:var(--muted)}.gp-request-error{color:var(--warning);font-size:13px}.gp-thumbs button{padding:0;overflow:hidden;border-radius:12px;width:150px;height:84px;border:1px solid var(--edge)}.gp-thumbs button img{width:100%;height:100%;object-fit:cover}.gp-section code{overflow-wrap:anywhere}.gp-concept-label{font-size:12px;color:var(--muted);margin-top:8px}.gp-signin{max-width:440px;margin:10vh auto;padding:26px;background:var(--surface);border:1px solid var(--edge);border-radius:22px}.gp-signin h1{font-size:32px}.gp-signin p{color:var(--muted)}.gp-room .gp-joinbar{flex-shrink:0}.gp-room-placeholder{flex:1;display:grid;place-items:center;text-align:center;padding:25px;color:var(--muted)}
+@media(max-width:760px){.gp-section{margin:26px 18px 0}.gp-media{aspect-ratio:16/9}.gp-signin{margin:8vh 18px}.gp-card .gp-download-card{padding-bottom:10px}.gp-voice{margin:10px 14px}}
+@media(prefers-reduced-motion:reduce){.public-game *{scroll-behavior:auto!important;transition:none!important}}
+.gp-tabs a{position:relative;padding:0 14px;height:100%;color:var(--muted);font-weight:600;font-size:14px;display:flex;align-items:center;gap:7px}.gp-tabs a[aria-selected="true"]{color:var(--ink)}.gp-tabs a[aria-selected="true"]::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;background:var(--ink)}@media(max-width:760px){.gp-mtabs a{flex:1;justify-content:center}}
+
+.gp-chat > [data-phx-session]{height:100%;min-height:0}
+
+html.public-game-document{height:auto;min-height:100%;overflow-y:auto;overscroll-behavior:auto;background:#111214!important}
+body.public-game{height:auto;min-height:100dvh;overflow:visible;overscroll-behavior:auto}
+.gp-player-chat{display:flex;flex-direction:column;height:100%;min-height:0}.gp-player-messages{overflow-y:auto;flex:1;min-height:0;padding:16px}.gp-player-message{padding:10px 0;overflow-wrap:anywhere}.gp-player-message strong{font-size:14px}.gp-player-message time{font-size:11px;color:var(--muted);margin-left:10px}.gp-player-message p{margin:5px 0 0;white-space:pre-wrap}.gp-player-composer{display:flex;gap:10px;padding:12px;border-top:1px solid var(--edge);align-items:flex-end}.gp-player-composer>div{flex:1;min-width:0}.gp-player-composer input{width:100%;background:var(--raised);color:var(--ink);border:1px solid var(--edge);border-radius:10px;padding:10px}.gp-player-send{background:var(--accent)!important;color:var(--on-accent)!important;padding:11px;border-radius:10px}.gp-player-composer label{font-size:12px;color:var(--muted)}.gp-badge{font-size:10px;margin-left:7px;color:var(--interactive)}.gp-me{max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#game-messages:empty::before{content:"Say hello. Find your crew. Pick a limb.";color:var(--muted);font-size:14px}

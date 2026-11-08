@@ -1,0 +1,123 @@
+name: Game page smoke
+on:
+  push:
+    branches: [feat/voltron-game-page]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      postgres:
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      GAME_PAGE_BROWSER_EVIDENCE: /tmp/game-page-browser/game-page-evidence
+    defaults:
+      run:
+        working-directory: apps/platform
+    steps:
+      - name: Tools
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
+          update-ca-certificates
+      - uses: actions/checkout@v5
+      - name: Hex
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - uses: actions/cache@v5
+        id: cache
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}
+      - name: Dependencies
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+      - name: Format changed Elixir and HEEx
+        run: |
+          mix format lib/platform_web/live/game_community_live.ex lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/game_page_html/sign_in.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs test/platform/repo_lookup_boundary_test.exs
+          tar -czf "$GITHUB_WORKSPACE/game-page-formatted.tar.gz" lib/platform_web/live/game_community_live.ex lib/platform/games.ex lib/platform/accounts.ex lib/platform_web/controllers/game_page_controller.ex lib/platform_web/controllers/game_page_html.ex lib/platform_web/controllers/game_page_html/show.html.heex lib/platform_web/controllers/game_page_html/sign_in.html.heex lib/platform_web/controllers/auth_controller.ex lib/platform_web/router.ex config/runtime.exs test/platform_web/controllers/game_page_controller_test.exs test/platform/repo_lookup_boundary_test.exs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-page-format
+          path: game-page-formatted.tar.gz
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/assets/package-lock.json
+      - name: JavaScript dependencies and game page checks
+        working-directory: apps/platform/assets
+        run: |
+          npm ci
+          npx vitest run test/public_game_page.test.js
+      - name: Compile and exercise game and existing auth/attachment boundaries
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          mix precommit test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs test/platform/repo_lookup_boundary_test.exs
+      - name: Check the actual page on phone and desktop
+        run: |
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
+          mix tailwind platform --minify
+          cd assets
+          NODE_PATH=../deps npx esbuild js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=. --alias:@extensions=./js/extensions/none.js --minify
+          cd ..
+          cp -r priv/static/assets priv/static/images /tmp/game-page-browser/
+          npm install --prefix /tmp/game-page-playwright playwright@1.58.2
+          /tmp/game-page-playwright/node_modules/.bin/playwright install --with-deps chromium
+          mkdir -p /tmp/game-page-screenshots
+          node -e 'const h=require("node:http"),f=require("node:fs"),p=require("node:path");h.createServer((q,r)=>{const x=p.join("/tmp/game-page-browser",new URL(q.url,"http://localhost").pathname);f.readFile(x,(e,b)=>{if(e){r.writeHead(404);return r.end()}r.setHeader("Content-Type",x.endsWith(".css")?"text/css":x.endsWith(".js")?"text/javascript":x.endsWith(".svg")?"image/svg+xml":x.endsWith(".png")?"image/png":x.endsWith(".jpg")?"image/jpeg":"text/html");r.end(b)})}).listen(8765,"127.0.0.1")' &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          GAME_PAGE_PLAYWRIGHT=/tmp/game-page-playwright/node_modules/playwright GAME_PAGE_SCREENSHOTS=/tmp/game-page-screenshots node "$GITHUB_WORKSPACE/.github/scripts/game-page-layout.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-page-layout
+          path: /tmp/game-page-screenshots
+      - name: Prove ordinary account provisioning is rejected for a new game player
+        run: |
+          cp lib/platform/games.ex /tmp/game-page-original.ex
+          trap 'cp /tmp/game-page-original.ex lib/platform/games.ex' EXIT
+          sed -i 's/Accounts.find_or_create_game_player(claims)/Accounts.find_or_create_from_oidc(claims)/' lib/platform/games.ex
+          if mix test test/platform_web/controllers/game_page_controller_test.exs --only game_identity > /tmp/game-identity-mutation.log 2>&1; then
+            cat /tmp/game-identity-mutation.log
+            echo 'Unsafe root-membership mutation survived'
+            exit 1
+          fi
+          cat /tmp/game-identity-mutation.log
+          grep -q 'creates only external game membership' /tmp/game-identity-mutation.log
+      - uses: actions/cache/save@v5
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}
