@@ -35,20 +35,13 @@ def _service(plan, svc):
     # The single-host layer aliases every routed host to Caddy. Here that
     # would point core's OIDC discovery at Caddy's plain-http listener.
     out.pop("networks", None)
-    health = out.get("healthcheck")
-    if health and health["test"][:2] == ["CMD", "pg_isready"]:
-        # First boot runs initdb plus the postgres-init scripts, then a
-        # restart. On the Mac build host (8 GB, under memory pressure, 2026-10-05) that
-        # checkpoint's fsync alone took 22 s and postgres was marked unhealthy
-        # after the 5 x 10 s retries, failing `up`. A start period lets the
-        # first boot finish; afterwards the check is as tight as before.
-        health["start_period"] = PG_START_PERIOD
+    # postgres' first-boot start_period (2026-10-05: on the Mac build host,
+    # 8 GB under memory pressure, the init checkpoint's fsync alone took
+    # 22 s) now comes from templates._healthcheck for every target.
     return out
 
 
-# How long a first boot of the bundled postgres may take before failed
-# healthchecks count (Docker's `start_period`).
-PG_START_PERIOD = "180s"
+PG_START_PERIOD = templates.PG_START_PERIOD
 
 
 def compose(plan):

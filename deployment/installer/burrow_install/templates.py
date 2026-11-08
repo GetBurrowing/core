@@ -130,9 +130,20 @@ def _caddy_mounts(plan):
     return mounts
 
 
+# How long a first boot of the bundled postgres may take before failed
+# healthchecks count (Docker's `start_period`). First boot runs initdb plus
+# the postgres-init scripts, then a restart. Without it, a 2 vCPU droplet
+# whose first boot also runs burrow-agent-host-setup (npm installs) marked
+# postgres unhealthy after the 5 x 10 s retries; `docker compose up -d` then
+# failed burrow-stack.service, leaving core-platform "Created" for good (core
+# task 01a1b7ed stage 3, a fresh local install). The Mac build host hit the
+# same on 2026-10-05 (mac.py). Afterwards the check is as tight as before.
+PG_START_PERIOD = "180s"
+
+
 def _healthcheck(test):
     if test[:2] == ["CMD", "pg_isready"]:
-        timing = {"interval": "10s", "timeout": "5s", "retries": 5}
+        timing = {"interval": "10s", "timeout": "5s", "retries": 5, "start_period": PG_START_PERIOD}
     else:
         timing = {"interval": "30s", "timeout": "10s", "retries": 3, "start_period": "30s"}
     return {"test": list(test), **timing}

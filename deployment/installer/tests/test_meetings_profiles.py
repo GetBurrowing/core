@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 
 from test_droplet import block_list, compose_blocks
 
-from burrow_install import registry
+from burrow_install import registry, templates
 from burrow_install.manifest import load
 from burrow_install.render import build
 from burrow_install.validate import validate
@@ -177,6 +177,20 @@ class TranscriptionOffCoreEnvTest(unittest.TestCase):
         blocks = self.core_block(True)
         self.assertIn("meeting-transcriber", blocks)
         self.assertNotIn("MEETING_TRANSCRIPTION", blocks["core-platform"])
+
+
+class PostgresFirstBootTest(unittest.TestCase):
+    """A droplet's first-boot postgres gets a start_period (core task 01a1b7ed stage 3).
+
+    Seen on a fresh 2 vCPU install: initdb ran alongside the agent-host setup,
+    postgres went unhealthy after 5 x 10 s, and `docker compose up -d` failed
+    burrow-stack.service for good.
+    """
+
+    def test_droplet_postgres_healthcheck_has_the_first_boot_start_period(self):
+        blocks = meetings_compose("small")
+        self.assertEqual(scalar(blocks["core-postgres"], "  start_period"), "180s")
+        self.assertEqual(templates.PG_START_PERIOD, "180s")
 
 
 if __name__ == "__main__":
