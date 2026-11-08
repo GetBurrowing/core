@@ -272,6 +272,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     doc: "the search input's form name; the create sheet names it so submit sees the query"
   )
 
+  attr(:placeholder, :string, default: "Name or email")
+  attr(:aria_label, :string, default: "Invite someone")
+
   @doc """
   The search box plus its dropdown.
 
@@ -311,8 +314,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           id={"#{@id}-search"}
           data-role="meeting-invite-search"
           class="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:outline-none focus:ring-0"
-          placeholder="Name or email"
-          aria-label="Invite someone"
+          placeholder={@placeholder}
+          aria-label={@aria_label}
           autocomplete="off"
           name={@name}
           phx-hook="InviteSearchEnter"

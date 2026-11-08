@@ -40,6 +40,7 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
   alias Platform.Meetings
   alias Platform.Meetings.Meeting
   alias PlatformWeb.MeetingLive
+  alias PlatformWeb.MeetingLive.InviteeStaging
   alias PlatformWeb.TimeEntry
 
   @fields ~w(name date start_time duration_minutes description)
@@ -60,23 +61,17 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
          {:ok, meeting} <- editable(id, viewer) do
       original = prefill(meeting, time_zone)
 
-      state = %{
-        meeting_id: meeting.id,
-        slug: meeting.slug,
-        time_zone: time_zone,
-        original: original,
-        params: original,
-        invitees: invitee_rows(meeting),
-        removed_ids: [],
-        added: [],
-        adding?: false,
-        query: "",
-        candidates: [],
-        email: nil,
-        refused?: false,
-        error: nil,
-        saving?: false
-      }
+      state =
+        %{
+          meeting_id: meeting.id,
+          slug: meeting.slug,
+          time_zone: time_zone,
+          original: original,
+          params: original,
+          error: nil,
+          saving?: false
+        }
+        |> Map.merge(InviteeStaging.init(InviteeStaging.rows(meeting)))
 
       assign(socket, :meeting_edit, recompute(state, meeting))
     else
@@ -115,55 +110,34 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
   end
 
   defp dispatch(socket, state, meeting, "meeting_edit_remove", %{"id" => id}, _viewer) do
-    known? = Enum.any?(state.invitees, &(&1.id == id)) and id not in state.removed_ids
-
-    cond do
-      not known? ->
-        {:noreply, socket}
-
-      # The context's own verdict decides the refusal: remove it in a
-      # trial preview and ask whether that edit would be refused.
-      trial_refused?(state, meeting, id) ->
-        put(socket, recompute(%{state | refused?: true}, meeting))
-
-      true ->
-        put(
-          socket,
-          recompute(%{state | removed_ids: state.removed_ids ++ [id], refused?: false}, meeting)
-        )
-    end
+    put(
+      socket,
+      recompute(InviteeStaging.remove(state, id, &trial_refused?(state, meeting, &1)), meeting)
+    )
   end
 
   defp dispatch(socket, state, meeting, "meeting_edit_undo", %{"id" => id}, _viewer) do
-    put(socket, recompute(%{state | removed_ids: List.delete(state.removed_ids, id)}, meeting))
+    put(socket, recompute(InviteeStaging.undo(state, id), meeting))
   end
 
   defp dispatch(socket, state, meeting, "meeting_edit_unstage", %{"id" => id}, _viewer) do
-    added = Enum.reject(state.added, &(&1.id == id))
-    put(socket, recompute(%{state | added: added, refused?: false}, meeting))
+    put(socket, recompute(InviteeStaging.unstage(state, id), meeting))
   end
 
   defp dispatch(socket, state, _meeting, "meeting_edit_add_people", _params, _viewer) do
-    put(socket, %{state | adding?: true})
+    put(socket, InviteeStaging.open(state))
   end
 
   defp dispatch(socket, state, _meeting, "meeting_edit_invite_search", %{"value" => q}, _v) do
-    put(socket, search(state, to_string(q)))
+    put(socket, InviteeStaging.search(state, q))
   end
 
   defp dispatch(socket, state, meeting, "meeting_edit_invite_stage", %{"kind" => _} = params, _v) do
-    case stage_entry(state, params) do
-      nil ->
+    case InviteeStaging.stage(state, params) do
+      :error ->
         {:noreply, socket}
 
-      entry ->
-        added =
-          if Enum.any?(state.added, &(&1.id == entry.id)),
-            do: state.added,
-            else: state.added ++ [entry]
-
-        state = %{state | added: added, query: "", candidates: [], email: nil, refused?: false}
-
+      {:ok, state} ->
         {:noreply,
          socket
          |> assign(:meeting_edit, recompute(state, meeting))
@@ -171,25 +145,19 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
     end
   end
 
-  defp dispatch(socket, state, meeting, "meeting_edit_invite_commit", %{"value" => value}, viewer) do
-    value = to_string(value)
-
-    if String.trim(value) == "" do
+  defp dispatch(socket, state, meeting, "meeting_edit_invite_commit", %{"value" => value}, _v) do
+    if String.trim(to_string(value)) == "" do
       {:noreply, socket}
     else
-      state = search(state, value)
-
-      case PlatformWeb.MeetingLive.LiveInvites.commit_params(state.candidates, state.email, value) do
-        nil ->
+      case InviteeStaging.commit(state, value) do
+        {:searched, state} ->
           put(socket, state)
 
-        params ->
-          socket = assign(socket, :meeting_edit, state)
-
-          {:noreply, socket} =
-            dispatch(socket, state, meeting, "meeting_edit_invite_stage", params, viewer)
-
-          {:reply, %{staged: true}, socket}
+        {:ok, state} ->
+          {:reply, %{staged: true},
+           socket
+           |> assign(:meeting_edit, recompute(state, meeting))
+           |> push_event("invite-search:clear", %{id: "meeting-edit-invite-search"})}
       end
     end
   end
@@ -318,10 +286,7 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
     |> put_if(changed.description, :description, blank_to_nil(trim(state.params["description"])))
     |> Map.merge(time_attrs(state, changed))
     |> Map.put(:remove_invite_ids, state.removed_ids)
-    |> Map.put(
-      :add_invitees,
-      Enum.map(state.added, &Map.take(&1, [:kind, :user_id, :email, :display_name]))
-    )
+    |> Map.put(:add_invitees, InviteeStaging.additions(state))
   end
 
   defp time_attrs(state, changed) do
@@ -413,87 +378,10 @@ defmodule PlatformWeb.MeetingLive.MeetingEdit do
     |> Map.put(:form, to_form(state.params, as: :meeting_edit))
   end
 
-  defp trial_refused?(state, meeting, id) do
-    trial = %{state | removed_ids: state.removed_ids ++ [id]}
+  defp trial_refused?(state, meeting, removed_ids) do
+    trial = %{state | removed_ids: removed_ids}
     Meetings.preview_meeting_edit(meeting, attrs(trial)).refusal == :last_invitee
   end
-
-  # ── invitees ───────────────────────────────────────────────────────────
-
-  defp invitee_rows(meeting),
-    do: meeting |> MeetingLive.detail_invite_rows() |> Enum.reject(& &1.agent)
-
-  defp search(state, query) do
-    if String.trim(query) == "" do
-      %{state | query: "", candidates: [], email: nil}
-    else
-      kept = Enum.reject(state.invitees, &(&1.id in state.removed_ids))
-
-      %{users: users, email: email} =
-        Meetings.resolve_invite_candidates(query,
-          exclude_user_ids: for(r <- kept ++ state.added, is_binary(r.user_id), do: r.user_id),
-          exclude_emails: for(r <- kept ++ state.added, is_binary(r.email), do: r.email)
-        )
-
-      %{state | query: query, candidates: users, email: email, adding?: true}
-    end
-  end
-
-  # A user must be one of the candidates the search offered; an address or
-  # a guest name is whatever was typed. Anything else stages nothing.
-  defp stage_entry(state, %{"kind" => "user", "id" => user_id}) do
-    case Enum.find(state.candidates, &(&1.id == user_id)) do
-      nil ->
-        nil
-
-      user ->
-        %{
-          id: "user:" <> user.id,
-          kind: :user,
-          user_id: user.id,
-          email: user.email,
-          display_name: user.name || user.email,
-          subtitle: user.name && user.email
-        }
-    end
-  end
-
-  defp stage_entry(_state, %{"kind" => kind, "email" => email})
-       when kind in ["guest", "external"] do
-    case trim(email) do
-      "" ->
-        nil
-
-      address ->
-        %{
-          id: kind <> ":" <> address,
-          kind: if(kind == "guest", do: :guest, else: :external),
-          user_id: nil,
-          email: address,
-          display_name: address,
-          subtitle: if(kind == "guest", do: "guest link", else: "external member")
-        }
-    end
-  end
-
-  defp stage_entry(_state, %{"kind" => "guest", "name" => name}) do
-    case trim(name) do
-      "" ->
-        nil
-
-      trimmed ->
-        %{
-          id: "guest-name:" <> trimmed,
-          kind: :guest,
-          user_id: nil,
-          email: nil,
-          display_name: trimmed,
-          subtitle: "guest link"
-        }
-    end
-  end
-
-  defp stage_entry(_state, _params), do: nil
 
   # ── helpers ────────────────────────────────────────────────────────────
 

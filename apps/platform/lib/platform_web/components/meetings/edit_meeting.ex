@@ -260,60 +260,7 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
               </div>
             </div>
 
-            <div class="flex flex-col gap-1" data-role="meeting-edit-invitees">
-              <span class={label_class()}>Invitees</span>
-              <div class="flex flex-col">
-                <.invitee_row :for={row <- @kept} row={row} event="meeting_edit_remove" />
-                <.invitee_row
-                  :for={entry <- @edit.added}
-                  row={entry}
-                  event="meeting_edit_unstage"
-                  added
-                />
-              </div>
-              <p
-                :for={row <- @removed}
-                class="m-0 text-sm text-subtle"
-                data-role="meeting-edit-removed"
-                data-invite-id={row.id}
-              >
-                removed: {row.name} (<button
-                  type="button"
-                  class="text-base-content underline"
-                  phx-click="meeting_edit_undo"
-                  phx-value-id={row.id}
-                  data-role="meeting-edit-undo"
-                >undo</button>)
-              </p>
-              <p
-                :if={@edit.refused?}
-                class="m-0 flex items-center gap-1.5 text-sm text-error"
-                role="alert"
-                data-role="meeting-edit-last-invitee"
-              >
-                <span class="hero-exclamation-circle size-4 shrink-0" aria-hidden="true"></span>
-                Keep at least one invitee, or cancel the meeting.
-              </p>
-              <button
-                :if={!@edit.adding?}
-                type="button"
-                class="mt-1 flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-edge px-3 text-left text-sm font-medium text-base-content lg:min-h-9 lg:hover:border-primary"
-                phx-click="meeting_edit_add_people"
-                data-role="meeting-edit-add-people"
-              >
-                <span class="hero-plus size-4" aria-hidden="true"></span> Add people
-              </button>
-              <div :if={@edit.adding?} class="mt-1" data-role="meeting-edit-invite-expansion">
-                <.invite_control
-                  mode={:edit}
-                  id="meeting-edit-invite"
-                  query={@edit.query}
-                  candidates={@edit.candidates}
-                  email_option={@edit.email}
-                  dropdown={:inline}
-                />
-              </div>
-            </div>
+            <.invitees staging={@edit} kept={@kept} removed={@removed} />
 
             <div class="flex flex-col gap-1">
               <label for="meeting-edit-notes" class={label_class()}>
@@ -355,6 +302,89 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
             </button>
           </div>
         </.form>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:staging, :map, required: true, doc: "an `InviteeStaging` state")
+  attr(:kept, :list, required: true)
+  attr(:removed, :list, required: true)
+  attr(:label, :string, default: "Invitees")
+  attr(:label_class, :string, default: nil)
+  attr(:placeholder, :string, default: "Name or email")
+  attr(:always_open, :boolean, default: false, doc: "show the search box without Add people")
+  attr(:id, :string, default: "meeting-edit-invite")
+  attr(:rest, :global)
+
+  @doc """
+  The staged people block: kept rows, staged additions, removed rows with
+  undo, the last-invitee refusal and the add-people search. Shared by the
+  Edit meeting form and the Calendar event editor (task 01a1b8a5 stage 2);
+  its events are `meeting_edit_remove`, `meeting_edit_undo`,
+  `meeting_edit_unstage`, `meeting_edit_add_people` and InviteControl's
+  `:edit` mode, in both.
+  """
+  def invitees(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1" data-role="meeting-edit-invitees" {@rest}>
+      <span class={@label_class || label_class()}>{@label}</span>
+      <div class="flex flex-col">
+        <.invitee_row :for={row <- @kept} row={row} event="meeting_edit_remove" />
+        <.invitee_row
+          :for={entry <- @staging.added}
+          row={entry}
+          event="meeting_edit_unstage"
+          added
+        />
+      </div>
+      <p
+        :for={row <- @removed}
+        class="m-0 text-sm text-subtle"
+        data-role="meeting-edit-removed"
+        data-invite-id={row.id}
+      >
+        removed: {row.name} (<button
+          type="button"
+          class="text-base-content underline"
+          phx-click="meeting_edit_undo"
+          phx-value-id={row.id}
+          data-role="meeting-edit-undo"
+        >undo</button>)
+      </p>
+      <p
+        :if={@staging.refused?}
+        class="m-0 flex items-center gap-1.5 text-sm text-error"
+        role="alert"
+        data-role="meeting-edit-last-invitee"
+      >
+        <span class="hero-exclamation-circle size-4 shrink-0" aria-hidden="true"></span>
+        Keep at least one invitee, or cancel the meeting.
+      </p>
+      <button
+        :if={!@staging.adding? and !@always_open}
+        type="button"
+        class="mt-1 flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-edge px-3 text-left text-sm font-medium text-base-content lg:min-h-9 lg:hover:border-primary"
+        phx-click="meeting_edit_add_people"
+        data-role="meeting-edit-add-people"
+      >
+        <span class="hero-plus size-4" aria-hidden="true"></span> Add people
+      </button>
+      <div
+        :if={@staging.adding? or @always_open}
+        class="mt-1"
+        data-role="meeting-edit-invite-expansion"
+      >
+        <.invite_control
+          mode={:edit}
+          id={@id}
+          query={@staging.query}
+          candidates={@staging.candidates}
+          email_option={@staging.email}
+          dropdown={:inline}
+          placeholder={@placeholder}
+          aria_label={@label}
+        />
       </div>
     </div>
     """
@@ -411,7 +441,8 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
   attr(:text, :string, required: true)
   attr(:bare, :boolean, default: false)
 
-  defp was(assigns) do
+  @doc "A muted 'was ...' marker beside a changed field's label."
+  def was(assigns) do
     ~H"""
     <span
       class="ml-1 text-xs font-normal normal-case tracking-normal text-subtle"
