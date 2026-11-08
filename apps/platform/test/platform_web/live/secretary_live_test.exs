@@ -547,6 +547,12 @@ defmodule PlatformWeb.SecretaryLiveTest do
 
       assert {:error, {:redirect, %{to: to}}} = live(auth(conn, user), "/brief")
       assert to =~ "/access-denied"
+
+      # Positive control: an unlocked member of the same org opens it. Without
+      # the ModuleGate entry an unlisted view is denied for everyone, so this
+      # is the half that tells "listed under :inbox" from "not listed at all".
+      twin = person!("tw")
+      assert {:ok, _, _} = live(auth(conn, twin), "/brief")
     end
 
     test "an external user is denied /brief and /inbox", %{conn: conn} do
