@@ -436,6 +436,8 @@ defmodule Platform.Secretary.View do
       tag: e.tag,
       tag_label: tag_label(e.tag),
       kind: kind,
+      input_kind: input.kind,
+      mentioned?: input.mentioned?,
       title: title(input, item, todo, space),
       reason: e.reason,
       kind_label: kind_label(input),
@@ -645,8 +647,23 @@ defmodule Platform.Secretary.View do
   defp goal_space_label(nil, %{space_name: name}) when is_binary(name), do: "#" <> name
   defp goal_space_label(nil, _goal), do: "#space"
 
+  # A row still carrying a goal key from an earlier model verdict (the
+  # fallback has not rewritten it yet) is placed by its kind, the same
+  # routing `Platform.Secretary.Fallback.classify/2` writes.
   defp fallback_groups(rows) do
-    by_key = Enum.group_by(rows, & &1.evaluation.group_key)
+    by_key =
+      Enum.group_by(rows, fn row ->
+        case row.evaluation.group_key do
+          "fallback:" <> _ = key ->
+            key
+
+          _ ->
+            case Fallback.classify(row.input_kind || "", row.mentioned? == true) do
+              {nil, _} -> "none"
+              {group, _} -> Fallback.group_key(group)
+            end
+        end
+      end)
 
     for {key, label} <- Fallback.groups(),
         rows = Map.get(by_key, Fallback.group_key(key), []),
