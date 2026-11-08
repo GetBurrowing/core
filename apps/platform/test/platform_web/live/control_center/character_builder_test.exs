@@ -372,13 +372,18 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
 
     test "roll and a name chip change the name", %{conn: conn} do
       view = open(conn, "name")
+      [initial] = attr(view, "#ba-agname", "value")
       click(view, "#ba-dice")
       [rolled] = attr(view, "#ba-agname", "value")
-      assert rolled != "Forge"
+      assert rolled != initial
       assert rolled in Archetypes.get("builder").names
-      click(view, ~s{.ba-chip[data-nm="Anvil"]})
-      assert attr(view, "#ba-agname", "value") == ["Anvil"]
-      assert has_element?(view, ".ba-sub b", "@Anvil")
+      # The chips hide the current name and any name another agent wears, so
+      # pick whichever chip is actually rendered rather than a fixed one.
+      [chip | _] = attr(view, ".ba-chips .ba-chip[data-nm]", "data-nm")
+      assert chip != rolled
+      click(view, ~s{.ba-chip[data-nm="#{chip}"]})
+      assert attr(view, "#ba-agname", "value") == [chip]
+      assert has_element?(view, ".ba-sub b", "@#{chip}")
     end
 
     test "voice knobs, reset and a typed prompt", %{conn: conn} do
