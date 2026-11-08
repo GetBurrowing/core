@@ -5,7 +5,7 @@ defmodule PlatformWeb.Components.IconRail do
   One render function and the list every navigation surface reads:
 
     * `bottom_rail/1` — mobile tab bar (<`lg` breakpoint). Link tabs from
-                       `mobile_tab_keys/0` (Chat, Calendar, Meetings, Inbox,
+                       `mobile_tab_keys/0` (Chat, Calendar, Inbox,
                        filtered by Scope) plus a More button that fires
                        `phx-click="open_more_sheet"` (`close_more_sheet`
                        while the sheet is open). Voice and Tasks are the
@@ -58,7 +58,7 @@ defmodule PlatformWeb.Components.IconRail do
   @doc """
   Mobile tab bar. Hidden at the `lg` breakpoint and above.
 
-  Link tabs for `mobile_tab_keys/0` (Chat, Calendar, Meetings, Inbox; a Scope
+  Link tabs for `mobile_tab_keys/0` (Chat, Calendar, Inbox; a Scope
   that does not admit one drops its cell, and the rest stay equal width), then
   a More button. Admin and the long tail live in the More sheet, never in the bar.
 
@@ -97,7 +97,7 @@ defmodule PlatformWeb.Components.IconRail do
   )
 
   def bottom_rail(assigns) do
-    current_path = Map.get(assigns, :current_path, "/")
+    current_path = assigns |> Map.get(:current_path, "/") |> nav_path()
     scope = assigns[:access_scope]
     primary = tab_destinations(scope)
     link_winner = active_destination_key(primary, current_path)
@@ -205,16 +205,34 @@ defmodule PlatformWeb.Components.IconRail do
   meetings, and inbox. We can move tasks and voice into the more menu";
   task 01a18d9f stage 5). More is not a key here; it is the button after
   the links.
+
+  Meetings left the bar, the desktop rail and the More sheet in task
+  01a1b8a5 stage 4 (calendar consolidation, prototype 01a178d2 v7
+  `#tab-meetings` absent): calls are Calendar events now, and a call room
+  is reached from its event's details or a direct `/meetings/:slug` link.
+  Calendar keeps its own `calendar.read` rail permission, so it stays
+  whether or not the video-call module is on. The `:meetings` destination
+  itself stays in `canonical_destinations/0` for Access labels and the
+  module gate; no navigation surface lists it.
   """
   @spec mobile_tab_keys() :: [atom()]
-  def mobile_tab_keys, do: [:chat, :calendar, :meetings, :inbox]
+  def mobile_tab_keys, do: [:chat, :calendar, :inbox]
 
   @doc """
   The desktop sidebar's module-row keys, in order: prototype 01a178d2 v4's
   rail (`index.html` `.side`). The More group follows (`desktop_more_rows/2`).
   """
   @spec desktop_rail_keys() :: [atom()]
-  def desktop_rail_keys, do: [:chat, :voice, :tasks, :calendar, :meetings]
+  def desktop_rail_keys, do: [:chat, :voice, :tasks, :calendar]
+
+  @doc """
+  Keys no navigation surface lists (task 01a1b8a5 stage 4): Meetings is
+  retired from the bar, the desktop rail and both More lists. The More
+  rows filter on this too, so a later `@more_sheet_order` edit cannot bring
+  it back by accident.
+  """
+  @spec retired_nav_keys() :: [atom()]
+  def retired_nav_keys, do: [:meetings]
 
   defp tab_aria_label(%{key: :inbox} = dest, count), do: inbox_aria_label(dest.label, count)
   defp tab_aria_label(dest, _), do: dest.label
@@ -358,7 +376,7 @@ defmodule PlatformWeb.Components.IconRail do
   """
   @spec more_sheet_rows(Scope.t() | nil, boolean()) :: [map()]
   def more_sheet_rows(scope, root_user) do
-    visible = scope |> rail_filter(root_user) |> destinations()
+    visible = scope |> rail_filter(root_user) |> destinations() |> drop_retired()
     by_key = Map.new(visible, &{&1.key, &1})
     extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
 
@@ -387,7 +405,7 @@ defmodule PlatformWeb.Components.IconRail do
   """
   @spec desktop_more_rows(Scope.t() | nil, boolean()) :: [map()]
   def desktop_more_rows(scope, root_user) do
-    visible = scope |> rail_filter(root_user) |> destinations()
+    visible = scope |> rail_filter(root_user) |> destinations() |> drop_retired()
     by_key = Map.new(visible, &{&1.key, &1})
     extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
 
@@ -420,6 +438,9 @@ defmodule PlatformWeb.Components.IconRail do
     do: active_destination_key(rows ++ settings_destinations(), current_path)
 
   def more_sheet_current_key(_rows, _current_path), do: nil
+
+  defp drop_retired(destinations),
+    do: Enum.reject(destinations, &(&1.key in retired_nav_keys()))
 
   defp settings_destinations, do: Enum.map(@settings_paths, &%{key: :settings, path: &1})
 
@@ -543,6 +564,20 @@ defmodule PlatformWeb.Components.IconRail do
       [] -> nil
     end
   end
+
+  @doc """
+  The path the navigation surfaces light their current row for (task
+  01a1b8a5 stage 4). A call room (`/meetings/:slug`) and the old listing
+  path light Calendar: the Meetings destination is retired and a call is a
+  Calendar event. Only that segment is rewritten (`/meetingsx` is left
+  alone), and only for highlighting: `TabSwitchCache` still files a room's
+  snapshot under its own key, so tapping Calendar never flashes a call room.
+  """
+  @spec nav_path(term()) :: term()
+  def nav_path("/meetings"), do: "/calendar"
+  def nav_path("/meetings/" <> _), do: "/calendar"
+  def nav_path("/meetings?" <> _), do: "/calendar"
+  def nav_path(path), do: path
 
   # A destination whose path carries a query (More > Canvases,
   # `/files?tab=browse&type=canvas`) matches only that exact URL; FilesLive

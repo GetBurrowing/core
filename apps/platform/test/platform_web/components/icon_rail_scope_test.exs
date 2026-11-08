@@ -204,9 +204,11 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
     end
 
     test "a guest without meetings.join gets no Meetings tab in the bar", ctx do
-      # Control: a member's bar carries Meetings, in its place.
+      # Control: a member's bar carries Calendar; nobody's carries Meetings
+      # since task 01a1b8a5 stage 4 retired it.
       member = scope_of(ctx.internal[:sub_member])
-      assert mobile_keys(%{access_scope: member}) == [:chat, :calendar, :meetings, :inbox]
+      assert Access.module_access?(member, :meetings)
+      assert mobile_keys(%{access_scope: member}) == [:chat, :calendar, :inbox]
 
       for {row, user} <- ctx.guests do
         scope = scope_of(user)
@@ -342,16 +344,13 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert Enum.sort(scope_destination_keys(locked)) == [:chat, :meetings, :tasks, :voice]
 
-      assert Enum.sort(desktop_keys(%{access_scope: locked})) == [
-               :chat,
-               :meetings,
-               :tasks,
-               :voice
-             ]
+      # Task 01a1b8a5 stage 4: Meetings is no navigation row even for a
+      # viewer who holds it; the module itself stays open (`scope_destination_keys`).
+      assert Enum.sort(desktop_keys(%{access_scope: locked})) == [:chat, :tasks, :voice]
 
-      # Task 01a18d9f stage 5: the bar is Chat, Calendar, Meetings, Inbox
-      # (Calendar and Inbox are locked here); Voice and Tasks lead the sheet.
-      assert mobile_keys(%{access_scope: locked}) == [:chat, :meetings]
+      # Task 01a18d9f stage 5: the bar is Chat, Calendar, Inbox (Calendar and
+      # Inbox are locked here); Voice and Tasks lead the sheet.
+      assert mobile_keys(%{access_scope: locked}) == [:chat]
       assert more_sheet_keys(%{access_scope: locked}) == [:voice, :tasks]
 
       sheet = more_sheet_html(%{access_scope: locked})
@@ -362,8 +361,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       assert surfaces(scope_of(ctx.twin)) == ctx.before
     end
 
+    # Since task 01a1b8a5 stage 4 Meetings is not a tab, so a meetings lock
+    # leaves the bar exactly as it was: Calendar does not depend on calls.
     test "a meetings lock leaves three link tabs plus More (task 01a18d9f stage 5)", ctx do
-      assert ctx.before.mobile == [:chat, :calendar, :meetings, :inbox]
+      assert ctx.before.mobile == [:chat, :calendar, :inbox]
       lock_all_but!(ctx.locked, ctx.org, Grant.lockable_modules() -- ["meetings"])
       locked = surfaces(scope_of(ctx.locked))
 

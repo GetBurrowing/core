@@ -307,12 +307,19 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
         </div>
 
         <div class="px-4 pt-3">
+          <%!-- On the shell the call's home is its Calendar event (task
+               01a1b8a5 stage 4): back to that event's details. The
+               chrome-less member surface keeps its meetings list. --%>
           <.link
-            navigate="/meetings"
+            navigate={
+              if @shell?,
+                do: "/calendar?" <> URI.encode_query(%{meeting: @meeting.id}),
+                else: "/meetings"
+            }
             class="btn btn-primary min-h-11 w-full"
             data-role="call-recap-done"
           >
-            Back to meetings
+            {if @shell?, do: "Back to Calendar", else: "Back to meetings"}
           </.link>
         </div>
       </div>

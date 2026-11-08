@@ -236,10 +236,16 @@ defmodule PlatformWeb.ModuleGateTest do
       end
     end
 
-    test "/chat, /tasks and /meetings still open", ctx do
-      for path <- ["/chat", "/tasks", "/meetings"] do
+    # `/meetings` is no longer a page on the app host (task 01a1b8a5 stage
+    # 4): it hands over to Calendar, which the gate then decides on its own.
+    # The call room itself still opens.
+    test "/chat and /tasks still open, and /meetings hands over to Calendar", ctx do
+      for path <- ["/chat", "/tasks"] do
         assert {:ok, _view, _html} = build_conn() |> authed(ctx.locked) |> live(path), path
       end
+
+      assert {:error, {:live_redirect, %{to: "/calendar"}}} =
+               build_conn() |> authed(ctx.locked) |> live("/meetings")
     end
   end
 end

@@ -152,7 +152,10 @@ defmodule PlatformWeb.CalendarLiveCancelMeetingTest do
       assert has_element?(view, @details <> " [data-role=meeting-cancelled-chip]", "Cancelled")
       refute has_element?(view, @details, "Join now")
       refute has_element?(view, @details, "Open meeting")
-      assert has_element?(view, @details, "View in Meetings")
+      # "View in Meetings" went with the listing (task 01a1b8a5 stage 4), and
+      # a cancelled call offers no room.
+      refute has_element?(view, @details, "View in Meetings")
+      refute has_element?(view, "[data-role=calendar-detail-join]")
       refute has_element?(view, "[data-role=meeting-cancel-row]")
     end
 

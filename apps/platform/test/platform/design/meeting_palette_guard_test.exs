@@ -399,9 +399,10 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
     assert scoped =~ ~s(data-role="meeting-captions")
     assert scoped =~ ~s(data-role="meeting-live-pill")
     assert scoped =~ ~s(data-role="meeting-agent-removed-toast")
-    # Index, detail, archive and new-meeting sheet (stage 2).
+    # Index, detail and archive (stage 2). The new-meeting sheet left with
+    # the scheduled-meeting create flow (task 01a1b8a5 stage 4).
     assert scoped =~ @heex_index_open
-    assert scoped =~ ~s(data-role="start-meeting-sheet")
+    refute scoped =~ ~s(data-role="start-meeting-sheet")
     assert scoped =~ ~s(data-role="archive-row")
     assert scoped =~ ~s(data-role="meeting-detail-sheet-backdrop")
 

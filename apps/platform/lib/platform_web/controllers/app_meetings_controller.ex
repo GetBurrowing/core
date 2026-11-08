@@ -53,6 +53,11 @@ defmodule PlatformWeb.AppMeetingsController do
       {:error, :meeting_over} ->
         error(conn, :conflict, "meeting_over")
 
+      # The organizer turned the call off (task 01a1b8a5 stage 4). Only a
+      # viewer who can see the meeting gets this far, so it leaks nothing.
+      {:error, :call_disabled} ->
+        error(conn, :conflict, "call_disabled")
+
       {:error, reason} when reason in [:livekit_not_configured, :meetings_disabled] ->
         error(conn, :service_unavailable, "meetings_unavailable")
 

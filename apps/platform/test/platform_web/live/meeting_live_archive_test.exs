@@ -77,7 +77,12 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     user
   end
 
-  defp login(conn, user), do: Plug.Test.init_test_session(conn, current_user_id: user.id)
+  # The archive survives only on the `meet.` host's member listing (task
+  # 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI shim); the
+  # app-host `/meetings?view=archive` is Calendar's Past events now. These
+  # tests reach the surviving archive the way a member does.
+  defp login(conn, user),
+    do: %{Plug.Test.init_test_session(conn, current_user_id: user.id) | host: "meet.example.com"}
 
   defp project!, do: project!("Control Center")
 

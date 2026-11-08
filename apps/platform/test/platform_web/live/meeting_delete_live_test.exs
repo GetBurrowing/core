@@ -12,6 +12,12 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
@@ -171,13 +177,13 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
          ctx do
       meeting = cancelled!(ctx)
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
       assert has_element?(view, @detail <> " [data-meeting-id='#{meeting.id}']")
       assert has_element?(view, @detail <> " " <> @row, "Delete meeting")
       refute has_element?(view, "[data-role=meeting-edit-open]")
       refute has_element?(view, "[data-role=meeting-cancel-row]")
 
-      {:ok, invitee_view, _} = live(conn_for(ctx.invitee), detail_path(meeting))
+      {:ok, invitee_view, _} = live(meet_member_host(conn_for(ctx.invitee)), detail_path(meeting))
       # Positive control: the invitee's detail did render this meeting.
       assert has_element?(invitee_view, @detail <> " [data-meeting-id='#{meeting.id}']")
       refute has_element?(invitee_view, @row)
@@ -185,7 +191,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
 
     test "an ended meeting and a scheduled one whose time has passed both carry Delete", ctx do
       for meeting <- [ended!(ctx, name: "Ran already"), past_scheduled!(ctx)] do
-        {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
+        {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
         assert has_element?(view, @detail <> " [data-meeting-id='#{meeting.id}']")
         assert has_element?(view, @detail <> " " <> @row, "Delete meeting")
         refute has_element?(view, "[data-role=meeting-edit-open]")
@@ -195,9 +201,10 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
     test "a future scheduled meeting shows no Delete, and a forged delete is refused", ctx do
       meeting = meeting!(ctx)
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      # Positive control: the organizer does hold the surface Delete would sit on.
-      assert has_element?(view, @detail <> " [data-role=meeting-edit-open]")
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
+      # Positive control: the organizer does hold the surface Delete would
+      # sit on (Cancel; Edit left the listing in task 01a1b8a5 stage 4).
+      assert has_element?(view, @detail <> " [data-role=meeting-cancel-row]")
       refute has_element?(view, @row)
 
       render_click(view, "delete_meeting_open", %{})
@@ -214,7 +221,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
     test "the invitee's forged delete on a cancelled meeting changes nothing", ctx do
       meeting = cancelled!(ctx)
 
-      {:ok, view, _} = live(conn_for(ctx.invitee), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.invitee)), detail_path(meeting))
       render_click(view, "delete_meeting_open", %{})
       refute has_element?(view, @confirm)
 
@@ -231,7 +238,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
   describe "the confirm inset" do
     test "carries the copy verbatim, and Keep it collapses it without deleting", ctx do
       meeting = cancelled!(ctx)
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
 
       view |> element(@detail <> " " <> @row) |> render_click()
       assert has_element?(view, @confirm, @copy)
@@ -247,7 +254,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
 
     test "a delete the server refuses collapses the inset with a flash", ctx do
       meeting = cancelled!(ctx)
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
       view |> element(@detail <> " " <> @row) |> render_click()
 
       # The meeting is put back on the calendar under the open confirm,
@@ -274,10 +281,14 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
       transcript = transcript!(meeting)
       {200, body} = download(ctx.organizer, transcript)
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      {:ok, invitee_list, _} = live(conn_for(ctx.invitee), "/meetings")
-      {:ok, invitee_archive, _} = live(conn_for(ctx.invitee), "/meetings?view=archive")
-      {:ok, organizer_archive, _} = live(conn_for(ctx.organizer), "/meetings?view=archive")
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
+      {:ok, invitee_list, _} = live(meet_member_host(conn_for(ctx.invitee)), "/meetings")
+
+      {:ok, invitee_archive, _} =
+        live(meet_member_host(conn_for(ctx.invitee)), "/meetings?view=archive")
+
+      {:ok, organizer_archive, _} =
+        live(meet_member_host(conn_for(ctx.organizer)), "/meetings?view=archive")
 
       # Visible before, so each refutation below is about the delete.
       for v <- [view, invitee_list], do: assert(has_element?(v, list_row(meeting)))
@@ -309,7 +320,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
       refute has_element?(organizer_archive, archive_row(meeting))
 
       # A fresh mount agrees.
-      {:ok, fresh, _} = live(conn_for(ctx.invitee), "/meetings?view=archive")
+      {:ok, fresh, _} = live(meet_member_host(conn_for(ctx.invitee)), "/meetings?view=archive")
       refute has_element?(fresh, archive_row(meeting))
 
       # The room URL answers not found for both viewers.
@@ -329,7 +340,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
       selected = cancelled!(ctx, name: "Selected")
       other = cancelled!(ctx, name: "Other")
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(selected))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(selected))
       render_click(view, "delete_meeting_open", %{})
       render_click(view, "delete_meeting_confirm", %{"id" => other.id, "meeting_id" => other.id})
       render_async(view)
@@ -346,7 +357,7 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
       start = DateTime.utc_now() |> DateTime.add(-2 * 3600) |> DateTime.truncate(:second)
       meeting = ended!(ctx, start: %{start | second: 0}, minutes: 30)
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), "/meetings?view=calendar")
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), "/meetings?view=calendar")
       render_click(view, "select_meeting", %{"id" => meeting.id})
 
       for footer <- ["meeting-detail-panel-footer", "meeting-detail-sheet-footer"] do
@@ -354,7 +365,9 @@ defmodule PlatformWeb.MeetingDeleteLiveTest do
         refute has_element?(view, "[data-role=#{footer}] [data-role=meeting-edit-open]")
       end
 
-      {:ok, invitee_view, _} = live(conn_for(ctx.invitee), "/meetings?view=calendar")
+      {:ok, invitee_view, _} =
+        live(meet_member_host(conn_for(ctx.invitee)), "/meetings?view=calendar")
+
       render_click(invitee_view, "select_meeting", %{"id" => meeting.id})
       assert has_element?(invitee_view, "[data-role=meeting-detail-panel-footer]")
       refute has_element?(invitee_view, @row)

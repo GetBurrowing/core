@@ -89,6 +89,24 @@ defmodule PlatformWeb.CalendarLive.Editor do
   end
 
   @doc """
+  Preselect the call's Project on an open new-event editor (task 01a1b8a5
+  stage 4: an old `/meetings?schedule=true&project_id=…` link). Only one of
+  the viewer's own projects is taken; anything else is ignored.
+  """
+  def put_call_project(%{assigns: %{editor: %{new?: true} = state}} = socket, id)
+      when is_binary(id) do
+    if Enum.any?(projects(socket), &(&1.id == id)) do
+      params = Map.put(state.params, "call_project", id)
+      state = %{state | params: params, original: Map.put(state.original, "call_project", id)}
+      assign(socket, :editor, recompute(state, socket))
+    else
+      socket
+    end
+  end
+
+  def put_call_project(socket, _id), do: socket
+
+  @doc """
   Open the form on any draft (`Authoring.new_draft/2`, `load_draft/2`, or a
   stage-3 agent draft). Nothing is written.
   """

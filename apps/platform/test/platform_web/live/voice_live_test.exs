@@ -126,7 +126,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       keys =
         d |> q("[data-bottom-rail] [data-destination]") |> LazyHTML.attribute("data-destination")
 
-      assert keys == ["chat", "calendar", "meetings", "inbox", "more"]
+      assert keys == ["chat", "calendar", "inbox", "more"]
 
       # More is a sheet trigger, never aria-current; it carries the active class.
       assert attr(d, "[data-bottom-rail] [aria-current=page]", "data-destination") == []

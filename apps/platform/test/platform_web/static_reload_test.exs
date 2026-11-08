@@ -54,9 +54,9 @@ defmodule PlatformWeb.StaticReloadTest do
     stale = ["http://www.example.com/assets/css/app-old0digest.css"]
 
     assert {:error, {:redirect, %{to: to}}} =
-             conn |> tracking(stale) |> live("/meetings?tab=archive")
+             conn |> tracking(stale) |> live("/calendar?view=month")
 
-    assert %URI{path: "/meetings", query: "tab=archive"} = URI.parse(to)
+    assert %URI{path: "/calendar", query: "view=month"} = URI.parse(to)
   end
 
   test "a client on the current deploy's assets mounts normally", %{conn: conn} do

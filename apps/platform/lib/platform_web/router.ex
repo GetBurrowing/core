@@ -751,6 +751,7 @@ defmodule PlatformWeb.Router do
       # Paired with the `{:meet, ["meetings"]} -> conn` admission clause in
       # `ExternalUserScope`; without the route that clause 404s here, which
       # is the bug this closes.
+      # parallel-ui: meet-member-meetings-index
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
     end
@@ -972,6 +973,10 @@ defmodule PlatformWeb.Router do
       # ADR-0042 stage 5: project-scoped document store
       live("/files", FilesLive, :index)
       live("/files/:project_id", FilesLive, :show)
+      # The retired listing (task 01a1b8a5 stage 4): MeetingLive's `:index`
+      # redirects to Calendar on this surface (`MeetingLive.CalendarRedirect`).
+      # Kept as a route so old links land somewhere; `/meetings/:slug` below
+      # is the call room and is never redirected.
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
       # The Voice tab (task 01a1557a-eab7 stage 2).

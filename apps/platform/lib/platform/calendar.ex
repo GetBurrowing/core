@@ -348,6 +348,41 @@ defmodule Platform.Calendar do
 
   defp redact(event, _), do: event
 
+  @doc """
+  Cancel every still-active native event linked to `meeting_id` (task
+  01a1b8a5 stage 4). `Platform.Meetings.cancel_meeting/2` calls it in the
+  same transaction as the meeting's own status change, so a call cancelled
+  from anywhere (the Calendar details, the old Meetings detail, an agent
+  tool, the native app) never leaves its owner's calendar row active: the
+  row is stamped `cancelled_at`, its `sequence` advances like
+  `delete_event/2`'s, and each owner's Calendar is told to reload.
+
+  Returns the cancelled events. A malformed id cancels nothing.
+  """
+  @spec cancel_linked_events(binary(), DateTime.t()) :: [Event.t()]
+  def cancel_linked_events(meeting_id, now \\ DateTime.utc_now())
+
+  def cancel_linked_events(meeting_id, now) when is_binary(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      {_count, events} =
+        from(e in Event, where: e.meeting_id == ^meeting_id and is_nil(e.cancelled_at))
+        |> select([e], e)
+        |> Repo.update_all(set: [cancelled_at: now, updated_at: now], inc: [sequence: 1])
+
+      events
+    else
+      []
+    end
+  end
+
+  def cancel_linked_events(_meeting_id, _now), do: []
+
+  @doc "Tell each event owner's Calendar that the event changed."
+  @spec broadcast_changed([Event.t()]) :: :ok
+  def broadcast_changed(events) when is_list(events) do
+    Enum.each(events, &broadcast({:ok, &1}))
+  end
+
   defp broadcast({:ok, event} = result) do
     Phoenix.PubSub.broadcast(
       Platform.PubSub,

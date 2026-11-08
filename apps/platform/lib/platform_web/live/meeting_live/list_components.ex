@@ -21,7 +21,6 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
-  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
   import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   @sections [{:live, "Live now"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]
@@ -277,11 +276,6 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
       "`%{can_cancel, state, audience}` for the selected row (task 01a19e7f); nil draws no control"
   )
 
-  attr(:edit, :map,
-    default: nil,
-    doc: "`%{can_edit}` for the selected row (task 01a1b281); nil draws no Edit"
-  )
-
   attr(:delete, :map,
     default: nil,
     doc:
@@ -403,24 +397,11 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         <%!-- At the BOTTOM, below everything else and off the action row
            (design direction 01a19e80). Nothing at all for someone who may
            not cancel, or once the meeting is no longer cancellable. --%>
-        <%!-- Edit (task 01a1b281) beside the cancel row, on its rule. --%>
-        <div
-          :if={match?(%{can_edit: true}, @edit)}
-          class="flex items-start gap-2 border-t border-edge pt-3"
-          data-role="meetings-detail-edit-row"
-        >
-          <.edit_button can_edit={true} id="meetings-detail-edit" />
-          <.cancel_meeting
-            :if={@cancel}
-            can_cancel={@cancel.can_cancel}
-            state={@cancel.state}
-            audience={@cancel.audience}
-            id_prefix="meetings-detail"
-            class="min-w-0 flex-1 !border-t-0 !pt-0"
-          />
-        </div>
+        <%!-- No Edit here: the listing's edit entry point was retired with
+           the app-host list (task 01a1b8a5 stage 4); a call is edited in
+           Calendar's one editor. --%>
         <.cancel_meeting
-          :if={@cancel && !match?(%{can_edit: true}, @edit)}
+          :if={@cancel}
           can_cancel={@cancel.can_cancel}
           state={@cancel.state}
           audience={@cancel.audience}
@@ -486,7 +467,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
             </select>
           </label>
           <p class="my-[1em] text-sm text-subtle" data-role="new-room-hint">
-            Start a room now, or schedule one from Calendar → New → Meeting.
+            Start a room now, or schedule a call from Calendar with + New event.
           </p>
           <p :if={@error} class="cal-err" role="alert">{@error}</p>
           <div class="cal-ft">

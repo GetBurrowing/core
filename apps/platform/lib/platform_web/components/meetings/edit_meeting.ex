@@ -1,53 +1,33 @@
 defmodule PlatformWeb.Components.Meetings.EditMeeting do
   @moduledoc """
-  Edit a scheduled meeting in place (task 01a1b281 stage 3; design
-  direction canvas `01a1b282-37bc-7000-899c-692ba01d0293`, mockup canvas
-  `01a1b290-0b1c-7000-a236-56cff21d2a55`, prototype `01a1b28f-58ac` v1).
+  The pieces of the retired "Edit meeting" form (task 01a1b281 stage 3) that
+  Calendar's ONE event editor kept (task 01a1b8a5 stages 2 and 4; design
+  direction canvas `01a1b282-37bc-7000-899c-692ba01d0293`):
 
-  Two pieces, shared by `PlatformWeb.MeetingLive` and
-  `PlatformWeb.CalendarLive`:
+    * `edit_button/1` — the text "Edit" action in the Calendar details
+      footer for a call record. Renders NOTHING unless `can_edit` is true;
+      callers compute that with `Platform.Meetings.can_edit_meeting?/2`.
+    * `invitees/1` — the staged-people block (`InviteeStaging`).
+    * `was/1` — a changed field's muted "was ..." marker.
+    * `summary/1` — "When you save": `Platform.Meetings.preview_meeting_edit/2`'s
+      recipients turned into sentences. Nothing here decides who is emailed.
 
-    * `edit_button/1` — the secondary "Edit" beside Cancel meeting on the
-      /meetings detail, or the text action in the calendar details footer.
-    * `edit_meeting/1` — the form: a centred dialog from `sm` up, a
-      full-height sheet below it. Name, Date, Start and Duration in the
-      create sheet's order, prefilled, then Invitees and Notes, then the
-      pinned "When you save" summary and Save changes.
-
-  ## Hidden, never disabled
-
-  `edit_button/1` renders NOTHING unless the caller passes `can_edit`
-  true, and callers compute that with `Platform.Meetings.can_edit_meeting?/2`.
-  The server rule holds regardless: every `meeting_edit_*` event reloads the
-  meeting through the viewer scope (`PlatformWeb.MeetingLive.MeetingEdit`).
-
-  ## The summary is rendered, never decided
-
-  `summary/1` turns `Platform.Meetings.preview_meeting_edit/2`'s answer
-  into sentences: its recipient lists name who gets an updated invite, an
-  invite or a cancellation, its `changed` list says what moved, and its
-  `link` is the link that stays. Nothing here decides who is emailed.
-
-  ## Events
-
-  `meeting_edit_open` (from the button), then `meeting_edit_change`,
-  `meeting_edit_save`, `meeting_edit_close`, `meeting_edit_remove`,
-  `meeting_edit_undo`, `meeting_edit_unstage`, `meeting_edit_add_people`
-  and InviteControl's `:edit` mode events. None carries a meeting id.
+  The form itself (`edit_meeting/1`) and its LiveView half
+  (`PlatformWeb.MeetingLive.MeetingEdit`) are gone: the /meetings listing
+  was its only caller, and a second invitee editor beside Calendar's is
+  exactly what the consolidation removes. The server rule still holds
+  regardless of what is drawn: Calendar's editor reloads the meeting
+  through the viewer scope on every event.
 
   ## DOM contract
 
-  `data-role` values `meeting-edit-open`, `meeting-edit`, `meeting-edit-*`
-  for fields, `meeting-edit-was`, `meeting-edit-removed`,
-  `meeting-edit-last-invitee`, `meeting-edit-summary`,
-  `meeting-edit-summary-*` and `meeting-edit-save`.
+  `data-role` values `meeting-edit-open`, `meeting-edit-was`,
+  `meeting-edit-removed`, `meeting-edit-last-invitee`,
+  `meeting-edit-summary` and `meeting-edit-summary-*`.
   """
   use PlatformWeb, :html
 
   import PlatformWeb.Components.Meetings.InviteControl, only: [invite_control: 1]
-
-  alias PlatformWeb.MeetingLive
-  alias PlatformWeb.MeetingLive.MeetingEdit
 
   # ── the Edit action ─────────────────────────────────────────────────────
 
@@ -94,218 +74,6 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
   end
 
   # ── the form ────────────────────────────────────────────────────────────
-
-  attr(:edit, :map, required: true, doc: "the `:meeting_edit` assign (never nil here)")
-
-  attr(:escape, :boolean,
-    default: true,
-    doc:
-      "bind Escape to `meeting_edit_close`. CalendarLive binds Escape page-wide and closes the form itself, so it passes false"
-  )
-
-  @doc "The Edit meeting dialog (desktop) / full-height sheet (phone)."
-  def edit_meeting(assigns) do
-    edit = assigns.edit
-
-    assigns =
-      assigns
-      |> assign(:form, edit.form)
-      |> assign(:changed, edit.changed)
-      |> assign(:original, edit.original)
-      |> assign(:kept, Enum.reject(edit.invitees, &(&1.id in edit.removed_ids)))
-      |> assign(:removed, Enum.filter(edit.invitees, &(&1.id in edit.removed_ids)))
-      |> assign(:durations, MeetingEdit.duration_options(edit))
-      |> assign(:dirty?, edit.preview.changed != [])
-      |> assign(:can_save?, edit.preview.changed != [] and is_nil(edit.error))
-
-    ~H"""
-    <div
-      id="meeting-edit"
-      class="fixed inset-0 z-50 flex items-stretch justify-center sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="meeting-edit-title"
-      data-role="meeting-edit"
-      phx-window-keydown={@escape && "meeting_edit_close"}
-      phx-key={@escape && "Escape"}
-    >
-      <div
-        class="absolute inset-0 bg-scrim"
-        phx-click="meeting_edit_close"
-        aria-hidden="true"
-        data-role="meeting-edit-backdrop"
-      >
-      </div>
-
-      <%!-- A capped flex COLUMN that clips, with ONE scrolling body, like
-           the create sheet: a long invitee list scrolls under the pinned
-           summary and Save instead of pushing them off the panel. Below
-           `sm` it is the full height of the screen. --%>
-      <div class="relative flex h-full w-full flex-col overflow-hidden bg-base-100 pb-[env(safe-area-inset-bottom)] shadow-2xl sm:h-auto sm:max-h-[85vh] sm:max-w-lg sm:rounded-2xl">
-        <div class="flex flex-none items-center gap-2 border-b border-edge px-4 py-3">
-          <span class="hero-pencil-square size-5 shrink-0 text-subtle" aria-hidden="true"></span>
-          <h2 id="meeting-edit-title" class="flex-1 text-base font-semibold">Edit meeting</h2>
-          <button
-            type="button"
-            phx-click="meeting_edit_close"
-            class="btn btn-sm btn-ghost btn-square min-h-11 sm:min-h-8"
-            aria-label="Close"
-            data-role="meeting-edit-close"
-          >
-            <span class="hero-x-mark size-4"></span>
-          </button>
-        </div>
-
-        <.form
-          for={@form}
-          id="meeting-edit-form"
-          phx-change="meeting_edit_change"
-          phx-submit="meeting_edit_save"
-          novalidate
-          class="flex min-h-0 flex-1 flex-col"
-        >
-          <div
-            class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4"
-            data-role="meeting-edit-body"
-          >
-            <div
-              :if={@edit.error}
-              class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-base-content"
-              role="alert"
-              data-role="meeting-edit-error"
-            >
-              {@edit.error}
-            </div>
-
-            <div class="flex flex-col gap-1">
-              <label for="meeting-edit-name" class={label_class()}>
-                Name <span class="text-base-content">*</span>
-                <.was :if={@changed.name} text={@original["name"]} />
-              </label>
-              <input
-                id="meeting-edit-name"
-                type="text"
-                name={@form[:name].name}
-                value={@form[:name].value}
-                required
-                autocomplete="off"
-                class="input input-bordered min-h-11 w-full text-sm font-semibold"
-                data-role="meeting-edit-name"
-              />
-            </div>
-
-            <div class="grid grid-cols-2 gap-2 sm:grid-cols-[1.4fr_1fr_1fr]">
-              <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
-                <label for="meeting-edit-date" class={label_class()}>
-                  Date <.was :if={@changed.date} text={date_label(@original["date"])} />
-                </label>
-                <input
-                  id="meeting-edit-date"
-                  type="date"
-                  name={@form[:date].name}
-                  value={@form[:date].value}
-                  phx-hook="DateEntryGuard"
-                  data-incomplete-flag="meeting-edit-date-incomplete"
-                  class="input input-bordered min-h-11 w-full text-sm"
-                  data-role="meeting-edit-date"
-                />
-                <input
-                  id="meeting-edit-date-incomplete"
-                  type="hidden"
-                  name={@form[:date_incomplete].name}
-                  value=""
-                  phx-update="ignore"
-                />
-              </div>
-
-              <div class="flex flex-col gap-1">
-                <label for="meeting-edit-start-time" class={label_class()}>
-                  Start <.was :if={@changed.start_time} text={@original["start_time"]} />
-                </label>
-                <input
-                  id="meeting-edit-start-time"
-                  type="text"
-                  inputmode="text"
-                  autocomplete="off"
-                  placeholder="1:00 PM"
-                  name={@form[:start_time].name}
-                  value={@form[:start_time].value}
-                  class="input input-bordered min-h-11 w-full text-sm"
-                  data-role="meeting-edit-start-time"
-                />
-              </div>
-
-              <div class="flex flex-col gap-1">
-                <label for="meeting-edit-duration" class={label_class()}>
-                  Duration
-                  <.was
-                    :if={@changed.duration_minutes}
-                    text={duration_text(@original["duration_minutes"])}
-                  />
-                </label>
-                <select
-                  id="meeting-edit-duration"
-                  name={@form[:duration_minutes].name}
-                  class="select select-bordered min-h-11 w-full text-sm"
-                  data-role="meeting-edit-duration"
-                >
-                  <option
-                    :for={minutes <- @durations}
-                    value={minutes}
-                    selected={to_string(@form[:duration_minutes].value) == to_string(minutes)}
-                  >
-                    {MeetingLive.duration_label(minutes)}
-                  </option>
-                </select>
-              </div>
-            </div>
-
-            <.invitees staging={@edit} kept={@kept} removed={@removed} />
-
-            <div class="flex flex-col gap-1">
-              <label for="meeting-edit-notes" class={label_class()}>
-                Notes <.was :if={@changed.description} text="edited" bare />
-              </label>
-              <textarea
-                id="meeting-edit-notes"
-                name={@form[:description].name}
-                rows="3"
-                class="textarea textarea-bordered w-full text-sm"
-                data-role="meeting-edit-notes"
-              >{Phoenix.HTML.Form.normalize_value("textarea", @form[:description].value)}</textarea>
-            </div>
-          </div>
-
-          <div class="flex-none border-t border-edge px-4 pt-3">
-            <.summary preview={@edit.preview} />
-          </div>
-
-          <div
-            class="flex flex-none items-center justify-end gap-2 px-4 py-3"
-            data-role="meeting-edit-footer"
-          >
-            <button
-              type="button"
-              phx-click="meeting_edit_close"
-              class="btn btn-ghost btn-sm hidden min-h-11 sm:inline-flex"
-              data-role="meeting-edit-cancel"
-            >
-              Close
-            </button>
-            <button
-              type="submit"
-              class="btn btn-primary btn-sm min-h-11 max-sm:w-full"
-              disabled={!@can_save?}
-              data-role="meeting-edit-save"
-            >
-              Save changes
-            </button>
-          </div>
-        </.form>
-      </div>
-    </div>
-    """
-  end
 
   attr(:staging, :map, required: true, doc: "an `InviteeStaging` state")
   attr(:kept, :list, required: true)
@@ -542,20 +310,4 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
   defp link_text(link), do: link
 
   defp label_class, do: "text-xs font-semibold uppercase tracking-wider text-base-content"
-
-  defp date_label(""), do: "no date"
-
-  defp date_label(iso) do
-    case Date.from_iso8601(iso || "") do
-      {:ok, date} -> Calendar.strftime(date, "%a %b %-d")
-      _ -> iso
-    end
-  end
-
-  defp duration_text(raw) do
-    case Integer.parse(raw || "") do
-      {minutes, ""} -> MeetingLive.duration_label(minutes)
-      _ -> raw
-    end
-  end
 end

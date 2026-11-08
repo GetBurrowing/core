@@ -13,6 +13,7 @@
     booking_link_count={@booking_link_count}
     calendars={@calendars}
     calendars_shown={@calendars_shown}
+    past_open={@past != nil}
   />
 
   <section
@@ -102,6 +103,8 @@
     cancel={%{state: @meeting_cancel_state}}
     delete={%{state: @meeting_delete_state}}
   />
+
+  <.past_events :if={@past && @live_action != :settings} past={@past} zone={@zone} view={@view} />
 
   <.event_editor
     :if={@editor}

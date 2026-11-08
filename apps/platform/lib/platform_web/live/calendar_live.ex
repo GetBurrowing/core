@@ -41,6 +41,7 @@ defmodule PlatformWeb.CalendarLive do
      )
      |> assign(:view, "week")
      |> assign(:selected, nil)
+     |> assign(:past, nil)
      |> assign(:meeting_cancel_state, :idle)
      |> assign(:meeting_delete_state, :idle)
      |> assign(:projects, [])
@@ -82,6 +83,18 @@ defmodule PlatformWeb.CalendarLive do
         _ -> socket
       end
 
+    # `?meeting=<id>`: a call record's own event (task 01a1b8a5 stage 4) —
+    # the retired /meetings list's selection, a call room's way back, and a
+    # Past events row. Re-resolved through the viewer scope; a meeting the
+    # viewer cannot see opens plain Calendar, like a stale id.
+    socket =
+      case params["meeting"] do
+        id when is_binary(id) and id != "" -> open_meeting_link(socket, id)
+        _ -> socket
+      end
+
+    socket = assign_past(socket, params)
+
     # `?draft=<token>`: an agent's draft link (task 01a1b8a5 stage 3). It
     # opens the ONE editor on the draft for its owner only; anyone else, an
     # expired or a spent link gets a reason and nothing else.
@@ -93,12 +106,19 @@ defmodule PlatformWeb.CalendarLive do
 
     socket =
       cond do
-        socket.assigns.live_action == :settings -> load_settings(socket, nil)
+        socket.assigns.live_action == :settings ->
+          load_settings(socket, nil)
+
         # `?new=1`: the list pane's "+ New" on /calendar/booking. With
         # `date` and `start` (task 01a1986e) it opens on that day and time;
         # either one that does not parse falls back to today / 14:00.
-        params["new"] == "1" -> new_event_at(socket, new_day(params, socket), new_minute(params))
-        true -> socket
+        params["new"] == "1" ->
+          socket
+          |> new_event_at(new_day(params, socket), new_minute(params))
+          |> Editor.put_call_project(params["project"])
+
+        true ->
+          socket
       end
 
     {:noreply, socket}
@@ -126,6 +146,13 @@ defmodule PlatformWeb.CalendarLive do
       end
 
     {:noreply, reload(socket)}
+  end
+
+  # Past events (task 01a1b8a5 stage 4) is URL state (`?past=1`), so Close
+  # patches it away and keeps the view and day the viewer was on.
+  def handle_event("close_past", _, socket) do
+    %{view: view, sel_day: day} = socket.assigns
+    {:noreply, push_patch(socket, to: ~p"/calendar?#{%{view: view, date: Date.to_iso8601(day)}}")}
   end
 
   def handle_event("today", _, socket) do
@@ -971,7 +998,11 @@ defmodule PlatformWeb.CalendarLive do
           notes: event.description,
           recurrence: recurrence_label(event),
           calendar: if(owner?, do: (user && user.name) || "You"),
-          agent: entry[:agent] || "an agent"
+          agent: entry[:agent] || "an agent",
+          # The owner's own native event for a call (task 01a1b8a5 stage 4):
+          # `project_linked/3` shows the owner this row and drops the meeting,
+          # so the call's Join and records ride here.
+          call: linked_call(assigns, event)
         })
 
       "meeting" ->
@@ -981,6 +1012,7 @@ defmodule PlatformWeb.CalendarLive do
         |> Map.merge(meeting_info(entry.meeting))
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
         |> Map.put(:time_zone, zone)
+        |> Map.put(:call, call_info(entry.meeting, user))
 
       "external" ->
         Map.merge(base, %{
@@ -989,6 +1021,69 @@ defmodule PlatformWeb.CalendarLive do
         })
     end
   end
+
+  # The call behind an owner's native event: nil without a link, without
+  # the video-call module, or when the viewer can no longer see the meeting.
+  defp linked_call(%{meetings_on: true, current_user_record: user}, %{meeting_id: id})
+       when is_binary(id) do
+    case Platform.Meetings.get_meeting_for_user(user, id) do
+      {:ok, meeting} -> call_info(meeting, user)
+      {:error, _} -> nil
+    end
+  end
+
+  defp linked_call(_assigns, _event), do: nil
+
+  # What the details say about a call (task 01a1b8a5 stage 4): Join now
+  # while it is live, Open call room otherwise, nothing to join once the
+  # call is off or the meeting is cancelled, and the records a finished call
+  # left — each admitted for this viewer by `PastEvents.records/2`.
+  defp call_info(meeting, user) do
+    %{
+      meeting_id: meeting.id,
+      slug: meeting.slug,
+      live?: meeting.status == "live",
+      ended?: meeting.status == "ended",
+      cancelled?: meeting.status == "cancelled",
+      enabled?: Platform.Meetings.call_enabled?(meeting),
+      records: Platform.Meetings.PastEvents.records(user, meeting)
+    }
+  end
+
+  defp open_meeting_link(socket, id) do
+    %{current_user_record: user, zone: zone} = socket.assigns
+
+    with true <- Platform.UUID.valid?(id),
+         {:ok, meeting} <- Platform.Meetings.get_meeting_for_user(user, id),
+         %DateTime{} = at <- meeting.scheduled_start_at || meeting.started_at do
+      socket =
+        socket |> put_day(at |> DateTime.shift_zone!(zone) |> DateTime.to_date()) |> reload()
+
+      visible = socket.assigns.visible_entries
+
+      entry =
+        Enum.find(visible, &(&1.kind == :meeting and &1.id == id)) ||
+          Enum.find(visible, &(&1.kind == :event and &1[:meeting_id] == id))
+
+      if entry, do: assign(socket, :selected, detail(socket.assigns, entry)), else: socket
+    else
+      _ -> socket
+    end
+  end
+
+  # `?past=1` opens Past events; `past_page` pages it. Built from the
+  # archive read model with per-record checks (`Meetings.PastEvents`).
+  defp assign_past(socket, %{"past" => "1"} = params) do
+    past =
+      case Platform.Meetings.PastEvents.page(socket.assigns.access_scope, params["past_page"]) do
+        {:ok, page} -> Map.put(page, :state, if(page.rows == [], do: :empty, else: :ok))
+        {:error, :unavailable} -> %{state: :unavailable, rows: [], page: 1, more?: false}
+      end
+
+    assign(socket, :past, past)
+  end
+
+  defp assign_past(socket, _params), do: assign(socket, :past, nil)
 
   # The meeting's space and host, read from the chat rows the Meetings
   # context keeps for it. Invitees come from `meeting_invites` (revoked rows

@@ -137,6 +137,15 @@
           <p :if={@unavailable_kind == :unknown} class="text-sm text-base-content">
             Your invite link is fine — we're unable to connect you to {@meeting.name} right now. Please try again in a few minutes, or contact whoever invited you.
           </p>
+          <%!-- The call toggle (task 01a1b8a5 stage 4): the organizer turned
+             the call off, so the mint refused with `:call_disabled`. Not a
+             fault and not a bad link. --%>
+          <h1 :if={@unavailable_kind == :no_call} class="card-title text-lg">
+            This event has no call
+          </h1>
+          <p :if={@unavailable_kind == :no_call} class="text-sm text-base-content">
+            Your invite link is fine — the organizer turned the Burrow call off for {@meeting.name}, so there is nothing to join. Contact whoever invited you if you expected one.
+          </p>
           <div :if={@public_site_url} class="card-actions mt-2">
             <a href={@public_site_url} class="btn btn-primary btn-sm">
               Go to {@public_site_host}
@@ -353,7 +362,15 @@
               else: "off"}.
           </p>
           <div class="sticky bottom-0 mt-auto bg-base-100 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            <p
+              :if={!Platform.Meetings.call_enabled?(@meeting)}
+              data-role="meeting-call-off"
+              class="text-center text-sm text-subtle"
+            >
+              The organizer turned the Burrow call off for this event, so there is nothing to join.
+            </p>
             <button
+              :if={Platform.Meetings.call_enabled?(@meeting)}
               type="button"
               phx-click="join_meeting"
               data-role="meeting-lobby-join"
@@ -506,10 +523,14 @@
          gate a guest would get an authenticated back-to-list link into a
          surface they can't access. Mirrors the `@shell?` gating already
          applied to the chat panel / copy-guest-link / rail-collapse hooks. --%>
+      <%!-- The root segment is the call's Calendar event since the
+         Meetings list was retired (task 01a1b8a5 stage 4): Calendar opens
+         that event's details on its day (`?meeting=<id>`), so a viewer who
+         came from the event returns to the same event. --%>
       <.breadcrumb
         :if={@shell?}
         segments={[
-          %{label: "Meetings", navigate: ~p"/meetings"},
+          %{label: "Calendar", navigate: ~p"/calendar?#{%{meeting: @meeting.id}}"},
           %{label: @meeting.name, navigate: nil}
         ]}
       />
@@ -1401,7 +1422,20 @@
              same `@in_meeting` it always was. Only the Join CTA is left
              here, because there is no shared component for "you have not
              joined yet". --%>
-            <%= if not @in_meeting do %>
+            <%!-- The call toggle (task 01a1b8a5 stage 4): with the call off
+             there is nothing to join. `Meetings.join_for_user/3` refuses
+             the join server-side (`:call_disabled`); this only says so. --%>
+            <%= if not @in_meeting and not Platform.Meetings.call_enabled?(@meeting) do %>
+              <span
+                data-role="meeting-call-off"
+                class="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-edge px-3 text-xs text-subtle"
+                title="The organizer turned the Burrow call off for this event."
+              >
+                <span class="hero-video-camera-slash size-4"></span>
+                <span>No call for this event</span>
+              </span>
+            <% end %>
+            <%= if not @in_meeting and Platform.Meetings.call_enabled?(@meeting) do %>
               <button
                 type="button"
                 phx-click="meeting_join"
@@ -3623,25 +3657,6 @@
         >
           {archive_count_label(@archive_result, "filtered")}
         </span>
-
-        <%!-- ── Desktop `New meeting` button (task 019fb954-8ead stage 5) ──
-           The create path the frames put in the toolbar at `lg`, where a
-           corner FAB is the wrong affordance for a pointer surface. It
-           REUSES `open_start_meeting_sheet` — the same event the FAB
-           pushes, the same sheet — so there is one create flow with two
-           entry points rather than two flows that can drift.
-
-           `hidden lg:inline-flex` is the exact inverse of the FAB's
-           `lg:hidden`: below `lg` this is not drawn and the FAB is the
-           only create path; at `lg` and above they swap. --%>
-        <button
-          type="button"
-          phx-click="open_start_meeting_sheet"
-          data-role="new-meeting-button"
-          class="btn btn-primary btn-sm hidden lg:inline-flex gap-1.5"
-        >
-          <span class="hero-plus size-4"></span> New meeting
-        </button>
       </header>
 
       <%!-- ── Archive pane (task 019fb954-c848) ───────────────────────────
@@ -3690,7 +3705,6 @@
           tab={@list_tab}
           calendar?={Platform.Access.module_access?(assigns[:access_scope], :calendar)}
           cancel={cancel_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
-          edit={edit_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
           delete={delete_attrs(assigns[:meeting_cancel], list_row && list_row.meeting)}
         />
       </div>
@@ -4738,7 +4752,6 @@
             <.meeting_detail_actions
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
-              edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
               delete={delete_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-panel"
             />
@@ -4829,7 +4842,6 @@
             <.meeting_detail_actions
               meeting={detail_meeting}
               cancel={cancel_attrs(assigns[:meeting_cancel], detail_meeting)}
-              edit={edit_attrs(assigns[:meeting_cancel], detail_meeting)}
               delete={delete_attrs(assigns[:meeting_cancel], detail_meeting)}
               cancel_id_prefix="meeting-detail-sheet"
             />
@@ -4837,475 +4849,8 @@
         </div>
       </div>
 
-      <%!-- ── Start-meeting FAB ───────────────────────────────────────────
-         Mobile-first reachability fix: anchored bottom-right with a
-         safe-area-aware bottom offset that ALSO clears the mobile
-         bottom-nav (`--bottom-nav-height`, 56px on phones, 0 on
-         desktop) so the FAB never sits behind the nav row. Mirrors
-         the tasks_live FAB pattern (apps/platform/lib/platform_web/
-         live/tasks_live.html.heex:2391). Only renders on `:index`
-         (this branch is inside the `<%= if @meeting do … else …%>`
-         else arm).
-
-         `lg:hidden` (stage 5) makes this the MOBILE create path only; at
-         `lg` and above the header's `new-meeting-button` takes over and
-         pushes the same event. The bottom offset stays because a FAB is
-         `position: fixed` — out of flow — which is exactly the case where
-         reserving the in-flow nav height is correct.
-
-         Stage 4 had carried an `lg:`-scoped horizontal offset — the panel's
-         width plus a gutter — applied while the detail panel was open, so
-         the FAB would not paint over the panel's action row. `lg:hidden`
-         DELETES that state: the panel is `hidden lg:flex`, so it exists
-         only at `lg` and above, which is precisely where the FAB no longer
-         renders. The offset was therefore unreachable in every state and is
-         gone rather than left behind as a guard that cannot fire. Below
-         `lg` nothing overlaps either — the detail SHEET is a z-50 overlay
-         above the FAB's z-30.
-
-         Deliberately NOT naming that offset as a literal class string here:
-         Tailwind scans this directory as plain text, so a class written in
-         a COMMENT is still a build candidate and would emit the rule this
-         change exists to retire.
-
-         `min-h-11 min-w-11` is the 44px touch-target floor, and it is NOT
-         redundant with `btn-circle`. Read out of the BUILT stylesheet
-         rather than guessed from the class name: `.btn-circle` resolves to
-         `width: var(--size); height: var(--size)`, `.btn` sets
-         `--size: calc(var(--size-field, 0.25rem) * 10)`, and this app's
-         theme sets `--size-field: 0.21875rem` — so the button was 35px,
-         which is exactly what two reviewers measured. Nothing was
-         overriding `btn-circle`; it was faithfully rendering a 35px token.
-
-         The floor therefore has to be local. Raising `--size-field` would
-         resize every button and input in the app to fix one button, and
-         that token is a deliberate design-spec value. And the floor is
-         expressed as `min-*` rather than `size-11` on purpose: min-width
-         and min-height beat width and height in the box model whatever
-         order the two utility rules land in, so this does not depend on
-         winning a cascade race with daisyUI.
-
-         Safe here in a way a pixel floor was NOT safe on the calendar
-         block: this button is `position: fixed`, so growing it consumes no
-         sibling's slot. Its bottom offset is unchanged and still clears
-         the nav — the offset is measured from the button's own bottom
-         edge, so a taller button grows upward into empty space. --%>
-      <button
-        :if={@meetings_view != :list}
-        type="button"
-        phx-click="open_start_meeting_sheet"
-        aria-label="New meeting"
-        title="New meeting"
-        data-role="start-meeting-fab"
-        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 min-h-11 min-w-11 shadow-lg lg:hidden"
-      >
-        <span class="hero-video-camera size-6"></span>
-      </button>
-
-      <%!-- ── Edit meeting (task 01a1b281 stage 3) ─────────────────────────
-         One form for the list view, the calendar view's panel and its
-         sheet; it opens on the selection. --%>
-      <.edit_meeting :if={assigns[:meeting_edit]} edit={@meeting_edit} />
-
-      <%!-- ── New-meeting create sheet ────────────────────────────────────
-         Task 019fb955-1d7b stage 4. The sheet CHROME is unchanged from
-         the stage-2 start-meeting sheet — full-bleed slide-up below
-         `sm`, centred card above, `bg-scrim` backdrop that
-         click-dismisses — because that is already the geometry the
-         canvas draws. What changed is what the panel holds: a
-         schedulable time, a required project, and a staged invite list.
-
-         `data-role` values from the old sheet are KEPT even where the
-         copy moved on (`start-meeting-*`); tests and sibling members key
-         on them. New controls take `meeting-create-*`.
-
-         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
-         clearance here — the in-flow bottom-nav reservation does not
-         apply to an overlay. --%>
-      <div
-        :if={@show_start_meeting_sheet}
-        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-        data-role="start-meeting-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="start-meeting-sheet-title"
-      >
-        <%!-- Backdrop (click to dismiss) --%>
-        <div
-          class="absolute inset-0 bg-scrim"
-          phx-click="close_start_meeting_sheet"
-          aria-hidden="true"
-          data-role="start-meeting-sheet-backdrop"
-        >
-        </div>
-
-        <%!-- Sheet panel. A flex COLUMN whose height is capped, not a single
-             scroll region: the cap belongs to the panel and the scrolling
-             belongs to the body alone, so the footer bar stays pinned no
-             matter how many invites are staged. Scrolling the whole panel
-             instead (`max-h-[75vh] overflow-y-auto` here) pushes the footer
-             — and with it `start-meeting-submit` — off the bottom of the
-             modal once the staged list is long enough, which is the defect
-             the sponsor rejected stage 4 for.
-
-             `overflow-hidden` keeps the body's scroll from painting over
-             the rounded corners. --%>
-        <div class="relative flex flex-col w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-hidden">
-          <%!-- Header. Below `sm` the primary action lives HERE (mobile
-               frame 3): the footer bar is the first thing a soft keyboard
-               covers, so the commit control has to be reachable above it. --%>
-          <div class="flex-none flex items-center justify-between gap-2 border-b border-edge px-4 py-3">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-              <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
-                {if @schedule_origin == :calendar, do: "New", else: "New meeting"}
-              </h2>
-            </div>
-            <div class="flex items-center gap-1">
-              <button
-                :if={@schedule_origin != :calendar}
-                type="submit"
-                form="start-meeting-form"
-                class="btn btn-ghost btn-sm px-3 font-semibold text-base-content min-h-11 sm:hidden"
-                data-role="meeting-create-submit-mobile"
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                phx-click="close_start_meeting_sheet"
-                class="btn btn-sm btn-ghost btn-square"
-                aria-label="Close"
-                data-role="start-meeting-sheet-close"
-              >
-                <span class="hero-x-mark size-4"></span>
-              </button>
-            </div>
-          </div>
-
-          <%!-- ── Calendar origin (task 01a1986e stage 3) ───────────────
-               Opened from Calendar → New → Meeting. The shared Event |
-               Meeting toggle sits under the header with Meeting active; its
-               Event side returns to Calendar's New editor carrying the date
-               and start in the URL (the two routes are in different
-               live_sessions, so no assign survives the hop). Meet now and
-               its divider do not render here: the viewer came to schedule. --%>
-          <div
-            :if={@schedule_origin == :calendar}
-            class="flex-none border-b border-edge px-4 py-3"
-            data-role="meeting-create-kind"
-          >
-            <PlatformWeb.Components.NewKindToggle.new_kind_toggle
-              active={:meeting}
-              event_click="switch_to_event"
-              helper_role="meeting-create-helper"
-            />
-          </div>
-
-          <%!-- ── Meet now (task 01a0d4d5) ──────────────────────────────
-               The common case is "start a call right now", so it sits
-               above the scheduling form and needs nothing filled in.
-
-               OUTSIDE the form element and outside
-               `data-role="meeting-create-body"`, which is the panel's one
-               scrolling region. A control placed in the body scrolls away
-               behind a long staged-invite list — the same defect the
-               footer bar was rejected for at stage 4 of the original
-               sheet. `flex-none` keeps it out of the shrink calculation.
-
-               NOT breakpoint-gated. The desktop `new-meeting-button` and
-               the mobile `start-meeting-fab` both push
-               `open_start_meeting_sheet` and render this one panel, so one
-               ungated control is what "works from both entry points"
-               means here. A `lg:`-gated duplicate would be two controls to
-               keep in step and two chances to drift.
-
-               `min-h-11` is the 44px tap floor: `btn` alone renders 35px
-               in this theme (see the FAB comment above). --%>
-          <div
-            :if={@projects != [] and @schedule_origin != :calendar}
-            class="flex-none border-b border-edge px-4 py-4"
-          >
-            <%!-- A TILE, not a second filled primary. `start-meeting-submit`
-                 in the footer is already `btn-primary`; a second one here
-                 makes the sheet read as two equal commits and neither wins.
-                 The tile reads as a shortcut OUT of the form, which is what
-                 it is. Ratified design canvas rev 2.
-
-                 Icon, label and subline are all INSIDE the one button, so
-                 the whole surface is the hit target — `text-left` because a
-                 two-line control that centres its subline reads as a banner
-                 rather than something you press. --%>
-            <button
-              type="button"
-              phx-click="meet_now"
-              disabled={@meet_now_pending?}
-              data-role="meeting-meet-now"
-              class="flex w-full min-h-11 items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-3 text-left transition-colors lg:hover:bg-base-300 disabled:opacity-60"
-            >
-              <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-              <span class="min-w-0">
-                <span class="block text-sm font-semibold">Meet now</span>
-                <%!-- NAMES THE PROJECT the click will land in. Load-bearing,
-                     not decoration: the tile takes no input, so in a
-                     multi-project org it is silently choosing a project and
-                     a viewer who cannot see which one is surprised by a real
-                     side effect once they are already in the room. --%>
-                <span class="block truncate text-xs text-muted" data-role="meeting-meet-now-hint">
-                  Starts now in {@meet_now_project_name}
-                </span>
-              </span>
-            </button>
-          </div>
-
-          <%!-- Divider into the scheduling path the sheet used to be
-               entirely about. --%>
-          <div
-            :if={@schedule_origin != :calendar}
-            class="flex-none flex items-center gap-3 px-4 pt-4"
-          >
-            <div class="h-px flex-1 bg-edge"></div>
-            <span class="text-xs uppercase tracking-wide text-muted">Or schedule for later</span>
-            <div class="h-px flex-1 bg-edge"></div>
-          </div>
-
-          <%!-- Form --%>
-          <%!-- `novalidate` (task 01a192d6): the server is the gate for every
-               field (Name, Project, the Start parse), and its refusal lands
-               in the inline error below. A browser bubble blocks submit
-               without telling the server anything. `required` stays on the
-               inputs for assistive tech. --%>
-          <form
-            id="start-meeting-form"
-            phx-submit="start_meeting"
-            phx-change="start_meeting_form_change"
-            novalidate
-            class="flex flex-1 flex-col min-h-0"
-          >
-            <%!-- Scrolling body. `min-h-0` is load-bearing: a flex child
-                 defaults to `min-height: auto` and refuses to shrink below
-                 its content, so without it this never scrolls and the
-                 footer is pushed out of the panel again. --%>
-            <div
-              class="flex flex-1 flex-col gap-3 min-h-0 overflow-y-auto px-4 py-4"
-              data-role="meeting-create-body"
-            >
-              <%!-- Inline error (server-side validation feedback) --%>
-              <div
-                :if={@start_meeting_error}
-                class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-base-content"
-                data-role="start-meeting-error"
-              >
-                {@start_meeting_error}
-              </div>
-
-              <%!-- Name (required) --%>
-              <div class="flex flex-col gap-1">
-                <label
-                  for="start-meeting-name"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
-                >
-                  Name <span class="text-base-content">*</span>
-                </label>
-                <input
-                  id="start-meeting-name"
-                  type="text"
-                  name="start_meeting[name]"
-                  value={@start_meeting_form["name"]}
-                  required
-                  autocomplete="off"
-                  placeholder="What's the meeting about?"
-                  class="input input-bordered w-full text-sm font-semibold min-h-11"
-                  data-role="start-meeting-name"
-                />
-              </div>
-
-              <%!-- Date / Start / Duration. Three across from `sm` up; below
-                 it, Date takes its own row and Start + Duration pair, so
-                 no control is narrower than its own content at 375px.
-                 Leaving Date and Start blank creates an AD-HOC meeting —
-                 `create_meeting/1` takes the intended-time pair as
-                 both-or-neither and both nil is a supported state. --%>
-              <div class="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr] gap-2">
-                <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
-                  <label
-                    for="meeting-create-date"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
-                  >
-                    Date
-                  </label>
-                  <%!-- A half-typed native date posts "" under novalidate;
-                       DateEntryGuard mirrors `validity.badInput` into the
-                       hidden flag so the server can refuse it instead of
-                       reading "no date" (task 01a192d6). --%>
-                  <input
-                    id="meeting-create-date"
-                    type="date"
-                    name="start_meeting[date]"
-                    value={@start_meeting_form["date"]}
-                    phx-hook="DateEntryGuard"
-                    data-incomplete-flag="meeting-create-date-incomplete"
-                    class="input input-bordered w-full text-sm min-h-11"
-                    data-role="meeting-create-date"
-                  />
-                  <input
-                    id="meeting-create-date-incomplete"
-                    type="hidden"
-                    name="start_meeting[date_incomplete]"
-                    value=""
-                    phx-update="ignore"
-                  />
-                </div>
-
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="meeting-create-start-time"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
-                  >
-                    Start
-                  </label>
-                  <%!-- Text, not type="time": parsed by PlatformWeb.TimeEntry
-                       so a time with no AM/PM gets a message instead of an
-                       empty submit (task 01a192d6). --%>
-                  <input
-                    id="meeting-create-start-time"
-                    type="text"
-                    inputmode="text"
-                    autocomplete="off"
-                    placeholder="1:00 PM"
-                    name="start_meeting[start_time]"
-                    value={@start_meeting_form["start_time"]}
-                    aria-invalid={start_time_error?(@start_meeting_error) && "true"}
-                    class="input input-bordered w-full text-sm min-h-11"
-                    data-role="meeting-create-start-time"
-                  />
-                </div>
-
-                <div class="flex flex-col gap-1">
-                  <label
-                    for="meeting-create-duration"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
-                  >
-                    Duration
-                  </label>
-                  <select
-                    id="meeting-create-duration"
-                    name="start_meeting[duration_minutes]"
-                    class="select select-bordered w-full text-sm min-h-11"
-                    data-role="meeting-create-duration"
-                  >
-                    <option
-                      :for={minutes <- PlatformWeb.MeetingLive.duration_options()}
-                      value={minutes}
-                      selected={@start_meeting_form["duration_minutes"] == to_string(minutes)}
-                    >
-                      {PlatformWeb.MeetingLive.duration_label(minutes)}
-                    </option>
-                  </select>
-                </div>
-              </div>
-
-              <%!-- Project (required). The `required` attribute is a hint;
-                 the server-side guard in `handle_event("start_meeting", …)`
-                 is the gate, because `meetings.project_id` is NOT NULL and
-                 the slug is unique per project. --%>
-              <div class="flex flex-col gap-1">
-                <label
-                  for="start-meeting-project"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
-                >
-                  Project <span class="text-base-content">*</span>
-                </label>
-                <select
-                  id="start-meeting-project"
-                  name="start_meeting[project_id]"
-                  required
-                  class="select select-bordered w-full text-sm min-h-11"
-                  data-role="start-meeting-project"
-                >
-                  <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
-                    Select a project…
-                  </option>
-                  <option
-                    :for={project <- assigns[:projects] || []}
-                    value={project.id}
-                    selected={@start_meeting_form["project_id"] == project.id}
-                  >
-                    {project.name}
-                  </option>
-                </select>
-              </div>
-
-              <%!-- Invite. `:draft` mode — nothing is written until submit,
-                 and the row `X` unstages rather than revoking. --%>
-              <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
-                  Invite
-                </span>
-
-                <.invite_control
-                  mode={:draft}
-                  id="meeting-create-invite"
-                  name="start_meeting[invite_query]"
-                  query={@meeting_create_invite_query}
-                  candidates={@meeting_create_invite_candidates}
-                  email_option={@meeting_create_invite_email}
-                />
-
-                <.invite_list
-                  mode={:draft}
-                  entries={PlatformWeb.MeetingLive.draft_invite_rows(@meeting_create_invites)}
-                />
-              </div>
-            </div>
-
-            <%!-- Footer actions. Hidden below `sm`, where the header's
-                 `Create` carries the same submit. OUTSIDE the scrolling
-                 body and `flex-none`, so a long staged-invite list scrolls
-                 under it instead of pushing it off the panel. --%>
-            <div
-              :if={@schedule_origin != :calendar}
-              class="hidden flex-none items-center justify-end gap-2 border-t border-edge px-4 py-3 min-h-11 sm:flex"
-              data-role="meeting-create-footer"
-            >
-              <button
-                type="button"
-                phx-click="close_start_meeting_sheet"
-                class="btn btn-ghost btn-sm min-h-11"
-                data-role="start-meeting-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                class="btn btn-primary btn-sm gap-1.5 min-h-11"
-                data-role="start-meeting-submit"
-              >
-                <span class="hero-paper-airplane size-4"></span>
-                <span>Create &amp; send invites</span>
-              </button>
-            </div>
-
-            <%!-- Calendar origin: ONE full-width commit at every width, in
-                 place of the header's mobile Create and the Cancel / Create
-                 & send invites pair. Same pinned-footer rule as above:
-                 OUTSIDE the scrolling body and `flex-none`. --%>
-            <div
-              :if={@schedule_origin == :calendar}
-              class="flex flex-none border-t border-edge px-4 py-3"
-              data-role="meeting-create-footer-calendar"
-            >
-              <button
-                type="submit"
-                form="start-meeting-form"
-                class="btn btn-primary w-full min-h-11"
-                data-role="meeting-create-submit-calendar"
-              >
-                Create meeting
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <%!-- The scheduled-meeting create sheet and its FAB are gone (task
+         01a1b8a5 stage 4): a call is scheduled in Calendar's one editor.
+         There is no second authoring flow on this surface. --%>
     </div>
 <% end %>

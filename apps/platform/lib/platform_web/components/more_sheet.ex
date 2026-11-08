@@ -107,7 +107,10 @@ defmodule PlatformWeb.Components.MoreSheet do
       assigns
       |> assign(:rows, rows)
       |> assign(:last_index, length(rows) - 1)
-      |> assign(:current_key, IconRail.more_sheet_current_key(rows, assigns[:current_path]))
+      |> assign(
+        :current_key,
+        IconRail.more_sheet_current_key(rows, IconRail.nav_path(assigns[:current_path]))
+      )
       |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
       |> assign(:avatar_url, Map.get(assigns[:user] || %{}, :avatar_url))
       |> assign(:avatar_seed, Map.get(assigns[:user] || %{}, :id))

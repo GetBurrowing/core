@@ -8,8 +8,8 @@ defmodule PlatformWeb.Components.Sidebar do
   ## Rows: the v4 rail, then More
 
   The module rows are prototype 01a178d2 v4's rail
-  (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar,
-  Meetings), then a "More" label, then `IconRail.desktop_more_rows/2`:
+  (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar;
+  Meetings left in task 01a1b8a5 stage 4), then a "More" label, then `IconRail.desktop_more_rows/2`:
   Inbox with its count badge (`IconRail.inbox_badge/1`, the phone tab's
   badge on the row's icon: 1-9, then 9+, nothing at 0), the extension rows, then the rest of the More
   sheet's order. The phone bar keeps its own four tabs (the product lead's rule, task
@@ -89,7 +89,10 @@ defmodule PlatformWeb.Components.Sidebar do
       assigns
       |> assign(:tabs, tabs)
       |> assign(:more, more)
-      |> assign(:current_key, IconRail.more_sheet_current_key(tabs ++ more, assigns.current_path))
+      |> assign(
+        :current_key,
+        IconRail.more_sheet_current_key(tabs ++ more, IconRail.nav_path(assigns.current_path))
+      )
       |> assign(:chat_badge, IconRail.chat_badge_text(assigns.chat_unread_count))
       |> assign(:resolved_mode, resolved)
       |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
@@ -145,8 +148,11 @@ defmodule PlatformWeb.Components.Sidebar do
           >
             {@chat_badge}
           </span>
+          <%!-- The live-call dot rode the Meetings row until that row was
+               retired (task 01a1b8a5 stage 4); calls are Calendar events
+               now, so it rides Calendar. --%>
           <span
-            :if={dest.key == :meetings and @meeting_active}
+            :if={dest.key == :calendar and @meeting_active}
             data-role="live-call-dot"
             class="ml-auto size-[7px] shrink-0 rounded-full bg-success"
             title="live call"

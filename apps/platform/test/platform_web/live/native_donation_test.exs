@@ -258,10 +258,13 @@ defmodule PlatformWeb.NativeDonationTest do
   end
 
   describe "meeting_started" do
-    test "Meet now donates the meeting id only", %{conn: conn} do
+    # The create sheet's Meet now went with the sheet (task 01a1b8a5 stage
+    # 4); the v4 list's "Start a room now" is the same create path in
+    # `:enter` mode, on the surviving meet-host listing.
+    test "starting a room now donates the meeting id only", %{conn: conn} do
       me = user!("Meeter")
 
-      {:ok, _project} =
+      {:ok, project} =
         %Project{}
         |> Project.changeset(%{
           name: "Donate Meet #{u()}",
@@ -270,9 +273,10 @@ defmodule PlatformWeb.NativeDonationTest do
         })
         |> Repo.insert()
 
-      {:ok, view, _html} = live(login(conn, me), ~p"/meetings?view=calendar")
-      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
-      _ = render_click(view, "meet_now", %{})
+      {:ok, view, _html} = live(%{login(conn, me) | host: "meet.example.com"}, ~p"/meetings")
+
+      _ =
+        render_click(view, "start_room", %{"title" => "Donated room", "project_id" => project.id})
 
       meeting = Repo.one!(Meeting)
       assert_push_event(view, "native_donate", payload)

@@ -96,7 +96,6 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
     only: [invite_control: 1, invite_list: 1]
 
   import PlatformWeb.Components.Meetings.CancelMeeting, only: [cancel_meeting: 1]
-  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
   import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   alias Platform.Meetings.CalendarLink
@@ -223,11 +222,6 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
     doc: "`%{can_cancel, state, audience}` for this meeting (task 01a19e7f); nil draws no control"
   )
 
-  attr(:edit, :map,
-    default: nil,
-    doc: "`%{can_edit}` for this meeting (task 01a1b281); nil or `can_edit` false draws no Edit"
-  )
-
   attr(:delete, :map,
     default: nil,
     doc:
@@ -237,8 +231,6 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
   attr(:cancel_id_prefix, :string, default: "meeting-detail")
 
   def meeting_detail_actions(assigns) do
-    assigns = assign(assigns, :can_edit, match?(%{can_edit: true}, assigns.edit))
-
     ~H"""
     <.link
       :if={@meeting.status != "cancelled"}
@@ -249,25 +241,10 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
       <span class="hero-arrow-top-right-on-square size-4 flex-shrink-0" aria-hidden="true"></span>
       <span>Open meeting</span>
     </.link>
-    <%!-- Edit (task 01a1b281) sits BESIDE the cancel row, a secondary
-       pill on the same rule, so Open meeting stays the one primary. --%>
-    <div
-      :if={@can_edit}
-      class="mt-3 flex items-start gap-2 border-t border-edge pt-3"
-      data-role="meeting-detail-edit-row"
-    >
-      <.edit_button can_edit={@can_edit} id={"#{@cancel_id_prefix}-edit"} />
-      <.cancel_meeting
-        :if={@cancel}
-        can_cancel={@cancel.can_cancel}
-        state={@cancel.state}
-        audience={@cancel.audience}
-        id_prefix={@cancel_id_prefix}
-        class="min-w-0 flex-1 !border-t-0 !pt-0"
-      />
-    </div>
+    <%!-- No Edit (task 01a1b8a5 stage 4): a call is edited in Calendar's
+       one editor, not from this listing. --%>
     <.cancel_meeting
-      :if={@cancel && !@can_edit}
+      :if={@cancel}
       can_cancel={@cancel.can_cancel}
       state={@cancel.state}
       audience={@cancel.audience}

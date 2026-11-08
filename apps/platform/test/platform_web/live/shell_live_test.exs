@@ -425,17 +425,18 @@ defmodule PlatformWeb.ShellLiveTest do
     test "active-state marker tracks current_path on the mobile bottom-rail", %{conn: conn} do
       # Was /activity; Activity left the bar in task 01a1557a-7a71 stage 2.
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/meetings")
+      # Meetings left the bar in task 01a1b8a5 stage 4; Calendar is a tab.
+      {:ok, _view, html} = live(conn, ~p"/calendar")
 
-      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="meetings"/
+      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="calendar"/
     end
 
     test "opening the More sheet lights More, and only More, in the rendered shell", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
-      {:ok, view, html} = live(conn, ~p"/meetings")
-      assert bar_active_keys(html) == ["meetings"]
+      {:ok, view, html} = live(conn, ~p"/calendar")
+      assert bar_active_keys(html) == ["calendar"]
 
       html =
         view

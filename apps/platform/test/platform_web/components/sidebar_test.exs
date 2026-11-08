@@ -103,9 +103,11 @@ defmodule PlatformWeb.Components.SidebarTest do
 
         # Positive control: both halves are populated, and the rail half is
         # exactly desktop_rail_keys/0.
-        assert Enum.take(expected, 5) == IconRail.desktop_rail_keys()
-        assert Enum.at(expected, 5) == :inbox
-        assert length(expected) > 6
+        assert Enum.take(expected, 4) == IconRail.desktop_rail_keys()
+        assert Enum.at(expected, 4) == :inbox
+        assert length(expected) > 5
+        # Task 01a1b8a5 stage 4: Meetings is on neither half.
+        refute :meetings in expected
 
         assert row_keys(render_sidebar(%{root_user: root_user})) == expected
         assert Sidebar.row_keys(nil, root_user) == expected
@@ -119,10 +121,13 @@ defmodule PlatformWeb.Components.SidebarTest do
       end
     end
 
-    test "the rail order is Chat, Voice, Tasks, Calendar, Meetings, then More with Inbox first" do
-      assert IconRail.desktop_rail_keys() == [:chat, :voice, :tasks, :calendar, :meetings]
+    # Task 01a1b8a5 stage 4: Meetings retired from the rail (prototype
+    # 01a178d2 v7 `#rail-meetings` absent); Calendar stays.
+    test "the rail order is Chat, Voice, Tasks, Calendar, then More with Inbox first" do
+      assert IconRail.desktop_rail_keys() == [:chat, :voice, :tasks, :calendar]
       keys = row_keys(render_sidebar(%{root_user: true}))
-      assert Enum.take(keys, 6) == [:chat, :voice, :tasks, :calendar, :meetings, :inbox]
+      assert Enum.take(keys, 5) == [:chat, :voice, :tasks, :calendar, :inbox]
+      refute :meetings in keys
     end
 
     test "equal desktop rail ++ desktop More rows for a root admin's Scope and a restricted one" do
@@ -153,7 +158,8 @@ defmodule PlatformWeb.Components.SidebarTest do
       html = render_sidebar(%{root_user: true})
       labels = html |> doc() |> q("#sidebar-nav .sidebar-row span.truncate") |> Enum.map(&text/1)
 
-      assert Enum.take(labels, 6) == ["Chat", "Voice", "Tasks", "Calendar", "Meetings", "Inbox"]
+      assert Enum.take(labels, 5) == ["Chat", "Voice", "Tasks", "Calendar", "Inbox"]
+      refute "Meetings" in labels
       assert "Inbox" in labels
       assert "Org memory" in labels
 
@@ -190,7 +196,7 @@ defmodule PlatformWeb.Components.SidebarTest do
       end
 
       assert icon.("chat") == IconRail.tab_icon(:chat, false)
-      assert icon.("meetings") == IconRail.tab_icon(:meetings, false)
+      assert icon.("calendar") == IconRail.tab_icon(:calendar, false)
 
       inbox = Enum.find(IconRail.desktop_more_rows(nil, true), &(&1.key == :inbox))
       assert icon.("inbox") == inbox.hero_icon
@@ -313,14 +319,15 @@ defmodule PlatformWeb.Components.SidebarTest do
       assert d |> q(~s(.sidebar-row[aria-label$="need you"])) |> Enum.count() == 1
     end
 
-    test "the live-call dot is on Meetings only while a meeting is active" do
+    # The dot rode Meetings until that row was retired (task 01a1b8a5 stage 4).
+    test "the live-call dot is on Calendar only while a meeting is active" do
       d = render_sidebar(%{meeting_active: false}) |> doc()
       assert d |> q(~s([data-role="live-call-dot"])) |> Enum.count() == 0
 
       d = render_sidebar(%{meeting_active: true}) |> doc()
 
       assert d
-             |> q(~s(.sidebar-row[data-destination="meetings"] [data-role="live-call-dot"]))
+             |> q(~s(.sidebar-row[data-destination="calendar"] [data-role="live-call-dot"]))
              |> LazyHTML.attribute("title") == ["live call"]
     end
   end
@@ -429,7 +436,7 @@ defmodule PlatformWeb.Components.SidebarTest do
 
     test "renders #sidebar and none of the icon rail, utility bar, account menu or collapse control",
          %{conn: conn} do
-      for path <- ~w(/chat /tasks /meetings /settings) do
+      for path <- ~w(/chat /tasks /calendar /settings) do
         {:ok, view, _html} = live(conn, path)
 
         assert has_element?(view, "aside#sidebar[data-sidebar]"), path

@@ -23,6 +23,12 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
@@ -182,7 +188,7 @@ defmodule PlatformWeb.MeetingRejoinAskTest do
         )
 
       conn = put_connect_params(conn, %{"timezone" => "Etc/UTC"})
-      {:ok, view, html} = live(conn, "/meetings")
+      {:ok, view, html} = live(meet_member_host(conn), "/meetings")
 
       selector = ~s([data-role="workspace-meeting"][data-meeting-id="#{meeting.id}"])
       assert statuses(html, selector) != []

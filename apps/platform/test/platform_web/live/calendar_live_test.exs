@@ -246,14 +246,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=feed-old]", "Old URL …/#{prefix}….ics was revoked")
   end
 
-  test "default Meetings destination is its workspace list", %{conn: conn} do
-    {:ok, view, _} = live(conn, "/meetings")
-    assert has_element?(view, "[data-region=meetings-workspace]")
-    refute has_element?(view, "[data-role=calendar-week-grid]")
-    # v4 list pane section labels (task 01a18d9f stage 4).
-    assert has_element?(view, ".mt-section-label", "Live now")
-    assert has_element?(view, ".mt-section-label", "Upcoming")
-    assert has_element?(view, ".mt-section-label", "Past")
+  # Task 01a1b8a5 stage 4: the app-host Meetings listing is retired into
+  # Calendar (`MeetingLive.CalendarRedirect`).
+  test "the old Meetings destination lands in Calendar", %{conn: conn} do
+    assert {:error, {:live_redirect, %{to: "/calendar"}}} = live(conn, "/meetings")
   end
 
   test "overlapping recurrence occurrences have distinct DOM identities", %{
@@ -885,7 +881,9 @@ defmodule PlatformWeb.CalendarLiveTest do
              "Join now"
            )
 
-    assert has_element?(view, ".cal-dfoot a", "View in Meetings")
+    # The old "View in Meetings" link went with the listing (task 01a1b8a5
+    # stage 4; prototype v7 excludes it).
+    refute has_element?(view, ".cal-dfoot a", "View in Meetings")
 
     open_chip(view, "external")
     assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "External event")

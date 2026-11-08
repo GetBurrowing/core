@@ -1,8 +1,9 @@
 defmodule PlatformWeb.MeetingEditLiveTest do
   @moduledoc """
-  Edit a scheduled meeting in place from /meetings and /calendar (task
-  01a1b281 stage 3): `PlatformWeb.Components.Meetings.EditMeeting` driven by
-  `PlatformWeb.MeetingLive.MeetingEdit`.
+  Edit a scheduled meeting in place (task 01a1b281 stage 3). Since task
+  01a1b8a5 stage 4 that is Calendar's one editor only: the /meetings Edit
+  meeting form (`PlatformWeb.MeetingLive.MeetingEdit`) is gone, and the
+  listing that survives on the meet host draws no Edit.
 
   Every refusal is paired with a permitted viewer on the same fixture, so a
   control that never renders fails a named test instead of passing the
@@ -11,6 +12,12 @@ defmodule PlatformWeb.MeetingEditLiveTest do
   `MeetingNotifier` sends edit mail on) is made.
   """
   use PlatformWeb.ConnCase, async: false
+
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
 
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
@@ -107,321 +114,49 @@ defmodule PlatformWeb.MeetingEditLiveTest do
   defp reload(meeting), do: Repo.get!(Meeting, meeting.id)
   defp deliveries, do: Repo.aggregate(Delivery, :count)
 
-  defp open_edit(view) do
-    view |> element("[data-role=meetings-detail] [data-role=meeting-edit-open]") |> render_click()
-    assert has_element?(view, "[data-role=meeting-edit]")
-  end
-
-  defp change(view, attrs) do
-    view |> form("#meeting-edit-form", meeting_edit: attrs) |> render_change()
-  end
-
   @detail "[data-role=meetings-detail]"
-  @save "[data-role=meeting-edit-save]"
 
-  # ── Who sees Edit ─────────────────────────────────────────────────────────
+  # ── The listing has no Edit (task 01a1b8a5 stage 4) ──────────────────────
+  #
+  # The /meetings "Edit meeting" form was the second authoring flow; it is
+  # gone with the app-host listing. The meet-host listing that survives (the
+  # `meet-member-meetings-index` shim) draws no Edit for anyone and no
+  # longer handles `meeting_edit_*` at all, so a forged one writes nothing.
 
-  describe "the Edit action on /meetings" do
-    test "the organizer sees it beside Cancel on the list detail; the invitee sees none",
-         ctx do
+  describe "the surviving meet-host listing" do
+    test "draws no Edit for the organizer either; Cancel is still there", ctx do
       meeting = meeting!(ctx)
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      assert has_element?(view, @detail <> " [data-role=meetings-detail-edit-row]")
-      assert has_element?(view, @detail <> " [data-role=meeting-edit-open]", "Edit")
-      assert has_element?(view, @detail <> " [data-role=meeting-cancel-row]")
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
 
-      {:ok, invitee_view, _} = live(conn_for(ctx.invitee), detail_path(meeting))
-      # Positive control: the invitee's detail did render this meeting.
-      assert has_element?(invitee_view, @detail <> " [data-meeting-id='#{meeting.id}']")
-      refute has_element?(invitee_view, "[data-role=meeting-edit-open]")
-    end
-
-    test "the calendar view's panel and sheet footers carry it for the organizer only", ctx do
-      zone = "America/Chicago"
-      # Ahead of now, inside today's week.
-      start = DateTime.utc_now() |> DateTime.add(120) |> DateTime.truncate(:second)
-      start = %{start | second: 0}
-      meeting = meeting!(ctx, start: start, minutes: 30)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer, zone), "/meetings?view=calendar")
-      render_click(view, "select_meeting", %{"id" => meeting.id})
-
-      for footer <- ["meeting-detail-panel-footer", "meeting-detail-sheet-footer"] do
-        assert has_element?(view, "[data-role=#{footer}] [data-role=meeting-edit-open]")
-      end
-
-      render_click(view, "meeting_edit_open", %{})
-      assert has_element?(view, "[data-role=meeting-edit] [data-role=meeting-edit-name]")
-
-      {:ok, invitee_view, _} = live(conn_for(ctx.invitee, zone), "/meetings?view=calendar")
-      render_click(invitee_view, "select_meeting", %{"id" => meeting.id})
-      assert has_element?(invitee_view, "[data-role=meeting-detail-panel-footer]")
-      refute has_element?(invitee_view, "[data-role=meeting-edit-open]")
-    end
-
-    test "a cancelled meeting shows no Edit, even to its organizer", ctx do
-      meeting = meeting!(ctx)
-      {:ok, _} = Meetings.cancel_meeting_for_user(meeting.id, ctx.organizer)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      assert has_element?(view, @detail <> " [data-meeting-id='#{meeting.id}']")
+      assert has_element?(view, @detail, "Weekly sync")
+      assert has_element?(view, "#{@detail} [data-role=meeting-cancel-row]"), "positive control"
       refute has_element?(view, "[data-role=meeting-edit-open]")
+      refute has_element?(view, "[data-role=meeting-edit]")
     end
-  end
 
-  # ── Forged events ─────────────────────────────────────────────────────────
-
-  describe "a forged edit" do
-    test "from the invitee opens nothing, saves nothing and mails nobody", ctx do
-      meeting = meeting!(ctx, guests: 2)
+    test "a forged meeting_edit event saves nothing and mails nobody", ctx do
+      meeting = meeting!(ctx)
       before = deliveries()
 
-      {:ok, view, _} = live(conn_for(ctx.invitee), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(ctx.organizer)), detail_path(meeting))
+      Process.flag(:trap_exit, true)
 
-      render_click(view, "meeting_edit_open", %{})
-      refute has_element?(view, "[data-role=meeting-edit]")
+      # No clause handles it any more: the LiveView refuses by crashing,
+      # which is a refusal, not a write.
+      catch_exit(render_click(view, "meeting_edit_save", %{"meeting_edit" => %{"name" => "X"}}))
 
-      render_submit(view, "meeting_edit_save", %{
-        "meeting_id" => meeting.id,
-        "meeting_edit" => %{"name" => "Hijacked", "start_time" => "3:00 PM"}
-      })
-
-      render_click(view, "meeting_edit_remove", %{"id" => meeting.id})
-
-      row = reload(meeting)
-      assert row.name == "Weekly sync"
-      assert row.scheduled_start_at == meeting.scheduled_start_at
-      assert row.ical_sequence == meeting.ical_sequence
-      assert length(Meetings.list_invites(meeting.id)) == 3
+      assert reload(meeting).name == "Weekly sync"
       refute_receive {:meeting_updated, _, _}, 100
       assert deliveries() == before
     end
 
-    test "names the meeting the form was opened on, never the payload's id", ctx do
-      opened = meeting!(ctx, name: "Opened one")
-      other = meeting!(ctx, name: "Other one", invite_invitee: false)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(opened))
-      open_edit(view)
-
-      render_submit(view, "meeting_edit_save", %{
-        "meeting_id" => other.id,
-        "id" => other.id,
-        "meeting_edit" => %{"name" => "Renamed"}
-      })
-
-      assert reload(opened).name == "Renamed"
-      assert reload(other).name == "Other one"
-    end
-
-    test "every event reloads the meeting: one cancelled meanwhile shuts the form", ctx do
+    test "the app-host listing (and its ?meeting= selection) lands in Calendar", ctx do
       meeting = meeting!(ctx)
+      to = "/calendar?meeting=#{meeting.id}"
 
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      # Cancelled from another window: the form's own state still says
-      # "editable", only a reload knows otherwise.
-      Repo.update_all(from(m in Meeting, where: m.id == ^meeting.id),
-        set: [status: "cancelled"]
-      )
-
-      change(view, %{name: "Too late"})
-      refute has_element?(view, "[data-role=meeting-edit]")
-      assert render(view) =~ "You can&#39;t edit this meeting."
-      assert reload(meeting).name == "Weekly sync"
-    end
-  end
-
-  # ── Saving ────────────────────────────────────────────────────────────────
-
-  describe "saving" do
-    test "a new time keeps the id and the link, and the list redraws", ctx do
-      meeting = meeting!(ctx)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      assert has_element?(view, "[data-role=meeting-edit-start-time][value='10:00 AM']")
-      refute has_element?(view, "[data-role=meeting-edit-was]")
-
-      change(view, %{start_time: "11:30 AM"})
-      assert has_element?(view, "[data-role=meeting-edit-was]", "was 10:00 AM")
-
-      assert has_element?(
-               view,
-               "[data-role=meeting-edit-summary-link]",
-               "/meetings/#{meeting.slug}"
-             )
-
-      view |> form("#meeting-edit-form") |> render_submit()
-
-      row = reload(meeting)
-      assert row.id == meeting.id
-      assert row.slug == meeting.slug
-
-      assert DateTime.compare(
-               row.scheduled_start_at,
-               DateTime.add(meeting.scheduled_start_at, 5400)
-             ) == :eq
-
-      assert DateTime.compare(row.scheduled_end_at, DateTime.add(meeting.scheduled_end_at, 5400)) ==
-               :eq
-
-      assert row.ical_sequence == meeting.ical_sequence + 1
-
-      assert_receive {:meeting_updated, %Meeting{id: id}, %{changed: changed}}
-      assert id == meeting.id
-      assert :time in changed
-
-      refute has_element?(view, "[data-role=meeting-edit]")
-      assert render(view) =~ "11:30"
-    end
-
-    test "the summary renders preview_meeting_edit/2's recipients", ctx do
-      meeting = meeting!(ctx, guests: 2)
-      [removed | _] = Enum.filter(Meetings.list_invites(meeting.id), &is_binary(&1.email))
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      change(view, %{name: "Weekly sync, renamed"})
-      render_click(view, "meeting_edit_remove", %{"id" => removed.id})
-      assert has_element?(view, "[data-role=meeting-edit-removed]", "removed:")
-
-      preview =
-        Meetings.preview_meeting_edit(reload(meeting), %{
-          name: "Weekly sync, renamed",
-          remove_invite_ids: [removed.id],
-          add_invitees: []
-        })
-
-      # Anti-vacuity: this edit does mail someone both ways.
-      assert preview.update_recipients != []
-      assert preview.cancel_recipients != []
-
-      summary = "[data-role=meeting-edit-summary]"
-
-      for r <- preview.update_recipients do
-        name = PlatformWeb.Components.Meetings.EditMeeting.recipient_name(r)
-        assert has_element?(view, summary <> " [data-role=meeting-edit-summary-updated]", name)
-      end
-
-      assert has_element?(
-               view,
-               summary <> " [data-role=meeting-edit-summary-updated]",
-               "an updated invite (new title)."
-             )
-
-      for r <- preview.cancel_recipients do
-        name = PlatformWeb.Components.Meetings.EditMeeting.recipient_name(r)
-        assert has_element?(view, summary <> " [data-role=meeting-edit-summary-cancelled]", name)
-      end
-
-      # Undo puts the row back and the cancellation sentence goes.
-      render_click(view, "meeting_edit_undo", %{"id" => removed.id})
-      refute has_element?(view, "[data-role=meeting-edit-summary-cancelled]")
-      refute render(view) =~ ~r/reschedul/i
-    end
-
-    test "no change disables Save; notes alone mail nobody", ctx do
-      meeting = meeting!(ctx, guests: 1)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      assert has_element?(
-               view,
-               "[data-role=meeting-edit-summary-none]",
-               "Nothing has changed yet."
-             )
-
-      assert has_element?(view, @save <> "[disabled]")
-
-      change(view, %{start_time: "11:00 AM"})
-      refute has_element?(view, @save <> "[disabled]")
-
-      # Back to the original value: nothing has changed again.
-      change(view, %{start_time: "10:00 AM"})
-      assert has_element?(view, @save <> "[disabled]")
-      assert has_element?(view, "[data-role=meeting-edit-summary-none]")
-
-      change(view, %{description: "Bring the numbers."})
-      refute has_element?(view, @save <> "[disabled]")
-
-      assert has_element?(
-               view,
-               "[data-role=meeting-edit-summary-notes-only]",
-               "only the notes changed."
-             )
-
-      before = deliveries()
-      view |> form("#meeting-edit-form") |> render_submit()
-      assert reload(meeting).description == "Bring the numbers."
-      assert reload(meeting).ical_sequence == meeting.ical_sequence
-      assert deliveries() == before
-    end
-
-    test "removing the last invitee is refused inline and the row stays", ctx do
-      meeting = meeting!(ctx)
-      [only] = Meetings.list_invites(meeting.id)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      render_click(view, "meeting_edit_remove", %{"id" => only.id})
-
-      assert has_element?(
-               view,
-               "[data-role=meeting-edit-last-invitee]",
-               "Keep at least one invitee, or cancel the meeting."
-             )
-
-      refute has_element?(view, "[data-role=meeting-edit-removed]")
-      assert has_element?(view, "[data-role=meeting-edit-invitee]", ctx.invitee.name)
-    end
-
-    test "Add people stages a guest by email as an email chip, invited on Save", ctx do
-      meeting = meeting!(ctx)
-
-      {:ok, view, _} = live(conn_for(ctx.organizer), detail_path(meeting))
-      open_edit(view)
-
-      view |> element("[data-role=meeting-edit-add-people]") |> render_click()
-      address = "edit-new-#{System.unique_integer([:positive])}@example.com"
-      render_keyup(view, "meeting_edit_invite_search", %{"value" => address})
-      view |> element("[data-role=meeting-invite-option][data-option=guest]") |> render_click()
-
-      assert has_element?(view, "[data-role=meeting-edit-invitee][data-email-chip=true]", address)
-      assert has_element?(view, "[data-role=meeting-edit-summary-invited]", address)
-
-      view |> form("#meeting-edit-form") |> render_submit()
-      assert Enum.any?(Meetings.list_invites(meeting.id), &(&1.email == address))
-    end
-  end
-
-  # ── Live redraw ───────────────────────────────────────────────────────────
-
-  describe "an open list" do
-    test "redraws on {:meeting_updated, ...} and drops a deleted meeting", ctx do
-      meeting = meeting!(ctx, name: "Before the edit")
-      gone = meeting!(ctx, name: "Soon deleted", invite_invitee: false)
-      {:ok, _} = Meetings.cancel_meeting_for_user(gone.id, ctx.organizer)
-
-      {:ok, view, _} = live(conn_for(ctx.invitee), "/meetings")
-      row = "[data-role=workspace-meeting][data-meeting-id='#{meeting.id}'] strong"
-      assert has_element?(view, row, "Before the edit")
-      assert has_element?(view, "[data-role=workspace-meeting][data-meeting-id='#{gone.id}']")
-
-      {:ok, _} =
-        Meetings.update_meeting_for_user(meeting.id, %{name: "After the edit"}, ctx.organizer)
-
-      {:ok, _} = Meetings.delete_meeting_for_user(gone.id, ctx.organizer)
-
-      assert has_element?(view, row, "After the edit")
-      refute has_element?(view, row, "Before the edit")
-      refute has_element?(view, "[data-role=workspace-meeting][data-meeting-id='#{gone.id}']")
+      assert {:error, {:live_redirect, %{to: ^to}}} =
+               live(conn_for(ctx.organizer), detail_path(meeting))
     end
   end
 

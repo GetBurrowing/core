@@ -17,6 +17,12 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
 
   use PlatformWeb.ConnCase, async: true
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -136,7 +142,7 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
           scheduled_end_at: zoned_utc(today(), 15, 0)
         )
 
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      {:ok, _view, html} = live(meet_member_host(grid_conn(conn)), ~p"/meetings?view=calendar")
 
       # The width pair: the list is `lg:hidden` and NOT also `hidden`; the
       # grid is `hidden` and `lg:grid`. Each half alone admits a build that
@@ -199,7 +205,7 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
 
     test "is absent entirely when the selected day has no meetings, and the heading still says so",
          %{conn: conn} do
-      {:ok, _view, html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      {:ok, _view, html} = live(meet_member_host(grid_conn(conn)), ~p"/meetings?view=calendar")
 
       assert attrs_of(html, ~s([data-role="meeting-card-list"]), "data-role") == []
       assert html =~ "No meetings"
@@ -217,7 +223,7 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
           scheduled_end_at: zoned_utc(today(), 12, 0)
         )
 
-      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings?view=calendar")
+      {:ok, view, _html} = live(meet_member_host(grid_conn(conn)), ~p"/meetings?view=calendar")
 
       {:error, {:live_redirect, %{to: to}}} =
         view

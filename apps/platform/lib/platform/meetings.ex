@@ -1522,22 +1522,36 @@ defmodule Platform.Meetings do
   @spec cancel_meeting(Meeting.t(), binary() | nil) ::
           {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
   def cancel_meeting(%Meeting{} = meeting, cancelled_by_participant_id) do
+    now = DateTime.utc_now()
+
     attrs = %{
-      cancelled_at: DateTime.utc_now(),
+      cancelled_at: now,
       cancelled_by_participant_id: cancelled_by_participant_id
     }
 
-    case meeting
-         |> Meeting.status_changeset("cancelled", attrs)
-         |> Repo.update() do
-      {:ok, updated} = ok ->
+    # The linked native event (task 01a1b8a5 stage 4) is cancelled in the
+    # same transaction: a call record cancelled from any surface must not
+    # leave its owner's `calendar_events` row active, or the owner's Calendar
+    # keeps a live-looking event for a call nobody can join.
+    result =
+      Repo.transaction(fn ->
+        case meeting |> Meeting.status_changeset("cancelled", attrs) |> Repo.update() do
+          {:ok, updated} -> {updated, Platform.Calendar.cancel_linked_events(updated.id, now)}
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, {updated, events}} ->
         Phoenix.PubSub.broadcast(
           Platform.PubSub,
           project_meetings_topic(updated.project_id),
           {:meeting_cancelled, updated}
         )
 
-        ok
+        Platform.Calendar.broadcast_changed(events)
+
+        {:ok, updated}
 
       error ->
         error
@@ -4990,7 +5004,7 @@ defmodule Platform.Meetings do
              identity: String.t(),
              name: String.t()
            }}
-          | {:error, :join_not_permitted | term()}
+          | {:error, :join_not_permitted | :call_disabled | term()}
   def join_for_user(space_id, user_id, display_name)
       when is_binary(space_id) and is_binary(user_id) do
     with :ok <- authorize_join(space_id, user_id),
@@ -5046,13 +5060,47 @@ defmodule Platform.Meetings do
   # surface passes through it, rather than being duplicated per caller.
   # Hiding the button is cosmetics; this is the fence.
   defp authorize_join(space_id, user_id) do
-    if join_permitted?(space_id, user_id) do
-      :ok
-    else
-      emit_join_blocked(space_id, user_id)
-      {:error, :join_not_permitted}
+    cond do
+      not join_permitted?(space_id, user_id) ->
+        emit_join_blocked(space_id, user_id)
+        {:error, :join_not_permitted}
+
+      call_disabled_for_space?(space_id) ->
+        {:error, :call_disabled}
+
+      true ->
+        :ok
     end
   end
+
+  @doc """
+  Is the call switched off for the meeting that owns chat space `space_id`
+  (task 01a1b8a5 stage 4)? True when a non-deleted meeting bound to the
+  space carries `call_enabled: false`.
+
+  The server-side half of the call toggle. `join_for_user/3` and
+  `companion_token_for_user/3` (every web, chat and native-app join) refuse
+  with `{:error, :call_disabled}` and mint no token; the guest mint
+  (`guest_livekit_token/2`) refuses the same way. Hiding the Join button is
+  cosmetics; this is the fence. A plain chat space, or a meet-now space,
+  has no such meeting and is unaffected.
+  """
+  @spec call_disabled_for_space?(binary()) :: boolean()
+  def call_disabled_for_space?(space_id) when is_binary(space_id) do
+    Platform.UUID.valid?(space_id) and
+      Repo.exists?(
+        from(m in Meeting,
+          where: m.chat_space_id == ^space_id and m.call_enabled == false and is_nil(m.deleted_at)
+        )
+      )
+  end
+
+  def call_disabled_for_space?(_space_id), do: false
+
+  @doc "Does `meeting` offer a Burrow call? `call_enabled` defaults to true."
+  @spec call_enabled?(Meeting.t() | map()) :: boolean()
+  def call_enabled?(%{call_enabled: false}), do: false
+  def call_enabled?(_meeting), do: true
 
   # An external user may join only a call whose space they hold a live invite
   # to. Internal users are unaffected — and pay no query for the privilege:
@@ -5959,12 +6007,16 @@ defmodule Platform.Meetings do
              room_name: String.t(),
              livekit_url: String.t() | nil
            }}
-          | {:error, :livekit_not_configured | :missing_display_name}
-  def guest_livekit_token(%Meeting{chat_space_id: chat_space_id} = _meeting, display_name)
+          | {:error, :livekit_not_configured | :missing_display_name | :call_disabled}
+  def guest_livekit_token(%Meeting{chat_space_id: chat_space_id} = meeting, display_name)
       when is_binary(chat_space_id) and is_binary(display_name) do
     trimmed = String.trim(display_name)
 
     cond do
+      # The call toggle's fence on the guest path (task 01a1b8a5 stage 4).
+      not call_enabled?(meeting) ->
+        {:error, :call_disabled}
+
       trimmed == "" ->
         {:error, :missing_display_name}
 

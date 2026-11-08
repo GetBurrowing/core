@@ -276,9 +276,12 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       html = render_hook(view, "meeting_left", %{})
       assert count(html, @recap) == 1
 
-      # Dismissing ends the visit on the Meetings index (task 01a18d0a
-      # stage 3), so the recap is gone with the page.
-      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+      # Dismissing ends the visit (task 01a18d0a stage 3) on the call's own
+      # Calendar event since the shell listing was retired (task 01a1b8a5
+      # stage 4), so the recap is gone with the page.
+      to = "/calendar?meeting=#{meeting.id}"
+
+      assert {:error, {:live_redirect, %{to: ^to}}} =
                render_hook(view, "dismiss_call_recap", %{})
     end
 
@@ -303,7 +306,9 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       assert panel_class =~ "lg:max-w-[880px]"
 
       # Dismiss still works from the desktop surface.
-      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+      to = "/calendar?meeting=#{meeting.id}"
+
+      assert {:error, {:live_redirect, %{to: ^to}}} =
                render_hook(view, "dismiss_call_recap", %{})
     end
 
@@ -342,7 +347,7 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       :ok
     end
 
-    test "join, leave, read the report, close it: lands on /meetings and never returns",
+    test "join, leave, read the report, close it: lands on the Calendar event and never returns",
          %{conn: conn, user: user, meeting: meeting} do
       # Another participant is in the call; this viewer leaving must not
       # take them out of it.
@@ -363,9 +368,9 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
 
       view |> element(~s([data-role="call-recap-dismiss"])) |> render_click()
       assert {path, _flash} = assert_redirect(view)
-      assert path == "/meetings"
+      assert path == "/calendar?meeting=#{meeting.id}"
 
-      # The index renders, and is the index rather than the departed room.
+      # Calendar renders, and is Calendar rather than the departed room.
       {:ok, index, _} = live(conn, path)
       refute has_element?(index, ~s([data-role="call-recap"]))
       refute has_element?(index, ~s([data-role="meeting-join"]))
@@ -398,7 +403,9 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       # Nothing has navigated yet.
       assert render(view) =~ ~s(data-role="call-recap")
 
-      assert {:error, {:live_redirect, %{to: "/meetings"}}} =
+      to = "/calendar?meeting=#{meeting.id}"
+
+      assert {:error, {:live_redirect, %{to: ^to}}} =
                render_hook(view, "dismiss_call_recap", %{})
     end
 
@@ -407,7 +414,7 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
 
       html = render_hook(view, "dismiss_call_recap", %{})
       assert html =~ ~s(data-role="meeting-join")
-      refute_redirected(view, "/meetings")
+      refute_redirected(view, "/calendar?meeting=#{meeting.id}")
     end
 
     test "reopening the ended meeting after the report does not join or reopen its filed run",
@@ -416,7 +423,7 @@ defmodule PlatformWeb.MeetingLiveRecapTest do
       view |> element(~s([data-role="meeting-join"])) |> render_click()
       view |> element(~s([data-role="meeting-leave"])) |> render_click()
       view |> element(~s([data-role="call-recap-dismiss"])) |> render_click()
-      assert_redirect(view, "/meetings")
+      assert_redirect(view, "/calendar?meeting=#{meeting.id}")
 
       {:ok, ended} = Meetings.end_meeting(Repo.get!(Meeting, meeting.id))
       runs_before = Repo.all(from(r in CompletionRun, where: r.meeting_id == ^ended.id))

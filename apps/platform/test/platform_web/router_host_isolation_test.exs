@@ -237,8 +237,10 @@ defmodule PlatformWeb.RouterHostIsolationTest do
       %{conn: signed_in_conn(conn)}
     end
 
-    test "a signed-in internal user still gets 200 on /tasks, /meetings, /chat", %{conn: conn} do
-      for path <- ["/tasks", "/meetings", "/chat"] do
+    # `/meetings` left this list in task 01a1b8a5 stage 4: the app-host
+    # listing redirects to Calendar now, so it is a 302 by design.
+    test "a signed-in internal user still gets 200 on /tasks, /calendar, /chat", %{conn: conn} do
+      for path <- ["/tasks", "/calendar", "/chat"] do
         assert status(conn, @app_host, path) == 200,
                "#{path} broke on the APP host — the fence is over-broad"
       end

@@ -51,6 +51,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:booking_link_count, :integer, default: 0)
   attr(:calendars, :list, default: [])
   attr(:calendars_shown, :map, default: %{})
+  attr(:past_open, :boolean, default: false)
 
   @doc "The 270px desktop list pane: header, mini month, nav rows, calendar toggles."
   def list_pane(assigns) do
@@ -92,6 +93,17 @@ defmodule PlatformWeb.CalendarLive.Components do
           label="Calendar settings"
           note="feed · external · agents"
         />
+        <%!-- Past events (task 01a1b8a5 stage 4; v7 `[data-past-events]`).
+             Where the retired Meetings archive went. --%>
+        <.nav_row
+          href={~p"/calendar?#{%{view: @view, past: 1}}"}
+          current={@past_open}
+          navigate={@section != :calendar}
+          icon="hero-archive-box"
+          label="Past events"
+          note="Call summaries, transcripts, recordings"
+          data_past_events
+        />
         <div class="px-2 pb-1 pt-3 text-xs font-[650] uppercase tracking-[.08em] text-subtle">
           Calendars
         </div>
@@ -111,12 +123,14 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:icon, :string, required: true)
   attr(:label, :string, required: true)
   attr(:note, :string, required: true)
+  attr(:data_past_events, :boolean, default: false)
 
   defp nav_row(assigns) do
     ~H"""
     <.link
       patch={!@navigate && @href}
       navigate={@navigate && @href}
+      data-past-events={@data_past_events && "open"}
       class={[
         "relative flex w-full items-center gap-2 rounded-[var(--radius-field)] p-2 text-left text-[13px] hover:bg-base-300",
         @current && "bg-base-300"
@@ -583,11 +597,13 @@ defmodule PlatformWeb.CalendarLive.Components do
           {key, label, href} <- [
             {:calendar, "Calendar", ~p"/calendar"},
             {:booking, "Booking links", ~p"/calendar/booking"},
-            {:settings, "Settings", ~p"/calendar/settings"}
+            {:settings, "Settings", ~p"/calendar/settings"},
+            {:past, "Past events", ~p"/calendar?#{%{past: 1}}"}
           ]
         }
         patch={key != :booking && @section != :booking && href}
         navigate={(key == :booking or @section == :booking) && href}
+        data-past-events={key == :past && "open"}
         aria-current={@section == key && "page"}
         class={[
           "inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-xs",
@@ -1092,6 +1108,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <h3>{@detail.title}</h3>
         <.detail_row icon="hero-clock" text={@detail.when} sub={@detail[:recurrence]} />
         <.detail_body detail={@detail} invite={@invite} />
+        <.call_block :if={@detail[:call]} call={@detail.call} />
         <.cancel_meeting
           :if={@detail.kind == "meeting" and @cancel}
           can_cancel={@detail.can_cancel}
@@ -1117,6 +1134,84 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp footer?(%{kind: "native", owner?: owner?}), do: owner? == true
   defp footer?(_), do: true
+
+  # ── the call on an event (task 01a1b8a5 stage 4) ───────────────────────
+
+  attr(:call, :map, required: true)
+
+  # v7 `.dl` call row and `.panel` "After the call". A call that is off says
+  # so instead of offering a room; a finished call lists its three records,
+  # each one admitted for this viewer (`Meetings.PastEvents.records/2`), and
+  # an absent record says it is absent rather than linking nothing.
+  defp call_block(assigns) do
+    ~H"""
+    <div
+      :if={!@call.enabled? and !@call.cancelled?}
+      class="cal-dl"
+      data-role="calendar-detail-call-off"
+    >
+      <.icon name="hero-video-camera-slash" class="size-3.5" />
+      <span class="min-w-0">
+        No Burrow call<small>The call is off for this event, so there is no room to join.</small>
+      </span>
+    </div>
+    <div :if={@call.enabled? and @call.live?} class="cal-dl" data-role="calendar-detail-call-live">
+      <.icon name="hero-video-camera" class="size-3.5" />
+      <span class="min-w-0">Burrow call<small>Live now</small></span>
+    </div>
+    <div :if={@call.ended?} class="cal-panel" data-role="calendar-detail-recap">
+      <h3>After the call</h3>
+      <p :if={@call.records.summary} class="!text-base-content" data-record="summary">
+        <span class="whitespace-pre-line">{@call.records.summary}</span>
+      </p>
+      <p :if={!@call.records.summary} data-record="summary-none">No summary was saved.</p>
+      <p :if={@call.records.transcript_id} data-record="transcript">
+        <a
+          href={~p"/api/transcripts/#{@call.records.transcript_id}/download"}
+          class="text-interactive underline"
+        >
+          Transcript
+        </a>
+      </p>
+      <p :if={!@call.records.transcript_id} data-record="transcript-none">
+        No transcript was saved.
+      </p>
+      <p :if={@call.records.recording_url} data-record="recording">
+        <a
+          href={@call.records.recording_url}
+          class="text-interactive underline"
+          target="_blank"
+          rel="noopener"
+        >
+          Recording
+        </a>
+      </p>
+      <p :if={!@call.records.recording_url} data-record="recording-none">
+        No recording was saved.
+      </p>
+    </div>
+    """
+  end
+
+  attr(:call, :map, default: nil)
+  attr(:primary, :boolean, default: true)
+
+  # Join now / Open call room. Absent when there is nothing to join: the
+  # call is off or the meeting was cancelled. The room's own breadcrumb and
+  # "Back to Calendar" return to this event (`/calendar?meeting=<id>`).
+  defp call_link(assigns) do
+    ~H"""
+    <.link
+      :if={call_offered?(@call)}
+      navigate={~p"/meetings/#{@call.slug}"}
+      class={if @primary, do: primary_btn(), else: ghost_btn()}
+      data-role="calendar-detail-join"
+    >
+      <.icon name="hero-video-camera" class="size-3.5" />
+      {if @call.live?, do: "Join now", else: "Open call room"}
+    </.link>
+    """
+  end
 
   attr(:detail, :map, required: true)
 
@@ -1263,7 +1358,14 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_footer(%{detail: %{kind: "native"}} = assigns) do
     ~H"""
-    <button type="button" class={primary_btn()} phx-click="edit">Edit</button>
+    <.call_link call={@detail[:call]} />
+    <button
+      type="button"
+      class={if call_offered?(@detail[:call]), do: ghost_btn(), else: primary_btn()}
+      phx-click="edit"
+    >
+      Edit
+    </button>
     <button type="button" class={[ghost_btn(), "cal-danger-btn"]} phx-click="delete">Delete</button>
     """
   end
@@ -1281,16 +1383,7 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_footer(%{detail: %{kind: "meeting"}} = assigns) do
     ~H"""
-    <.link
-      :if={!@detail[:cancelled?]}
-      navigate={~p"/meetings/#{@detail.slug}"}
-      class={primary_btn()}
-    >
-      {if @detail.live?, do: "Join now", else: "Open meeting"}
-    </.link>
-    <.link navigate={~p"/meetings?#{%{meeting: @detail.meeting_id}}"} class={ghost_btn()}>
-      View in Meetings
-    </.link>
+    <.call_link call={@detail[:call]} />
     <.edit_button
       can_edit={@detail[:can_edit] == true}
       variant={:text}
@@ -1304,6 +1397,137 @@ defmodule PlatformWeb.CalendarLive.Components do
     <.link patch={~p"/calendar/settings"} class={ghost_btn()}>Manage external calendars</.link>
     """
   end
+
+  defp call_offered?(%{enabled?: true, cancelled?: false}), do: true
+  defp call_offered?(_call), do: false
+
+  # ── past events (v7 `[data-past-events]` modal, task 01a1b8a5 stage 4) ─
+
+  attr(:past, :map, required: true)
+  attr(:zone, :string, required: true)
+  attr(:view, :string, default: "week")
+
+  @doc """
+  Past events: the calls the viewer can look back on
+  (`Platform.Meetings.PastEvents.page/2`), newest first, a page at a time.
+  A row opens its event in the Calendar (`?meeting=<id>`), where the
+  details' "After the call" panel holds the records. Production states
+  beyond v7: empty, unavailable (no video calls for this viewer) and a
+  pager.
+  """
+  def past_events(assigns) do
+    ~H"""
+    <div class="cal-sheet-scrim" phx-click="close_past" data-role="past-events-scrim"></div>
+    <div
+      class="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col rounded-t-2xl border border-edge bg-base-100 shadow-2xl lg:inset-auto lg:left-1/2 lg:top-1/2 lg:w-[560px] lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="past-events-title"
+      data-role="past-events"
+      data-state={@past.state}
+    >
+      <div class="flex shrink-0 items-center gap-2 border-b border-edge px-4 py-3">
+        <div class="min-w-0 flex-1">
+          <h2 id="past-events-title" class="m-0 text-base font-[650]">Past events</h2>
+          <p class="m-0 text-xs text-subtle">Call records stay attached to their calendar event.</p>
+        </div>
+        <button type="button" class={icon_btn()} phx-click="close_past" aria-label="Close">
+          <.icon name="hero-x-mark" class="size-[18px]" />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <p
+          :if={@past.state == :unavailable}
+          class="m-0 px-2 py-6 text-center text-sm text-subtle"
+          data-role="past-events-unavailable"
+        >
+          Past events need Burrow calls, and calls aren’t available to you. Ask an admin to turn on video calls.
+        </p>
+        <p
+          :if={@past.state == :empty}
+          class="m-0 px-2 py-6 text-center text-sm text-subtle"
+          data-role="past-events-empty"
+        >
+          No past calls yet. When a call you can see ends, it appears here with its summary, transcript and recording.
+        </p>
+        <.link
+          :for={row <- @past.rows}
+          patch={~p"/calendar?#{%{meeting: row.id}}"}
+          class="flex items-start gap-3 rounded-[var(--radius-field)] px-2 py-2.5 hover:bg-base-300"
+          data-role="past-event-row"
+          data-meeting-id={row.id}
+        >
+          <.icon name="hero-video-camera" class="mt-0.5 size-4 shrink-0 text-subtle" />
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-[13px] font-semibold text-base-content">
+              {row.name}
+            </span>
+            <small class="block text-xs text-subtle">
+              {past_when(row, @zone)}<span :if={row.project_path}> · {row.project_path}</span>
+            </small>
+            <small class="mt-1 flex flex-wrap gap-1.5 text-xs" data-role="past-event-records">
+              <span :if={row.status == "cancelled"} class="text-subtle">
+                Cancelled · no call records
+              </span>
+              <span
+                :if={row.status != "cancelled"}
+                class={if row.summary, do: "text-base-content", else: "text-subtle line-through"}
+                data-record={if row.summary, do: "summary", else: "summary-none"}
+              >
+                Summary
+              </span>
+              <span :if={row.status != "cancelled"} class="text-subtle" aria-hidden="true">·</span>
+              <span
+                :if={row.status != "cancelled"}
+                class={
+                  if row.transcript_id, do: "text-base-content", else: "text-subtle line-through"
+                }
+                data-record={if row.transcript_id, do: "transcript", else: "transcript-none"}
+              >
+                Transcript
+              </span>
+              <span :if={row.status != "cancelled"} class="text-subtle" aria-hidden="true">·</span>
+              <span
+                :if={row.status != "cancelled"}
+                class={
+                  if row.recording_url, do: "text-base-content", else: "text-subtle line-through"
+                }
+                data-record={if row.recording_url, do: "recording", else: "recording-none"}
+              >
+                Recording
+              </span>
+            </small>
+          </span>
+        </.link>
+      </div>
+      <div class="flex shrink-0 items-center gap-2 border-t border-edge px-4 py-3">
+        <.link
+          :if={@past.page > 1}
+          patch={~p"/calendar?#{%{view: @view, past: 1, past_page: @past.page - 1}}"}
+          class={ghost_btn()}
+          data-role="past-events-newer"
+        >
+          Newer
+        </.link>
+        <.link
+          :if={@past.more?}
+          patch={~p"/calendar?#{%{view: @view, past: 1, past_page: @past.page + 1}}"}
+          class={ghost_btn()}
+          data-role="past-events-older"
+        >
+          Older
+        </.link>
+        <span class="flex-1"></span>
+        <button type="button" class={ghost_btn()} phx-click="close_past">Close</button>
+      </div>
+    </div>
+    """
+  end
+
+  defp past_when(%{at: %DateTime{} = at}, zone),
+    do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%a %-d %b %Y · %H:%M")
+
+  defp past_when(_row, _zone), do: "No date"
 
   # ── editor (app.js `openEditor`, index.html `.modal`) ──────────────────
 
