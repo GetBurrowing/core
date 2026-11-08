@@ -20,6 +20,27 @@ defmodule Platform.UpdatesTest do
   defp read_inbox(%{core_dir: core}, name),
     do: core |> Path.join("inbox") |> Path.join(name) |> File.read!() |> Jason.decode!()
 
+  # Returns an idempotent restore function.
+  defp make_staging_unwritable(staging_dir) do
+    if root?() do
+      File.rm_rf!(staging_dir)
+      File.write!(staging_dir, "")
+
+      fn ->
+        File.rm(staging_dir)
+        File.mkdir_p!(staging_dir)
+      end
+    else
+      File.chmod!(staging_dir, 0o500)
+      fn -> File.chmod!(staging_dir, 0o700) end
+    end
+  end
+
+  defp root? do
+    {uid, 0} = System.cmd("id", ["-u"])
+    String.trim(uid) == "0"
+  end
+
   describe "request/2" do
     test "writes exactly {action, request_id, requested_at} as inbox/request.json", ctx do
       for action <- [:check, :update, :rollback] do
@@ -68,15 +89,17 @@ defmodule Platform.UpdatesTest do
       staging_dir = Path.join(ctx.core_dir, "staging")
       # A staging dir core cannot write into: the request must fail and the
       # inbox stay empty. A direct write to the inbox would succeed here.
-      File.chmod!(staging_dir, 0o500)
-      on_exit(fn -> File.chmod(staging_dir, 0o700) end)
+      # Mode bits do not bind root (CI runs the suite as root in a container),
+      # so as root the staging dir is replaced by a plain file instead.
+      restore = make_staging_unwritable(staging_dir)
+      on_exit(restore)
 
       assert {:error, _} = Updates.request(:update, nil)
       assert {:error, _} = Updates.set_auto_update(false, nil)
       assert inbox(ctx) == []
 
       # Control: writable staging, the same calls land in the inbox.
-      File.chmod!(staging_dir, 0o700)
+      restore.()
       assert {:ok, _} = Updates.request(:update, nil)
       assert :ok = Updates.set_auto_update(false, nil)
       assert inbox(ctx) == ["request.json", "settings.json"]
