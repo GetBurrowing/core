@@ -15,8 +15,9 @@ defmodule Platform.Experiments.Surfaces.LearnedDefaults do
 
     * `prefill_threshold`: number in 0..1, the confidence the top target must
       reach before it is pre-filled. Control: 0.6.
-    * `min_signals`: integer in 1..50, the decayed signal count required
-      before a pre-fill. Control: 3.
+    * `min_signals`: integer in 1..50, how many times the top target must
+      have been chosen or accepted (a raw count, not decayed) before a
+      pre-fill. Control: 3.
     * `act_after_accepts`: integer in 1..50, accepted pre-fills before the
       ladder may act with undo. Control: 5.
     * `half_life_days`: integer in 1..365, the decay half-life of a signal's
