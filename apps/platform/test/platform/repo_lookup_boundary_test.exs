@@ -141,6 +141,13 @@ defmodule Platform.RepoLookupBoundaryTest do
      "do_save/3 re-reads Event.id after Calendar.update_event/3 or create_event/2 returned that row, a UUIDv7 primary key; the draft's own event id reaches the Repo only through Calendar's guarded owned_event/2"},
     {"platform/calendar/authoring.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "linked_event/1 guards the draft's meeting id (an EventDraft field a LiveView or agent draft can carry) before its Repo.one; a malformed id answers nil and the save path then goes through Meetings.update_meeting_for_user/3, which answers :not_found"},
+    # Task 01a1b8a5 stage 3: the write-free agent draft.
+    {"platform/calendar/draft.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "agent_name/1 reads Draft.agent_id, a non-null UUID foreign key copied from the live AgentGrant row when the draft was inserted"},
+    {"platform/calendar/draft.ex", :get_by, "__MODULE__", 4, :must_cast,
+     "create/4 looks up by owner_id only after AgentAccess.draft_authority/2 has passed Platform.UUID.valid?/1 on it, plus the grant's persisted agent_id and a string key; insert/5 repeats that lookup; fetch/3 pins a string token and the Scope actor's User.id; get/3 sits behind its own Platform.UUID.valid?/1 guard"},
+    {"platform/calendar/draft.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "get/3 guards the client draft id, lock_for_save/3 guards the editor's draft id, and attendee/2 guards an agent-supplied user_id before Accounts.get_user/1; malformed values answer not found or a clarification"},
     {"platform/calendar/booking_confirmation.ex", :get, "Platform.Tasks.Project", 1,
      :safe_internal,
      "enqueue/5 receives the persisted Meeting created by BookingLinks; meeting.project_id is a UUID foreign key already checked against the owner's current project list"},
@@ -1149,6 +1156,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/calendar.ex" => 1,
     # linked_event/1 checks the meeting id with Platform.UUID.valid?/1 first.
     "platform/calendar/authoring.ex" => 1,
+    # lock_for_save/3 pins the draft id behind Platform.UUID.valid?/1 and the
+    # owner id to the Scope actor's User.id (task 01a1b8a5 stage 3).
+    "platform/calendar/draft.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;
     # the periodic worker selects one persisted row without caller-supplied ids.
     "platform/calendar/subscriptions.ex" => 1,
@@ -1365,7 +1375,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # (`remove_message_attention/4`). Its `where:` pins a message id read off
     # the loaded message and a principal id that sits behind the function's
     # `Platform.UUID.valid?/1` guard (this file's `:platform_uuid_guard` entry).
-    "platform/chat.ex" => 24,
+    #
+    # 24 -> 25 for task 01a1b8a5 stage 3's `post_to_agent_dm/4`. Its `where:`
+    # pins the space id of the DM find_or_create_dm/4 just returned and the
+    # caller's own user id (Calendar passes its Scope actor's User.id).
+    "platform/chat.ex" => 25,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by
