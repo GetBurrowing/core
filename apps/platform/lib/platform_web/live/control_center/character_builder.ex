@@ -1,8 +1,8 @@
 defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   @moduledoc """
   The character builder (task 01a1b6ad stage 2): the comp's `createAgent()`
-  (burrow-agents.js) as a LiveComponent. Seven steps: class, name, colour,
-  face, personality, voice, reveal.
+  (burrow-agents.js) as a LiveComponent. Eight steps: class, name, colour,
+  face, personality, voice, AI (task 01a1b84b stage 2), reveal.
 
   ## State
 
@@ -27,6 +27,20 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   without it sees Bring to life disabled with the reason (the same rule
   task 01a1ae4b applies to the Add chooser's create paths).
 
+  ## The one exception: picking an AI on step 7
+
+  A sign-in needs a real agent on the agent host, so picking a provider
+  tile on "Which AI should it use?" brings the character to life early:
+  `Character.create/3` with the builder's state, then
+  `Platform.Agents.AiConnect.prepare/3` for that provider (the panel runs
+  it), then the sign-in starts. The builder keeps the agent; "Bring to
+  life" then applies any later edits with `Character.update/3` instead of
+  creating a second agent, and keeps the card flip and confetti. Cancel,
+  Esc or a scrim click after that closes the builder and opens the agent's
+  page: nothing is silently deleted. Skip, or Reveal without a pick,
+  creates nothing until Bring to life, and the agent stays unconnected.
+  The same `may_create_ownerless?/1` rule gates the tiles.
+
   ## Layout
 
   One render serves both layouts. app.css turns the comp's `.desk` class
@@ -35,14 +49,16 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   in `.ba-bside`.
 
   The parent (`ControlCenterLive`) receives `{:character_builder, :closed}`,
-  `{:character_builder, :advanced}` and
-  `{:character_builder, {:created, agent}}`.
+  `{:character_builder, :advanced}`, `{:character_builder, {:created, agent}}`
+  and `{:character_builder, {:left, agent}}` (closed after the early create).
   """
   use PlatformWeb, :live_component
 
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
-  alias Platform.Agents.{Archetypes, Character, ColorPalette}
+  alias Platform.Agents.{Agent, Archetypes, Character, ColorPalette}
+  alias PlatformWeb.ConnectAi.Panel
+  alias PlatformWeb.ConnectAiLive
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
 
   import PlatformWeb.AgentPortrait, only: [agent_portrait: 1]
@@ -50,6 +66,13 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   @steps Archetypes.steps()
   @last length(@steps) - 1
   @typing_ms 420
+  @ai_prefix "ba-ai"
+  @ai_panel_id "ba-ai-panel"
+  @no_ai %{connected?: false, provider: nil, plan: nil, account: nil}
+  @ai_tiles %{
+    claude_subscription: %{name: "Claude", plan: "Pro or Max plan", mark: "C"},
+    codex: %{name: "ChatGPT", plan: "Your ChatGPT plan", mark: "G"}
+  }
 
   @doc "The step ids, in order (the comp's STEPS)."
   def step_ids, do: Enum.map(@steps, &elem(&1, 0))
@@ -59,6 +82,9 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
     do: Enum.find_index(@steps, fn {s, _} -> s == id end) || 0
 
   def step_index(_), do: 0
+
+  @doc "The AI step's panel component id (the parent refreshes it on agent-host status)."
+  def ai_panel_id, do: @ai_panel_id
 
   @doc "The reason a member sees on a disabled Bring to life."
   def locked_line,
@@ -80,8 +106,19 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
      )}
   end
 
+  @doc "The card's \"Runs on\" text for a connection summary, or nil when not connected."
+  def runs_on(%{connected?: true, provider: "chatgpt"}), do: "ChatGPT"
+
+  def runs_on(%{connected?: true, provider: "claude", plan: plan}) when is_binary(plan),
+    do: "Claude " <> String.capitalize(plan)
+
+  def runs_on(%{connected?: true, provider: "claude"}), do: "Claude"
+  def runs_on(_summary), do: nil
+
   @impl true
   def update(%{typing_done: true}, socket), do: {:ok, assign(socket, :typing, false)}
+
+  def update(%{ai_connect: %{} = summary}, socket), do: {:ok, assign(socket, :ai, summary)}
 
   def update(assigns, socket) do
     agents = Map.get(assigns, :agents, [])
@@ -119,6 +156,9 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
     |> assign(:b, b)
     |> assign(:step, step_index(Map.get(assigns, :step)))
     |> assign(:viewer, viewer)
+    |> assign(:agent, nil)
+    |> assign(:ai_pick, nil)
+    |> assign(:ai, @no_ai)
   end
 
   # The first agent wearing each slot, for the swatch's small label.
@@ -138,7 +178,11 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
 
   @impl true
   def handle_event("close", _params, socket) do
-    send(self(), {:character_builder, :closed})
+    case socket.assigns.agent do
+      %Agent{} = agent -> send(self(), {:character_builder, {:left, agent}})
+      nil -> send(self(), {:character_builder, :closed})
+    end
+
     {:noreply, socket}
   end
 
@@ -309,12 +353,29 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
     end
   end
 
-  def handle_event("life", _params, socket) do
-    user_id = socket.assigns.current_user_id
-    scope = Platform.Access.Scope.for_user(%{id: user_id})
+  # Step 7: a provider tile. The agent is created now (once), and the panel
+  # prepares it for the provider and starts the sign-in (`selected`).
+  def handle_event("pick_ai", %{"provider" => provider}, socket) do
+    option = Enum.find(ConnectAiLive.choices(), &(Atom.to_string(&1) == provider))
 
-    if Platform.Access.Agents.may_create_ownerless?(scope) do
-      bring_to_life(socket, user_id)
+    cond do
+      is_nil(option) ->
+        {:noreply, socket}
+
+      not may_create?(socket) ->
+        {:noreply, assign(socket, :can_create?, false)}
+
+      true ->
+        case create_early(socket) do
+          {:ok, socket} -> {:noreply, assign(socket, :ai_pick, option)}
+          {:error, socket} -> {:noreply, socket}
+        end
+    end
+  end
+
+  def handle_event("life", _params, socket) do
+    if may_create?(socket) do
+      bring_to_life(socket, socket.assigns.current_user_id)
     else
       {:noreply, assign(socket, :can_create?, false)}
     end
@@ -322,23 +383,64 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
+  defp may_create?(socket) do
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
+    Platform.Access.Agents.may_create_ownerless?(scope)
+  end
+
+  # The early create (step 7): one agent, kept on the socket; a second pick
+  # reuses it.
+  defp create_early(%{assigns: %{agent: %Agent{}}} = socket), do: {:ok, socket}
+
+  defp create_early(socket) do
+    case Character.create(socket.assigns.b, %{id: socket.assigns.current_user_id}) do
+      {:ok, %{agent: agent}} ->
+        b = %{socket.assigns.b | n: agent.name}
+        {:ok, socket |> assign(:agent, agent) |> assign(:b, b)}
+
+      {:error, _step, reason} ->
+        send(self(), {:character_builder, {:error, reason}})
+        {:error, socket}
+    end
+  end
+
+  # Bring to life: create, or, after an early create, apply the edits to the
+  # same agent. Never a second agent.
+  defp bring_to_life(%{assigns: %{agent: %Agent{} = agent}} = socket, _user_id) do
+    b = socket.assigns.b
+
+    case Character.update(
+           agent,
+           Map.take(b, [:cls, :n, :color, :portrait, :sl, :traits, :toolkit, :vc])
+         ) do
+      {:ok, %{agent: agent}} ->
+        send(self(), {:character_builder, {:created, with_avatar(socket, agent)}})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        send(self(), {:character_builder, {:error, reason}})
+        {:noreply, socket}
+    end
+  end
+
   defp bring_to_life(socket, user_id) do
     case Character.create(socket.assigns.b, %{id: user_id}) do
       {:ok, %{agent: agent}} ->
-        agent =
-          with {:ok, attrs} <- AgentAvatarUpload.consume(socket, agent),
-               {:ok, updated} <- Character.put_avatar(agent, attrs) do
-            updated
-          else
-            _ -> agent
-          end
-
-        send(self(), {:character_builder, {:created, agent}})
+        send(self(), {:character_builder, {:created, with_avatar(socket, agent)}})
         {:noreply, socket}
 
       {:error, _step, reason} ->
         send(self(), {:character_builder, {:error, reason}})
         {:noreply, socket}
+    end
+  end
+
+  defp with_avatar(socket, agent) do
+    with {:ok, attrs} <- AgentAvatarUpload.consume(socket, agent),
+         {:ok, updated} <- Character.put_avatar(agent, attrs) do
+      updated
+    else
+      _ -> agent
     end
   end
 
@@ -384,6 +486,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
         :next_label,
         if(assigns.step + 1 == @last, do: "Reveal", else: "Next")
       )
+      |> assign(:runs_on, runs_on(assigns.ai))
 
     ~H"""
     <div
@@ -461,6 +564,9 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
                 <b>{display_name(@b.n)}</b>
                 <span>{@a.glyph} {@a.n} · {@palette.label}</span>
                 <div class="tr"><i :for={t <- @b.traits}>{t}</i></div>
+                <span :if={@runs_on} class="ba-runs-on" id="ba-mini-runs-on">
+                  Runs on · {@runs_on}
+                </span>
               </div>
             </div>
             <div class="ba-fbody">
@@ -519,7 +625,15 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
           <div :if={!@last?} class="ba-bside">
             <small>live preview</small>
             <div id="ba-live">
-              <.card b={@b} number={@number} viewer={@viewer} entry={@entry} w={290} prefix="live" />
+              <.card
+                b={@b}
+                number={@number}
+                viewer={@viewer}
+                entry={@entry}
+                w={290}
+                prefix="live"
+                runs_on={@runs_on}
+              />
             </div>
           </div>
         </div>
@@ -887,12 +1001,92 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
     """
   end
 
+  # Step 7 (task 01a1b84b stage 2): two provider tiles in provider_order, the
+  # panel's #106 steps under the picked one, a skip line. Reveal stays enabled.
+  defp step_body(%{step_id: "ai"} = assigns) do
+    assigns =
+      assigns
+      |> assign(:choices, ConnectAiLive.choices())
+      |> assign(:tiles, @ai_tiles)
+      |> assign(:ai_prefix, @ai_prefix)
+      |> assign(:ai_panel_id, @ai_panel_id)
+      |> assign(:current_user, Accounts.get_user(assigns.current_user_id))
+
+    ~H"""
+    <h1 class="ba-h1">Which AI should {display_name(@b.n)} use?</h1>
+    <p class="ba-sub">Sign in with a plan you already pay for. No API key.</p>
+    <div class="ba-ai" id="ba-ai">
+      <div class="ba-ai-tiles">
+        <button
+          :for={option <- @choices}
+          :if={@can_create?}
+          type="button"
+          id={"ba-ai-" <> Atom.to_string(option)}
+          class="ba-class ba-ai-tile"
+          data-provider={option}
+          aria-pressed={to_string(@ai_pick == option)}
+          phx-click="pick_ai"
+          phx-value-provider={option}
+          phx-target={@myself}
+        >
+          <span class="g ba-ai-mark" aria-hidden="true">{@tiles[option].mark}</span>
+          <b>{@tiles[option].name}</b>
+          <span>{@tiles[option].plan}</span>
+        </button>
+        <button
+          :for={option <- @choices}
+          :if={!@can_create?}
+          type="button"
+          id={"ba-ai-" <> Atom.to_string(option)}
+          class="ba-class ba-ai-tile"
+          data-provider={option}
+          aria-pressed="false"
+          aria-disabled="true"
+          aria-describedby="ba-ai-locked"
+          data-locked="true"
+        >
+          <span class="g ba-ai-mark" aria-hidden="true">{@tiles[option].mark}</span>
+          <b>{@tiles[option].name}</b>
+          <span>{@tiles[option].plan}</span>
+        </button>
+      </div>
+      <p :if={!@can_create?} id="ba-ai-locked" class="ba-sub">{locked_line()}</p>
+      <div :if={@agent && @ai_pick} class="ba-ai-steps" id="ba-ai-steps">
+        <.live_component
+          module={Panel}
+          id={@ai_panel_id}
+          target={@agent}
+          current_user={@current_user}
+          prefix={@ai_prefix}
+          order={@choices}
+          picker={false}
+          selected={@ai_pick}
+          notify={{__MODULE__, @id}}
+        />
+      </div>
+      <p class="ba-sub ba-ai-later">
+        <button id="ba-ai-later" type="button" class="ba-link" phx-click="skip" phx-target={@myself}>
+          Not now? Connect from {display_name(@b.n)}'s page later.
+        </button>
+      </p>
+    </div>
+    """
+  end
+
   defp step_body(%{step_id: "reveal"} = assigns) do
     assigns = assign(assigns, :voice_key, Archetypes.voice(assigns.b.vc.p).key)
 
     ~H"""
     <div class="ba-revwrap">
-      <.card b={@b} number={@number} viewer={@viewer} entry={@entry} reveal prefix="reveal" />
+      <.card
+        b={@b}
+        number={@number}
+        viewer={@viewer}
+        entry={@entry}
+        reveal
+        prefix="reveal"
+        runs_on={@runs_on}
+      />
       <div class="ba-writes">
         Creates <code>IDENTITY.md</code>
         · <code>SOUL.md</code>
@@ -952,6 +1146,10 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
   attr :w, :integer, default: nil
   attr :prefix, :string, default: "card"
 
+  attr :runs_on, :string,
+    default: nil,
+    doc: "\"Claude Max\" or \"ChatGPT\" once connected, else nil"
+
   def card(assigns) do
     assigns =
       assigns
@@ -978,6 +1176,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
         <div class="tr"><i :for={t <- @c.traits}>{t}</i></div>
         <div class="tk"><span :for={t <- @c.toolkit}>{t}</span></div>
         <div class="vc"><span>Talks like</span><b>{@c.talks_like}</b></div>
+        <div :if={@runs_on} class="vc" data-runs-on><span>Runs on</span><b>{@runs_on}</b></div>
         <q>“{@c.quote}”</q>
         <div class="ft"><span>{@c.footer}</span><span>№ {@c.number}</span></div>
       </div>

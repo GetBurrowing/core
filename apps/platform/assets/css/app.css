@@ -11194,6 +11194,19 @@ textarea.cal-input {
 .ba-vhead .ba-lbl{margin:0}
 .ba-vsaved{margin-left:auto;font-size:12px;font-weight:600;color:var(--ag);opacity:0;transition:opacity .2s}
 .ba-vsaved.on{opacity:1}
+/* Step 7, Which AI should it use (task 01a1b84b stage 2): two provider tiles in
+   the .ba-class style, one column, names only; the connect steps under them. */
+.ba-ai-tiles{display:grid;grid-template-columns:1fr;gap:10px;margin-top:16px}
+.ba-flow .ba-ai-tiles{grid-template-columns:1fr}
+.ba-ai .ba-class{min-height:0;flex-direction:row;align-items:center;gap:12px;padding:14px 16px}
+.ba-ai .ba-class b{font-size:16px;margin-top:0}
+.ba-ai .ba-class > span:not(.g){margin-left:auto;text-align:right}
+.ba-ai-mark{width:36px;height:36px;border-radius:50%;background:color-mix(in srgb,var(--ag) 14%,var(--color-base-100));color:var(--ag);font-size:16px!important;font-weight:750;display:flex;align-items:center;justify-content:center;flex:none}
+.ba-ai .ba-class[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
+.ba-ai-steps{margin-top:16px}
+.ba-ai-later{margin-top:16px}
+.ba-ai-later .ba-link{background:none;border:0;padding:0;cursor:pointer}
+.ba-mini .ba-runs-on{display:block;font-size:11px;color:var(--color-subtle);margin-top:2px}
 .ba-card .vc{font-size:11px;color:var(--color-subtle);display:flex;justify-content:space-between}
 .ba-card .vc b{color:var(--color-base-content);font-weight:650}
 .ba-sys-sub{font-size:11px;color:var(--color-subtle);text-align:center;margin-top:-4px}

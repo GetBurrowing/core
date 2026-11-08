@@ -12,7 +12,17 @@ defmodule PlatformWeb.ConnectAi.Panel do
     * `current_user`: the signed-in user;
     * `prefix`: the DOM id prefix, default `"connect-ai"`;
     * `order`: the providers offered, default `PlatformWeb.ConnectAiLive.choices/0`
-      (the experiment surface's `provider_order`).
+      (the experiment surface's `provider_order`);
+    * `picker`: render the provider picker (default true). The character
+      builder's AI step draws its own tiles and passes `picker: false`;
+    * `selected`: the provider the host picked for the agent. When it changes,
+      the panel runs the same path as its own "select" event (prepare, then
+      the sign-in starts), permission checked the same way;
+    * `notify`: `{module, id}` of a sibling LiveComponent that gets
+      `send_update(module, id: id, ai_connect: summary)` whenever the
+      connection summary (`connected?`, `provider`, `plan`, `account`)
+      changes, so a host can show "Runs on · Claude Max" the moment the
+      sign-in completes.
 
   ## Each agent signs in on its own
 
@@ -87,6 +97,8 @@ defmodule PlatformWeb.ConnectAi.Panel do
       |> assign(:current_user, assigns.current_user)
       |> assign(:prefix, Map.get(assigns, :prefix, "connect-ai"))
       |> assign(:order, Map.get(assigns, :order) || ConnectAiLive.choices())
+      |> assign(:picker?, Map.get(assigns, :picker, true))
+      |> assign(:notify, Map.get(assigns, :notify))
       |> assign(:target, target)
       |> assign(:target_key, key(target))
 
@@ -99,14 +111,28 @@ defmodule PlatformWeb.ConnectAi.Panel do
         |> assign(:claude, Steps.idle())
         |> assign(:failure, nil)
         |> assign(:selected, initial_selection(agent))
+        |> assign(:notified, nil)
         |> refresh_state()
         |> maybe_start_claude()
       else
         socket
       end
 
-    {:ok, socket}
+    {:ok, apply_selected(socket, Map.get(assigns, :selected, :unset))}
   end
+
+  # The host picked a provider for the agent: the same path as the "select"
+  # event, with the same permission check, once per change.
+  defp apply_selected(socket, :unset), do: socket
+  defp apply_selected(%{assigns: %{selected: selected}} = socket, selected), do: socket
+
+  defp apply_selected(socket, option) when option in [:codex, :claude_subscription] do
+    if allowed?("select", socket),
+      do: handle("select", %{"provider" => Atom.to_string(option)}, socket),
+      else: refuse(socket, "select")
+  end
+
+  defp apply_selected(socket, _other), do: socket
 
   defp key(:burrow), do: :burrow
   defp key(%Agent{id: id}), do: id
@@ -328,7 +354,49 @@ defmodule PlatformWeb.ConnectAi.Panel do
       |> assign(:can_manage?, not is_nil(runtime) and NativeAgents.can_manage?(user, agent))
       |> assign(:login, runtime && NativeLogin.login_view(agent, socket.assigns.claude.login))
 
-    assign(socket, :can_act?, may_act_on_target?(socket.assigns))
+    socket
+    |> assign(:can_act?, may_act_on_target?(socket.assigns))
+    |> notify_host()
+  end
+
+  # Tell the host component when the summary changes (`notify`).
+  defp notify_host(%{assigns: %{notify: {module, id}}} = socket) do
+    summary = summary(socket.assigns)
+
+    if summary != socket.assigns.notified do
+      send_update(module, id: id, ai_connect: summary)
+      assign(socket, :notified, summary)
+    else
+      socket
+    end
+  end
+
+  defp notify_host(socket), do: socket
+
+  @doc """
+  What the panel knows about the agent's connection: `connected?`, and the
+  `provider` ("claude" or "chatgpt"), `plan` and `account` when connected.
+  """
+  def summary(%{running?: running?, claude: claude, harness: harness, ai_login: ai_login}) do
+    connected? = running? or claude.status == :connected
+
+    cond do
+      not connected? ->
+        %{connected?: false, provider: nil, plan: nil, account: nil}
+
+      harness == "codex" ->
+        %{connected?: true, provider: "chatgpt", plan: nil, account: nil}
+
+      true ->
+        login = connected_login(claude, ai_login) || %{}
+
+        %{
+          connected?: true,
+          provider: "claude",
+          plan: Map.get(login, :plan),
+          account: Map.get(login, :account)
+        }
+    end
   end
 
   # ── Markup ──────────────────────────────────────────────────────────
@@ -367,7 +435,7 @@ defmodule PlatformWeb.ConnectAi.Panel do
 
       <div :if={!@connected?} class="space-y-4">
         <form
-          :if={@can_act?}
+          :if={@can_act? and @picker?}
           id={"#{@prefix}-options"}
           phx-change="select"
           phx-target={@myself}

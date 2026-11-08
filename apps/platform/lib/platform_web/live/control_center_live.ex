@@ -19,6 +19,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Repo
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
+  alias PlatformWeb.ConnectAi.Panel
   alias PlatformWeb.ControlCenter.CharacterBuilder
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.AgentCrudEvents
@@ -170,6 +171,8 @@ defmodule PlatformWeb.ControlCenterLive do
 
   @impl true
   def handle_info({:agent_host_status, _event}, socket) do
+    # The builder's AI step (task 01a1b84b stage 2) turns connected by itself.
+    if socket.assigns.builder, do: Panel.refresh(CharacterBuilder.ai_panel_id())
     {:noreply, refresh_native(socket)}
   end
 
@@ -191,6 +194,15 @@ defmodule PlatformWeb.ControlCenterLive do
      socket
      |> assign(:builder, nil)
      |> put_flash(:info, "#{agent.name} is alive")
+     |> push_patch(to: ~p"/control/#{agent.slug}")}
+  end
+
+  # Closed after step 7 created the agent early (task 01a1b84b stage 2): the
+  # agent exists, so the page lands on it. Nothing is deleted.
+  def handle_info({:character_builder, {:left, %Agent{} = agent}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:builder, nil)
      |> push_patch(to: ~p"/control/#{agent.slug}")}
   end
 

@@ -16,8 +16,20 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Platform.AgentHost.Reconciler
-  alias Platform.Agents.{Agent, Archetypes, Character, ColorPalette, WorkspaceFile}
+  import Platform.AsyncAssertions
+
+  alias Platform.AgentHost.{FakeHost, Reconciler}
+
+  alias Platform.Agents.{
+    Agent,
+    Archetypes,
+    Burrow,
+    Character,
+    ColorPalette,
+    NativeAgents,
+    WorkspaceFile
+  }
+
   alias Platform.Chat.Space
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Repo
@@ -96,7 +108,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
   # ── Inventory, every step, both layouts ───────────────────────────
 
   describe "inventory" do
-    test "the shell on every step: ftop, seven dots, mini and bside except on reveal", %{
+    test "the shell on every step: ftop, eight dots, mini and bside except on reveal", %{
       conn: conn
     } do
       for {id, i} <- Enum.with_index(@steps) do
@@ -105,10 +117,10 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
 
         assert has_element?(view, "#character-builder.ba-flow .ba-modal[role=dialog]")
         assert has_element?(view, ".ba-ftop")
-        assert count(view, ".ba-dots i") == 7
+        assert count(view, ".ba-dots i") == 8
         assert count(view, ".ba-dots i.on") == 1
         assert count(view, ".ba-dots i.done") == i
-        assert attr(view, ".ba-dots", "aria-label") == ["Step #{i + 1} of 7"]
+        assert attr(view, ".ba-dots", "aria-label") == ["Step #{i + 1} of 8"]
 
         if i == 0 do
           assert has_element?(view, ".ba-ftop .tbtn.muted#ba-cancel", "Cancel")
@@ -126,7 +138,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
           assert has_element?(view, ".ba-ffoot .ba-btn.ag.full#ba-life", "Bring Forge to life")
           assert has_element?(view, ".ba-ffoot .ba-link#ba-restart", "Change something")
         else
-          label = if id == "voice", do: "Reveal", else: "Next"
+          label = if id == "ai", do: "Reveal", else: "Next"
           assert has_element?(view, ".ba-ffoot .ba-btn.ag.full#ba-next", label)
           assert has_element?(view, ".ba-bside small", "live preview")
           assert text(view, "#ba-mini span") =~ "Builder · Orange"
@@ -608,6 +620,309 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
       assert attr(view, ".ba-swatches input[checked]", "value") == ["indigo"]
       pick_color(view, "not-a-slot")
       assert slot(view) == ["indigo"]
+    end
+  end
+
+  # ── Step 7: Which AI should it use (task 01a1b84b stage 2) ────────
+
+  describe "step 7: which AI" do
+    setup do
+      previous = Application.get_env(:platform, PlatformWeb.ConnectAiLive)
+
+      Application.put_env(
+        :platform,
+        PlatformWeb.ConnectAiLive,
+        Keyword.put(previous || [], :claude_login_timeout_ms, 500)
+      )
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, PlatformWeb.ConnectAiLive, previous),
+          else: Application.delete_env(:platform, PlatformWeb.ConnectAiLive)
+      end)
+
+      fake = start_supervised!({FakeHost, report_after_ms: 0})
+      assert_eventually(fn -> Reconciler.host_pid() == fake end, 3_000)
+      %{fake: fake}
+    end
+
+    defp pick_ai(view, provider), do: click(view, ~s{#ba-ai-#{provider}})
+
+    # The step's own markup (the page around it has warning tokens of its own).
+    defp step_html(view) do
+      view
+      |> render()
+      |> LazyHTML.from_document()
+      |> LazyHTML.query("#ba-step-ai")
+      |> LazyHTML.to_html()
+    end
+
+    defp new_agent(before), do: Repo.one!(from(a in Agent, where: a.id not in ^before))
+    defp agent_ids, do: Repo.all(from(a in Agent, select: a.id))
+
+    test "inventory: dot 7 of 8, title, subhead, two tiles in provider order, skip line, Reveal enabled",
+         %{conn: conn} do
+      view = open(conn, "ai")
+      assert step(view) == "ai"
+      assert count(view, ".ba-dots i") == 8
+      assert attr(view, ".ba-dots", "aria-label") == ["Step 7 of 8"]
+      assert has_element?(view, ~s{.ba-dots i.on[title="AI"]})
+      assert has_element?(view, "#ba-step-ai .ba-h1", "Which AI should Forge use?")
+
+      assert has_element?(
+               view,
+               "#ba-step-ai .ba-sub",
+               "Sign in with a plan you already pay for. No API key."
+             )
+
+      order = Enum.map(PlatformWeb.ConnectAiLive.choices(), &Atom.to_string/1)
+      assert attr(view, "#ba-ai .ba-ai-tiles .ba-class", "data-provider") == order
+      assert order == ["codex", "claude_subscription"]
+      assert has_element?(view, ~s{#ba-ai-claude_subscription[aria-pressed="false"] b}, "Claude")
+      assert has_element?(view, "#ba-ai-claude_subscription span", "Pro or Max plan")
+      assert has_element?(view, ~s{#ba-ai-codex[aria-pressed="false"] b}, "ChatGPT")
+      assert has_element?(view, "#ba-ai-codex span", "Your ChatGPT plan")
+      assert count(view, "#ba-ai img, #ba-ai svg") == 0
+
+      assert has_element?(
+               view,
+               "#ba-ai-later.ba-link",
+               "Not now? Connect from Forge's page later."
+             )
+
+      assert has_element?(view, "#ba-skip", "Skip")
+      assert has_element?(view, ".ba-ffoot #ba-next.ba-btn.ag.full", "Reveal")
+      refute has_element?(view, "#ba-next[disabled]")
+      refute has_element?(view, "#ba-ai-panel")
+      refute has_element?(view, ".ba-card .vc[data-runs-on]")
+      refute has_element?(view, "#ba-mini-runs-on")
+      # The retired title appears nowhere, not even as a literal here.
+      refute render(view) =~ Enum.join(["Connect", "a", "brain"], " ")
+      refute step_html(view) =~ "warning"
+    end
+
+    test "Skip creates nothing; Bring to life then makes a built_in agent with no connection", %{
+      conn: conn
+    } do
+      before = counts()
+      ids = agent_ids()
+      view = open(conn, "ai")
+      click(view, "#ba-skip")
+      assert step(view) == "reveal"
+      assert counts() == before
+      refute has_element?(view, ".ba-card.reveal .vc[data-runs-on]")
+
+      click(view, "#ba-life")
+      assert counts().agents == before.agents + 1
+      agent = new_agent(ids)
+      assert agent.runtime_type == "built_in"
+      refute NativeAgents.managed?(agent)
+      assert NativeAgents.ai_login(agent) == nil
+      assert_patch(view, ~p"/control/#{agent.slug}")
+    end
+
+    test "the skip line is a skip too", %{conn: conn} do
+      before = counts()
+      view = open(conn, "ai")
+      click(view, "#ba-ai-later")
+      assert step(view) == "reveal"
+      assert counts() == before
+    end
+
+    test "picking Claude creates one agent and adopts it; the good code connects it and the card says Runs on; Bring to life updates, no duplicate",
+         %{conn: conn, admin: admin} do
+      before = counts()
+      ids = agent_ids()
+      view = open(conn)
+      click(view, ~s{.ba-class[data-cls="scout"]})
+      go_to(view, "name")
+      type_name(view, "Lark")
+      go_to(view, "ai")
+
+      pick_ai(view, "claude_subscription")
+      assert counts().agents == before.agents + 1
+      agent = new_agent(ids)
+      assert agent.name == "Lark"
+      assert has_element?(view, ~s{#ba-ai-claude_subscription[aria-pressed="true"]})
+
+      assert has_element?(
+               view,
+               ~s{#ba-ai-panel[data-agent-id="#{agent.id}"][data-connected="false"]}
+             )
+
+      assert_eventually(fn -> has_element?(view, "a#ba-ai-claude-open") end, 3_000)
+      runtime = NativeAgents.get_managed_runtime(Repo.reload!(agent))
+      assert runtime.harness == "claude_code"
+      assert runtime.managed_by == "install"
+      assert runtime.owner_user_id == admin.id
+      assert has_element?(view, "#ba-ai-panel", "Sign in to Claude")
+      assert has_element?(view, "#ba-ai-panel", "Paste the code Claude shows you")
+      refute has_element?(view, ".ba-card .vc[data-runs-on]")
+
+      view |> element("a#ba-ai-claude-open") |> render_click()
+      assert has_element?(view, "#ba-ai-claude-waiting.text-info", "Waiting for the code")
+      refute step_html(view) =~ "warning"
+      assert has_element?(view, ".ba-ffoot #ba-next", "Reveal")
+      refute has_element?(view, "#ba-next[disabled]")
+
+      code = FakeHost.claude_login_code()
+      view |> form("#ba-ai-claude-form", %{"code" => code}) |> render_submit()
+
+      assert_eventually(
+        fn -> has_element?(view, "#ba-ai-claude-connected", "Connected as owner@example.com") end,
+        3_000
+      )
+
+      assert has_element?(view, "#ba-ai-claude-connected .text-success")
+      refute render(view) =~ code
+
+      # The Runs on row, in the preview the moment sign-in completes.
+      assert_eventually(
+        fn -> has_element?(view, ".ba-bside .ba-card .vc[data-runs-on] b", "Claude Max") end,
+        3_000
+      )
+
+      assert has_element?(view, ".ba-bside .ba-card .vc[data-runs-on] span", "Runs on")
+      assert has_element?(view, "#ba-mini-runs-on", "Runs on · Claude Max")
+
+      assert NativeAgents.ai_login(Repo.reload!(agent)) ==
+               %{"provider" => "claude", "account" => "owner@example.com", "plan" => "max"}
+
+      # Still one agent; a later edit lands on it through Bring to life.
+      assert counts().agents == before.agents + 1
+      go_to(view, "color")
+      pick_color(view, "indigo")
+      go_to(view, "reveal")
+      assert has_element?(view, ".ba-card.reveal .vc[data-runs-on] b", "Claude Max")
+      assert has_element?(view, ".ba-confetti")
+
+      click(view, "#ba-life")
+      assert_patch(view, ~p"/control/#{agent.slug}")
+      assert counts().agents == before.agents + 1
+      assert Repo.aggregate(from(a in Agent, where: a.name == "Lark"), :count) == 1
+      agent = Repo.reload!(agent)
+      assert agent.color == "indigo"
+      assert NativeAgents.get_managed_runtime(agent).harness == "claude_code"
+    end
+
+    test "a ChatGPT pick reaches connected through the fake device login", %{conn: conn} do
+      before = counts()
+      ids = agent_ids()
+      view = open(conn, "ai")
+      pick_ai(view, "codex")
+      assert counts().agents == before.agents + 1
+      agent = new_agent(ids)
+
+      assert_eventually(
+        fn -> has_element?(view, "#ba-ai-code", FakeHost.device_code()) end,
+        3_000
+      )
+
+      assert has_element?(view, "#ba-ai-panel", "Sign in to ChatGPT")
+      assert has_element?(view, "#ba-ai-panel", "Enter this code there:")
+      assert NativeAgents.get_managed_runtime(Repo.reload!(agent)).harness == "codex"
+
+      :ok = FakeHost.complete(agent.id)
+
+      assert_eventually(
+        fn -> has_element?(view, "#ba-ai-codex-connected", "Connected to ChatGPT") end,
+        3_000
+      )
+
+      assert_eventually(
+        fn -> has_element?(view, ".ba-bside .ba-card .vc[data-runs-on] b", "ChatGPT") end,
+        3_000
+      )
+
+      assert has_element?(view, "#ba-mini-runs-on", "Runs on · ChatGPT")
+      refute render(view) =~ "Disconnect"
+      assert counts().agents == before.agents + 1
+    end
+
+    for how <- [:escape, :scrim, :cancel] do
+      test "leaving by #{how} after the early create opens the agent's page, deletes nothing", %{
+        conn: conn
+      } do
+        before = counts()
+        ids = agent_ids()
+        view = open(conn, "ai")
+        pick_ai(view, "claude_subscription")
+        agent = new_agent(ids)
+
+        case unquote(how) do
+          :escape ->
+            view |> element("#character-builder") |> render_keydown(%{"key" => "Escape"})
+
+          :scrim ->
+            view |> with_target("#character-builder") |> render_click("close", %{})
+
+          :cancel ->
+            go_to(view, "class")
+            click(view, "#ba-cancel")
+        end
+
+        assert_patch(view, ~p"/control/#{agent.slug}")
+        refute has_element?(view, "#character-builder")
+        assert counts().agents == before.agents + 1
+        assert Repo.reload!(agent)
+      end
+    end
+
+    test "a member who may not create sees the tiles disabled like Bring to life, and a forged pick writes nothing",
+         %{conn: conn} do
+      user = World.create_user!()
+
+      World.plain_member!(
+        user,
+        Repo.get!(Platform.Tenancy.Org, Platform.TenancyFixtures.acme_org_id())
+      )
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      before = counts()
+      view = open(conn, "ai")
+      assert count(view, ~s{#ba-ai .ba-class[aria-disabled="true"][data-locked="true"]}) == 2
+      refute has_element?(view, "#ba-ai .ba-class[phx-click]")
+      assert has_element?(view, "#ba-ai-locked", CharacterBuilder.locked_line())
+
+      view
+      |> with_target("#character-builder")
+      |> render_click("pick_ai", %{"provider" => "claude_subscription"})
+
+      assert counts() == before
+      refute has_element?(view, "#ba-ai-panel")
+    end
+
+    test "B3: with Burrow connected, the new agent's step shows not connected and inherits nothing",
+         %{conn: conn, admin: admin} do
+      {:ok, burrow} = Burrow.ensure(admin.id, "claude_code")
+
+      :ok =
+        Reconciler.agent_state(Reconciler.host_pid(), %{
+          "agent_id" => burrow.id,
+          "state" => "running"
+        })
+
+      assert_eventually(fn -> Burrow.connected?() end, 3_000)
+
+      {:ok, _} =
+        NativeAgents.put_ai_login(burrow, %{
+          "provider" => "claude",
+          "account" => "burrow@example.com",
+          "plan" => "max"
+        })
+
+      ids = agent_ids()
+      view = open(conn, "ai")
+      refute has_element?(view, ".ba-card .vc[data-runs-on]")
+      pick_ai(view, "claude_subscription")
+      agent = new_agent(ids)
+      assert_eventually(fn -> has_element?(view, "a#ba-ai-claude-open") end, 3_000)
+      assert has_element?(view, ~s{#ba-ai-panel[data-connected="false"]})
+      refute has_element?(view, "#ba-ai-connected")
+      refute has_element?(view, ".ba-card .vc[data-runs-on]")
+      refute render(view) =~ "burrow@example.com"
+      refute render(view) =~ "Burrow's account"
+      assert NativeAgents.ai_login(Repo.reload!(agent)) == nil
     end
   end
 end

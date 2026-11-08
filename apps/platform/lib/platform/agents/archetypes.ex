@@ -403,6 +403,7 @@ defmodule Platform.Agents.Archetypes do
     {"portrait", "Its face"},
     {"personality", "Its personality"},
     {"voice", "How it talks"},
+    {"ai", "AI"},
     {"reveal", "Meet your agent"}
   ]
 
@@ -468,6 +469,6 @@ defmodule Platform.Agents.Archetypes do
   @doc "The four Try-it prompts and each preset's reply to them."
   def samples, do: @samples
 
-  @doc "The builder's seven steps: id and title."
+  @doc "The builder's eight steps: id and title."
   def steps, do: @steps
 end
