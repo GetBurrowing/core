@@ -20,6 +20,7 @@ defmodule Platform.Access.RoleAdminTest do
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation.ToolAuthorization
   alias Platform.Repo
+  alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
   setup do
@@ -404,6 +405,61 @@ defmodule Platform.Access.RoleAdminTest do
                Caps.for_runtime(ctx.runtime)
 
       assert {:error, :forbidden} = ToolAuthorization.authorize("prototype_publish", ctx.runtime)
+    end
+  end
+
+  # ── read-only lookups (task 01a1a399) ────────────────────────────────
+
+  describe "list_builtin_roles/0" do
+    test "is exactly admin, member and guest, all built-in, ordered by key", _ctx do
+      assert [
+               %Role{key: "admin", builtin: true},
+               %Role{key: "member", builtin: true},
+               %Role{key: "guest", builtin: true}
+             ] = RoleAdmin.list_builtin_roles()
+    end
+  end
+
+  describe "assignable_principals/2" do
+    test "returns org a's internal members and the agents their members own", ctx do
+      actor = scope(member!(ctx.a, "admin"))
+      owner = member!(ctx.a)
+      other = member!(ctx.a)
+      b_member = member!(ctx.b)
+      external = member!(ctx.a)
+      {:ok, _} = Tenancy.mark_membership_external(%{user_id: external.id, org_id: ctx.a})
+      {_, agent} = runtime!(owner)
+
+      assert {:ok, %{users: users, agents: agents}} =
+               RoleAdmin.assignable_principals(actor, ctx.a)
+
+      user_ids = Enum.map(users, fn {id, _, _} -> id end)
+      assert owner.id in user_ids
+      assert other.id in user_ids
+      refute b_member.id in user_ids
+      refute external.id in user_ids
+
+      assert [{agent_id, _}] = agents
+      assert agent_id == agent.id
+    end
+
+    test "is forbidden for a member actor and for an org-b admin querying org a", ctx do
+      member = scope(member!(ctx.a))
+      b_admin = scope(member!(ctx.b, "admin"))
+
+      assert {:error, :forbidden} = RoleAdmin.assignable_principals(member, ctx.a)
+      assert {:error, :forbidden} = RoleAdmin.assignable_principals(b_admin, ctx.a)
+    end
+  end
+
+  describe "agents_owned_by/1" do
+    test "returns exactly the owner's agent names, [] for an owner with none", ctx do
+      owner = member!(ctx.a)
+      {_, agent} = runtime!(owner)
+      nobody = member!(ctx.a)
+
+      assert RoleAdmin.agents_owned_by(owner.id) == [agent.name]
+      assert RoleAdmin.agents_owned_by(nobody.id) == []
     end
   end
 end

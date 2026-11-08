@@ -40,6 +40,7 @@ defmodule Platform.Access.RoleAdmin do
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Repo
+  alias Platform.Tenancy.OrgMembership
 
   @default_rule "membership_org"
 
@@ -170,6 +171,77 @@ defmodule Platform.Access.RoleAdmin do
   end
 
   def list_assignments_for_role(_actor, _role_key), do: {:error, :forbidden}
+
+  # ── read-only lookups ────────────────────────────────────────────────
+
+  @doc "The built-in roles (`admin`, `member`, `guest`), ordered by key. Global and \nread-only, so no actor or org is required."
+  @spec list_builtin_roles() :: [Role.t()]
+  def list_builtin_roles do
+    Repo.all(from(r in Role, where: r.builtin, order_by: r.key))
+  end
+
+  @doc """
+  The org's internal members (users whose `OrgMembership` in `org_id` is
+  non-external) and the agents whose runtime owner is one of them — the
+  assignee candidates the role editor offers. Gated through `authorize/2`
+  like every RoleAdmin call: a member actor or another org's admin gets
+  `{:error, :forbidden}`.
+
+  Users come back as `{id, name, email}`, agents as `{id, name}` tuples,
+  the shape the LiveView builds assignee labels from.
+  """
+  @spec assignable_principals(Scope.t(), binary()) ::
+          {:ok, %{users: [{binary(), String.t(), String.t()}], agents: [{binary(), String.t()}]}}
+          | {:error, :forbidden}
+  def assignable_principals(%Scope{} = actor, org_id) when is_binary(org_id) do
+    with :ok <- authorize(actor, org_id) do
+      users =
+        Repo.all(
+          from(u in User,
+            join: m in OrgMembership,
+            on: m.user_id == u.id and m.org_id == ^org_id and m.external == false,
+            order_by: [asc: u.name],
+            select: {u.id, u.name, u.email}
+          )
+        )
+
+      owner_ids = Enum.map(users, &elem(&1, 0))
+
+      agents =
+        Repo.all(
+          from(a in Agent,
+            join: r in AgentRuntime,
+            on: r.id == a.runtime_id or r.agent_id == a.id,
+            where: r.owner_user_id in ^owner_ids,
+            distinct: a.id,
+            order_by: [asc: a.id],
+            select: {a.id, a.name}
+          )
+        )
+
+      {:ok, %{users: users, agents: agents}}
+    end
+  end
+
+  def assignable_principals(_actor, _org_id), do: {:error, :forbidden}
+
+  @doc """
+  The names of the agents `user_id` owns, by id — the copy the unassign
+  confirmation shows when an owner's agents lose a role with them.
+  """
+  @spec agents_owned_by(binary()) :: [String.t()]
+  def agents_owned_by(user_id) do
+    Repo.all(
+      from(a in Agent,
+        join: r in AgentRuntime,
+        on: r.id == a.runtime_id or r.agent_id == a.id,
+        where: r.owner_user_id == ^user_id,
+        distinct: a.id,
+        order_by: [asc: a.id],
+        select: a.name
+      )
+    )
+  end
 
   # ── lifting an owner cap ──────────────────────────────────────────────
 
