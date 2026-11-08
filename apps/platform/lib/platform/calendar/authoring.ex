@@ -189,6 +189,41 @@ defmodule Platform.Calendar.Authoring do
   def save(_scope, _base, _attrs), do: {:error, :forbidden}
 
   @doc """
+  `save/3` for a draft an agent left (`Platform.Calendar.Draft`, task
+  01a1b8a5 stage 3). Options: `agent_draft:` the draft's id and
+  `resolved:` the ids of the clarifications the owner answered in the
+  editor.
+
+  In one transaction: lock the owner's draft, refuse it when it is spent
+  (`:saved`), `:expired`, someone else's (`:not_found`) or still has an
+  unanswered attendee question (`:unresolved`), then `save/3`, then mark
+  the draft saved. So the same draft saves at most once, and a refusal
+  anywhere writes nothing. Without `agent_draft:` this is `save/3`.
+  """
+  @spec save(Scope.t(), EventDraft.t(), map(), keyword()) :: {:ok, result()} | {:error, term()}
+  def save(scope, base, attrs, opts) when is_list(opts) do
+    case Keyword.get(opts, :agent_draft) do
+      nil ->
+        save(scope, base, attrs)
+
+      draft_id ->
+        transaction(fn ->
+          with {:ok, draft} <-
+                 Platform.Calendar.Draft.lock_for_save(
+                   scope,
+                   draft_id,
+                   Keyword.get(opts, :resolved, [])
+                 ),
+               {:ok, result} <- save(scope, base, attrs),
+               {:ok, _} <-
+                 Platform.Calendar.Draft.mark_saved(draft, result.event && result.event.id) do
+            {:ok, result}
+          end
+        end)
+    end
+  end
+
+  @doc """
   Delete the draft's event. A call record is deleted only by
   `Meetings.delete_meeting_for_user/2`, under its lifecycle rule (an upcoming
   call is `:not_deletable`; cancel it first), and a refusal leaves the native

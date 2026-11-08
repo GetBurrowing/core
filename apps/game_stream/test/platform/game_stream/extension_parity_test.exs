@@ -534,18 +534,20 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :ok
     end
 
-    # Calendar task 01a16991 is additive to both Play flag states. The frozen
-    # oracle below still checks every earlier definition byte for byte.
+    # Calendar task 01a16991 (and calendar_draft, task 01a1b8a5 stage 3) is
+    # additive to both Play flag states. The frozen oracle below still checks
+    # every earlier definition byte for byte.
     defp pre_calendar_tool_definitions do
       {calendar, prior} =
         Enum.split_with(
           ToolSurface.tool_definitions(),
-          &(&1.name in ["calendar_list", "calendar_propose"])
+          &(&1.name in ["calendar_list", "calendar_propose", "calendar_draft"])
         )
 
       assert Enum.map(calendar, &{&1.name, &1.bundle}) == [
                {"calendar_list", "context_read"},
-               {"calendar_propose", "context_read"}
+               {"calendar_propose", "context_read"},
+               {"calendar_draft", "context_read"}
              ]
 
       prior

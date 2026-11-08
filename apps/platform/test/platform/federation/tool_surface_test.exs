@@ -197,11 +197,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +2 owner-granted Calendar tools (task 01a16991 stage 5).
       # +1 `project_create` in `task` (task 01a19aa4 stage 1).
       # +1 `space_rename` in `space` (task 01a19948 stage 2).
-      assert length(tools) == 155
+      # +1 write-free `calendar_draft` in `context_read` (task 01a1b8a5 stage 3).
+      assert length(tools) == 156
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names
       assert "calendar_propose" in tool_names
+      assert "calendar_draft" in tool_names
       assert "task_close_as_delivered" in tool_names
       assert "task_delivery_candidate_list" in tool_names
       assert "send_media" in tool_names

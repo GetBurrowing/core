@@ -44,6 +44,79 @@ defmodule Platform.Federation.CalendarTools do
           "When the Calendar owner explicitly delegated reading or scheduling to this agent. Use a stable request_key to retry changes safely."
       })
     end)
+    |> Kernel.++([draft_definition()])
+  end
+
+  # Task 01a1b8a5 stage 3. Kept out of the shared `returns`/`limitations`
+  # above so calendar_list and calendar_propose stay byte for byte.
+  defp draft_definition do
+    %{
+      name: "calendar_draft",
+      description:
+        "Prepare an event for the Calendar owner to review and save themselves. Write-free: creates no event, meeting, invitation, busy hold or Inbox item (calendar_propose is the tool that reserves time). Pass resolved values only: start/end as ISO 8601 with an offset, or as local wall time read in time_zone; attendees by user_id, email or name. Ambiguous names and local times a daylight-saving change repeats or skips come back as clarifications to ask the owner about. Same request_key returns the original draft.",
+      parameters: %{
+        owner_id: %{type: "string", required: true, description: "The Calendar owner's user id."},
+        request_key: %{
+          type: "string",
+          required: true,
+          description:
+            "The request key from the owner's Calendar message, or your own stable key."
+        },
+        time_zone: %{
+          type: "string",
+          required: true,
+          description: "IANA zone the owner gave (for example America/Chicago)."
+        },
+        title: %{type: "string", description: "Event title."},
+        start: %{
+          type: "string",
+          description:
+            "Start, ISO 8601. With an offset it is that instant; without one it is local time in time_zone. For all_day, a date."
+        },
+        end: %{
+          type: "string",
+          description: "End, same format as start. For all_day, the last day."
+        },
+        all_day: %{type: "boolean"},
+        category: %{
+          type: "string",
+          enum: ["event", "focus", "ooo"],
+          schema: %{type: "string", enum: ["event", "focus", "ooo"]},
+          description: "event (default), focus (Focus time) or ooo (Out of office)."
+        },
+        visibility: %{
+          type: "string",
+          enum: ["busy", "details"],
+          schema: %{type: "string", enum: ["busy", "details"]},
+          description: "details (default) or busy."
+        },
+        call_enabled: %{type: "boolean", description: "Add a Burrow call. Off unless asked."},
+        project_id: %{type: "string", description: "Project to hold a Burrow call."},
+        notes: %{type: "string"},
+        attendees: %{
+          type: "array",
+          schema: %{
+            type: "array",
+            items: %{
+              type: "object",
+              properties: %{
+                user_id: %{type: "string"},
+                email: %{type: "string"},
+                name: %{type: "string"}
+              }
+            }
+          },
+          description:
+            "People, each an object with user_id (from principal_search), email, or name. A name matching several people is a clarification, never a pick."
+        }
+      },
+      returns:
+        "%{status, url, expires_at, clarifications, issues}; status is ready, needs_clarification or incomplete. url opens the draft in Calendar for the owner only.",
+      limitations:
+        "Authenticated active runtime, owner Calendar permission and live per-agent create grant required. The link works only for the signed-in owner, for 24 hours, and saves at most once. Nothing is saved without the owner's Save.",
+      when_to_use:
+        "When the owner asks you, from Calendar or chat, to schedule something they will review first. Send the url back to them with any clarification questions."
+    }
   end
 
   def execute(tool, args, context) do
@@ -82,14 +155,48 @@ defmodule Platform.Federation.CalendarTools do
                  ) do
             {:ok, %{id: consent.id, state: consent.state, inbox_url: "/inbox"}}
           end
+
+        "calendar_draft" ->
+          case Platform.Calendar.Draft.create(scope, args["owner_id"], args) do
+            {:ok, draft, _created_or_existing} -> {:ok, draft_result(draft)}
+            {:error, {:invalid, messages}} -> {:invalid, messages}
+            error -> error
+          end
       end
     else
       _ -> {:error, :forbidden}
     end
     |> case do
-      {:ok, _} = result -> result
-      _ -> {:error, %{error: "Calendar grant denied or change unavailable", recoverable: false}}
+      {:ok, _} = result ->
+        result
+
+      {:invalid, messages} ->
+        {:error, %{error: "calendar_draft: " <> Enum.join(messages, "; "), recoverable: true}}
+
+      _ ->
+        {:error, %{error: "Calendar grant denied or change unavailable", recoverable: false}}
     end
+  end
+
+  defp draft_result(draft) do
+    %{
+      status: Platform.Calendar.Draft.status(draft),
+      url: Platform.Calendar.Draft.url(draft),
+      expires_at: DateTime.to_iso8601(draft.expires_at),
+      clarifications:
+        Enum.map(draft.clarifications, fn c ->
+          %{
+            kind: c["kind"],
+            question: c["question"],
+            candidates:
+              for(
+                candidate <- c["candidates"] || [],
+                do: Map.take(candidate, ["user_id", "name"])
+              )
+          }
+        end),
+      issues: draft.issues
+    }
   end
 
   defp instant(value) when is_binary(value), do: DateTime.from_iso8601(value)

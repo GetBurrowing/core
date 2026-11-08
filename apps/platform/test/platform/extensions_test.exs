@@ -1022,21 +1022,27 @@ defmodule Platform.ExtensionsTest do
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
 
-      # Calendar task 01a16991 adds two owner-grant tools. Pin their contract
-      # explicitly and retain the existing byte oracle for every older tool.
+      # Calendar task 01a16991 adds two owner-grant tools, and task 01a1b8a5
+      # stage 3 the write-free calendar_draft. Pin their contract explicitly
+      # and retain the existing byte oracle for every older tool.
       {calendar, defs} =
-        Enum.split_with(defs, &(&1.name in ["calendar_list", "calendar_propose"]))
+        Enum.split_with(
+          defs,
+          &(&1.name in ["calendar_list", "calendar_propose", "calendar_draft"])
+        )
 
       assert Enum.map(calendar, &{&1.name, &1.bundle}) == [
                {"calendar_list", "context_read"},
-               {"calendar_propose", "context_read"}
+               {"calendar_propose", "context_read"},
+               {"calendar_draft", "context_read"}
              ]
 
       by_name = Map.new(calendar, &{&1.name, &1})
 
       for {name, required} <- [
             {"calendar_list", ~w(owner_id from to)a},
-            {"calendar_propose", ~w(owner_id operation attributes request_key)a}
+            {"calendar_propose", ~w(owner_id operation attributes request_key)a},
+            {"calendar_draft", ~w(owner_id request_key time_zone)a}
           ] do
         actual =
           for {key, parameter} <- by_name[name].parameters, parameter[:required] == true, do: key

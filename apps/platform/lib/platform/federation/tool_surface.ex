@@ -4349,8 +4349,9 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Messaging tools ──────────────────────────────────────────────────────
 
-  def execute(tool, args, context) when tool in ["calendar_list", "calendar_propose"],
-    do: Platform.Federation.CalendarTools.execute(tool, args, context)
+  def execute(tool, args, context)
+      when tool in ["calendar_list", "calendar_propose", "calendar_draft"],
+      do: Platform.Federation.CalendarTools.execute(tool, args, context)
 
   def execute("send_media", args, context) do
     space_id = Map.get(args, "space_id")

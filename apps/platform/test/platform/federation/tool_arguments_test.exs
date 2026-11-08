@@ -235,7 +235,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # 229 adds space_rename's two HONEST declarations (task 01a19948 stage 2):
   # space_id and name are read only through require_string/3; neither is
   # aliased, defaulted or resolved from caller context.
-  @surveyed_required_count 229
+  # 232 adds calendar_draft's owner_id, request_key and time_zone (task
+  # 01a1b8a5 stage 3). HONEST: CalendarTools reads each under its declared
+  # key only; AgentAccess.draft_authority/2 refuses a missing owner, and
+  # Draft.create/4 refuses a missing request_key or time_zone in words.
+  @surveyed_required_count 232
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather
@@ -311,7 +315,9 @@ defmodule Platform.Federation.ToolArgumentsTest do
          "operation" => "create",
          "attributes" => %{},
          "request_key" => "request"
-       }}
+       }},
+      {"calendar_draft",
+       %{"owner_id" => "owner", "request_key" => "request", "time_zone" => "Etc/UTC"}}
     ]
 
     for {tool, args} <- cases do
