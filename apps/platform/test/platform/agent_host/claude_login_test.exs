@@ -253,8 +253,9 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       Reconciler.claude_logout(agent.id, "clear")
       {:ok, _} = in_other_process(fn -> AgentHost.claude_login_start(owner, agent) end)
 
-      # The Task has exited: its pending login went with it.
-      refute Reconciler.claude_login_pending?(agent.id)
+      # Task.await observes the caller's exit; the Reconciler receives its
+      # own DOWN independently, so wait for that cleanup before starting again.
+      assert_eventually(fn -> not Reconciler.claude_login_pending?(agent.id) end)
       assert {:ok, _} = AgentHost.claude_login_start(admin, agent)
       assert {:ok, _} = AgentHost.claude_login_submit(admin, agent, good_code())
     end
