@@ -107,6 +107,10 @@ defmodule Platform.Design.PlaceholderContrastTest do
     # The character builder's Try-it field, "Ask <name> anything…" (task
     # 01a1b6ad stage 2): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/character_builder.ex" => :global_default,
+    # The agent page's Memory & notes field, "Tell it something to remember…"
+    # (task 01a1b6ad stage 4): the comp's .ba-addnote input, no placeholder:
+    # utility, so the base ::placeholder rule.
+    "platform_web/live/control_center/agent_page.ex" => :global_default,
     # The agent page's Grant panel "Role name" field (task 01a1a2e4-9265
     # stage 3): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/runtime_panel.ex" => :global_default,

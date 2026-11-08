@@ -1975,6 +1975,38 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  The day each of `tasks` was shipped, `%{task_id => Date}`, for the tasks
+  whose status is `done` (task 01a1b6ad stage 4: the Stats tab's streak and
+  14-day bars). The day is that of the task's latest recorded transition to
+  `done` (`Platform.Tasks.PhaseTransitions`); a done task with no such row
+  (moved before the log existed, or inserted done) falls back to its
+  `updated_at`. Tasks in any other status are absent.
+  """
+  @spec done_dates(list(Task.t())) :: %{optional(binary()) => Date.t()}
+  def done_dates(tasks) when is_list(tasks) do
+    done = Enum.filter(tasks, &(&1.status == "done"))
+    ids = Enum.map(done, & &1.id)
+
+    logged =
+      if ids == [] do
+        %{}
+      else
+        from(t in Platform.Tasks.PhaseTransition,
+          where: t.task_id in ^ids and t.to_status == "done",
+          group_by: t.task_id,
+          select: {t.task_id, max(t.occurred_at)}
+        )
+        |> Repo.all()
+        |> Map.new()
+      end
+
+    Map.new(done, fn task ->
+      at = Map.get(logged, task.id) || task.updated_at
+      {task.id, DateTime.to_date(at)}
+    end)
+  end
+
+  @doc """
   Returns tasks whose `updated_at` falls within the given window.
 
   Used by the Historian's activity digest to surface tasks that changed

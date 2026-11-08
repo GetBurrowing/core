@@ -11306,6 +11306,71 @@ textarea.cal-input {
 .ba-advanced{padding:16px 0;font-size:initial;line-height:normal}
 .ba-advhead{display:flex;align-items:center;justify-content:space-between;padding:0 16px}
 .ba-advhead .ba-lbl{margin:0}
+/* Stage 4: Connections, Memory & notes, Stats (comp graph, memory and
+   stats blocks). The comp draws a 340x400 graph on the phone and a 680x440
+   one on the desktop (its mob flag); both render and the media query picks. */
+.ba-gfilters{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:8px}
+.ba-gfilters .ba-chip{height:30px;font-size:12px}
+.ba-graph{position:relative;border-radius:calc(var(--radius-box) * 1.5);background:radial-gradient(circle at 50% 50%,color-mix(in srgb,var(--ag) 10%,var(--color-base-100)),var(--color-base-100) 70%);border:1px solid var(--color-edge);overflow:hidden}
+.ba-graph svg{display:block;width:100%;height:auto}
+.ba-graph svg.d{display:none}
+.ba-graph .edge{stroke:color-mix(in srgb,var(--ag) 45%,var(--color-edge));stroke-linecap:round;fill:none;transition:opacity .2s,stroke .2s}
+.ba-graph .flow{stroke:var(--ag);stroke-dasharray:3 14;stroke-linecap:round;fill:none;opacity:.7;animation:ba-flow 2.6s linear infinite}
+@keyframes ba-flow{to{stroke-dashoffset:-34}}
+.ba-graph .node{cursor:pointer;outline:0}
+.ba-graph .node .float{animation:ba-float 6s ease-in-out infinite;transform-box:fill-box}
+@keyframes ba-float{50%{transform:translateY(-2.5px)}}
+.ba-graph .node circle.bgc{fill:var(--color-base-100);stroke-width:2;transition:all .15s}
+.ba-graph .node:focus-visible circle.bgc{stroke-width:3.5}
+.ba-graph .node text{paint-order:stroke;stroke:var(--color-base-100);stroke-width:3px;stroke-linejoin:round;fill:var(--color-base-content);font-size:11px;font-weight:600;text-anchor:middle;font-family:var(--font-sans)}
+.ba-graph .node text.gl{font-size:14px;dominant-baseline:central;stroke:none}
+.ba-graph .node text.sm{fill:var(--color-subtle);font-size:9.5px;font-weight:500}
+.ba-graph .k-channel circle.bgc{stroke:var(--color-info)}
+.ba-graph .k-project circle.bgc{stroke:var(--color-primary)}
+.ba-graph .k-repo circle.bgc{stroke:var(--color-subtle);stroke-dasharray:4 3}
+.ba-graph .k-tool circle.bgc{stroke:var(--color-subtle)}
+.ba-graph .k-person circle.bgc{stroke:var(--color-base-content)}
+.ba-graph .k-agent circle.bgc{stroke:var(--ag)}
+.ba-graph .node.sel circle.bgc{stroke-width:3.5;fill:color-mix(in srgb,var(--ag) 20%,var(--color-base-100))}
+.ba-graph .node.dim{opacity:.25}
+.ba-graph .edge.dim,.ba-graph .flow.dim{opacity:.08}
+.ba-graph .edge.hot{stroke:var(--ag)}
+.ba-graph .center circle{fill:var(--ag)}
+.ba-graph .center .halo{fill:none;stroke:var(--ag);stroke-width:2;transform-box:fill-box;transform-origin:center;animation:ba-halo 3s ease-out infinite}
+@keyframes ba-halo{from{transform:scale(1);opacity:.6}to{transform:scale(1.8);opacity:0}}
+.ba-glegend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--color-subtle);margin-top:8px}
+.ba-glegend span{display:inline-flex;align-items:center;gap:5px}
+.ba-glegend i{width:10px;height:10px;border-radius:50%;border:2px solid var(--color-subtle);display:inline-block}
+.ba-node{margin-top:12px;border-radius:calc(var(--radius-box) * 1.5);background:var(--color-base-100);border:1px solid var(--color-edge);padding:14px;animation:ba-step .2s ease}
+.ba-node h4{margin:0;font-size:17px;display:flex;align-items:center;gap:8px}
+.ba-node .k{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--color-subtle);font-weight:650}
+.ba-node p{margin:6px 0 0;color:var(--color-subtle);font-size:13px}
+.ba-node ul{margin:10px 0 0;padding:0;list-style:none;font-size:13px}
+.ba-node li{padding:6px 0;border-top:1px solid var(--color-edge);display:flex;gap:8px}
+.ba-node li small{color:var(--color-subtle);margin-left:auto;white-space:nowrap}
+.ba-node .acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.ba-bars{display:flex;align-items:flex-end;gap:2px;height:84px;padding:6px 0 0;border-bottom:1px solid var(--color-edge)}
+.ba-bars i{flex:1;background:var(--ag);border-radius:4px 4px 0 0;min-height:2px;position:relative;opacity:.85;transition:opacity .1s;cursor:pointer}
+.ba-bars i:hover,.ba-bars i.hl{opacity:1;outline:2px solid var(--color-base-content);outline-offset:1px}
+.ba-barax{display:flex;justify-content:space-between;font-size:11px;color:var(--color-subtle);margin-top:4px}
+.ba-bartip{font-size:12px;color:var(--color-subtle);min-height:20px;margin-top:4px}
+.ba-xp{margin-top:8px}
+.ba-xp .sbar{height:10px;border-radius:5px;background:var(--color-base-300);overflow:hidden}
+.ba-xp .sbar i{display:block;height:100%;background:linear-gradient(90deg,color-mix(in srgb,var(--ag) 60%,var(--color-base-100)),var(--ag));border-radius:5px}
+.ba-xp div{display:flex;justify-content:space-between;font-size:12px;margin-top:6px;color:var(--color-subtle)}
+.ba-xp div b{color:var(--color-base-content)}
+.ba-badges{display:flex;gap:8px;flex-wrap:wrap}
+.ba-badges span{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:var(--radius-box);background:var(--color-base-100);border:1px solid var(--color-edge);font-size:12px}
+.ba-mems{display:flex;flex-direction:column;gap:8px}
+.ba-memc{display:flex;gap:10px;align-items:flex-start;background:var(--color-base-100);border:1px solid var(--color-edge);border-radius:calc(var(--radius-box) * 1.5);padding:10px 12px}
+.ba-memc .tx{flex:1;min-width:0;font-size:13px}
+.ba-memc .tx small{display:block;color:var(--color-subtle);font-size:11px;margin-top:3px}
+.ba-memc button{font-size:12px;color:var(--color-subtle);padding:2px 6px}
+.ba-memc button[disabled]{cursor:not-allowed;opacity:.6}
+.ba-addnote{display:flex;gap:8px;margin-top:8px}
+.ba-addnote input{flex:1;min-width:0;height:40px;border-radius:var(--radius-box);border:1px solid var(--color-edge);background:var(--color-base-100);padding:0 12px;outline:0}
+.ba-addnote input:focus{border-color:var(--color-interactive)}
+.ba-group > .ba-gempty{padding:10px 14px}
 @media (max-width: 767.98px){
 .ba-avwrap .ba-por{width:96px!important;height:96px!important}
 .ba-page .ba-voice.ba-cols{display:flex}
@@ -11329,9 +11394,11 @@ textarea.cal-input {
 .ba-tk{grid-template-columns:1fr 1fr}
 .ba-tk .ba-row:nth-last-child(2):nth-child(odd){border-bottom:0!important}
 .ba-tiles{grid-template-columns:repeat(3,1fr)}
+.ba-graph svg.m{display:none}
+.ba-graph svg.d{display:block}
 .ba-page .ba-voice.ba-cols > .ba-vc{display:flex;flex-direction:column;gap:16px;min-width:0}
 .ba-page .ba-voice.ba-cols .ba-vtry,.ba-page .ba-voice.ba-cols .ba-vread{order:0}
 .ba-advanced{padding:20px 8px}
 }
-@media (prefers-reduced-motion: reduce){.ba-page,.ba-avwrap .ring,.ba-pill.st i,.ba-tl div.live::before{animation:none!important}}
+@media (prefers-reduced-motion: reduce){.ba-page,.ba-avwrap .ring,.ba-pill.st i,.ba-tl div.live::before,.ba-graph .flow,.ba-graph .float,.ba-graph .halo,.ba-node{animation:none!important}}
 /* ── end living agent page ── */

@@ -108,6 +108,10 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:page_try, %{})
      |> assign(:page_saved, nil)
      |> assign(:show_card, false)
+     # Stage 4: the Connections filter and node, the Stats bar.
+     |> assign(:page_filter, "all")
+     |> assign(:page_node, nil)
+     |> assign(:page_bar, nil)
      |> assign(:viewer_name, viewer_name(current_user_id))
      # Onboarding flow assigns
      |> assign(:show_onboarding_chooser, false)
@@ -162,6 +166,7 @@ defmodule PlatformWeb.ControlCenterLive do
       |> close_add_space_modal_on_switch(selected_agent)
       |> reset_page_on_switch(selected_agent)
       |> assign(:page_tab, AgentPage.normalize_tab(params["tab"]))
+      |> assign(:page_node, page_node_param(params["node"]))
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
@@ -386,6 +391,13 @@ defmodule PlatformWeb.ControlCenterLive do
     "voice_reset" => :manage_selected,
     "page_toolkit" => :manage_selected,
     "page_mode" => :manage_selected,
+    # Stage 4: Connections, Memory & notes, Stats.
+    "page_filter" => :ui,
+    "page_node" => :ui,
+    "page_bar" => :ui,
+    "page_file" => :ui,
+    "page_note" => :manage_selected,
+    "page_forget" => :manage_selected,
     # Grant panel (task 01a1a2e4-9265 stage 3): org admin of the selected
     # agent's owner org, never :manage_selected (a member owner manages
     # their own agent but must not grant themselves a role).
@@ -961,6 +973,24 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("page_mode", params, socket),
     do: page_event("page_mode", params, socket)
 
+  defp handle_control_event("page_filter", params, socket),
+    do: page_event("page_filter", params, socket)
+
+  defp handle_control_event("page_node", params, socket),
+    do: page_event("page_node", params, socket)
+
+  defp handle_control_event("page_bar", params, socket),
+    do: page_event("page_bar", params, socket)
+
+  defp handle_control_event("page_file", params, socket),
+    do: page_event("page_file", params, socket)
+
+  defp handle_control_event("page_note", params, socket),
+    do: page_event("page_note", params, socket)
+
+  defp handle_control_event("page_forget", params, socket),
+    do: page_event("page_forget", params, socket)
+
   defp handle_control_event("open_grant_panel", params, socket),
     do: GrantEvents.handle("open_grant_panel", params, socket)
 
@@ -1231,6 +1261,9 @@ defmodule PlatformWeb.ControlCenterLive do
             saved={@page_saved}
             show_card={@show_card}
             vault={@overview_counts.vault}
+            filter={@page_filter}
+            node={@page_node}
+            bar={@page_bar}
           >
             <:settings>
               <div
@@ -1445,6 +1478,8 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply,
      socket
      |> assign(:show_advanced, false)
+     |> assign(:page_filter, "all")
+     |> assign(:page_bar, nil)
      |> push_patch(to: ~p"/control/#{agent.slug}?#{[tab: AgentPage.normalize_tab(tab)]}")}
   end
 
@@ -1583,7 +1618,107 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
+  # ── Stage 4: Connections, Memory & notes, Stats ────────────────────
+
+  # A filter chip: Everything or one node kind. Anything else is ignored.
+  defp page_event("page_filter", %{"k" => k}, socket) when is_binary(k) do
+    kinds = ["all" | Enum.map(AgentPageData.kinds(), &elem(&1, 0))]
+    if k in kinds, do: {:noreply, assign(socket, :page_filter, k)}, else: {:noreply, socket}
+  end
+
+  # A node click, or Enter / Space on a focused node: the card shows under
+  # the graph and the id goes in the URL so the view is linkable.
+  defp page_event("page_node", %{"key" => key}, socket) when key not in ["Enter", " "],
+    do: {:noreply, socket}
+
+  defp page_event(
+         "page_node",
+         %{"node" => id},
+         %{assigns: %{selected_agent: %Agent{} = agent, page: %{graph: nodes}}} = socket
+       )
+       when is_binary(id) and is_list(nodes) do
+    if Enum.any?(nodes, &(&1.id == id)) do
+      {:noreply,
+       push_patch(socket, to: ~p"/control/#{agent.slug}?#{[tab: "connections", node: id]}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp page_event("page_bar", %{"i" => i}, socket) do
+    case Integer.parse(to_string(i)) do
+      {n, ""} when n in 0..13 -> {:noreply, assign(socket, :page_bar, n)}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # A workspace file row opens the existing editor (under Advanced
+  # settings) on that file.
+  defp page_event(
+         "page_file",
+         %{"key" => key},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       )
+       when is_binary(key) do
+    if Enum.any?(socket.assigns[:workspace_files] || [], &(&1.file_key == key)) do
+      {:noreply,
+       socket
+       |> assign(:show_advanced, true)
+       |> push_patch(to: ~p"/control/#{agent.slug}?#{[tab: "memory", file: key]}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Tell it something to remember: a long-term memory, from you.
+  defp page_event(
+         "page_note",
+         %{"note" => note},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       )
+       when is_binary(note) do
+    case String.trim(note) do
+      "" ->
+        {:noreply, socket}
+
+      text ->
+        case MemoryContext.append_memory(agent.id, :long_term, String.slice(text, 0, 2000),
+               metadata: %{"source" => "from you"}
+             ) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "#{agent.name} will remember that")
+             |> reload_selected_agent()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not save that note.")}
+        end
+    end
+  end
+
+  # Forget: deletes that memory row, and only that agent's.
+  defp page_event(
+         "page_forget",
+         %{"id" => id},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
+    case MemoryContext.delete_memory(agent.id, to_string(id)) do
+      {:ok, memory} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Forgot: " <> String.slice(memory.content, 0, 32) <> "…")
+         |> reload_selected_agent()}
+
+      {:error, :not_found} ->
+        {:noreply, socket}
+    end
+  end
+
   defp page_event(_event, _params, socket), do: {:noreply, socket}
+
+  defp page_node_param(id) when is_binary(id) and byte_size(id) in 3..60, do: id
+  defp page_node_param(_), do: nil
 
   # A dial, trait or voice change goes through Character.update/3, which
   # rewrites SOUL.md (version + 1) and the agent row. `fun` gets the stored
@@ -1623,7 +1758,8 @@ defmodule PlatformWeb.ControlCenterLive do
         runtime: socket.assigns[:runtime],
         federation_online?: socket.assigns[:federation_online?],
         native: socket.assigns[:native_header],
-        agents: socket.assigns[:agents] || []
+        agents: socket.assigns[:agents] || [],
+        tab: socket.assigns[:page_tab]
       )
 
     assign(socket, :page, page)
@@ -1643,6 +1779,8 @@ defmodule PlatformWeb.ControlCenterLive do
         |> assign(:show_card, false)
         |> assign(:page_try, %{})
         |> assign(:page_saved, nil)
+        |> assign(:page_filter, "all")
+        |> assign(:page_bar, nil)
     end
   end
 

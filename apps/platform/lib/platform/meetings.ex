@@ -4047,6 +4047,21 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  How many meetings `agent_id` has joined: its `meeting_participants` rows
+  (task 01a1b6ad stage 4, the Stats tab's "meetings attended"). A row is
+  one join, so an agent that joins the same room twice counts twice.
+  """
+  @spec count_agent_participations(binary()) :: non_neg_integer()
+  def count_agent_participations(agent_id) when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      from(p in Participant, where: p.agent_id == ^agent_id)
+      |> Repo.aggregate(:count)
+    else
+      0
+    end
+  end
+
+  @doc """
   Record a participant leaving a room.
 
   Finds the most recent active participant record matching the identity,

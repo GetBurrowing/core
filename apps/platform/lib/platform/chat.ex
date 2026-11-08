@@ -3555,6 +3555,61 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  How many messages `agent_id` has authored, in every space (task 01a1b6ad
+  stage 4, the Stats tab's "messages · all spaces"). Deleted and log-only
+  rows are not counted. A malformed id counts nothing.
+  """
+  @spec count_agent_messages(binary()) :: non_neg_integer()
+  def count_agent_messages(agent_id) when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      from(m in Message,
+        where: m.author_agent_id == ^agent_id and is_nil(m.deleted_at) and m.log_only == false
+      )
+      |> Repo.aggregate(:count)
+    else
+      0
+    end
+  end
+
+  @doc """
+  `agent_id`'s message count per space, `%{space_id => count}`, over the
+  same rows `count_agent_messages/1` counts. The Connections graph buckets
+  an edge's weight from it. Spaces it has said nothing in are absent.
+  """
+  @spec agent_message_counts_by_space(binary()) :: %{optional(binary()) => non_neg_integer()}
+  def agent_message_counts_by_space(agent_id) when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      from(m in Message,
+        where: m.author_agent_id == ^agent_id and is_nil(m.deleted_at) and m.log_only == false,
+        group_by: m.space_id,
+        select: {m.space_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+    else
+      %{}
+    end
+  end
+
+  @doc """
+  The human participants of `space_ids`, as `%{user_id => shared_space_count}`:
+  how many of those spaces each user sits in. The Connections graph draws
+  the people an agent shares its spaces with from it. Empty for no spaces.
+  """
+  @spec user_participant_counts([binary()]) :: %{optional(binary()) => pos_integer()}
+  def user_participant_counts([]), do: %{}
+
+  def user_participant_counts(space_ids) when is_list(space_ids) do
+    from(p in Participant,
+      where: p.space_id in ^space_ids and p.participant_type == "user",
+      group_by: p.participant_id,
+      select: {p.participant_id, count(p.space_id, :distinct)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
   The unbounded digest-eligibility predicate for the `messages` corpus —
   every filter that decides whether a `chat_messages` row can ever reach a
   Historian digest, and nothing else. No time bound, no ordering, no select.

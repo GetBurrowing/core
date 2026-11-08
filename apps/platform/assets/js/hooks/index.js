@@ -4,6 +4,7 @@
 // it at the entry `mix platform.extensions.assets` generates from its
 // configured modules. Core never imports a module's hook by name.
 import extensionHooks from "@extensions"
+import AgentStatsBars from "./agent_stats_bars"
 import AppBadge from "./app_badge"
 import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
@@ -133,6 +134,7 @@ export default {
   InlineThread,
   KanbanDragDrop,
   TasksMyListRows,
+  AgentStatsBars,
   LocalTime,
   MessageGestures,
   MessageActionsCopy,

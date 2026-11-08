@@ -65,6 +65,89 @@ defmodule PlatformWeb.ControlCenter.AgentPageTest do
     space
   end
 
+  # Stage 4 seeds. Every row goes through a context function; the two
+  # Repo.update_all calls below only move a timestamp a context cannot set.
+  defp project!(name) do
+    {:ok, project} =
+      Platform.Tasks.create_project(%{name: name, repo_url: "https://example.invalid/r/pg"})
+
+    project
+  end
+
+  defp task!(agent, project, title, status) do
+    {:ok, t} =
+      Platform.Tasks.create_task(%{
+        title: title,
+        project_id: project.id,
+        assignee_type: "agent",
+        assignee_id: agent.id,
+        status: status
+      })
+
+    t
+  end
+
+  defp say!(space, agent, text) do
+    {:ok, p} =
+      case Chat.get_agent_participant(space.id, agent.id) do
+        nil -> Chat.add_agent_participant(space.id, agent)
+        p -> {:ok, p}
+      end
+
+    {:ok, m} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: p.id,
+        content_type: "text",
+        content: text
+      })
+
+    m
+  end
+
+  defp merged!(task) do
+    {:ok, plan} = Platform.Tasks.create_plan(%{task_id: task.id})
+    {:ok, stage} = Platform.Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy"})
+    {:ok, v} = Platform.Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+    {:ok, _} =
+      Platform.Tasks.evaluate_validation(v.id, "passed", %{
+        "merge_sha" => String.duplicate("ab", 20),
+        "merged_by" => "auto_merger"
+      })
+
+    :ok
+  end
+
+  defp meeting!(agent) do
+    {:ok, space} = Chat.create_space(%{kind: "execution"})
+
+    {:ok, room} =
+      %Platform.Meetings.Room{}
+      |> Platform.Meetings.Room.changeset(%{
+        space_id: space.id,
+        livekit_room_name: "space-#{space.id}"
+      })
+      |> Repo.insert()
+
+    {:ok, _} =
+      Platform.Meetings.participant_joined(room, %{agent_id: agent.id, display_name: agent.name})
+
+    :ok
+  end
+
+  defp updated_at!(task, %DateTime{} = at) do
+    import Ecto.Query
+
+    Repo.update_all(from(t in Platform.Tasks.Task, where: t.id == ^task.id),
+      set: [updated_at: at]
+    )
+  end
+
+  defp days_ago(n), do: DateTime.utc_now() |> DateTime.add(-n * 86_400, :second)
+
+  defp memory_count(agent), do: MemoryContext.count_memories(agent.id)
+
   # ── Head and tabs ──────────────────────────────────────────────────
 
   describe "head and tabs" do
@@ -127,13 +210,14 @@ defmodule PlatformWeb.ControlCenter.AgentPageTest do
       assert has_element?(view, "[data-body='overview']")
     end
 
-    test "Connections, Memory & notes and Stats show the tab chrome, body pending", %{
+    test "Connections, Memory & notes and Stats render their bodies (stage 4)", %{
       conn: conn,
       agent: agent
     } do
       for tab <- ~w(connections memory stats) do
         view = open(conn, agent, tab)
-        assert has_element?(view, "#ba-pbody [data-pending='#{tab}']")
+        assert has_element?(view, "#ba-pbody [data-body='#{tab}']")
+        refute has_element?(view, "#ba-pbody [data-pending]")
         assert attr(view, ".ba-ptabs button[aria-selected='true']", "data-tab") == [tab]
       end
     end
@@ -731,6 +815,645 @@ defmodule PlatformWeb.ControlCenter.AgentPageTest do
     end
   end
 
+  # ── Connections (stage 4) ──────────────────────────────────────────
+
+  describe "Connections" do
+    test "the empty state: a fresh builder agent has only its creator, and the comp's copy", %{
+      conn: conn,
+      agent: agent
+    } do
+      view = open(conn, agent, "connections")
+
+      assert has_element?(
+               view,
+               ".ba-gfilters .ba-chip[data-gf='all'][aria-pressed='true']",
+               "Everything"
+             )
+
+      assert has_element?(view, ".ba-gfilters .ba-chip[data-gf='all'] small", "1")
+      assert has_element?(view, ".ba-gfilters .ba-chip[data-gf='person']", "People")
+      refute has_element?(view, ".ba-gfilters .ba-chip[data-gf='channel']")
+      refute has_element?(view, ".ba-gfilters .ba-chip[data-gf='project']")
+      # Both sizes render; app.css shows one per the 768px media query.
+      assert count(view, ".ba-graph svg") == 2
+      assert has_element?(view, ".ba-graph svg.m[viewBox='0 0 340 400']")
+      assert has_element?(view, ".ba-graph svg.d[viewBox='0 0 680 440']")
+      assert has_element?(view, ".ba-graph svg.m .center circle.halo")
+      assert has_element?(view, ".ba-graph svg.m .center text", String.first(agent.name))
+      assert count(view, ".ba-graph svg.m .node") == 1
+      assert has_element?(view, ".ba-graph svg.m .node.k-person[role='button'][tabindex='0']")
+      assert has_element?(view, ".ba-glegend span[data-legend='person']", "☺ Person")
+      refute has_element?(view, ".ba-glegend span[data-legend='channel']")
+      assert has_element?(view, ".ba-glegend span", "line weight = how much they work together")
+
+      assert has_element?(
+               view,
+               "#ba-nodecard .ba-gempty",
+               "Tap a node to see what they do together."
+             )
+
+      refute has_element?(view, "#ba-nodecard .ba-node")
+    end
+
+    test "exactly one node per seeded space and project, counted on the filter chips", %{
+      conn: conn,
+      agent: agent
+    } do
+      alpha = channel!("alpha")
+      beta = channel!("beta")
+      {:ok, _} = Chat.add_agent_participant(alpha.id, agent, attention_mode: "active")
+      {:ok, _} = Chat.add_agent_participant(beta.id, agent, attention_mode: "mention")
+      project = project!("Pg project")
+      task!(agent, project, "One", "in_progress")
+      task!(agent, project, "Two", "done")
+
+      view = open(conn, agent, "connections")
+      assert count(view, ".ba-graph svg.m .node.k-channel") == 2
+      assert count(view, ".ba-graph svg.m .node.k-project") == 1
+      assert count(view, ".ba-graph svg.m .node.k-person") == 1
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.m .node[data-node='c-#{alpha.id}'][aria-label='#alpha']"
+             )
+
+      assert has_element?(view, ".ba-graph svg.m .node[data-node='c-#{beta.id}']")
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.m .node[data-node='p-#{project.id}'][aria-label='Pg project']"
+             )
+
+      assert count(view, ".ba-graph svg.m .edge") == 4
+      assert has_element?(view, ".ba-gfilters [data-gf='all'] small", "4")
+      assert has_element?(view, ".ba-gfilters [data-gf='channel'] small", "2")
+      assert has_element?(view, ".ba-gfilters [data-gf='project'] small", "1")
+      assert has_element?(view, ".ba-gfilters [data-gf='person'] small", "1")
+      # The desktop graph draws the sub label under each node.
+      assert has_element?(
+               view,
+               ".ba-graph svg.d .node[data-node='c-#{alpha.id}'] text.sm",
+               "follows along"
+             )
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.d .node[data-node='p-#{project.id}'] text.sm",
+               "2 tasks"
+             )
+
+      refute has_element?(view, ".ba-graph svg.m .node[data-node='c-#{alpha.id}'] text.sm")
+
+      # One more project moves the project count; the DM is never a node.
+      other = project!("Other")
+      task!(agent, other, "Three", "backlog")
+      view = open(conn, agent, "connections")
+      assert count(view, ".ba-graph svg.m .node.k-project") == 2
+      assert has_element?(view, ".ba-gfilters [data-gf='project'] small", "2")
+      assert has_element?(view, ".ba-gfilters [data-gf='all'] small", "5")
+      refute has_element?(view, ".ba-graph svg.m .node[data-node^='c-'][aria-label*='dm']")
+    end
+
+    test "a filter chip dims the other kinds; an unknown filter is ignored", %{
+      conn: conn,
+      agent: agent
+    } do
+      alpha = channel!("alpha")
+      {:ok, _} = Chat.add_agent_participant(alpha.id, agent)
+      project = project!("Pg project")
+      task!(agent, project, "One", "backlog")
+
+      view = open(conn, agent, "connections")
+      view |> element(".ba-gfilters [data-gf='channel']") |> render_click()
+      assert has_element?(view, ".ba-gfilters [data-gf='channel'][aria-pressed='true']")
+      assert has_element?(view, ".ba-gfilters [data-gf='all'][aria-pressed='false']")
+      assert has_element?(view, ".ba-graph svg.m .node.k-project.dim")
+      assert has_element?(view, ".ba-graph svg.m .node.k-person.dim")
+      refute has_element?(view, ".ba-graph svg.m .node.k-channel.dim")
+      assert has_element?(view, ".ba-graph svg.m .edge.dim[data-e='p-#{project.id}']")
+      refute has_element?(view, ".ba-graph svg.m .edge.dim[data-e='c-#{alpha.id}']")
+
+      render_click(view, "page_filter", %{"k" => "bogus"})
+      assert has_element?(view, ".ba-gfilters [data-gf='channel'][aria-pressed='true']")
+    end
+
+    test "a node click shows its card with real lines; the weight follows the message count", %{
+      conn: conn,
+      agent: agent
+    } do
+      alpha = channel!("alpha")
+      {:ok, _} = Chat.add_agent_participant(alpha.id, agent, attention_mode: "active")
+
+      view = open(conn, agent, "connections")
+      view |> element(".ba-graph svg.m .node[data-node='c-#{alpha.id}']") |> render_click()
+      assert_patch(view, "/control/#{agent.slug}?node=c-#{alpha.id}&tab=connections")
+      assert has_element?(view, ".ba-graph svg.m .node.sel[data-node='c-#{alpha.id}']")
+      assert has_element?(view, ".ba-graph svg.m .edge.hot[data-e='c-#{alpha.id}']")
+      refute has_element?(view, "#ba-nodecard .ba-gempty")
+      assert has_element?(view, "#ba-nodecard .ba-node .k", "Channel")
+      assert has_element?(view, "#ba-nodecard .ba-node h4", "#alpha")
+      assert has_element?(view, "#ba-nodecard .ba-node p", "follows along")
+      assert has_element?(view, "#ba-nodecard .ba-node li", "last message")
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "—")
+      assert has_element?(view, "#ba-nodecard .ba-node li", "mode")
+      # No messages yet: weight 1.
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "●○○")
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.m .edge[data-e='c-#{alpha.id}'][stroke-width='1.4']"
+             )
+
+      refute has_element?(view, ".ba-graph svg.m .flow[data-e='c-#{alpha.id}']")
+
+      assert attr(view, "#ba-nodecard .ba-node a[data-open-space]", "href") == [
+               "/chat/#{alpha.slug}"
+             ]
+
+      assert has_element?(view, "#ba-nodecard .ba-node a[data-open-space]", "Open #alpha")
+
+      # Ten messages in #alpha: weight 3, a flow line, a last-message time.
+      for i <- 1..10, do: say!(alpha, agent, "m#{i}")
+      view = open(conn, agent, "connections")
+      view |> element(".ba-graph svg.m .node[data-node='c-#{alpha.id}']") |> render_click()
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "●●●")
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "just now")
+      assert has_element?(view, ".ba-graph svg.m .flow[data-e='c-#{alpha.id}']")
+
+      # Change mode goes to Abilities.
+      view |> element("#ba-nodecard [data-a='tab-abilities']") |> render_click()
+      assert_patch(view, "/control/#{agent.slug}?tab=abilities")
+    end
+
+    test "a project card counts its open tasks and opens the board; a person card names the creator",
+         %{
+           conn: conn,
+           agent: agent,
+           admin: admin
+         } do
+      project = project!("Pg project")
+      task!(agent, project, "One", "in_progress")
+      task!(agent, project, "Two", "backlog")
+      task!(agent, project, "Three", "done")
+
+      view = open(conn, agent, "connections")
+      render_click(view, "page_node", %{"node" => "p-#{project.id}"})
+      assert has_element?(view, "#ba-nodecard .ba-node .k", "Project")
+      assert has_element?(view, "#ba-nodecard .ba-node h4", "◆ Pg project")
+      assert has_element?(view, "#ba-nodecard .ba-node p", "3 tasks")
+      assert has_element?(view, "#ba-nodecard .ba-node li", "open tasks")
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "2")
+      assert has_element?(view, "#ba-nodecard .ba-node li small", "●●○")
+
+      assert attr(view, "#ba-nodecard .ba-node a[data-a='tasks']", "href") == [
+               "/tasks?project=#{project.id}"
+             ]
+
+      render_click(view, "page_node", %{"node" => "h-#{admin.id}"})
+      assert has_element?(view, "#ba-nodecard .ba-node .k", "Person")
+      assert has_element?(view, "#ba-nodecard .ba-node p", "works with you")
+      assert has_element?(view, "#ba-nodecard .ba-node li", "together")
+      refute has_element?(view, "#ba-nodecard .ba-node .acts a")
+    end
+
+    test "people are whoever shares its channels, the creator first", %{
+      conn: conn,
+      agent: agent,
+      admin: admin
+    } do
+      alpha = channel!("alpha")
+      {:ok, _} = Chat.add_agent_participant(alpha.id, agent)
+      other = World.create_user!()
+
+      {:ok, _} =
+        Chat.add_participant(alpha.id, %{
+          participant_type: "user",
+          participant_id: other.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      view = open(conn, agent, "connections")
+      assert count(view, ".ba-graph svg.m .node.k-person") == 2
+      assert has_element?(view, ".ba-gfilters [data-gf='person'] small", "2")
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.d .node[data-node='h-#{admin.id}'] text.sm",
+               "works with you"
+             )
+
+      assert has_element?(
+               view,
+               ".ba-graph svg.d .node[data-node='h-#{other.id}'] text.sm",
+               "same spaces"
+             )
+    end
+
+    test "Enter or Space on a focused node selects it; an unknown node or key does nothing", %{
+      conn: conn,
+      agent: agent,
+      admin: admin
+    } do
+      view = open(conn, agent, "connections")
+      render_keydown(view, "page_node", %{"key" => "a", "node" => "h-#{admin.id}"})
+      refute has_element?(view, "#ba-nodecard .ba-node")
+
+      render_keydown(view, "page_node", %{"key" => "Enter", "node" => "h-#{admin.id}"})
+      assert_patch(view, "/control/#{agent.slug}?node=h-#{admin.id}&tab=connections")
+      assert has_element?(view, "#ba-nodecard .ba-node .k", "Person")
+
+      render_click(view, "page_node", %{"node" => "c-nope"})
+      assert has_element?(view, "#ba-nodecard .ba-node .k", "Person")
+
+      {:ok, view, _} = live(conn, "/control/#{agent.slug}?tab=connections&node=c-nope")
+      assert has_element?(view, "#ba-nodecard .ba-gempty")
+      refute has_element?(view, ".ba-graph .node.sel")
+    end
+  end
+
+  # ── Memory & notes (stage 4) ───────────────────────────────────────
+
+  describe "Memory & notes" do
+    test "the empty state renders the comp's copy and the three files the builder wrote", %{
+      conn: conn,
+      agent: agent
+    } do
+      view = open(conn, agent, "memory")
+
+      assert has_element?(view, "[data-body='memory'] .ba-lbl", "What it remembers about you")
+      assert has_element?(view, "[data-body='memory'] .ba-lbl", "Org memory it reads")
+      assert has_element?(view, "[data-body='memory'] .ba-lbl", "Its workspace")
+      assert count(view, "#ba-mems .ba-memc") == 0
+
+      assert has_element?(
+               view,
+               "form.ba-addnote #ba-note[placeholder='Tell it something to remember…'][aria-label='Add a note']"
+             )
+
+      assert has_element?(view, "form.ba-addnote button[data-a='note']", "Add")
+      assert has_element?(view, "[data-pages] .ba-gempty", "No pages yet.")
+      assert has_element?(view, "[data-pages-note]", "Nothing records what it reads.")
+      assert count(view, "[data-files] .ba-row[data-file]") == 3
+      assert has_element?(view, "[data-files] .ba-row[data-file='SOUL.md'] small", "personality")
+
+      assert has_element?(
+               view,
+               "[data-files] .ba-row[data-file='IDENTITY.md'] small",
+               "name, class, portrait, colour"
+             )
+
+      assert has_element?(view, "[data-files] .ba-row[data-file='TOOLS.md'] small", "toolkit")
+    end
+
+    test "Add writes a long-term memory from you; a blank note writes nothing", %{
+      conn: conn,
+      agent: agent
+    } do
+      n0 = memory_count(agent)
+      view = open(conn, agent, "memory")
+
+      view |> form("#ba-addnote", %{"note" => "  prefers short answers  "}) |> render_submit()
+      assert memory_count(agent) == n0 + 1
+      [m] = MemoryContext.list_memories(agent.id, limit: 1)
+      assert m.content == "prefers short answers"
+      assert m.memory_type == "long_term"
+      assert m.metadata["source"] == "from you"
+
+      assert has_element?(
+               view,
+               "#ba-mems .ba-memc[data-memory='#{m.id}'] .tx",
+               "prefers short answers"
+             )
+
+      assert has_element?(view, "#ba-mems .ba-memc[data-memory='#{m.id}'] small", "from you · ")
+
+      assert has_element?(
+               view,
+               "#ba-mems .ba-memc[data-memory='#{m.id}'] button[data-forget='#{m.id}']",
+               "Forget"
+             )
+
+      view |> form("#ba-addnote", %{"note" => "   "}) |> render_submit()
+      assert memory_count(agent) == n0 + 1
+    end
+
+    test "memories list with their source label; Forget deletes that row and only that row", %{
+      conn: conn,
+      agent: agent,
+      admin: admin
+    } do
+      {:ok, a} = MemoryContext.append_memory(agent.id, :long_term, "keep me")
+      {:ok, b} = MemoryContext.append_memory(agent.id, :daily, "forget me")
+
+      other =
+        Character.new("scout")
+        |> Map.merge(%{n: "Other" <> String.slice(Ecto.UUID.generate(), 0, 4)})
+
+      {:ok, %{agent: other_agent}} = Character.create(other, admin)
+      {:ok, theirs} = MemoryContext.append_memory(other_agent.id, :long_term, "not yours")
+      n0 = memory_count(agent)
+
+      view = open(conn, agent, "memory")
+      assert count(view, "#ba-mems .ba-memc") == 2
+
+      assert has_element?(
+               view,
+               "#ba-mems .ba-memc[data-memory='#{a.id}'] small",
+               "long-term memory · "
+             )
+
+      assert has_element?(view, "#ba-mems .ba-memc[data-memory='#{b.id}'] small", "daily note · ")
+
+      view
+      |> element("#ba-mems .ba-memc[data-memory='#{b.id}'] button[data-forget]")
+      |> render_click()
+
+      assert memory_count(agent) == n0 - 1
+      assert MemoryContext.list_memories(agent.id) |> Enum.map(& &1.id) == [a.id]
+      refute has_element?(view, "#ba-mems .ba-memc[data-memory='#{b.id}']")
+      assert has_element?(view, "#ba-mems .ba-memc[data-memory='#{a.id}']")
+
+      # Another agent's row, or a malformed id, deletes nothing.
+      render_click(view, "page_forget", %{"id" => to_string(theirs.id)})
+      render_click(view, "page_forget", %{"id" => "abc"})
+      assert memory_count(agent) == n0 - 1
+      assert memory_count(other_agent) == 1
+    end
+
+    test "org memory it reads lists the pages it last wrote, linked", %{conn: conn, agent: agent} do
+      {:ok, page} =
+        Platform.Org.Wiki.upsert_page("org/pg-notes", %{content: "notes", updated_by: agent.id})
+
+      {:ok, _} = Platform.Org.Wiki.upsert_page("org/pg-other", %{content: "theirs"})
+
+      view = open(conn, agent, "memory")
+      assert count(view, "[data-pages] .ba-row[data-page]") == 1
+      assert has_element?(view, "[data-pages] .ba-row[data-page='org/pg-notes'] b", "pg-notes")
+
+      assert has_element?(
+               view,
+               "[data-pages] .ba-row[data-page='org/pg-notes'] small",
+               "org/pg-notes · v#{page.version}"
+             )
+
+      assert attr(view, "[data-pages] .ba-row[data-page='org/pg-notes']", "href") == [
+               "/org_memory/org/pg-notes"
+             ]
+
+      refute has_element?(view, "[data-pages] .ba-gempty")
+    end
+
+    test "a workspace file row opens the existing editor on that file", %{
+      conn: conn,
+      agent: agent
+    } do
+      view = open(conn, agent, "memory")
+      view |> element("[data-files] .ba-row[data-file='SOUL.md']") |> render_click()
+      assert_patch(view, "/control/#{agent.slug}?file=SOUL.md&tab=memory")
+      assert has_element?(view, "#agent-advanced:not(.hidden)")
+
+      assert has_element?(
+               view,
+               "#agent-advanced button[phx-value-file_key='SOUL.md'].border-primary"
+             )
+
+      # A key that is not one of its files patches nowhere.
+      render_click(view, "page_file", %{"key" => "NOPE.md"})
+
+      assert has_element?(
+               view,
+               "#agent-advanced button[phx-value-file_key='SOUL.md'].border-primary"
+             )
+
+      refute has_element?(view, "#agent-advanced button[phx-value-file_key='NOPE.md']")
+    end
+  end
+
+  # ── Stats (stage 4) ────────────────────────────────────────────────
+
+  describe "Stats" do
+    test "the empty state: every tile zero or —, 14 bars, level 1, one badge", %{
+      conn: conn,
+      agent: agent
+    } do
+      view = open(conn, agent, "stats")
+
+      assert count(view, "[data-body='stats'] .ba-tile") == 6
+      assert has_element?(view, "[data-tile='shipped'] b", "0")
+      assert has_element?(view, "[data-tile='shipped'] span", "tasks shipped")
+
+      assert has_element?(
+               view,
+               "[data-tile='shipped'] small",
+               "since #{Calendar.strftime(agent.inserted_at, "%b %-d")}"
+             )
+
+      assert has_element?(view, "[data-tile='prs'] b", "0")
+      assert has_element?(view, "[data-tile='prs'] span", "PRs merged")
+      assert has_element?(view, "[data-tile='prs'] small", "merged = shipped")
+      assert has_element?(view, "[data-tile='meetings'] b", "0")
+      assert has_element?(view, "[data-tile='meetings'] span", "meetings attended")
+      assert has_element?(view, "[data-tile='first-reply'] b", "—")
+      assert has_element?(view, "[data-tile='first-reply'] span", "median first reply")
+      assert has_element?(view, "[data-tile='messages'] b", "0")
+      assert has_element?(view, "[data-tile='messages'] span", "messages")
+      assert has_element?(view, "[data-tile='streak'] b", "0d")
+      assert has_element?(view, "[data-tile='streak'] span", "streak")
+      assert has_element?(view, "[data-tile='streak'] small", "days with a shipped task")
+      assert has_element?(view, "[data-body='stats'] .ba-lbl", "Shipped per day · last 14 days")
+      assert count(view, "#ba-bars i") == 14
+      assert has_element?(view, "#ba-bars i[data-i='13'][title='0 shipped · today']")
+      assert has_element?(view, "#ba-bars i[data-i='0'][title='0 shipped · 13d ago']")
+      assert has_element?(view, ".ba-barax span", "14d ago")
+      assert has_element?(view, ".ba-barax span", "today")
+      assert has_element?(view, "#ba-bartip", "Hover or tap a bar.")
+      assert has_element?(view, "[data-body='stats'] .ba-lbl", "Level")
+      assert has_element?(view, ".ba-xp b", "Level 1")
+      assert has_element?(view, ".ba-xp span", "Producer")
+      assert has_element?(view, ".ba-xp span", "0 / 350 xp to level 2")
+      assert has_element?(view, "[data-body='stats'] .ba-lbl", "Badges")
+      assert count(view, ".ba-badges span") == 1
+      assert has_element?(view, ".ba-badges span", "✨ Brought to life")
+      assert has_element?(view, "#ba-stats[phx-hook='AgentStatsBars']")
+    end
+
+    test "each tile equals a count of seeded rows and moves when one more row is added", %{
+      conn: conn,
+      agent: agent
+    } do
+      project = project!("Pg project")
+      t1 = task!(agent, project, "One", "done")
+      _t2 = task!(agent, project, "Two", "done")
+      task!(agent, project, "Open", "in_progress")
+      merged!(t1)
+      meeting!(agent)
+      alpha = channel!("alpha")
+      say!(alpha, agent, "hi")
+      say!(alpha, agent, "there")
+
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='shipped'] b", "2")
+      assert has_element?(view, "[data-tile='prs'] b", "1")
+      assert has_element?(view, "[data-tile='meetings'] b", "1")
+      assert has_element?(view, "[data-tile='messages'] b", "2")
+      # 2*40 + 1*25 + 1*15 = 120 xp.
+      assert has_element?(view, ".ba-xp b", "Level 1")
+      assert has_element?(view, ".ba-xp span", "120 / 350 xp to level 2")
+      assert has_element?(view, ".ba-xp .sbar i[style='width:34.29%']")
+      assert has_element?(view, ".ba-badges span", "⑂ First PR")
+      assert count(view, ".ba-badges span") == 2
+
+      t3 = task!(agent, project, "Three", "done")
+      merged!(t3)
+      meeting!(agent)
+      say!(alpha, agent, "again")
+
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='shipped'] b", "3")
+      assert has_element?(view, "[data-tile='prs'] b", "2")
+      assert has_element?(view, "[data-tile='meetings'] b", "2")
+      assert has_element?(view, "[data-tile='messages'] b", "3")
+      # 3*40 + 2*25 + 2*15 = 200 xp.
+      assert has_element?(view, ".ba-xp span", "200 / 350 xp to level 2")
+    end
+
+    test "level 2 at 350 xp; the comp's badges at their thresholds", %{conn: conn, agent: agent} do
+      project = project!("Pg project")
+      for i <- 1..9, do: task!(agent, project, "Done #{i}", "done")
+      # 9*40 = 360: level 2 with 10 xp over.
+      view = open(conn, agent, "stats")
+      assert has_element?(view, ".ba-xp b", "Level 2")
+      assert has_element?(view, ".ba-xp span", "10 / 350 xp to level 3")
+      refute has_element?(view, ".ba-badges span", "First PR")
+
+      for _ <- 1..10, do: meeting!(agent)
+      view = open(conn, agent, "stats")
+      assert has_element?(view, ".ba-badges span", "🎥 Meeting regular")
+    end
+
+    test "the streak and the 14-day bars follow the day each task was shipped", %{
+      conn: conn,
+      agent: agent
+    } do
+      project = project!("Pg project")
+      # Shipped today (through a real transition, so the log has the day),
+      # yesterday and the day before (moved before the log: updated_at).
+      t_today = task!(agent, project, "Today", "in_progress")
+      {:ok, _} = Platform.Tasks.transition_task_status(t_today, "done")
+      t_yest = task!(agent, project, "Yesterday", "done")
+      updated_at!(t_yest, days_ago(1))
+      t_before = task!(agent, project, "Before", "done")
+      updated_at!(t_before, days_ago(2))
+      t_before2 = task!(agent, project, "Before too", "done")
+      updated_at!(t_before2, days_ago(2))
+      # A gap at 3 days ago, then one more 4 days ago: not in the streak.
+      t_old = task!(agent, project, "Old", "done")
+      updated_at!(t_old, days_ago(4))
+
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='shipped'] b", "5")
+      assert has_element?(view, "[data-tile='streak'] b", "3d")
+      assert has_element?(view, "#ba-bars i[data-i='13'][title='1 shipped · today']")
+      assert has_element?(view, "#ba-bars i[data-i='12'][title='1 shipped · 1d ago']")
+
+      assert has_element?(
+               view,
+               "#ba-bars i[data-i='11'][title='2 shipped · 2d ago'][style='height:100%']"
+             )
+
+      assert has_element?(
+               view,
+               "#ba-bars i[data-i='10'][title='0 shipped · 3d ago'][style='height:2%']"
+             )
+
+      assert has_element?(
+               view,
+               "#ba-bars i[data-i='9'][title='1 shipped · 4d ago'][style='height:50%']"
+             )
+
+      # The logged day wins over a later edit to the row.
+      updated_at!(t_today, days_ago(6))
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "#ba-bars i[data-i='13'][title='1 shipped · today']")
+      assert has_element?(view, "[data-tile='streak'] b", "3d")
+
+      # Filling the gap extends the streak to 5 and lights the week badge at 7.
+      t_gap = task!(agent, project, "Gap", "done")
+      updated_at!(t_gap, days_ago(3))
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='streak'] b", "5d")
+      refute has_element?(view, ".ba-badges span", "Week streak")
+
+      for d <- 5..6 do
+        t = task!(agent, project, "Day #{d}", "done")
+        updated_at!(t, days_ago(d))
+      end
+
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='streak'] b", "7d")
+      assert has_element?(view, ".ba-badges span", "🔥 Week streak")
+    end
+
+    test "a streak with nothing shipped yet today counts from yesterday", %{
+      conn: conn,
+      agent: agent
+    } do
+      project = project!("Pg project")
+      t = task!(agent, project, "Yesterday", "done")
+      updated_at!(t, days_ago(1))
+      view = open(conn, agent, "stats")
+      assert has_element?(view, "[data-tile='streak'] b", "1d")
+    end
+
+    test "tapping a bar highlights it and writes its title in the tip", %{
+      conn: conn,
+      agent: agent
+    } do
+      view = open(conn, agent, "stats")
+      view |> element("#ba-bars i[data-i='13']") |> render_click()
+      assert has_element?(view, "#ba-bars i.hl[data-i='13']")
+      assert has_element?(view, "#ba-bartip", "0 shipped · today")
+      assert count(view, "#ba-bars i.hl") == 1
+
+      render_click(view, "page_bar", %{"i" => "99"})
+      assert has_element?(view, "#ba-bars i.hl[data-i='13']")
+    end
+  end
+
+  describe "a member who may not manage the agent (stage 4)" do
+    setup %{conn: conn} do
+      user = World.create_user!()
+
+      World.plain_member!(
+        user,
+        Repo.get!(Platform.Tenancy.Org, Platform.TenancyFixtures.acme_org_id())
+      )
+
+      %{member_conn: init_test_session(conn, current_user_id: user.id)}
+    end
+
+    test "sees memories with Add and Forget disabled; forged events write nothing", %{
+      member_conn: conn,
+      agent: agent
+    } do
+      {:ok, m} = MemoryContext.append_memory(agent.id, :long_term, "keep")
+      n0 = memory_count(agent)
+      view = open(conn, agent, "memory")
+
+      assert has_element?(
+               view,
+               "#ba-mems .ba-memc[data-memory='#{m.id}'] button[data-forget][disabled]"
+             )
+
+      assert has_element?(view, "#ba-note[disabled]")
+      assert has_element?(view, "form.ba-addnote button[data-a='note'][disabled]")
+
+      render_click(view, "page_forget", %{"id" => to_string(m.id)})
+      render_submit(view, "page_note", %{"note" => "forged"})
+      assert memory_count(agent) == n0
+    end
+  end
+
   # ── Layout rules ───────────────────────────────────────────────────
 
   describe "app.css" do
@@ -745,6 +1468,12 @@ defmodule PlatformWeb.ControlCenter.AgentPageTest do
       assert desk =~ ".ba-page .ba-cols{grid-template-columns:1.2fr 1fr}"
       assert desk =~ ".ba-tk{grid-template-columns:1fr 1fr}"
       assert page =~ ".ba-pmore{display:none;"
+      # Stage 4: the phone graph shows below 768, the desktop one at it.
+      assert page =~ ".ba-graph svg.d{display:none}"
+      assert desk =~ ".ba-graph svg.m{display:none}"
+      assert desk =~ ".ba-graph svg.d{display:block}"
+      assert page =~ ".ba-graph .node text{paint-order:stroke"
+      assert page =~ "font-family:var(--font-sans)}"
       refute page =~ ~r/#[0-9a-fA-F]{3,6}\b/
     end
 

@@ -37,7 +37,7 @@ defmodule Platform.Org.Wiki do
   is the V1 surface and stays untouched; T5 will retire it.
   """
 
-  import Ecto.Query, only: [from: 2, where: 3, order_by: 3]
+  import Ecto.Query, only: [from: 2, where: 3, order_by: 3, limit: 2]
 
   require Logger
 
@@ -142,6 +142,30 @@ defmodule Platform.Org.Wiki do
     |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([p], asc: p.file_key)
     |> Repo.all()
+  end
+
+  @doc """
+  The pages whose last write was by `actor_id` (`updated_by`), newest first
+  (task 01a1b6ad stage 4). The agent page shows these as "Org memory it
+  reads" because nothing records a read: a page an agent wrote or edited is
+  the only evidence it has been there. Same options as `list_pages/1`, plus
+  `:limit` (default 20).
+  """
+  @spec list_pages_updated_by(binary(), keyword()) :: [WikiPage.t()]
+  def list_pages_updated_by(actor_id, opts \\ []) when is_binary(actor_id) do
+    if Platform.UUID.valid?(actor_id) do
+      limit = Keyword.get(opts, :limit, 20)
+
+      WikiPage
+      |> where([p], p.updated_by == ^actor_id)
+      |> filter_workspace(Keyword.get(opts, :workspace_id))
+      |> maybe_scope_by(Keyword.get(opts, :access_scope))
+      |> order_by([p], desc: p.updated_at, asc: p.file_key)
+      |> limit(^limit)
+      |> Repo.all()
+    else
+      []
+    end
   end
 
   @doc """

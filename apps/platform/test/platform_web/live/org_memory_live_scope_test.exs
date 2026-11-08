@@ -207,7 +207,15 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # key does not admit. Without `:access_scope` every query is byte-identical
   # to before; a page without `readers:` is unchanged for every scope. One
   # alias added; no write path moved.
-  @wiki_ex_sha256_2026_09_08 "0dd985e4f2be8e6ab55c6b9198b5d81362d4ed00bbc694f1142ad5c9d1e68204"
+  #
+  # Re-pinned 2026-11-07 (task 01a1b6ad stage 4, the living agent page's
+  # "Org memory it reads", authorized by the stage's specification): one
+  # read added, `list_pages_updated_by/2`, the pages whose `updated_by` is
+  # the given actor, behind `Platform.UUID.valid?/1`, through the same
+  # `filter_workspace/2` and `maybe_scope_by/2` as `list_pages/1`, so it
+  # cannot answer a page the scope may not read. `limit: 2` joined the
+  # Ecto.Query import for it. No write path moved; no alias changed.
+  @wiki_ex_sha256_2026_09_08 "30b90dcf9834baa69e41ce42cc5e623adf329ac57242650f3545dd42a25b4b1f"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"

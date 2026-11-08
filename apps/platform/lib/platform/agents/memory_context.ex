@@ -162,6 +162,30 @@ defmodule Platform.Agents.MemoryContext do
     |> Repo.all()
   end
 
+  @doc """
+  Forget one memory: delete the row `memory_id` if it belongs to `agent_id`
+  (task 01a1b6ad stage 4, the Memory & notes tab's Forget). The id arrives
+  from a LiveView event as a string; anything that is not that agent's row,
+  including a non-integer, is `{:error, :not_found}` and deletes nothing.
+  """
+  @spec delete_memory(Ecto.UUID.t(), integer() | String.t()) ::
+          {:ok, Memory.t()} | {:error, :not_found}
+  def delete_memory(agent_id, memory_id) when is_binary(memory_id) do
+    case Integer.parse(memory_id) do
+      {id, ""} -> delete_memory(agent_id, id)
+      _ -> {:error, :not_found}
+    end
+  end
+
+  def delete_memory(agent_id, memory_id) when is_integer(memory_id) do
+    query = from(m in Memory, where: m.agent_id == ^agent_id and m.id == ^memory_id)
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      %Memory{} = memory -> Repo.delete(memory)
+    end
+  end
+
   @doc "How many memories the agent has, of every type."
   @spec count_memories(Ecto.UUID.t()) :: non_neg_integer()
   def count_memories(agent_id) do
