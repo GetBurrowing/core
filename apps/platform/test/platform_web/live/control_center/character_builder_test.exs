@@ -376,9 +376,18 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
       [rolled] = attr(view, "#ba-agname", "value")
       assert rolled != "Forge"
       assert rolled in Archetypes.get("builder").names
-      click(view, ~s{.ba-chip[data-nm="Anvil"]})
-      assert attr(view, "#ba-agname", "value") == ["Anvil"]
-      assert has_element?(view, ".ba-sub b", "@Anvil")
+      # The currently selected name is intentionally absent from suggestions.
+      # Main reproduced a flake when the roll itself picked Anvil. Exercise
+      # both known chips, starting with one different from the rolled value.
+      picked = if rolled == "Anvil", do: "Rivet", else: "Anvil"
+      click(view, ~s{.ba-chip[data-nm="#{picked}"]})
+      assert attr(view, "#ba-agname", "value") == [picked]
+      assert has_element?(view, ".ba-sub b", "@#{picked}")
+
+      other = if picked == "Anvil", do: "Rivet", else: "Anvil"
+      click(view, ~s{.ba-chip[data-nm="#{other}"]})
+      assert attr(view, "#ba-agname", "value") == [other]
+      assert has_element?(view, ".ba-sub b", "@#{other}")
     end
 
     test "voice knobs, reset and a typed prompt", %{conn: conn} do
