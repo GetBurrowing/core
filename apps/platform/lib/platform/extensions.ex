@@ -350,11 +350,9 @@ defmodule Platform.Extensions do
   defp core_tool_names,
     do: core_listed_tool_names() ++ Platform.Federation.ToolAliases.legacy_names()
 
-  defp core_listed_tool_names do
-    Platform.Federation.ToolSurface.core_bundles()
-    |> Platform.Federation.ToolSurface.list_tools()
-    |> Enum.map(& &1.name)
-  end
+  # Not `list_tools(core_bundles())`: that applies the capability gates, and
+  # the feedback gate reads the database, which `validate!/0` runs before.
+  defp core_listed_tool_names, do: Platform.Federation.ToolSurface.reserved_tool_names()
 
   @doc """
   A tool name with its separators read as one (task 01a14a7f stage 3):
