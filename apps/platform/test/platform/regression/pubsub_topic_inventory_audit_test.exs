@@ -160,6 +160,9 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"files:stars:<id>", :user},
     {"external_admission:<id>", :user},
     {"inbox:<id>", :user},
+    # Task 01a1b6de stage 4: keyed by the ask's fixer (`owner_user_id`); the
+    # payload is that user's own unblock ask.
+    {"unblock_asks:<id>", :user},
     {"meeting:state:<id>", :user},
     # Dormant on BOTH sides: broadcast_user/2 and subscribe_user/1 have no
     # caller anywhere in lib.

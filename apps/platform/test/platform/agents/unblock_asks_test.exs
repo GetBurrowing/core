@@ -197,7 +197,10 @@ defmodule Platform.Agents.UnblockAsksTest do
         ctx.task,
         "execution.blocked",
         runtime.runtime_id,
-        %{"description" => "remote: Permission to example-org/other.git denied to example-bot. 403"},
+        %{
+          "description" =>
+            "remote: Permission to example-org/other.git denied to example-bot. 403"
+        },
         hours(2)
       )
 

@@ -138,6 +138,14 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # twelve are stated, not fixed — the original nine plus the three
   # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
+    "team_status" =>
+      "agents.team_check builds this itself in gather_context/2 (task " <>
+        "01a1b6de stage 3) from presence and runtime events; no " <>
+        "ContextProviders clause exists and no other handler declares it",
+    "raise_list" =>
+      "agents.team_check builds this itself in gather_context/2 from the " <>
+        "unblock asks sent on the fire (task 01a1b6de stage 4); no " <>
+        "ContextProviders clause exists and no other handler declares it",
     "experiments" =>
       "experiments.scientist assembles this itself in gather_context/1 " <>
         "(task 01a0d415 stage 5) from the experimentation tables; no " <>
