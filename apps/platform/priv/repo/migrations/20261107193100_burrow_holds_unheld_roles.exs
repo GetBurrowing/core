@@ -26,6 +26,8 @@ defmodule Platform.Repo.Migrations.BurrowHoldsUnheldRoles do
 
   use Ecto.Migration
 
+  # old-code-compatible: only inserts role_assignments rows into the existing table, with the columns the previous release already reads; no schema change, and down/0 is a no-op
+
   def up do
     execute("""
     INSERT INTO role_assignments (id, role_key, agent_id, inserted_at, updated_at)
