@@ -4,7 +4,7 @@ defmodule PlatformWeb.CalendarLive do
   import PlatformWeb.CalendarLive.Components
 
   alias Platform.Calendar, as: Events
-  alias Platform.Calendar.Authoring
+  alias Platform.Calendar.{Authoring, Draft}
   alias PlatformWeb.CalendarLive.Editor
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.MeetingLive.LiveInvites
@@ -16,6 +16,7 @@ defmodule PlatformWeb.CalendarLive do
 
     if connected?(socket) do
       Events.subscribe(socket.assigns.access_scope)
+      Draft.subscribe(socket.assigns.access_scope)
 
       Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
       |> Enum.each(&Platform.Meetings.subscribe_to_project_meetings(&1.id))
@@ -48,7 +49,8 @@ defmodule PlatformWeb.CalendarLive do
      |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
      |> assign(:grant_form, agent_grant_form(nil, nil))
      |> LiveInvites.seed()
-     |> Editor.seed()}
+     |> Editor.seed()
+     |> seed_plan()}
   end
 
   @impl true
@@ -77,6 +79,15 @@ defmodule PlatformWeb.CalendarLive do
     socket =
       case params["select"] do
         id when is_binary(id) and id != "" -> select_entry(socket, nil, id, nil)
+        _ -> socket
+      end
+
+    # `?draft=<token>`: an agent's draft link (task 01a1b8a5 stage 3). It
+    # opens the ONE editor on the draft for its owner only; anyone else, an
+    # expired or a spent link gets a reason and nothing else.
+    socket =
+      case params["draft"] do
+        token when is_binary(token) and token != "" -> open_draft_link(socket, token)
         _ -> socket
       end
 
@@ -165,6 +176,106 @@ defmodule PlatformWeb.CalendarLive do
       _ -> {:noreply, socket}
     end
   end
+
+  # ── Scheduling language (v7 `#quick-plan`, task 01a1b8a5 stage 3) ─────
+  #
+  # The owner's words go, unparsed, to a calendar agent they granted
+  # `create`, as a message in their DM with it (`Draft.ask/4`, through
+  # `Chat.post_to_agent_dm/4`). The agent's replies arrive on that DM's
+  # topic and are shown here; its `calendar_draft` call arrives on the
+  # owner's draft topic and offers Review draft, which opens the ONE editor.
+  # An agent that is not connected gets nothing, and + New still works.
+  def handle_event("plan_change", %{"plan" => params}, socket) do
+    plan = socket.assigns.plan
+
+    agent_id =
+      if Enum.any?(plan.agents, &(&1.id == params["agent_id"])),
+        do: params["agent_id"],
+        else: plan.agent_id
+
+    {:noreply,
+     assign(socket, :plan, %{
+       plan
+       | text: to_string(params["text"] || plan.text),
+         agent_id: agent_id
+     })}
+  end
+
+  def handle_event("plan_change", _params, socket), do: {:noreply, socket}
+
+  def handle_event("plan_submit", %{"plan" => params}, socket) do
+    {:noreply, socket} = handle_event("plan_change", %{"plan" => params}, socket)
+    plan = %{socket.assigns.plan | agents: draft_agents(socket)}
+
+    result =
+      if plan.status in [:waiting, :slow],
+        do: {:error, :busy},
+        else:
+          Draft.ask(socket.assigns.access_scope, plan.agent_id, plan.text,
+            time_zone: socket.assigns.zone,
+            today: today(socket.assigns.zone)
+          )
+
+    case result do
+      {:ok, %{space: space, message: message, request_key: key}} ->
+        if is_nil(plan.space) or plan.space.id != space.id,
+          do: Platform.Chat.PubSub.subscribe(space.id)
+
+        Process.send_after(self(), {:plan_slow, key}, 90_000)
+
+        {:noreply,
+         assign(socket, :plan, %{
+           plan
+           | status: :waiting,
+             space: space,
+             request_key: key,
+             sent_at: message.inserted_at,
+             replies: [],
+             draft: nil,
+             error: nil
+         })}
+
+      {:error, :busy} ->
+        {:noreply, socket}
+
+      {:error, :blank} ->
+        {:noreply,
+         assign(socket, :plan, %{
+           plan
+           | status: :failed,
+             error: "Describe what you want to schedule first."
+         })}
+
+      {:error, :unavailable} ->
+        {:noreply, assign(socket, :plan, %{plan | status: :unavailable, error: nil})}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :plan, %{plan | status: :failed, error: nil})}
+    end
+  end
+
+  def handle_event("plan_submit", _params, socket), do: {:noreply, socket}
+
+  def handle_event("plan_reset", _params, socket) do
+    plan = socket.assigns.plan
+    {:noreply, assign(socket, :plan, %{fresh_plan(draft_agents(socket)) | space: plan.space})}
+  end
+
+  def handle_event("plan_open_draft", _params, socket) do
+    case socket.assigns.plan.draft do
+      %{id: id} ->
+        case Draft.get(socket.assigns.access_scope, id) do
+          {:ok, draft} -> {:noreply, open_agent_draft(socket, draft)}
+          {:error, reason} -> {:noreply, put_flash(socket, :error, draft_refusal(reason))}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # An answer to one of the agent's attendee questions inside the editor.
+  def handle_event("draft_resolve", params, socket), do: Editor.resolve(socket, params)
 
   # ── Calendar settings: agents (v4 `Agents with calendar access`) ────────
 
@@ -619,6 +730,70 @@ defmodule PlatformWeb.CalendarLive do
     do: {:noreply, put_flash(socket, :info, "Copied to clipboard")}
 
   @impl true
+  # The agent's reply in the DM the plan was sent to; only agent messages
+  # posted after the request.
+  def handle_info({:new_message, %{space_id: space_id} = message}, socket)
+      when is_binary(space_id) do
+    plan = socket.assigns.plan
+
+    # The shell may already follow this DM for its unread badge, so the
+    # same message can arrive twice: keep it once.
+    if (plan.space && plan.space.id == space_id) and plan.status not in [:idle] and
+         not Enum.any?(plan.replies, &(&1.id == message.id)) and agent_message?(message) and
+         (is_nil(plan.sent_at) or DateTime.compare(message.inserted_at, plan.sent_at) != :lt) do
+      replies = plan.replies ++ [%{id: message.id, content: message.content || ""}]
+      status = if plan.status in [:waiting, :slow], do: :replied, else: plan.status
+      {:noreply, assign(socket, :plan, %{plan | replies: replies, status: status})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A draft the asked agent just left for this owner.
+  def handle_info({:calendar_draft, %{id: id, agent_id: agent_id}}, socket) do
+    plan = socket.assigns.plan
+
+    with true <- plan.status in [:waiting, :slow, :replied] and plan.agent_id == agent_id,
+         {:ok, draft} <- Draft.get(socket.assigns.access_scope, id) do
+      status = if plan.status in [:waiting, :slow], do: :replied, else: plan.status
+
+      {:noreply,
+       assign(socket, :plan, %{
+         plan
+         | status: status,
+           draft: %{id: draft.id, status: Draft.status(draft)}
+       })}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_info({:plan_slow, key}, socket) do
+    plan = socket.assigns.plan
+
+    if plan.request_key == key and plan.status == :waiting,
+      do: {:noreply, assign(socket, :plan, %{plan | status: :slow})},
+      else: {:noreply, socket}
+  end
+
+  # The rest of the DM topic's traffic (edits, reactions, typing) is not
+  # the calendar's business.
+  def handle_info({event, _payload}, socket)
+      when event in [
+             :message_updated,
+             :message_deleted,
+             :reaction_added,
+             :reaction_removed,
+             :pin_added,
+             :pin_removed,
+             :participant_joined,
+             :participant_left,
+             :participant_role_changed,
+             :typing,
+             :agent_typing
+           ],
+      do: {:noreply, socket}
+
   def handle_info(:calendar_tick, socket) do
     Process.send_after(self(), :calendar_tick, 60_000)
     {:noreply, reload(socket)}
@@ -992,6 +1167,59 @@ defmodule PlatformWeb.CalendarLive do
   defp agent_name(socket, id) do
     Enum.find_value(socket.assigns.agent_choices, "The agent", &(&1.id == id && &1.name))
   end
+
+  # ── scheduling language helpers ──────────────────────────────────────────
+
+  defp seed_plan(socket), do: assign(socket, :plan, fresh_plan(draft_agents(socket)))
+
+  defp fresh_plan(agents) do
+    %{
+      agents: agents,
+      agent_id:
+        Enum.find_value(agents, &(&1.online? && &1.id)) || (List.first(agents) || %{})[:id],
+      text: "",
+      status: :idle,
+      space: nil,
+      request_key: nil,
+      sent_at: nil,
+      replies: [],
+      draft: nil,
+      error: nil
+    }
+  end
+
+  defp draft_agents(socket),
+    do: Platform.Calendar.AgentAccess.draft_agents(socket.assigns.access_scope)
+
+  defp agent_message?(%{participant_id: id}) when is_binary(id) do
+    match?(%{participant_type: "agent"}, Platform.Chat.get_participant(id))
+  end
+
+  defp agent_message?(_message), do: false
+
+  defp open_draft_link(socket, token) do
+    case Draft.fetch(socket.assigns.access_scope, token) do
+      {:ok, draft} -> open_agent_draft(socket, draft)
+      {:error, reason} -> put_flash(socket, :error, draft_refusal(reason))
+    end
+  end
+
+  # The week moves to the draft's day, then the ONE editor opens on it.
+  defp open_agent_draft(socket, draft) do
+    socket =
+      case Date.from_iso8601(Draft.local_date(draft) || "") do
+        {:ok, day} -> socket |> put_day(day) |> reload()
+        _ -> socket
+      end
+
+    Editor.open_agent_draft(socket, draft)
+  end
+
+  defp draft_refusal(:expired),
+    do: "This draft has expired. Ask again, or add the event yourself with + New."
+
+  defp draft_refusal(:saved), do: "This draft was already saved."
+  defp draft_refusal(_), do: "This draft link isn't available to you."
 
   defp put_cursor(socket, date),
     do: assign(socket, cursor: date, mini_month: Date.beginning_of_month(date))

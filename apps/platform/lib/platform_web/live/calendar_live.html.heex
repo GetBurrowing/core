@@ -49,6 +49,7 @@
   >
     <.cal_header view={@view} cursor={@cursor} sel_day={@sel_day} zone={@zone} />
     <.section_tabs section={:calendar} />
+    <.quick_plan plan={@plan} />
     <div
       id="calendar-body"
       phx-hook="CalendarScroll"

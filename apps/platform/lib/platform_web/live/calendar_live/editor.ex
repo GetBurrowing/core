@@ -6,8 +6,9 @@ defmodule PlatformWeb.CalendarLive.Editor do
   Every way in loads the same form from a `Platform.Calendar.EventDraft`:
   New / `+ New event`, a slot click, a drag-selected range
   (`calendar_selection.js`), `?new=1`, Edit on a native event's details,
-  Edit on a meeting's details and (stage 3) an agent draft through
-  `open_draft/2`. Every save, delete and preview goes through
+  Edit on a meeting's details and (stage 3) an agent's draft through
+  `open_agent_draft/2`, which adds the agent's open questions and saves with
+  `Authoring.save/4` so the draft is spent once. Every save, delete and preview goes through
   `Platform.Calendar.Authoring`, so a native event and its call record are
   never written apart, and nothing is written before Save.
 
@@ -47,7 +48,7 @@ defmodule PlatformWeb.CalendarLive.Editor do
   import Phoenix.LiveView, only: [push_event: 3, put_flash: 3]
 
   alias Platform.Calendar, as: Events
-  alias Platform.Calendar.{Authoring, Event, EventDraft, Recurrence}
+  alias Platform.Calendar.{Authoring, Draft, Event, EventDraft, Recurrence}
   alias Platform.Meetings
   alias PlatformWeb.MeetingLive.InviteeStaging
   alias PlatformWeb.TimeEntry
@@ -111,7 +112,8 @@ defmodule PlatformWeb.CalendarLive.Editor do
         error: nil,
         invalid: [],
         preview: nil,
-        call_available?: Authoring.call_available?(scope)
+        call_available?: Authoring.call_available?(scope),
+        agent: nil
       })
 
     state = Map.put(state, :deletable?, deletable?(state, socket.assigns.current_user_record))
@@ -127,6 +129,139 @@ defmodule PlatformWeb.CalendarLive.Editor do
     case Authoring.load_draft(socket.assigns.access_scope, ref) do
       {:ok, %EventDraft{editable: true} = draft} -> {:ok, open_draft(socket, draft)}
       _ -> {:error, seed(socket)}
+    end
+  end
+
+  @doc """
+  Open the form on a draft an agent left (`Platform.Calendar.Draft`, task
+  01a1b8a5 stage 3): the same form as New event, prefilled with the
+  draft's resolved fields and staged people, plus the agent's open
+  questions. Nothing is written; Create event saves through
+  `Authoring.save/4` with the draft, once.
+
+  A time the agent could not resolve stays blank (the draft keeps its day),
+  so the editor's own "Pick a date, start and end." asks for it. A Burrow
+  call's project goes in the call's Project choice, not in Where, so the
+  event stays private as a New event does.
+  """
+  def open_agent_draft(socket, %Draft{} = draft) do
+    socket = open_draft(socket, Draft.event_draft(draft, socket.assigns.access_scope))
+    state = socket.assigns.editor
+    project_id = draft.attrs["project_id"]
+
+    params =
+      state.params
+      |> then(fn params ->
+        if params["date"] == "" and is_binary(Draft.local_date(draft)),
+          do: Map.put(params, "date", Draft.local_date(draft)),
+          else: params
+      end)
+      |> then(fn params ->
+        if is_binary(project_id) and Enum.any?(projects(socket), &(&1.id == project_id)),
+          do: Map.put(params, "call_project", project_id),
+          else: params
+      end)
+
+    state = %{
+      state
+      | original: params,
+        params: params,
+        added: Enum.map(state.base.add_invitees, &staged_entry/1),
+        agent: %{
+          id: draft.id,
+          name: Draft.agent_name(draft),
+          clarifications: draft.clarifications,
+          issues: draft.issues,
+          resolved: []
+        }
+    }
+
+    assign(socket, :editor, recompute(state, socket))
+  end
+
+  @doc """
+  Answer one of the agent's attendee questions: `choice` is a candidate's
+  user id (staged as that person) or `"skip"` (leave them out). Only a
+  candidate the draft itself listed can be staged.
+  """
+  def resolve(socket, %{"id" => id, "choice" => choice}) do
+    with_state(socket, fn
+      %{agent: %{} = agent} = state ->
+        question =
+          Enum.find(
+            agent.clarifications,
+            &(&1["kind"] == "attendee" and &1["id"] == id and id not in agent.resolved)
+          )
+
+        candidate =
+          question && Enum.find(question["candidates"] || [], &(&1["user_id"] == choice))
+
+        cond do
+          is_nil(question) ->
+            {:noreply, socket}
+
+          choice == "skip" ->
+            {:noreply, put(socket, recompute(answered(state, id), socket))}
+
+          candidate && people_enabled?(state) ->
+            entry =
+              staged_entry(%{
+                "kind" => "user",
+                "user_id" => candidate["user_id"],
+                "email" => candidate["email"],
+                "display_name" => candidate["name"]
+              })
+
+            added =
+              if Enum.any?(state.added, &(&1.id == entry.id)),
+                do: state.added,
+                else: state.added ++ [entry]
+
+            {:noreply, put(socket, recompute(%{answered(state, id) | added: added}, socket))}
+
+          true ->
+            {:noreply, socket}
+        end
+
+      _state ->
+        {:noreply, socket}
+    end)
+  end
+
+  def resolve(socket, _params), do: {:noreply, socket}
+
+  defp answered(%{agent: agent} = state, id),
+    do: %{state | agent: %{agent | resolved: agent.resolved ++ [id]}}
+
+  @doc "The agent's attendee questions not answered yet (none for other drafts)."
+  def unresolved(%{agent: %{clarifications: questions, resolved: resolved}}),
+    do: Enum.filter(questions, &(&1["kind"] == "attendee" and &1["id"] not in resolved))
+
+  def unresolved(_state), do: []
+
+  defp staged_entry(entry) do
+    get = fn key -> Map.get(entry, key) || Map.get(entry, String.to_existing_atom(key)) end
+
+    case to_string(get.("kind")) do
+      "user" ->
+        %{
+          id: "user:" <> get.("user_id"),
+          kind: :user,
+          user_id: get.("user_id"),
+          email: get.("email"),
+          display_name: get.("display_name") || get.("email"),
+          subtitle: get.("display_name") && get.("email")
+        }
+
+      kind ->
+        %{
+          id: kind <> ":" <> get.("email"),
+          kind: if(kind == "external", do: :external, else: :guest),
+          user_id: nil,
+          email: get.("email"),
+          display_name: get.("display_name") || get.("email"),
+          subtitle: if(kind == "external", do: "external member", else: "guest link")
+        }
     end
   end
 
@@ -205,9 +340,29 @@ defmodule PlatformWeb.CalendarLive.Editor do
           {:noreply, put(socket, %{recompute(state, socket) | error: message, invalid: invalid})}
 
         {:ok, attrs} ->
-          case Authoring.save(socket.assigns.access_scope, state.base, attrs) do
+          case save_through_authoring(socket, state, attrs) do
             {:ok, result} ->
               {:saved, result, seed(socket)}
+
+            {:error, :unresolved} ->
+              {:noreply,
+               put(socket, %{
+                 recompute(state, socket)
+                 | error: "Answer the question above before saving.",
+                   invalid: []
+               })}
+
+            {:error, :saved} ->
+              {:noreply, socket |> seed() |> put_flash(:error, "This draft was already saved.")}
+
+            {:error, :expired} ->
+              {:noreply,
+               socket
+               |> seed()
+               |> put_flash(
+                 :error,
+                 "This draft has expired. Ask again, or add the event yourself with + New."
+               )}
 
             {:error, :last_invitee} ->
               {:noreply, put(socket, %{recompute(state, socket) | refused?: true})}
@@ -224,6 +379,22 @@ defmodule PlatformWeb.CalendarLive.Editor do
       end
     end)
   end
+
+  # An agent draft saves with its id and the questions answered here, so
+  # Authoring spends it in the same transaction; every other draft is the
+  # plain `save/3`.
+  defp save_through_authoring(socket, %{agent: %{id: id, resolved: resolved}} = state, attrs) do
+    if unresolved(state) == [],
+      do:
+        Authoring.save(socket.assigns.access_scope, state.base, attrs,
+          agent_draft: id,
+          resolved: resolved
+        ),
+      else: {:error, :unresolved}
+  end
+
+  defp save_through_authoring(socket, state, attrs),
+    do: Authoring.save(socket.assigns.access_scope, state.base, attrs)
 
   @doc """
   Delete the draft's event (Edit event footer). `{:deleted, socket}` or

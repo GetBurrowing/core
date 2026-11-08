@@ -232,6 +232,235 @@ defmodule PlatformWeb.CalendarLive.Components do
     """
   end
 
+  # ── scheduling language (v7 renderMain `#quick-plan`, task 01a1b8a5 s3) ─
+
+  attr(:plan, :map, required: true)
+
+  @doc """
+  v7's `#quick-plan`: "Describe what you want to schedule", the text and
+  Draft event. The words go to a real calendar agent the owner granted
+  `create`, through the owner's DM with it (`Platform.Calendar.Draft.ask/4`);
+  nothing here parses them. The agent chooser, the waiting, reply,
+  unavailable and failure states and Review draft are production
+  extensions (not in canvas), declared under Design deviations.
+  """
+  def quick_plan(assigns) do
+    plan = assigns.plan
+    agent = Enum.find(plan.agents, &(&1.id == plan.agent_id))
+
+    assigns =
+      assign(assigns,
+        agent: agent,
+        agent_name: (agent && agent.name) || "Your agent",
+        busy?: plan.status in [:waiting, :slow]
+      )
+
+    ~H"""
+    <section
+      id="quick-plan"
+      class="shrink-0 border-b border-edge bg-base-100 px-3 py-2.5 lg:px-4"
+      aria-labelledby="quick-plan-label"
+      data-role="quick-plan"
+      data-status={@plan.status}
+    >
+      <form
+        id="quick-plan-form"
+        phx-submit="plan_submit"
+        phx-change="plan_change"
+        class="flex flex-col gap-2 lg:flex-row lg:items-end"
+      >
+        <label class="flex min-w-0 flex-1 flex-col gap-1">
+          <span id="quick-plan-label" class="text-xs font-[550] text-subtle">
+            Describe what you want to schedule
+          </span>
+          <input
+            type="text"
+            name="plan[text]"
+            value={@plan.text}
+            placeholder="Meet Friday at 2pm with Alex and Sam"
+            maxlength="2000"
+            autocomplete="off"
+            class="cal-input"
+            disabled={@plan.agents == []}
+            data-role="quick-plan-text"
+          />
+        </label>
+        <div class="flex items-end gap-2">
+          <label :if={length(@plan.agents) > 1} class="flex min-w-0 flex-col gap-1">
+            <span class="text-xs font-[550] text-subtle">Drafted by</span>
+            <select name="plan[agent_id]" class="cal-input" data-role="quick-plan-agent">
+              <option
+                :for={choice <- @plan.agents}
+                value={choice.id}
+                selected={choice.id == @plan.agent_id}
+              >
+                {choice.name}
+              </option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            class={[primary_btn(), "h-[38px] px-4 disabled:opacity-50"]}
+            disabled={@plan.agents == [] or @busy?}
+            data-role="quick-plan-submit"
+          >
+            Draft event
+          </button>
+        </div>
+      </form>
+
+      <p :if={@plan.agents == []} class="mt-2 text-xs text-subtle" data-role="quick-plan-empty">
+        No agent can draft events for you yet. Give one access in <.link
+          navigate={~p"/calendar/settings"}
+          class="underline"
+        >Calendar settings</.link>.
+      </p>
+      <p
+        :if={length(@plan.agents) == 1 and @plan.status == :idle}
+        class="mt-1.5 text-xs text-subtle"
+        data-role="quick-plan-agent-note"
+      >
+        {@agent_name} drafts it; nothing is saved until you choose Create event.
+      </p>
+
+      <div
+        :if={@plan.status != :idle}
+        class="mt-2 flex flex-col gap-1.5 text-[13px]"
+        role="status"
+        aria-live="polite"
+        data-role="quick-plan-state"
+      >
+        <p :if={@plan.status == :waiting} class="text-subtle" data-role="quick-plan-waiting">
+          Sent to {@agent_name}. Waiting for a reply…
+        </p>
+        <p :if={@plan.status == :slow} class="text-subtle" data-role="quick-plan-slow">
+          {@agent_name} hasn't replied yet. You can keep waiting, or add the event yourself with + New.
+        </p>
+        <p
+          :if={@plan.status == :unavailable}
+          class="font-[550] text-error"
+          data-role="quick-plan-unavailable"
+        >
+          {@agent_name} isn't connected right now, so nothing was sent. You can still add the event yourself with + New.
+        </p>
+        <p :if={@plan.status == :failed} class="font-[550] text-error" data-role="quick-plan-failed">
+          {@plan.error ||
+            "Couldn't send that to #{@agent_name}. Try again, or add the event yourself with + New."}
+        </p>
+        <div
+          :for={reply <- @plan.replies}
+          class="rounded-[var(--radius-field)] bg-base-200 px-3 py-2"
+          data-role="quick-plan-reply"
+        >
+          <span class="text-xs font-[650] text-subtle">{@agent_name}</span>
+          <p class="m-0 whitespace-pre-line break-words">{reply.content}</p>
+        </div>
+        <div
+          :if={@plan.draft}
+          class="flex flex-wrap items-center gap-2"
+          data-role="quick-plan-draft"
+          data-draft-status={@plan.draft.status}
+        >
+          <span :if={@plan.draft.status == "ready"}>{@agent_name} drafted an event.</span>
+          <span :if={@plan.draft.status == "needs_clarification"}>
+            {@agent_name} drafted an event that needs your answer before you can save it.
+          </span>
+          <span :if={@plan.draft.status == "incomplete"}>
+            {@agent_name} drafted an event with details still missing.
+          </span>
+          <button
+            type="button"
+            class={primary_btn()}
+            phx-click="plan_open_draft"
+            data-role="quick-plan-review"
+          >
+            Review draft
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <.link
+            :if={@plan.space}
+            navigate={~p"/chat/#{PlatformWeb.ChatLive.space_nav_target(@plan.space)}"}
+            class={ghost_btn()}
+            data-role="quick-plan-conversation"
+          >
+            Open conversation
+          </.link>
+          <button
+            type="button"
+            class={ghost_btn()}
+            phx-click="plan_reset"
+            data-role="quick-plan-reset"
+          >
+            Start over
+          </button>
+        </div>
+      </div>
+    </section>
+    """
+  end
+
+  # The agent's open questions inside the editor (production extension:
+  # agent clarification state, not in canvas).
+  attr(:agent, :map, required: true)
+
+  defp agent_questions(assigns) do
+    ~H"""
+    <div
+      class="flex flex-col gap-2 rounded-[var(--radius-box)] border border-edge bg-base-200 p-3 text-[13px]"
+      data-role="calendar-editor-agent"
+    >
+      <p class="m-0 text-xs text-subtle">
+        Drafted by {@agent.name}. Nothing is saved until you choose Create event.
+      </p>
+      <ul :if={@agent.issues != []} class="m-0 list-none p-0 text-xs text-subtle">
+        <li :for={issue <- @agent.issues} data-role="calendar-editor-agent-issue">{issue}</li>
+      </ul>
+      <div
+        :for={question <- @agent.clarifications}
+        class="flex flex-col gap-1.5"
+        data-role="calendar-editor-agent-question"
+        data-kind={question["kind"]}
+        data-answered={to_string(question["id"] in @agent.resolved)}
+      >
+        <p class="m-0 font-[550]">{question["question"]}</p>
+        <div
+          :if={question["kind"] == "attendee" and question["id"] not in @agent.resolved}
+          class="flex flex-wrap gap-1.5"
+        >
+          <button
+            :for={candidate <- question["candidates"] || []}
+            type="button"
+            class={ghost_btn()}
+            phx-click="draft_resolve"
+            phx-value-id={question["id"]}
+            phx-value-choice={candidate["user_id"]}
+            data-role="calendar-editor-agent-candidate"
+          >
+            Add {candidate["name"]}
+          </button>
+          <button
+            type="button"
+            class={ghost_btn()}
+            phx-click="draft_resolve"
+            phx-value-id={question["id"]}
+            phx-value-choice="skip"
+            data-role="calendar-editor-agent-skip"
+          >
+            Leave out
+          </button>
+        </div>
+        <p
+          :if={question["kind"] == "attendee" and question["id"] in @agent.resolved}
+          class="m-0 text-xs text-subtle"
+        >
+          Answered.
+        </p>
+      </div>
+    </div>
+    """
+  end
+
   # ── header (app.js `headHTML`) ─────────────────────────────────────────
 
   attr(:view, :string, required: true)
@@ -1165,6 +1394,7 @@ defmodule PlatformWeb.CalendarLive.Components do
             <.icon name="hero-x-mark" class="size-[18px]" />
           </button>
         </div>
+        <.agent_questions :if={@editor.agent} agent={@editor.agent} />
         <.form
           for={@form}
           id="calendar-event-form"
@@ -1474,7 +1704,12 @@ defmodule PlatformWeb.CalendarLive.Components do
             >
               Cancel
             </button>
-            <button type="submit" class={[primary_btn(), "cal-ft-btn"]} data-role="f-save">
+            <button
+              type="submit"
+              class={[primary_btn(), "cal-ft-btn disabled:opacity-50"]}
+              disabled={Editor.unresolved(@editor) != []}
+              data-role="f-save"
+            >
               {if @new?, do: "Create event", else: "Save"}
             </button>
           </div>
