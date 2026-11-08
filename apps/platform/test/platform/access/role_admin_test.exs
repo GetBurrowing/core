@@ -414,8 +414,8 @@ defmodule Platform.Access.RoleAdminTest do
     test "is exactly admin, member and guest, all built-in, ordered by key", _ctx do
       assert [
                %Role{key: "admin", builtin: true},
-               %Role{key: "member", builtin: true},
-               %Role{key: "guest", builtin: true}
+               %Role{key: "guest", builtin: true},
+               %Role{key: "member", builtin: true}
              ] = RoleAdmin.list_builtin_roles()
     end
   end
